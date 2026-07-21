@@ -7,12 +7,17 @@ current-state anchors into the code, design decisions (already made — do
 not relitigate them without asking Abraham), work items with file-level
 detail, test plan, and acceptance criteria.
 
-| Batch | File | Ships as |
-|---|---|---|
-| 2 | `BATCH_2_STREAMING_UX_AND_CONTROL.md` | v0.7.0 |
-| 3 | `BATCH_3_FULL_DRAFT_AND_REVIEW_QUEUE.md` | v0.8.0 |
-| 4 | `BATCH_4_FINAL_QC_ON_FABLE.md` | v0.9.0 |
-| 5 | `BATCH_5_REDLINE_EXPORT.md` | v1.0.0 |
+| Batch | File | Ships as | Status |
+|---|---|---|---|
+| 2 | `BATCH_2_STREAMING_UX_AND_CONTROL.md` | v0.7.0 | planned |
+| 3 | `BATCH_3_FULL_DRAFT_AND_REVIEW_QUEUE.md` | v0.8.0 | planned |
+| 4 | `BATCH_4_FINAL_QC_ON_FABLE.md` | v0.9.0 | planned |
+| 5 | `BATCH_5_REDLINE_EXPORT.md` | v1.0.0 | planned |
+
+The reusable kickoff prompt for each Claude Code session lives in
+`AGENT_PROMPT.md` — Abraham pastes it at the start of every batch; it
+auto-detects which batch is next from this table and the plan files'
+as-built annotations.
 
 ## Ground rules for every batch (read before coding)
 
@@ -34,6 +39,10 @@ detail, test plan, and acceptance criteria.
    - Version bumped in BOTH `backend/settings.py` (`VERSION`) and
      `frontend/package.json` — `test_version_consistency_gate` enforces
      agreement. Use the version from the table above.
+   - The batch's plan file annotated with an `## As built (<date>)`
+     section at the top — status, what shipped, every deviation from the
+     plan with one line of why (mirror `ROADMAP.md`'s as-built style) —
+     and the Status column in the table above flipped to `shipped`.
 4. **Model policy (frozen, 2026-07-21):** everything runs on
    `claude-sonnet-5`. There is NO user-facing model picker and none may
    be added. The single exception is Batch 4's Final QC, which runs on

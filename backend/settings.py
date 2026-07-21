@@ -100,6 +100,41 @@ RESEARCH_MAX_TOKENS = _int_env(
 )
 RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "xhigh")
 
+# --- Pricing (WI4 cost meter) -----------------------------------------------
+
+# USD per token unless noted. VERIFIED 2026-07 against the claude-api
+# reference (Current Models table) + Anthropic's web-search pricing. Sonnet 5
+# lists an intro rate ($2/$10 per MTok through 2026-08-31); we deliberately
+# use the POST-intro numbers ($3/$15) so the meter never under-reports.
+# Cache read is 0.1× input; cache write (5-minute ephemeral TTL) is 1.25×
+# input. Fable 5 ($10/$50) is Batch 4's Final-QC model. Web search bills
+# $10 / 1,000 requests ($0.01 each); web fetch has no per-request fee (token
+# cost only). Keep this current when Anthropic's list pricing moves.
+PRICING: dict[str, dict[str, float]] = {
+    MODEL_SONNET_5: {
+        "input": 3.0 / 1_000_000,
+        "output": 15.0 / 1_000_000,
+        "cache_read": 0.30 / 1_000_000,
+        "cache_write": 3.75 / 1_000_000,
+    },
+    MODEL_OPUS_48: {
+        "input": 5.0 / 1_000_000,
+        "output": 25.0 / 1_000_000,
+        "cache_read": 0.50 / 1_000_000,
+        "cache_write": 6.25 / 1_000_000,
+    },
+    "claude-fable-5": {
+        "input": 10.0 / 1_000_000,
+        "output": 50.0 / 1_000_000,
+        "cache_read": 1.00 / 1_000_000,
+        "cache_write": 12.50 / 1_000_000,
+    },
+}
+
+# Per-request cost of a server-side web search ($10 / 1,000). Web fetch has
+# no separate per-request charge — only the tokens it returns.
+WEB_SEARCH_COST = 10.0 / 1_000
+
 # --- Server -----------------------------------------------------------------
 
 HOST = "127.0.0.1"

@@ -43,6 +43,7 @@ from typing import Any, Callable
 from .. import settings
 from ..project_profile import ProjectProfile
 from ..spec_modules import ResearchDimension, SpecModule
+from ..usage_ledger import usage_to_dict
 from .grounding import (
     STOP_CLASS_COMPLETE,
     STOP_CLASS_PAUSE,
@@ -156,7 +157,7 @@ class ResearchItem:
 
 @dataclass
 class DimensionStatus:
-    """Per-dimension completion telemetry (failure honesty)."""
+    """Per-dimension completion telemetry (failure honesty + WI4 billing)."""
 
     dimension_id: str
     status: str  # "completed" | "failed"
@@ -164,6 +165,10 @@ class DimensionStatus:
     grounded_count: int = 0
     web_search_requests: int = 0
     web_fetch_requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
     error: str = ""
 
 
@@ -197,6 +202,24 @@ class RequirementsProfile:
             if candidate.item_id == item_id:
                 return candidate
         return None
+
+    def usage_total(self) -> dict[str, int]:
+        """Billed usage summed across every dimension (WI4 cost meter)."""
+        keys = (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "web_search_requests",
+            "web_fetch_requests",
+        )
+        out: dict[str, int] = {}
+        for status in self.dimension_statuses:
+            for key in keys:
+                value = getattr(status, key, 0)
+                if value:
+                    out[key] = out.get(key, 0) + int(value)
+        return out
 
     # -- Rendering (deterministic) ------------------------------------------
 
@@ -310,6 +333,14 @@ class RequirementsProfile:
                     ),
                     web_fetch_requests=int(
                         raw.get("web_fetch_requests", 0) or 0
+                    ),
+                    input_tokens=int(raw.get("input_tokens", 0) or 0),
+                    output_tokens=int(raw.get("output_tokens", 0) or 0),
+                    cache_read_input_tokens=int(
+                        raw.get("cache_read_input_tokens", 0) or 0
+                    ),
+                    cache_creation_input_tokens=int(
+                        raw.get("cache_creation_input_tokens", 0) or 0
                     ),
                     error=str(raw.get("error", "") or ""),
                 )
@@ -506,6 +537,15 @@ def _items_from_payload(payload: dict, dimension_id: str) -> list[ResearchItem]:
     return items
 
 
+def _sum_token_usage(responses: list[Any]) -> dict[str, int]:
+    """Sum billed token counts across a dimension's responses (WI4)."""
+    totals: dict[str, int] = {}
+    for response in responses:
+        for key, value in usage_to_dict(getattr(response, "usage", None)).items():
+            totals[key] = totals.get(key, 0) + value
+    return totals
+
+
 def _run_dimension(
     client: Any,
     *,
@@ -529,15 +569,19 @@ def _run_dimension(
     user_message = build_dimension_user_message(module, profile, dimension)
 
     def _failed(error: str, *, responses: list[Any] | None = None) -> _DimensionOutcome:
+        billed = responses or []
+        tokens = _sum_token_usage(billed)
         return _DimensionOutcome(
             status=DimensionStatus(
                 dimension_id=dimension.dimension_id,
                 status="failed",
-                web_search_requests=sum(
-                    web_search_count(r) for r in (responses or [])
-                ),
-                web_fetch_requests=sum(
-                    web_fetch_count(r) for r in (responses or [])
+                web_search_requests=sum(web_search_count(r) for r in billed),
+                web_fetch_requests=sum(web_fetch_count(r) for r in billed),
+                input_tokens=tokens.get("input_tokens", 0),
+                output_tokens=tokens.get("output_tokens", 0),
+                cache_read_input_tokens=tokens.get("cache_read_input_tokens", 0),
+                cache_creation_input_tokens=tokens.get(
+                    "cache_creation_input_tokens", 0
                 ),
                 error=error,
             )
@@ -664,6 +708,7 @@ def _run_dimension(
                 item.accepted_sources = list(grounding.accepted)
                 item.grounded = grounding.has_any_grounded_citation()
 
+            tokens = _sum_token_usage(all_responses)
             return _DimensionOutcome(
                 status=DimensionStatus(
                     dimension_id=dimension.dimension_id,
@@ -675,6 +720,14 @@ def _run_dimension(
                     ),
                     web_fetch_requests=sum(
                         web_fetch_count(r) for r in all_responses
+                    ),
+                    input_tokens=tokens.get("input_tokens", 0),
+                    output_tokens=tokens.get("output_tokens", 0),
+                    cache_read_input_tokens=tokens.get(
+                        "cache_read_input_tokens", 0
+                    ),
+                    cache_creation_input_tokens=tokens.get(
+                        "cache_creation_input_tokens", 0
                     ),
                 ),
                 items=items,

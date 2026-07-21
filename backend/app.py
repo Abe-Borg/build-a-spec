@@ -18,6 +18,7 @@ Endpoints (all JSON unless noted):
   (with the assumptions schedule), as a download.
 - ``POST /api/research/start``  → launch the requirements-research fan-out
   (requires a complete project profile; 409 while one runs).
+- ``GET  /api/usage``         → this session's billed usage + est. cost.
 - ``GET  /api/research/status`` → research state + event log + profile view.
 - ``GET  /api/research/stream`` → SSE follow of the active/last run.
 - ``GET  /api/project/save``  → project file (history + doc versions +
@@ -406,6 +407,7 @@ def create_app() -> FastAPI:
             client=client,
             model=settings.RESEARCH_MODEL,
             max_tokens=settings.RESEARCH_MAX_TOKENS,
+            usage_sink=lambda u: session.usage.add("research", u),
         )
         if not started:
             return JSONResponse(
@@ -475,6 +477,7 @@ def create_app() -> FastAPI:
             model=settings.RESEARCH_MODEL,
             max_tokens=settings.RESEARCH_MAX_TOKENS,
             version_index=session.doc.index,
+            usage_sink=lambda u: session.usage.add("audit", u),
         )
         if not started:
             return JSONResponse(
@@ -486,6 +489,18 @@ def create_app() -> FastAPI:
     @app.get("/api/audit/status")
     def audit_status() -> dict:
         return sessions.get_session().audit.snapshot()
+
+    # --- Usage & cost meter (WI4) -------------------------------------------
+
+    @app.get("/api/usage")
+    def usage() -> dict:
+        """This session's billed usage + an estimated cost from list pricing.
+
+        Session-scoped: reset and project load clear it. The dollar figures
+        are estimates (labeled as such in the UI); the trace files remain the
+        permanent, exact record.
+        """
+        return sessions.get_session().usage.snapshot()
 
     # --- Project save / resume --------------------------------------------
 

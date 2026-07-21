@@ -71,6 +71,7 @@ from ..research.schema import build_web_fetch_tool, build_web_search_tool
 from ..tracing import capture as _trace
 from ..spec_modules import SpecModule, get_module
 from ..standards import standards_context_block
+from ..usage_ledger import UsageLedger
 from .client import MissingApiKeyError, get_client
 from .prompts import render_system_prompt
 
@@ -116,6 +117,8 @@ class SessionState:
     module: SpecModule = field(default_factory=lambda: get_module(None))
     research: ResearchRunner = field(default_factory=ResearchRunner)
     audit: AuditRunner = field(default_factory=AuditRunner)
+    # Session-scoped billed-usage meter (WI4). Reset/load clear it.
+    usage: UsageLedger = field(default_factory=UsageLedger)
     # True while a model turn owns the document store (WI2). Manual edits are
     # rejected in this window — a mid-turn manual edit would be swept into the
     # streaming turn's commit or rollback.
@@ -128,6 +131,9 @@ class SessionState:
         # finishes into the abandoned objects (the zombie-turn pattern).
         self.research = ResearchRunner()
         self.audit = AuditRunner()
+        # The meter answers "what has THIS session spent" — a fresh session
+        # starts at zero (the trace remains the permanent record).
+        self.usage.reset()
         self.generation += 1
 
 
@@ -700,6 +706,10 @@ def stream_user_turn(
         # disconnects mid-stream, which no except clause above can see.
         # Anything short of a committed turn rolls the document back.
         session.turn_active = False
+        # The spend is real even on a failed turn — record it (unless a
+        # reset/load raced in, whose fresh ledger must not inherit it).
+        if session.generation == generation:
+            session.usage.add("interview", usage_totals, count_turn=True)
         if not committed:
             session.doc.rollback_turn()
             _trace.turn_end(

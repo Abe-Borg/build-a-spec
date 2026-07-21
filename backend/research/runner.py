@@ -75,6 +75,7 @@ class ResearchRunner:
         model: str,
         max_tokens: int,
         on_settled: Callable[[], None] | None = None,
+        usage_sink: Callable[[dict], None] | None = None,
     ) -> bool:
         """Kick off the fan-out on a daemon thread. False if already running.
 
@@ -127,6 +128,13 @@ class ResearchRunner:
                     trace_handle, status=STATUS_FAILED, error=message
                 )
             else:
+                # Meter first, then flip to terminal — a status poller that
+                # sees "complete" must find the ledger already updated.
+                if usage_sink is not None:
+                    try:
+                        usage_sink(result.usage_total())
+                    except Exception:  # noqa: BLE001 — metering never sinks a run
+                        pass
                 with self._lock:
                     self.status = STATUS_COMPLETE
                     self.profile_result = result

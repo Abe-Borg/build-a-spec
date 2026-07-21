@@ -122,5 +122,8 @@ def load_project(data: Any, session) -> None:
     audit_result = data.get("audit_result")
     if isinstance(audit_result, dict) and audit_result.get("coverage"):
         session.audit.restore(audit_result)
+    # The meter is per-session; a resumed project starts its own count (the
+    # prior session's spend lives in that session's traces, not this file).
+    session.usage.reset()
     # Invalidate any turn that was still streaming against the old state.
     session.generation += 1

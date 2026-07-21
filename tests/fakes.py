@@ -24,12 +24,41 @@ def tool_use_block(
     return SimpleNamespace(type="tool_use", id=tool_id, name=name, input=tool_input)
 
 
-def text_turn(chunks: list[str], stop_reason: str = "end_turn") -> SimpleNamespace:
+def token_usage(
+    *,
+    input: int = 0,
+    output: int = 0,
+    cache_read: int = 0,
+    cache_write: int = 0,
+    thinking: int = 0,
+    searches: int = 0,
+    fetches: int = 0,
+) -> SimpleNamespace:
+    """A billed-usage object shaped for the ledger (WI4 cost meter)."""
+    return SimpleNamespace(
+        input_tokens=input,
+        output_tokens=output,
+        cache_read_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_write,
+        output_tokens_details=SimpleNamespace(thinking_tokens=thinking),
+        server_tool_use=SimpleNamespace(
+            web_search_requests=searches, web_fetch_requests=fetches
+        ),
+    )
+
+
+def text_turn(
+    chunks: list[str],
+    stop_reason: str = "end_turn",
+    *,
+    usage: SimpleNamespace | None = None,
+) -> SimpleNamespace:
     """A response that streams ``chunks`` and ends the turn."""
     return SimpleNamespace(
         chunks=list(chunks),
         content=[text_block("".join(chunks))],
         stop_reason=stop_reason,
+        usage=usage,
     )
 
 
@@ -40,6 +69,7 @@ def tool_turn(
     tool_id: str = "toolu_fake_1",
     name: str = "apply_spec_edits",
     stop_reason: str = "tool_use",
+    usage: SimpleNamespace | None = None,
 ) -> SimpleNamespace:
     """A response that streams ``chunks`` then requests a tool call.
 
@@ -52,7 +82,7 @@ def tool_turn(
         content.append(text_block(text))
     content.append(tool_use_block(tool_id, name, tool_input))
     return SimpleNamespace(
-        chunks=list(chunks), content=content, stop_reason=stop_reason
+        chunks=list(chunks), content=content, stop_reason=stop_reason, usage=usage
     )
 
 
@@ -228,7 +258,9 @@ class _FakeStreamCtx:
 
     def get_final_message(self):
         return SimpleNamespace(
-            content=self._turn.content, stop_reason=self._turn.stop_reason
+            content=self._turn.content,
+            stop_reason=self._turn.stop_reason,
+            usage=getattr(self._turn, "usage", None),
         )
 
 
@@ -297,11 +329,23 @@ def fetch_blocks(url: str) -> list[SimpleNamespace]:
     ]
 
 
-def usage(searches: int = 0, fetches: int = 0) -> SimpleNamespace:
+def usage(
+    searches: int = 0,
+    fetches: int = 0,
+    *,
+    input: int = 0,
+    output: int = 0,
+    cache_read: int = 0,
+    cache_write: int = 0,
+) -> SimpleNamespace:
     return SimpleNamespace(
+        input_tokens=input,
+        output_tokens=output,
+        cache_read_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_write,
         server_tool_use=SimpleNamespace(
             web_search_requests=searches, web_fetch_requests=fetches
-        )
+        ),
     )
 
 
@@ -313,6 +357,7 @@ def research_response(
     stop_reason: str = "tool_use",
     searches: int | None = None,
     fetches: int = 0,
+    tokens: dict[str, int] | None = None,
     tool_name: str = "submit_requirements_research",
 ) -> SimpleNamespace:
     """A terminal research response: search results + the output tool call.
@@ -339,6 +384,7 @@ def research_response(
         usage=usage(
             searches if searches is not None else len(searched_urls or []),
             fetches,
+            **(tokens or {}),
         ),
     )
 

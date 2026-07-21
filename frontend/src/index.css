@@ -126,6 +126,13 @@ body {
   padding: 0.35em 0.6em;
 }
 
+/* Blocks touched by the latest turn's edits, tinted on the paper surface */
+.changed-block {
+  background: #f8ecd6;
+  box-shadow: inset 2px 0 0 var(--color-accent);
+  transition: background 0.6s ease;
+}
+
 /* Blinking caret shown while a reply streams */
 .streaming-caret::after {
   content: "▍";

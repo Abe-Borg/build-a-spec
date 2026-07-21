@@ -31,68 +31,106 @@ file is the working reference for AI-assisted development sessions.
 main.py                    entry point: uvicorn thread + pywebview window
 backend/
   settings.py              models (claude-sonnet-5 default), port 8756, env knobs
-  app.py                   FastAPI app factory; SSE at POST /api/chat
+  app.py                   FastAPI app factory; SSE at POST /api/chat; doc/undo/
+                           redo, docx export, project save/load endpoints
   app_paths.py             [PORT: Spec Critic src/core/app_paths.py]
   api_key_store.py         [PORT: Spec Critic src/core/api_key_store.py + save_api_key]
-  sessions.py              single module-level SessionState (Phase 1)
+  sessions.py              single module-level SessionState (history + DocumentStore)
+  spec_doc/model.py        SectionFormat tree; stable ids (pt1.a2.p3); statuses;
+                           transactional apply_edits; DocumentStore (per-turn
+                           versions, undo/redo); open_questions; outline;
+                           APPLY_SPEC_EDITS_TOOL schema
+  spec_doc/docx_export.py  python-docx rendering + assumptions/open-items schedules
+  spec_doc/project.py      JSON project files (save/resume) + chat transcript
   llm/client.py            client factory; MissingApiKeyError; per-key cache
-  llm/prompts.py           SYSTEM_PROMPT — Phase 1 Div 21 interviewer
-  llm/conversation.py      stream_user_turn generator; _TOOLS seam (empty)
+  llm/prompts.py           SYSTEM_PROMPT — tool drafting + defaults-first interview
+  llm/conversation.py      stream_user_turn generator; tool dispatch + continuation
 frontend/src/
-  App.tsx                  state owner: messages[], health, send loop
-  lib/api.ts               streamChat async generator (fetch + SSE parse)
-  components/*             Chat / MessageBubble / Composer / ArtifactPanel /
-                           Header / ApiKeyBanner
+  App.tsx                  state owner: messages[], doc, open items, changed ids,
+                           health, send loop (the SSE event switch)
+  lib/api.ts               streamChat async generator; doc/undo/redo/project calls
+  components/*             Chat / MessageBubble / Composer / ArtifactPanel
+                           (stepper, export, save/open, open items) /
+                           SpecDocument (paper rendering) / Header / ApiKeyBanner
 tests/
   conftest.py              hermetic env + fresh session per test
-  test_app.py              health, SSE round-trip, error paths, reset
+  fakes.py                 scripted fake streaming client (text + tool_use turns)
+  test_app.py              API surface: SSE round-trips, tool loop, rollback,
+                           undo/redo, export, project save/resume
+  test_spec_doc.py         document model units: ids, transactions, versions
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
 
-Each frame is `data: <json>\n\n`. Phase 1 event types:
+Each frame is `data: <json>\n\n`. Event types:
 
 | type | payload | meaning |
 |---|---|---|
-| `text_delta` | `text` | streamed assistant text chunk |
-| `turn_complete` | `stop_reason` | turn ended; history committed server-side |
-| `error` | `message` | turn failed; history untouched (retry is safe) |
+| `text_delta` | `text` | streamed assistant text chunk (all continuation rounds) |
+| `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
+| `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
+| `open_questions` | `items` | open-item list (TBD markers + needs_input blocks); emitted when a turn changed the doc |
+| `turn_complete` | `stop_reason` | turn ended; history + doc version committed server-side |
+| `error` | `message` | turn failed; history untouched and doc rolled back (retry is safe) |
 
-Phase 2 adds document events (planned): `doc_patch` (an applied edit op with
-element ids), `doc_snapshot` (full tree on load/undo), `open_questions`.
 The frontend switch in `App.tsx#send` is the single place events dispatch.
+Snapshots outside a turn travel over REST, not SSE: `GET /api/doc`,
+`POST /api/doc/undo|redo`, and `POST /api/project/load` all return
+`{doc, open_questions}` (load adds `chat`, the rebuilt transcript).
+Patches and snapshots always carry the full tree — the frontend never
+applies ops itself.
 
 ## Conversation engine invariants
 
-- History mutates only after a fully successful turn (user + assistant
-  appended together); every failure path yields one `error` event and leaves
-  history unchanged so resend never duplicates.
-- System prompt is a block list with `cache_control: ephemeral` on the last
-  block (prompt-cache hits across the growing interview).
-- `_TOOLS` in `conversation.py` is the Phase 2 seam: register document tools
-  there, then grow the loop with tool-use dispatch + continuation, mirroring
-  Spec Critic's streaming continuation pattern (`requirements_research.py`).
+- Turn atomicity spans both stores: history mutates and the document turn
+  commits (one undo snapshot per changed turn) only after a fully
+  successful turn — user message, every assistant message, and every
+  tool_result appended together. Every failure path (including tool-round
+  exhaustion, capped at `MAX_TOOL_ROUNDS`) yields one `error` event, rolls
+  the document back to its pre-turn tree, and leaves history unchanged so
+  resend never duplicates. Rollback lives in a `finally`, so it also
+  covers `GeneratorExit` when the SSE client disconnects mid-stream (and
+  `begin_turn` self-heals from an abandoned backup). A truncated response
+  (`max_tokens`) strips unexecuted `tool_use` blocks before commit — a
+  dangling tool call would invalidate every later request.
+- `SessionState.generation` increments on reset and project load; an
+  in-flight turn checks it before each round, each tool dispatch, and the
+  final commit, so a zombie turn discards itself instead of polluting the
+  fresh/loaded session ("New session" is also disabled in the UI while a
+  turn streams).
+- System prompt is a block list: the stable prompt block carries
+  `cache_control: ephemeral` (prompt-cache hits across the growing
+  interview); a **dynamic document-outline block follows it**, outside the
+  cached prefix, keeping the model's map of element ids/statuses current —
+  including after undo/redo and project resume.
+- The tool loop in `stream_user_turn` follows Spec Critic's streaming
+  continuation pattern (`requirements_research.py`): stream → on
+  `tool_use`, apply edits + emit `doc_patch` + send tool_result → stream
+  again. An invalid edit batch becomes an `is_error` tool_result (with the
+  current outline) for the model to self-correct — never a turn failure.
+- Document edits are transactional per batch (`spec_doc.apply_edits` works
+  on a copy, swaps on success). Element ids come from monotonic per-parent
+  counters and are never reused; display numbering (1.1 / A. / 1. / a. /
+  1)) derives from position at serialization time. A new edit after undo
+  truncates the redo tail, so ids can't collide with an abandoned future.
 
-## Phase 2 sketch (next up)
+## Phase 2 — implemented notes
 
-(Full phase list: `README.md` → Roadmap. This section is the build spec for
-the next milestone.)
-
-Server-owned document model in `backend/spec_doc/`:
-
-- Tree: `SpecSection` → parts (`PART 1 - GENERAL` / 2 / 3) → `Article` →
-  `Paragraph` (nested letters/numbers per SectionFormat). Stable element ids
-  (`pt1.a2.p3` style — generative cousin of Spec Critic's `p7`/`t0r2` ids).
-- Per-block provenance status: `confirmed` (user-supplied/approved) /
-  `assumed` (model default, see interview policy) / `needs_input`;
-  `[TBD: …]` markers tracked as first-class open items.
-- `apply_spec_edits` tool schema: list of ops
-  `{action: add_article|add_paragraph|replace|delete, target_id, position?,
-  text?, numbering?, status?}` — validated server-side, applied
-  transactionally, snapshotted for undo, broadcast as `doc_patch` events.
-- Renderers: panel JSON → React; `.docx` export via python-docx (office
-  SectionFormat styling) including an **assumptions schedule**; JSON project
-  file for save/resume.
+- `apply_spec_edits` op schema (see `APPLY_SPEC_EDITS_TOOL` in
+  `spec_doc/model.py`): ops `{action: add_article|add_paragraph|replace|
+  delete, target_id, position?, text?, numbering?, status?}`. The section
+  header is set via `replace` on target `sec` (`text` = title,
+  `numbering` = section number) — no fifth action. Omitted `status`
+  defaults to `assumed`: over-flagging for the reviewer beats silently
+  confirming a model guess.
+- `.docx` export (`spec_doc/docx_export.py`) renders SectionFormat body +
+  **assumptions schedule** + open-items schedule; download at
+  `GET /api/export/docx`. Project save/resume is a JSON file with the full
+  history (tool blocks included) and the complete version list, so undo
+  survives a resume (`spec_doc/project.py`).
+- Next up is **Phase 3 — spec modules** (registry-validated `SpecModule`,
+  pinned standards editions, deterministic linting): see `README.md` →
+  Roadmap and the Spec Critic port pointers below.
 
 Interview policy (decided 2026-07-21, conversation w/ Abraham):
 

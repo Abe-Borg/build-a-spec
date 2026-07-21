@@ -2,10 +2,11 @@ import type { Health } from "../types";
 
 interface Props {
   health: Health | null;
+  busy: boolean;
   onNewSession: () => void;
 }
 
-export default function Header({ health, onNewSession }: Props) {
+export default function Header({ health, busy, onNewSession }: Props) {
   return (
     <header className="flex items-center justify-between border-b border-edge bg-surface px-5 py-3">
       <div className="flex items-baseline gap-3">
@@ -29,7 +30,8 @@ export default function Header({ health, onNewSession }: Props) {
         )}
         <button
           onClick={onNewSession}
-          className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-xs text-ink transition-colors hover:border-accent hover:text-accent"
+          disabled={busy}
+          className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-xs text-ink transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
         >
           New session
         </button>

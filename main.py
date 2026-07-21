@@ -68,6 +68,13 @@ def main() -> None:
     try:
         import webview  # pywebview
 
+        # WebView2 blocks file downloads unless explicitly allowed — the
+        # panel's "Export .docx" and "Save" buttons depend on this.
+        try:
+            webview.settings["ALLOW_DOWNLOADS"] = True
+        except Exception:
+            pass  # older pywebview without the settings dict
+
         webview.create_window(
             settings.APP_NAME,
             url,

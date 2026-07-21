@@ -1,4 +1,9 @@
-import type { Health, StreamEvent } from "../types";
+import type {
+  DocPayload,
+  Health,
+  ProjectLoadResult,
+  StreamEvent,
+} from "../types";
 
 export async function getHealth(): Promise<Health> {
   const resp = await fetch("/api/health");
@@ -20,6 +25,42 @@ export async function saveApiKey(apiKey: string): Promise<void> {
 
 export async function resetSession(): Promise<void> {
   await fetch("/api/session/reset", { method: "POST" });
+}
+
+export async function getDoc(): Promise<DocPayload> {
+  const resp = await fetch("/api/doc");
+  if (!resp.ok) throw new Error(`doc ${resp.status}`);
+  return resp.json();
+}
+
+/** Step the document one version back/forward; null when at the end stop. */
+async function stepDoc(direction: "undo" | "redo"): Promise<DocPayload | null> {
+  const resp = await fetch(`/api/doc/${direction}`, { method: "POST" });
+  if (resp.status === 409) return null;
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `${direction} failed (${resp.status})`);
+  }
+  return data;
+}
+
+export const undoDoc = () => stepDoc("undo");
+export const redoDoc = () => stepDoc("redo");
+
+/** Restore a session from a parsed project file. */
+export async function loadProject(
+  project: unknown,
+): Promise<ProjectLoadResult> {
+  const resp = await fetch("/api/project/load", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(project),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `load failed (${resp.status})`);
+  }
+  return data;
 }
 
 /** POST /api/chat and yield parsed SSE events as they arrive. */

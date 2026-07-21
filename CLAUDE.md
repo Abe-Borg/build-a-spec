@@ -75,19 +75,40 @@ The frontend switch in `App.tsx#send` is the single place events dispatch.
 
 ## Phase 2 sketch (next up)
 
+(Full phase list: `README.md` → Roadmap. This section is the build spec for
+the next milestone.)
+
 Server-owned document model in `backend/spec_doc/`:
 
 - Tree: `SpecSection` → parts (`PART 1 - GENERAL` / 2 / 3) → `Article` →
   `Paragraph` (nested letters/numbers per SectionFormat). Stable element ids
   (`pt1.a2.p3` style — generative cousin of Spec Critic's `p7`/`t0r2` ids).
-- Per-block status: `drafted` / `placeholder` / `needs_input`; `[TBD: …]`
-  markers tracked as first-class open items.
+- Per-block provenance status: `confirmed` (user-supplied/approved) /
+  `assumed` (model default, see interview policy) / `needs_input`;
+  `[TBD: …]` markers tracked as first-class open items.
 - `apply_spec_edits` tool schema: list of ops
   `{action: add_article|add_paragraph|replace|delete, target_id, position?,
-  text?, numbering?}` — validated server-side, applied transactionally,
-  snapshotted for undo, broadcast as `doc_patch` events.
+  text?, numbering?, status?}` — validated server-side, applied
+  transactionally, snapshotted for undo, broadcast as `doc_patch` events.
 - Renderers: panel JSON → React; `.docx` export via python-docx (office
-  SectionFormat styling); JSON project file for save/resume.
+  SectionFormat styling) including an **assumptions schedule**; JSON project
+  file for save/resume.
+
+Interview policy (decided 2026-07-21, conversation w/ Abraham):
+
+- **Defaults-first.** Every question carries the model's recommended answer;
+  "I don't know" is a first-class reply — the model applies the defensible
+  NFPA 13-2025 / hyperscale-norm default and stamps the block `assumed`.
+  The panel badges assumptions; the export schedules them so a senior
+  reviewer audits every guess in one pass. The interview never stalls on an
+  unanswered question unless it is truly non-defaultable (section, location,
+  client, hazard basics).
+- **Guide-me mode.** Optional mode where open questions become 2–4 concrete
+  options with plain-language tradeoffs (novices pick, experts type). Plus
+  an "explain why you're asking" affordance on any question.
+- **Model routing.** Conversational turns stay on Sonnet 5; heavy one-shot
+  passes (e.g. "draft all of PART 2 from the gathered profile") may route to
+  Opus 4.8 via the existing `stream_user_turn(model=...)` override.
 
 ## Commands
 

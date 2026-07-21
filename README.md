@@ -114,7 +114,7 @@ Ported so far (adapted, same design): `api_key_store.py`, `app_paths.py`, the he
 ## Roadmap
 
 1. **Phase 1 — Shell (this release).** Streaming interview chat, native window, key management, tests.
-2. **Phase 2 — Living document.** Server-owned SectionFormat tree (Section → PART → article → paragraph) with stable element ids and per-block status (`drafted` / `placeholder` / `needs_input`); `apply_spec_edits` tool-use so drafts land in the panel, not chat; change highlighting + version history; `.docx` export; save/resume project files.
+2. **Phase 2 — Living document.** Server-owned SectionFormat tree (Section → PART → article → paragraph) with stable element ids and per-block provenance (`confirmed` / `assumed` / `needs_input`); `apply_spec_edits` tool-use so drafts land in the panel, not chat; a defaults-first interview where "I don't know" is a valid answer — the model applies a defensible default and flags it, with assumptions badged in the panel and scheduled in the `.docx` export; change highlighting + version history; `.docx` export; save/resume project files.
 3. **Phase 3 — Spec modules.** Registry-validated `SpecModule` (interview playbook, section catalog, code basis, pinned standards editions — NFPA 13-2025 default, jurisdiction-adopted editions respected); live deterministic linting of the draft.
 4. **Phase 4 — Research agents.** Port of the requirements-research fan-out: grounded web-search agents for AHJ, client, and insurer requirements with citations surfaced in chat and folded into drafting context.
 5. **Phase 5 — Ship.** Master-spec import as a starting point, packaging/installer/auto-updater, and a compliance audit of the finished draft against the researched requirements profile.

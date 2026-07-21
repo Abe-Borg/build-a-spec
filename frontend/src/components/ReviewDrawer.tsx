@@ -118,6 +118,10 @@ export default function ReviewDrawer({
   }, [busy, current]);
 
   const saveEdit = () => {
+    // A model turn owns the tree: the backend would 409 this edit. Keep the
+    // draft open (don't clear edit mode, don't count it) so nothing is lost —
+    // the user saves once the turn finishes.
+    if (busy) return;
     const text = draft.trim();
     setEditing(false);
     if (!current || !text) {
@@ -351,7 +355,16 @@ export default function ReviewDrawer({
                     className="w-full resize-y rounded border border-edge bg-bg px-2 py-1.5 text-[12px] leading-relaxed text-ink outline-none focus:border-accent/60"
                   />
                   <div className="mt-1.5 flex items-center gap-2 text-[11px]">
-                    <button className={actionKey} onClick={saveEdit}>
+                    <button
+                      className={actionKey}
+                      onClick={saveEdit}
+                      disabled={busy}
+                      title={
+                        busy
+                          ? "A model turn is streaming — save once it finishes"
+                          : "Save (⌘/Ctrl+Enter)"
+                      }
+                    >
                       Save (⌘/Ctrl+Enter)
                     </button>
                     <button

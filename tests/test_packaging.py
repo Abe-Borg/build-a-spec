@@ -9,6 +9,7 @@ no build tools required.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -69,3 +70,25 @@ def test_release_and_ci_workflows_exist():
     workflows = REPO_ROOT / ".github" / "workflows"
     assert (workflows / "release.yml").is_file()
     assert (workflows / "ci.yml").is_file()
+
+
+def test_windowed_startup_survives_none_std_streams(monkeypatch):
+    """A windowed PyInstaller build has sys.stdout/stderr == None; uvicorn's
+    log formatter calls sys.stdout.isatty() and crashed the shipped app on
+    launch. _ensure_std_streams must make uvicorn.Config construct cleanly.
+    Regression guard for the None-stdout startup crash."""
+    import uvicorn
+
+    import main
+
+    monkeypatch.setattr(sys, "stdout", None, raising=False)
+    monkeypatch.setattr(sys, "stderr", None, raising=False)
+
+    main._ensure_std_streams()
+
+    assert sys.stdout is not None and sys.stderr is not None
+    assert sys.stdout.isatty() is False and sys.stderr.isatty() is False
+
+    # The exact path that used to raise: Config -> configure_logging ->
+    # ColourizedFormatter.__init__ -> sys.stdout.isatty().
+    uvicorn.Config("backend.app:app", host="127.0.0.1", port=8756, log_level="warning")

@@ -11,6 +11,9 @@ opening the default browser against the same local server.
 """
 from __future__ import annotations
 
+import io
+import os
+import sys
 import threading
 import time
 import urllib.request
@@ -20,7 +23,31 @@ import uvicorn
 from backend import settings
 
 
+def _ensure_std_streams() -> None:
+    """Guarantee ``sys.stdout``/``sys.stderr`` are real streams.
+
+    A windowed PyInstaller build (``console=False``) runs with no console,
+    so both are ``None``. Uvicorn's log formatter calls
+    ``sys.stdout.isatty()`` while configuring logging and crashes on
+    ``None`` (``AttributeError: 'NoneType' object has no attribute
+    'isatty'``); other libraries assume the streams exist too. Point any
+    missing stream at ``os.devnull`` — a real stream whose ``isatty()``
+    returns ``False`` and whose writes are discarded. Idempotent.
+    """
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name, None) is None:
+            try:
+                stream = open(os.devnull, "w", encoding="utf-8")
+            except OSError:
+                stream = io.StringIO()
+            setattr(sys, name, stream)
+            if getattr(sys, f"__{name}__", None) is None:
+                setattr(sys, f"__{name}__", stream)
+
+
 def _start_backend() -> threading.Thread:
+    # Must run before uvicorn.Config configures logging (see the docstring).
+    _ensure_std_streams()
     config = uvicorn.Config(
         "backend.app:app",
         host=settings.HOST,

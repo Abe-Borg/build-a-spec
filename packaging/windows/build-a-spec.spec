@@ -45,6 +45,13 @@ for _pkg in ("webview", "clr_loader", "pythonnet"):
 # FastAPI/uvicorn dynamic bits.
 hiddenimports += collect_submodules("uvicorn")
 
+# pythonnet's import module is ``clr`` (a compiled extension loaded at
+# runtime, invisible to PyInstaller's static analysis). PyInstaller's
+# bundled hooks (pyinstaller-hooks-contrib: clr / clr_loader / webview)
+# collect Python.Runtime.dll et al.; naming ``clr`` explicitly is cheap
+# insurance against the classic frozen "cannot load Python.Runtime" crash.
+hiddenimports += ["clr"]
+
 # keyring resolves its backend (Windows Credential Manager) dynamically;
 # optional dependency — a build without it still works via the key file.
 try:
@@ -110,7 +117,9 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # drop an .ico here (icon="app.ico") once one exists
+    # Multi-resolution app icon (packaging/windows/make_icon.py generates it);
+    # embedded in BuildASpec.exe so the taskbar/desktop show a real icon.
+    icon=os.path.join(SPECPATH, "assets", "BuildASpec.ico"),
 )
 
 coll = COLLECT(

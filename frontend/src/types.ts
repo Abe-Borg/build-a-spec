@@ -45,6 +45,18 @@ export interface KeyStatus {
   env_locked?: boolean;
 }
 
+/** Session-scoped billed-usage snapshot (WI4 cost meter). */
+export interface UsageSummary {
+  categories: Record<string, Record<string, number>>;
+  totals: Record<string, number>;
+  turns: number;
+  estimated_cost_usd: {
+    by_category: Record<string, number>;
+    total: number;
+  };
+  cache_saved_usd: number;
+}
+
 /* --- Document model (mirrors backend/spec_doc/model.py serialization) --- */
 
 export type BlockStatus = "confirmed" | "assumed" | "needs_input" | "imported";

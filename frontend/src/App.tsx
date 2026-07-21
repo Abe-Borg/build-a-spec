@@ -10,6 +10,7 @@ import type {
   SpecDoc,
   StandardInfo,
   UpdateCheckPayload,
+  UsageSummary,
 } from "./types";
 import {
   checkUpdate,
@@ -18,6 +19,7 @@ import {
   getDoc,
   getHealth,
   getResearchStatus,
+  getUsage,
   importMaster,
   installUpdate,
   loadProject,
@@ -51,6 +53,7 @@ export default function App() {
   const [audit, setAudit] = useState<AuditSnapshot | null>(null);
   const [update, setUpdate] = useState<UpdateCheckPayload | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
   const busyRef = useRef(false);
   const researchFollowRef = useRef(false);
@@ -86,14 +89,21 @@ export default function App() {
       .catch(() => setAudit(null));
   }, []);
 
+  const refreshUsage = useCallback(() => {
+    getUsage()
+      .then(setUsage)
+      .catch(() => setUsage(null));
+  }, []);
+
   useEffect(() => {
     refreshHealth();
     refreshDoc();
     refreshResearch();
     refreshAudit();
+    refreshUsage();
     // Throttled auto-check (server enforces once a day); failures ignored.
     checkUpdate().then(setUpdate).catch(() => setUpdate(null));
-  }, [refreshHealth, refreshDoc, refreshResearch, refreshAudit]);
+  }, [refreshHealth, refreshDoc, refreshResearch, refreshAudit, refreshUsage]);
 
   /** Poll the audit while one runs (single call, ~a minute). */
   const pollAudit = useCallback(async () => {
@@ -110,8 +120,9 @@ export default function App() {
       // Snapshot errors surface as a null audit; the button re-enables.
     } finally {
       auditPollRef.current = false;
+      refreshUsage();
     }
-  }, []);
+  }, [refreshUsage]);
 
   const onStartAudit = useCallback(async () => {
     try {
@@ -209,8 +220,9 @@ export default function App() {
     } finally {
       researchFollowRef.current = false;
       refreshResearch();
+      refreshUsage();
     }
-  }, [refreshResearch]);
+  }, [refreshResearch, refreshUsage]);
 
   const onStartResearch = useCallback(async () => {
     try {
@@ -332,8 +344,10 @@ export default function App() {
             streaming: false,
             status: null,
           });
-          // A failed turn rolled the document back server-side.
+          // A failed turn rolled the document back server-side — but the
+          // spend was real, so refresh the meter too.
           refreshDoc();
+          refreshUsage();
           setChangedIds(new Set());
         } else if (evt.type === "turn_complete") {
           sawTerminalEvent = true;
@@ -341,6 +355,7 @@ export default function App() {
           // Profile completeness may have changed (set_project_profile);
           // the snapshot endpoint is authoritative and cheap.
           refreshDoc();
+          refreshUsage();
         }
         // Unknown event types are ignored so an older/newer backend never
         // crashes the UI.
@@ -454,9 +469,13 @@ export default function App() {
         health={health}
         busy={busy}
         update={update}
+        usage={usage}
         onNewSession={newSession}
         onInstallUpdate={onInstallUpdate}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          setSettingsOpen(true);
+          refreshUsage();
+        }}
       />
       {health && !health.api_key_present && (
         <ApiKeyBanner onSaved={refreshHealth} />
@@ -465,6 +484,7 @@ export default function App() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         health={health}
+        usage={usage}
         onKeyChange={refreshHealth}
       />
       <main className="flex min-h-0 flex-1">

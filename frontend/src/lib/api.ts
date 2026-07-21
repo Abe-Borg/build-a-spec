@@ -10,6 +10,7 @@ import type {
   ResearchSnapshot,
   StreamEvent,
   UpdateCheckPayload,
+  UsageSummary,
 } from "../types";
 
 export async function getHealth(): Promise<Health> {
@@ -49,6 +50,13 @@ export async function deleteKey(): Promise<KeyStatus> {
     throw new Error(data.error ?? `delete failed (${resp.status})`);
   }
   return data;
+}
+
+/** This session's billed usage + estimated cost (WI4 meter). */
+export async function getUsage(): Promise<UsageSummary> {
+  const resp = await fetch("/api/usage");
+  if (!resp.ok) throw new Error(`usage ${resp.status}`);
+  return resp.json();
 }
 
 /** Validate a candidate (or the stored) key; never stores it. */

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Health, KeyStatus } from "../types";
+import type { Health, KeyStatus, UsageSummary } from "../types";
 import {
   checkUpdate,
   deleteKey,
@@ -14,8 +14,95 @@ interface Props {
   health: Health | null;
   /** Called after the stored key changes so the app can refresh health. */
   onKeyChange: () => void;
-  /** WI4 fills this with the usage table; omitted → a short placeholder. */
-  usageSection?: React.ReactNode;
+  /** Session usage snapshot (WI4 meter); null until first load. */
+  usage?: UsageSummary | null;
+}
+
+const CATEGORY_LABEL: Record<string, string> = {
+  interview: "Interview",
+  research: "Research",
+  audit: "Audit",
+  qc: "Final QC",
+};
+
+/** Compact token formatting: 12345 → "12.3k". */
+function fmt(n: number | undefined): string {
+  if (!n) return "0";
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
+function UsageTable({ usage }: { usage: UsageSummary }) {
+  const cats = Object.keys(usage.categories);
+  if (cats.length === 0) {
+    return (
+      <p className="mt-2 text-xs text-ink-faint">
+        No spend recorded yet this session.
+      </p>
+    );
+  }
+  const cell = "px-2 py-1 text-right tabular-nums";
+  return (
+    <div className="mt-2 overflow-x-auto">
+      <table className="w-full text-[11px] text-ink-dim">
+        <thead className="text-ink-faint">
+          <tr className="border-b border-edge">
+            <th className="px-2 py-1 text-left font-medium">Category</th>
+            <th className={cell + " font-medium"}>In</th>
+            <th className={cell + " font-medium"}>Out</th>
+            <th className={cell + " font-medium"}>Cache r/w</th>
+            <th className={cell + " font-medium"}>Web</th>
+            <th className={cell + " font-medium"}>Est.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {cats.map((cat) => {
+            const b = usage.categories[cat];
+            const est = usage.estimated_cost_usd.by_category[cat] ?? 0;
+            return (
+              <tr key={cat} className="border-b border-edge/50">
+                <td className="px-2 py-1 text-left text-ink">
+                  {CATEGORY_LABEL[cat] ?? cat}
+                </td>
+                <td className={cell}>{fmt(b.input_tokens)}</td>
+                <td className={cell}>{fmt(b.output_tokens)}</td>
+                <td className={cell}>
+                  {fmt(b.cache_read_input_tokens)}/
+                  {fmt(b.cache_creation_input_tokens)}
+                </td>
+                <td className={cell}>{b.web_search_requests ?? 0}</td>
+                <td className={cell + " text-ink"}>${est.toFixed(3)}</td>
+              </tr>
+            );
+          })}
+          <tr className="font-medium text-ink">
+            <td className="px-2 py-1 text-left">
+              Total ({usage.turns} turn{usage.turns === 1 ? "" : "s"})
+            </td>
+            <td className={cell}>{fmt(usage.totals.input_tokens)}</td>
+            <td className={cell}>{fmt(usage.totals.output_tokens)}</td>
+            <td className={cell}>
+              {fmt(usage.totals.cache_read_input_tokens)}/
+              {fmt(usage.totals.cache_creation_input_tokens)}
+            </td>
+            <td className={cell}>{usage.totals.web_search_requests ?? 0}</td>
+            <td className={cell}>
+              ${usage.estimated_cost_usd.total.toFixed(3)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      {usage.cache_saved_usd > 0 && (
+        <p className="mt-2 text-[11px] text-ok">
+          Prompt caching saved ≈ ${usage.cache_saved_usd.toFixed(3)} this
+          session.
+        </p>
+      )}
+      <p className="mt-1 text-[11px] text-ink-faint">
+        Estimates from Anthropic list pricing — actual billing may differ.
+      </p>
+    </div>
+  );
 }
 
 const SOURCE_LABEL: Record<KeyStatus["source"], string> = {
@@ -32,7 +119,7 @@ export default function SettingsPanel({
   onClose,
   health,
   onKeyChange,
-  usageSection,
+  usage,
 }: Props) {
   const [status, setStatus] = useState<KeyStatus | null>(null);
   const [replaceValue, setReplaceValue] = useState("");
@@ -246,7 +333,9 @@ export default function SettingsPanel({
           {/* --- Usage (WI4) --- */}
           <section>
             <p className={label}>Usage this session</p>
-            {usageSection ?? (
+            {usage ? (
+              <UsageTable usage={usage} />
+            ) : (
               <p className="mt-2 text-xs text-ink-faint">
                 No spend recorded yet this session.
               </p>

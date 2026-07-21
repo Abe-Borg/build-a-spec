@@ -1,9 +1,10 @@
-import type { Health, UpdateCheckPayload } from "../types";
+import type { Health, UpdateCheckPayload, UsageSummary } from "../types";
 
 interface Props {
   health: Health | null;
   busy: boolean;
   update: UpdateCheckPayload | null;
+  usage: UsageSummary | null;
   onNewSession: () => void;
   onInstallUpdate: () => void;
   onOpenSettings: () => void;
@@ -13,10 +14,13 @@ export default function Header({
   health,
   busy,
   update,
+  usage,
   onNewSession,
   onInstallUpdate,
   onOpenSettings,
 }: Props) {
+  const spend = usage?.estimated_cost_usd.total ?? 0;
+  const spendLabel = spend > 0 ? `≈ $${spend.toFixed(2)}` : "—";
   const updateAvailable =
     update?.status === "UPDATE_AVAILABLE" && !!update.version;
   return (
@@ -50,6 +54,14 @@ export default function Header({
               v{update?.version} available
             </a>
           ))}
+        <button
+          onClick={onOpenSettings}
+          title="Estimated spend this session — click for the breakdown"
+          className="rounded-full border border-edge bg-raised px-3 py-1 text-xs text-ink-dim tabular-nums transition-colors hover:border-accent hover:text-accent"
+        >
+          {spendLabel}
+          <span className="ml-1 text-ink-faint">this session</span>
+        </button>
         {health && (
           <span className="flex items-center gap-2 rounded-full border border-edge bg-raised px-3 py-1 text-xs text-ink-dim">
             <span

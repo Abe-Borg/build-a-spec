@@ -58,7 +58,12 @@ export function useSmoothText(target: string, active: boolean): string {
     return () => cancelAnimationFrame(raf);
   }, [snap]);
 
-  return displayed;
+  // While snapping — reduced motion, stream end, or a shrunk target — the
+  // effect only re-runs when `snap` flips, so `displayed` can lag a growing
+  // target. Return the live target directly in that case so a
+  // reduced-motion stream never sits blank; the animated path still uses
+  // the smoothed `displayed`.
+  return snap ? target : displayed;
 }
 
 /** Split streamed markdown at the last paragraph break: `[stablePrefix, liveTail]`. */

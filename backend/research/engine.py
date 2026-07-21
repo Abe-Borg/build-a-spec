@@ -708,7 +708,12 @@ def _run_dimension(
                 item.accepted_sources = list(grounding.accepted)
                 item.grounded = grounding.has_any_grounded_citation()
 
-            tokens = _sum_token_usage(all_responses)
+            # Meter the full billed set: a retryable failure abandons its
+            # attempt's conversation but not its billed usage, so a
+            # retry-then-succeed must still account for the earlier spend
+            # (billed_responses) — the meter never under-reports.
+            billed = [*billed_responses, *all_responses]
+            tokens = _sum_token_usage(billed)
             return _DimensionOutcome(
                 status=DimensionStatus(
                     dimension_id=dimension.dimension_id,
@@ -716,10 +721,10 @@ def _run_dimension(
                     item_count=len(items),
                     grounded_count=sum(1 for i in items if i.grounded),
                     web_search_requests=sum(
-                        web_search_count(r) for r in all_responses
+                        web_search_count(r) for r in billed
                     ),
                     web_fetch_requests=sum(
-                        web_fetch_count(r) for r in all_responses
+                        web_fetch_count(r) for r in billed
                     ),
                     input_tokens=tokens.get("input_tokens", 0),
                     output_tokens=tokens.get("output_tokens", 0),

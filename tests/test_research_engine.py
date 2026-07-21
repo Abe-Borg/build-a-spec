@@ -233,6 +233,48 @@ def test_retryable_failure_retries_then_succeeds(monkeypatch):
     assert any(i.requirement == "Recovered." for i in profile.items)
 
 
+def test_retry_success_counts_billed_usage_from_abandoned_attempt(monkeypatch):
+    """A response streamed before a retryable failure is billed spend — the
+    successful DimensionStatus must include it, or the cost meter
+    under-reports (WI4)."""
+    import backend.research.engine as engine
+
+    monkeypatch.setattr(engine.time, "sleep", lambda _s: None)
+    import anthropic
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    retryable = anthropic.APIConnectionError(message="reset", request=request)
+    client = SequencedFakeClient(
+        _scripts(
+            governing_codes=[
+                # Attempt 1: streams a billed response (200 in), then pauses…
+                research_response(
+                    searched_urls=["https://a.gov"],
+                    stop_reason="pause_turn",
+                    tokens={"input": 200},
+                ),
+                # …and the continuation dies with a retryable error.
+                retryable,
+                # Attempt 2 succeeds (100 in).
+                research_response(
+                    items=[_item("Recovered.", ["https://b.gov"])],
+                    searched_urls=["https://b.gov"],
+                    tokens={"input": 100},
+                ),
+            ]
+        )
+    )
+    profile = _run(client)
+    status = next(
+        s for s in profile.dimension_statuses if s.dimension_id == "governing_codes"
+    )
+    assert status.status == "completed"
+    # 200 (abandoned but billed) + 100 (successful attempt) — not just 100.
+    assert status.input_tokens == 300
+    assert profile.usage_total()["input_tokens"] == 300
+
+
 def test_render_text_is_deterministic_and_marks_unverified():
     profile = RequirementsProfile.from_dict(
         {

@@ -90,6 +90,67 @@ def load_api_key() -> str:
     return ""
 
 
+def _mask(value: str) -> str:
+    """A never-the-key preview: an ellipsis plus the last four characters."""
+    value = (value or "").strip()
+    if len(value) <= 4:
+        return "…" + value
+    return "…" + value[-4:]
+
+
+def key_status() -> dict[str, object]:
+    """Where the key resolves from + a masked tail. Never returns the key.
+
+    Resolution mirrors :func:`load_api_key` exactly: env var (read-only),
+    then OS keyring, then the config-dir / exe-adjacent files.
+    """
+    from_env = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    if from_env:
+        return {"present": True, "source": "env", "masked": _mask(from_env)}
+    from_keyring = _keyring_get()
+    if from_keyring:
+        return {
+            "present": True,
+            "source": "keyring",
+            "masked": _mask(from_keyring),
+        }
+    for path in api_key_paths():
+        if not path.exists():
+            continue
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if value:
+            return {"present": True, "source": "file", "masked": _mask(value)}
+    return {"present": False, "source": "none", "masked": ""}
+
+
+def delete_api_key() -> dict[str, bool]:
+    """Clear the stored key from the keyring and every key file.
+
+    The ``ANTHROPIC_API_KEY`` env var cannot be cleared from here — callers
+    must surface that to the user. Returns which stores were actually
+    cleared. Errors are swallowed (a missing keyring entry is not a failure).
+    """
+    cleared_keyring = False
+    if _KEYRING_AVAILABLE and _keyring is not None:
+        try:
+            _keyring.delete_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
+            cleared_keyring = True
+        except Exception:
+            pass
+    cleared_file = False
+    for path in api_key_paths():
+        try:
+            if path.exists():
+                path.unlink()
+                cleared_file = True
+        except OSError:
+            pass
+    return {"keyring": cleared_keyring, "file": cleared_file}
+
+
 def save_api_key(value: str) -> str:
     """Persist the key; returns where it landed (``"keyring"`` / ``"file"``).
 

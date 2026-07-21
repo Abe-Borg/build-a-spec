@@ -37,6 +37,14 @@ export interface Health {
   module_id?: string;
 }
 
+/** API-key resolution status (WI3 settings panel). Never carries the key. */
+export interface KeyStatus {
+  present: boolean;
+  source: "env" | "keyring" | "file" | "none";
+  masked: string;
+  env_locked?: boolean;
+}
+
 /* --- Document model (mirrors backend/spec_doc/model.py serialization) --- */
 
 export type BlockStatus = "confirmed" | "assumed" | "needs_input" | "imported";

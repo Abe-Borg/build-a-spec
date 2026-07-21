@@ -33,6 +33,7 @@ import Header from "./components/Header";
 import ApiKeyBanner from "./components/ApiKeyBanner";
 import Chat from "./components/Chat";
 import ArtifactPanel from "./components/ArtifactPanel";
+import SettingsPanel from "./components/SettingsPanel";
 
 let nextId = 0;
 const newId = () => `m${++nextId}`;
@@ -49,6 +50,7 @@ export default function App() {
   const [research, setResearch] = useState<ResearchSnapshot | null>(null);
   const [audit, setAudit] = useState<AuditSnapshot | null>(null);
   const [update, setUpdate] = useState<UpdateCheckPayload | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
   const busyRef = useRef(false);
   const researchFollowRef = useRef(false);
@@ -454,10 +456,17 @@ export default function App() {
         update={update}
         onNewSession={newSession}
         onInstallUpdate={onInstallUpdate}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       {health && !health.api_key_present && (
         <ApiKeyBanner onSaved={refreshHealth} />
       )}
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        health={health}
+        onKeyChange={refreshHealth}
+      />
       <main className="flex min-h-0 flex-1">
         <Chat messages={messages} busy={busy} onSend={send} />
         <ArtifactPanel

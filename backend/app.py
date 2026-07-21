@@ -4,6 +4,9 @@ Endpoints (all JSON unless noted):
 
 - ``GET  /api/health``        → app/model/key status for the UI header.
 - ``POST /api/key``           → save an Anthropic API key (keyring → file).
+- ``GET  /api/key/status``    → where the key resolves from + a masked tail.
+- ``DELETE /api/key``         → remove the stored key (keyring + files).
+- ``POST /api/key/test``      → validate a candidate/stored key (no save).
 - ``POST /api/session/reset`` → clear the conversation and the document.
 - ``POST /api/chat``          → Server-Sent Events stream of turn events.
 - ``GET  /api/doc``           → current document snapshot + open questions.
@@ -33,6 +36,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import quote
 
+import anthropic
 from fastapi import FastAPI, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
@@ -45,8 +49,18 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import settings, sessions
-from .api_key_store import load_api_key, save_api_key
-from .llm.client import MissingApiKeyError, get_client, reset_client_cache
+from .api_key_store import (
+    delete_api_key,
+    key_status,
+    load_api_key,
+    save_api_key,
+)
+from .llm.client import (
+    MissingApiKeyError,
+    build_probe_client,
+    get_client,
+    reset_client_cache,
+)
 from .llm.conversation import standards_payload, stream_user_turn
 from .project_profile import ProjectProfile
 from .spec_doc import SpecEditError, lint_document, open_questions
@@ -70,6 +84,10 @@ class SaveKeyRequest(BaseModel):
 
 class EditDocRequest(BaseModel):
     ops: list[dict[str, Any]]
+
+
+class TestKeyRequest(BaseModel):
+    api_key: str | None = None
 
 
 def _sse(event: dict) -> str:
@@ -142,6 +160,56 @@ def create_app() -> FastAPI:
             )
         reset_client_cache()
         return JSONResponse({"ok": True, "stored_in": stored_in})
+
+    @app.get("/api/key/status")
+    def key_status_endpoint() -> dict:
+        """Where the key resolves from + a masked tail (never the key)."""
+        status = key_status()
+        if status.get("source") == "env":
+            status["env_locked"] = True
+        return status
+
+    @app.delete("/api/key")
+    def delete_key() -> JSONResponse:
+        """Remove the stored key (keyring + files) and drop the client cache.
+
+        The env var cannot be cleared from here; the fresh status shows
+        whether a key still resolves (e.g. an env var still set).
+        """
+        cleared = delete_api_key()
+        reset_client_cache()
+        return JSONResponse({"ok": True, "cleared": cleared, **key_status()})
+
+    @app.post("/api/key/test")
+    def test_key(body: TestKeyRequest) -> JSONResponse:
+        """Validate a candidate (or the stored) key with one cheap call.
+
+        Never stores anything as a side effect — the frontend tests, then
+        saves separately on success.
+        """
+        candidate = (body.api_key or "").strip() or load_api_key()
+        if not candidate:
+            return JSONResponse(
+                {"ok": False, "error": "No API key to test."}
+            )
+        try:
+            probe = build_probe_client(candidate)
+            probe.models.list(limit=1)
+        except MissingApiKeyError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)})
+        except anthropic.APIStatusError as exc:
+            return JSONResponse({"ok": False, "error": exc.message})
+        except anthropic.APIConnectionError:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Could not reach the Anthropic API — check "
+                    "your connection.",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 — surfaced to the user
+            return JSONResponse({"ok": False, "error": str(exc)})
+        return JSONResponse({"ok": True})
 
     @app.post("/api/session/reset")
     def reset() -> dict:

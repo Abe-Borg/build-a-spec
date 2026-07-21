@@ -4,6 +4,7 @@ import type {
   EditOp,
   Health,
   ImportResultPayload,
+  KeyStatus,
   ProjectLoadResult,
   ResearchEvent,
   ResearchSnapshot,
@@ -31,6 +32,36 @@ export async function saveApiKey(apiKey: string): Promise<void> {
 
 export async function resetSession(): Promise<void> {
   await fetch("/api/session/reset", { method: "POST" });
+}
+
+/* --- API key management (WI3) --- */
+
+export async function getKeyStatus(): Promise<KeyStatus> {
+  const resp = await fetch("/api/key/status");
+  if (!resp.ok) throw new Error(`key status ${resp.status}`);
+  return resp.json();
+}
+
+export async function deleteKey(): Promise<KeyStatus> {
+  const resp = await fetch("/api/key", { method: "DELETE" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `delete failed (${resp.status})`);
+  }
+  return data;
+}
+
+/** Validate a candidate (or the stored) key; never stores it. */
+export async function testKey(
+  apiKey?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const resp = await fetch("/api/key/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(apiKey ? { api_key: apiKey } : {}),
+  });
+  if (!resp.ok) return { ok: false, error: `test failed (${resp.status})` };
+  return resp.json();
 }
 
 export async function getDoc(): Promise<DocPayload> {

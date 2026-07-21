@@ -11,6 +11,7 @@ import type {
   ReadinessPayload,
   ResearchEvent,
   ResearchSnapshot,
+  SectionDiffPayload,
   StreamEvent,
   UpdateCheckPayload,
   UsageSummary,
@@ -94,6 +95,21 @@ async function stepDoc(direction: "undo" | "redo"): Promise<DocPayload | null> {
 
 export const undoDoc = () => stepDoc("undo");
 export const redoDoc = () => stepDoc("redo");
+
+/** Version diff for the in-app compare view (Batch 5). cur defaults to head. */
+export async function getDocDiff(
+  base: number,
+  cur?: number,
+): Promise<SectionDiffPayload> {
+  const query =
+    cur === undefined ? `?base=${base}` : `?base=${base}&cur=${cur}`;
+  const resp = await fetch(`/api/doc/diff${query}`);
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `diff failed (${resp.status})`);
+  }
+  return data;
+}
 
 /** Apply a manual edit batch (WI2). 409 while a model turn streams. */
 export async function editDoc(ops: EditOp[]): Promise<DocPayload> {

@@ -454,3 +454,73 @@ def test_load_rejects_malformed_overrides():
     with pytest.raises(ValueError, match="Malformed document data"):
         store.load({"versions": [snapshot], "index": 0})
     assert store.doc.is_empty()
+
+
+# ---------------------------------------------------------------------------
+# Redline baseline bookkeeping (Batch 5)
+# ---------------------------------------------------------------------------
+
+
+def _importable_section() -> SpecSection:
+    section = SpecSection.empty()
+    section.number = "21 13 13"
+    section.title = "WET-PIPE SPRINKLER SYSTEMS"
+    return section
+
+
+def test_adopt_import_sets_baseline_index():
+    store = DocumentStore()
+    assert store.baseline_index is None
+    store.adopt_imported(_importable_section())
+    assert store.index == 1 and store.baseline_index == 1
+
+
+def test_baseline_survives_forward_edits_and_save_load():
+    store = DocumentStore()
+    store.adopt_imported(_importable_section())
+    # Editing forward keeps the baseline pointing at the master version.
+    store.begin_turn()
+    store.apply_edits([{"action": "add_article", "target_id": "pt1", "text": "SCOPE"}])
+    store.commit_turn()
+    assert store.index == 2 and store.baseline_index == 1
+
+    data = store.to_dict()
+    assert data["baseline_index"] == 1
+    restored = DocumentStore()
+    restored.load(data)
+    assert restored.baseline_index == 1
+
+
+def test_baseline_absence_and_out_of_range_degrade_to_none():
+    store = DocumentStore()
+    store.adopt_imported(_importable_section())
+    data = store.to_dict()
+    # Old project files predate baseline_index -> None (not a load failure).
+    legacy = {"versions": data["versions"], "index": data["index"]}
+    restored = DocumentStore()
+    restored.load(legacy)
+    assert restored.baseline_index is None
+    # An out-of-range value also degrades to None.
+    bad = {**data, "baseline_index": 99}
+    restored2 = DocumentStore()
+    restored2.load(bad)
+    assert restored2.baseline_index is None
+
+
+def test_baseline_dropped_when_its_version_is_truncated():
+    store = DocumentStore()
+    store.adopt_imported(_importable_section())  # index 1, baseline 1
+    assert store.undo()  # back to the empty version 0
+    # A new edit after undo truncates version 1 (the master) — the baseline
+    # no longer exists, so the marker must clear.
+    store.begin_turn()
+    store.apply_edits([{"action": "add_article", "target_id": "pt1", "text": "NEW"}])
+    store.commit_turn()
+    assert store.baseline_index is None
+
+
+def test_reset_clears_baseline():
+    store = DocumentStore()
+    store.adopt_imported(_importable_section())
+    store.reset()
+    assert store.baseline_index is None

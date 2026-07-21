@@ -3,7 +3,7 @@
  * tree, a per-turn version stepper (undo/redo), export / save / open
  * actions, and the open-items list ([TBD] markers + needs-input blocks).
  */
-import { useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   EditOp,
   LintIssue,
@@ -11,6 +11,8 @@ import type {
   QcSnapshot,
   ReadinessPayload,
   ResearchSnapshot,
+  SectionDiff,
+  SectionDiffPayload,
   SpecDoc,
   StandardInfo,
   UsageSummary,
@@ -32,6 +34,7 @@ interface Props {
   readiness: ReadinessPayload | null;
   usage: UsageSummary | null;
   changedIds: ReadonlySet<string>;
+  baselineIndex: number | null;
   busy: boolean;
   onUndo: () => void;
   onRedo: () => void;
@@ -44,6 +47,7 @@ interface Props {
   onDismissQc: (findingId: string, reason?: string) => void;
   onDraftFull: () => void;
   onAskModel: (text: string) => void;
+  onFetchDiff: (base: number, cur?: number) => Promise<SectionDiffPayload>;
 }
 
 function EmptyState() {
@@ -96,6 +100,7 @@ export default function ArtifactPanel({
   readiness,
   usage,
   changedIds,
+  baselineIndex,
   busy,
   onUndo,
   onRedo,
@@ -108,6 +113,7 @@ export default function ArtifactPanel({
   onDismissQc,
   onDraftFull,
   onAskModel,
+  onFetchDiff,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
@@ -136,6 +142,66 @@ export default function ArtifactPanel({
     doc?.parts.reduce((n, p) => n + p.articles.length, 0) ?? 0;
   const isSparse = articleCount < 3;
   const draftPulse = isSparse && research?.status === "complete";
+
+  // --- Compare (diff) mode (Batch 5) ---
+  const curIndex = version.index;
+  const versionCount = version.count;
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareBase, setCompareBase] = useState<number | null>(null);
+  const [diff, setDiff] = useState<SectionDiff | null>(null);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+
+  // Compare is a transient view of (base → current). Any version change
+  // (edit, undo/redo, new turn) invalidates the diff — leave compare mode.
+  useEffect(() => {
+    setCompareMode(false);
+    setExportMenuOpen(false);
+  }, [curIndex, versionCount]);
+
+  const loadDiff = useCallback(
+    async (base: number) => {
+      setCompareBase(base);
+      setDiff(null);
+      setDiffError(null);
+      try {
+        setDiff(await onFetchDiff(base, curIndex));
+      } catch (e) {
+        setDiffError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [onFetchDiff, curIndex],
+  );
+
+  const enterCompare = () => {
+    const defaultBase =
+      baselineIndex !== null && baselineIndex !== curIndex
+        ? baselineIndex
+        : Math.max(0, curIndex - 1);
+    setCompareMode(true);
+    void loadDiff(defaultBase);
+  };
+
+  // Base-version options: master pinned first, then each other version.
+  const baseOptions = useMemo(() => {
+    const opts: { value: number; label: string }[] = [];
+    if (baselineIndex !== null && baselineIndex !== curIndex) {
+      opts.push({
+        value: baselineIndex,
+        label: `Master (import) · v${baselineIndex + 1}`,
+      });
+    }
+    for (let i = 0; i < versionCount; i += 1) {
+      if (i === curIndex || i === baselineIndex) continue;
+      opts.push({
+        value: i,
+        label: i === 0 ? "Blank start · v1" : `Version v${i + 1}`,
+      });
+    }
+    return opts;
+  }, [baselineIndex, curIndex, versionCount]);
+
+  const canCompare = versionCount > 1 || baselineIndex !== null;
 
   const scrollToElement = (elementId: string) => {
     document
@@ -178,7 +244,7 @@ export default function ArtifactPanel({
           <button
             className={actionButton}
             onClick={onUndo}
-            disabled={busy || version.index === 0}
+            disabled={busy || compareMode || version.index === 0}
             title="Step back one version"
           >
             ‹
@@ -189,29 +255,88 @@ export default function ArtifactPanel({
           <button
             className={actionButton}
             onClick={onRedo}
-            disabled={busy || version.index >= version.count - 1}
+            disabled={busy || compareMode || version.index >= version.count - 1}
             title="Step forward one version"
           >
             ›
           </button>
-          <span className="mx-1 h-4 w-px bg-edge" />
-          {/* Downloads are disabled while a turn streams: mid-turn the live
-              doc holds provisional edits and the version history only holds
-              committed ones — either download would be misleading. The href
-              is dropped entirely while disabled so keyboard activation
-              (Tab + Enter) can't navigate either. */}
-          <a
+          <button
             className={
-              actionButton +
-              (hasContent && !busy ? "" : " pointer-events-none opacity-40")
+              actionButton + (compareMode ? " border-accent text-accent" : "")
             }
-            href={hasContent && !busy ? "/api/export/docx" : undefined}
-            aria-disabled={!hasContent || busy}
-            download
-            title="Export the section as .docx with the assumptions schedule"
+            onClick={() => (compareMode ? setCompareMode(false) : enterCompare())}
+            disabled={busy || !canCompare}
+            title={
+              canCompare
+                ? "Compare the current version against the master or a prior version"
+                : "Compare needs a prior version or an imported master"
+            }
           >
-            Export .docx
-          </a>
+            {compareMode ? "Exit compare" : "Compare"}
+          </button>
+          <span className="mx-1 h-4 w-px bg-edge" />
+          {/* Export menu (Batch 5): clean, or a genuine tracked-changes
+              redline vs the master / a chosen version. Downloads are disabled
+              while a turn streams — mid-turn the live doc holds provisional
+              edits and only committed versions are downloadable. */}
+          <div className="relative">
+            <button
+              className={
+                actionButton +
+                (hasContent && !busy ? "" : " pointer-events-none opacity-40")
+              }
+              onClick={() => setExportMenuOpen((open) => !open)}
+              disabled={!hasContent || busy}
+              title="Export the section as .docx"
+            >
+              Export ▾
+            </button>
+            {exportMenuOpen && (
+              <div
+                className="absolute right-0 z-20 mt-1 w-56 rounded-md border border-edge bg-raised py-1 text-[11px] shadow-lg"
+                onMouseLeave={() => setExportMenuOpen(false)}
+              >
+                <a
+                  className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
+                  href="/api/export/docx"
+                  download
+                  onClick={() => setExportMenuOpen(false)}
+                  title="Plain .docx with the assumptions / open-items schedules"
+                >
+                  Export clean
+                </a>
+                {baselineIndex !== null && (
+                  <a
+                    className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
+                    href="/api/export/docx?redline=master"
+                    download
+                    onClick={() => setExportMenuOpen(false)}
+                    title="Tracked-changes .docx vs the imported master — Accept All yields this draft, Reject All yields the master"
+                  >
+                    Redline vs master
+                  </a>
+                )}
+                {compareMode && compareBase !== null ? (
+                  <a
+                    className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
+                    href={`/api/export/docx?redline=version&base=${compareBase}`}
+                    download
+                    onClick={() => setExportMenuOpen(false)}
+                    title="Tracked-changes .docx vs the version selected in compare mode"
+                  >
+                    Redline vs version…
+                  </a>
+                ) : (
+                  <span
+                    className="block cursor-default px-3 py-1.5 text-ink-faint"
+                    title="Enter compare mode and pick a version first"
+                  >
+                    Redline vs version…
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
           <a
             className={
               actionButton + (busy ? " pointer-events-none opacity-40" : "")
@@ -268,8 +393,50 @@ export default function ArtifactPanel({
         </div>
       </div>
 
+      {compareMode && (
+        <div className="flex flex-wrap items-center gap-3 border-b border-edge bg-bg/40 px-5 py-2 text-[11px]">
+          <span className="font-medium tracking-wide text-ink-dim uppercase">
+            Comparing
+          </span>
+          <select
+            className="rounded border border-edge bg-raised px-2 py-1 text-[11px] text-ink"
+            value={compareBase ?? ""}
+            onChange={(e) => void loadDiff(Number(e.target.value))}
+          >
+            {baseOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <span className="text-ink-faint">→ current v{curIndex + 1}</span>
+          {diff && (
+            <span className="flex items-center gap-2 text-ink-dim tabular-nums">
+              <span className="text-ok">+{diff.stats.inserted} added</span>
+              <span className="text-err">−{diff.stats.deleted} removed</span>
+              <span>{diff.stats.changed} edited</span>
+              {diff.status_changes.length > 0 && (
+                <span className="text-ink-faint">
+                  · {diff.status_changes.length} status
+                </span>
+              )}
+            </span>
+          )}
+          {diffError && <span className="text-err">{diffError}</span>}
+          {!diff && !diffError && <span className="text-ink-faint">Loading…</span>}
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto p-6">
-        {hasContent && doc ? (
+        {compareMode ? (
+          diff && doc ? (
+            <SpecDocument doc={doc} changedIds={changedIds} diff={diff} />
+          ) : (
+            <div className="mx-auto max-w-2xl text-center text-sm text-ink-faint">
+              {diffError ?? "Loading comparison…"}
+            </div>
+          )
+        ) : hasContent && doc ? (
           <SpecDocument
             doc={doc}
             changedIds={changedIds}

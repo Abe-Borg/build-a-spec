@@ -1,3 +1,58 @@
+## As built (2026-07-21)
+
+**Status: shipped as v1.0.0.** All three work items landed; 221 backend tests
+green (+26 new), frontend builds clean, version gate at 1.0.0.
+
+What shipped, per the plan:
+
+- **WI1 — diff engine (`backend/spec_doc/diffing.py`).** Pure
+  `diff_sections(base, cur) -> SectionDiff`: uid join
+  (unchanged/changed/inserted/deleted, deleted spliced at base position, moves
+  unmarked), word-level `token_runs` (`re.findall(r'\S+\s*')` +
+  `SequenceMatcher(autojunk=False)`, byte-exact reconstruction of both texts),
+  `status_changes` for status-only deltas, `stats`. `SectionDiff`/`ElementDiff`/
+  `DiffRun`/`StatusChange` dataclasses with `to_dict`. `DocumentStore.baseline_index`
+  set by `adopt_imported`, cleared on truncation + reset, persisted through
+  `to_dict`/`load` (old files tolerate absence → None).
+- **WI2 — tracked-changes writer.** `build_docx(..., redline=SectionDiff,
+  redline_date=None)` builds `w:ins`/`w:del`/`w:delText` + paragraph-mark
+  ins/del with `docx.oxml`; sequential-unique `w:id`, author = `settings.APP_NAME`,
+  ISO-8601 `w:date`. Clean body extracted to `_render_clean_body`, byte-identical
+  to v0.9.0 (pinned). `GET /api/export/docx?redline=master|version&base=N`
+  (400 no-baseline; ` - REDLINE` filename). The killer round-trip invariant is a
+  test: Accept-All(redline) == clean(cur), Reject-All(redline) == clean(base).
+- **WI3 — in-app diff view.** `GET /api/doc/diff?base=N[&cur=M]`; `types.ts`
+  mirror; `ArtifactPanel` Compare toggle + base picker (Master pinned) + stat
+  line + export menu; `SpecDocument` read-only diff render via a `diff` prop;
+  diff CSS in `index.css`.
+
+Deviations (each with why):
+
+1. **Round-trip assertion compares resolved views, not raw text.** The plan's
+   "reproduce the CURRENT document text exactly" is asserted as
+   Accept-All(redline) == a clean export of cur (and Reject-All == clean base),
+   because the clean export's `(Not used.)` line for empty parts is pre-existing
+   behavior — comparing resolved Accept/Reject views is the honest invariant.
+   Both the real `parse_master_docx` importer and a custom reject-all reader are
+   exercised.
+2. **Compare view lives inside `SpecDocument.tsx`** as a `DiffDocument`
+   subcomponent gated by a `diff` prop (not a mutation of the editable
+   renderer) — literally "SpecDocument renders diff mode", kept read-only.
+3. **No vitest toolchain added.** The diff contract is pinned by the Python
+   suite (`test_diffing.py`), and the frontend consumes the identical
+   serialization, so compare-vs-export parity is inherent (matching the plan's
+   steer for the review-queue contract in Batch 3).
+4. **`baseline_index` in `_doc_payload`.** Added so the compare picker knows a
+   master exists without first fetching a diff (the plan implied it; made explicit).
+
+Manual QA still required before release (see the checklist handed back at
+batch close): open a redline in **real Word** — reviewing pane shows
+"Build-a-Spec" as author; Accept All yields the current doc; Reject All yields
+the master; word-level edits read cleanly; deleted paragraphs collapse on
+accept.
+
+---
+
 # Batch 5 — Redline export (real tracked changes) + in-app version diff
 
 Ships as **v1.0.0** — the release milestone, because this is the single

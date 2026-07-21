@@ -38,7 +38,9 @@ backend/
                            /api/draft/full (Batch 3 directive); doc/undo/redo/edit,
                            docx export, project save/load endpoints; Batch 4 adds
                            /api/qc/start|status|stream|apply|dismiss|export +
-                           /api/readiness (audit endpoints kept, deprecated)
+                           /api/readiness (audit endpoints kept, deprecated); Batch 5
+                           adds GET /api/doc/diff + ?redline=master|version on
+                           /api/export/docx (+ baseline_index in _doc_payload)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides);
@@ -119,8 +121,15 @@ backend/
                            (confirmed/assumed/needs_input/imported);
                            transactional apply_edits; edition_overrides +
                            project_profile on the tree; DocumentStore (per-turn
-                           versions, undo/redo, adopt_imported); open_questions;
-                           outline; APPLY_SPEC_EDITS_TOOL schema
+                           versions, undo/redo, adopt_imported; Batch 5 baseline_index
+                           = redline master version, cleared on truncation, persisted);
+                           open_questions; outline; APPLY_SPEC_EDITS_TOOL schema
+  spec_doc/diffing.py      [Batch 5] pure diff_sections(base, cur) -> SectionDiff:
+                           uid join (unchanged/changed/inserted/deleted, deleted at
+                           base position, moves unmarked), word-level token_runs
+                           (re.findall \S+\s* + SequenceMatcher, byte-exact
+                           reconstruction), status_changes (status-only, no marks),
+                           stats; feeds the redline writer + the compare view
   spec_doc/importer.py     [PORT: Spec Critic src/input/extractor.py mechanics]
                            Accept-All tracked-changes text, content-loss
                            warning; native SectionFormat tree builder (labels
@@ -131,9 +140,14 @@ backend/
                            empty/duplicate articles, unset header
   spec_doc/docx_export.py  python-docx rendering + assumptions/open-items schedules;
                            Batch 4 adds build_qc_memo (standalone QC memo) + a QC
-                           closing that supersedes the audit closing in build_docx
+                           closing that supersedes the audit closing in build_docx;
+                           Batch 5 adds the redline body writer (build_docx(...,
+                           redline=SectionDiff): w:ins/w:del/w:delText + para-mark
+                           ins/del via docx.oxml; clean path untouched, byte-stable)
+                           + redline_filename
   spec_doc/project.py      JSON project files (save/resume) + chat transcript +
-                           module_id + audit_result + qc_result
+                           module_id + audit_result + qc_result (baseline_index
+                           rides store.to_dict/load — no project.py change)
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
                            FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message)
@@ -142,11 +156,12 @@ backend/
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
-                           settings-open, send loop (SSE switch incl.
+                           baselineIndex, settings-open, send loop (SSE switch incl.
                            status/thinking_delta); QC follow-stream + accept/dismiss
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
                            draftFull; key status/delete/test; usage; Batch 4 qc
-                           start/status/stream/apply/dismiss + readiness
+                           start/status/stream/apply/dismiss + readiness; Batch 5
+                           getDocDiff
   lib/useSmoothText.ts     [Batch 2] rAF typewriter smoothing + reduced-motion +
                            splitStableTail (cheap-markdown prefix/tail split)
   lib/reviewQueue.ts       [Batch 3] pure buildQueue(doc, mode) — the review
@@ -154,14 +169,16 @@ frontend/src/
                            reviewCounts (outstanding imported/assumed)
   components/*             Chat / MessageBubble (smoothing + thinking block) /
                            Composer (WI2 ask-model prefill) / ArtifactPanel (stepper,
-                           export, save/open, ⚠ badge, "Draft full section" button,
+                           Batch 5 Compare toggle + base picker + stat line + export
+                           menu, save/open, ⚠ badge, "Draft full section" button,
                            open items) / ReviewDrawer (Batch 3 keyboard review walk) /
                            IssuesDrawer (lint + StandardsStrip) / ResearchDrawer
                            (research only — audit UI retired in Batch 4) / QCDrawer
                            (Batch 4: readiness checklist, lens progress, accept/dismiss
                            fix queue, hold-to-apply-criticals, refuted appendix) /
                            SpecDocument (paper rendering + inline manual-edit
-                           affordances) / Header (spend ticker) / ApiKeyBanner /
+                           affordances; Batch 5 read-only diff render via `diff` prop)
+                           / Header (spend ticker) / ApiKeyBanner /
                            StatusStrip (live status strip) / SettingsPanel (key mgmt +
                            usage table + about)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
@@ -179,6 +196,15 @@ tests/
                            kills, median severity), ops validation, apply (one undo
                            step + stale skip), dismiss memory, runner lifecycle,
                            readiness, memo export, Fable-priced usage
+  test_diffing.py          [Batch 5] diff_sections units: identical/insert/delete/
+                           text-edit (byte-exact run invariants) / nested / article
+                           title / move-not-marked / status-only / section header /
+                           vs-empty / token_runs whitespace / serialization
+  test_redline_export.py   [Batch 5] Accept-All==cur & Reject-All==base round-trip
+                           (real importer + custom reject reader), XML shapes
+                           (author/date/unique id, w:delText not w:t, para-mark
+                           ins/del), doc/diff + redline API validation, no-baseline
+                           400, baseline_index project round-trip, clean-path no-marks
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -202,13 +228,22 @@ Each frame is `data: <json>\n\n`. Event types:
 The frontend switch in `App.tsx#send` is the single place events dispatch.
 Snapshots outside a turn travel over REST, not SSE: `GET /api/doc`,
 `POST /api/doc/undo|redo`, and `POST /api/project/load` all return
-`{doc, open_questions, lint, standards, profile_complete, research_status}`
-(load adds `chat`, the rebuilt transcript). Patches and snapshots always
-carry the full tree — the frontend never applies ops itself. The Batch 3
-full-draft pass adds NO SSE event: `POST /api/draft/full` returns the canned
-directive `{ok, message}` over REST (409 while a turn or research runs) and
-the frontend sends `message` straight back through `POST /api/chat`, so the
-pass is an ordinary turn on the one streaming path.
+`{doc, open_questions, lint, standards, profile_complete, research_status,
+baseline_index}` (load adds `chat`, the rebuilt transcript; `baseline_index`
+is the imported-master version for the redline picker). Patches and snapshots
+always carry the full tree — the frontend never applies ops itself. The
+Batch 3 full-draft pass adds NO SSE event: `POST /api/draft/full` returns the
+canned directive `{ok, message}` over REST (409 while a turn or research runs)
+and the frontend sends `message` straight back through `POST /api/chat`, so
+the pass is an ordinary turn on the one streaming path.
+
+The Batch 5 redline/compare surface is REST-only, adds NO SSE event: `GET
+/api/doc/diff?base=N[&cur=M]` returns a serialized `SectionDiff`
+(`{ok, elements, status_changes, stats, base_index, cur_index,
+baseline_index}`; 400 out-of-range or base==cur), and `GET
+/api/export/docx?redline=master|version&base=N` streams a tracked-changes
+`.docx` (400 when `redline=master` and no baseline; filename gains
+` - REDLINE`). The clean `GET /api/export/docx` is byte-identical to before.
 
 Research has its own channel (a run outlives any one chat turn):
 `POST /api/research/start` (400 incomplete profile / no key; 409 while
@@ -687,6 +722,78 @@ table ($10/$50; VERIFIED against the claude-api reference 2026-07).
   stop_reason → the lens fails clean under the existing failure policy.
   Fable 5 requires 30-day data retention — a ZDR org 400s every QC request
   (operational caveat, not a code concern).
+
+## Batch 5 — implemented notes (v1.0.0: redline export + version diff)
+
+The 1.0 release milestone: a `.docx` with genuine Word tracked changes
+showing exactly what Build-a-Spec did to the office master. One deterministic
+diff engine powers both the export and an in-app compare view. No new SSE
+events, no new env vars, no new Python deps (`difflib` is stdlib).
+
+- **The diff engine (`spec_doc/diffing.py`) is pure and deterministic** — no
+  model, no I/O. `diff_sections(base, cur) -> SectionDiff` joins the two trees
+  by **stable uid** (an id join, never a fuzzy text match): in-both →
+  `unchanged`/`changed` by normalized text; cur-only → `inserted`; base-only →
+  `deleted`, spliced into the merged order at its base position relative to
+  surviving siblings. **Pure moves are NOT marked** (frozen decision — display
+  numbering is positional and recomputes; marking a move as delete+insert is
+  noise). **Status-only changes** (text identical, provenance status moved)
+  land in `status_changes`, never a redline mark. `changed` elements carry
+  **word-level** `runs` (`re.findall(r'\S+\s*')` keeping whitespace attached +
+  `SequenceMatcher(autojunk=False)`): joining the non-`del` runs reconstructs
+  `cur_text` byte-exact, non-`ins` reconstructs `base_text` (stored provision
+  text is always stripped, so nothing is lost). Parts (pt1/pt2/pt3) are fixed
+  structural headings, never counted in `stats`. `diff_sections` knows nothing
+  about "the master" — vs-master is `base = versions[baseline_index]`, vs-empty
+  is `base = versions[0]` (the always-present empty snapshot).
+- **Baseline bookkeeping.** `DocumentStore.baseline_index` (None for
+  from-scratch) is set to the post-import version by `adopt_imported`, cleared
+  by `reset`, persisted in `to_dict`/restored in `load` (old files tolerate
+  absence + out-of-range → None). `commit_turn` drops it when a new edit after
+  undo truncates the version it points at (the master was abandoned). It rides
+  the project file for free through `store.to_dict()`/`store.load()`.
+- **The redline `.docx` writer** extends `build_docx(..., redline=SectionDiff,
+  redline_date=None)`. python-docx has no tracked-changes API, so `w:ins`/
+  `w:del`/`w:delText` and the deleted/inserted paragraph *marks*
+  (`w:pPr/w:rPr/<w:ins|w:del>`) are built with `docx.oxml`, mirroring the
+  shapes the importer's tests manufacture. `w:id` is sequential-unique;
+  `w:author = settings.APP_NAME`; `w:date` is ISO-8601 `…Z` (VERIFIED against
+  ECMA-376 2026-07). Tabs become `w:tab`; token whitespace uses
+  `xml:space=preserve`. The clean (non-redline) body path is extracted
+  verbatim into `_render_clean_body` and is **byte-identical to v0.9.0** (a
+  test pins it). Schedules (assumptions/imported/open-items/QC closing) always
+  render plainly from the current section, never redlined.
+- **The killer invariant (tested):** re-importing the redlined export through
+  the real Accept-All resolver reproduces the current document; a Reject-All
+  reading (custom test extractor: keep `w:del`/`w:delText`, drop `w:ins`, drop
+  paragraph-mark-inserted paragraphs) reproduces the baseline. So **Accept All
+  in Word == the issued draft, Reject All == the master.**
+- **API (REST-only).** `GET /api/doc/diff?base=N[&cur=M]` (cur defaults to
+  head; 400 out-of-range or base==cur) returns the serialized diff.
+  `GET /api/export/docx?redline=master|version&base=N` streams the tracked-
+  changes `.docx` (400 when `redline=master` and `baseline_index is None`;
+  filename gains ` - REDLINE`). `_doc_payload` now carries `baseline_index`.
+- **Frontend.** `ArtifactPanel` gains a **Compare** toggle (disabled without a
+  prior version or master) that opens a base picker (Master pinned first when a
+  master was imported, else Blank start / each prior version), a `+N/−M/K
+  edited` stat line + status-changes count, and renders the diff read-only via
+  `SpecDocument`'s new `diff` prop (ins green/underline, del red/strikethrough,
+  inserted/deleted whole-block left-border + badge, status-change footer
+  strip). Compare mode exits automatically on any version change (the diff
+  would be stale). The single Export button became a small menu: *Export
+  clean* / *Redline vs master* (shown only with a baseline) / *Redline vs
+  version…* (uses the compare selection). Because the compare view and the
+  export read the *same* serialized diff, they match run-for-run.
+- **Deviations from the plan:** (1) the round-trip test asserts
+  Accept-All(redline) == a clean export of cur (and Reject-All == clean base)
+  rather than raw text equality — the clean-export `(Not used.)` line for
+  empty parts is pre-existing behavior, so comparing resolved views is the
+  honest invariant; both the real importer path and a custom reject reader are
+  exercised. (2) The compare view is a `diff` prop *inside* `SpecDocument.tsx`
+  (a `DiffDocument` subcomponent) rather than mutating the editable renderer —
+  literally "SpecDocument renders diff mode", kept read-only. (3) No vitest was
+  added; the diff contract is pinned by the Python suite and the frontend
+  consumes the identical serialization.
 
 ## Commands
 

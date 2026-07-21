@@ -15,14 +15,26 @@ PROJECT_KIND = "buildaspec-project"
 PROJECT_FORMAT = 1
 
 
-def save_project(history: list[dict[str, Any]], store) -> dict[str, Any]:
-    return {
+def save_project(
+    history: list[dict[str, Any]],
+    store,
+    module_id: str = "",
+    requirements_profile: dict[str, Any] | None = None,
+    audit_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
         "kind": PROJECT_KIND,
         "format": PROJECT_FORMAT,
         "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "module_id": module_id,
         "history": history,
         "doc": store.to_dict(),
     }
+    if requirements_profile:
+        payload["requirements_profile"] = requirements_profile
+    if audit_result:
+        payload["audit_result"] = audit_result
+    return payload
 
 
 def chat_transcript(history: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -89,5 +101,26 @@ def load_project(data: Any, session) -> None:
     session.history.clear()
     session.history.extend(history)
     session.doc.load(doc_data)
+    # Module resolution degrades to the default on unknown/missing ids —
+    # the same posture as Spec Critic's registry (a file from a build with
+    # more modules still opens; the lint/prompt basis is then the default
+    # module's, which the standards block makes visible, never silent).
+    from ..spec_modules import get_module
+
+    session.module = get_module(data.get("module_id"))
+    # A completed research profile rides the project file; a malformed one
+    # degrades to "not researched" rather than failing the load (the doc
+    # and history are the load-bearing content).
+    from ..compliance import AuditRunner
+    from ..research import RequirementsProfile, ResearchRunner
+
+    session.research = ResearchRunner()
+    restored = RequirementsProfile.from_dict(data.get("requirements_profile"))
+    if restored is not None:
+        session.research.restore(restored)
+    session.audit = AuditRunner()
+    audit_result = data.get("audit_result")
+    if isinstance(audit_result, dict) and audit_result.get("coverage"):
+        session.audit.restore(audit_result)
     # Invalidate any turn that was still streaming against the old state.
     session.generation += 1

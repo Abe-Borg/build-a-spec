@@ -15,60 +15,79 @@ Spec Critic dependency; 3–5 do.
 
 ---
 
-## Phase 3 — Spec modules, pinned standards, live linting
+## Phase 3 — Spec modules, pinned standards, live linting ✅ SHIPPED (v0.3.0)
 
-**Goal:** discipline knowledge moves out of the hardcoded system prompt into
-frozen, registry-validated `SpecModule` objects — Spec Critic's
-`ReviewModule` architecture, pointed at authoring instead of review.
+**As built (2026-07-21).** All five work items landed as planned; details
+in `CLAUDE.md` → "Phase 3 — implemented notes". Deviations from the
+original sketch worth knowing when reading the code:
 
-### Work items
+- **Edition overrides became a document op.** `set_standard_edition`
+  (target `sec`; `standard` + `edition` + required `basis`; empty edition
+  removes) rather than any UI form — overrides live on the tree
+  (`SpecSection.edition_overrides`), so they ride the existing
+  transactional apply / undo / project-file machinery for free. The model
+  records one only when the user states the adoption; Phase 4 research
+  will become the second legitimate source.
+- **Pins = current published editions** (NFPA 13-2025, 14-2024, 20-2025,
+  22-2023, 24-2025, 25-2026, 72-2025, 75-2024, 76-2024, 291-2025,
+  2001-2025, 855-2026; IBC/IFC 2024 as model-code context), verified
+  2026-07 with receipts in `docs/standards_provenance.md`. Deliberately
+  NOT Spec Critic's I-code-referenced editions — drafting defaults to
+  current, jurisdiction overrides once known. (Checked: the NFPA
+  13D/13R/24/291-into-13 consolidation did not happen.)
+- **"Detector vocabulary" shrank to `lint_extra_marker_patterns`.** The
+  stale-edition vocabulary falls out of the pins themselves (per-name
+  citation patterns incl. the REFERENCES-line shape), so the module only
+  contributes extra marker regexes. The Spec Critic year/abbreviation
+  vocabulary wasn't needed.
+- Catalog: 21 13 13 carries the full playbook (`playbook_depth="full"`);
+  21 13 16 / 21 13 19 / 21 30 00 / 21 11 00 / 21 12 00 / 21 05 00 /
+  21 22 00 are catalog-depth entries the model drafts from conventions +
+  pins.
+- Frontend surfaces: ⚠ count badge in the panel header, an Issues drawer
+  (click-to-jump), and a collapsible Standards strip (overrides
+  highlighted with basis) — `IssuesDrawer.tsx`.
 
-1. **Port the standards machinery.** `Claude-Spec-Critic/src/core/code_cycles.py`
-   → `backend/standards.py`: keep `StandardEdition` / `BaseCode` (frozen
-   dataclasses with maintainer `source` provenance fields and the
-   `edition_phrase` / `description` rendering helpers); drop the
-   California-cycle-specific wiring. Every pinned edition must carry a
-   `source`; entries not confirmed against a published adoption are prefixed
-   `UNVERIFIED`, same convention as Spec Critic.
-2. **New `backend/spec_modules/`** mirroring `src/modules/` in Spec Critic:
-   - `base.py`: frozen `SpecModule` dataclass + import-time
-     `validate_module_registry` (bad prompt slots / inconsistent vocabulary
-     fail at startup, never mid-session).
-   - `registry.py`: `AVAILABLE_MODULES` / `DEFAULT_MODULE` / `get_module`.
-   - `hyperscale_fire.py`: the first module. Seed its content from
-     `src/modules/datacenter_fire.py` (code basis, keywords, research
-     dimensions — the research dimensions stay dormant until Phase 4).
-3. **SpecModule contents (initial shape — refine during build):**
-   module_id + display name; **section catalog** (21 13 13 wet-pipe first;
-   siblings like dry-pipe, preaction, fire pumps, and common-work sections
-   added incrementally); **interview playbook** (ordered topic graph, each
-   topic with its recommended default and whether it is non-defaultable);
-   **code basis + pinned `StandardEdition` collection** (NFPA 13-2025
-   default; the exact pin list is authored during this phase with provenance
-   sources, and jurisdiction-adopted earlier editions override once known —
-   never silently); **drafting prompt slots** (system prompt becomes a
-   template rendered from the module, and the pinned editions render the
-   PART 1 REFERENCES article data); **detector vocabulary** for linting.
-4. **Live linting.** Deterministic, no-API checks run on every document
-   mutation, modeled on Spec Critic's preprocessor detectors
-   (`src/input/preprocessor.py` is the vocabulary/pattern reference):
-   unresolved `[TBD]`s and `needs_input` blocks (already tracked), empty
-   articles, standard references that contradict the module's pinned
-   editions (stale-edition detection), duplicate headings, placeholder/
-   template markers. Surface as panel badges + an issues drawer; issues are
-   advisory, never blocking.
-5. **Tests:** registry validation failure modes (startup rejection), lint
-   detector cases, REFERENCES-article generation from pins, module-rendered
-   prompt snapshot tests.
-
-### Spec Critic files to read/port
-`src/modules/base.py`, `src/modules/registry.py`,
-`src/modules/datacenter_fire.py`, `src/core/code_cycles.py`,
-`src/input/preprocessor.py` (detector patterns only).
+78 hermetic tests green; suite grew from 28 (test_standards,
+test_spec_modules, test_linting + API/model extensions).
 
 ---
 
-## Phase 4 — Research agents (AHJ / client / insurer)
+## Phase 4 — Research agents (AHJ / client / insurer) ✅ SHIPPED (v0.4.0)
+
+**As built (2026-07-21).** The near-verbatim port landed; details in
+`CLAUDE.md` → "Phase 4 — implemented notes". Deviations from the sketch
+below worth knowing when reading the code:
+
+- **Profile capture is conversational, not a form** — the
+  `set_project_profile` op on the tree (model records it as the user
+  states location/client; undo/save ride along). The ported US/CA tables
+  still back normalization; no React form was built.
+- **Research is button-triggered, never auto** — real spend stays a user
+  decision. `POST /api/research/start` + `GET /api/research/status` +
+  `GET /api/research/stream` (SSE replay-and-follow with a `stream_end`
+  sentinel), run on a session-bound daemon thread whose results a
+  reset/load abandons safely.
+- **Results render in a panel drawer, not chat cards** — consistent with
+  the Phase 3 issues/standards strips; grounded items link their accepted
+  sources, `[UNVERIFIED]`/`[PROCESS]` marked.
+- **The splice targets the dynamic system block** (no "Project Context"
+  textarea exists here): `research_context_block` trims whole items
+  lowest-confidence-first under a ~16k-token estimate; the structured
+  profile is never trimmed.
+- **Provenance is `source_item_id`** on add_paragraph/replace → ◆ chips
+  in the paper; research-grounded adoptions become `set_standard_edition`
+  overrides citing the item id (prompt-driven, no new machinery).
+- `corpus_signals.py` was evaluated and **skipped** (no corpus until
+  Phase 5 master import). Thinking/effort config deliberately not ported.
+- New dependency: `pypdf` (fetched-PDF elision on continuation resume).
+
+Suite grew 78 → 99 hermetic tests (engine fan-out/grounding/budgets,
+profile normalization, API lifecycle, provenance + research round-trips);
+the fan-out is faked per-dimension via `SequencedFakeClient` so parallel
+workers stay deterministic.
+
+### Original sketch (for reference)
 
 **Goal:** grounded web research answers the questions the user shouldn't
 have to — jurisdiction adoptions and amendments, AHJ requirements, client
@@ -95,9 +114,13 @@ requirements-research fan-out.
    — extract the needed helpers into a small `backend/research/grounding.py`
    during the port rather than dragging the whole verifier over.
 3. **Dimensions come from the module.** `SpecModule.research_dimensions`
-   (seeded in Phase 3 from `datacenter_fire`) activates here — what to
-   research and per-dimension search budgets are module data; the engine is
-   domain-neutral.
+   (authored in Phase 3 on `hyperscale_fire`: governing_codes /
+   ahj_requirements / client_standards / site_environment, already
+   registration-validated against the profile placeholders) activates here
+   — what to research and per-dimension search budgets are module data;
+   the engine is domain-neutral. **Research findings become the second
+   legitimate source for `set_standard_edition` overrides** (grounded
+   adoption facts, cited basis) — the op and its plumbing already exist.
 4. **Orchestration + UX.** Research triggers when the profile completes (or
    on demand). Runs on a background thread; progress streams as SSE events
    (`research_started` / `research_progress` / `research_complete`) rendered
@@ -125,7 +148,42 @@ corpus), `src/verification/retry_policy.py`,
 
 ---
 
-## Phase 5 — Master import, compliance audit, ship
+## Phase 5 — Master import, compliance audit, ship ✅ SHIPPED (v0.5.0)
+
+**As built (2026-07-21).** All five work items landed (tracing included);
+details in `CLAUDE.md` → "Phase 5 — implemented notes". Deviations from
+the sketch worth knowing:
+
+- The imported provenance status is named **`imported`** (the "exact
+  status name decided at build time" decision); import is allowed only
+  into an empty document and lands as one undoable version.
+- The extractor port took the *mechanics* (Accept-All tracked changes,
+  content-loss warning, revision detection) — the SectionFormat tree
+  builder is native, since Spec Critic extracts flat text for review
+  while drafting needs the hierarchy. `extraction_cache.py` was not
+  ported (one-shot imports cache nothing).
+- The compliance audit is a single-call, single-section pass (no
+  chunking machinery needed) with the trust model preserved exactly;
+  coverage is always complete — a requirement the model skipped reports
+  `unclear` rather than disappearing. Results stamp the audited version
+  index so staleness is visible in the drawer and the export.
+- The updater state lives in the platformdirs config dir (with the key
+  file) rather than a home dot-dir. The Inno AppId GUID is
+  Build-a-Spec's own; the version-consistency release gate runs inside
+  pytest, not just at release time.
+- Tracing shipped as the scoped port (recorder core + native capture
+  hooks + bundled viewer at `/api/trace/viewer`), one app-lifetime
+  trace per launch.
+- New dependency: `python-multipart` (the import upload). PyInstaller
+  stays a build-time-only install, documented in the runbook.
+
+Suite grew 99 → 132 hermetic tests. What the roadmap leaves for
+post-1.0 life: cutting the first actual release from
+`docs/RELEASE_WINDOWS.md` on a Windows box (PyInstaller/ISCC cannot run
+in the build container), sibling-section playbooks, more modules, and
+import-heuristic tuning against real office masters.
+
+### Original sketch (for reference)
 
 **Goal:** meet real workflow (nobody drafts from a blank page), close the
 loop against the researched requirements, and ship a Windows installer.

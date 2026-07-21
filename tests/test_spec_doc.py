@@ -299,3 +299,94 @@ def test_unknown_status_rejected():
             ]
         )
     assert store.doc.is_empty()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: set_standard_edition (jurisdiction edition overrides)
+# ---------------------------------------------------------------------------
+
+
+def _override_op(standard="NFPA 13", edition="2019", basis="2021 VCC per user"):
+    op = {
+        "action": "set_standard_edition",
+        "target_id": "sec",
+        "standard": standard,
+    }
+    if edition is not None:
+        op["edition"] = edition
+    if basis is not None:
+        op["basis"] = basis
+    return op
+
+
+def test_set_standard_edition_records_normalized_override():
+    store = DocumentStore()
+    store.begin_turn()
+    applied = store.apply_edits([_override_op(standard="nfpa  13")])
+    store.commit_turn()
+    assert applied == [
+        {
+            "action": "set_standard_edition",
+            "id": "sec",
+            "standard": "NFPA 13",
+            "edition": "2019",
+        }
+    ]
+    assert store.doc.edition_overrides == {
+        "NFPA 13": {"edition": "2019", "basis": "2021 VCC per user"}
+    }
+    # Overrides count as document content.
+    assert not store.doc.is_empty()
+
+
+def test_set_standard_edition_requires_basis_and_sec_target():
+    store = DocumentStore()
+    store.begin_turn()
+    with pytest.raises(SpecEditError, match="basis"):
+        store.apply_edits([_override_op(basis="  ")])
+    with pytest.raises(SpecEditError, match="'sec'"):
+        store.apply_edits(
+            [dict(_override_op(), target_id="pt1")]
+        )
+    with pytest.raises(SpecEditError, match="standard"):
+        store.apply_edits([_override_op(standard="  ")])
+    assert store.doc.edition_overrides == {}
+
+
+def test_set_standard_edition_removal_and_unknown_removal():
+    store = DocumentStore()
+    store.begin_turn()
+    store.apply_edits([_override_op()])
+    applied = store.apply_edits([_override_op(edition="", basis=None)])
+    assert applied[0]["removed"] is True
+    assert store.doc.edition_overrides == {}
+    with pytest.raises(SpecEditError, match="no override recorded"):
+        store.apply_edits([_override_op(standard="NFPA 20", edition="")])
+
+
+def test_overrides_ride_undo_redo_and_serialization():
+    store = DocumentStore()
+    store.begin_turn()
+    store.apply_edits([_override_op()])
+    store.commit_turn()
+
+    assert store.undo()
+    assert store.doc.edition_overrides == {}
+    assert store.redo()
+    assert store.doc.edition_overrides == {
+        "NFPA 13": {"edition": "2019", "basis": "2021 VCC per user"}
+    }
+
+    # Round-trip through the persisted store shape.
+    restored = DocumentStore()
+    restored.load(store.to_dict())
+    assert restored.doc.edition_overrides == store.doc.edition_overrides
+
+
+def test_load_rejects_malformed_overrides():
+    store = DocumentStore()
+    snapshot = SpecSection.empty().to_dict()
+    snapshot["edition_overrides"] = {"NFPA 13": {"edition": "2019"}}  # no basis
+    with pytest.raises(ValueError, match="Malformed document data"):
+        store.load({"versions": [snapshot], "index": 0})
+    assert store.doc.is_empty()

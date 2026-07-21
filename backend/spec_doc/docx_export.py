@@ -74,7 +74,15 @@ def _schedule_table(document, rows: list[tuple[str, str]], headers: tuple[str, s
     return table
 
 
-def build_docx(section: SpecSection) -> bytes:
+def build_docx(section: SpecSection, audit_result: dict | None = None) -> bytes:
+    """Render the section; ``audit_result`` adds the compliance closing.
+
+    ``audit_result`` is the Phase 5 audit dict ``{summary, coverage,
+    findings, audited_at, version_index}`` — rendered as a closing section
+    so the issued package carries the audit trail. The caller passes the
+    session's result regardless of staleness; the rendering states which
+    document version was audited.
+    """
     document = Document()
     _style_base(document)
 
@@ -130,6 +138,22 @@ def build_docx(section: SpecSection) -> bytes:
     else:
         document.add_paragraph("None — every provision is confirmed.")
 
+    # -- imported provisions not yet reviewed (Phase 5 master import) ------
+    imported = [
+        (ref, p.text)
+        for _part, _article, p, _depth, ref in iter_paragraphs(section)
+        if p.status == "imported"
+    ]
+    if imported:
+        document.add_paragraph()
+        _centered(document, "IMPORTED PROVISIONS NOT YET REVIEWED")
+        document.add_paragraph(
+            "The following provisions were imported from a master "
+            "specification and have not been confirmed or adapted for this "
+            "project. Each requires review before issue."
+        )
+        _schedule_table(document, imported, ("Ref", "Imported provision"))
+
     items = open_questions(section)
     if items:
         document.add_paragraph()
@@ -143,6 +167,54 @@ def build_docx(section: SpecSection) -> bytes:
             for item in items
         ]
         _schedule_table(document, rows, ("Ref", "Open item"))
+
+    # -- compliance audit closing section (Phase 5) ------------------------
+    if audit_result and audit_result.get("coverage"):
+        document.add_page_break()
+        _centered(document, "COMPLIANCE AUDIT SUMMARY")
+        audited_at = audit_result.get("audited_at", "")
+        version_index = audit_result.get("version_index")
+        version_note = (
+            f" of document version v{int(version_index) + 1}"
+            if isinstance(version_index, int)
+            else ""
+        )
+        document.add_paragraph(
+            f"Advisory audit{version_note} against the researched project "
+            f"requirements profile ({audited_at}). Grounded requirements "
+            "only; this summary is not a substitute for review by a "
+            "licensed design professional."
+        )
+        summary = str(audit_result.get("summary") or "").strip()
+        if summary:
+            document.add_paragraph(summary)
+        coverage_rows = [
+            (
+                str(entry.get("status", "")).upper(),
+                f"[{entry.get('requirement_id', '')}] "
+                + str(entry.get("note") or entry.get("evidence_quote") or ""),
+            )
+            for entry in audit_result.get("coverage", [])
+        ]
+        if coverage_rows:
+            _schedule_table(document, coverage_rows, ("Status", "Requirement"))
+        findings = audit_result.get("findings") or []
+        if findings:
+            document.add_paragraph()
+            _centered(document, "AUDIT FINDINGS")
+            finding_rows = [
+                (
+                    str(finding.get("severity", "")).upper(),
+                    str(finding.get("issue", ""))
+                    + (
+                        f" Suggestion: {finding['suggestion']}"
+                        if finding.get("suggestion")
+                        else ""
+                    ),
+                )
+                for finding in findings
+            ]
+            _schedule_table(document, finding_rows, ("Severity", "Finding"))
 
     buffer = io.BytesIO()
     document.save(buffer)

@@ -28,17 +28,52 @@ function TbdText({ text }: { text: string }) {
   );
 }
 
+const badgeStyles: Record<string, { css: string; label: string }> = {
+  assumed: {
+    css: "border-[#d4a04c]/60 bg-[#f6ead2] text-[#8a6414]",
+    label: "assumed",
+  },
+  needs_input: {
+    css: "border-[#c65b4e]/50 bg-[#f7e2df] text-[#a03d31]",
+    label: "needs input",
+  },
+  imported: {
+    css: "border-[#5b7db8]/50 bg-[#e3eaf6] text-[#3a5a94]",
+    label: "imported",
+  },
+};
+
 function StatusBadge({ status }: { status: DocParagraph["status"] }) {
-  if (status === "confirmed") return null;
-  const styles =
-    status === "assumed"
-      ? "border-[#d4a04c]/60 bg-[#f6ead2] text-[#8a6414]"
-      : "border-[#c65b4e]/50 bg-[#f7e2df] text-[#a03d31]";
+  const style = badgeStyles[status];
+  if (!style) return null;
   return (
     <span
-      className={`ml-2 inline-block rounded border px-1 py-px align-middle text-[9px] font-semibold tracking-wide uppercase ${styles}`}
+      className={`ml-2 inline-block rounded border px-1 py-px align-middle text-[9px] font-semibold tracking-wide uppercase ${style.css}`}
     >
-      {status === "assumed" ? "assumed" : "needs input"}
+      {style.label}
+    </span>
+  );
+}
+
+function SourceChip({
+  itemId,
+  lookup,
+}: {
+  itemId: string;
+  lookup: ReadonlyMap<string, string>;
+}) {
+  if (!itemId) return null;
+  const tooltip = lookup.get(itemId);
+  return (
+    <span
+      className="ml-1.5 inline-block cursor-help align-middle text-[10px] text-[#7a90b8]"
+      title={
+        tooltip
+          ? `Research: ${tooltip}`
+          : `Research item ${itemId} (re-run research to see details)`
+      }
+    >
+      ◆
     </span>
   );
 }
@@ -47,10 +82,12 @@ function ParagraphNode({
   p,
   depth,
   changedIds,
+  sourceLookup,
 }: {
   p: DocParagraph;
   depth: number;
   changedIds: ReadonlySet<string>;
+  sourceLookup: ReadonlyMap<string, string>;
 }) {
   return (
     <>
@@ -65,6 +102,7 @@ function ParagraphNode({
         <span className="min-w-0 flex-1">
           <TbdText text={p.text} />
           <StatusBadge status={p.status} />
+          <SourceChip itemId={p.source_item_id} lookup={sourceLookup} />
         </span>
       </div>
       {p.children.map((child) => (
@@ -73,6 +111,7 @@ function ParagraphNode({
           p={child}
           depth={depth + 1}
           changedIds={changedIds}
+          sourceLookup={sourceLookup}
         />
       ))}
     </>
@@ -82,9 +121,11 @@ function ParagraphNode({
 function PartBlock({
   part,
   changedIds,
+  sourceLookup,
 }: {
   part: DocPart;
   changedIds: ReadonlySet<string>;
+  sourceLookup: ReadonlyMap<string, string>;
 }) {
   return (
     <div>
@@ -110,6 +151,7 @@ function PartBlock({
                     p={p}
                     depth={0}
                     changedIds={changedIds}
+                    sourceLookup={sourceLookup}
                   />
                 ))}
               </div>
@@ -124,9 +166,11 @@ function PartBlock({
 export default function SpecDocument({
   doc,
   changedIds,
+  sourceLookup = new Map(),
 }: {
   doc: SpecDoc;
   changedIds: ReadonlySet<string>;
+  sourceLookup?: ReadonlyMap<string, string>;
 }) {
   return (
     <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
@@ -149,7 +193,12 @@ export default function SpecDocument({
 
       <div className="mt-10 space-y-8">
         {doc.parts.map((part) => (
-          <PartBlock key={part.id} part={part} changedIds={changedIds} />
+          <PartBlock
+            key={part.id}
+            part={part}
+            changedIds={changedIds}
+            sourceLookup={sourceLookup}
+          />
         ))}
       </div>
 

@@ -28,9 +28,19 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-STATUSES = ("confirmed", "assumed", "needs_input")
+from ..project_profile import (
+    ProjectProfile,
+    normalize_country,
+    normalize_state_or_province,
+)
+from ..standards import normalize_standard_name, validate_overrides_shape
+
+STATUSES = ("confirmed", "assumed", "needs_input", "imported")
 # An op that omits status gets "assumed": over-flagging for the reviewer is
-# safer than silently confirming a model guess.
+# safer than silently confirming a model guess. "imported" (Phase 5) marks
+# master-spec content not yet reviewed against this project — the
+# gap-and-adapt interview upgrades it to confirmed/assumed (or deletes it)
+# article by article; remaining imported blocks are scheduled in the export.
 DEFAULT_STATUS = "assumed"
 
 PART_TITLES = ("PART 1 - GENERAL", "PART 2 - PRODUCTS", "PART 3 - EXECUTION")
@@ -57,6 +67,11 @@ class Paragraph:
     status: str = DEFAULT_STATUS
     children: list["Paragraph"] = field(default_factory=list)
     next_seq: int = 1  # id counter for children; never rewinds on delete
+    # Optional provenance link to the research item that motivated this
+    # block (Phase 4): a ``r-…`` RequirementsProfile item id. Advisory —
+    # the panel renders a citation chip; nothing validates existence
+    # (research can be re-run, items re-minted).
+    source_item_id: str = ""
 
 
 @dataclass
@@ -81,6 +96,16 @@ class SpecSection:
     number: str = ""  # e.g. "21 13 13"
     title: str = ""  # e.g. "WET-PIPE SPRINKLER SYSTEMS"
     parts: list[Part] = field(default_factory=list)
+    # Jurisdiction-adopted standard editions recorded for this project:
+    # {canonical name: {"edition": "2019", "basis": "2021 VCC ..."}}. Part
+    # of the tree on purpose — overrides ride the same transactional
+    # apply / per-turn versioning / undo / project-file machinery as text.
+    edition_overrides: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Project identity recorded through set_project_profile (Phase 4):
+    # {"city", "state_or_province", "country", "client_name"} — the
+    # ProjectProfile dict shape. On the tree for the same reason as
+    # edition_overrides: transactional, undoable, persisted for free.
+    project_profile: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def empty(cls) -> "SpecSection":
@@ -92,8 +117,12 @@ class SpecSection:
         )
 
     def is_empty(self) -> bool:
-        return not self.number and not self.title and not any(
-            part.articles for part in self.parts
+        return (
+            not self.number
+            and not self.title
+            and not self.edition_overrides
+            and not self.project_profile
+            and not any(part.articles for part in self.parts)
         )
 
     # -- serialization ------------------------------------------------------
@@ -102,6 +131,8 @@ class SpecSection:
         return {
             "section": {"number": self.number, "title": self.title},
             "parts": [_part_to_dict(part) for part in self.parts],
+            "edition_overrides": copy.deepcopy(self.edition_overrides),
+            "project_profile": dict(self.project_profile),
         }
 
     @classmethod
@@ -111,15 +142,47 @@ class SpecSection:
             parts = [_part_from_dict(p) for p in data["parts"]]
             if [p.uid for p in parts] != ["pt1", "pt2", "pt3"]:
                 raise ValueError("expected exactly parts pt1, pt2, pt3")
+            overrides = validate_overrides_shape(
+                data.get("edition_overrides")
+            )
+            profile = _validate_profile_shape(data.get("project_profile"))
             result = cls(
                 number=str(section.get("number", "")),
                 title=str(section.get("title", "")),
                 parts=parts,
+                edition_overrides=overrides,
+                project_profile=profile,
             )
         except (KeyError, TypeError, AttributeError) as exc:
             raise ValueError(f"Malformed document data: {exc}") from exc
+        except ValueError as exc:
+            raise ValueError(f"Malformed document data: {exc}") from exc
         _check_integrity(result)
         return result
+
+
+_PROFILE_FIELDS = ("city", "state_or_province", "country", "client_name")
+
+
+def _validate_profile_shape(data: Any) -> dict[str, str]:
+    """Validate/normalize a persisted ``project_profile`` mapping."""
+    if data in (None, {}):
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("project_profile must be an object")
+    clean: dict[str, str] = {}
+    for key in _PROFILE_FIELDS:
+        value = data.get(key, "")
+        if not isinstance(value, str):
+            raise ValueError(f"project_profile.{key} must be a string")
+        if value.strip():
+            clean[key] = value.strip()
+    unknown = set(data) - set(_PROFILE_FIELDS)
+    if unknown:
+        raise ValueError(
+            f"project_profile has unknown fields: {sorted(unknown)}"
+        )
+    return clean
 
 
 def _paragraph_label(depth: int, index: int) -> str:
@@ -153,6 +216,7 @@ def _paragraph_to_dict(p: Paragraph, depth: int, index: int) -> dict[str, Any]:
         "label": _paragraph_label(depth, index),
         "text": p.text,
         "status": p.status,
+        "source_item_id": p.source_item_id,
         "children": [
             _paragraph_to_dict(c, depth + 1, i) for i, c in enumerate(p.children)
         ],
@@ -195,6 +259,7 @@ def _paragraph_from_dict(data: dict[str, Any]) -> Paragraph:
         status=status,
         children=[_paragraph_from_dict(c) for c in data.get("children", [])],
         next_seq=int(data.get("seq", 1)),
+        source_item_id=str(data.get("source_item_id", "") or ""),
     )
 
 
@@ -407,7 +472,22 @@ def outline(section: SpecSection, *, max_text: int = 160) -> str:
 # Edit ops
 # ---------------------------------------------------------------------------
 
-_ACTIONS = ("add_article", "add_paragraph", "replace", "delete")
+_ACTIONS = (
+    "add_article",
+    "add_paragraph",
+    "replace",
+    "delete",
+    "set_standard_edition",
+    "set_project_profile",
+)
+
+# set_project_profile op field -> stored ProjectProfile field.
+_PROFILE_OP_FIELDS = {
+    "city": "city",
+    "state": "state_or_province",
+    "country": "country",
+    "client": "client_name",
+}
 
 
 def _require_text(op: dict[str, Any], what: str) -> str:
@@ -426,6 +506,16 @@ def _opt_status(op: dict[str, Any]) -> str | None:
             f"Unknown status {status!r}; expected one of {', '.join(STATUSES)}."
         )
     return status
+
+
+def _opt_source_item_id(op: dict[str, Any]) -> str | None:
+    """Optional research-item provenance; ``None`` = not supplied."""
+    value = op.get("source_item_id")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise SpecEditError("'source_item_id' must be a string.")
+    return value.strip()
 
 
 def _insert(items: list[Any], item: Any, position: Any) -> None:
@@ -455,6 +545,107 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
     target_id = op.get("target_id")
     if not isinstance(target_id, str) or not target_id:
         raise SpecEditError(f"{action}: 'target_id' is required.")
+
+    # -- jurisdiction edition overrides: section-level metadata ------------
+    if action == "set_standard_edition":
+        if target_id != "sec":
+            raise SpecEditError(
+                "set_standard_edition: target_id must be 'sec' (overrides "
+                "are section-level metadata)."
+            )
+        standard = normalize_standard_name(str(op.get("standard") or ""))
+        if not standard:
+            raise SpecEditError(
+                "set_standard_edition: non-empty 'standard' (the "
+                "designation, e.g. 'NFPA 13') is required."
+            )
+        edition = str(op.get("edition") or "").strip()
+        if not edition:
+            # Empty/omitted edition removes a recorded override (reverting
+            # to the module default).
+            if standard not in section.edition_overrides:
+                raise SpecEditError(
+                    f"set_standard_edition: no override recorded for "
+                    f"{standard!r} to remove."
+                )
+            del section.edition_overrides[standard]
+            return {
+                "action": "set_standard_edition",
+                "id": "sec",
+                "standard": standard,
+                "removed": True,
+            }
+        if len(edition) > 20:
+            raise SpecEditError(
+                "set_standard_edition: 'edition' looks malformed "
+                "(20 chars max, e.g. '2019')."
+            )
+        basis = str(op.get("basis") or "").strip()
+        if not basis:
+            raise SpecEditError(
+                "set_standard_edition: non-empty 'basis' is required — "
+                "state the adoption that makes this edition govern (e.g. "
+                "'2021 VCC per user, Loudoun County VA'). Never record an "
+                "edition override silently."
+            )
+        section.edition_overrides[standard] = {
+            "edition": edition,
+            "basis": basis,
+        }
+        return {
+            "action": "set_standard_edition",
+            "id": "sec",
+            "standard": standard,
+            "edition": edition,
+        }
+
+    # -- project profile: section-level metadata ---------------------------
+    if action == "set_project_profile":
+        if target_id != "sec":
+            raise SpecEditError(
+                "set_project_profile: target_id must be 'sec' (the profile "
+                "is section-level metadata)."
+            )
+        provided = {
+            op_field: op[op_field]
+            for op_field in _PROFILE_OP_FIELDS
+            if op_field in op and op[op_field] is not None
+        }
+        if not provided:
+            raise SpecEditError(
+                "set_project_profile: provide at least one of 'city', "
+                "'state', 'country', 'client'."
+            )
+        updated = dict(section.project_profile)
+        for op_field, raw in provided.items():
+            if not isinstance(raw, str):
+                raise SpecEditError(
+                    f"set_project_profile: '{op_field}' must be a string."
+                )
+            stored_key = _PROFILE_OP_FIELDS[op_field]
+            value = raw.strip()
+            if not value:
+                # Explicit empty string clears the field.
+                updated.pop(stored_key, None)
+                continue
+            if op_field == "country":
+                normalized = normalize_country(value)
+                if not normalized:
+                    raise SpecEditError(
+                        f"set_project_profile: unrecognized country {value!r} "
+                        "(this build supports US and Canada — e.g. 'USA')."
+                    )
+                value = normalized
+            elif op_field == "state":
+                value = normalize_state_or_province(value)
+            updated[stored_key] = value
+        section.project_profile = updated
+        profile = ProjectProfile.from_dict(updated)
+        return {
+            "action": "set_project_profile",
+            "id": "sec",
+            "complete": bool(profile and profile.is_complete()),
+        }
 
     # -- section header: replace target "sec" ------------------------------
     if target_id == "sec":
@@ -517,6 +708,7 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             uid=f"{node.uid}.p{parent_seq_owner.next_seq}",
             text=text,
             status=status,
+            source_item_id=_opt_source_item_id(op) or "",
         )
         parent_seq_owner.next_seq += 1
         _insert(siblings, paragraph, op.get("position"))
@@ -534,9 +726,11 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
         if isinstance(node, Paragraph):
             text = op.get("text")
             status = _opt_status(op)
-            if text is None and status is None:
+            source_item_id = _opt_source_item_id(op)
+            if text is None and status is None and source_item_id is None:
                 raise SpecEditError(
-                    "replace: provide 'text' and/or 'status' for a paragraph."
+                    "replace: provide 'text', 'status', and/or "
+                    "'source_item_id' for a paragraph."
                 )
             if text is not None:
                 if not isinstance(text, str) or not text.strip():
@@ -544,6 +738,9 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
                 node.text = text.strip()
             if status is not None:
                 node.status = status
+            if source_item_id is not None:
+                # Empty string clears the provenance link.
+                node.source_item_id = source_item_id
             return {"action": "replace", "id": node.uid, "status": node.status}
         raise SpecEditError("replace: target must be an article or paragraph.")
 
@@ -633,6 +830,26 @@ class DocumentStore:
         self._dirty = False
         return changed
 
+    def adopt_imported(self, section: SpecSection) -> None:
+        """Adopt a master-spec import as the document, as one version.
+
+        The caller (the import endpoint) enforces that the current document
+        is empty — an import is a *starting point*, never a merge. The
+        empty version stays at index 0, so one undo steps back to the
+        blank page. Refuses mid-turn adoption (an in-flight turn owns the
+        tree until it commits or rolls back).
+        """
+        if self._turn_backup is not None:
+            raise ValueError("Cannot import while a turn is in progress.")
+        # Validate before adopting anything (from_dict runs integrity).
+        snapshot = section.to_dict()
+        SpecSection.from_dict(snapshot)
+        self.doc = section
+        del self.versions[self.index + 1 :]
+        self.versions.append(snapshot)
+        self.index += 1
+        self._dirty = False
+
     def rollback_turn(self) -> None:
         if self._turn_backup is not None:
             self.doc = SpecSection.from_dict(self._turn_backup)
@@ -717,8 +934,27 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "(text and/or status), or 'sec' to set the section header (text = "
         "section title, numbering = section number like '21 13 13').\n"
         "- delete: target_id = an article or paragraph id.\n"
+        "- set_standard_edition: target_id = 'sec'; standard = the "
+        "designation (e.g. 'NFPA 13'); edition = the jurisdiction-adopted "
+        "edition (e.g. '2019'); basis = the stated adoption that makes it "
+        "govern (required — overrides are never recorded silently). Use "
+        "ONLY when the user states the adoption or a grounded research "
+        "item provides it (then cite the item id in the basis, e.g. "
+        "'research r-1a2b3c4d5e6f: 2021 VCC') — never from your own "
+        "assumption. Omit 'edition' to remove a recorded override and "
+        "revert to the module default. The editions in effect are listed "
+        "in your context; linting checks the draft against them.\n"
+        "- set_project_profile: target_id = 'sec'; record the project "
+        "identity as the user states it — city, state (name or 2-letter "
+        "code), country ('USA'/'Canada'), client. Provide only the fields "
+        "stated; an explicit empty string clears a field. A complete "
+        "profile (all four) enables the requirements-research phase.\n"
         "- position (optional, add ops): 0-based insertion index among the "
         "target's children; omit to append.\n"
+        "- source_item_id (optional, add_paragraph/replace): when a "
+        "research profile item motivates the provision, its item id "
+        "(r-...) — the panel then shows the citation. Empty string on "
+        "replace clears it.\n"
         "\n"
         "Mark undecided values inline as [TBD: short description] — they "
         "are tracked as open items until resolved."
@@ -744,6 +980,14 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
                             "type": "string",
                             "enum": list(STATUSES),
                         },
+                        "standard": {"type": "string"},
+                        "edition": {"type": "string"},
+                        "basis": {"type": "string"},
+                        "city": {"type": "string"},
+                        "state": {"type": "string"},
+                        "country": {"type": "string"},
+                        "client": {"type": "string"},
+                        "source_item_id": {"type": "string"},
                     },
                     "required": ["action", "target_id"],
                 },

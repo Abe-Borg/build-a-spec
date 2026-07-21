@@ -6,6 +6,8 @@ pydantic>=2.10
 platformdirs>=4.3
 pywebview>=5.3
 python-docx>=1.1
+pypdf>=4
+python-multipart>=0.0.9
 
 # Optional (recommended): OS credential-manager storage for the API key
 keyring>=25

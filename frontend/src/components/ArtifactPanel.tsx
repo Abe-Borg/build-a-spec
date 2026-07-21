@@ -3,18 +3,35 @@
  * tree, a per-turn version stepper (undo/redo), export / save / open
  * actions, and the open-items list ([TBD] markers + needs-input blocks).
  */
-import { useRef } from "react";
-import type { OpenItem, SpecDoc } from "../types";
+import { useMemo, useRef } from "react";
+import type {
+  AuditSnapshot,
+  LintIssue,
+  OpenItem,
+  ResearchSnapshot,
+  SpecDoc,
+  StandardInfo,
+} from "../types";
+import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
+import ResearchDrawer from "./ResearchDrawer";
 import SpecDocument from "./SpecDocument";
 
 interface Props {
   doc: SpecDoc | null;
   openItems: OpenItem[];
+  lintIssues: LintIssue[];
+  standards: StandardInfo[];
+  profileComplete: boolean;
+  research: ResearchSnapshot | null;
+  audit: AuditSnapshot | null;
   changedIds: ReadonlySet<string>;
   busy: boolean;
   onUndo: () => void;
   onRedo: () => void;
   onLoadProject: (file: File) => void;
+  onImportMaster: (file: File) => void;
+  onStartResearch: () => void;
+  onStartAudit: () => void;
 }
 
 function EmptyState() {
@@ -59,13 +76,33 @@ const kindDot: Record<OpenItem["kind"], string> = {
 export default function ArtifactPanel({
   doc,
   openItems,
+  lintIssues,
+  standards,
+  profileComplete,
+  research,
+  audit,
   changedIds,
   busy,
   onUndo,
   onRedo,
   onLoadProject,
+  onImportMaster,
+  onStartResearch,
+  onStartAudit,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const importRef = useRef<HTMLInputElement>(null);
+  // item_id -> short tooltip text for the paper's source chips.
+  const sourceLookup = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of research?.profile?.items ?? []) {
+      const sources = item.accepted_sources.length
+        ? ` — ${item.accepted_sources.join(", ")}`
+        : " — [UNVERIFIED]";
+      map.set(item.item_id, `${item.requirement}${sources}`);
+    }
+    return map;
+  }, [research]);
   const version = doc?.version ?? { index: 0, count: 1 };
   const hasContent =
     !!doc &&
@@ -85,8 +122,16 @@ export default function ArtifactPanel({
   return (
     <aside className="flex min-w-[420px] flex-1 basis-[54%] flex-col bg-surface">
       <div className="flex items-center justify-between gap-3 border-b border-edge px-5 py-2.5">
-        <span className="text-xs font-medium tracking-wide text-ink-dim uppercase">
+        <span className="flex items-center gap-2 text-xs font-medium tracking-wide text-ink-dim uppercase">
           Specification
+          {lintIssues.length > 0 && (
+            <span
+              className="rounded-full border border-warn/50 bg-warn/15 px-1.5 py-px text-[10px] font-semibold text-warn normal-case"
+              title="Advisory lint issues — see the Issues drawer below"
+            >
+              ⚠ {lintIssues.length}
+            </span>
+          )}
         </span>
         <div className="flex items-center gap-1.5">
           <button
@@ -156,16 +201,57 @@ export default function ArtifactPanel({
               e.target.value = "";
             }}
           />
+          <button
+            className={actionButton}
+            onClick={() => importRef.current?.click()}
+            disabled={busy || hasContent}
+            title={
+              hasContent
+                ? "Import needs a blank document — start a new session first"
+                : "Import an office master (.docx) as the starting point; the interview pivots to gap-and-adapt"
+            }
+          >
+            Import master
+          </button>
+          <input
+            ref={importRef}
+            type="file"
+            accept=".docx"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onImportMaster(file);
+              e.target.value = "";
+            }}
+          />
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
         {hasContent && doc ? (
-          <SpecDocument doc={doc} changedIds={changedIds} />
+          <SpecDocument
+            doc={doc}
+            changedIds={changedIds}
+            sourceLookup={sourceLookup}
+          />
         ) : (
           <EmptyState />
         )}
       </div>
+
+      <ResearchDrawer
+        doc={doc}
+        profileComplete={profileComplete}
+        research={research}
+        audit={audit}
+        canAudit={hasContent && research?.status === "complete"}
+        busy={busy}
+        onStart={onStartResearch}
+        onStartAudit={onStartAudit}
+        onJump={scrollToElement}
+      />
+
+      <IssuesDrawer issues={lintIssues} onJump={scrollToElement} />
 
       {openItems.length > 0 && (
         <div className="max-h-44 overflow-y-auto border-t border-edge bg-bg/60 px-5 py-2.5">
@@ -196,6 +282,8 @@ export default function ArtifactPanel({
           </ul>
         </div>
       )}
+
+      <StandardsStrip standards={standards} />
     </aside>
   );
 }

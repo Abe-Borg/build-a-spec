@@ -1,8 +1,13 @@
 import type {
+  AuditSnapshot,
   DocPayload,
   Health,
+  ImportResultPayload,
   ProjectLoadResult,
+  ResearchEvent,
+  ResearchSnapshot,
   StreamEvent,
+  UpdateCheckPayload,
 } from "../types";
 
 export async function getHealth(): Promise<Health> {
@@ -63,23 +68,9 @@ export async function loadProject(
   return data;
 }
 
-/** POST /api/chat and yield parsed SSE events as they arrive. */
-export async function* streamChat(
-  message: string,
-): AsyncGenerator<StreamEvent> {
-  const resp = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
-  });
-  if (!resp.ok || !resp.body) {
-    yield {
-      type: "error",
-      message: `The backend refused the request (${resp.status}).`,
-    };
-    return;
-  }
-
+/** Read SSE frames off a fetch Response body and yield parsed JSON. */
+async function* readSse<T>(resp: Response): AsyncGenerator<T> {
+  if (!resp.body) return;
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -96,12 +87,98 @@ export async function* streamChat(
       for (const line of frame.split("\n")) {
         if (line.startsWith("data: ")) {
           try {
-            yield JSON.parse(line.slice(6)) as StreamEvent;
+            yield JSON.parse(line.slice(6)) as T;
           } catch {
             // Malformed frame — skip rather than kill the stream.
           }
         }
       }
     }
+  }
+}
+
+/** POST /api/chat and yield parsed SSE events as they arrive. */
+export async function* streamChat(
+  message: string,
+): AsyncGenerator<StreamEvent> {
+  const resp = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  if (!resp.ok || !resp.body) {
+    yield {
+      type: "error",
+      message: `The backend refused the request (${resp.status}).`,
+    };
+    return;
+  }
+  yield* readSse<StreamEvent>(resp);
+}
+
+/* --- Research (Phase 4) --- */
+
+export async function startResearch(): Promise<void> {
+  const resp = await fetch("/api/research/start", { method: "POST" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `research start failed (${resp.status})`);
+  }
+}
+
+export async function getResearchStatus(): Promise<ResearchSnapshot> {
+  const resp = await fetch("/api/research/status");
+  if (!resp.ok) throw new Error(`research status ${resp.status}`);
+  return resp.json();
+}
+
+/** Follow the active/last research run's SSE stream until it closes. */
+export async function* streamResearch(): AsyncGenerator<ResearchEvent> {
+  const resp = await fetch("/api/research/stream");
+  if (!resp.ok || !resp.body) return;
+  yield* readSse<ResearchEvent>(resp);
+}
+
+/* --- Master import + compliance audit + updates (Phase 5) --- */
+
+export async function importMaster(file: File): Promise<ImportResultPayload> {
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetch("/api/import/master", {
+    method: "POST",
+    body: form,
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `import failed (${resp.status})`);
+  }
+  return data;
+}
+
+export async function startAudit(): Promise<void> {
+  const resp = await fetch("/api/audit/start", { method: "POST" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `audit start failed (${resp.status})`);
+  }
+}
+
+export async function getAuditStatus(): Promise<AuditSnapshot> {
+  const resp = await fetch("/api/audit/status");
+  if (!resp.ok) throw new Error(`audit status ${resp.status}`);
+  return resp.json();
+}
+
+export async function checkUpdate(force = false): Promise<UpdateCheckPayload> {
+  const resp = await fetch(`/api/update/check${force ? "?force=true" : ""}`);
+  if (!resp.ok) throw new Error(`update check ${resp.status}`);
+  return resp.json();
+}
+
+export async function installUpdate(): Promise<void> {
+  const resp = await fetch("/api/update/install", { method: "POST" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `update install failed (${resp.status})`);
   }
 }

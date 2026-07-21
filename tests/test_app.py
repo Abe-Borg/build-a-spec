@@ -454,3 +454,157 @@ def test_project_load_rejects_garbage(monkeypatch):
     assert "project file" in resp.json()["error"]
     # Session untouched.
     assert sessions.get_session().history == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: lint + standards over the API surface
+# ---------------------------------------------------------------------------
+
+_OVERRIDE_EDITS = {
+    "edits": [
+        {
+            "action": "replace",
+            "target_id": "sec",
+            "text": "WET-PIPE SPRINKLER SYSTEMS",
+            "numbering": "21 13 13",
+        },
+        {"action": "add_article", "target_id": "pt1", "text": "REFERENCES"},
+        {
+            "action": "add_paragraph",
+            "target_id": "pt1.a1",
+            "text": "Comply with NFPA 13-2025 throughout.",
+            "status": "confirmed",
+        },
+        {
+            "action": "set_standard_edition",
+            "target_id": "sec",
+            "standard": "NFPA 13",
+            "edition": "2019",
+            "basis": "2021 VCC per user (Loudoun County, VA)",
+        },
+    ]
+}
+
+
+def test_health_reports_module(monkeypatch):
+    data = _client().get("/api/health").json()
+    assert data["module_id"] == "hyperscale_fire"
+    assert "Fire Suppression" in data["module"]
+
+
+def test_chat_turn_emits_lint_event_and_payloads_carry_standards(monkeypatch):
+    fake = FakeClient(
+        [tool_turn(["Recording."], _OVERRIDE_EDITS), text_turn(["Done."])]
+    )
+    _patch_client(monkeypatch, fake)
+    client = _client()
+
+    resp = client.post("/api/chat", json={"message": "The AHJ is on 2021 VCC"})
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "turn_complete"
+
+    (lint_evt,) = [e for e in events if e["type"] == "lint"]
+    # The 2025 citation contradicts the just-recorded 2019 override.
+    stale = [i for i in lint_evt["items"] if i["rule"] == "stale_edition"]
+    assert len(stale) == 1
+    assert "edition in effect is 2019" in stale[0]["message"]
+    nfpa13 = next(s for s in lint_evt["standards"] if s["name"] == "NFPA 13")
+    assert nfpa13["is_override"] is True and nfpa13["edition"] == "2019"
+
+    # The override op streamed as a doc_patch touching "sec".
+    patches = [e for e in events if e["type"] == "doc_patch"]
+    assert any(
+        op["action"] == "set_standard_edition" and op["id"] == "sec"
+        for p in patches
+        for op in p["ops"]
+    )
+
+    # REST snapshot carries the same lint + standards shape.
+    payload = client.get("/api/doc").json()
+    assert [i["rule"] for i in payload["lint"]] == ["stale_edition"]
+    assert any(s["is_override"] for s in payload["standards"])
+
+
+def test_override_missing_basis_is_tool_error_not_turn_failure(monkeypatch):
+    fake = FakeClient(
+        [
+            tool_turn(
+                [],
+                {
+                    "edits": [
+                        {
+                            "action": "set_standard_edition",
+                            "target_id": "sec",
+                            "standard": "NFPA 13",
+                            "edition": "2019",
+                        }
+                    ]
+                },
+            ),
+            text_turn(["Let me include the basis."]),
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+
+    resp = _client().post("/api/chat", json={"message": "record it"})
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "turn_complete"
+    tool_result = sessions.get_session().history[2]["content"][0]
+    assert tool_result["is_error"] is True
+    assert "basis" in tool_result["content"]
+    assert sessions.get_session().doc.doc.edition_overrides == {}
+
+
+def test_override_survives_project_round_trip(monkeypatch):
+    fake = FakeClient(
+        [tool_turn(["Recording."], _OVERRIDE_EDITS), text_turn(["Done."])]
+    )
+    _patch_client(monkeypatch, fake)
+    client = _client()
+    client.post("/api/chat", json={"message": "go"})
+
+    project = json.loads(client.get("/api/project/save").content)
+    assert project["module_id"] == "hyperscale_fire"
+
+    client.post("/api/session/reset")
+    loaded = client.post("/api/project/load", json=project).json()
+    assert loaded["ok"] is True
+    nfpa13 = next(s for s in loaded["standards"] if s["name"] == "NFPA 13")
+    assert nfpa13["edition"] == "2019" and nfpa13["is_override"]
+    assert [i["rule"] for i in loaded["lint"]] == ["stale_edition"]
+
+    # The dynamic system block reflects the loaded override on the next turn.
+    fake2 = FakeClient([text_turn(["Continuing."])])
+    _patch_client(monkeypatch, fake2)
+    client.post("/api/chat", json={"message": "continue"})
+    dynamic_block = fake2.messages.last_request["system"][1]["text"]
+    assert "jurisdiction-adopted override" in dynamic_block
+    assert "2021 VCC per user" in dynamic_block
+
+
+def test_undo_rolls_back_override_and_lint(monkeypatch):
+    fake = FakeClient(
+        [tool_turn(["Recording."], _OVERRIDE_EDITS), text_turn(["Done."])]
+    )
+    _patch_client(monkeypatch, fake)
+    client = _client()
+    client.post("/api/chat", json={"message": "go"})
+
+    undone = client.post("/api/doc/undo").json()
+    assert undone["ok"] is True
+    assert undone["lint"] == []
+    assert all(not s["is_override"] for s in undone["standards"])
+
+
+def test_stable_system_prompt_is_cached_and_module_rendered(monkeypatch):
+    fake = FakeClient([text_turn(["ok"])])
+    _patch_client(monkeypatch, fake)
+    _client().post("/api/chat", json={"message": "hello"})
+    request = fake.messages.last_request
+    stable = request["system"][0]
+    assert stable["cache_control"] == {"type": "ephemeral"}
+    assert "21 13 13 Wet-Pipe Sprinkler Systems" in stable["text"]
+    assert "Standards editions in effect" not in stable["text"]
+    dynamic = request["system"][1]["text"]
+    assert "Standards editions in effect" in dynamic
+    assert "NFPA 13: 2025" in dynamic

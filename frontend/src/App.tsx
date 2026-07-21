@@ -1,12 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatMessage, Health, OpenItem, SpecDoc } from "./types";
+import type {
+  AuditSnapshot,
+  ChatMessage,
+  Health,
+  LintIssue,
+  OpenItem,
+  ResearchSnapshot,
+  SpecDoc,
+  StandardInfo,
+  UpdateCheckPayload,
+} from "./types";
 import {
+  checkUpdate,
+  getAuditStatus,
   getDoc,
   getHealth,
+  getResearchStatus,
+  importMaster,
+  installUpdate,
   loadProject,
   redoDoc,
   resetSession,
+  startAudit,
+  startResearch,
   streamChat,
+  streamResearch,
   undoDoc,
 } from "./lib/api";
 import Header from "./components/Header";
@@ -23,8 +41,16 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [doc, setDoc] = useState<SpecDoc | null>(null);
   const [openItems, setOpenItems] = useState<OpenItem[]>([]);
+  const [lintIssues, setLintIssues] = useState<LintIssue[]>([]);
+  const [standards, setStandards] = useState<StandardInfo[]>([]);
+  const [profileComplete, setProfileComplete] = useState(false);
+  const [research, setResearch] = useState<ResearchSnapshot | null>(null);
+  const [audit, setAudit] = useState<AuditSnapshot | null>(null);
+  const [update, setUpdate] = useState<UpdateCheckPayload | null>(null);
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
   const busyRef = useRef(false);
+  const researchFollowRef = useRef(false);
+  const auditPollRef = useRef(false);
 
   const refreshHealth = useCallback(() => {
     getHealth()
@@ -32,19 +58,174 @@ export default function App() {
       .catch(() => setHealth(null));
   }, []);
 
+  const refreshResearch = useCallback(() => {
+    getResearchStatus()
+      .then(setResearch)
+      .catch(() => setResearch(null));
+  }, []);
+
   const refreshDoc = useCallback(() => {
     getDoc()
       .then((payload) => {
         setDoc(payload.doc);
         setOpenItems(payload.open_questions);
+        setLintIssues(payload.lint);
+        setStandards(payload.standards);
+        setProfileComplete(payload.profile_complete);
       })
       .catch(() => setDoc(null));
+  }, []);
+
+  const refreshAudit = useCallback(() => {
+    getAuditStatus()
+      .then(setAudit)
+      .catch(() => setAudit(null));
   }, []);
 
   useEffect(() => {
     refreshHealth();
     refreshDoc();
-  }, [refreshHealth, refreshDoc]);
+    refreshResearch();
+    refreshAudit();
+    // Throttled auto-check (server enforces once a day); failures ignored.
+    checkUpdate().then(setUpdate).catch(() => setUpdate(null));
+  }, [refreshHealth, refreshDoc, refreshResearch, refreshAudit]);
+
+  /** Poll the audit while one runs (single call, ~a minute). */
+  const pollAudit = useCallback(async () => {
+    if (auditPollRef.current) return;
+    auditPollRef.current = true;
+    try {
+      for (let i = 0; i < 600; i += 1) {
+        const snapshot = await getAuditStatus();
+        setAudit(snapshot);
+        if (snapshot.status !== "running") break;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    } catch {
+      // Snapshot errors surface as a null audit; the button re-enables.
+    } finally {
+      auditPollRef.current = false;
+    }
+  }, []);
+
+  const onStartAudit = useCallback(async () => {
+    try {
+      await startAudit();
+      void pollAudit();
+    } catch (e) {
+      setAudit({
+        status: "failed",
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }, [pollAudit]);
+
+  useEffect(() => {
+    if (audit?.status === "running") void pollAudit();
+  }, [audit?.status, pollAudit]);
+
+  const onImportMaster = useCallback(
+    async (file: File) => {
+      try {
+        const result = await importMaster(file);
+        applyDocPayload(result);
+        const warningLines = result.warnings.length
+          ? "\n\nImport notes:\n" +
+            result.warnings.map((w) => `- ${w}`).join("\n")
+          : "";
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: newId(),
+            role: "assistant",
+            text:
+              `Imported ${result.imported_block_count} provisions from the ` +
+              `master — every block is stamped *imported* until we review ` +
+              `it for this project. Tell me about the project and I'll ` +
+              `walk the master article by article.` +
+              warningLines,
+          },
+        ]);
+      } catch (e) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: newId(),
+            role: "assistant",
+            text: `Import failed: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+            error: true,
+          },
+        ]);
+      }
+    },
+    // applyDocPayload is stable in practice (defined per render but only
+    // touches setters); listing setMessages deps is unnecessary noise.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const onInstallUpdate = useCallback(async () => {
+    try {
+      await installUpdate();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          role: "assistant",
+          text: "The installer is running — the app will close to update.",
+        },
+      ]);
+    } catch (e) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          role: "assistant",
+          text: `Update failed: ${e instanceof Error ? e.message : String(e)}`,
+          error: true,
+        },
+      ]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Follow the SSE stream of a running research, snapshotting as it goes. */
+  const followResearch = useCallback(async () => {
+    if (researchFollowRef.current) return;
+    researchFollowRef.current = true;
+    try {
+      for await (const _evt of streamResearch()) {
+        // Events carry deltas; the snapshot endpoint is authoritative and
+        // cheap for a local app — refresh on each frame.
+        refreshResearch();
+      }
+    } finally {
+      researchFollowRef.current = false;
+      refreshResearch();
+    }
+  }, [refreshResearch]);
+
+  const onStartResearch = useCallback(async () => {
+    try {
+      await startResearch();
+      void followResearch();
+    } catch (e) {
+      setResearch((prev) => ({
+        status: "failed",
+        error: e instanceof Error ? e.message : String(e),
+        events: prev?.events ?? [],
+      }));
+    }
+  }, [followResearch]);
+
+  // A page load during a running research (or a resumed project) picks the
+  // stream back up.
+  useEffect(() => {
+    if (research?.status === "running") void followResearch();
+  }, [research?.status, followResearch]);
 
   const updateLast = (patch: Partial<ChatMessage>) => {
     setMessages((prev) => {
@@ -98,6 +279,9 @@ export default function App() {
           setDoc(evt.doc);
         } else if (evt.type === "open_questions") {
           setOpenItems(evt.items);
+        } else if (evt.type === "lint") {
+          setLintIssues(evt.items);
+          setStandards(evt.standards);
         } else if (evt.type === "error") {
           sawTerminalEvent = true;
           updateLast({ text: evt.message, error: true, streaming: false });
@@ -107,6 +291,9 @@ export default function App() {
         } else if (evt.type === "turn_complete") {
           sawTerminalEvent = true;
           updateLast({ streaming: false });
+          // Profile completeness may have changed (set_project_profile);
+          // the snapshot endpoint is authoritative and cheap.
+          refreshDoc();
         }
       }
     } catch (e) {
@@ -130,16 +317,26 @@ export default function App() {
     await resetSession();
     setMessages([]);
     setOpenItems([]);
+    setLintIssues([]);
+    setStandards([]);
     setChangedIds(new Set());
     refreshDoc();
+    refreshResearch();
+    refreshAudit();
   };
 
   const applyDocPayload = (payload: {
     doc: SpecDoc;
     open_questions: OpenItem[];
+    lint: LintIssue[];
+    standards: StandardInfo[];
+    profile_complete: boolean;
   }) => {
     setDoc(payload.doc);
     setOpenItems(payload.open_questions);
+    setLintIssues(payload.lint);
+    setStandards(payload.standards);
+    setProfileComplete(payload.profile_complete);
     setChangedIds(new Set());
   };
 
@@ -158,6 +355,8 @@ export default function App() {
       const parsed: unknown = JSON.parse(await file.text());
       const result = await loadProject(parsed);
       applyDocPayload(result);
+      refreshResearch();
+      refreshAudit();
       setMessages(
         result.chat.map((m) => ({ id: newId(), role: m.role, text: m.text })),
       );
@@ -178,7 +377,13 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <Header health={health} busy={busy} onNewSession={newSession} />
+      <Header
+        health={health}
+        busy={busy}
+        update={update}
+        onNewSession={newSession}
+        onInstallUpdate={onInstallUpdate}
+      />
       {health && !health.api_key_present && (
         <ApiKeyBanner onSaved={refreshHealth} />
       )}
@@ -187,11 +392,19 @@ export default function App() {
         <ArtifactPanel
           doc={doc}
           openItems={openItems}
+          lintIssues={lintIssues}
+          standards={standards}
+          profileComplete={profileComplete}
+          research={research}
+          audit={audit}
           changedIds={changedIds}
           busy={busy}
           onUndo={onUndo}
           onRedo={onRedo}
           onLoadProject={onLoadProject}
+          onImportMaster={onImportMaster}
+          onStartResearch={onStartResearch}
+          onStartAudit={onStartAudit}
         />
       </main>
     </div>

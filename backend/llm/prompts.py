@@ -76,6 +76,15 @@ When the document contains imported blocks, the user started from an office mast
 - Still run the interview: the playbook topics apply, but ask them against what the master already says ("the master specifies Schedule 10 roll-grooved for 2-1/2 in. and larger — keep that here?").
 - The export schedules every block still stamped imported, so a block you never visited stays visible to the reviewer. Do not mass-upgrade statuses without actually reviewing content."""
 
+_FULL_DRAFT_POLICY = """\
+# Full-section draft pass
+
+The user can ask you — through a "Draft the complete section" action — to lay down the entire section in a single turn. When that directive arrives:
+
+- Draft breadth-first: set the section header and every PART's articles first, then flesh out each article's provisions — so the document's skeleton appears at once and fills in, rather than one finished article at a time.
+- Keep each apply_spec_edits call to a sensible batch (roughly an article or a few related articles — about 25 ops as a soft guide) instead of one enormous batch, so edit patches stream steadily and the user watches the section assemble live. This is a pacing guide, never a cap: don't hold back content to hit a number.
+- Everything else is unchanged — the provenance discipline, the standards editions in effect, grounded research items (tag derived provisions with source_item_id), and the defaults-first posture all apply exactly as in a normal turn. The user reviews the assumed blocks one at a time afterward, so honest over-flagging is exactly right; never silently confirm a guess to look finished."""
+
 _INTERVIEW_POLICY = """\
 # Interview policy — defaults-first
 
@@ -106,6 +115,21 @@ _SPEC_CONVENTIONS_ENGINE = """\
 
 _CLOSING = """\
 Never fabricate project facts, code adoptions, or client standards — ask, or default visibly with an assumed stamp."""
+
+
+# The canned user message the "Draft full section" action (Batch 3, WI1)
+# sends through the normal chat path — it appears in chat as a visible,
+# honest user turn and rides the ordinary tool loop, undo, and rollback.
+# Server-owned (not the frontend) so the obligations stay versioned with
+# the engine. The complementary stable-prompt policy is ``_FULL_DRAFT_POLICY``.
+FULL_DRAFT_DIRECTIVE = """\
+Draft the COMPLETE section now — the full first pass, top to bottom.
+
+- Lay down every PART and every article this section conventionally carries (per the section catalog and the interview playbook), plus anything the project's known facts call for. Structure first, then flesh each article out.
+- Use everything already established: my interview answers, the project profile, the standards editions in effect, and the grounded research items. Draft to them — and when a provision derives from a research item, tag it with that item's source_item_id.
+- Stamp provenance honestly: confirmed only for what I've actually stated or approved; assumed for your defensible playbook / standards / domain defaults (say in one line what you assumed); [TBD: …] or needs_input for anything that genuinely can't be defaulted yet. Over-flag rather than silently guess — I'll walk the assumptions afterward.
+- Keep each apply_spec_edits call to a sensible size (an article or a few related articles) so the document assembles visibly as you go, not in one silent mega-batch at the end.
+- When you're done, give me a short summary in chat plus the 2–3 highest-value follow-up questions."""
 
 
 def _render_catalog(module: SpecModule) -> str:
@@ -168,6 +192,7 @@ def render_system_prompt(module: SpecModule) -> str:
             _LINT_POLICY,
             _RESEARCH_POLICY,
             _GAP_AND_ADAPT,
+            _FULL_DRAFT_POLICY,
             _render_catalog(module),
             _render_playbook(module),
             conventions,

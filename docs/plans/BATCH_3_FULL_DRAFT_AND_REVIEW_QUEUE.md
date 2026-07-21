@@ -1,3 +1,53 @@
+## As built (2026-07-21)
+
+**Status: shipped (v0.8.0).** Both work items landed as planned; 174 hermetic
+backend tests green (9 new for Batch 3), frontend builds clean. Details in `CLAUDE.md` → "Batch 3
+— implemented notes". Deviations from the plan worth knowing when reading the
+code:
+
+- **WI1 endpoint shape exactly as specified.** `POST /api/draft/full` is thin
+  — 409 on `turn_active` or research `running`, otherwise
+  `{ok, message: FULL_DRAFT_DIRECTIVE}`; the frontend sends it back through
+  `/api/chat`, so the pass is one ordinary turn (SSE stream, tool loop, one
+  undo step, rollback, status strip) with no duplicated pipeline. The
+  directive lives in `backend/llm/prompts.py` (server-owned, versioned) and
+  the complementary stable-prompt policy is `_FULL_DRAFT_POLICY` (breadth-first
+  + ~25-ops-per-call pacing prose, explicitly *not* a cap).
+- **Draft-full button lives in the panel header**, left of the version
+  stepper — accent-primary, shown only while the doc is empty-or-sparse
+  (< 3 articles), disabled while busy, with a one-time CSS attention pulse
+  (`.draft-pulse`, 3 glows) once research is complete. No confirm dialog (one
+  undo step; the tooltip says so).
+- **WI2 queue is a pure frontend function of the doc snapshot**
+  (`frontend/src/lib/reviewQueue.ts`), a straight port of the backend
+  `iter_paragraphs` document-order contract (pinned by the new Python test
+  `test_iter_paragraphs_document_order_is_the_review_queue_contract`, per the
+  plan's "prefer the Python-side ordering test" steer — no vitest toolchain
+  added). `buildQueue(doc, mode)` returns entries carrying an extra
+  `articleId` (the "confirm remaining in article" grouping key) beyond the
+  plan's field list.
+- **`ReviewDrawer.tsx`** sits between the Research and Issues drawers; its bar
+  shows the outstanding count ("Review N") and a mode filter (All / Imported /
+  Assumed). Keyboard: `K`/Enter keep, `E` edit, `D` delete, `A` ask, `S`/→
+  skip, ← back. Mutations don't advance the cursor themselves — the queue
+  recomputes from the next doc payload and the next item slides into place
+  (single source of truth: the doc). Delete is single-keystroke (undo exists);
+  no delete-confirm (a small deviation from the paper panel's confirm, matching
+  the plan's "single-keystroke, because undo exists").
+- **Batch affordance:** per-article press-and-hold (800ms) → one
+  `/api/doc/edit` with N `set_status` ops (one undo step, pinned by
+  `test_batch_set_status_is_transactional_and_one_undo_step`). Shown only when
+  the current article has ≥2 outstanding blocks. No document-wide bulk confirm
+  (frozen decision honored).
+- **"Ask model"** prefills the composer via an App-owned
+  `{text, nonce}` state threaded Chat → Composer (the nonce re-fires the
+  focus effect on repeat asks); the drawer stays open and recomputes when the
+  turn completes.
+- **No new SSE events, no new env vars, no new Python deps.** The only new
+  REST endpoint is `POST /api/draft/full`.
+
+---
+
 # Batch 3 — "Draft the full section now" + the review queue
 
 Ships as **v0.8.0**. Two work items that together complete the core

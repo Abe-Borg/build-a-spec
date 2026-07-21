@@ -7,9 +7,11 @@ interface Props {
   messages: ChatMessage[];
   busy: boolean;
   onSend: (text: string) => void;
+  /** WI2 "Ask model" prefill, forwarded to the composer. */
+  prefill?: { text: string; nonce: number };
 }
 
-export default function Chat({ messages, busy, onSend }: Props) {
+export default function Chat({ messages, busy, onSend, prefill }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
 
@@ -69,7 +71,7 @@ export default function Chat({ messages, busy, onSend }: Props) {
           </div>
         )}
       </div>
-      <Composer disabled={busy} onSend={onSend} />
+      <Composer disabled={busy} onSend={onSend} prefill={prefill} />
     </section>
   );
 }

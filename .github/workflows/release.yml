@@ -122,6 +122,16 @@ jobs:
           if (Test-Path selfcheck.txt) { Get-Content selfcheck.txt }
           if ($p.ExitCode -ne 0) { throw "selfcheck failed (exit $($p.ExitCode))" }
 
+          # Actually boot the backend headless (windowed exe -> None stdout),
+          # exercising the real uvicorn startup path. Catches the class of
+          # crash that a pure import check can't (e.g. None-stdout logging).
+          $env:BUILD_A_SPEC_DISABLE_UPDATE_CHECK = '1'
+          $env:BUILD_A_SPEC_SELFCHECK_OUT = "$PWD\boot.txt"
+          $p = Start-Process -FilePath $exe -ArgumentList '--boot-check' -Wait -PassThru
+          Write-Host "--- boot-check output ---"
+          if (Test-Path boot.txt) { Get-Content boot.txt }
+          if ($p.ExitCode -ne 0) { throw "boot-check failed (exit $($p.ExitCode))" }
+
       - name: Download Edge WebView2 bootstrapper
         shell: pwsh
         run: |

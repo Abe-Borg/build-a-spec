@@ -230,11 +230,24 @@ export interface ProjectLoadResult extends DocPayload {
   chat: { role: Role; text: string }[];
 }
 
+/** Aggregated billed usage for one turn (all continuation rounds). */
+export interface TurnUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  thinking_tokens?: number;
+  web_search_requests?: number;
+  web_fetch_requests?: number;
+}
+
 export type StreamEvent =
   | { type: "text_delta"; text: string }
+  | { type: "web_search"; query: string }
+  | { type: "web_fetch"; url: string }
   | { type: "doc_patch"; ops: DocOp[]; doc: SpecDoc }
   | { type: "doc_snapshot"; doc: SpecDoc }
   | { type: "open_questions"; items: OpenItem[] }
   | { type: "lint"; items: LintIssue[]; standards: StandardInfo[] }
-  | { type: "turn_complete"; stop_reason: string | null }
+  | { type: "turn_complete"; stop_reason: string | null; usage?: TurnUsage }
   | { type: "error"; message: string };

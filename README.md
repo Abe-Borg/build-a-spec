@@ -1,14 +1,58 @@
 # Build-a-Spec
 
-**v0.5.0 (Phase 5)** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v0.6.0 ("Sonnet unleashed")** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First target domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## Current Status — Phase 5, master import + compliance audit + ship
+## Current Status — v0.6.0, the "Sonnet unleashed" batch
 
-New in this release:
+New in this release (project decision: the app imposes **no quality limits
+on the model** — the only caps left are runaway circuit breakers sized so
+no legitimate turn ever meets one):
+
+- **The model sees the whole document, every turn.** The truncated outline
+  is gone from the drafting context: a PROJECT CONTEXT block in each
+  turn's user message carries the full text of every provision (ids,
+  statuses, ◆research-provenance chips), the standards editions in
+  effect, the research profile, the live lint report, and the open-item
+  list. The model can no longer edit a paragraph it can't see — and it
+  fixes its own stale citations and placeholders because the lint now
+  talks to it, not just to you.
+- **Prompt-cache restructure that pays for all of it.** The dynamic
+  context used to sit between the cached system prompt and the message
+  history, busting the cache for the whole history every doc-changing
+  turn; now the system prompt is stable-only, live state rides the newest
+  user message, and a second cache breakpoint on the message tail caches
+  the growing interview incrementally. Strictly more context per turn,
+  cheaper per turn.
+- **Adaptive thinking, wired properly.** Requests state
+  `thinking: adaptive` explicitly with effort knobs (interview `high`,
+  research `xhigh`), and thinking blocks are preserved verbatim across
+  tool-use continuation rounds as the API requires — the previous code
+  dropped them, a latent 400 on real drafting turns. Output ceilings sit
+  at the model max (128k tokens), so nothing the app controls truncates
+  a draft.
+- **Live web lookups in the interview.** The drafting model carries
+  `web_search`/`web_fetch` (same authoritative-domains blocklist as the
+  research phase) for mid-interview verification — a UL category, a
+  manufacturer datasheet, a standard designation — with `pause_turn`
+  continuation handling and inline 🔍 activity chips in the chat. The
+  systematic research fan-out stays button-triggered.
+- **Research budgets doubled** (per-dimension searches now 16–40, fetches
+  8–12, continuation ceiling 16) and research runs at `xhigh` effort —
+  background work where latency is free and quality is the point.
+- **Usage telemetry groundwork.** Every turn aggregates its billed usage
+  (input/output/cache/thinking tokens, web-tool requests) across all
+  rounds into `turn_complete.usage` and the session trace — the raw
+  material for the upcoming cost meter.
+- Committed history stays lean: the per-turn context block, thinking
+  blocks, and fetched-PDF payloads are stripped/elided at commit, so
+  project files don't balloon and stale document snapshots never
+  fossilize into the conversation.
+
+Shipped in v0.5.0 (Phase 5) and still current:
 
 - **Master-spec import (gap-and-adapt).** "Import master" ingests an office master or previous-project `.docx` into the live tree — SectionFormat structure parsed from explicit labels *or* Word auto-numbering, tables flattened with warnings, and pending tracked changes resolved to the **Accept-All view** (the text that would actually issue), all mechanics ported from Spec Critic's extractor. Every block enters with a fourth provenance status, **`imported`** (badged blue, scheduled in the export until reviewed), and the interview pivots to gap-and-adapt: walking the master against this project article by article — confirm, adapt, or delete — instead of drafting from zero. Nothing is ever silently dropped; every parse guess lands in the import warnings.
 - **Compliance audit.** One click audits the draft against the Phase 4 requirements profile, with Spec Critic's trust model intact: only **grounded** requirements control; `[UNVERIFIED]` items can at most earn a confirm-with-authority advisory; `[PROCESS]` items are excluded. Output: a coverage matrix (`represented / missing / contradicted / unclear`, every controlling requirement always classified — a skipped one reports `unclear`, never invisible) with evidence quotes + click-to-jump element ids, advisory findings, a staleness marker when the draft moves past the audited version, and a **compliance closing section in the `.docx` export**. Full multi-spec reviews still belong to Spec Critic.
@@ -113,8 +157,11 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
   llm/
     client.py            Anthropic client factory (monkeypatch seam for tests)
     prompts.py           engine prompt protocol + module-rendered system prompt
-    conversation.py      streaming turn loop with apply_spec_edits dispatch +
-                         continuation rounds; lint event; research-profile splice
+    conversation.py      streaming turn loop: apply_spec_edits dispatch,
+                         web_search/web_fetch with pause_turn continuation,
+                         adaptive thinking, the per-turn PROJECT CONTEXT
+                         block (full document + lint + research), incremental
+                         history caching, per-turn usage aggregation
 frontend/                Vite + React + TypeScript + Tailwind v4
   src/App.tsx            state owner: chat + document + lint + research + audit +
                          update + SSE dispatch
@@ -190,9 +237,13 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | API key; overrides keyring/file, never persisted. |
 | `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5` | Model for interview/drafting turns. |
-| `BUILD_A_SPEC_MAX_TOKENS` | `8192` | Per-turn output cap. |
+| `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
+| `BUILD_A_SPEC_INTERVIEW_EFFORT` | `high` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`). |
+| `BUILD_A_SPEC_CHAT_MAX_SEARCHES` | `8` | Interview web_search allowance per continuation round. |
+| `BUILD_A_SPEC_CHAT_MAX_FETCHES` | `4` | Interview web_fetch allowance per continuation round. |
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
-| `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `8192` | Per-dimension research output cap. |
+| `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
+| `BUILD_A_SPEC_RESEARCH_EFFORT` | `xhigh` | Adaptive-thinking effort for research dimensions. |
 | `BUILD_A_SPEC_PORT` | `8756` | Backend port (127.0.0.1 only). |
 | `BUILD_A_SPEC_DEV` | off | Point the window at the Vite dev server. |
 | `BUILD_A_SPEC_TRACE` | on | Session tracing (JSONL spans/events, local-only). `0` disables. |

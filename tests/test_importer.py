@@ -266,7 +266,7 @@ def test_import_endpoint_gates_and_gap_adapt_context(tmp_path, monkeypatch):
 
     from backend import sessions
     from backend.app import create_app
-    from tests.fakes import FakeClient, text_turn
+    from tests.fakes import FakeClient, request_context_text, text_turn
 
     client = TestClient(create_app())
     path = _write_docx(tmp_path, _MASTER_LINES)
@@ -317,7 +317,7 @@ def test_import_endpoint_gates_and_gap_adapt_context(tmp_path, monkeypatch):
     monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
     client.post("/api/chat", json={"message": "adapt it"})
     request = fake.messages.last_request
-    assert "(imported)" in request["system"][1]["text"]
+    assert "(imported)" in request_context_text(request)
     assert "Gap-and-adapt" in request["system"][0]["text"]
 
     # Undo steps back to the blank page.

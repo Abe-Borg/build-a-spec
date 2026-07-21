@@ -30,7 +30,10 @@ file is the working reference for AI-assisted development sessions.
 ```
 main.py                    entry point: uvicorn thread + pywebview window
 backend/
-  settings.py              models (claude-sonnet-5 default), port 8756, env knobs
+  settings.py              models (claude-sonnet-5 default), effort levels
+                           (interview high / research xhigh), max_tokens at
+                           the 128k model ceiling, chat web-tool allowances,
+                           port 8756, env knobs
   app.py                   FastAPI app factory; SSE at POST /api/chat; doc/undo/
                            redo, docx export, project save/load endpoints
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
@@ -138,11 +141,13 @@ Each frame is `data: <json>\n\n`. Event types:
 | type | payload | meaning |
 |---|---|---|
 | `text_delta` | `text` | streamed assistant text chunk (all continuation rounds) |
+| `web_search` | `query` | the model ran a server-side web search this round (interview live-lookup) |
+| `web_fetch` | `url` | the model fetched a page/document server-side this round |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
 | `open_questions` | `items` | open-item list (TBD markers + needs_input blocks); emitted when a turn changed the doc |
 | `lint` | `items`, `standards` | advisory lint issues + the editions in effect (pins + overrides); emitted right after `open_questions` when a turn changed the doc |
-| `turn_complete` | `stop_reason` | turn ended; history + doc version committed server-side |
+| `turn_complete` | `stop_reason`, `usage` | turn ended; history + doc version committed server-side. `usage` aggregates the turn's billed tokens across every round (input/output/cache/thinking + web-tool request counts) — raw material for the future cost meter |
 | `error` | `message` | turn failed; history untouched and doc rolled back (retry is safe) |
 
 The frontend switch in `App.tsx#send` is the single place events dispatch.
@@ -179,20 +184,46 @@ the run's event log from seq 0 and follows until terminal, closing with a
   final commit, so a zombie turn discards itself instead of polluting the
   fresh/loaded session ("New session" is also disabled in the UI while a
   turn streams).
-- System prompt is a block list: the stable block — `render_system_prompt
-  (session.module)`, deterministic per module — carries
-  `cache_control: ephemeral` (prompt-cache hits across the growing
-  interview); a **dynamic block follows it**, outside the cached prefix,
-  carrying everything session-varying: the standards editions in effect
-  (`standards_context_block`: module pins + recorded jurisdiction
-  overrides) and the document outline — current after undo/redo and
-  project resume. Nothing session-varying may render into the stable
-  block (pinned by `test_stable_system_prompt_is_cached_and_module_rendered`).
+- **Context architecture ("Sonnet unleashed", 2026-07-21).** The system
+  prompt is ONLY the stable module block (`render_system_prompt`,
+  deterministic per module, `cache_control: ephemeral`). Everything
+  session-varying — standards editions in effect, the research profile,
+  the **full document text** (`outline(doc, max_text=None)`, with
+  ◆source chips), the lint report, and open items — renders into a
+  PROJECT CONTEXT block spliced ahead of the user's text in the **newest
+  user message** (`_turn_context_text`, frozen at turn start). A second
+  cache breakpoint rides the tail of each request's messages
+  (`_with_tail_cache_breakpoint`, copy-on-write — stored history never
+  carries `cache_control`), so history caches incrementally instead of
+  re-billing every turn. Nothing session-varying may render into the
+  stable block (pinned by
+  `test_stable_system_prompt_is_cached_and_module_rendered`).
+- **Strip at commit** (`_committed_messages`): the context block is
+  replaced by the user's bare text (exactly one current state block per
+  request, never a stale one — pinned by
+  `test_context_block_never_fossilizes_into_history`), thinking blocks
+  drop (only required within their own turn), and fetched-PDF payloads
+  are elided wholesale (`elide_all_pdf_sources` — a PDF left in history
+  would be re-billed forever and balloon the project file). Server-tool
+  blocks (search results, citations) stay.
+- **Adaptive thinking** is stated explicitly (`thinking: {type:
+  "adaptive"}` + `output_config: {effort: settings.INTERVIEW_EFFORT}`,
+  default `high`; research runs `RESEARCH_EFFORT`, default `xhigh`).
+  Thinking blocks are preserved **verbatim** across continuation rounds —
+  the API requires them during tool use; `_serialize` round-trips every
+  block type exactly (SDK `model_dump`, `vars()` for test fakes).
 - The tool loop in `stream_user_turn` follows Spec Critic's streaming
   continuation pattern (`requirements_research.py`): stream → on
   `tool_use`, apply edits + emit `doc_patch` + send tool_result → stream
-  again. An invalid edit batch becomes an `is_error` tool_result (with the
-  current outline) for the model to self-correct — never a turn failure.
+  again; on **`pause_turn`** (long server-tool work: the interview now
+  carries `web_search`/`web_fetch` with static config — per-tool
+  `user_location` would bust the cached prefix), re-send the assistant
+  content verbatim and stream again, no synthetic user turn.
+  `sanitize_messages_for_resend` guards every request against the inbound
+  PDF page limit. An invalid edit batch becomes an `is_error` tool_result
+  (with the current outline) for the model to self-correct — never a turn
+  failure. `MAX_TOOL_ROUNDS` (50) is a runaway circuit breaker, not a
+  quality limit — no legitimate turn approaches it.
 - Document edits are transactional per batch (`spec_doc.apply_edits` works
   on a copy, swaps on success). Element ids come from monotonic per-parent
   counters and are never reused; display numbering (1.1 / A. / 1. / a. /
@@ -343,6 +374,43 @@ the run's event log from seq 0 and follows until terminal, closing with a
   set `BUILD_A_SPEC_TRACE=0` in conftest; tracing tests opt back in
   with a tmp trace dir.
 
+## "Sonnet unleashed" — implemented notes (2026-07-21, v0.6.0)
+
+Abraham's directive: no quality limits on the model, ever — the user
+spends what the work needs. What landed:
+
+- **No-limits posture.** `INTERVIEW_MAX_TOKENS` / `RESEARCH_MAX_TOKENS`
+  default to `MODEL_MAX_OUTPUT_TOKENS` (128k — the model ceiling, so the
+  app imposes nothing). Research search/fetch budgets doubled
+  (hyperscale_fire dimensions now 16–40 searches, 8–12 fetches;
+  engine defaults 24/8; `RESEARCH_MAX_CONTINUATIONS` 16). The rendered
+  research-profile cap is 100k est. tokens. The ONLY remaining caps are
+  runaway circuit breakers (`MAX_TOOL_ROUNDS` 50, the 2× search
+  ceiling) — sized so no legitimate turn ever meets one; hitting one is
+  a bug, and the turn fails retry-safe.
+- **Full-document context** replaced the planned `read_element` tool:
+  the model sees every provision's complete text each turn (PROJECT
+  CONTEXT block), so there is nothing left to "read". Tool results keep
+  the compact 160-char outline as an id map.
+- **Lint + open items feed the model** every turn (same block), with
+  prompt policy (`_LINT_POLICY`): stale editions are drafting errors to
+  fix when touching the block; no derailing the interview.
+- **Interview web lookups**: `web_search`/`web_fetch` (blocklist shared
+  with research, `CHAT_MAX_SEARCHES`/`CHAT_MAX_FETCHES` per round) with
+  prompt policy (`_WEB_LOOKUP_POLICY`): verify facts freely, weigh
+  sources, never recreate the research phase piecemeal, never paste
+  retrieved content into the spec. Activity streams as
+  `web_search`/`web_fetch` SSE events → inline chips in the chat.
+- **Adaptive thinking + effort** wired in both loops (see invariants);
+  `anthropic>=0.117` floor for `output_config`. Verified 2026-07 against
+  platform.claude.com docs: Sonnet 5 runs adaptive thinking BY DEFAULT
+  and rejects manual `budget_tokens`; thinking blocks MUST ride
+  continuation rounds during tool use (the old code dropped them —
+  latent 400 on real tool turns; fixed by verbatim `_serialize`).
+- **Usage telemetry**: every turn aggregates billed usage across rounds
+  → `turn_complete.usage` + the trace span. Groundwork for the cost
+  meter (next batch).
+
 Interview policy (decided 2026-07-21, conversation w/ Abraham):
 
 - **Defaults-first.** Every question carries the model's recommended answer;
@@ -355,9 +423,12 @@ Interview policy (decided 2026-07-21, conversation w/ Abraham):
 - **Guide-me mode.** Optional mode where open questions become 2–4 concrete
   options with plain-language tradeoffs (novices pick, experts type). Plus
   an "explain why you're asking" affordance on any question.
-- **Model routing.** Conversational turns stay on Sonnet 5; heavy one-shot
-  passes (e.g. "draft all of PART 2 from the gathered profile") may route to
-  Opus 4.8 via the existing `stream_user_turn(model=...)` override.
+- **Model routing (revised 2026-07-21, w/ Abraham).** Everything runs on
+  Sonnet 5 — no user-facing model picker, ever. The one planned exception
+  is the future "Final QC" pass: a user-triggered, spare-no-expense
+  multi-agent review on Fable 5 (`claude-fable-5`) before a section goes
+  out the door. The `stream_user_turn(model=...)` override remains the
+  seam for it.
 
 ## Commands
 

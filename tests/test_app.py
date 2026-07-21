@@ -11,7 +11,17 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend import sessions
-from tests.fakes import FakeClient, text_turn, tool_turn
+from tests.fakes import (
+    FakeClient,
+    chat_search_blocks,
+    raw_turn,
+    request_context_text,
+    text_block,
+    text_turn,
+    thinking_block,
+    tool_turn,
+    tool_use_block,
+)
 
 
 def _client() -> TestClient:
@@ -97,12 +107,27 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
     assert history[1]["role"] == "assistant"
     assert history[1]["content"][0]["text"] == "PART 1 - GENERAL"
 
-    # The request carried the cached system prompt, the live document
-    # outline block after it, and the document tool.
+    # The request: cached stable system prompt (nothing else in system),
+    # the PROJECT CONTEXT block riding the user message, the document +
+    # web tools, and explicit adaptive thinking at the configured effort.
     request = fake.messages.last_request
+    assert len(request["system"]) == 1
     assert request["system"][0]["cache_control"] == {"type": "ephemeral"}
-    assert "document" in request["system"][1]["text"]
-    assert [t["name"] for t in request["tools"]] == ["apply_spec_edits"]
+    context = request_context_text(request)
+    assert "document" in context
+    assert [t["name"] for t in request["tools"]] == [
+        "apply_spec_edits",
+        "web_search",
+        "web_fetch",
+    ]
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"] == {"effort": "high"}
+
+    # Committed history stores the user's text ONLY — the context block
+    # is per-request, never fossilized into history.
+    assert history[0]["content"] == [
+        {"type": "text", "text": "Start 21 13 13"}
+    ]
 
 
 def test_chat_error_leaves_history_clean(monkeypatch):
@@ -178,7 +203,11 @@ def test_tool_turn_patches_document_and_continues(monkeypatch):
     kinds = {i["kind"] for i in open_evt["items"]}
     assert kinds == {"tbd", "needs_input"}
 
-    assert events[-1] == {"type": "turn_complete", "stop_reason": "end_turn"}
+    assert events[-1] == {
+        "type": "turn_complete",
+        "stop_reason": "end_turn",
+        "usage": {},
+    }
 
     # History: user, assistant(tool_use), user(tool_result), assistant.
     history = sessions.get_session().history
@@ -307,7 +336,11 @@ def test_max_tokens_mid_tool_use_does_not_wedge_history(monkeypatch):
 
     resp = client.post("/api/chat", json={"message": "go"})
     events = _parse_sse(resp.text)
-    assert events[-1] == {"type": "turn_complete", "stop_reason": "max_tokens"}
+    assert events[-1] == {
+        "type": "turn_complete",
+        "stop_reason": "max_tokens",
+        "usage": {},
+    }
     # The unexecuted tool call never touched the doc and is not in history
     # (a dangling tool_use would invalidate every later request).
     assert sessions.get_session().doc.doc.is_empty()
@@ -573,13 +606,13 @@ def test_override_survives_project_round_trip(monkeypatch):
     assert nfpa13["edition"] == "2019" and nfpa13["is_override"]
     assert [i["rule"] for i in loaded["lint"]] == ["stale_edition"]
 
-    # The dynamic system block reflects the loaded override on the next turn.
+    # The PROJECT CONTEXT block reflects the loaded override on the next turn.
     fake2 = FakeClient([text_turn(["Continuing."])])
     _patch_client(monkeypatch, fake2)
     client.post("/api/chat", json={"message": "continue"})
-    dynamic_block = fake2.messages.last_request["system"][1]["text"]
-    assert "jurisdiction-adopted override" in dynamic_block
-    assert "2021 VCC per user" in dynamic_block
+    context = request_context_text(fake2.messages.last_request)
+    assert "jurisdiction-adopted override" in context
+    assert "2021 VCC per user" in context
 
 
 def test_undo_rolls_back_override_and_lint(monkeypatch):
@@ -601,10 +634,139 @@ def test_stable_system_prompt_is_cached_and_module_rendered(monkeypatch):
     _patch_client(monkeypatch, fake)
     _client().post("/api/chat", json={"message": "hello"})
     request = fake.messages.last_request
+    # The system prompt is ONLY the stable module block — everything
+    # session-varying rides the PROJECT CONTEXT block in the user message.
+    assert len(request["system"]) == 1
     stable = request["system"][0]
     assert stable["cache_control"] == {"type": "ephemeral"}
     assert "21 13 13 Wet-Pipe Sprinkler Systems" in stable["text"]
     assert "Standards editions in effect" not in stable["text"]
-    dynamic = request["system"][1]["text"]
-    assert "Standards editions in effect" in dynamic
-    assert "NFPA 13: 2025" in dynamic
+    context = request_context_text(request)
+    assert "Standards editions in effect" in context
+    assert "NFPA 13: 2025" in context
+
+
+# ---------------------------------------------------------------------------
+# Sonnet unleashed: context splice/strip, thinking, pause_turn, caching
+# ---------------------------------------------------------------------------
+
+
+def test_context_block_never_fossilizes_into_history(monkeypatch):
+    client = _client()
+    _seed_doc_via_chat(client, monkeypatch)
+
+    history = sessions.get_session().history
+    assert history[0]["content"] == [
+        {"type": "text", "text": "Start 21 13 13"}
+    ]
+    assert "PROJECT CONTEXT" not in json.dumps(history)
+
+    # The next turn's request carries exactly one, current, context block
+    # (with the seeded document's full text in it).
+    fake2 = FakeClient([text_turn(["Continuing."])])
+    _patch_client(monkeypatch, fake2)
+    client.post("/api/chat", json={"message": "continue"})
+    request = fake2.messages.last_request
+    contexts = [
+        b["text"]
+        for m in request["messages"]
+        if isinstance(m.get("content"), list)
+        for b in m["content"]
+        if isinstance(b, dict) and "PROJECT CONTEXT" in b.get("text", "")
+    ]
+    assert len(contexts) == 1
+    assert "WET-PIPE SPRINKLER SYSTEMS" in contexts[0]
+    # Full text, not the 160-char truncation: the whole seeded paragraph.
+    assert "Section includes wet-pipe systems per NFPA 13-2025." in contexts[0]
+    # The lint/open-item feedback loop reaches the model too.
+    assert "OPEN ITEMS" in contexts[0]
+
+
+def test_thinking_blocks_preserved_mid_turn_and_stripped_at_commit(monkeypatch):
+    fake = FakeClient(
+        [
+            raw_turn(
+                [
+                    thinking_block(),
+                    text_block("Drafting."),
+                    tool_use_block("toolu_t1", "apply_spec_edits", _SEED_EDITS),
+                ],
+                stop_reason="tool_use",
+                chunks=["Drafting."],
+            ),
+            text_turn(["Done."]),
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+
+    resp = _client().post("/api/chat", json={"message": "go"})
+    assert _parse_sse(resp.text)[-1]["type"] == "turn_complete"
+
+    # The continuation request re-sent the thinking block verbatim (the
+    # adaptive-thinking tool-use contract)…
+    continuation = fake.messages.requests[1]
+    assistant = [
+        m for m in continuation["messages"] if m["role"] == "assistant"
+    ][-1]
+    assert assistant["content"][0]["type"] == "thinking"
+    assert assistant["content"][0]["signature"] == "sig-fake"
+
+    # …and committed history dropped it (only required within the turn).
+    history = sessions.get_session().history
+    assert "thinking" not in {
+        b["type"] for m in history for b in m["content"]
+    }
+    assert not sessions.get_session().doc.doc.is_empty()
+
+
+def test_pause_turn_resumes_and_emits_web_activity(monkeypatch):
+    fake = FakeClient(
+        [
+            raw_turn(
+                chat_search_blocks(
+                    "NFPA 13 2025 obstruction rules", ["https://nfpa.org"]
+                ),
+                stop_reason="pause_turn",
+            ),
+            text_turn(["Verified against nfpa.org."]),
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+
+    resp = _client().post("/api/chat", json={"message": "check that"})
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "turn_complete"
+
+    # The search surfaced as a UI activity event.
+    (search_evt,) = [e for e in events if e["type"] == "web_search"]
+    assert search_evt["query"] == "NFPA 13 2025 obstruction rules"
+
+    # The resume followed the pause_turn contract: assistant content
+    # re-sent, no synthetic user turn, no tool_result.
+    resumed = fake.messages.requests[1]["messages"]
+    assert resumed[-1]["role"] == "assistant"
+    assert resumed[-1]["content"][0]["type"] == "server_tool_use"
+
+    # The server-tool blocks survive into committed history (they carry
+    # the retrieval record), unlike thinking blocks.
+    history = sessions.get_session().history
+    types = {b["type"] for m in history for b in m["content"]}
+    assert "server_tool_use" in types and "web_search_tool_result" in types
+
+
+def test_tail_cache_breakpoint_rides_requests_not_history(monkeypatch):
+    client = _client()
+    _seed_doc_via_chat(client, monkeypatch)
+
+    fake2 = FakeClient([text_turn(["ok"])])
+    _patch_client(monkeypatch, fake2)
+    client.post("/api/chat", json={"message": "continue"})
+
+    # The request's final content block carries the incremental breakpoint…
+    request = fake2.messages.last_request
+    tail = request["messages"][-1]["content"][-1]
+    assert tail["cache_control"] == {"type": "ephemeral"}
+    # …the stable system block carries the other…
+    assert request["system"][0]["cache_control"] == {"type": "ephemeral"}
+    # …and stored history carries none (breakpoints are per-request).
+    assert "cache_control" not in json.dumps(sessions.get_session().history)

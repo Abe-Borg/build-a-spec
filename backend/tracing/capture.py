@@ -100,15 +100,22 @@ def turn_end(
     *,
     stop_reason: Any = None,
     doc_changed: bool = False,
+    usage: dict | None = None,
     error: str = "",
 ) -> None:
     try:
         recorder = get_recorder()
         if recorder is None or handle is None:
             return
+        outputs: dict[str, Any] = {
+            "stop_reason": stop_reason,
+            "doc_changed": doc_changed,
+        }
+        if usage:
+            outputs["usage"] = dict(usage)
         recorder.close_span(
             handle,
-            outputs={"stop_reason": stop_reason, "doc_changed": doc_changed},
+            outputs=outputs,
             status=STATUS_ERROR if error else STATUS_OK,
             error=error or None,
         )

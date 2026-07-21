@@ -6,8 +6,11 @@ diagnostics object, no GUI context splice (the rendered profile block goes
 into the conversation's dynamic system context instead, trimmed by
 :func:`research_context_block`), and progress flows through a single
 ``event_sink`` callable (the runner turns events into the SSE stream).
-The adaptive-thinking/effort request shaping was deliberately not ported —
-research runs fine without it and Build-a-Spec has no capability table yet.
+Deviations from the source: research requests state adaptive thinking
+explicitly with the ``settings.RESEARCH_EFFORT`` level (default ``xhigh``
+— background work, quality over latency), and every ceiling is sized as a
+runaway guard rather than a budget (the 2026-07-21 no-quality-limits
+decision).
 
 What is preserved exactly, because it is the hard-won part:
 
@@ -37,6 +40,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .. import settings
 from ..project_profile import ProjectProfile
 from ..spec_modules import ResearchDimension, SpecModule
 from .grounding import (
@@ -82,14 +86,14 @@ class ResearchFanoutError(RuntimeError):
 _RESEARCH_MAX_WORKERS = 4
 
 # Cap on pause_turn continuations per dimension call. Research dimensions
-# carry web_search budgets of 8–24, and the server pauses long multi-search
+# carry web_search budgets of 16–40, and the server pauses long multi-search
 # turns; sized for the heaviest dimension (~one pause per 3 searches). The
 # 2× search-budget ceiling below is the real runaway guard.
-RESEARCH_MAX_CONTINUATIONS = 8
+RESEARCH_MAX_CONTINUATIONS = 16
 
 # Engine defaults when a dimension declares no budget of its own.
-RESEARCH_DEFAULT_MAX_SEARCHES = 12
-RESEARCH_DEFAULT_MAX_FETCHES = 4
+RESEARCH_DEFAULT_MAX_SEARCHES = 24
+RESEARCH_DEFAULT_MAX_FETCHES = 8
 
 # Tagged-JSON fallback for the rare text detour (tool_choice stays absent).
 _RESEARCH_JSON_TAG_PATTERN = re.compile(
@@ -563,6 +567,10 @@ def _run_dimension(
             }
         ],
         "tools": tools,
+        # Background quality pass: adaptive thinking stated explicitly at
+        # the research effort level (default xhigh — latency is free here).
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": settings.RESEARCH_EFFORT},
     }
 
     # Runaway guard: at most 2× the per-dimension search budget across
@@ -804,10 +812,12 @@ def run_requirements_research(
 # Drafting-context splice (trim lowest-confidence-first under a token cap)
 # ---------------------------------------------------------------------------
 
-# Cap on the rendered profile block inside the dynamic system context.
-# Estimated tokens (len/4 — no tokenizer dependency); the structured
-# profile is never trimmed, only its rendered projection.
-RESEARCH_CONTEXT_MAX_TOKENS = 16_000
+# Ceiling on the rendered profile block inside the per-turn PROJECT
+# CONTEXT. Estimated tokens (len/4 — no tokenizer dependency); the
+# structured profile is never trimmed, only its rendered projection. Sized
+# as a runaway guard for the 1M-context era, not a budget — a profile has
+# to be pathological to hit it.
+RESEARCH_CONTEXT_MAX_TOKENS = 100_000
 
 
 def _estimate_tokens(text: str) -> int:

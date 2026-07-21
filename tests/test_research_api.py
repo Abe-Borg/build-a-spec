@@ -12,6 +12,7 @@ from backend import sessions
 from tests.fakes import (
     FakeClient,
     SequencedFakeClient,
+    request_context_text,
     research_response,
     text_turn,
     tool_turn,
@@ -167,7 +168,7 @@ def test_research_lifecycle_stream_and_context_splice(monkeypatch):
     chat_fake = FakeClient([text_turn(["Noted."])])
     _patch_chat_client(monkeypatch, chat_fake)
     client.post("/api/chat", json={"message": "continue"})
-    dynamic = chat_fake.messages.last_request["system"][1]["text"]
+    dynamic = request_context_text(chat_fake.messages.last_request)
     assert "PROJECT REQUIREMENTS PROFILE" in dynamic
     assert "2021 VCC governs" in dynamic
     # Stable prompt stayed free of run-specific research data (cacheable —
@@ -266,9 +267,8 @@ def test_research_profile_survives_project_round_trip(monkeypatch):
     chat_fake = FakeClient([text_turn(["Hi."])])
     _patch_chat_client(monkeypatch, chat_fake)
     client.post("/api/chat", json={"message": "resume"})
-    assert (
-        "Grounded fact."
-        in chat_fake.messages.last_request["system"][1]["text"]
+    assert "Grounded fact." in request_context_text(
+        chat_fake.messages.last_request
     )
 
 

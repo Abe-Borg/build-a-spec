@@ -168,13 +168,13 @@ def test_pause_turn_continuation_pools_grounding_across_responses():
 
 
 def test_search_budget_ceiling_cuts_off_runaway_dimension():
-    # governing_codes budget is 24 → ceiling 48. Two pauses totalling 49
+    # governing_codes budget is 40 → ceiling 80. Two pauses totalling 81
     # searches trip the guard before a third call.
     client = SequencedFakeClient(
         _scripts(
             governing_codes=[
-                pause_response(searched_urls=["https://a.gov"], searches=25),
-                pause_response(searched_urls=["https://b.gov"], searches=24),
+                pause_response(searched_urls=["https://a.gov"], searches=41),
+                pause_response(searched_urls=["https://b.gov"], searches=40),
             ]
         )
     )
@@ -184,7 +184,7 @@ def test_search_budget_ceiling_cuts_off_runaway_dimension():
     )
     assert status.status == "failed"
     assert "budget ceiling" in status.error
-    assert status.web_search_requests == 49
+    assert status.web_search_requests == 81
 
 
 def test_incomplete_stop_reason_and_missing_payload_fail_cleanly():

@@ -114,6 +114,37 @@ def _elide_source(source: dict, *, pages: int | None) -> None:
     source.update({"type": "text", "media_type": "text/plain", "data": note})
 
 
+def elide_all_pdf_sources(messages: list[dict]) -> list[dict]:
+    """Elide EVERY fetched base64-PDF payload, regardless of page count.
+
+    Used at interview-turn commit (Build-a-Spec native, not in the Spec
+    Critic source): a fetched PDF that stays in committed history would be
+    re-sent — and re-billed — on every later request, balloon the project
+    file at save time, and count against the inbound PDF page limit
+    forever after. The model's extracted findings live in its text; the
+    source URL survives in the elision note's sibling blocks, so it can
+    always re-fetch. Returns the same list object when nothing needed
+    eliding.
+    """
+    found = False
+    sanitized = list(messages)
+    for msg_idx, message in enumerate(messages):
+        if _get(message, "role") != "assistant":
+            continue
+        sources = _find_pdf_sources(_get(message, "content"))
+        if not sources:
+            continue
+        found = True
+        new_content = [
+            _to_plain_block(b) for b in (_get(message, "content") or [])
+        ]
+        for source in _find_pdf_sources(new_content):
+            if isinstance(source, dict):
+                _elide_source(source, pages=_pdf_page_count(source.get("data")))
+        sanitized[msg_idx] = {"role": "assistant", "content": new_content}
+    return sanitized if found else messages
+
+
 def sanitize_messages_for_resend(messages: list[dict]) -> list[dict]:
     """Ensure a continuation resume request fits the API's PDF page limit.
 

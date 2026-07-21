@@ -433,8 +433,15 @@ def open_questions(section: SpecSection) -> list[dict[str, Any]]:
     return items
 
 
-def outline(section: SpecSection, *, max_text: int = 160) -> str:
-    """Compact plain-text outline with ids — the model's map of the doc."""
+def outline(section: SpecSection, *, max_text: int | None = 160) -> str:
+    """Plain-text rendering with ids — the model's map of the doc.
+
+    ``max_text`` truncates each paragraph (the compact form used in tool
+    results); ``None`` renders every paragraph's full text — the form the
+    per-turn PROJECT CONTEXT block carries so the model always sees the
+    entire document it is editing. Paragraphs drafted from a research item
+    carry a ``◆item-id`` provenance chip next to the status.
+    """
     if section.is_empty():
         return "(document is empty — no section header or articles yet)"
     lines = [
@@ -455,12 +462,16 @@ def outline(section: SpecSection, *, max_text: int = 160) -> str:
             def walk(paragraphs: list[Paragraph], depth: int) -> None:
                 for i, p in enumerate(paragraphs):
                     text = " ".join(p.text.split())
-                    if len(text) > max_text:
+                    if max_text is not None and len(text) > max_text:
                         text = text[: max_text - 1] + "…"
                     indent = "    " + "  " * depth
                     label = _paragraph_label(depth, i)
+                    source = (
+                        f" ◆{p.source_item_id}" if p.source_item_id else ""
+                    )
                     lines.append(
-                        f"{indent}{label} ({p.status}) {text}  [id: {p.uid}]"
+                        f"{indent}{label} ({p.status}{source}) {text}"
+                        f"  [id: {p.uid}]"
                     )
                     walk(p.children, depth + 1)
 

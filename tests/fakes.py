@@ -55,6 +55,57 @@ def tool_turn(
     )
 
 
+def thinking_block(thinking: str = "", signature: str = "sig-fake") -> SimpleNamespace:
+    """An adaptive-thinking block (Sonnet 5 display "omitted" → empty text)."""
+    return SimpleNamespace(type="thinking", thinking=thinking, signature=signature)
+
+
+def chat_search_blocks(query: str, urls: list[str]) -> list[SimpleNamespace]:
+    """A ``server_tool_use``(web_search) + result pair for the chat loop."""
+    return [
+        SimpleNamespace(
+            type="server_tool_use",
+            id="srvtoolu_fake",
+            name="web_search",
+            input={"query": query},
+        ),
+        search_result_block(urls),
+    ]
+
+
+def raw_turn(
+    content: list[SimpleNamespace],
+    *,
+    stop_reason: str,
+    chunks: list[str] | None = None,
+) -> SimpleNamespace:
+    """A scripted response with arbitrary content blocks (thinking,
+    server tools, pause_turn shapes) for the chat loop's fake client."""
+    return SimpleNamespace(
+        chunks=list(chunks or []), content=list(content), stop_reason=stop_reason
+    )
+
+
+def request_context_text(request: dict) -> str:
+    """The PROJECT CONTEXT block of a captured chat request.
+
+    The context is the FIRST text block of the turn's user message (the
+    user's own text follows it) — the Sonnet-unleashed context placement.
+    Returns "" when the request has no such block.
+    """
+    for message in request.get("messages", []):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, list) and content:
+            first = content[0]
+            if isinstance(first, dict) and first.get("type") == "text":
+                text = first.get("text", "")
+                if "PROJECT CONTEXT" in text:
+                    return text
+    return ""
+
+
 class _FakeStreamCtx:
     def __init__(self, turn: SimpleNamespace):
         self._turn = turn

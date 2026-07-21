@@ -265,6 +265,11 @@ export default function App() {
       for await (const evt of streamChat(text)) {
         if (evt.type === "text_delta") {
           appendToLast(evt.text);
+        } else if (evt.type === "web_search") {
+          // Surface live web activity inline in the streaming message.
+          appendToLast(`\n\n*🔍 Searched the web: "${evt.query}"*\n\n`);
+        } else if (evt.type === "web_fetch") {
+          appendToLast(`\n\n*📄 Reading: ${evt.url}*\n\n`);
         } else if (evt.type === "doc_patch") {
           setDoc(evt.doc);
           setChangedIds((prev) => {

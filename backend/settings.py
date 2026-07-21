@@ -2,9 +2,13 @@
 
 Model ids mirror Spec Critic's current stack (``api_config.py`` in the
 Claude-Spec-Critic repo): Sonnet 5 for interactive interview/drafting turns.
-Heavier drafting passes may escalate to Opus 4.8 in a later phase. Every
-value is env-overridable with the same degrade-gracefully posture as Spec
-Critic — a bad value falls back to the default rather than crashing.
+Every value is env-overridable with the same degrade-gracefully posture as
+Spec Critic — a bad value falls back to the default rather than crashing.
+
+Token posture (project decision, 2026-07-21): the app imposes NO quality
+limits of its own. ``max_tokens`` defaults sit at the model's output
+ceiling; the only caps that remain are runaway circuit breakers (tool-round
+and search-budget ceilings) sized so no legitimate turn ever meets them.
 """
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Build-a-Spec"
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 # --- Models -----------------------------------------------------------------
 
@@ -34,7 +38,38 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-INTERVIEW_MAX_TOKENS = _int_env("BUILD_A_SPEC_MAX_TOKENS", 8192)
+# The model's own output ceiling (Sonnet 5: 128k output tokens, thinking
+# included) — a "limit" at the model maximum is no app limit at all.
+MODEL_MAX_OUTPUT_TOKENS = 128_000
+
+INTERVIEW_MAX_TOKENS = _int_env(
+    "BUILD_A_SPEC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS
+)
+
+# --- Adaptive thinking / effort ---------------------------------------------
+
+# Sonnet 5 runs adaptive thinking by default; requests state it explicitly
+# (``thinking: {type: "adaptive"}``) plus an effort level via
+# ``output_config``. Interview turns default to "high" — the model's own
+# default: deep on complex work without stalling an interactive chat.
+# Research passes are background work and default to "xhigh".
+EFFORT_LEVELS = ("low", "medium", "high", "max", "xhigh")
+
+
+def _effort_env(name: str, default: str) -> str:
+    value = os.environ.get(name, "").strip().lower()
+    return value if value in EFFORT_LEVELS else default
+
+
+INTERVIEW_EFFORT = _effort_env("BUILD_A_SPEC_INTERVIEW_EFFORT", "high")
+
+# --- Interview web lookups ---------------------------------------------------
+
+# Per-request allowances for the interview loop's web_search / web_fetch
+# server tools. They renew every continuation round — per-call runaway
+# guards, not a session budget.
+CHAT_MAX_SEARCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_SEARCHES", 8)
+CHAT_MAX_FETCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_FETCHES", 4)
 
 # --- Research (Phase 4) -----------------------------------------------------
 
@@ -42,7 +77,10 @@ RESEARCH_MODEL = (
     os.environ.get("BUILD_A_SPEC_RESEARCH_MODEL", "").strip()
     or MODEL_SONNET_5
 )
-RESEARCH_MAX_TOKENS = _int_env("BUILD_A_SPEC_RESEARCH_MAX_TOKENS", 8192)
+RESEARCH_MAX_TOKENS = _int_env(
+    "BUILD_A_SPEC_RESEARCH_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS
+)
+RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "xhigh")
 
 # --- Server -----------------------------------------------------------------
 

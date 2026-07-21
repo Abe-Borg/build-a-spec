@@ -428,8 +428,8 @@ _RESEARCH_DIMENSIONS = (
     ResearchDimension(
         dimension_id="governing_codes",
         title="Governing building and fire codes",
-        max_searches=24,
-        max_fetches=8,
+        max_searches=40,
+        max_fetches=12,
         prompt_template=(
             "Determine the governing building and fire codes for a new "
             "hyperscale data-center project in {city}, {state_or_province}, "
@@ -457,8 +457,8 @@ _RESEARCH_DIMENSIONS = (
     ResearchDimension(
         dimension_id="ahj_requirements",
         title="Authority-having-jurisdiction requirements",
-        max_searches=20,
-        max_fetches=6,
+        max_searches=32,
+        max_fetches=10,
         prompt_template=(
             "Identify every authority having jurisdiction over fire "
             "protection for a data-center project in {city}, "
@@ -484,8 +484,8 @@ _RESEARCH_DIMENSIONS = (
     ResearchDimension(
         dimension_id="client_standards",
         title="Owner / client and insurer standards",
-        max_searches=12,
-        max_fetches=4,
+        max_searches=24,
+        max_fetches=8,
         prompt_template=(
             "First determine who reviews risk for {client_name} projects — "
             "FM Global, a named risk consultancy, or self-insurance — since "
@@ -509,8 +509,8 @@ _RESEARCH_DIMENSIONS = (
     ResearchDimension(
         dimension_id="site_environment",
         title="Site and environmental factors",
-        max_searches=8,
-        max_fetches=4,
+        max_searches=16,
+        max_fetches=8,
         prompt_template=(
             "Identify site and environmental factors for {city}, "
             "{state_or_province}, {country} that fire-suppression "

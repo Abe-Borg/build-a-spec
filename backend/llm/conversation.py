@@ -5,28 +5,43 @@ the FastAPI layer serializes as Server-Sent Events. History and the
 document store live on a :class:`SessionState` owned by the caller
 (``backend.sessions``).
 
-Phase 2 tool loop
------------------
-``_TOOLS`` registers ``apply_spec_edits``. A turn is a continuation loop
-(the streaming continuation pattern from Spec Critic's
-``requirements_research.py``): stream a response; if it stops with
-``tool_use``, apply the edits to the session's :class:`DocumentStore`
-(transactionally — an invalid batch becomes an ``is_error`` tool result
-the model can correct), emit a ``doc_patch`` event, send the tool results
-back, and stream again — until the model ends the turn or the round
-budget runs out.
+Context architecture (the "Sonnet unleashed" restructure, 2026-07-21)
+---------------------------------------------------------------------
+The system prompt is ONLY the stable module-rendered block, carrying
+``cache_control`` — byte-identical across the whole session. Everything
+session-varying (standards editions in effect, the research profile, the
+FULL document text, the lint report, open items) rides a PROJECT CONTEXT
+block spliced into the newest user message instead. That ordering is what
+makes the conversation history a stable, cacheable prefix: a second cache
+breakpoint rides the tail of the request's messages, so the growing
+interview hits the prompt cache incrementally instead of re-billing every
+token every turn. At commit the spliced context (and the turn's thinking
+blocks, plus any fetched-PDF payloads) are stripped from the stored
+history — each request carries exactly one, current, state block.
 
-Turn atomicity covers both stores: history mutates and the document turn
-commits (one undo snapshot per changed turn) only after a fully
+The model sees the ENTIRE document every turn — full paragraph text, ids,
+statuses, provenance chips — never a truncated outline. Tool results still
+carry the compact outline as an id map for mid-turn orientation.
+
+Tool loop
+---------
+``apply_spec_edits`` plus the ``web_search``/``web_fetch`` server tools
+(static config — byte-stable so the cached prefix never busts). A turn is
+a continuation loop: stream a response; on ``tool_use``, apply the edits
+transactionally (an invalid batch becomes an ``is_error`` tool result the
+model can correct), emit a ``doc_patch`` event, send the tool results
+back, and stream again; on ``pause_turn`` (long server-tool work), re-send
+the assistant content per the pause contract and continue. Adaptive
+thinking is stated explicitly (Sonnet 5 runs it by default) with the
+effort level from settings; thinking blocks are preserved verbatim across
+continuation rounds — the API requires them during tool use — and dropped
+only at commit.
+
+Turn atomicity is unchanged from Phase 2: history mutates and the document
+turn commits (one undo snapshot per changed turn) only after a fully
 successful turn. Every failure path yields one ``error`` event, rolls the
 document back to its pre-turn state, and leaves history unchanged, so a
 resend never duplicates anything.
-
-Phase 3: the session carries a :class:`SpecModule`; the stable system
-prompt renders from it (cacheable per module) while the dynamic block
-carries the standards editions in effect + the document outline. After a
-doc-changing turn a ``lint`` event streams the deterministic issue list
-alongside ``open_questions``.
 """
 from __future__ import annotations
 
@@ -47,18 +62,39 @@ from ..spec_doc import (
 )
 from ..compliance import AuditRunner
 from ..research import ResearchRunner, research_context_block
+from ..research.resend_sanitizer import (
+    elide_all_pdf_sources,
+    sanitize_messages_for_resend,
+)
+from ..research.schema import build_web_fetch_tool, build_web_search_tool
 from ..tracing import capture as _trace
 from ..spec_modules import SpecModule, get_module
 from ..standards import standards_context_block
 from .client import MissingApiKeyError, get_client
 from .prompts import render_system_prompt
 
-_TOOLS: list[dict[str, Any]] = [APPLY_SPEC_EDITS_TOOL]
+# Ceiling on continuation rounds (tool dispatches + pause_turn resumes)
+# within one user turn. This is a runaway circuit breaker, not a quality
+# limit: each round can carry an arbitrarily large edit batch and a fresh
+# web-tool allowance, so no legitimate turn gets anywhere near it — the
+# failure mode it guards is a model resubmitting the same broken batch
+# forever. Hitting it is treated as a failed (retry-safe) turn.
+MAX_TOOL_ROUNDS = 50
 
-# Ceiling on tool-use continuation rounds within one user turn. Each round
-# can carry an arbitrarily large edit batch, so a well-prompted model never
-# gets near this; hitting it is treated as a failed (retry-safe) turn.
-MAX_TOOL_ROUNDS = 10
+
+def _chat_tools() -> list[dict[str, Any]]:
+    """The interview tool list: document edits + live web lookups.
+
+    Static configuration on purpose — tools precede the system prompt in
+    the cached prefix, so anything per-turn here (e.g. a profile-derived
+    ``user_location``) would bust the prompt cache for the whole session.
+    The model steers search locale through its query text instead.
+    """
+    return [
+        APPLY_SPEC_EDITS_TOOL,
+        build_web_search_tool(max_uses=settings.CHAT_MAX_SEARCHES),
+        build_web_fetch_tool(max_uses=settings.CHAT_MAX_FETCHES),
+    ]
 
 
 @dataclass
@@ -94,16 +130,31 @@ class _SessionInvalidated(RuntimeError):
     """The session was reset/replaced while this turn was still streaming."""
 
 
-def _system_blocks(session: SessionState) -> list[dict[str, Any]]:
-    """System prompt blocks: stable module prompt + live dynamic context.
+def _stable_system_blocks(session: SessionState) -> list[dict[str, Any]]:
+    """The system prompt: ONLY the stable module block, cached.
 
-    ``cache_control`` sits on the stable block — the module-rendered
-    prompt, deterministic per module — so the growing interview still hits
-    the prompt cache. The dynamic block after it is intentionally outside
-    the cached prefix and carries everything session-varying: the standards
-    editions in effect (module pins + any recorded jurisdiction overrides)
-    and the document outline, current even after undo/redo or a project
-    resume.
+    Nothing session-varying may render here (pinned by
+    ``test_stable_system_prompt_is_cached_and_module_rendered``); the live
+    state travels in the PROJECT CONTEXT block of the newest user message
+    (:func:`_turn_context_text`), after the cacheable history prefix.
+    """
+    return [
+        {
+            "type": "text",
+            "text": render_system_prompt(session.module),
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def _turn_context_text(session: SessionState) -> str:
+    """The PROJECT CONTEXT block: everything live, rendered at turn start.
+
+    Standards editions in effect, the research profile (when one exists),
+    the FULL document text with ids/statuses/provenance, the lint report,
+    and the open-item list. Spliced ahead of the user's text in the newest
+    user message and stripped again at commit — each request carries
+    exactly one, current, state block, never a stale one.
     """
     doc = session.doc.doc
     parts = [
@@ -113,56 +164,207 @@ def _system_blocks(session: SessionState) -> list[dict[str, Any]]:
     if research_profile is not None:
         block, _dropped = research_context_block(research_profile)
         parts.append(block)
-    parts.append("Current specification document:\n" + outline(doc))
-    return [
-        {
-            "type": "text",
-            "text": render_system_prompt(session.module),
-            "cache_control": {"type": "ephemeral"},
-        },
-        {"type": "text", "text": "\n\n".join(parts)},
-    ]
+    parts.append(
+        "Current specification document (full text; element ids in "
+        "[id: …], provenance chips as ◆item-id):\n"
+        + outline(doc, max_text=None)
+    )
+    lint_items = lint_document(doc, session.module)
+    if lint_items:
+        lines = [
+            "LINT REPORT (deterministic, advisory — stale-edition findings "
+            "are drafting errors to fix):"
+        ]
+        for issue in lint_items:
+            where = issue.get("ref") or issue.get("element_id") or ""
+            lines.append(
+                f"- [{issue.get('rule')}] {where}: {issue.get('message')} "
+                f"(element {issue.get('element_id')})"
+            )
+        parts.append("\n".join(lines))
+    open_items = open_questions(doc)
+    if open_items:
+        lines = ["OPEN ITEMS (resolve as answers arrive):"]
+        for item in open_items:
+            lines.append(
+                f"- {item.get('ref')} [{item.get('kind')}] "
+                f"{item.get('label')} (element {item.get('element_id')})"
+            )
+        parts.append("\n".join(lines))
+    return (
+        "=== PROJECT CONTEXT (current state — supersedes anything "
+        "remembered from earlier turns) ===\n\n"
+        + "\n\n".join(parts)
+        + "\n\n=== END PROJECT CONTEXT ==="
+    )
+
+
+def _serialize(node: Any) -> Any:
+    """Deep-serialize SDK content into plain JSON-able structures.
+
+    Preserves EVERY block type verbatim — text (with citations), tool_use,
+    thinking/redacted_thinking (empty ``thinking`` fields included, per the
+    adaptive-thinking contract), server_tool_use, and the web tool result
+    blocks — so continuation rounds can re-send exactly what the API
+    returned. Pydantic models dump via ``model_dump``; test fakes
+    (SimpleNamespace) fall back to ``vars()``.
+    """
+    if isinstance(node, dict):
+        return {k: _serialize(v) for k, v in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [_serialize(v) for v in node]
+    dump = getattr(node, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(mode="json", exclude_none=True)
+        except Exception:  # noqa: BLE001 — fall through to attribute dump
+            pass
+    if hasattr(node, "__dict__") and not isinstance(node, type):
+        return {k: _serialize(v) for k, v in vars(node).items()}
+    return node
 
 
 def _content_blocks_to_dicts(content: Any) -> list[dict[str, Any]]:
-    """Serialize SDK content blocks into plain history dicts."""
+    """Serialize SDK content blocks into plain history dicts, verbatim."""
     blocks: list[dict[str, Any]] = []
-    for block in content:
-        block_type = getattr(block, "type", None)
-        if block_type == "text":
-            blocks.append({"type": "text", "text": block.text})
-        elif block_type == "tool_use":
-            blocks.append(
-                {
-                    "type": "tool_use",
-                    "id": block.id,
-                    "name": block.name,
-                    "input": block.input,
-                }
-            )
+    for block in content or []:
+        serialized = _serialize(block)
+        if isinstance(serialized, dict) and serialized.get("type"):
+            blocks.append(serialized)
     return blocks
 
 
+_TRANSIENT_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
+
+
+def _committed_messages(
+    new_messages: list[dict[str, Any]], user_text: str
+) -> list[dict[str, Any]]:
+    """The turn's messages as history stores them: lean and current-free.
+
+    - The first user message keeps ONLY the user's text (the PROJECT
+      CONTEXT block would otherwise fossilize a stale document snapshot
+      into every later request).
+    - Thinking blocks drop — the adaptive-thinking contract only requires
+      them within the turn that produced them.
+    - Fetched-PDF payloads are elided wholesale (see
+      :func:`elide_all_pdf_sources`); search results and citations stay.
+    """
+    committed: list[dict[str, Any]] = [
+        {"role": "user", "content": [{"type": "text", "text": user_text}]}
+    ]
+    for message in new_messages[1:]:
+        if message.get("role") != "assistant":
+            committed.append(message)
+            continue
+        content = [
+            b
+            for b in (message.get("content") or [])
+            if b.get("type") not in _TRANSIENT_BLOCK_TYPES
+        ]
+        if not content:
+            content = [{"type": "text", "text": "[Model reasoning omitted.]"}]
+        committed.append({"role": "assistant", "content": content})
+    return elide_all_pdf_sources(committed)
+
+
+def _with_tail_cache_breakpoint(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Copy-on-write a cache breakpoint onto the request's last block.
+
+    Marks the incremental prefix (tools + system are covered by the stable
+    block's own breakpoint): each continuation round extends the previous
+    round's cache; each new turn re-writes only the previous turn's
+    exchange (the strip at commit shifts those bytes). Stored history is
+    never mutated — the breakpoint rides a per-request copy.
+    """
+    if not messages:
+        return messages
+    last = messages[-1]
+    content = last.get("content")
+    if not isinstance(content, list) or not content:
+        return messages
+    tail = content[-1]
+    if not isinstance(tail, dict) or tail.get("type") in _TRANSIENT_BLOCK_TYPES:
+        return messages
+    new_tail = dict(tail)
+    new_tail["cache_control"] = {"type": "ephemeral"}
+    return [
+        *messages[:-1],
+        {**last, "content": [*content[:-1], new_tail]},
+    ]
+
+
+def _merge_usage(totals: dict[str, int], usage: Any) -> None:
+    """Accumulate one response's billed usage into the turn totals."""
+    if usage is None:
+        return
+    for key in (
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    ):
+        value = getattr(usage, key, None)
+        if isinstance(value, (int, float)) and value:
+            totals[key] = totals.get(key, 0) + int(value)
+    details = getattr(usage, "output_tokens_details", None)
+    thinking = getattr(details, "thinking_tokens", None) if details else None
+    if isinstance(thinking, (int, float)) and thinking:
+        totals["thinking_tokens"] = totals.get("thinking_tokens", 0) + int(
+            thinking
+        )
+    server = getattr(usage, "server_tool_use", None)
+    for key in ("web_search_requests", "web_fetch_requests"):
+        value = getattr(server, key, None) if server else None
+        if isinstance(value, (int, float)) and value:
+            totals[key] = totals.get(key, 0) + int(value)
+
+
+def _web_activity_events(
+    content: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """UI events for the round's server-side web tool calls."""
+    events: list[dict[str, Any]] = []
+    for block in content:
+        if block.get("type") != "server_tool_use":
+            continue
+        tool_input = block.get("input") or {}
+        if block.get("name") == "web_search":
+            events.append(
+                {
+                    "type": "web_search",
+                    "query": str(tool_input.get("query", "")),
+                }
+            )
+        elif block.get("name") == "web_fetch":
+            events.append(
+                {"type": "web_fetch", "url": str(tool_input.get("url", ""))}
+            )
+    return events
+
+
 def _run_tool(
-    session: SessionState, block: Any, trace_handle: Any = None
+    session: SessionState, block: dict[str, Any], trace_handle: Any = None
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Execute one tool_use block.
+    """Execute one (serialized) tool_use block.
 
     Returns ``(tool_result_block, ui_events)``. Tool failures become
     ``is_error`` results for the model to correct — they never abort the
     turn.
     """
-    if block.name != "apply_spec_edits":
+    if block.get("name") != "apply_spec_edits":
         return (
             {
                 "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": f"Unknown tool: {block.name}",
+                "tool_use_id": block.get("id"),
+                "content": f"Unknown tool: {block.get('name')}",
                 "is_error": True,
             },
             [],
         )
-    edits = (block.input or {}).get("edits")
+    edits = (block.get("input") or {}).get("edits")
     try:
         applied = session.doc.apply_edits(edits)
     except SpecEditError as exc:
@@ -175,7 +377,7 @@ def _run_tool(
         return (
             {
                 "type": "tool_result",
-                "tool_use_id": block.id,
+                "tool_use_id": block.get("id"),
                 "content": (
                     f"Edit batch rejected (nothing was applied): {exc}\n\n"
                     "Current specification document:\n"
@@ -188,7 +390,7 @@ def _run_tool(
     _trace.tool_dispatch(trace_handle, ops=len(applied), ok=True)
     result = {
         "type": "tool_result",
-        "tool_use_id": block.id,
+        "tool_use_id": block.get("id"),
         "content": json.dumps(
             {"applied": applied, "outline": outline(session.doc.doc)},
             ensure_ascii=False,
@@ -212,18 +414,30 @@ def stream_user_turn(
     """Run one user turn against the model, yielding UI event dicts.
 
     Event order: ``text_delta`` chunks (across all continuation rounds)
-    interleaved with ``doc_patch`` after each applied edit batch, then —
-    on success — ``open_questions`` (if the document changed) and
-    ``turn_complete``. Any failure yields a single ``error`` event, rolls
-    the document back, and leaves history unchanged.
+    interleaved with ``web_search``/``web_fetch`` activity and
+    ``doc_patch`` after each applied edit batch, then — on success —
+    ``open_questions`` and ``lint`` (if the document changed) and
+    ``turn_complete``, which carries the turn's aggregated billed usage.
+    Any failure yields a single ``error`` event, rolls the document back,
+    and leaves history unchanged.
     """
     user_text = (user_text or "").strip()
     if not user_text:
         yield {"type": "error", "message": "Empty message."}
         return
 
+    # The PROJECT CONTEXT renders once, at turn start: mid-turn document
+    # changes reach the model through tool results, and a frozen block
+    # keeps the request prefix byte-stable across continuation rounds.
+    context_text = _turn_context_text(session)
     new_messages: list[dict[str, Any]] = [
-        {"role": "user", "content": [{"type": "text", "text": user_text}]}
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": context_text},
+                {"type": "text", "text": user_text},
+            ],
+        }
     ]
     session.doc.begin_turn()
     generation = session.generation
@@ -240,17 +454,23 @@ def stream_user_turn(
             )
 
     def request_kwargs() -> dict[str, Any]:
+        messages = sanitize_messages_for_resend(
+            list(session.history) + new_messages
+        )
         return {
             "model": model or settings.INTERVIEW_MODEL,
             "max_tokens": max_tokens or settings.INTERVIEW_MAX_TOKENS,
-            "system": _system_blocks(session),
-            "messages": list(session.history) + new_messages,
-            "tools": _TOOLS,
+            "system": _stable_system_blocks(session),
+            "messages": _with_tail_cache_breakpoint(messages),
+            "tools": _chat_tools(),
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": settings.INTERVIEW_EFFORT},
         }
 
     stop_reason: str | None = None
     doc_changed = False
     committed = False
+    usage_totals: dict[str, int] = {}
     try:
         client = get_client()
         for _round in range(MAX_TOOL_ROUNDS):
@@ -261,8 +481,19 @@ def stream_user_turn(
                         yield {"type": "text_delta", "text": delta}
                 final = stream.get_final_message()
 
+            _merge_usage(usage_totals, getattr(final, "usage", None))
             content = _content_blocks_to_dicts(final.content)
             stop_reason = final.stop_reason
+            for event in _web_activity_events(content):
+                yield event
+
+            if stop_reason == "pause_turn":
+                # Long server-tool work paused server-side: re-send the
+                # assistant content verbatim (per the pause_turn contract,
+                # thinking blocks included) and stream again — no
+                # synthetic user turn, no tool results.
+                new_messages.append({"role": "assistant", "content": content})
+                continue
             if stop_reason != "tool_use":
                 # A truncated response (e.g. max_tokens) can still carry
                 # tool_use blocks; committing one without a tool_result
@@ -275,8 +506,8 @@ def stream_user_turn(
             new_messages.append({"role": "assistant", "content": content})
 
             tool_results: list[dict[str, Any]] = []
-            for block in final.content:
-                if getattr(block, "type", None) != "tool_use":
+            for block in content:
+                if block.get("type") != "tool_use":
                     continue
                 check_session()
                 result, ui_events = _run_tool(session, block, trace_handle)
@@ -321,7 +552,7 @@ def stream_user_turn(
                 "streaming; the turn was discarded.",
             }
             return
-        session.history.extend(new_messages)
+        session.history.extend(_committed_messages(new_messages, user_text))
         doc_changed = session.doc.commit_turn()
         committed = True
     finally:
@@ -334,6 +565,7 @@ def stream_user_turn(
                 trace_handle,
                 stop_reason=stop_reason,
                 doc_changed=False,
+                usage=usage_totals,
                 error="turn did not commit (failure or disconnect)",
             )
         else:
@@ -341,6 +573,7 @@ def stream_user_turn(
                 trace_handle,
                 stop_reason=stop_reason,
                 doc_changed=doc_changed,
+                usage=usage_totals,
             )
 
     if doc_changed:
@@ -356,7 +589,11 @@ def stream_user_turn(
             "items": lint_document(session.doc.doc, session.module),
             "standards": standards_payload(session),
         }
-    yield {"type": "turn_complete", "stop_reason": stop_reason}
+    yield {
+        "type": "turn_complete",
+        "stop_reason": stop_reason,
+        "usage": usage_totals,
+    }
 
 
 def standards_payload(session: SessionState) -> list[dict[str, Any]]:

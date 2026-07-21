@@ -1,42 +1,57 @@
 # Build-a-Spec
 
-**v0.1.0 (Phase 1)** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and (from Phase 2 on) builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v0.2.0 (Phase 2)** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First target domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. The engine is domain-neutral; discipline knowledge will live in registry-validated spec modules, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## Current Status — Phase 1 shell
+## Current Status — Phase 2, the living document
 
 What works today:
 
-- Claude-desktop-style UI: streaming chat pane on the left, specification document panel on the right (placeholder skeleton in this phase), warm dark theme.
-- Real streaming interview loop against the Anthropic API (Sonnet 5 by default) with a Division 21 hyperscale fire-suppression system prompt. Drafted spec language arrives in fenced blocks in chat for now.
+- Claude-desktop-style UI: streaming chat pane on the left, the **live specification document** on the right, warm dark theme.
+- The model drafts exclusively through the `apply_spec_edits` tool into a server-owned SectionFormat tree (Section → PART 1/2/3 → articles → nested paragraphs, automatic 1.1 / A. / 1. / a. / 1) numbering, stable element ids). Edits are validated server-side and applied transactionally; each turn's changes stream into the panel as they happen, with changed blocks highlighted.
+- Per-block provenance: `confirmed` / `assumed` / `needs_input`, badged in the panel. `[TBD: …]` markers and needs-input blocks are tracked as open items — listed under the panel (click to jump) and scheduled in the export.
+- Defaults-first interview: every question carries a recommended answer; "I don't know" applies a defensible NFPA 13-2025 / hyperscale-norm default stamped `assumed`; guide-me mode turns open questions into concrete options with tradeoffs.
+- Version stepper: one snapshot per turn that changed the document; undo/redo from the panel header.
+- `.docx` export via python-docx — SectionFormat styling plus an **assumptions schedule** (every `assumed` block with its numbering, for one-pass senior review) and an open-items schedule.
+- Project save/resume: a JSON file bundling the conversation (with tool history) and the full document version history — undo still works after a resume.
 - API key management: `ANTHROPIC_API_KEY` env var → OS credential manager (via `keyring`) → key file fallback, same posture as Spec Critic. A banner in the UI stores your key if none is found.
 - Session reset, prompt-cached system prompt, hermetic test suite (no network, no key).
 
-Not yet wired (next phases, in order): the server-owned document model with `apply_spec_edits` tool-use patching into the live panel, `.docx` export, the spec-module registry with pinned standards editions, live deterministic linting ([TBD] tracking, stale-edition detection), and the AHJ/client requirements-research agents.
+Not yet wired (next phases, in order): the spec-module registry with pinned standards editions, live deterministic linting (stale-edition detection), and the AHJ/client requirements-research agents.
 
 ## Architecture
 
 ```
 main.py                  pywebview shell: starts the backend, opens the native window
 backend/                 FastAPI + the conversation engine (Python 3.11+)
-  app.py                 /api/health, /api/key, /api/session/reset, /api/chat (SSE)
+  app.py                 /api/health, /api/key, /api/session/reset, /api/chat (SSE),
+                         /api/doc (+ undo/redo), /api/export/docx,
+                         /api/project/save + /api/project/load
   settings.py            models, ports, env overrides
   api_key_store.py       key resolution: env -> keyring -> file   [ported from Spec Critic]
   app_paths.py           platformdirs config locations            [ported from Spec Critic]
-  sessions.py            active-session store (single session in Phase 1)
+  sessions.py            active-session store (single session)
+  spec_doc/
+    model.py             SectionFormat tree, stable ids, transactional edit ops,
+                         per-turn version store (undo/redo), open-item extraction
+    docx_export.py       .docx rendering + assumptions/open-items schedules
+    project.py           JSON project files: save/resume, chat transcript
   llm/
     client.py            Anthropic client factory (monkeypatch seam for tests)
-    prompts.py           Phase 1 interviewer system prompt (Div 21 hyperscale)
-    conversation.py      streaming turn loop; tool seam for Phase 2 document tools
+    prompts.py           interviewer system prompt: tool drafting + defaults-first policy
+    conversation.py      streaming turn loop with apply_spec_edits dispatch +
+                         continuation rounds
 frontend/                Vite + React + TypeScript + Tailwind v4
-  src/App.tsx            layout: header, chat, artifact panel
-  src/lib/api.ts         SSE parsing over fetch
-  src/components/        Chat, MessageBubble (markdown), Composer, ArtifactPanel,
-                         Header, ApiKeyBanner
-tests/                   hermetic pytest suite with a fake Anthropic streaming client
+  src/App.tsx            state owner: chat + document + SSE event dispatch
+  src/lib/api.ts         SSE parsing over fetch; doc/undo/project calls
+  src/components/        Chat, MessageBubble (markdown), Composer, Header,
+                         ApiKeyBanner, ArtifactPanel (stepper, export, open items),
+                         SpecDocument (SectionFormat rendering)
+tests/                   hermetic pytest suite; fakes.py scripts multi-round
+                         tool-use streaming turns
 ```
 
 The backend serves the built frontend from `frontend/dist` in normal use; in development the Vite dev server proxies `/api` to the backend for hot reload.
@@ -113,8 +128,8 @@ Ported so far (adapted, same design): `api_key_store.py`, `app_paths.py`, the he
 
 ## Roadmap
 
-1. **Phase 1 — Shell (this release).** Streaming interview chat, native window, key management, tests.
-2. **Phase 2 — Living document.** Server-owned SectionFormat tree (Section → PART → article → paragraph) with stable element ids and per-block provenance (`confirmed` / `assumed` / `needs_input`); `apply_spec_edits` tool-use so drafts land in the panel, not chat; a defaults-first interview where "I don't know" is a valid answer — the model applies a defensible default and flags it, with assumptions badged in the panel and scheduled in the `.docx` export; change highlighting + version history; `.docx` export; save/resume project files.
+1. **Phase 1 — Shell.** Streaming interview chat, native window, key management, tests. *(Shipped in v0.1.0.)*
+2. **Phase 2 — Living document (this release).** Server-owned SectionFormat tree (Section → PART → article → paragraph) with stable element ids and per-block provenance (`confirmed` / `assumed` / `needs_input`); `apply_spec_edits` tool-use so drafts land in the panel, not chat; a defaults-first interview where "I don't know" is a valid answer — the model applies a defensible default and flags it, with assumptions badged in the panel and scheduled in the `.docx` export; change highlighting + version history; `.docx` export; save/resume project files.
 3. **Phase 3 — Spec modules.** Registry-validated `SpecModule` (interview playbook, section catalog, code basis, pinned standards editions — NFPA 13-2025 default, jurisdiction-adopted editions respected); live deterministic linting of the draft.
 4. **Phase 4 — Research agents.** Port of the requirements-research fan-out: grounded web-search agents for AHJ, client, and insurer requirements with citations surfaced in chat and folded into drafting context.
 5. **Phase 5 — Ship.** Master-spec import as a starting point, packaging/installer/auto-updater, and a compliance audit of the finished draft against the researched requirements profile.

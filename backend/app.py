@@ -9,6 +9,9 @@ Endpoints (all JSON unless noted):
 - ``POST /api/key/test``      → validate a candidate/stored key (no save).
 - ``POST /api/session/reset`` → clear the conversation and the document.
 - ``POST /api/chat``          → Server-Sent Events stream of turn events.
+- ``POST /api/draft/full``    → the canned full-section draft directive for
+  the frontend to send through the normal chat path (409 while a turn or
+  research runs).
 - ``GET  /api/doc``           → current document snapshot + open questions.
 - ``POST /api/doc/undo``      → step to the previous per-turn version.
 - ``POST /api/doc/redo``      → step forward again.
@@ -63,6 +66,7 @@ from .llm.client import (
     reset_client_cache,
 )
 from .llm.conversation import standards_payload, stream_user_turn
+from .llm.prompts import FULL_DRAFT_DIRECTIVE
 from .project_profile import ProjectProfile
 from .spec_doc import SpecEditError, lint_document, open_questions
 from .spec_doc.docx_export import build_docx, export_filename
@@ -233,6 +237,39 @@ def create_app() -> FastAPI:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.post("/api/draft/full")
+    def draft_full() -> JSONResponse:
+        """Hand the frontend the canned full-section draft directive (WI1).
+
+        Deliberately thin: it owns no drafting machinery of its own. The
+        directive is an ordinary user message the frontend sends back through
+        ``/api/chat``, so the pass rides the existing SSE stream, tool loop,
+        status strip, one-undo-step commit, and rollback — one code path for
+        turns, no duplicated pipeline. Refused (409) while a model turn is
+        streaming or research is running, mirroring the manual-edit guard: a
+        drafting turn launched into either would collide with in-flight work.
+        """
+        session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is already streaming — wait for it "
+                    "to finish before drafting the full section.",
+                },
+                status_code=409,
+            )
+        if session.research.status == "running":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Requirements research is running — let it finish "
+                    "so the draft can use the grounded results.",
+                },
+                status_code=409,
+            )
+        return JSONResponse({"ok": True, "message": FULL_DRAFT_DIRECTIVE})
 
     # --- Document ----------------------------------------------------------
 

@@ -1,14 +1,50 @@
 # Build-a-Spec
 
-**v0.7.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v0.8.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First target domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## Current Status — v0.7.0 (Batch 2: streaming UX, direct editing, settings, cost meter)
+## Current Status — v0.8.0 (Batch 3: full-section draft + the review queue)
 
-New in this release:
+**Two on-ramps, one review surface.** Whether a section starts from a blank
+page or from an imported office master, you now converge on the same place: a
+complete draft, then a guided block-by-block walk to reviewed status.
+From-scratch drafting is a first-class path, not the fallback.
+
+- **"Draft full section" — the payoff of the no-limits work.** One accent
+  button (in the panel header, offered while the page is empty or sparse) has
+  Sonnet lay down the *entire* section in a single turn: every PART, every
+  article the module conventionally carries, drafted from your interview
+  answers, the project profile, the grounded research, and the standards
+  editions in effect — provisions tagged with their research provenance,
+  statuses stamped honestly (user-stated `confirmed`, defaults `assumed`,
+  unknowns `[TBD]`/needs-input). It streams into the panel article by article
+  (no dead air, no silent mega-batch), it's **one undo step**, and after it
+  runs the interview pivots to refining what's on the page — exactly like
+  gap-and-adapt does after an import. It rides the ordinary chat path (the
+  directive appears as a visible user turn), so there's no second pipeline to
+  trust. Once research completes and the page is still sparse, the button
+  gives a one-time attention pulse.
+- **The review queue — turn the assumptions schedule into a workflow.** A
+  Review drawer under the panel shows the outstanding count ("Review 87") and
+  walks every block that needs a human decision — `imported` blocks after a
+  master import, `assumed` blocks after drafting — one at a time, in document
+  order, at keyboard speed: **K**eep (confirm), **E**dit (rewrite → confirmed,
+  research provenance preserved), **D**elete, **A**sk the model (prefills the
+  chat with a targeted "Regarding 1.2.A …" so you just say what to change),
+  **S**/→ skip, ← back. Each decision advances to the next block; the queue
+  recomputes straight from the live document, so it survives undo, model
+  edits, and resets with nothing to drift out of sync. A per-article
+  press-and-hold confirms the rest of an article you've read in one undo
+  step — the *only* bulk affordance, deliberately guarded; there is no
+  document-wide "confirm everything". The outstanding count always matches the
+  export's assumptions + imported schedules, so the queue empties exactly as
+  the paper trail does.
+
+Shipped in v0.7.0 (Batch 2: streaming UX, direct editing, settings, cost
+meter) and still current:
 
 - **Buttery-smooth streaming — no dead air, ever.** The chat loop now
   iterates the model's raw stream events and narrates all of them live: a
@@ -126,8 +162,9 @@ All five roadmap phases are shipped. What remains is real-world hardening: cutti
 main.py                  pywebview shell: starts the backend, opens the native window
 backend/                 FastAPI + the conversation engine (Python 3.11+)
   app.py                 /api/health, /api/key, /api/session/reset, /api/chat (SSE),
-                         /api/doc (+ undo/redo), /api/export/docx,
-                         /api/import/master, /api/research/start|status|stream,
+                         /api/draft/full, /api/doc (+ undo/redo/edit),
+                         /api/export/docx, /api/import/master,
+                         /api/research/start|status|stream,
                          /api/audit/start|status, /api/update/check|install,
                          /api/trace/viewer, /api/project/save + load
   settings.py            models (interview + research), ports, env overrides,
@@ -198,11 +235,14 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
 frontend/                Vite + React + TypeScript + Tailwind v4
   src/App.tsx            state owner: chat + document + lint + research + audit +
                          update + SSE dispatch
-  src/lib/api.ts         SSE parsing over fetch; doc/undo/project/research/
-                         import/audit/update calls
-  src/components/        Chat, MessageBubble (markdown), Composer,
+  src/lib/api.ts         SSE parsing over fetch; doc/undo/edit/draft-full/project/
+                         research/import/audit/update calls
+  src/lib/reviewQueue.ts buildQueue(doc, mode): the review queue as a pure
+                         document-order walk (port of iter_paragraphs)
+  src/components/        Chat, MessageBubble (markdown), Composer (ask-model prefill),
                          Header (update pill), ApiKeyBanner,
-                         ArtifactPanel (stepper, export, import, open items),
+                         ArtifactPanel (stepper, export, import, "Draft full section",
+                         open items), ReviewDrawer (keyboard review walk),
                          IssuesDrawer (lint + standards strip),
                          ResearchDrawer (profile, research, audit coverage),
                          SpecDocument (SectionFormat rendering + badges + ◆ chips)

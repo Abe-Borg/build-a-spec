@@ -14,6 +14,7 @@ import type {
 } from "./types";
 import {
   checkUpdate,
+  draftFull,
   editDoc,
   getAuditStatus,
   getDoc,
@@ -55,6 +56,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
+  // Composer prefill for the review queue's "Ask model" (WI2). The nonce
+  // fires the composer's effect even when the same ref is asked twice.
+  const [prefill, setPrefill] = useState({ text: "", nonce: 0 });
   const busyRef = useRef(false);
   const researchFollowRef = useRef(false);
   const auditPollRef = useRef(false);
@@ -377,6 +381,32 @@ export default function App() {
     }
   };
 
+  /** Fetch the canned full-draft directive and send it as a normal turn. */
+  const onDraftFull = async () => {
+    if (busyRef.current) return;
+    try {
+      const message = await draftFull();
+      await send(message);
+    } catch (e) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          role: "assistant",
+          text: `Could not start the full draft: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+          error: true,
+        },
+      ]);
+    }
+  };
+
+  /** Prefill the composer from a review-queue "Ask model" and focus it. */
+  const onAskModel = (text: string) => {
+    setPrefill((p) => ({ text, nonce: p.nonce + 1 }));
+  };
+
   const newSession = async () => {
     await resetSession();
     setMessages([]);
@@ -488,7 +518,7 @@ export default function App() {
         onKeyChange={refreshHealth}
       />
       <main className="flex min-h-0 flex-1">
-        <Chat messages={messages} busy={busy} onSend={send} />
+        <Chat messages={messages} busy={busy} onSend={send} prefill={prefill} />
         <ArtifactPanel
           doc={doc}
           openItems={openItems}
@@ -506,6 +536,8 @@ export default function App() {
           onImportMaster={onImportMaster}
           onStartResearch={onStartResearch}
           onStartAudit={onStartAudit}
+          onDraftFull={onDraftFull}
+          onAskModel={onAskModel}
         />
       </main>
     </div>

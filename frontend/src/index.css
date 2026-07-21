@@ -133,6 +133,26 @@ body {
   transition: background 0.6s ease;
 }
 
+/* One-time attention pulse on the "Draft full section" button once research
+   has landed and the page is still sparse. A few glows, then it settles. */
+.draft-pulse {
+  animation: draft-pulse 1.3s ease-in-out 3;
+}
+@keyframes draft-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(217, 119, 87, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(217, 119, 87, 0.35);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .draft-pulse {
+    animation: none;
+  }
+}
+
 /* Blinking caret shown while a reply streams */
 .streaming-caret::after {
   content: "▍";

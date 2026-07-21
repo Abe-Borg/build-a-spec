@@ -186,6 +186,75 @@ def test_manual_edit_is_undoable(monkeypatch):
     assert para["status"] == "assumed"  # back to the seeded value
 
 
+def test_batch_set_status_is_transactional_and_one_undo_step(monkeypatch):
+    """Batch 3, WI2: the review queue's "confirm remaining N in this article"
+    affordance sends N set_status ops in one /api/doc/edit call. They apply as
+    one transactional batch and land as a single undoable version."""
+    client = _client()
+    # Seed two assumed paragraphs in one article.
+    seed = {
+        "edits": [
+            {"action": "add_article", "target_id": "pt2", "text": "SPRINKLERS"},
+            {
+                "action": "add_paragraph",
+                "target_id": "pt2.a1",
+                "text": "Provide UL-listed sprinklers.",
+                "status": "assumed",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt2.a1",
+                "text": "Provide guards where subject to damage.",
+                "status": "assumed",
+            },
+        ]
+    }
+    fake = FakeClient([tool_turn(["Drafting."], seed), text_turn(["Done."])])
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    client.post("/api/chat", json={"message": "draft products"})
+    before = client.get("/api/doc").json()["doc"]
+    assert before["version"] == {"index": 1, "count": 2}
+
+    resp = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {"action": "set_status", "target_id": "pt2.a1.p1", "status": "confirmed"},
+                {"action": "set_status", "target_id": "pt2.a1.p2", "status": "confirmed"},
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    paras = data["doc"]["parts"][1]["articles"][0]["paragraphs"]
+    assert [p["status"] for p in paras] == ["confirmed", "confirmed"]
+    # One new version for the whole batch.
+    assert data["doc"]["version"] == {"index": 2, "count": 3}
+
+    # A single undo reverts both confirmations at once.
+    undone = client.post("/api/doc/undo").json()
+    paras = undone["doc"]["parts"][1]["articles"][0]["paragraphs"]
+    assert [p["status"] for p in paras] == ["assumed", "assumed"]
+
+
+def test_batch_set_status_rejects_whole_batch_on_one_bad_op(monkeypatch):
+    client = _client()
+    _seed(client, monkeypatch)
+    before = client.get("/api/doc").json()["doc"]
+    resp = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {"action": "set_status", "target_id": "pt1.a1.p1", "status": "confirmed"},
+                {"action": "set_status", "target_id": "nope", "status": "confirmed"},
+            ]
+        },
+    )
+    assert resp.status_code == 400
+    # The good op did not stick — the batch is all-or-nothing.
+    assert client.get("/api/doc").json()["doc"] == before
+
+
 def test_confirming_removes_block_from_assumptions_schedule(monkeypatch):
     client = _client()
     _seed(client, monkeypatch)

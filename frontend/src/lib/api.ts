@@ -151,6 +151,20 @@ async function* readSse<T>(resp: Response): AsyncGenerator<T> {
   }
 }
 
+/**
+ * Fetch the canned full-section draft directive (WI1). The caller sends the
+ * returned text back through {@link streamChat} as a normal user turn, so the
+ * draft pass rides the one chat pipeline. 409 while a turn or research runs.
+ */
+export async function draftFull(): Promise<string> {
+  const resp = await fetch("/api/draft/full", { method: "POST" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `draft failed (${resp.status})`);
+  }
+  return data.message as string;
+}
+
 /** POST /api/chat and yield parsed SSE events as they arrive. */
 export async function* streamChat(
   message: string,

@@ -34,8 +34,9 @@ backend/
                            (interview high / research xhigh), max_tokens at
                            the 128k model ceiling, chat web-tool allowances,
                            port 8756, env knobs
-  app.py                   FastAPI app factory; SSE at POST /api/chat; doc/undo/
-                           redo, docx export, project save/load endpoints
+  app.py                   FastAPI app factory; SSE at POST /api/chat; POST
+                           /api/draft/full (Batch 3 directive); doc/undo/redo/edit,
+                           docx export, project save/load endpoints
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides);
@@ -114,7 +115,8 @@ backend/
   spec_doc/project.py      JSON project files (save/resume) + chat transcript +
                            module_id
   llm/client.py            client factory; MissingApiKeyError; per-key cache
-  llm/prompts.py           engine protocol blocks + render_system_prompt(module)
+  llm/prompts.py           engine protocol blocks + render_system_prompt(module);
+                           FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message)
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
                            lint event + standards_payload
 frontend/src/
@@ -122,15 +124,19 @@ frontend/src/
                            standards, changed ids, health, usage, settings-open,
                            send loop (SSE switch incl. status/thinking_delta)
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
-                           key status/delete/test; usage
+                           draftFull; key status/delete/test; usage
   lib/useSmoothText.ts     [Batch 2] rAF typewriter smoothing + reduced-motion +
                            splitStableTail (cheap-markdown prefix/tail split)
+  lib/reviewQueue.ts       [Batch 3] pure buildQueue(doc, mode) — the review
+                           queue as a document-order walk (port of iter_paragraphs);
+                           reviewCounts (outstanding imported/assumed)
   components/*             Chat / MessageBubble (smoothing + thinking block) /
-                           Composer / ArtifactPanel (stepper, export, save/open,
-                           ⚠ badge, open items) / IssuesDrawer (lint +
-                           StandardsStrip) / SpecDocument (paper rendering +
-                           inline manual-edit affordances) / Header (spend ticker)
-                           / ApiKeyBanner / StatusStrip (live status strip) /
+                           Composer (WI2 ask-model prefill) / ArtifactPanel (stepper,
+                           export, save/open, ⚠ badge, "Draft full section" button,
+                           open items) / ReviewDrawer (Batch 3 keyboard review walk) /
+                           IssuesDrawer (lint + StandardsStrip) / SpecDocument (paper
+                           rendering + inline manual-edit affordances) / Header (spend
+                           ticker) / ApiKeyBanner / StatusStrip (live status strip) /
                            SettingsPanel (key mgmt + usage table + about)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
@@ -168,7 +174,11 @@ Snapshots outside a turn travel over REST, not SSE: `GET /api/doc`,
 `POST /api/doc/undo|redo`, and `POST /api/project/load` all return
 `{doc, open_questions, lint, standards, profile_complete, research_status}`
 (load adds `chat`, the rebuilt transcript). Patches and snapshots always
-carry the full tree — the frontend never applies ops itself.
+carry the full tree — the frontend never applies ops itself. The Batch 3
+full-draft pass adds NO SSE event: `POST /api/draft/full` returns the canned
+directive `{ok, message}` over REST (409 while a turn or research runs) and
+the frontend sends `message` straight back through `POST /api/chat`, so the
+pass is an ordinary turn on the one streaming path.
 
 Research has its own channel (a run outlives any one chat turn):
 `POST /api/research/start` (400 incomplete profile / no key; 409 while
@@ -502,6 +512,58 @@ Interview policy (decided 2026-07-21, conversation w/ Abraham):
   `usageSection` node. (3) Web *fetch* is metered as a count only (no
   per-request dollar) because Anthropic bills web fetch by tokens, not
   per request — only web *search* carries the $0.01/req line.
+
+## Batch 3 — implemented notes (v0.8.0: full-section draft + review queue)
+
+Two work items that complete the workflow symmetry — from-scratch drafting
+and master import both converge on a full draft you then walk to reviewed
+status. Frozen decisions honored throughout.
+
+- **Full-section draft (WI1) rides the normal chat path — no new drafting
+  machinery.** `POST /api/draft/full` is thin: 409 when `turn_active` or
+  `research.status == "running"`, else `{ok, message: FULL_DRAFT_DIRECTIVE}`.
+  The frontend (`App.onDraftFull`) fetches the directive and sends it through
+  the ordinary `send()` → `/api/chat`, so it appears as a visible, honest
+  user turn and inherits the SSE stream, tool loop, one-undo-step commit,
+  rollback, and Batch 2 status strip — one code path for turns. Rejected the
+  dedicated-endpoint alternative (would duplicate the pipeline).
+- **Directive is server-owned** (`prompts.FULL_DRAFT_DIRECTIVE`) so its
+  obligations stay versioned with the engine: draft every PART/article from
+  known facts, use profile + grounded research (tag with `source_item_id`),
+  stamp provenance honestly (`confirmed`/`assumed`/`[TBD]`/`needs_input`),
+  batch edits per-article so patches stream live, close with a summary + 2–3
+  follow-ups. Complemented by `_FULL_DRAFT_POLICY` in the STABLE prompt
+  (breadth-first; ~25-ops-per-call **pacing prose, explicitly not a cap** —
+  the no-limits rule stands; hitting the soft guide is fine).
+- **"Draft full section" button** (`ArtifactPanel`) is accent-primary in the
+  panel header, shown only while empty-or-sparse (< 3 articles), disabled
+  while busy, one-time `.draft-pulse` glow once research completes. No confirm
+  dialog — one undo step, said in the tooltip.
+- **Review queue (WI2) is a pure function of the doc** — `buildQueue(doc,
+  mode)` in `lib/reviewQueue.ts`, a straight port of the backend
+  `iter_paragraphs` document order (the contract is pinned by a Python test,
+  per the plan's steer — no vitest toolchain added). Entries carry
+  `{elementId, articleId, ref, articleTitle, text, status, sourceItemId}`;
+  `all` mode lists imported-then-assumed, each in document order (matches the
+  export schedules). The queue derives from every fresh doc payload — no
+  drawer-owned list to drift; it survives undo, model edits, and resets.
+- **`ReviewDrawer`** walks one block at a time with keyboard actions (`K`/Enter
+  keep → `set_status confirmed`, `E` edit → `replace` + confirmed preserving
+  `source_item_id`, `D` delete, `A` ask → composer prefill, `S`/→ skip, ← back).
+  Mutations do NOT advance the cursor — the queue recomputes and the next item
+  slides into the cursor position (single source of truth: the doc). The
+  bar shows the outstanding count ("Review N") + an All/Imported/Assumed
+  filter. All mutations go through Batch 2's `POST /api/doc/edit`; the drawer
+  is read-only while a turn streams (mirrors the paper panel's busy guard).
+- **Per-article batch confirm, guarded:** a press-and-hold (800ms) button
+  (shown only when the current article has ≥2 outstanding blocks) sends N
+  `set_status` ops in one `/api/doc/edit` call → one undo step. **No
+  document-wide bulk confirm** (frozen decision).
+- **"Ask model"** prefills the composer through an App-owned `{text, nonce}`
+  state (nonce re-fires the focus effect on repeat asks), threaded App → Chat
+  → Composer; the drawer stays open and recomputes when the turn completes.
+- **No new SSE events, no new env vars, no new Python deps.** Only new REST
+  route: `POST /api/draft/full`.
 
 ## Commands
 

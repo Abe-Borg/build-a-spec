@@ -3,9 +3,12 @@ import { useEffect, useRef, useState } from "react";
 interface Props {
   disabled: boolean;
   onSend: (text: string) => void;
+  /** External prefill (WI2 "Ask model"): sets the text and focuses. The
+   *  nonce fires the effect even when the same text is requested twice. */
+  prefill?: { text: string; nonce: number };
 }
 
-export default function Composer({ disabled, onSend }: Props) {
+export default function Composer({ disabled, onSend, prefill }: Props) {
   const [value, setValue] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -16,6 +19,21 @@ export default function Composer({ disabled, onSend }: Props) {
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
   }, [value]);
+
+  // Prefill the composer from a review-queue "Ask model" and drop the caret
+  // at the end so the user just types what to change.
+  useEffect(() => {
+    if (!prefill || prefill.nonce === 0) return;
+    setValue(prefill.text);
+    const el = ref.current;
+    if (el) {
+      el.focus();
+      requestAnimationFrame(() => {
+        const end = el.value.length;
+        el.setSelectionRange(end, end);
+      });
+    }
+  }, [prefill?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = () => {
     const text = value.trim();

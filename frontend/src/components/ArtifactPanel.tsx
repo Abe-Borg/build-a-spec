@@ -15,6 +15,7 @@ import type {
 } from "../types";
 import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
 import ResearchDrawer from "./ResearchDrawer";
+import ReviewDrawer from "./ReviewDrawer";
 import SpecDocument from "./SpecDocument";
 
 interface Props {
@@ -34,6 +35,8 @@ interface Props {
   onImportMaster: (file: File) => void;
   onStartResearch: () => void;
   onStartAudit: () => void;
+  onDraftFull: () => void;
+  onAskModel: (text: string) => void;
 }
 
 function EmptyState() {
@@ -92,6 +95,8 @@ export default function ArtifactPanel({
   onImportMaster,
   onStartResearch,
   onStartAudit,
+  onDraftFull,
+  onAskModel,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
@@ -113,6 +118,14 @@ export default function ArtifactPanel({
       doc.section.title !== "" ||
       doc.parts.some((p) => p.articles.length > 0));
 
+  // Full-draft affordance (WI1): offered while the document is empty-or-sparse
+  // (fewer than 3 articles) — past that, a wholesale draft is the wrong tool.
+  // A one-time attention pulse once research has landed and the page is sparse.
+  const articleCount =
+    doc?.parts.reduce((n, p) => n + p.articles.length, 0) ?? 0;
+  const isSparse = articleCount < 3;
+  const draftPulse = isSparse && research?.status === "complete";
+
   const scrollToElement = (elementId: string) => {
     document
       .getElementById(`el-${elementId}`)
@@ -125,17 +138,31 @@ export default function ArtifactPanel({
   return (
     <aside className="flex min-w-[420px] flex-1 basis-[54%] flex-col bg-surface">
       <div className="flex items-center justify-between gap-3 border-b border-edge px-5 py-2.5">
-        <span className="flex items-center gap-2 text-xs font-medium tracking-wide text-ink-dim uppercase">
-          Specification
-          {lintIssues.length > 0 && (
-            <span
-              className="rounded-full border border-warn/50 bg-warn/15 px-1.5 py-px text-[10px] font-semibold text-warn normal-case"
-              title="Advisory lint issues — see the Issues drawer below"
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex items-center gap-2 text-xs font-medium tracking-wide text-ink-dim uppercase">
+            Specification
+            {lintIssues.length > 0 && (
+              <span
+                className="rounded-full border border-warn/50 bg-warn/15 px-1.5 py-px text-[10px] font-semibold text-warn normal-case"
+                title="Advisory lint issues — see the Issues drawer below"
+              >
+                ⚠ {lintIssues.length}
+              </span>
+            )}
+          </span>
+          {isSparse && (
+            <button
+              className={`shrink-0 rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${
+                draftPulse ? "draft-pulse" : ""
+              }`}
+              onClick={onDraftFull}
+              disabled={busy}
+              title="Draft the complete section in one pass — every PART and article, stamped from what's known so far. One click to undo."
             >
-              ⚠ {lintIssues.length}
-            </span>
+              ✨ Draft full section
+            </button>
           )}
-        </span>
+        </div>
         <div className="flex items-center gap-1.5">
           <button
             className={actionButton}
@@ -243,6 +270,15 @@ export default function ArtifactPanel({
           <EmptyState />
         )}
       </div>
+
+      <ReviewDrawer
+        doc={doc}
+        sourceLookup={sourceLookup}
+        busy={busy}
+        onEditDoc={onEditDoc}
+        onAskModel={onAskModel}
+        onJump={scrollToElement}
+      />
 
       <ResearchDrawer
         doc={doc}

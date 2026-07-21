@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from backend.spec_doc import DocumentStore, SpecEditError, open_questions, outline
-from backend.spec_doc.model import SpecSection
+from backend.spec_doc.model import SpecSection, iter_paragraphs
 
 
 def _store_with(edits: list[dict]) -> DocumentStore:
@@ -211,6 +211,70 @@ def test_rollback_turn_restores_pre_turn_tree():
     store.rollback_turn()
     assert [a.title for a in store.doc.parts[0].articles] == ["KEEP"]
     assert len(store.versions) == 2  # no phantom version
+
+
+def test_iter_paragraphs_document_order_is_the_review_queue_contract():
+    """Batch 3, WI2: the review queue (frontend ``buildQueue``) is a straight
+    port of ``iter_paragraphs`` document order. This pins that contract —
+    parts, then articles, then nested paragraphs depth-first — with the human
+    ``ref`` each entry carries, across mixed provenance statuses."""
+    store = _store_with(
+        [
+            {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Imported provision.",
+                "status": "imported",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Assumed provision.",
+                "status": "assumed",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1.p2",
+                "text": "Nested confirmed subparagraph.",
+                "status": "confirmed",
+            },
+            {"action": "add_article", "target_id": "pt2", "text": "SPRINKLERS"},
+            {
+                "action": "add_paragraph",
+                "target_id": "pt2.a1",
+                "text": "Another assumed provision.",
+                "status": "assumed",
+            },
+        ]
+    )
+    rows = [
+        (ref, p.uid, p.status)
+        for _part, _article, p, _depth, ref in iter_paragraphs(store.doc)
+    ]
+    # Document order, with the article number + stripped paragraph labels.
+    assert [ref for ref, _uid, _status in rows] == [
+        "1.1.A",
+        "1.1.B",
+        "1.1.B.1",
+        "2.1.A",
+    ]
+    assert [status for _ref, _uid, status in rows] == [
+        "imported",
+        "assumed",
+        "confirmed",
+        "assumed",
+    ]
+
+    # The frontend "all" queue derives from this: reviewable statuses only
+    # (imported / assumed), imported group first, each in document order.
+    reviewable = [
+        (ref, status) for ref, _uid, status in rows if status in ("imported", "assumed")
+    ]
+    all_order = [r for r in reviewable if r[1] == "imported"] + [
+        r for r in reviewable if r[1] == "assumed"
+    ]
+    assert all_order == [("1.1.A", "imported"), ("1.1.B", "assumed"), ("2.1.A", "assumed")]
 
 
 def test_outline_lists_ids_and_statuses():

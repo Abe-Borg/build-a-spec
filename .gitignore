@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# App state / secrets
+*.api_key.txt
+build_a_spec_api_key.txt
+.env
+
+# Build / packaging
+build/
+dist/
+*.spec.bak

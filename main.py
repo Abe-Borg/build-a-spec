@@ -1,0 +1,93 @@
+"""Build-a-Spec entry point.
+
+Starts the FastAPI backend on 127.0.0.1 and opens the UI in a native
+pywebview window (Edge WebView2 on Windows). Dev mode
+(``BUILD_A_SPEC_DEV=1``) points the window at the Vite dev server for hot
+reload; otherwise the packaged/built frontend in ``frontend/dist`` is
+served by the backend itself.
+
+If pywebview is unavailable (or has no usable GUI backend), falls back to
+opening the default browser against the same local server.
+"""
+from __future__ import annotations
+
+import threading
+import time
+import urllib.request
+
+import uvicorn
+
+from backend import settings
+
+
+def _start_backend() -> threading.Thread:
+    config = uvicorn.Config(
+        "backend.app:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        log_level="warning",
+    )
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    return thread
+
+
+def _wait_for_health(timeout_s: float = 15.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    url = f"http://{settings.HOST}:{settings.PORT}/api/health"
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.2)
+    return False
+
+
+def main() -> None:
+    _start_backend()
+    if not _wait_for_health():
+        raise SystemExit(
+            "Backend failed to start on "
+            f"http://{settings.HOST}:{settings.PORT} — see logs above."
+        )
+
+    if settings.dev_mode():
+        url = settings.DEV_FRONTEND_URL
+    else:
+        url = f"http://{settings.HOST}:{settings.PORT}/"
+        if not settings.FRONTEND_DIST.is_dir():
+            raise SystemExit(
+                "frontend/dist not found. Build the UI first:\n"
+                "  cd frontend && npm install && npm run build\n"
+                "or run in dev mode (BUILD_A_SPEC_DEV=1 with `npm run dev`)."
+            )
+
+    try:
+        import webview  # pywebview
+
+        webview.create_window(
+            settings.APP_NAME,
+            url,
+            width=1440,
+            height=900,
+            min_size=(1100, 700),
+        )
+        webview.start()
+    except Exception:
+        # No usable native webview — plain browser fallback.
+        import webbrowser
+
+        webbrowser.open(url)
+        print(f"{settings.APP_NAME} running at {url} — Ctrl+C to quit.")
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            pass
+
+
+if __name__ == "__main__":
+    main()

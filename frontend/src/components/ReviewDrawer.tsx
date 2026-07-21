@@ -14,13 +14,19 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EditOp, SpecDoc } from "../types";
-import { buildQueue, reviewCounts, type ReviewMode } from "../lib/reviewQueue";
+import {
+  buildQueue,
+  reviewCounts,
+  type QueueEntry,
+  type ReviewMode,
+} from "../lib/reviewQueue";
 
 interface Props {
   doc: SpecDoc | null;
   sourceLookup: ReadonlyMap<string, string>;
   busy: boolean;
-  onEditDoc: (ops: EditOp[]) => void;
+  // App's handler is async; the drawer awaits it for an in-flight lockout.
+  onEditDoc: (ops: EditOp[]) => void | Promise<unknown>;
   onAskModel: (text: string) => void;
   onJump: (elementId: string) => void;
 }
@@ -51,8 +57,17 @@ export default function ReviewDrawer({
   const [cursor, setCursor] = useState(0);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  // The block being edited is SNAPSHOTTED at edit start — never re-read from
+  // the live queue at save time, so an undo/redo or a completing turn that
+  // shifts `current` under an open editor can't misdirect the write.
+  const [editTarget, setEditTarget] = useState<QueueEntry | null>(null);
   const [holding, setHolding] = useState(false);
   const [tally, setTally] = useState({ confirmed: 0, edited: 0, deleted: 0 });
+  // True while a manual edit's round-trip is in flight. `busy` only tracks a
+  // model chat turn, and mutations don't advance the cursor themselves (the
+  // doc round-trip does), so without this a second fast keypress would re-fire
+  // on the still-stale `current`.
+  const [pending, setPending] = useState(false);
 
   const walkerRef = useRef<HTMLDivElement>(null);
   const holdTimer = useRef<number | undefined>(undefined);
@@ -62,24 +77,53 @@ export default function ReviewDrawer({
   const safeCursor = queue.length ? Math.min(cursor, queue.length - 1) : 0;
   const current = queue[safeCursor];
   const docEmpty = !doc || doc.parts.every((p) => p.articles.length === 0);
+  // Locked out from mutating while a model turn streams OR a manual edit is
+  // still resolving. Navigation (skip/back) stays live.
+  const locked = busy || pending;
 
   const focusWalker = useCallback(() => {
     requestAnimationFrame(() => walkerRef.current?.focus());
   }, []);
+
+  // Fire a mutation and hold the lockout until its round-trip settles (App's
+  // handler catches its own errors, so this always resolves).
+  const runEdit = useCallback(
+    (ops: EditOp[]) => {
+      setPending(true);
+      Promise.resolve(onEditDoc(ops)).finally(() => setPending(false));
+    },
+    [onEditDoc],
+  );
 
   // Focus the walker when the drawer opens so the keyboard flow works at once.
   useEffect(() => {
     if (expanded && queue.length) focusWalker();
   }, [expanded, queue.length, focusWalker]);
 
-  // A fresh/emptied document (new session, empty project load) resets the
-  // session tallies and collapses the drawer — no stale "reviewed" panel.
+  // Reset the session tally + cursor whenever the document IDENTITY changes —
+  // a new session, or loading a different project (populated OR empty). Keying
+  // on empty alone leaked the previous project's tally across a non-empty load.
+  const docKey = doc
+    ? [
+        doc.section.number,
+        doc.section.title,
+        doc.project_profile?.client_name ?? "",
+      ].join("|")
+    : "";
+  const prevDocKey = useRef(docKey);
   useEffect(() => {
-    if (docEmpty) {
+    if (prevDocKey.current !== docKey) {
+      prevDocKey.current = docKey;
       setTally({ confirmed: 0, edited: 0, deleted: 0 });
       setCursor(0);
-      setExpanded(false);
+      setEditing(false);
+      setEditTarget(null);
     }
+  }, [docKey]);
+
+  // Collapse the drawer when the document empties (new session / empty load).
+  useEffect(() => {
+    if (docEmpty) setExpanded(false);
   }, [docEmpty]);
 
   useEffect(() => () => window.clearTimeout(holdTimer.current), []);
@@ -91,51 +135,55 @@ export default function ReviewDrawer({
     focusWalker();
   };
 
-  // --- Actions (all no-ops while a model turn owns the tree) ---------------
+  // --- Actions (all no-ops while a turn streams or an edit is in flight) ----
 
   const confirm = useCallback(() => {
-    if (busy || !current) return;
-    onEditDoc([
+    if (locked || !current) return;
+    runEdit([
       { action: "set_status", target_id: current.elementId, status: "confirmed" },
     ]);
     setTally((t) => ({ ...t, confirmed: t.confirmed + 1 }));
     setEditing(false);
     focusWalker();
-  }, [busy, current, onEditDoc, focusWalker]);
+  }, [locked, current, runEdit, focusWalker]);
 
   const remove = useCallback(() => {
-    if (busy || !current) return;
-    onEditDoc([{ action: "delete", target_id: current.elementId }]);
+    if (locked || !current) return;
+    runEdit([{ action: "delete", target_id: current.elementId }]);
     setTally((t) => ({ ...t, deleted: t.deleted + 1 }));
     setEditing(false);
     focusWalker();
-  }, [busy, current, onEditDoc, focusWalker]);
+  }, [locked, current, runEdit, focusWalker]);
 
   const startEdit = useCallback(() => {
-    if (busy || !current) return;
+    if (locked || !current) return;
     setDraft(current.text);
+    setEditTarget(current); // snapshot the target — save writes to THIS block
     setEditing(true);
-  }, [busy, current]);
+  }, [locked, current]);
 
   const saveEdit = () => {
-    // A model turn owns the tree: the backend would 409 this edit. Keep the
-    // draft open (don't clear edit mode, don't count it) so nothing is lost —
-    // the user saves once the turn finishes.
-    if (busy) return;
+    // A model turn owns the tree (busy) or an edit is resolving (pending):
+    // keep the draft open so nothing is lost — the user saves after it clears.
+    if (locked) return;
+    const target = editTarget;
     const text = draft.trim();
     setEditing(false);
-    if (!current || !text) {
+    setEditTarget(null);
+    if (!target || !text) {
       focusWalker();
       return;
     }
-    if (text !== current.text) {
-      onEditDoc([
+    // Compare against the SNAPSHOTTED original, and write to the snapshotted
+    // id — never to whatever `current` happens to be now.
+    if (text !== target.text) {
+      runEdit([
         {
           action: "replace",
-          target_id: current.elementId,
+          target_id: target.elementId,
           text,
           status: "confirmed",
-          source_item_id: current.sourceItemId,
+          source_item_id: target.sourceItemId,
         },
       ]);
       setTally((t) => ({ ...t, edited: t.edited + 1 }));
@@ -144,14 +192,14 @@ export default function ReviewDrawer({
   };
 
   const ask = useCallback(() => {
-    if (busy || !current) return;
+    if (locked || !current) return;
     const snippet =
       current.text.length > 80
         ? `${current.text.slice(0, 80).trimEnd()}…`
         : current.text;
     onAskModel(`Regarding ${current.ref} "${snippet}": `);
     setEditing(false);
-  }, [busy, current, onAskModel]);
+  }, [locked, current, onAskModel]);
 
   const skip = useCallback(() => {
     setEditing(false);
@@ -171,8 +219,8 @@ export default function ReviewDrawer({
     : [];
 
   const confirmArticle = () => {
-    if (busy || articleGroup.length === 0) return;
-    onEditDoc(
+    if (locked || articleGroup.length === 0) return;
+    runEdit(
       articleGroup.map((e) => ({
         action: "set_status" as const,
         target_id: e.elementId,
@@ -185,7 +233,7 @@ export default function ReviewDrawer({
   };
 
   const startHold = () => {
-    if (busy || articleGroup.length < 2) return;
+    if (locked || articleGroup.length < 2) return;
     setHolding(true);
     holdTimer.current = window.setTimeout(() => {
       setHolding(false);
@@ -201,6 +249,7 @@ export default function ReviewDrawer({
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (editing) return; // the edit textarea owns its keys
+    if (e.repeat) return; // ignore OS key auto-repeat (double-fire guard)
     const tag = (e.target as HTMLElement).tagName;
     if (tag === "BUTTON" || tag === "TEXTAREA" || tag === "INPUT") return;
     const k = e.key;
@@ -358,10 +407,10 @@ export default function ReviewDrawer({
                     <button
                       className={actionKey}
                       onClick={saveEdit}
-                      disabled={busy}
+                      disabled={locked}
                       title={
-                        busy
-                          ? "A model turn is streaming — save once it finishes"
+                        locked
+                          ? "Busy — save once the current action finishes"
                           : "Save (⌘/Ctrl+Enter)"
                       }
                     >
@@ -387,16 +436,16 @@ export default function ReviewDrawer({
               {!editing && (
                 <>
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                    <button className={actionKey} onClick={confirm} disabled={busy}>
+                    <button className={actionKey} onClick={confirm} disabled={locked}>
                       <b>K</b>eep
                     </button>
-                    <button className={actionKey} onClick={startEdit} disabled={busy}>
+                    <button className={actionKey} onClick={startEdit} disabled={locked}>
                       <b>E</b>dit
                     </button>
-                    <button className={actionKey} onClick={remove} disabled={busy}>
+                    <button className={actionKey} onClick={remove} disabled={locked}>
                       <b>D</b>elete
                     </button>
-                    <button className={actionKey} onClick={ask} disabled={busy}>
+                    <button className={actionKey} onClick={ask} disabled={locked}>
                       <b>A</b>sk model
                     </button>
                     <button className={actionKey} onClick={skip}>
@@ -411,7 +460,7 @@ export default function ReviewDrawer({
                       onPointerUp={cancelHold}
                       onPointerLeave={cancelHold}
                       onPointerCancel={cancelHold}
-                      disabled={busy}
+                      disabled={locked}
                       title="Press and hold to confirm every outstanding block in this article — one undo step"
                     >
                       <span

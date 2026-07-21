@@ -44,6 +44,33 @@ Deviations (each with why):
    steer for the review-queue contract in Batch 3).
 4. **`baseline_index` in `_doc_payload`.** Added so the compare picker knows a
    master exists without first fetching a diff (the plan implied it; made explicit).
+5. **Reject-All is text-faithful, not label-faithful (post-review clarification).**
+   Both the Codex PR bot and the batch's own adversarial review flagged that a
+   *survivor* whose position shifts (a preceding sibling was inserted/deleted)
+   keeps its cur-position label, so Reject-All reproduces the baseline's
+   provision text but not its literal numbering (e.g. delete clause A → on
+   Reject the survivor shows "A." not "B."). This is the direct, intended
+   consequence of the frozen "moves are NOT marked / numbering is positional
+   and recomputes" decision — making numbering label-faithful would require
+   tracking every renumber as a revision (reversing that frozen decision) or
+   switching the export to Word auto-numbering (`w:numPr`, a larger change
+   deferred past 1.0). Resolution: keep numbering positional, and make the
+   invariant honest everywhere — the round-trip test now includes a
+   position-shift case (`test_position_shift_accept_exact_reject_text_faithful`)
+   asserting Accept-All exact + Reject-All text-faithful, and the docstrings /
+   README / CLAUDE.md state the guarantee precisely. Accept-All (the primary
+   "give me the issued draft" path) remains exact, numbering included.
+6. **Review-driven hardening (same review pass).** The adversarial review also
+   surfaced and fixed: (a) the `(Not used.)` empty-part placeholder is now
+   *tracked* (`w:ins` when a part empties in cur, `w:del` when it fills), so
+   Accept-All is genuinely exact even when a part gains/loses all its articles;
+   (b) the section header renders the `[TBD]`/`[TBD: SECTION TITLE]`
+   placeholders on the empty side, so a from-scratch (vs-empty) redline
+   round-trips exactly both ways; (c) frontend compare mode no longer defaults
+   the base to the current index at version 0 (was a base==cur 400), `loadDiff`
+   ignores out-of-order responses, and compare mode exits while a turn streams.
+   New tests: `test_part_emptying_tracks_not_used_placeholder`,
+   `test_from_scratch_redline_vs_empty_round_trips`.
 
 Manual QA still required before release (see the checklist handed back at
 batch close): open a redline in **real Word** — reviewing pane shows

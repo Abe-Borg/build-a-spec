@@ -183,6 +183,88 @@ def test_accept_all_reproduces_current_reject_all_reproduces_base():
     assert _body_texts(redline, "reject") == _body_texts(build_docx(base), "accept")
 
 
+def _provision_texts(docx_bytes: bytes, mode: str) -> list[str]:
+    """Body texts with the leading positional label token stripped.
+
+    Display numbering (A. / 1.1 / a.) is positional and recomputes to the
+    rendered view — it is NOT tracked content (the frozen "moves are not
+    marked" decision). Stripping the first token uniformly on both sides
+    compares provision *content*, which is what Reject-All must reproduce.
+    """
+    stripped = []
+    for line in _body_texts(docx_bytes, mode):
+        parts = line.split(None, 1)
+        stripped.append(parts[1] if len(parts) == 2 else line)
+    return stripped
+
+
+def test_position_shift_accept_exact_reject_text_faithful():
+    """When a survivor's position shifts (a preceding sibling was deleted),
+    Accept-All still reproduces the current document exactly (current
+    numbering included); Reject-All reproduces the baseline's provision TEXT,
+    with numbering positional (it recomputes to the rendered view). This is
+    the case the shipped round-trip fixture did not exercise — both Codex and
+    the batch's own review flagged it."""
+    store = _populated_store()
+    base = SpecSection.from_dict(store.doc.to_dict())
+    # Delete the FIRST paragraph of article 1 — the survivor shifts up a slot.
+    first = store.doc.parts[0].articles[0].paragraphs[0].uid
+    store.begin_turn()
+    store.apply_edits([{"action": "delete", "target_id": first}])
+    store.commit_turn()
+    cur = store.doc
+    redline = build_docx(cur, redline=diff_sections(base, cur), redline_date=_DATE)
+
+    # Accept-All is exact, numbering included.
+    assert _body_texts(redline, "accept") == _body_texts(build_docx(cur), "accept")
+    # Reject-All reproduces the baseline PROVISION TEXT (labels are positional).
+    assert _provision_texts(redline, "reject") == _provision_texts(
+        build_docx(base), "accept"
+    )
+
+
+def test_part_emptying_tracks_not_used_placeholder():
+    """Deleting every article in a part must track its '(Not used.)' line so
+    Accept-All still equals a clean export of cur (and Reject-All the base)."""
+    store = _populated_store()
+    base = SpecSection.from_dict(store.doc.to_dict())
+    # PART 3 (INSTALLATION) has exactly one article; delete it, emptying PART 3.
+    article = store.doc.parts[2].articles[0].uid
+    store.begin_turn()
+    store.apply_edits([{"action": "delete", "target_id": article}])
+    store.commit_turn()
+    cur = store.doc
+    redline = build_docx(cur, redline=diff_sections(base, cur), redline_date=_DATE)
+    assert "(Not used.)" in _body_texts(redline, "accept")
+    assert _body_texts(redline, "accept") == _body_texts(build_docx(cur), "accept")
+    assert _body_texts(redline, "reject") == _body_texts(build_docx(base), "accept")
+
+
+def test_from_scratch_redline_vs_empty_round_trips():
+    """A from-scratch section redlined against the empty baseline is all
+    insertions; Accept-All == the draft, Reject-All == the empty document
+    (section '[TBD]' placeholders and '(Not used.)' parts included)."""
+    store = DocumentStore()
+    store.begin_turn()
+    store.apply_edits(
+        [
+            {"action": "replace", "target_id": "sec", "text": "WIDGETS", "numbering": "21 13 14"},
+            {"action": "add_article", "target_id": "pt1", "text": "SCOPE"},
+        ]
+    )
+    store.commit_turn()
+    article = store.doc.parts[0].articles[0].uid
+    store.begin_turn()
+    store.apply_edits(
+        [{"action": "add_paragraph", "target_id": article, "text": "Provide widgets."}]
+    )
+    store.commit_turn()
+    empty = SpecSection.empty()
+    redline = build_docx(store.doc, redline=diff_sections(empty, store.doc), redline_date=_DATE)
+    assert _body_texts(redline, "accept") == _body_texts(build_docx(store.doc), "accept")
+    assert _body_texts(redline, "reject") == _body_texts(build_docx(empty), "accept")
+
+
 def test_accept_all_via_real_importer_matches_current_tree(tmp_path):
     store = _populated_store()
     base = SpecSection.from_dict(store.doc.to_dict())

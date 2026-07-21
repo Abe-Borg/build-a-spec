@@ -151,38 +151,19 @@ export default function ArtifactPanel({
   const [diff, setDiff] = useState<SectionDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const diffSeq = useRef(0);
 
   // Compare is a transient view of (base → current). Any version change
-  // (edit, undo/redo, new turn) invalidates the diff — leave compare mode.
+  // (edit, undo/redo) OR a streaming turn invalidates the diff — leave
+  // compare mode so a stale diff is never shown.
   useEffect(() => {
     setCompareMode(false);
     setExportMenuOpen(false);
-  }, [curIndex, versionCount]);
+  }, [curIndex, versionCount, busy]);
 
-  const loadDiff = useCallback(
-    async (base: number) => {
-      setCompareBase(base);
-      setDiff(null);
-      setDiffError(null);
-      try {
-        setDiff(await onFetchDiff(base, curIndex));
-      } catch (e) {
-        setDiffError(e instanceof Error ? e.message : String(e));
-      }
-    },
-    [onFetchDiff, curIndex],
-  );
-
-  const enterCompare = () => {
-    const defaultBase =
-      baselineIndex !== null && baselineIndex !== curIndex
-        ? baselineIndex
-        : Math.max(0, curIndex - 1);
-    setCompareMode(true);
-    void loadDiff(defaultBase);
-  };
-
-  // Base-version options: master pinned first, then each other version.
+  // Base-version options: master pinned first, then each other version. The
+  // current version is never an option (comparing a version to itself is a
+  // no-op the server rejects).
   const baseOptions = useMemo(() => {
     const opts: { value: number; label: string }[] = [];
     if (baselineIndex !== null && baselineIndex !== curIndex) {
@@ -200,6 +181,37 @@ export default function ArtifactPanel({
     }
     return opts;
   }, [baselineIndex, curIndex, versionCount]);
+
+  const loadDiff = useCallback(
+    async (base: number) => {
+      const seq = (diffSeq.current += 1);
+      setCompareBase(base);
+      setDiff(null);
+      setDiffError(null);
+      try {
+        const payload = await onFetchDiff(base, curIndex);
+        if (diffSeq.current === seq) setDiff(payload); // ignore stale responses
+      } catch (e) {
+        if (diffSeq.current === seq) {
+          setDiffError(e instanceof Error ? e.message : String(e));
+        }
+      }
+    },
+    [onFetchDiff, curIndex],
+  );
+
+  const enterCompare = () => {
+    // Never default to the current index (would be a base==cur 400). Prefer
+    // the master, else the first valid option (e.g. at index 0 there is no
+    // "previous" version, so fall back to the next one).
+    const preferred =
+      baselineIndex !== null && baselineIndex !== curIndex
+        ? baselineIndex
+        : baseOptions[0]?.value;
+    if (preferred === undefined) return;
+    setCompareMode(true);
+    void loadDiff(preferred);
+  };
 
   const canCompare = versionCount > 1 || baselineIndex !== null;
 

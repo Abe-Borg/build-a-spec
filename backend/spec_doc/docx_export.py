@@ -98,10 +98,14 @@ def build_docx(
     When ``redline`` (a :class:`SectionDiff`) is supplied (Batch 5), the body
     is rendered as genuine Word tracked changes (``w:ins``/``w:del`` with
     ``w:delText``, deleted/inserted paragraph marks) instead of the plain
-    tree — Accept All reproduces ``section`` (the cur tree), Reject All
-    reproduces the diff's base tree. The schedules below are always rendered
-    plainly from ``section`` (the current document), never redlined.
-    ``redline_date`` overrides the ISO-8601 ``w:date`` stamp (tests pin it).
+    tree. **Accept All** reproduces ``section`` (the cur tree) exactly,
+    numbering included; **Reject All** reproduces the diff's base tree's
+    provision *text*. Display numbering (A. / 1.1 / a.) is positional and
+    recomputes to the rendered view — it is written as a plain literal so a
+    survivor whose position shifted keeps the current label, never a tracked
+    mark (the frozen "moves are not marked" decision). The schedules below are
+    always rendered plainly from ``section`` (the current document), never
+    redlined. ``redline_date`` overrides the ISO-8601 ``w:date`` stamp.
     """
     document = Document()
     _style_base(document)
@@ -279,7 +283,12 @@ def redline_filename(section: SpecSection) -> str:
 # elements are built directly with docx.oxml, mirroring the shapes the
 # importer's tests already manufacture (tests/test_importer.py). The killer
 # invariant: re-importing this export (Accept-All resolution) reproduces the
-# cur tree exactly; a Reject-All reading reproduces the base tree.
+# cur tree exactly; a Reject-All reading reproduces the base tree's provision
+# TEXT. Display numbering (A. / 1.1 / a.) is positional and recomputes to the
+# rendered view — it is a literal label, not tracked content, so a survivor
+# whose position shifted shows the current number under both resolutions
+# (the frozen "moves are not marked" decision). Reject-All is therefore
+# text-faithful, not label-faithful, for position-shifted survivors.
 # ---------------------------------------------------------------------------
 
 
@@ -371,25 +380,30 @@ def _redline_paragraph_format(paragraph, level: int) -> None:
 
 
 def _render_redline_section(document, element: ElementDiff, ids, author, date):
-    # SECTION <number> line (centered). Redline only the number if it moved.
+    # SECTION <number> line (centered). The clean body substitutes "[TBD]" for
+    # an empty number, so an empty side must carry that placeholder too, or the
+    # round-trip diverges on a from-scratch (vs-empty) redline.
     p = document.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _append_equal(p, "SECTION ", bold=True)
     if element.number_base == element.number_cur:
         _append_equal(p, element.number_cur or "[TBD]", bold=True)
     else:
-        if element.number_base:
-            _append_del(p, element.number_base, ids, author, date, bold=True)
-        if element.number_cur:
-            _append_ins(p, element.number_cur, ids, author, date, bold=True)
+        _append_del(p, element.number_base or "[TBD]", ids, author, date, bold=True)
+        _append_ins(p, element.number_cur or "[TBD]", ids, author, date, bold=True)
 
-    # Section title line (centered), word-level diff when it moved.
+    # Section title line (centered): word-level diff when both sides have a
+    # title, whole del/ins with the placeholder when a side is empty.
     q = document.add_paragraph()
     q.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    if element.runs is None:
-        _append_equal(q, element.cur_text or "[TBD: SECTION TITLE]", bold=True)
+    placeholder = "[TBD: SECTION TITLE]"
+    if element.base_text == element.cur_text:
+        _append_equal(q, element.cur_text or placeholder, bold=True)
+    elif not element.base_text or not element.cur_text:
+        _append_del(q, element.base_text or placeholder, ids, author, date, bold=True)
+        _append_ins(q, element.cur_text or placeholder, ids, author, date, bold=True)
     else:
-        _append_runs(q, element.runs, ids, author, date, bold=True)
+        _append_runs(q, element.runs or [], ids, author, date, bold=True)
     document.add_paragraph()
 
 
@@ -440,16 +454,25 @@ def _render_redline_body(
     document, section: SpecSection, redline: SectionDiff, author: str, date: str
 ) -> None:
     ids = itertools.count(1)
-    # Which parts have any article rows (base or cur) — an empty part still
-    # prints "(Not used.)", matching the clean body.
-    part_has_articles: dict[str, bool] = {}
+    # Per part, does it hold any article in cur / in base? The clean body
+    # prints "(Not used.)" for an empty part, so a part that empties (or fills)
+    # between the two versions must track that placeholder — else Accept-All
+    # (or Reject-All) would not reproduce the clean export. An article row's
+    # kind says which side it exists on: not-deleted => in cur; not-inserted
+    # => in base.
+    part_cur: dict[str, bool] = {}
+    part_base: dict[str, bool] = {}
     current_part: str | None = None
     for element in redline.elements:
         if element.node_type == "part":
             current_part = element.uid
-            part_has_articles.setdefault(current_part, False)
+            part_cur.setdefault(current_part, False)
+            part_base.setdefault(current_part, False)
         elif element.node_type == "article" and current_part is not None:
-            part_has_articles[current_part] = True
+            if element.kind != "deleted":
+                part_cur[current_part] = True
+            if element.kind != "inserted":
+                part_base[current_part] = True
 
     for element in redline.elements:
         if element.node_type == "section":
@@ -458,8 +481,22 @@ def _render_redline_body(
             p = document.add_paragraph()
             p.paragraph_format.space_before = Pt(12)
             p.add_run(element.cur_text).bold = True
-            if not part_has_articles.get(element.uid, False):
-                document.add_paragraph("(Not used.)")
+            has_cur = part_cur.get(element.uid, False)
+            has_base = part_base.get(element.uid, False)
+            if not has_cur and not has_base:
+                document.add_paragraph("(Not used.)")  # empty both ways
+            elif not has_cur:
+                # Emptied in cur (articles all deleted): "(Not used.)" appears
+                # on Accept, is gone on Reject (where the articles return).
+                np = document.add_paragraph()
+                _append_ins(np, "(Not used.)", ids, author, date)
+                _mark_paragraph(np, "w:ins", ids, author, date)
+            elif not has_base:
+                # Filled in cur (empty in base): "(Not used.)" appears on
+                # Reject, is gone on Accept (where the articles are present).
+                np = document.add_paragraph()
+                _append_del(np, "(Not used.)", ids, author, date)
+                _mark_paragraph(np, "w:del", ids, author, date)
         elif element.node_type == "article":
             _render_redline_article(document, element, ids, author, date)
         else:  # paragraph

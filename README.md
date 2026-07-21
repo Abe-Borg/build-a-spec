@@ -16,11 +16,14 @@ engine powers both the export and an in-app version-compare view.
 - **Real tracked changes, not a colored diff.** Export a redline vs the
   imported master (or any prior version) and open it in Word: insertions,
   deletions, and word-level edits render as native `w:ins`/`w:del` revisions
-  authored by "Build-a-Spec". **Accept All** yields exactly the issued draft;
-  **Reject All** yields exactly the master. That round-trip is a hard test in
-  the suite — the redline re-imported through the Accept-All resolver
-  reproduces the current document byte-for-provision, and a Reject-All reading
-  reproduces the baseline.
+  authored by "Build-a-Spec". **Accept All** yields exactly the issued draft
+  (numbering included); **Reject All** yields the master's provisions. That
+  round-trip is a hard test in the suite — the redline re-imported through the
+  Accept-All resolver reproduces the current document, and a Reject-All reading
+  reproduces the baseline's provision text. (Display numbering — A., 1.1, a. —
+  is positional and recomputes to the rendered view rather than being tracked,
+  so a clause that shifts position shows the current number under both
+  resolutions; the *text* is always faithful.)
 - **Word-level, reviewer-grade diffs.** Text edits diff at the word (not
   character) grain — no unreadable confetti in legal-style review. Whole-block
   insertions and deletions flag the paragraph *mark* too, so Word collapses a

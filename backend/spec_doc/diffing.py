@@ -13,9 +13,16 @@ Design decisions (frozen in the batch plan):
   base-order location relative to surviving siblings).
 - **Pure moves are NOT marked.** A uid present in both trees at a different
   position is classified by text only (``unchanged``/``changed``); it is
-  emitted once, at its cur position. Display numbering is positional and
-  recomputes anyway, so marking a move as delete+insert would drown a
-  reviewer in noise for zero information. Revisit only if a reviewer asks.
+  emitted once, at its cur position with its **cur-position label**. Display
+  numbering (A. / 1.1 / a.) is positional and recomputes anyway, so marking a
+  move — or the renumbering a survivor undergoes when a sibling is
+  inserted/deleted — as delete+insert would drown a reviewer in noise for zero
+  information. The consequence, by design: the redline export's Accept-All
+  reproduces the current document exactly (current numbering included), while
+  Reject-All reproduces the baseline's provision *text* with numbering
+  positional (a shifted survivor keeps its current label, not its base one).
+  Revisit only if a reviewer asks for label-faithful Reject-All (which would
+  require Word auto-numbering, not literal labels).
 - **Status changes are not content changes.** A block whose text is
   identical but whose provenance status moved (e.g. ``assumed`` →
   ``confirmed``) lands in ``status_changes`` for the in-app view; it never

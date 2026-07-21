@@ -761,13 +761,23 @@ events, no new env vars, no new Python deps (`difflib` is stdlib).
   ECMA-376 2026-07). Tabs become `w:tab`; token whitespace uses
   `xml:space=preserve`. The clean (non-redline) body path is extracted
   verbatim into `_render_clean_body` and is **byte-identical to v0.9.0** (a
-  test pins it). Schedules (assumptions/imported/open-items/QC closing) always
-  render plainly from the current section, never redlined.
+  test pins it). The empty-part `(Not used.)` line and the section `[TBD]`
+  placeholders are tracked (`w:ins`/`w:del` on the side that lacks them) so a
+  part that empties/fills and a from-scratch vs-empty redline both round-trip
+  exactly. Schedules (assumptions/imported/open-items/QC closing) always render
+  plainly from the current section, never redlined.
 - **The killer invariant (tested):** re-importing the redlined export through
-  the real Accept-All resolver reproduces the current document; a Reject-All
-  reading (custom test extractor: keep `w:del`/`w:delText`, drop `w:ins`, drop
-  paragraph-mark-inserted paragraphs) reproduces the baseline. So **Accept All
-  in Word == the issued draft, Reject All == the master.**
+  the real Accept-All resolver reproduces the current document (numbering
+  included); a Reject-All reading (custom test extractor: keep
+  `w:del`/`w:delText`, drop `w:ins`, drop paragraph-mark-inserted paragraphs)
+  reproduces the baseline's provision **text**. So **Accept All in Word == the
+  issued draft, Reject All == the master's provisions.** Display numbering
+  (A./1.1/a.) is a positional literal, not tracked content — a survivor whose
+  position shifted (a preceding sibling was inserted/deleted) keeps its current
+  label under both resolutions (the frozen "moves are not marked" decision), so
+  Reject-All is text-faithful, not label-faithful. Making it label-faithful
+  would require Word auto-numbering (deferred; see the plan's as-built). Pinned
+  by `test_position_shift_accept_exact_reject_text_faithful`.
 - **API (REST-only).** `GET /api/doc/diff?base=N[&cur=M]` (cur defaults to
   head; 400 out-of-range or base==cur) returns the serialized diff.
   `GET /api/export/docx?redline=master|version&base=N` streams the tracked-

@@ -109,17 +109,29 @@ export default function ArtifactPanel({
             ›
           </button>
           <span className="mx-1 h-4 w-px bg-edge" />
+          {/* Downloads are disabled while a turn streams: mid-turn the live
+              doc holds provisional edits and the version history only holds
+              committed ones — either download would be misleading. The href
+              is dropped entirely while disabled so keyboard activation
+              (Tab + Enter) can't navigate either. */}
           <a
-            className={actionButton + (hasContent ? "" : " pointer-events-none opacity-40")}
-            href="/api/export/docx"
+            className={
+              actionButton +
+              (hasContent && !busy ? "" : " pointer-events-none opacity-40")
+            }
+            href={hasContent && !busy ? "/api/export/docx" : undefined}
+            aria-disabled={!hasContent || busy}
             download
             title="Export the section as .docx with the assumptions schedule"
           >
             Export .docx
           </a>
           <a
-            className={actionButton}
-            href="/api/project/save"
+            className={
+              actionButton + (busy ? " pointer-events-none opacity-40" : "")
+            }
+            href={busy ? undefined : "/api/project/save"}
+            aria-disabled={busy}
             download
             title="Save the project (conversation + document) as JSON"
           >

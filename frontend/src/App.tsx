@@ -76,6 +76,10 @@ export default function App() {
       { id: newId(), role: "assistant", text: "", streaming: true },
     ]);
 
+    // Set once the server ends the turn (turn_complete or error). A stream
+    // that dies without one — network drop, fetch abort, backend restart —
+    // was rolled back server-side, so the panel must resync.
+    let sawTerminalEvent = false;
     try {
       for await (const evt of streamChat(text)) {
         if (evt.type === "text_delta") {
@@ -95,11 +99,13 @@ export default function App() {
         } else if (evt.type === "open_questions") {
           setOpenItems(evt.items);
         } else if (evt.type === "error") {
+          sawTerminalEvent = true;
           updateLast({ text: evt.message, error: true, streaming: false });
           // A failed turn rolled the document back server-side.
           refreshDoc();
           setChangedIds(new Set());
         } else if (evt.type === "turn_complete") {
+          sawTerminalEvent = true;
           updateLast({ streaming: false });
         }
       }
@@ -109,6 +115,11 @@ export default function App() {
         error: true,
       });
     } finally {
+      if (!sawTerminalEvent) {
+        // Drop the optimistic patches from the aborted turn.
+        refreshDoc();
+        setChangedIds(new Set());
+      }
       updateLast({ streaming: false });
       busyRef.current = false;
       setBusy(false);

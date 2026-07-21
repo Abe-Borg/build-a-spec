@@ -79,8 +79,12 @@ backend/
                            viewer/trace_viewer.html bundled
   app_paths.py             [PORT: Spec Critic src/core/app_paths.py]
   api_key_store.py         [PORT: Spec Critic src/core/api_key_store.py + save_api_key]
+                           Batch 2 adds key_status (masked, never leaks) + delete_api_key
+  usage_ledger.py          [Batch 2] session-scoped billed-usage ledger (interview/
+                           research/audit), thread-safe, cost estimate from
+                           settings.PRICING; not persisted (per-session meter)
   sessions.py              single module-level SessionState (history + DocumentStore
-                           + SpecModule + ResearchRunner)
+                           + SpecModule + ResearchRunner + UsageLedger)
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint
                            vocabulary, dormant research dimensions); import-time
@@ -115,12 +119,19 @@ backend/
                            lint event + standards_payload
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
-                           standards, changed ids, health, send loop (SSE switch)
-  lib/api.ts               streamChat async generator; doc/undo/redo/project calls
-  components/*             Chat / MessageBubble / Composer / ArtifactPanel
-                           (stepper, export, save/open, ⚠ badge, open items) /
-                           IssuesDrawer (lint list + StandardsStrip) /
-                           SpecDocument (paper rendering) / Header / ApiKeyBanner
+                           standards, changed ids, health, usage, settings-open,
+                           send loop (SSE switch incl. status/thinking_delta)
+  lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
+                           key status/delete/test; usage
+  lib/useSmoothText.ts     [Batch 2] rAF typewriter smoothing + reduced-motion +
+                           splitStableTail (cheap-markdown prefix/tail split)
+  components/*             Chat / MessageBubble (smoothing + thinking block) /
+                           Composer / ArtifactPanel (stepper, export, save/open,
+                           ⚠ badge, open items) / IssuesDrawer (lint +
+                           StandardsStrip) / SpecDocument (paper rendering +
+                           inline manual-edit affordances) / Header (spend ticker)
+                           / ApiKeyBanner / StatusStrip (live status strip) /
+                           SettingsPanel (key mgmt + usage table + about)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
   conftest.py              hermetic env + fresh session per test
@@ -140,9 +151,11 @@ Each frame is `data: <json>\n\n`. Event types:
 
 | type | payload | meaning |
 |---|---|---|
+| `status` | `kind`, `round?`, `progress_chars?` | transient liveness hint (Batch 2): `working`/`thinking`/`writing`/`drafting`/`searching`/`fetching`. Replaces the current status strip; cleared by the next `text_delta`/`thinking_delta`. NOT persisted to history/traces/project files |
 | `text_delta` | `text` | streamed assistant text chunk (all continuation rounds) |
-| `web_search` | `query` | the model ran a server-side web search this round (interview live-lookup) |
-| `web_fetch` | `url` | the model fetched a page/document server-side this round |
+| `thinking_delta` | `text` | streamed adaptive-thinking summary chunk (Batch 2; only when `THINKING_DISPLAY=summarized` and the model streams it). Rendered in a collapsible block; transient, never persisted |
+| `web_search` | `query` | the model ran a server-side web search this round — emitted LIVE (Batch 2) the instant the server-tool block's input completes, not derived post-hoc |
+| `web_fetch` | `url` | the model fetched a page/document server-side this round — emitted live on the block's completion |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
 | `open_questions` | `items` | open-item list (TBD markers + needs_input blocks); emitted when a turn changed the doc |
@@ -429,6 +442,66 @@ Interview policy (decided 2026-07-21, conversation w/ Abraham):
   multi-agent review on Fable 5 (`claude-fable-5`) before a section goes
   out the door. The `stream_user_turn(model=...)` override remains the
   seam for it.
+
+## Batch 2 — implemented notes (v0.7.0: streaming UX, editing, settings, meter)
+
+- **Raw-event streaming.** `stream_user_turn` iterates the SDK's raw
+  stream events (`_stream_events`) instead of `text_stream`, emitting a
+  richer live vocabulary: `status` liveness hints on block starts,
+  `thinking_delta` summaries, throttled drafting `progress_chars`, and
+  `web_search`/`web_fetch` the instant a server-tool block's input
+  completes (the post-hoc `_web_activity_events` pass is gone — no
+  double-emit). `status` frames are transient and never persisted (pinned
+  by `test_status_frames_never_persist_to_history`). A `status
+  working/searching` fires at the top of every round so there is never
+  dead air between send and first token.
+- **Thinking display probe.** Requests carry `thinking: {type: adaptive,
+  display: THINKING_DISPLAY}` (`BUILD_A_SPEC_THINKING_DISPLAY`, default
+  `summarized`). If a model/endpoint 400s on the `display` key,
+  `_enter_stream` degrades to `omitted` once and remembers it for the
+  process (`reset_thinking_display_probe` re-arms it between hermetic
+  tests). Manual QA still needed: confirm Sonnet 5 actually streams a
+  readable summary in prod.
+- **Frontend smoothing.** `useSmoothText` drains streamed text into the
+  DOM a few chars per animation frame (rAF, backlog-scaled, reduced-motion
+  aware); `MessageBubble` renders the settled prefix through a memoized
+  markdown and the live tail as a plain span, so a long answer never
+  re-parses markdown per frame. `StatusStrip` is the shimmer/pulse
+  liveness line; the thinking block is collapsible. `Chat` follows the
+  bottom on a rAF loop while pinned, hands off while reading.
+- **Manual editing (WI2).** New `set_status` op (paragraph-only) +
+  `POST /api/doc/edit` (same op vocabulary as the tool; one undoable
+  version; 409 while `SessionState.turn_active`, set/cleared in
+  `stream_user_turn`). `SpecDocument` grows hover affordances (✏️ inline
+  edit → `replace` with `status: confirmed`, preserving `source_item_id`;
+  ✓ → `set_status`; 🗑 → `delete` with inline confirm), all disabled while
+  a turn streams. No history surgery: the model sees the result in its
+  next PROJECT CONTEXT.
+- **Settings + key management (WI3).** `key_status()` (source + masked
+  tail, never the key) and `delete_api_key()` in `api_key_store.py`;
+  `GET /api/key/status`, `DELETE /api/key`, `POST /api/key/test`
+  (cheapest authenticated call: `models.list(limit=1)` on a throwaway
+  `build_probe_client`, never cached, never stores). `SettingsPanel` (gear
+  in `Header`): key source/replace-with-test-then-save/remove (env keys
+  read-only), usage table, about + forced update check.
+- **Cost meter (WI4).** `UsageLedger` on `SessionState` accumulates billed
+  usage by category (interview/research/audit), thread-safe (research and
+  audit fold run totals in from daemon threads — they meter BEFORE the
+  status flip so a poller that sees `complete` finds the ledger updated).
+  Reset/load clear it; not persisted. `settings.PRICING` (`VERIFY`-checked
+  2026-07: Sonnet 5 at post-intro $3/$15, cache read 0.1×, cache write
+  1.25×, web search $0.01/req, Fable 5 $10/$50 staged for Batch 4) drives
+  the estimate. `GET /api/usage` → categories/totals/turns/estimate/
+  cache-saved. Header shows a live `≈ $X` ticker; the settings Usage table
+  breaks it down. Estimates are labeled estimates; traces stay the exact
+  record.
+- **Deviations from the plan:** (1) the `read_element` tool the plan's
+  history mentions was already replaced by full-document context in
+  v0.6.0 — untouched. (2) The plan's SettingsPanel Usage section is fed a
+  `usage` prop and rendered internally (a `UsageTable`), not passed as a
+  `usageSection` node. (3) Web *fetch* is metered as a count only (no
+  per-request dollar) because Anthropic bills web fetch by tokens, not
+  per request — only web *search* carries the $0.01/req line.
 
 ## Commands
 

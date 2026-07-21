@@ -1,5 +1,55 @@
 # Batch 2 — Buttery-smooth streaming UX, direct editing, settings/key panel, cost meter
 
+## As built (2026-07-21)
+
+**Status: shipped as v0.7.0.** All four work items landed, backend suite
+green (164 tests, +28 for this batch across `test_streaming.py`,
+`test_manual_edit.py`, `test_key_management.py`, `test_usage.py`), frontend
+builds clean.
+
+What shipped:
+
+- **WI1 — streaming overhaul.** `stream_user_turn` iterates raw SDK stream
+  events (`_stream_events`) and emits `status` / `thinking_delta` /
+  live `web_search`/`web_fetch` / throttled drafting `progress_chars`; the
+  post-hoc `_web_activity_events` pass was deleted. `THINKING_DISPLAY`
+  knob + one-shot `display` degrade (`_enter_stream`). Frontend:
+  `useSmoothText` (rAF typewriter + reduced-motion), `StatusStrip`,
+  collapsible thinking block, cheap-markdown split, rAF scroll-follow.
+- **WI2 — manual editing.** `set_status` op + `POST /api/doc/edit` +
+  `turn_active` guard; `SpecDocument` hover affordances (edit / confirm /
+  delete) + editable article titles.
+- **WI3 — settings + key management.** `key_status()` / `delete_api_key()`;
+  `GET /api/key/status`, `DELETE /api/key`, `POST /api/key/test`;
+  `SettingsPanel` (gear in header).
+- **WI4 — cost meter.** `UsageLedger` on the session (thread-safe),
+  `settings.PRICING`, `GET /api/usage`, header ticker + settings Usage
+  table. Research `DimensionStatus` carries token counts; runners meter
+  before flipping to terminal.
+- **Also:** `.gitattributes` (`* text=auto eol=lf`) + repo renormalized to
+  LF; version bumped to 0.7.0 in both places; README / CLAUDE.md /
+  event-protocol table updated.
+
+Deviations from the plan (all minor):
+
+- The `read_element` tool the plan text references was already superseded
+  by full-document context in v0.6.0 — nothing to build; the drafting
+  status frame is `drafting`, and tool results keep the compact outline.
+- SettingsPanel's Usage section is rendered from a `usage` prop
+  (`UsageTable`) rather than injected as a `usageSection` node — simpler
+  data flow, same result.
+- Web *fetch* is metered as a count only, no per-request dollar: Anthropic
+  bills web fetch by returned tokens, not per request, so only web
+  *search* carries the `$0.01/req` line (VERIFY confirmed against live
+  pricing: $10/1,000 searches).
+- Pricing table includes an Opus 4.8 row for completeness even though no
+  spend category uses it today; Fable 5 ($10/$50) is staged for Batch 4.
+
+Manual QA still owed (see the session summary): streaming feel on a long
+drafting turn, a thinking-heavy turn, a search turn, reduced-motion, and
+scroll-while-streaming; a Word round-trip after a manual edit; the
+test/replace/remove key flows; and eyeballing the meter's dollar figures.
+
 Ships as **v0.7.0**. Four work items, ordered by priority. Work item 1 is
 Abraham's explicit mandate, verbatim requirement: *"we need a buttery
 smooth chat experience. right now the model output is jerky as fuck.

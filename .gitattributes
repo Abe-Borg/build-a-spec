@@ -1,0 +1,5 @@
+# Normalize line endings: store everything as LF in the repo, check out
+# native. Ends the CRLF/LF churn between Windows authoring tools and the
+# cloud sessions that also touch this repo (the cause of whole-file diffs
+# in the v0.6.0 history). Added in Batch 2 (v0.7.0).
+* text=auto eol=lf

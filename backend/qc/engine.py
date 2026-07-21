@@ -239,43 +239,57 @@ class QCResult:
 
     @classmethod
     def from_dict(cls, data: object) -> "QCResult | None":
+        """Defensive inverse of :meth:`to_dict`; ``None`` for garbage.
+
+        Must NEVER raise: ``project.load`` restores QC *after* the doc and
+        history have been swapped in, so a malformed or future-version result
+        (e.g. a non-numeric ``version_index`` / ``finding_count``) has to
+        degrade to "not run" rather than fail the whole load mid-mutation
+        (same posture as the research/audit restores).
+        """
         if not isinstance(data, dict):
             return None
-        findings = [
-            QCFinding.from_dict(f)
-            for f in (data.get("findings") or [])
-            if isinstance(f, dict)
-        ]
-        refuted = [
-            QCFinding.from_dict(f)
-            for f in (data.get("refuted") or [])
-            if isinstance(f, dict)
-        ]
-        statuses = [
-            QCLensStatus.from_dict(s)
-            for s in (data.get("lens_statuses") or [])
-            if isinstance(s, dict)
-        ]
-        if not findings and not refuted and not statuses:
+        try:
+            findings = [
+                QCFinding.from_dict(f)
+                for f in (data.get("findings") or [])
+                if isinstance(f, dict)
+            ]
+            refuted = [
+                QCFinding.from_dict(f)
+                for f in (data.get("refuted") or [])
+                if isinstance(f, dict)
+            ]
+            statuses = [
+                QCLensStatus.from_dict(s)
+                for s in (data.get("lens_statuses") or [])
+                if isinstance(s, dict)
+            ]
+            if not findings and not refuted and not statuses:
+                return None
+            usage = data.get("usage_totals")
+            return cls(
+                summary=str(data.get("summary", "") or ""),
+                findings=findings,
+                refuted=refuted,
+                lens_statuses=statuses,
+                started_at=str(data.get("started_at", "") or ""),
+                finished_at=str(data.get("finished_at", "") or ""),
+                version_index=int(data.get("version_index", 0) or 0),
+                model=str(data.get("model", "") or ""),
+                usage_totals={
+                    k: int(v)
+                    for k, v in (usage or {}).items()
+                    if isinstance(v, (int, float))
+                },
+                research_profile_present=bool(
+                    data.get("research_profile_present", False)
+                ),
+                dismissed_ids=[str(i) for i in (data.get("dismissed_ids") or [])],
+            )
+        except (ValueError, TypeError, AttributeError):
+            # Malformed persisted result → degrade to "not run".
             return None
-        usage = data.get("usage_totals")
-        return cls(
-            summary=str(data.get("summary", "") or ""),
-            findings=findings,
-            refuted=refuted,
-            lens_statuses=statuses,
-            started_at=str(data.get("started_at", "") or ""),
-            finished_at=str(data.get("finished_at", "") or ""),
-            version_index=int(data.get("version_index", 0) or 0),
-            model=str(data.get("model", "") or ""),
-            usage_totals={
-                k: int(v)
-                for k, v in (usage or {}).items()
-                if isinstance(v, (int, float))
-            },
-            research_profile_present=bool(data.get("research_profile_present", False)),
-            dismissed_ids=[str(i) for i in (data.get("dismissed_ids") or [])],
-        )
 
 
 def _mint_finding_id(lens_id: str, element_id: str, title: str, issue: str) -> str:

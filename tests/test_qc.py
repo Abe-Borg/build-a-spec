@@ -634,6 +634,50 @@ def test_qc_usage_rolls_up_under_fable_pricing(monkeypatch):
     )
 
 
+def test_qc_result_from_dict_degrades_on_malformed_data():
+    # A non-numeric version_index / finding_count must degrade to None, never
+    # raise — project.load restores QC after the doc/history are swapped in.
+    assert (
+        QCResult.from_dict(
+            {
+                "findings": [
+                    {"finding_id": "qc-x", "title": "t", "issue": "i", "severity": "high"}
+                ],
+                "version_index": "not-a-number",
+            }
+        )
+        is None
+    )
+    assert (
+        QCResult.from_dict(
+            {"lens_statuses": [{"lens_id": "x", "finding_count": "NaN"}]}
+        )
+        is None
+    )
+    assert QCResult.from_dict("garbage") is None
+
+
+def test_project_load_survives_malformed_qc_result(monkeypatch):
+    client = _client()
+    _seed_doc(client, monkeypatch)
+    project = json.loads(client.get("/api/project/save").content)
+    # A malformed QC result (non-numeric version_index) would raise in a naive
+    # from_dict — the load must still succeed and the doc must still restore.
+    project["qc_result"] = {
+        "findings": [
+            {"finding_id": "qc-x", "title": "t", "issue": "i", "severity": "high"}
+        ],
+        "version_index": "not-a-number",
+    }
+    client.post("/api/session/reset")
+    resp = client.post("/api/project/load", json=project)
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    # QC degraded to "not run"; the document still loaded.
+    assert client.get("/api/qc/status").json()["status"] == "idle"
+    assert client.get("/api/doc").json()["doc"]["parts"][0]["articles"]
+
+
 def test_qc_result_from_dict_round_trips():
     store = _section()
     scripts = _qc_scripts(

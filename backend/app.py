@@ -24,8 +24,15 @@ Endpoints (all JSON unless noted):
 - ``GET  /api/usage``         → this session's billed usage + est. cost.
 - ``GET  /api/research/status`` → research state + event log + profile view.
 - ``GET  /api/research/stream`` → SSE follow of the active/last run.
+- ``POST /api/qc/start``       → launch Final QC on Fable 5 (Batch 4).
+- ``GET  /api/qc/status``      → QC state + event log + result view.
+- ``GET  /api/qc/stream``      → SSE follow of the active/last QC run.
+- ``POST /api/qc/apply``       → apply accepted findings' fixes (one undo step).
+- ``POST /api/qc/dismiss``     → dismiss a finding (remembered across re-runs).
+- ``GET  /api/qc/export``      → the QC memo as a standalone ``.docx``.
+- ``GET  /api/readiness``      → deterministic "can it go out the door" checklist.
 - ``GET  /api/project/save``  → project file (history + doc versions +
-  research profile) as a JSON download.
+  research profile + QC result) as a JSON download.
 - ``POST /api/project/load``  → restore a session from a project file.
 
 When ``frontend/dist`` exists (production / packaged), it is served at
@@ -69,8 +76,9 @@ from .llm.conversation import standards_payload, stream_user_turn
 from .llm.prompts import FULL_DRAFT_DIRECTIVE
 from .project_profile import ProjectProfile
 from .spec_doc import SpecEditError, lint_document, open_questions
-from .spec_doc.docx_export import build_docx, export_filename
+from .spec_doc.docx_export import build_docx, build_qc_memo, export_filename
 from .spec_doc.importer import MasterImportError, parse_master_docx
+from .spec_doc.model import SpecSection, apply_edits, iter_paragraphs
 from .spec_doc.project import chat_transcript, load_project, save_project
 
 _DEV_ORIGINS = [
@@ -89,6 +97,15 @@ class SaveKeyRequest(BaseModel):
 
 class EditDocRequest(BaseModel):
     ops: list[dict[str, Any]]
+
+
+class QcApplyRequest(BaseModel):
+    finding_ids: list[str]
+
+
+class QcDismissRequest(BaseModel):
+    finding_id: str
+    reason: str | None = None
 
 
 class TestKeyRequest(BaseModel):
@@ -125,6 +142,107 @@ def _doc_payload(session) -> dict[str, Any]:
         "profile_complete": bool(profile and profile.is_complete()),
         "research_status": session.research.status,
     }
+
+
+def _readiness_payload(session) -> dict[str, Any]:
+    """The deterministic issue-readiness checklist.
+
+    Non-advisory checks gate ``ready`` (the "can it go out the door" bar,
+    per the batch acceptance criteria): no open items, no unreviewed
+    imported/assumed blocks, lint clean, research complete, and a current QC
+    with no open criticals. ``profile_complete`` is shown but advisory —
+    ``research_complete`` already subsumes it.
+    """
+    doc = session.doc.doc
+    open_items = open_questions(doc)
+    imported = 0
+    assumed = 0
+    for _part, _article, p, _depth, _ref in iter_paragraphs(doc):
+        if p.status == "imported":
+            imported += 1
+        elif p.status == "assumed":
+            assumed += 1
+    lint_items = lint_document(doc, session.module)
+    profile = ProjectProfile.from_dict(doc.project_profile)
+    profile_ok = bool(profile and profile.is_complete())
+    research_ok = session.research.status == "complete"
+
+    qc_result = session.qc.result
+    qc_current = (
+        qc_result is not None
+        and qc_result.version_index == session.doc.index
+        and qc_result.open_critical_count() == 0
+    )
+    if qc_result is None:
+        qc_detail = "Final QC has not been run."
+    elif qc_result.version_index != session.doc.index:
+        qc_detail = "Final QC is stale — the document has changed since it ran."
+    elif qc_result.open_critical_count() > 0:
+        qc_detail = (
+            f"{qc_result.open_critical_count()} open critical finding(s) — "
+            "resolve or dismiss them."
+        )
+    else:
+        qc_detail = "Final QC is current with no open criticals."
+
+    checks = [
+        {
+            "id": "no_open_items",
+            "ok": len(open_items) == 0,
+            "detail": "No open items."
+            if not open_items
+            else f"{len(open_items)} open item(s) ([TBD]/needs-input).",
+            "advisory": False,
+        },
+        {
+            "id": "no_imported_left",
+            "ok": imported == 0,
+            "detail": "No unreviewed imported blocks."
+            if imported == 0
+            else f"{imported} imported block(s) not yet reviewed.",
+            "advisory": False,
+        },
+        {
+            "id": "no_assumed_left",
+            "ok": assumed == 0,
+            "detail": "No unreviewed assumed blocks."
+            if assumed == 0
+            else f"{assumed} assumed block(s) awaiting review.",
+            "advisory": False,
+        },
+        {
+            "id": "lint_clean",
+            "ok": len(lint_items) == 0,
+            "detail": "Lint clean."
+            if not lint_items
+            else f"{len(lint_items)} advisory lint issue(s).",
+            "advisory": False,
+        },
+        {
+            "id": "profile_complete",
+            "ok": profile_ok,
+            "detail": "Project profile complete."
+            if profile_ok
+            else "Project profile is incomplete.",
+            "advisory": True,
+        },
+        {
+            "id": "research_complete",
+            "ok": research_ok,
+            "detail": "Requirements research complete."
+            if research_ok
+            else f"Research status: {session.research.status}.",
+            "advisory": False,
+        },
+        {
+            "id": "qc_current",
+            "ok": qc_current,
+            "detail": qc_detail,
+            "advisory": False,
+        },
+    ]
+    ready = all(c["ok"] for c in checks if not c["advisory"])
+    return {"checks": checks, "ready": ready}
 
 
 def create_app() -> FastAPI:
@@ -342,7 +460,12 @@ def create_app() -> FastAPI:
     @app.get("/api/export/docx")
     def export_docx() -> Response:
         session = sessions.get_session()
-        payload = build_docx(session.doc.doc, audit_result=session.audit.result)
+        qc_result = session.qc.result.to_dict() if session.qc.result else None
+        payload = build_docx(
+            session.doc.doc,
+            audit_result=session.audit.result,
+            qc_result=qc_result,
+        )
         filename = export_filename(session.doc.doc)
         return Response(
             content=payload,
@@ -527,6 +650,194 @@ def create_app() -> FastAPI:
     def audit_status() -> dict:
         return sessions.get_session().audit.snapshot()
 
+    # --- Final QC on Fable 5 (Batch 4) --------------------------------------
+
+    @app.post("/api/qc/start")
+    def qc_start() -> JSONResponse:
+        """Launch the spare-no-expense Final-QC pass on Fable 5.
+
+        Research is NOT required — when absent, the completeness lens adapts
+        and the result is flagged ``research_profile_present: false``. Gates:
+        non-empty draft, an API key, no QC already running, and no model turn
+        streaming (a QC of a mid-turn tree would review a moving target).
+        """
+        session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is streaming — let it finish before "
+                    "running Final QC.",
+                },
+                status_code=409,
+            )
+        if session.doc.doc.is_empty():
+            return JSONResponse(
+                {"ok": False, "error": "There is no draft to review yet."},
+                status_code=400,
+            )
+        try:
+            client = get_client()
+        except MissingApiKeyError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400
+            )
+        # Snapshot the tree so a turn streaming mid-QC can't mutate it under
+        # the call; capture dismiss memory before start() clears the result.
+        snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
+        remembered = session.qc.remembered_dismissed()
+        started = session.qc.start(
+            section=snapshot,
+            profile=session.research.profile_result,
+            module=session.module,
+            client=client,
+            model=settings.QC_MODEL,
+            max_tokens=settings.QC_MAX_TOKENS,
+            version_index=session.doc.index,
+            remembered_dismissed=remembered,
+            usage_sink=lambda u: session.usage.add("qc", u),
+        )
+        if not started:
+            return JSONResponse(
+                {"ok": False, "error": "Final QC is already running."},
+                status_code=409,
+            )
+        return JSONResponse({"ok": True})
+
+    @app.get("/api/qc/status")
+    def qc_status() -> dict:
+        return sessions.get_session().qc.snapshot()
+
+    @app.get("/api/qc/stream")
+    def qc_stream() -> StreamingResponse:
+        runner = sessions.get_session().qc
+
+        def event_stream() -> Iterator[str]:
+            for event in runner.sse_events():
+                yield _sse(event)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post("/api/qc/apply")
+    def qc_apply(body: QcApplyRequest) -> JSONResponse:
+        """Apply accepted findings' validated ops as ONE undoable version.
+
+        Re-dry-runs each finding against the CURRENT doc first (it may have
+        moved since QC ran): a finding whose ops no longer apply is reported
+        ``stale`` and skipped, never partially applied. Rejected (409) while a
+        model turn streams.
+        """
+        session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is streaming — apply the fix once it "
+                    "finishes.",
+                },
+                status_code=409,
+            )
+        result = session.qc.result
+        if result is None:
+            return JSONResponse(
+                {"ok": False, "error": "No QC result to apply from."},
+                status_code=409,
+            )
+        # Validate each finding onto an ACCUMULATING working copy so the
+        # combined batch is guaranteed to replay cleanly on the live tree.
+        working = SpecSection.from_dict(session.doc.doc.to_dict())
+        combined_ops: list[dict[str, Any]] = []
+        applied_ids: list[str] = []
+        outcomes: dict[str, str] = {}
+        for finding_id in body.finding_ids:
+            finding = result.finding(finding_id)
+            if finding is None:
+                outcomes[finding_id] = "unknown"
+                continue
+            if not finding.ops_valid or not finding.proposed_ops:
+                outcomes[finding_id] = "no_ops"
+                continue
+            if finding.status == "applied":
+                outcomes[finding_id] = "already_applied"
+                continue
+            try:
+                working, _applied = apply_edits(working, finding.proposed_ops)
+            except SpecEditError:
+                outcomes[finding_id] = "stale"
+                continue
+            combined_ops.extend(finding.proposed_ops)
+            applied_ids.append(finding_id)
+            outcomes[finding_id] = "applied"
+
+        if combined_ops:
+            generation = session.generation
+            session.doc.begin_turn()
+            try:
+                session.doc.apply_edits(combined_ops)
+            except SpecEditError as exc:  # pragma: no cover — validated above
+                session.doc.rollback_turn()
+                return JSONResponse(
+                    {"ok": False, "error": str(exc)}, status_code=400
+                )
+            if session.generation != generation:
+                session.doc.rollback_turn()
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "The session changed while applying; nothing "
+                        "was applied.",
+                    },
+                    status_code=409,
+                )
+            session.doc.commit_turn()
+            session.qc.mark_applied(applied_ids)
+
+        return JSONResponse(
+            {"ok": True, "outcomes": outcomes, **_doc_payload(session)}
+        )
+
+    @app.post("/api/qc/dismiss")
+    def qc_dismiss(body: QcDismissRequest) -> JSONResponse:
+        session = sessions.get_session()
+        if not session.qc.dismiss(body.finding_id, body.reason or ""):
+            return JSONResponse(
+                {"ok": False, "error": "No such finding to dismiss."},
+                status_code=404,
+            )
+        return JSONResponse({"ok": True, "qc": session.qc.snapshot()})
+
+    @app.get("/api/qc/export")
+    def qc_export() -> Response:
+        session = sessions.get_session()
+        if session.qc.result is None:
+            return JSONResponse(
+                {"ok": False, "error": "Run Final QC first."}, status_code=409
+            )
+        stale = session.qc.result.version_index != session.doc.index
+        payload = build_qc_memo(
+            session.qc.result.to_dict(), session.doc.doc, stale=stale
+        )
+        stem = session.doc.doc.number.replace(" ", "") or "draft"
+        return Response(
+            content=payload,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument"
+                ".wordprocessingml.document"
+            ),
+            headers=_attachment_headers(f"QC MEMO {stem}.docx"),
+        )
+
+    # --- Readiness gate (deterministic; no model call) ----------------------
+
+    @app.get("/api/readiness")
+    def readiness() -> dict:
+        """The "can it go out the door" checklist — pure functions of state."""
+        return _readiness_payload(sessions.get_session())
+
     # --- Usage & cost meter (WI4) -------------------------------------------
 
     @app.get("/api/usage")
@@ -553,6 +864,7 @@ def create_app() -> FastAPI:
                 research_profile.to_dict() if research_profile else None
             ),
             audit_result=session.audit.result,
+            qc_result=session.qc.result.to_dict() if session.qc.result else None,
         )
         stem = session.doc.doc.number.replace(" ", "") or "draft"
         return Response(

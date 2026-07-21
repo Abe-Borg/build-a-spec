@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
-  AuditSnapshot,
   ChatMessage,
   EditOp,
   Health,
   LintIssue,
   OpenItem,
+  QcSnapshot,
+  ReadinessPayload,
   ResearchSnapshot,
   SpecDoc,
   StandardInfo,
@@ -13,12 +14,15 @@ import type {
   UsageSummary,
 } from "./types";
 import {
+  applyQc,
   checkUpdate,
+  dismissQc,
   draftFull,
   editDoc,
-  getAuditStatus,
   getDoc,
   getHealth,
+  getQcStatus,
+  getReadiness,
   getResearchStatus,
   getUsage,
   importMaster,
@@ -26,9 +30,10 @@ import {
   loadProject,
   redoDoc,
   resetSession,
-  startAudit,
+  startQc,
   startResearch,
   streamChat,
+  streamQc,
   streamResearch,
   undoDoc,
 } from "./lib/api";
@@ -51,7 +56,8 @@ export default function App() {
   const [standards, setStandards] = useState<StandardInfo[]>([]);
   const [profileComplete, setProfileComplete] = useState(false);
   const [research, setResearch] = useState<ResearchSnapshot | null>(null);
-  const [audit, setAudit] = useState<AuditSnapshot | null>(null);
+  const [qc, setQc] = useState<QcSnapshot | null>(null);
+  const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [update, setUpdate] = useState<UpdateCheckPayload | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
@@ -61,7 +67,7 @@ export default function App() {
   const [prefill, setPrefill] = useState({ text: "", nonce: 0 });
   const busyRef = useRef(false);
   const researchFollowRef = useRef(false);
-  const auditPollRef = useRef(false);
+  const qcFollowRef = useRef(false);
 
   const refreshHealth = useCallback(() => {
     getHealth()
@@ -87,10 +93,16 @@ export default function App() {
       .catch(() => setDoc(null));
   }, []);
 
-  const refreshAudit = useCallback(() => {
-    getAuditStatus()
-      .then(setAudit)
-      .catch(() => setAudit(null));
+  const refreshQc = useCallback(() => {
+    getQcStatus()
+      .then(setQc)
+      .catch(() => setQc(null));
+  }, []);
+
+  const refreshReadiness = useCallback(() => {
+    getReadiness()
+      .then(setReadiness)
+      .catch(() => setReadiness(null));
   }, []);
 
   const refreshUsage = useCallback(() => {
@@ -103,52 +115,103 @@ export default function App() {
     refreshHealth();
     refreshDoc();
     refreshResearch();
-    refreshAudit();
+    refreshQc();
+    refreshReadiness();
     refreshUsage();
     // Throttled auto-check (server enforces once a day); failures ignored.
     checkUpdate().then(setUpdate).catch(() => setUpdate(null));
-  }, [refreshHealth, refreshDoc, refreshResearch, refreshAudit, refreshUsage]);
+  }, [
+    refreshHealth,
+    refreshDoc,
+    refreshResearch,
+    refreshQc,
+    refreshReadiness,
+    refreshUsage,
+  ]);
 
-  /** Poll the audit while one runs (single call, ~a minute). */
-  const pollAudit = useCallback(async () => {
-    if (auditPollRef.current) return;
-    auditPollRef.current = true;
+  /** Follow the QC run's SSE stream, snapshotting + metering as it streams. */
+  const followQc = useCallback(async () => {
+    if (qcFollowRef.current) return;
+    qcFollowRef.current = true;
     try {
-      for (let i = 0; i < 600; i += 1) {
-        const snapshot = await getAuditStatus();
-        setAudit(snapshot);
-        if (snapshot.status !== "running") break;
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+      for await (const _evt of streamQc()) {
+        // The snapshot endpoint is authoritative and cheap for a local app;
+        // refresh on each event so lens/verify progress lands live (no dead air).
+        refreshQc();
+        refreshUsage();
       }
-    } catch {
-      // Snapshot errors surface as a null audit; the button re-enables.
     } finally {
-      auditPollRef.current = false;
+      qcFollowRef.current = false;
+      refreshQc();
+      refreshReadiness();
       refreshUsage();
     }
-  }, [refreshUsage]);
+  }, [refreshQc, refreshReadiness, refreshUsage]);
 
-  const onStartAudit = useCallback(async () => {
+  const onStartQc = useCallback(async () => {
     try {
-      await startAudit();
-      void pollAudit();
+      await startQc();
+      void followQc();
     } catch (e) {
-      setAudit({
+      setQc((prev) => ({
         status: "failed",
         error: e instanceof Error ? e.message : String(e),
-      });
+        events: prev?.events ?? [],
+      }));
     }
-  }, [pollAudit]);
+  }, [followQc]);
 
+  // A page load during a running QC (or a resumed project) picks it back up.
   useEffect(() => {
-    if (audit?.status === "running") void pollAudit();
-  }, [audit?.status, pollAudit]);
+    if (qc?.status === "running") void followQc();
+  }, [qc?.status, followQc]);
+
+  const onApplyQc = useCallback(
+    async (findingIds: string[]) => {
+      try {
+        const payload = await applyQc(findingIds);
+        applyDocPayload(payload);
+        refreshQc();
+        refreshReadiness();
+      } catch (e) {
+        refreshDoc();
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: newId(),
+            role: "assistant",
+            text: `Could not apply the fix: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+            error: true,
+          },
+        ]);
+      }
+    },
+    // applyDocPayload is stable in practice; listing it is noise.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [refreshQc, refreshReadiness, refreshDoc],
+  );
+
+  const onDismissQc = useCallback(
+    async (findingId: string, reason?: string) => {
+      try {
+        const snapshot = await dismissQc(findingId, reason);
+        setQc(snapshot);
+        refreshReadiness();
+      } catch {
+        refreshQc();
+      }
+    },
+    [refreshQc, refreshReadiness],
+  );
 
   const onImportMaster = useCallback(
     async (file: File) => {
       try {
         const result = await importMaster(file);
         applyDocPayload(result);
+        refreshReadiness();
         const warningLines = result.warnings.length
           ? "\n\nImport notes:\n" +
             result.warnings.map((w) => `- ${w}`).join("\n")
@@ -357,9 +420,11 @@ export default function App() {
           sawTerminalEvent = true;
           updateLast({ streaming: false, status: null });
           // Profile completeness may have changed (set_project_profile);
-          // the snapshot endpoint is authoritative and cheap.
+          // the snapshot endpoint is authoritative and cheap. A doc-changing
+          // turn also moves the readiness gate (and can stale a QC result).
           refreshDoc();
           refreshUsage();
+          refreshReadiness();
         }
         // Unknown event types are ignored so an older/newer backend never
         // crashes the UI.
@@ -416,7 +481,8 @@ export default function App() {
     setChangedIds(new Set());
     refreshDoc();
     refreshResearch();
-    refreshAudit();
+    refreshQc();
+    refreshReadiness();
   };
 
   const applyDocPayload = (payload: {
@@ -438,6 +504,7 @@ export default function App() {
     try {
       const payload = await editDoc(ops);
       applyDocPayload(payload);
+      refreshReadiness();
       // Flash the blocks the user just touched (deletes have nothing to flash).
       const touched = ops
         .filter((op) => op.action !== "delete")
@@ -460,12 +527,18 @@ export default function App() {
 
   const onUndo = async () => {
     const payload = await undoDoc().catch(() => null);
-    if (payload) applyDocPayload(payload);
+    if (payload) {
+      applyDocPayload(payload);
+      refreshReadiness();
+    }
   };
 
   const onRedo = async () => {
     const payload = await redoDoc().catch(() => null);
-    if (payload) applyDocPayload(payload);
+    if (payload) {
+      applyDocPayload(payload);
+      refreshReadiness();
+    }
   };
 
   const onLoadProject = async (file: File) => {
@@ -474,7 +547,8 @@ export default function App() {
       const result = await loadProject(parsed);
       applyDocPayload(result);
       refreshResearch();
-      refreshAudit();
+      refreshQc();
+      refreshReadiness();
       setMessages(
         result.chat.map((m) => ({ id: newId(), role: m.role, text: m.text })),
       );
@@ -526,7 +600,9 @@ export default function App() {
           standards={standards}
           profileComplete={profileComplete}
           research={research}
-          audit={audit}
+          qc={qc}
+          readiness={readiness}
+          usage={usage}
           changedIds={changedIds}
           busy={busy}
           onUndo={onUndo}
@@ -535,7 +611,9 @@ export default function App() {
           onLoadProject={onLoadProject}
           onImportMaster={onImportMaster}
           onStartResearch={onStartResearch}
-          onStartAudit={onStartAudit}
+          onStartQc={onStartQc}
+          onApplyQc={onApplyQc}
+          onDismissQc={onDismissQc}
           onDraftFull={onDraftFull}
           onAskModel={onAskModel}
         />

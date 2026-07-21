@@ -1,3 +1,61 @@
+## As built (2026-07-21)
+
+**Status: shipped (v0.9.0).** The full pipeline landed as planned — a new
+`backend/qc/` package (structural clone of `research/`), five parallel Fable 5
+lenses → adversarial verification → deterministic ops validation → an
+accept/dismiss fix queue + a signed-off QC memo, plus a deterministic
+readiness gate. 193 backend tests green (19 new in `test_qc.py`); frontend
+builds clean; version gate at 0.9.0.
+
+**VERIFY resolved.** Fable 5 (`claude-fable-5`) accepts the research request
+shape unchanged — adaptive-thinking-always-on, depth via `output_config.effort`
+(the engine never sends `{type: disabled}`, which would 400). Added
+`MODEL_FABLE_5` to `schema._STRICT_CAPABLE_MODELS` (structured outputs are
+supported). Pricing ($10/M in, $50/M out; cache read 0.1×, write 1.25×) was
+already in the Batch 2 table and re-verified against the claude-api reference.
+
+**Deviations from the plan (with one-line why):**
+
+- **`no_assumed_left` gates `ready` (not advisory).** The plan body tagged it
+  "advisory tier", but acceptance criterion 5 explicitly requires "no
+  unreviewed imported/assumed blocks" for green — followed the acceptance
+  criterion; `profile_complete` is the advisory check instead (research-complete
+  already implies it, and criterion 5 omits it). Each check carries an
+  `advisory: bool` so the UI can tier them.
+- **Server-side refusal `fallbacks` deliberately NOT wired.** The claude-api
+  skill recommends it for Fable 5, but it requires the beta messages endpoint
+  and is outside this plan's scope; a refusal surfaces as an incomplete
+  stop_reason and the lens fails clean under the existing failure policy. Noted
+  as an operational caveat (as is Fable 5's 30-day-retention requirement — a
+  ZDR org 400s every request).
+- **Invalid `proposed_ops` are kept (advisory) rather than stripped.** The plan
+  said "strip ops"; keeping them with `ops_valid=False` + `ops_invalid_reason`
+  is more transparent (the memo/preview can show what was proposed) and the
+  apply path gates on `ops_valid`, so nothing invalid is ever applied.
+- **Apply validates onto an accumulating working copy**, not N independent
+  fresh copies, so the combined batch is guaranteed to replay as one
+  `begin_turn`/`commit_turn` — this is how "never partially applied within a
+  finding" + "one undo step" are both satisfied; a finding whose target moved
+  raises on the working copy → `stale`.
+- **Audit retired from the frontend entirely** (not just the button): `tsconfig`
+  has `noUnusedLocals`/`noUnusedParameters`, so the audit state/handlers/api
+  functions were removed from `App`/`ArtifactPanel`/`ResearchDrawer`/`api.ts`.
+  The `/api/audit/*` endpoints + `AuditRunner` are untouched (deprecated).
+- **QC runs on its own channel, never through `stream_user_turn`** — the plan's
+  `stream_user_turn(model=...)` seam note described the original intent; the
+  final shape keeps the interview loop Sonnet-only and puts Fable 5 entirely in
+  `backend/qc/` (cleaner, and QC outlives a chat turn like research does).
+- **Tracing:** added a `KIND_QC` span + `capture.qc_start/qc_event/qc_end`
+  (the plan didn't call for it, but it mirrors the research/audit spans and the
+  hooks never raise).
+
+**Manual QA still owed (hermetic tests can't cover):** a live Fable 5 run
+(streaming feel of lens→verify progress, real finding quality, refusal
+handling), the accept-fix Word round-trip, the QC-memo `.docx` opening in Word,
+and the hold-to-apply-criticals / readiness-goes-green flows in the real app.
+
+---
+
 # Batch 4 — Final QC on Fable 5 (spare-no-expense pre-issue review)
 
 Ships as **v0.9.0**. Abraham's framing (frozen): *the one place a model

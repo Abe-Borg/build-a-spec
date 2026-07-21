@@ -1,11 +1,14 @@
 import type {
-  AuditSnapshot,
   DocPayload,
   EditOp,
   Health,
   ImportResultPayload,
   KeyStatus,
   ProjectLoadResult,
+  QcApplyResult,
+  QcEvent,
+  QcSnapshot,
+  ReadinessPayload,
   ResearchEvent,
   ResearchSnapshot,
   StreamEvent,
@@ -207,7 +210,7 @@ export async function* streamResearch(): AsyncGenerator<ResearchEvent> {
   yield* readSse<ResearchEvent>(resp);
 }
 
-/* --- Master import + compliance audit + updates (Phase 5) --- */
+/* --- Master import + updates (Phase 5) --- */
 
 export async function importMaster(file: File): Promise<ImportResultPayload> {
   const form = new FormData();
@@ -223,17 +226,64 @@ export async function importMaster(file: File): Promise<ImportResultPayload> {
   return data;
 }
 
-export async function startAudit(): Promise<void> {
-  const resp = await fetch("/api/audit/start", { method: "POST" });
+/* --- Final QC on Fable 5 (Batch 4) --- */
+
+export async function startQc(): Promise<void> {
+  const resp = await fetch("/api/qc/start", { method: "POST" });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
-    throw new Error(data.error ?? `audit start failed (${resp.status})`);
+    throw new Error(data.error ?? `QC start failed (${resp.status})`);
   }
 }
 
-export async function getAuditStatus(): Promise<AuditSnapshot> {
-  const resp = await fetch("/api/audit/status");
-  if (!resp.ok) throw new Error(`audit status ${resp.status}`);
+export async function getQcStatus(): Promise<QcSnapshot> {
+  const resp = await fetch("/api/qc/status");
+  if (!resp.ok) throw new Error(`QC status ${resp.status}`);
+  return resp.json();
+}
+
+/** Follow the active/last QC run's SSE stream until it closes. */
+export async function* streamQc(): AsyncGenerator<QcEvent> {
+  const resp = await fetch("/api/qc/stream");
+  if (!resp.ok || !resp.body) return;
+  yield* readSse<QcEvent>(resp);
+}
+
+/** Apply accepted findings' fixes as one undoable version. */
+export async function applyQc(findingIds: string[]): Promise<QcApplyResult> {
+  const resp = await fetch("/api/qc/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ finding_ids: findingIds }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `QC apply failed (${resp.status})`);
+  }
+  return data;
+}
+
+/** Dismiss a finding (remembered across re-runs). */
+export async function dismissQc(
+  findingId: string,
+  reason?: string,
+): Promise<QcSnapshot> {
+  const resp = await fetch("/api/qc/dismiss", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ finding_id: findingId, reason: reason ?? null }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `QC dismiss failed (${resp.status})`);
+  }
+  return data.qc as QcSnapshot;
+}
+
+/** The deterministic "can it go out the door" checklist. */
+export async function getReadiness(): Promise<ReadinessPayload> {
+  const resp = await fetch("/api/readiness");
+  if (!resp.ok) throw new Error(`readiness ${resp.status}`);
   return resp.json();
 }
 

@@ -24,6 +24,7 @@ from .recorder import TraceRecorder, get_recorder, set_recorder
 from .spans import (
     KIND_COMPLIANCE,
     KIND_IMPORT,
+    KIND_QC,
     KIND_RESEARCH,
     KIND_TOOL_DISPATCH,
     KIND_TURN,
@@ -213,6 +214,45 @@ def audit_span(*, controlling: int) -> SpanHandle | None:
 
 
 def audit_end(
+    handle: SpanHandle | None, *, status: str, findings: int = 0, error: str = ""
+) -> None:
+    try:
+        recorder = get_recorder()
+        if recorder is None or handle is None:
+            return
+        recorder.close_span(
+            handle,
+            outputs={"status": status, "findings": findings},
+            status=STATUS_ERROR if error else STATUS_OK,
+            error=error or None,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def qc_start(*, lenses: int) -> SpanHandle | None:
+    try:
+        recorder = _ensure_recorder()
+        if recorder is None:
+            return None
+        return recorder.open_span(
+            KIND_QC, "final qc", inputs={"lenses": lenses}
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def qc_event(handle: SpanHandle | None, event: dict) -> None:
+    try:
+        recorder = get_recorder()
+        if recorder is None or handle is None:
+            return
+        recorder.add_event(handle, "qc_progress", **dict(event))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def qc_end(
     handle: SpanHandle | None, *, status: str, findings: int = 0, error: str = ""
 ) -> None:
     try:

@@ -488,6 +488,7 @@ _ACTIONS = (
     "add_paragraph",
     "replace",
     "delete",
+    "set_status",
     "set_standard_edition",
     "set_project_profile",
 )
@@ -755,6 +756,21 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             return {"action": "replace", "id": node.uid, "status": node.status}
         raise SpecEditError("replace: target must be an article or paragraph.")
 
+    if action == "set_status":
+        status = _opt_status(op)
+        if status is None:
+            raise SpecEditError(
+                "set_status: 'status' is required — one of "
+                f"{', '.join(STATUSES)}."
+            )
+        if not isinstance(node, Paragraph):
+            raise SpecEditError(
+                "set_status: target must be a paragraph id (only "
+                "provisions carry a status)."
+            )
+        node.status = status
+        return {"action": "set_status", "id": node.uid, "status": status}
+
     # action == "delete"
     if isinstance(node, Article):
         for part in section.parts:
@@ -945,6 +961,10 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "(text and/or status), or 'sec' to set the section header (text = "
         "section title, numbering = section number like '21 13 13').\n"
         "- delete: target_id = an article or paragraph id.\n"
+        "- set_status: target_id = a paragraph id; status = confirmed | "
+        "assumed | needs_input. Changes only the provision's status — use it "
+        "to confirm an assumed block (gap-and-adapt) without retyping its "
+        "text.\n"
         "- set_standard_edition: target_id = 'sec'; standard = the "
         "designation (e.g. 'NFPA 13'); edition = the jurisdiction-adopted "
         "edition (e.g. '2019'); basis = the stated adoption that makes it "

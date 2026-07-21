@@ -9,6 +9,7 @@ Critic's suite.
 """
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -73,16 +74,112 @@ def chat_search_blocks(query: str, urls: list[str]) -> list[SimpleNamespace]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Raw stream events (WI1: the chat loop now iterates SDK events, not
+# text_stream). Builders mirror the anthropic SDK's raw-event shapes the
+# engine consumes; ``_synthesize_events`` derives a plausible default
+# sequence from a scripted turn's content so existing tool/text/thinking
+# turns stream correctly with no per-test wiring.
+# ---------------------------------------------------------------------------
+
+
+def block_start_event(index: int, block_type: str, name: str = "") -> SimpleNamespace:
+    return SimpleNamespace(
+        type="content_block_start",
+        index=index,
+        content_block=SimpleNamespace(type=block_type, name=name),
+    )
+
+
+def text_delta_event(index: int, text: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        type="content_block_delta",
+        index=index,
+        delta=SimpleNamespace(type="text_delta", text=text),
+    )
+
+
+def thinking_delta_event(index: int, text: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        type="content_block_delta",
+        index=index,
+        delta=SimpleNamespace(type="thinking_delta", thinking=text),
+    )
+
+
+def input_json_delta_event(index: int, partial: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        type="content_block_delta",
+        index=index,
+        delta=SimpleNamespace(type="input_json_delta", partial_json=partial),
+    )
+
+
+def block_stop_event(index: int) -> SimpleNamespace:
+    return SimpleNamespace(type="content_block_stop", index=index)
+
+
+_STREAMED_BLOCK_TYPES = ("text", "thinking", "tool_use", "server_tool_use")
+
+
+def _synthesize_events(
+    content: list[SimpleNamespace], chunks: list[str]
+) -> list[SimpleNamespace]:
+    """Build a plausible raw-event sequence for a scripted turn's content.
+
+    Each streamable block gets start → delta(s) → stop; the turn's text
+    ``chunks`` stream as the first text block's deltas (so existing tests
+    that assert on streamed text keep passing), other text blocks stream
+    their full text, thinking blocks their (possibly empty) thinking, and
+    tool blocks their JSON input. Result blocks carry no stream events.
+    """
+    events: list[SimpleNamespace] = []
+    chunks = list(chunks or [])
+    used_chunks = False
+    idx = 0
+    for block in content:
+        btype = getattr(block, "type", None)
+        if btype not in _STREAMED_BLOCK_TYPES:
+            continue
+        name = getattr(block, "name", "") or ""
+        events.append(block_start_event(idx, btype, name))
+        if btype == "text":
+            if chunks and not used_chunks:
+                events.extend(text_delta_event(idx, c) for c in chunks)
+                used_chunks = True
+            else:
+                text = getattr(block, "text", "") or ""
+                if text:
+                    events.append(text_delta_event(idx, text))
+        elif btype == "thinking":
+            thinking = getattr(block, "thinking", "") or ""
+            if thinking:
+                events.append(thinking_delta_event(idx, thinking))
+        else:  # tool_use / server_tool_use
+            tool_input = getattr(block, "input", None) or {}
+            events.append(input_json_delta_event(idx, json.dumps(tool_input)))
+        events.append(block_stop_event(idx))
+        idx += 1
+    return events
+
+
 def raw_turn(
     content: list[SimpleNamespace],
     *,
     stop_reason: str,
     chunks: list[str] | None = None,
+    events: list[SimpleNamespace] | None = None,
 ) -> SimpleNamespace:
     """A scripted response with arbitrary content blocks (thinking,
-    server tools, pause_turn shapes) for the chat loop's fake client."""
+    server tools, pause_turn shapes) for the chat loop's fake client.
+
+    ``events`` overrides the synthesized raw-event stream when a test needs
+    a precise ordering (e.g. thinking → text → tool)."""
     return SimpleNamespace(
-        chunks=list(chunks or []), content=list(content), stop_reason=stop_reason
+        chunks=list(chunks or []),
+        content=list(content),
+        stop_reason=stop_reason,
+        events=events,
     )
 
 
@@ -115,6 +212,15 @@ class _FakeStreamCtx:
 
     def __exit__(self, *exc):
         return False
+
+    def __iter__(self):
+        """Yield the turn's raw stream events (explicit or synthesized)."""
+        events = getattr(self._turn, "events", None)
+        if events is None:
+            events = _synthesize_events(
+                self._turn.content, getattr(self._turn, "chunks", [])
+            )
+        yield from events
 
     @property
     def text_stream(self):
@@ -151,6 +257,17 @@ class FakeClient:
 
     def __init__(self, turns: list[Any]):
         self.messages = _FakeMessages(turns)
+
+
+def bad_request(message: str) -> Any:
+    """A real ``anthropic.BadRequestError`` (status 400) for scripting the
+    thinking.display capability degrade."""
+    import anthropic
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(400, request=request)
+    return anthropic.BadRequestError(message, response=response, body=None)
 
 
 # ---------------------------------------------------------------------------

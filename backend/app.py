@@ -9,6 +9,8 @@ Endpoints (all JSON unless noted):
 - ``GET  /api/doc``           → current document snapshot + open questions.
 - ``POST /api/doc/undo``      → step to the previous per-turn version.
 - ``POST /api/doc/redo``      → step forward again.
+- ``POST /api/doc/edit``      → apply a manual edit batch (one undoable
+  version; 409 while a model turn streams).
 - ``GET  /api/export/docx``   → the section as a SectionFormat ``.docx``
   (with the assumptions schedule), as a download.
 - ``POST /api/research/start``  → launch the requirements-research fan-out
@@ -47,7 +49,7 @@ from .api_key_store import load_api_key, save_api_key
 from .llm.client import MissingApiKeyError, get_client, reset_client_cache
 from .llm.conversation import standards_payload, stream_user_turn
 from .project_profile import ProjectProfile
-from .spec_doc import lint_document, open_questions
+from .spec_doc import SpecEditError, lint_document, open_questions
 from .spec_doc.docx_export import build_docx, export_filename
 from .spec_doc.importer import MasterImportError, parse_master_docx
 from .spec_doc.project import chat_transcript, load_project, save_project
@@ -64,6 +66,10 @@ class ChatRequest(BaseModel):
 
 class SaveKeyRequest(BaseModel):
     api_key: str
+
+
+class EditDocRequest(BaseModel):
+    ops: list[dict[str, Any]]
 
 
 def _sse(event: dict) -> str:
@@ -182,6 +188,50 @@ def create_app() -> FastAPI:
                 {"ok": False, "error": "Nothing to redo."}, status_code=409
             )
         return JSONResponse({"ok": True, **_doc_payload(session)})
+
+    @app.post("/api/doc/edit")
+    def edit_doc(body: EditDocRequest) -> JSONResponse:
+        """Apply a manual (user-authored) edit batch as one undoable version.
+
+        Same op vocabulary as the model's ``apply_spec_edits`` tool; thanks
+        to the v0.6.0 context architecture the model sees the result in its
+        next turn's PROJECT CONTEXT with no history surgery. Rejected while a
+        model turn streams (409) — a mid-turn manual edit would be swept into
+        that turn's commit/rollback.
+        """
+        session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is streaming — try the edit again "
+                    "once it finishes.",
+                },
+                status_code=409,
+            )
+        generation = session.generation
+        session.doc.begin_turn()
+        try:
+            applied = session.doc.apply_edits(body.ops)
+        except SpecEditError as exc:
+            session.doc.rollback_turn()
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400
+            )
+        if session.generation != generation:
+            # Reset/load raced in between begin and commit: discard the edit
+            # so the fresh/loaded session stays exactly as the user made it.
+            session.doc.rollback_turn()
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "The session changed while the edit was "
+                    "applying; the edit was discarded.",
+                },
+                status_code=409,
+            )
+        session.doc.commit_turn()
+        return JSONResponse({"ok": True, "applied": applied, **_doc_payload(session)})
 
     @app.get("/api/export/docx")
     def export_docx() -> Response:

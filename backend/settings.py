@@ -63,6 +63,24 @@ def _effort_env(name: str, default: str) -> str:
 
 INTERVIEW_EFFORT = _effort_env("BUILD_A_SPEC_INTERVIEW_EFFORT", "high")
 
+# Thinking-summary display. Sonnet 5 defaults to ``omitted`` — thinking
+# blocks stream with empty text, so a reasoning-heavy turn looks like a long
+# silent pause. ``summarized`` streams a readable summary of the model's
+# reasoning through thinking deltas: exactly the "see what the model is
+# thinking" liveness signal the streaming UX wants, and billing is identical
+# either way. On a model/endpoint that rejects the ``display`` key the engine
+# degrades to ``omitted`` at runtime (once, remembered for the process) and
+# relies on the ``thinking`` status strip alone.
+_DISPLAY_LEVELS = ("summarized", "omitted")
+
+
+def _display_env(name: str, default: str) -> str:
+    value = os.environ.get(name, "").strip().lower()
+    return value if value in _DISPLAY_LEVELS else default
+
+
+THINKING_DISPLAY = _display_env("BUILD_A_SPEC_THINKING_DISPLAY", "summarized")
+
 # --- Interview web lookups ---------------------------------------------------
 
 # Per-request allowances for the interview loop's web_search / web_fetch

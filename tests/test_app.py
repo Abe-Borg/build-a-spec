@@ -120,7 +120,9 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
         "web_search",
         "web_fetch",
     ]
-    assert request["thinking"] == {"type": "adaptive"}
+    # Adaptive thinking with the summarized-display opt-in (the "see what
+    # the model is thinking" stream) at the configured effort.
+    assert request["thinking"] == {"type": "adaptive", "display": "summarized"}
     assert request["output_config"] == {"effort": "high"}
 
     # Committed history stores the user's text ONLY — the context block

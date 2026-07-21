@@ -6,6 +6,25 @@ export interface ChatMessage {
   text: string;
   streaming?: boolean;
   error?: boolean;
+  /** Transient live status (WI1); cleared once text/thinking flows. */
+  status?: StreamStatus | null;
+  /** Accumulated adaptive-thinking summary (WI1), shown collapsed. */
+  thinking?: string;
+}
+
+/** Transient streaming status kinds (WI1 status strip). */
+export type StatusKind =
+  | "working"
+  | "thinking"
+  | "writing"
+  | "drafting"
+  | "searching"
+  | "fetching";
+
+export interface StreamStatus {
+  kind: StatusKind;
+  round?: number;
+  progress_chars?: number;
 }
 
 export interface Health {
@@ -66,6 +85,7 @@ export interface DocOp {
     | "add_paragraph"
     | "replace"
     | "delete"
+    | "set_status"
     | "set_standard_edition";
   id: string;
   target_id?: string;
@@ -73,6 +93,15 @@ export interface DocOp {
   standard?: string;
   edition?: string;
   removed?: boolean;
+}
+
+/** A manual edit op sent to POST /api/doc/edit (WI2). */
+export interface EditOp {
+  action: "replace" | "delete" | "set_status" | "add_paragraph";
+  target_id: string;
+  text?: string;
+  status?: BlockStatus;
+  source_item_id?: string;
 }
 
 export interface OpenItem {
@@ -243,6 +272,13 @@ export interface TurnUsage {
 
 export type StreamEvent =
   | { type: "text_delta"; text: string }
+  | { type: "thinking_delta"; text: string }
+  | {
+      type: "status";
+      kind: StatusKind;
+      round?: number;
+      progress_chars?: number;
+    }
   | { type: "web_search"; query: string }
   | { type: "web_fetch"; url: string }
   | { type: "doc_patch"; ops: DocOp[]; doc: SpecDoc }

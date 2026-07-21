@@ -6,6 +6,7 @@
 import { useMemo, useRef } from "react";
 import type {
   AuditSnapshot,
+  EditOp,
   LintIssue,
   OpenItem,
   ResearchSnapshot,
@@ -28,6 +29,7 @@ interface Props {
   busy: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  onEditDoc: (ops: EditOp[]) => void;
   onLoadProject: (file: File) => void;
   onImportMaster: (file: File) => void;
   onStartResearch: () => void;
@@ -85,6 +87,7 @@ export default function ArtifactPanel({
   busy,
   onUndo,
   onRedo,
+  onEditDoc,
   onLoadProject,
   onImportMaster,
   onStartResearch,
@@ -233,6 +236,8 @@ export default function ArtifactPanel({
             doc={doc}
             changedIds={changedIds}
             sourceLookup={sourceLookup}
+            busy={busy}
+            onEdit={onEditDoc}
           />
         ) : (
           <EmptyState />

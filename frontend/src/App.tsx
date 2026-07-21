@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AuditSnapshot,
   ChatMessage,
+  EditOp,
   Health,
   LintIssue,
   OpenItem,
@@ -12,6 +13,7 @@ import type {
 } from "./types";
 import {
   checkUpdate,
+  editDoc,
   getAuditStatus,
   getDoc,
   getHealth,
@@ -236,12 +238,28 @@ export default function App() {
     });
   };
 
+  /** Append streamed body text and clear the transient status strip. */
   const appendToLast = (delta: string) => {
     setMessages((prev) => {
       if (prev.length === 0) return prev;
       const next = [...prev];
       const last = next[next.length - 1];
-      next[next.length - 1] = { ...last, text: last.text + delta };
+      next[next.length - 1] = { ...last, text: last.text + delta, status: null };
+      return next;
+    });
+  };
+
+  /** Append a streamed adaptive-thinking summary; clears the status strip. */
+  const appendThinkingToLast = (delta: string) => {
+    setMessages((prev) => {
+      if (prev.length === 0) return prev;
+      const next = [...prev];
+      const last = next[next.length - 1];
+      next[next.length - 1] = {
+        ...last,
+        thinking: (last.thinking ?? "") + delta,
+        status: null,
+      };
       return next;
     });
   };
@@ -265,6 +283,17 @@ export default function App() {
       for await (const evt of streamChat(text)) {
         if (evt.type === "text_delta") {
           appendToLast(evt.text);
+        } else if (evt.type === "thinking_delta") {
+          appendThinkingToLast(evt.text);
+        } else if (evt.type === "status") {
+          // A "writing" hint just means text is imminent — clear the strip
+          // (text_delta arrives immediately after). Everything else shows.
+          updateLast({
+            status:
+              evt.kind === "writing"
+                ? null
+                : { kind: evt.kind, round: evt.round, progress_chars: evt.progress_chars },
+          });
         } else if (evt.type === "web_search") {
           // Surface live web activity inline in the streaming message.
           appendToLast(`\n\n*🔍 Searched the web: "${evt.query}"*\n\n`);
@@ -272,13 +301,19 @@ export default function App() {
           appendToLast(`\n\n*📄 Reading: ${evt.url}*\n\n`);
         } else if (evt.type === "doc_patch") {
           setDoc(evt.doc);
-          setChangedIds((prev) => {
-            const next = new Set(prev);
-            for (const op of evt.ops) {
-              if (op.action !== "delete") next.add(op.id);
-            }
-            return next;
-          });
+          const changed = evt.ops
+            .filter((op) => op.action !== "delete")
+            .map((op) => op.id);
+          setChangedIds((prev) => new Set([...prev, ...changed]));
+          // Nudge the doc panel to the first changed block as it lands.
+          if (changed.length > 0) {
+            const first = changed[0];
+            requestAnimationFrame(() =>
+              document
+                .getElementById(`el-${first}`)
+                ?.scrollIntoView({ block: "nearest", behavior: "smooth" }),
+            );
+          }
         } else if (evt.type === "doc_snapshot") {
           // The committed tree after a changed turn (correct version pointer).
           setDoc(evt.doc);
@@ -289,17 +324,24 @@ export default function App() {
           setStandards(evt.standards);
         } else if (evt.type === "error") {
           sawTerminalEvent = true;
-          updateLast({ text: evt.message, error: true, streaming: false });
+          updateLast({
+            text: evt.message,
+            error: true,
+            streaming: false,
+            status: null,
+          });
           // A failed turn rolled the document back server-side.
           refreshDoc();
           setChangedIds(new Set());
         } else if (evt.type === "turn_complete") {
           sawTerminalEvent = true;
-          updateLast({ streaming: false });
+          updateLast({ streaming: false, status: null });
           // Profile completeness may have changed (set_project_profile);
           // the snapshot endpoint is authoritative and cheap.
           refreshDoc();
         }
+        // Unknown event types are ignored so an older/newer backend never
+        // crashes the UI.
       }
     } catch (e) {
       updateLast({
@@ -312,7 +354,7 @@ export default function App() {
         refreshDoc();
         setChangedIds(new Set());
       }
-      updateLast({ streaming: false });
+      updateLast({ streaming: false, status: null });
       busyRef.current = false;
       setBusy(false);
     }
@@ -343,6 +385,30 @@ export default function App() {
     setStandards(payload.standards);
     setProfileComplete(payload.profile_complete);
     setChangedIds(new Set());
+  };
+
+  const onEditDoc = async (ops: EditOp[]) => {
+    try {
+      const payload = await editDoc(ops);
+      applyDocPayload(payload);
+      // Flash the blocks the user just touched (deletes have nothing to flash).
+      const touched = ops
+        .filter((op) => op.action !== "delete")
+        .map((op) => op.target_id);
+      if (touched.length) setChangedIds(new Set(touched));
+    } catch (e) {
+      // 409 (a turn is streaming) or 400 (bad op): resync and surface it.
+      refreshDoc();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          role: "assistant",
+          text: `Edit not applied: ${e instanceof Error ? e.message : String(e)}`,
+          error: true,
+        },
+      ]);
+    }
   };
 
   const onUndo = async () => {
@@ -406,6 +472,7 @@ export default function App() {
           busy={busy}
           onUndo={onUndo}
           onRedo={onRedo}
+          onEditDoc={onEditDoc}
           onLoadProject={onLoadProject}
           onImportMaster={onImportMaster}
           onStartResearch={onStartResearch}

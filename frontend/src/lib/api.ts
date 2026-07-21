@@ -1,6 +1,7 @@
 import type {
   AuditSnapshot,
   DocPayload,
+  EditOp,
   Health,
   ImportResultPayload,
   ProjectLoadResult,
@@ -51,6 +52,20 @@ async function stepDoc(direction: "undo" | "redo"): Promise<DocPayload | null> {
 
 export const undoDoc = () => stepDoc("undo");
 export const redoDoc = () => stepDoc("redo");
+
+/** Apply a manual edit batch (WI2). 409 while a model turn streams. */
+export async function editDoc(ops: EditOp[]): Promise<DocPayload> {
+  const resp = await fetch("/api/doc/edit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ops }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `edit failed (${resp.status})`);
+  }
+  return data;
+}
 
 /** Restore a session from a parsed project file. */
 export async function loadProject(

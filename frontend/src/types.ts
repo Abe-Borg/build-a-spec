@@ -6,6 +6,25 @@ export interface ChatMessage {
   text: string;
   streaming?: boolean;
   error?: boolean;
+  /** Transient live status (WI1); cleared once text/thinking flows. */
+  status?: StreamStatus | null;
+  /** Accumulated adaptive-thinking summary (WI1), shown collapsed. */
+  thinking?: string;
+}
+
+/** Transient streaming status kinds (WI1 status strip). */
+export type StatusKind =
+  | "working"
+  | "thinking"
+  | "writing"
+  | "drafting"
+  | "searching"
+  | "fetching";
+
+export interface StreamStatus {
+  kind: StatusKind;
+  round?: number;
+  progress_chars?: number;
 }
 
 export interface Health {
@@ -16,6 +35,26 @@ export interface Health {
   api_key_present: boolean;
   module?: string;
   module_id?: string;
+}
+
+/** API-key resolution status (WI3 settings panel). Never carries the key. */
+export interface KeyStatus {
+  present: boolean;
+  source: "env" | "keyring" | "file" | "none";
+  masked: string;
+  env_locked?: boolean;
+}
+
+/** Session-scoped billed-usage snapshot (WI4 cost meter). */
+export interface UsageSummary {
+  categories: Record<string, Record<string, number>>;
+  totals: Record<string, number>;
+  turns: number;
+  estimated_cost_usd: {
+    by_category: Record<string, number>;
+    total: number;
+  };
+  cache_saved_usd: number;
 }
 
 /* --- Document model (mirrors backend/spec_doc/model.py serialization) --- */
@@ -66,6 +105,7 @@ export interface DocOp {
     | "add_paragraph"
     | "replace"
     | "delete"
+    | "set_status"
     | "set_standard_edition";
   id: string;
   target_id?: string;
@@ -73,6 +113,15 @@ export interface DocOp {
   standard?: string;
   edition?: string;
   removed?: boolean;
+}
+
+/** A manual edit op sent to POST /api/doc/edit (WI2). */
+export interface EditOp {
+  action: "replace" | "delete" | "set_status" | "add_paragraph";
+  target_id: string;
+  text?: string;
+  status?: BlockStatus;
+  source_item_id?: string;
 }
 
 export interface OpenItem {
@@ -243,6 +292,13 @@ export interface TurnUsage {
 
 export type StreamEvent =
   | { type: "text_delta"; text: string }
+  | { type: "thinking_delta"; text: string }
+  | {
+      type: "status";
+      kind: StatusKind;
+      round?: number;
+      progress_chars?: number;
+    }
   | { type: "web_search"; query: string }
   | { type: "web_fetch"; url: string }
   | { type: "doc_patch"; ops: DocOp[]; doc: SpecDoc }

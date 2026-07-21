@@ -1,13 +1,16 @@
 import type {
   AuditSnapshot,
   DocPayload,
+  EditOp,
   Health,
   ImportResultPayload,
+  KeyStatus,
   ProjectLoadResult,
   ResearchEvent,
   ResearchSnapshot,
   StreamEvent,
   UpdateCheckPayload,
+  UsageSummary,
 } from "../types";
 
 export async function getHealth(): Promise<Health> {
@@ -32,6 +35,43 @@ export async function resetSession(): Promise<void> {
   await fetch("/api/session/reset", { method: "POST" });
 }
 
+/* --- API key management (WI3) --- */
+
+export async function getKeyStatus(): Promise<KeyStatus> {
+  const resp = await fetch("/api/key/status");
+  if (!resp.ok) throw new Error(`key status ${resp.status}`);
+  return resp.json();
+}
+
+export async function deleteKey(): Promise<KeyStatus> {
+  const resp = await fetch("/api/key", { method: "DELETE" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `delete failed (${resp.status})`);
+  }
+  return data;
+}
+
+/** This session's billed usage + estimated cost (WI4 meter). */
+export async function getUsage(): Promise<UsageSummary> {
+  const resp = await fetch("/api/usage");
+  if (!resp.ok) throw new Error(`usage ${resp.status}`);
+  return resp.json();
+}
+
+/** Validate a candidate (or the stored) key; never stores it. */
+export async function testKey(
+  apiKey?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const resp = await fetch("/api/key/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(apiKey ? { api_key: apiKey } : {}),
+  });
+  if (!resp.ok) return { ok: false, error: `test failed (${resp.status})` };
+  return resp.json();
+}
+
 export async function getDoc(): Promise<DocPayload> {
   const resp = await fetch("/api/doc");
   if (!resp.ok) throw new Error(`doc ${resp.status}`);
@@ -51,6 +91,20 @@ async function stepDoc(direction: "undo" | "redo"): Promise<DocPayload | null> {
 
 export const undoDoc = () => stepDoc("undo");
 export const redoDoc = () => stepDoc("redo");
+
+/** Apply a manual edit batch (WI2). 409 while a model turn streams. */
+export async function editDoc(ops: EditOp[]): Promise<DocPayload> {
+  const resp = await fetch("/api/doc/edit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ops }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `edit failed (${resp.status})`);
+  }
+  return data;
+}
 
 /** Restore a session from a parsed project file. */
 export async function loadProject(

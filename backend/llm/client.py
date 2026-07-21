@@ -45,3 +45,14 @@ def reset_client_cache() -> None:
     with _lock:
         _cached_client = None
         _cached_key = ""
+
+
+def build_probe_client(api_key: str) -> anthropic.Anthropic:
+    """A throwaway (never-cached) client for validating a candidate key.
+
+    The settings panel's "Test" flow constructs one of these with the
+    candidate (or stored) key and makes the cheapest authenticated call it
+    can. Kept out of the per-key cache so testing a bad key never poisons
+    the live client.
+    """
+    return anthropic.Anthropic(api_key=api_key)

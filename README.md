@@ -1,16 +1,49 @@
 # Build-a-Spec
 
-**v0.6.0 ("Sonnet unleashed")** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v0.7.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First target domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## Current Status — v0.6.0, the "Sonnet unleashed" batch
+## Current Status — v0.7.0 (Batch 2: streaming UX, direct editing, settings, cost meter)
 
-New in this release (project decision: the app imposes **no quality limits
-on the model** — the only caps left are runaway circuit breakers sized so
-no legitimate turn ever meets one):
+New in this release:
+
+- **Buttery-smooth streaming — no dead air, ever.** The chat loop now
+  iterates the model's raw stream events and narrates all of them live: a
+  shimmering status strip ("Thinking…", "Searching the web…", "Writing to
+  the document…"), streamed adaptive-thinking summaries in a collapsible
+  block, drafting progress on a long edit batch, and web-search chips that
+  fire the instant the search runs — not a post-hoc chip after it's over.
+  Text flows through a `requestAnimationFrame` typewriter with cheap
+  markdown (settled prefix memoized, live tail plain), so a 2,000-word
+  answer never re-parses itself dozens of times a second; scroll follows
+  the bottom while you're pinned and stays put while you read history.
+  Thinking summaries use `display: summarized` with a runtime degrade to
+  `omitted` if a model rejects it.
+- **Edit the document yourself.** Hover any provision for inline edit
+  (✏️), one-click confirm of an assumed block (✓), or delete (🗑), plus
+  editable article titles — a new `set_status` op and a transactional,
+  undoable `POST /api/doc/edit` endpoint behind them, slammed shut (409)
+  while a model turn owns the tree. Thanks to the full-document context,
+  the model sees your edits on its next turn with no special plumbing.
+- **A real settings panel.** A gear in the header opens key management that
+  actually manages: it shows where your key resolves from (credential
+  manager / key file / read-only env var) and a masked tail — never the
+  key — and lets you replace it (test-then-save: authenticates before it
+  stores, shows the API's rejection verbatim), remove it, or test it. Plus
+  an About section with version, model, and a check-for-updates link.
+- **Cost & usage meter.** A live `≈ $0.42 this session` ticker in the
+  header opens a by-category usage table (tokens in/out, cache read/write,
+  web searches, estimated dollars) with a "prompt caching saved ≈ $X"
+  line. Estimates come from a verified list-pricing table (Sonnet 5 at the
+  post-intro rate so the meter never under-reports); the trace files stay
+  the exact record. Per-session — reset and project load zero it out.
+
+Shipped in v0.6.0 ("Sonnet unleashed") and still current (project decision:
+the app imposes **no quality limits on the model** — the only caps left are
+runaway circuit breakers sized so no legitimate turn ever meets one):
 
 - **The model sees the whole document, every turn.** The truncated outline
   is gone from the drafting context: a PROJECT CONTEXT block in each
@@ -239,6 +272,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5` | Model for interview/drafting turns. |
 | `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
 | `BUILD_A_SPEC_INTERVIEW_EFFORT` | `high` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`). |
+| `BUILD_A_SPEC_THINKING_DISPLAY` | `summarized` | Thinking-summary streaming: `summarized` streams a readable reasoning summary (the "see what the model is thinking" strip); `omitted` streams empty thinking. Degrades to `omitted` automatically if a model rejects the display key. |
 | `BUILD_A_SPEC_CHAT_MAX_SEARCHES` | `8` | Interview web_search allowance per continuation round. |
 | `BUILD_A_SPEC_CHAT_MAX_FETCHES` | `4` | Interview web_fetch allowance per continuation round. |
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |

@@ -123,6 +123,22 @@ def turn_end(
         pass
 
 
+def note(handle: SpanHandle | None, message: str, **fields: Any) -> None:
+    """Attach a free-form ``note`` event to a span (never raises).
+
+    Used for one-off forensic breadcrumbs like the thinking.display
+    capability degrade — cheap to record, occasionally load-bearing when a
+    turn behaves unexpectedly.
+    """
+    try:
+        recorder = get_recorder()
+        if recorder is None:
+            return
+        recorder.add_event(handle, "note", message=message, **fields)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def tool_dispatch(
     parent: SpanHandle | None, *, ops: int, ok: bool, error: str = ""
 ) -> None:

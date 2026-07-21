@@ -4,15 +4,21 @@ Endpoints (all JSON unless noted):
 
 - ``GET  /api/health``        → app/model/key status for the UI header.
 - ``POST /api/key``           → save an Anthropic API key (keyring → file).
+- ``GET  /api/key/status``    → where the key resolves from + a masked tail.
+- ``DELETE /api/key``         → remove the stored key (keyring + files).
+- ``POST /api/key/test``      → validate a candidate/stored key (no save).
 - ``POST /api/session/reset`` → clear the conversation and the document.
 - ``POST /api/chat``          → Server-Sent Events stream of turn events.
 - ``GET  /api/doc``           → current document snapshot + open questions.
 - ``POST /api/doc/undo``      → step to the previous per-turn version.
 - ``POST /api/doc/redo``      → step forward again.
+- ``POST /api/doc/edit``      → apply a manual edit batch (one undoable
+  version; 409 while a model turn streams).
 - ``GET  /api/export/docx``   → the section as a SectionFormat ``.docx``
   (with the assumptions schedule), as a download.
 - ``POST /api/research/start``  → launch the requirements-research fan-out
   (requires a complete project profile; 409 while one runs).
+- ``GET  /api/usage``         → this session's billed usage + est. cost.
 - ``GET  /api/research/status`` → research state + event log + profile view.
 - ``GET  /api/research/stream`` → SSE follow of the active/last run.
 - ``GET  /api/project/save``  → project file (history + doc versions +
@@ -31,6 +37,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import quote
 
+import anthropic
 from fastapi import FastAPI, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
@@ -43,11 +50,21 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import settings, sessions
-from .api_key_store import load_api_key, save_api_key
-from .llm.client import MissingApiKeyError, get_client, reset_client_cache
+from .api_key_store import (
+    delete_api_key,
+    key_status,
+    load_api_key,
+    save_api_key,
+)
+from .llm.client import (
+    MissingApiKeyError,
+    build_probe_client,
+    get_client,
+    reset_client_cache,
+)
 from .llm.conversation import standards_payload, stream_user_turn
 from .project_profile import ProjectProfile
-from .spec_doc import lint_document, open_questions
+from .spec_doc import SpecEditError, lint_document, open_questions
 from .spec_doc.docx_export import build_docx, export_filename
 from .spec_doc.importer import MasterImportError, parse_master_docx
 from .spec_doc.project import chat_transcript, load_project, save_project
@@ -64,6 +81,14 @@ class ChatRequest(BaseModel):
 
 class SaveKeyRequest(BaseModel):
     api_key: str
+
+
+class EditDocRequest(BaseModel):
+    ops: list[dict[str, Any]]
+
+
+class TestKeyRequest(BaseModel):
+    api_key: str | None = None
 
 
 def _sse(event: dict) -> str:
@@ -137,6 +162,56 @@ def create_app() -> FastAPI:
         reset_client_cache()
         return JSONResponse({"ok": True, "stored_in": stored_in})
 
+    @app.get("/api/key/status")
+    def key_status_endpoint() -> dict:
+        """Where the key resolves from + a masked tail (never the key)."""
+        status = key_status()
+        if status.get("source") == "env":
+            status["env_locked"] = True
+        return status
+
+    @app.delete("/api/key")
+    def delete_key() -> JSONResponse:
+        """Remove the stored key (keyring + files) and drop the client cache.
+
+        The env var cannot be cleared from here; the fresh status shows
+        whether a key still resolves (e.g. an env var still set).
+        """
+        cleared = delete_api_key()
+        reset_client_cache()
+        return JSONResponse({"ok": True, "cleared": cleared, **key_status()})
+
+    @app.post("/api/key/test")
+    def test_key(body: TestKeyRequest) -> JSONResponse:
+        """Validate a candidate (or the stored) key with one cheap call.
+
+        Never stores anything as a side effect — the frontend tests, then
+        saves separately on success.
+        """
+        candidate = (body.api_key or "").strip() or load_api_key()
+        if not candidate:
+            return JSONResponse(
+                {"ok": False, "error": "No API key to test."}
+            )
+        try:
+            probe = build_probe_client(candidate)
+            probe.models.list(limit=1)
+        except MissingApiKeyError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)})
+        except anthropic.APIStatusError as exc:
+            return JSONResponse({"ok": False, "error": exc.message})
+        except anthropic.APIConnectionError:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Could not reach the Anthropic API — check "
+                    "your connection.",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 — surfaced to the user
+            return JSONResponse({"ok": False, "error": str(exc)})
+        return JSONResponse({"ok": True})
+
     @app.post("/api/session/reset")
     def reset() -> dict:
         sessions.reset_session()
@@ -182,6 +257,50 @@ def create_app() -> FastAPI:
                 {"ok": False, "error": "Nothing to redo."}, status_code=409
             )
         return JSONResponse({"ok": True, **_doc_payload(session)})
+
+    @app.post("/api/doc/edit")
+    def edit_doc(body: EditDocRequest) -> JSONResponse:
+        """Apply a manual (user-authored) edit batch as one undoable version.
+
+        Same op vocabulary as the model's ``apply_spec_edits`` tool; thanks
+        to the v0.6.0 context architecture the model sees the result in its
+        next turn's PROJECT CONTEXT with no history surgery. Rejected while a
+        model turn streams (409) — a mid-turn manual edit would be swept into
+        that turn's commit/rollback.
+        """
+        session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is streaming — try the edit again "
+                    "once it finishes.",
+                },
+                status_code=409,
+            )
+        generation = session.generation
+        session.doc.begin_turn()
+        try:
+            applied = session.doc.apply_edits(body.ops)
+        except SpecEditError as exc:
+            session.doc.rollback_turn()
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400
+            )
+        if session.generation != generation:
+            # Reset/load raced in between begin and commit: discard the edit
+            # so the fresh/loaded session stays exactly as the user made it.
+            session.doc.rollback_turn()
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "The session changed while the edit was "
+                    "applying; the edit was discarded.",
+                },
+                status_code=409,
+            )
+        session.doc.commit_turn()
+        return JSONResponse({"ok": True, "applied": applied, **_doc_payload(session)})
 
     @app.get("/api/export/docx")
     def export_docx() -> Response:
@@ -288,6 +407,7 @@ def create_app() -> FastAPI:
             client=client,
             model=settings.RESEARCH_MODEL,
             max_tokens=settings.RESEARCH_MAX_TOKENS,
+            usage_sink=lambda u: session.usage.add("research", u),
         )
         if not started:
             return JSONResponse(
@@ -357,6 +477,7 @@ def create_app() -> FastAPI:
             model=settings.RESEARCH_MODEL,
             max_tokens=settings.RESEARCH_MAX_TOKENS,
             version_index=session.doc.index,
+            usage_sink=lambda u: session.usage.add("audit", u),
         )
         if not started:
             return JSONResponse(
@@ -368,6 +489,18 @@ def create_app() -> FastAPI:
     @app.get("/api/audit/status")
     def audit_status() -> dict:
         return sessions.get_session().audit.snapshot()
+
+    # --- Usage & cost meter (WI4) -------------------------------------------
+
+    @app.get("/api/usage")
+    def usage() -> dict:
+        """This session's billed usage + an estimated cost from list pricing.
+
+        Session-scoped: reset and project load clear it. The dollar figures
+        are estimates (labeled as such in the UI); the trace files remain the
+        permanent, exact record.
+        """
+        return sessions.get_session().usage.snapshot()
 
     # --- Project save / resume --------------------------------------------
 

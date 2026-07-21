@@ -28,9 +28,14 @@ os.environ.setdefault("BUILD_A_SPEC_DISABLE_UPDATE_CHECK", "1")
 def _fresh_session():
     from backend import sessions
     from backend.llm.client import reset_client_cache
+    from backend.llm.conversation import reset_thinking_display_probe
 
     sessions.reset_session()
     reset_client_cache()
+    # The thinking.display capability degrade is process-scoped; re-arm it so
+    # a fallback test can't leak "omitted" into a later test's request.
+    reset_thinking_display_probe()
     yield
     sessions.reset_session()
     reset_client_cache()
+    reset_thinking_display_probe()

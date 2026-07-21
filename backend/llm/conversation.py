@@ -46,6 +46,7 @@ resend never duplicates anything.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
@@ -70,6 +71,7 @@ from ..research.schema import build_web_fetch_tool, build_web_search_tool
 from ..tracing import capture as _trace
 from ..spec_modules import SpecModule, get_module
 from ..standards import standards_context_block
+from ..usage_ledger import UsageLedger
 from .client import MissingApiKeyError, get_client
 from .prompts import render_system_prompt
 
@@ -115,6 +117,12 @@ class SessionState:
     module: SpecModule = field(default_factory=lambda: get_module(None))
     research: ResearchRunner = field(default_factory=ResearchRunner)
     audit: AuditRunner = field(default_factory=AuditRunner)
+    # Session-scoped billed-usage meter (WI4). Reset/load clear it.
+    usage: UsageLedger = field(default_factory=UsageLedger)
+    # True while a model turn owns the document store (WI2). Manual edits are
+    # rejected in this window — a mid-turn manual edit would be swept into the
+    # streaming turn's commit or rollback.
+    turn_active: bool = False
 
     def reset(self) -> None:
         self.history.clear()
@@ -123,6 +131,9 @@ class SessionState:
         # finishes into the abandoned objects (the zombie-turn pattern).
         self.research = ResearchRunner()
         self.audit = AuditRunner()
+        # The meter answers "what has THIS session spent" — a fresh session
+        # starts at zero (the trace remains the permanent record).
+        self.usage.reset()
         self.generation += 1
 
 
@@ -322,27 +333,146 @@ def _merge_usage(totals: dict[str, int], usage: Any) -> None:
             totals[key] = totals.get(key, 0) + int(value)
 
 
-def _web_activity_events(
-    content: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """UI events for the round's server-side web tool calls."""
-    events: list[dict[str, Any]] = []
-    for block in content:
-        if block.get("type") != "server_tool_use":
-            continue
-        tool_input = block.get("input") or {}
-        if block.get("name") == "web_search":
-            events.append(
-                {
-                    "type": "web_search",
-                    "query": str(tool_input.get("query", "")),
-                }
-            )
-        elif block.get("name") == "web_fetch":
-            events.append(
-                {"type": "web_fetch", "url": str(tool_input.get("url", ""))}
-            )
-    return events
+# --- Streaming-event translation (WI1: buttery-smooth streaming UX) ----------
+#
+# The interview streams raw SDK events instead of the text-only
+# ``text_stream``, so the UI sees everything the model is doing the moment it
+# happens: adaptive-thinking summaries, drafting progress on a long edit
+# batch, and web lookups the instant they fire — never a silent pause, never
+# a post-hoc "🔍 Searched…" chip that lands after the search is over. ``status``
+# frames are transient UI hints (not persisted to history/traces/project
+# files); ``text_delta``/``thinking_delta`` clear the strip.
+
+# Runaway guard on drafting-progress frames: at most one per this interval,
+# so a 40-op batch streams a handful of "drafting… 2.4k" pulses, not a flood.
+_DRAFT_PROGRESS_INTERVAL_S = 0.25
+
+
+def _safe_json(text: str) -> dict[str, Any]:
+    """Parse an accumulated tool-input JSON fragment; ``{}`` on garbage."""
+    try:
+        value = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
+    """Translate one round's raw stream events into UI event dicts.
+
+    Yields ``status`` hints on block starts (thinking/writing/drafting/
+    searching/fetching), ``text_delta``/``thinking_delta`` on content deltas,
+    throttled drafting ``progress_chars`` as an edit batch's JSON streams,
+    and LIVE ``web_search``/``web_fetch`` events the instant a server-tool
+    block's input finishes (``content_block_stop``) — not derived after the
+    round from the final message. Empty thinking deltas (``display:
+    omitted``) are dropped so they don't prematurely clear the status strip.
+    """
+    json_buffers: dict[int, str] = {}
+    block_kinds: dict[int, tuple[str, str]] = {}
+    last_progress = time.monotonic()
+    for event in stream:
+        etype = getattr(event, "type", None)
+        if etype == "content_block_start":
+            block = getattr(event, "content_block", None)
+            index = getattr(event, "index", 0)
+            btype = getattr(block, "type", None) or ""
+            bname = getattr(block, "name", "") or ""
+            block_kinds[index] = (btype, bname)
+            json_buffers[index] = ""
+            if btype == "thinking":
+                yield {"type": "status", "kind": "thinking"}
+            elif btype == "text":
+                yield {"type": "status", "kind": "writing"}
+            elif btype == "tool_use" and bname == "apply_spec_edits":
+                yield {"type": "status", "kind": "drafting", "progress_chars": 0}
+            elif btype == "server_tool_use" and bname == "web_search":
+                yield {"type": "status", "kind": "searching"}
+            elif btype == "server_tool_use" and bname == "web_fetch":
+                yield {"type": "status", "kind": "fetching"}
+        elif etype == "content_block_delta":
+            delta = getattr(event, "delta", None)
+            dtype = getattr(delta, "type", None)
+            index = getattr(event, "index", 0)
+            if dtype == "text_delta":
+                text = getattr(delta, "text", "") or ""
+                if text:
+                    yield {"type": "text_delta", "text": text}
+            elif dtype == "thinking_delta":
+                text = getattr(delta, "thinking", "") or ""
+                if text:
+                    yield {"type": "thinking_delta", "text": text}
+            elif dtype == "input_json_delta":
+                json_buffers[index] = json_buffers.get(index, "") + (
+                    getattr(delta, "partial_json", "") or ""
+                )
+                if block_kinds.get(index) == ("tool_use", "apply_spec_edits"):
+                    now = time.monotonic()
+                    if now - last_progress >= _DRAFT_PROGRESS_INTERVAL_S:
+                        last_progress = now
+                        yield {
+                            "type": "status",
+                            "kind": "drafting",
+                            "progress_chars": len(json_buffers[index]),
+                        }
+        elif etype == "content_block_stop":
+            index = getattr(event, "index", 0)
+            btype, bname = block_kinds.get(index, ("", ""))
+            if btype != "server_tool_use":
+                continue
+            payload = _safe_json(json_buffers.get(index, ""))
+            if bname == "web_search":
+                yield {"type": "web_search", "query": str(payload.get("query", ""))}
+            elif bname == "web_fetch":
+                yield {"type": "web_fetch", "url": str(payload.get("url", ""))}
+
+
+# thinking.display capability probe. Sonnet 5 accepts ``summarized``; a model
+# or endpoint that rejects the ``display`` key 400s once, after which the
+# whole process degrades to ``omitted`` (remembered, never re-probed). Reset
+# between hermetic tests via :func:`reset_thinking_display_probe`.
+_display_probe_disabled = False
+
+
+def reset_thinking_display_probe() -> None:
+    """Re-arm the thinking.display probe (tests; a fresh process)."""
+    global _display_probe_disabled
+    _display_probe_disabled = False
+
+
+def _thinking_param() -> dict[str, Any]:
+    """The adaptive-thinking request param, with display when supported."""
+    thinking: dict[str, Any] = {"type": "adaptive"}
+    if not _display_probe_disabled and settings.THINKING_DISPLAY == "summarized":
+        thinking["display"] = "summarized"
+    return thinking
+
+
+def _enter_stream(
+    client: Any, kwargs: dict[str, Any], trace_handle: Any = None
+) -> tuple[Any, Any]:
+    """Open + enter a message stream, degrading thinking.display once on 400.
+
+    The request fires when the stream context is entered, so a rejected
+    ``display`` key surfaces here; we retry the same round without it,
+    remember the degrade for the process, and note it in the trace.
+    """
+    global _display_probe_disabled
+    try:
+        manager = client.messages.stream(**kwargs)
+        return manager, manager.__enter__()
+    except anthropic.BadRequestError:
+        thinking = kwargs.get("thinking") or {}
+        if _display_probe_disabled or "display" not in thinking:
+            raise
+        _display_probe_disabled = True
+        _trace.note(
+            trace_handle,
+            "thinking.display rejected; degraded to omitted for this session",
+        )
+        kwargs = {**kwargs, "thinking": {"type": "adaptive"}}
+        manager = client.messages.stream(**kwargs)
+        return manager, manager.__enter__()
 
 
 def _run_tool(
@@ -413,13 +543,16 @@ def stream_user_turn(
 ) -> Iterator[dict[str, Any]]:
     """Run one user turn against the model, yielding UI event dicts.
 
-    Event order: ``text_delta`` chunks (across all continuation rounds)
-    interleaved with ``web_search``/``web_fetch`` activity and
-    ``doc_patch`` after each applied edit batch, then — on success —
-    ``open_questions`` and ``lint`` (if the document changed) and
+    Event order: transient ``status`` hints (working/thinking/writing/
+    drafting/searching/fetching) and ``thinking_delta`` summaries interleave
+    with ``text_delta`` chunks across every continuation round; live
+    ``web_search``/``web_fetch`` events fire the instant a server-tool call
+    completes; ``doc_patch`` follows each applied edit batch. Then — on
+    success — ``open_questions`` and ``lint`` (if the document changed) and
     ``turn_complete``, which carries the turn's aggregated billed usage.
-    Any failure yields a single ``error`` event, rolls the document back,
-    and leaves history unchanged.
+    ``status`` frames are transient UI hints, never persisted. Any failure
+    yields a single ``error`` event, rolls the document back, and leaves
+    history unchanged.
     """
     user_text = (user_text or "").strip()
     if not user_text:
@@ -440,6 +573,7 @@ def stream_user_turn(
         }
     ]
     session.doc.begin_turn()
+    session.turn_active = True
     generation = session.generation
     trace_handle = _trace.turn_start(
         model=model or settings.INTERVIEW_MODEL,
@@ -463,7 +597,7 @@ def stream_user_turn(
             "system": _stable_system_blocks(session),
             "messages": _with_tail_cache_breakpoint(messages),
             "tools": _chat_tools(),
-            "thinking": {"type": "adaptive"},
+            "thinking": _thinking_param(),
             "output_config": {"effort": settings.INTERVIEW_EFFORT},
         }
 
@@ -473,19 +607,30 @@ def stream_user_turn(
     usage_totals: dict[str, int] = {}
     try:
         client = get_client()
+        resumed_from_pause = False
         for _round in range(MAX_TOOL_ROUNDS):
             check_session()
-            with client.messages.stream(**request_kwargs()) as stream:
-                for delta in stream.text_stream:
-                    if delta:
-                        yield {"type": "text_delta", "text": delta}
+            # Never dead air between rounds: from send to first token there is
+            # always a live status. A pause_turn resume keeps server work
+            # visible as "searching" rather than a generic "working".
+            yield {
+                "type": "status",
+                "kind": "searching" if resumed_from_pause else "working",
+                "round": _round,
+            }
+            resumed_from_pause = False
+            manager, stream = _enter_stream(
+                client, request_kwargs(), trace_handle
+            )
+            try:
+                yield from _stream_events(stream)
                 final = stream.get_final_message()
+            finally:
+                manager.__exit__(None, None, None)
 
             _merge_usage(usage_totals, getattr(final, "usage", None))
             content = _content_blocks_to_dicts(final.content)
             stop_reason = final.stop_reason
-            for event in _web_activity_events(content):
-                yield event
 
             if stop_reason == "pause_turn":
                 # Long server-tool work paused server-side: re-send the
@@ -493,6 +638,7 @@ def stream_user_turn(
                 # thinking blocks included) and stream again — no
                 # synthetic user turn, no tool results.
                 new_messages.append({"role": "assistant", "content": content})
+                resumed_from_pause = True
                 continue
             if stop_reason != "tool_use":
                 # A truncated response (e.g. max_tokens) can still carry
@@ -559,6 +705,11 @@ def stream_user_turn(
         # Runs on every exit — including GeneratorExit when the SSE client
         # disconnects mid-stream, which no except clause above can see.
         # Anything short of a committed turn rolls the document back.
+        session.turn_active = False
+        # The spend is real even on a failed turn — record it (unless a
+        # reset/load raced in, whose fresh ledger must not inherit it).
+        if session.generation == generation:
+            session.usage.add("interview", usage_totals, count_turn=True)
         if not committed:
             session.doc.rollback_turn()
             _trace.turn_end(

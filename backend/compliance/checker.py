@@ -39,6 +39,7 @@ from ..research.retry_policy import (
 from ..research.schema import extract_tool_use_block
 from ..spec_doc.model import SpecSection
 from ..spec_modules import SpecModule
+from ..usage_ledger import usage_to_dict
 
 COMPLIANCE_TOOL_NAME = "submit_compliance_audit"
 
@@ -492,5 +493,6 @@ def run_compliance_audit(
             )
         result = _normalize_result(payload, profile)
         result["parse_source"] = parse_source
+        result["usage"] = usage_to_dict(getattr(response, "usage", None))
         return result
     raise ComplianceAuditError(last_error)

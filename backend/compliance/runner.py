@@ -44,6 +44,7 @@ class AuditRunner:
         max_tokens: int,
         version_index: int,
         on_settled: Callable[[], None] | None = None,
+        usage_sink: Callable[[dict], None] | None = None,
     ) -> bool:
         """Audit ``section`` (a deep-copied snapshot) on a daemon thread."""
         with self._lock:
@@ -87,8 +88,18 @@ class AuditRunner:
                     trace_handle, status=STATUS_FAILED, error=message
                 )
             else:
+                # Billed usage rides the outcome out of the checker; keep it
+                # out of the persisted/displayed result and hand it to the
+                # meter BEFORE flipping to terminal (a status poller that sees
+                # "complete" must find the ledger already updated).
+                run_usage = outcome.pop("usage", {})
                 outcome["audited_at"] = time.strftime("%Y-%m-%d %H:%M")
                 outcome["version_index"] = version_index
+                if usage_sink is not None:
+                    try:
+                        usage_sink(run_usage)
+                    except Exception:  # noqa: BLE001 — metering never sinks an audit
+                        pass
                 with self._lock:
                     self.status = STATUS_COMPLETE
                     self.result = outcome

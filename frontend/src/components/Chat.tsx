@@ -13,13 +13,26 @@ export default function Chat({ messages, busy, onSend }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
 
-  // Stay pinned to the bottom while streaming unless the user scrolled up.
+  // Stay pinned to the bottom on new messages unless the user scrolled up.
   useEffect(() => {
     const el = scrollRef.current;
     if (el && pinnedRef.current) {
       el.scrollTop = el.scrollHeight;
     }
   }, [messages]);
+
+  // While a turn streams, the smoothed text grows between message updates
+  // (via requestAnimationFrame inside the bubble), so follow the bottom on
+  // every frame — but only while pinned, never yanking scroll from a reader.
+  useEffect(() => {
+    if (!busy) return;
+    let raf = requestAnimationFrame(function follow() {
+      const el = scrollRef.current;
+      if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+      raf = requestAnimationFrame(follow);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [busy]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -33,6 +46,7 @@ export default function Chat({ messages, busy, onSend }: Props) {
       <div
         ref={scrollRef}
         onScroll={onScroll}
+        style={{ overflowAnchor: "none" }}
         className="flex-1 overflow-y-auto px-5 py-6"
       >
         {messages.length === 0 ? (

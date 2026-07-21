@@ -5,26 +5,20 @@
  * the grounded-citations list when it completes. Ungrounded items are
  * marked [UNVERIFIED]; process advisories are marked [PROCESS] and never
  * become spec text.
+ *
+ * The Phase 5 compliance-audit control moved out of here in Batch 4 — the
+ * Final QC drawer supersedes it (its code_compliance + completeness lenses
+ * cover the audit's ground and more).
  */
 import { useState } from "react";
-import type {
-  AuditCoverageStatus,
-  AuditSnapshot,
-  ResearchRunStatus,
-  ResearchSnapshot,
-  SpecDoc,
-} from "../types";
+import type { ResearchRunStatus, ResearchSnapshot, SpecDoc } from "../types";
 
 interface Props {
   doc: SpecDoc | null;
   profileComplete: boolean;
   research: ResearchSnapshot | null;
-  audit: AuditSnapshot | null;
-  canAudit: boolean;
   busy: boolean;
   onStart: () => void;
-  onStartAudit: () => void;
-  onJump: (elementId: string) => void;
 }
 
 const statusLabel: Record<ResearchRunStatus, string> = {
@@ -45,23 +39,12 @@ function profileLine(doc: SpecDoc | null): string {
     .join(" — ");
 }
 
-const coverageChip: Record<AuditCoverageStatus, string> = {
-  represented: "border-ok/50 bg-ok/15 text-ok",
-  missing: "border-err/50 bg-err/15 text-err",
-  contradicted: "border-err/50 bg-err/15 text-err",
-  unclear: "border-warn/50 bg-warn/15 text-warn",
-};
-
 export default function ResearchDrawer({
   doc,
   profileComplete,
   research,
-  audit,
-  canAudit,
   busy,
   onStart,
-  onStartAudit,
-  onJump,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const status: ResearchRunStatus = research?.status ?? "idle";
@@ -70,12 +53,6 @@ export default function ResearchDrawer({
   const grounded = items.filter((i) => i.grounded).length;
   const profile = profileLine(doc);
   const lastEvent = research?.events[research.events.length - 1];
-  const auditStatus = audit?.status ?? "idle";
-  const auditResult = audit?.result;
-  const auditStale =
-    auditResult != null &&
-    doc != null &&
-    auditResult.version_index !== doc.version.index;
 
   if (!profile && status === "idle") return null;
 
@@ -113,85 +90,10 @@ export default function ResearchDrawer({
         >
           {status === "complete" ? "Re-research" : "Research requirements"}
         </button>
-        <button
-          className="shrink-0 rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
-          onClick={onStartAudit}
-          disabled={!canAudit || auditStatus === "running" || busy}
-          title={
-            canAudit
-              ? "Audit the draft against the researched requirements (uses your API key)"
-              : "Needs a completed research run and a non-empty draft"
-          }
-        >
-          {auditStatus === "running"
-            ? "Auditing…"
-            : auditResult
-              ? "Re-audit"
-              : "Audit draft"}
-        </button>
       </div>
 
       {status === "failed" && research?.error && (
         <p className="mt-1 text-[11px] text-err">{research.error}</p>
-      )}
-      {auditStatus === "failed" && audit?.error && (
-        <p className="mt-1 text-[11px] text-err">Audit: {audit.error}</p>
-      )}
-
-      {auditResult && (
-        <div className="mt-1.5 border-t border-edge/60 pt-1.5">
-          <p className="text-[11px] text-ink-faint">
-            Compliance audit — {auditResult.audited_at} (v
-            {auditResult.version_index + 1})
-            {auditStale && (
-              <span className="ml-1 font-semibold text-warn">
-                · stale (draft has changed — re-audit)
-              </span>
-            )}
-          </p>
-          <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
-            {auditResult.coverage.map((entry) => (
-              <li
-                key={entry.requirement_id}
-                className="flex items-baseline gap-2 text-[11px]"
-              >
-                <span
-                  className={`shrink-0 rounded border px-1 py-px text-[9px] font-semibold uppercase ${coverageChip[entry.status]}`}
-                >
-                  {entry.status}
-                </span>
-                <button
-                  className="min-w-0 truncate text-left text-ink-dim hover:text-ink"
-                  onClick={() =>
-                    entry.element_id && onJump(entry.element_id)
-                  }
-                  title={entry.evidence_quote || entry.note}
-                >
-                  [{entry.requirement_id}] {entry.note || entry.evidence_quote}
-                </button>
-              </li>
-            ))}
-            {auditResult.findings.map((finding, i) => (
-              <li
-                key={`f-${i}`}
-                className="flex items-baseline gap-2 text-[11px]"
-              >
-                <span className="shrink-0 rounded border border-err/50 bg-err/15 px-1 py-px text-[9px] font-semibold text-err uppercase">
-                  {finding.severity}
-                </span>
-                <button
-                  className="min-w-0 truncate text-left text-ink-dim hover:text-ink"
-                  onClick={() =>
-                    finding.element_id && onJump(finding.element_id)
-                  }
-                  title={finding.suggestion || finding.issue}
-                >
-                  {finding.issue}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
       )}
 
       {expanded && research && (

@@ -1,14 +1,69 @@
 # Build-a-Spec
 
-**v0.8.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v0.9.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First target domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## Current Status — v0.8.0 (Batch 3: full-section draft + the review queue)
+## Current Status — v0.9.0 (Batch 4: Final QC on Fable 5)
 
-**Two on-ramps, one review surface.** Whether a section starts from a blank
+**One button, a fleet of Fable 5 reviewers, an accept/dismiss fix queue, and
+a signed-off QC memo.** The one place a model other than Sonnet 5 appears:
+a user-triggered, spare-no-expense last quality-control pass before a section
+goes out the door. The output isn't a report to read — it's a set of
+*verified* findings, each with a ready-to-apply fix, in an accept/dismiss
+queue.
+
+- **Five lenses, in parallel, on the strongest model.** "Send to Final QC"
+  fans out five independent Fable 5 reviews of the whole section: **code
+  compliance** (verifies every citation/edition against the standards'
+  *actual current content* via web search — the big search allowance),
+  **coordination & consistency** (PART 1/2/3 alignment, dangling
+  cross-references, terminology drift), **completeness** (versus the grounded
+  research profile and conventional section scope), **enforceability &
+  language** (imperative mood, measurable criteria, no "as required"), and
+  **provenance hygiene** (risky `assumed` blocks, surviving TBD/imported,
+  provisions citing `[UNVERIFIED]` items). One lens failing never cancels the
+  others; all five failing fails clean.
+- **Adversarial verification — no plausible-but-wrong noise reaches you.**
+  Every candidate finding faces a panel of independent Fable 5 refuters
+  prompted to *refute* it (2 for medium/low, 3 for critical/high). A tie goes
+  to the refuters — only real, actionable defects survive; refuted findings
+  are kept in a collapsed appendix for transparency, never shown as issues.
+  This is the "as many agents as necessary" clause: total calls = 5 lenses +
+  Σ panel sizes, with no cap on findings count (the runaway guards are
+  per-call).
+- **Accept the fix, or dismiss it — and dismiss decisions survive re-runs.**
+  Each surviving finding whose fix is a clean mechanical edit carries
+  `apply_spec_edits` ops, dry-run-validated against a document snapshot.
+  **Apply fix** edits the document exactly as previewed, in **one undo step**
+  (re-validated against the *current* doc first — a fix whose target moved is
+  reported `stale` and skipped, never partially applied). **Dismiss** (with an
+  optional reason) is remembered by content-addressed id, so a re-run that
+  regenerates the same finding auto-marks it dismissed. An "Apply all
+  criticals" press-and-hold handles the urgent set at once.
+- **Issue readiness — the "can it go out the door" screenshot moment.** A
+  deterministic checklist (no model call) at the top of the QC drawer goes
+  green exactly when: no open items, no unreviewed imported/assumed blocks,
+  lint clean, research complete, and QC current with no open criticals.
+- **The QC memo a reviewer signs off on.** A standalone `.docx` export:
+  project/section header, model + date + document version (with a staleness
+  note when the draft has moved on), findings by severity with element refs /
+  rationale / sources / disposition, and the refuted appendix. The main spec
+  export's closing section now shows the QC summary when one exists (falling
+  back to the compliance audit otherwise).
+- **No dead air — a QC run takes minutes and shows it.** The drawer streams
+  lens-by-lens status and a live "Verifying findings… (7/12)" counter over the
+  same SSE machinery the research phase uses; the header spend ticker moves as
+  the run streams.
+- **Migration note:** the QC `code_compliance` + `completeness` lenses
+  supersede the Phase 5 compliance audit. The audit button is retired from the
+  UI (the Research drawer keeps research only); the `/api/audit/*` endpoints
+  and runner remain (deprecated) so nothing breaks.
+
+Shipped in v0.8.0 (Batch 3: full-section draft + the review queue) and still
+current — **two on-ramps, one review surface.** Whether a section starts from a blank
 page or from an imported office master, you now converge on the same place: a
 complete draft, then a guided block-by-block walk to reviewed status.
 From-scratch drafting is a first-class path, not the fallback.
@@ -165,8 +220,17 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/draft/full, /api/doc (+ undo/redo/edit),
                          /api/export/docx, /api/import/master,
                          /api/research/start|status|stream,
-                         /api/audit/start|status, /api/update/check|install,
+                         /api/qc/start|status|stream|apply|dismiss|export,
+                         /api/readiness, /api/audit/* (deprecated),
+                         /api/update/check|install,
                          /api/trace/viewer, /api/project/save + load
+  qc/
+    schema.py            QC lens definitions + submit_qc_findings/verdict strict
+                         tools + finding/verdict normalization
+    engine.py            run_final_qc: lens fan-out -> adversarial verification
+                         -> ops validation -> QCResult  [pattern: research/engine.py]
+    runner.py            session-bound QC lifecycle: daemon thread, event log,
+                         SSE follow                       [pattern: research/runner.py]
   settings.py            models (interview + research), ports, env overrides,
                          frozen-app path resolution
   updates.py             GitHub-Releases manifest updater: https-only fetch,
@@ -199,7 +263,7 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
     schema.py            submit_requirements_research strict tool + web server-tool
                          builders + domain blocklist              [ported from Spec Critic]
     runner.py            session-bound background run: thread, event log, SSE follow
-  compliance/
+  compliance/            [deprecated — superseded by qc/; endpoints retained]
     checker.py           the audit call: controlling-set rules, coverage matrix,
                          strict tool + fallback              [ported from Spec Critic]
     runner.py            session-bound audit lifecycle (thread + status)
@@ -221,9 +285,9 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
     linting.py           deterministic lint: stale editions, placeholders, structure
                                                                   [ported from Spec Critic]
     docx_export.py       .docx rendering + assumptions/imported/open-items
-                         schedules + compliance closing section
+                         schedules + QC/compliance closing + the QC memo
     project.py           JSON project files: save/resume, chat transcript, module id,
-                         requirements profile, audit result
+                         requirements profile, audit result, QC result
   llm/
     client.py            Anthropic client factory (monkeypatch seam for tests)
     prompts.py           engine prompt protocol + module-rendered system prompt
@@ -233,19 +297,20 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          block (full document + lint + research), incremental
                          history caching, per-turn usage aggregation
 frontend/                Vite + React + TypeScript + Tailwind v4
-  src/App.tsx            state owner: chat + document + lint + research + audit +
-                         update + SSE dispatch
+  src/App.tsx            state owner: chat + document + lint + research + QC +
+                         readiness + update + SSE dispatch
   src/lib/api.ts         SSE parsing over fetch; doc/undo/edit/draft-full/project/
-                         research/import/audit/update calls
+                         research/import/qc/readiness/update calls
   src/lib/reviewQueue.ts buildQueue(doc, mode): the review queue as a pure
                          document-order walk (port of iter_paragraphs)
   src/components/        Chat, MessageBubble (markdown), Composer (ask-model prefill),
-                         Header (update pill), ApiKeyBanner,
+                         Header (spend ticker + update pill), ApiKeyBanner,
                          ArtifactPanel (stepper, export, import, "Draft full section",
                          open items), ReviewDrawer (keyboard review walk),
                          IssuesDrawer (lint + standards strip),
-                         ResearchDrawer (profile, research, audit coverage),
-                         SpecDocument (SectionFormat rendering + badges + ◆ chips)
+                         ResearchDrawer (profile + research),
+                         QCDrawer (readiness checklist, lens progress, accept/dismiss
+                         fix queue), SpecDocument (SectionFormat rendering + ◆ chips)
 packaging/windows/       build-a-spec.spec (PyInstaller), installer.iss (Inno),
                          app_entry.py (--version/--selfcheck), make_manifest.py,
                          check_release_version.py       [cloned from Spec Critic]
@@ -318,6 +383,15 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `xhigh` | Adaptive-thinking effort for research dimensions. |
+| `BUILD_A_SPEC_QC_MODEL` | `claude-fable-5` | Model for the Final QC pass (the one non-Sonnet surface). |
+| `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Per-call QC output ceiling (model max — no app limit). |
+| `BUILD_A_SPEC_QC_EFFORT` | `xhigh` | Adaptive-thinking effort for QC lenses/verifiers. |
+| `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings. |
+| `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings. |
+| `BUILD_A_SPEC_QC_MAX_SEARCHES_COMPLIANCE` | `24` | web_search allowance for the code-compliance lens (runaway guard). |
+| `BUILD_A_SPEC_QC_MAX_SEARCHES_LENS` | `8` | web_search allowance for the other lenses + verifiers. |
+| `BUILD_A_SPEC_QC_MAX_FETCHES_COMPLIANCE` | `8` | web_fetch allowance for the code-compliance lens. |
+| `BUILD_A_SPEC_QC_MAX_FETCHES_LENS` | `4` | web_fetch allowance for the other lenses + verifiers. |
 | `BUILD_A_SPEC_PORT` | `8756` | Backend port (127.0.0.1 only). |
 | `BUILD_A_SPEC_DEV` | off | Point the window at the Vite dev server. |
 | `BUILD_A_SPEC_TRACE` | on | Session tracing (JSONL spans/events, local-only). `0` disables. |

@@ -62,6 +62,7 @@ from ..spec_doc import (
     outline,
 )
 from ..compliance import AuditRunner
+from ..qc import QCRunner
 from ..research import ResearchRunner, research_context_block
 from ..research.resend_sanitizer import (
     elide_all_pdf_sources,
@@ -117,6 +118,9 @@ class SessionState:
     module: SpecModule = field(default_factory=lambda: get_module(None))
     research: ResearchRunner = field(default_factory=ResearchRunner)
     audit: AuditRunner = field(default_factory=AuditRunner)
+    # Final QC on Fable 5 (Batch 4). Replaced on reset/load like the other
+    # runners so an in-flight run settles into the abandoned object.
+    qc: QCRunner = field(default_factory=QCRunner)
     # Session-scoped billed-usage meter (WI4). Reset/load clear it.
     usage: UsageLedger = field(default_factory=UsageLedger)
     # True while a model turn owns the document store (WI2). Manual edits are
@@ -131,6 +135,7 @@ class SessionState:
         # finishes into the abandoned objects (the zombie-turn pattern).
         self.research = ResearchRunner()
         self.audit = AuditRunner()
+        self.qc = QCRunner()
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()

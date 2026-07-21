@@ -146,7 +146,7 @@ REQUIREMENTS_RESEARCH_SCHEMA: dict[str, Any] = {
 # ``strict: true`` only for these; an env-overridden unknown model gets the
 # lenient tool shape — a smaller safe request, never a 400.
 _STRICT_CAPABLE_MODELS = frozenset(
-    {settings.MODEL_SONNET_5, settings.MODEL_OPUS_48}
+    {settings.MODEL_SONNET_5, settings.MODEL_OPUS_48, settings.MODEL_FABLE_5}
 )
 
 

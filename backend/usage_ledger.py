@@ -63,6 +63,7 @@ def _category_models() -> dict[str, str]:
         "interview": settings.INTERVIEW_MODEL,
         "research": settings.RESEARCH_MODEL,
         "audit": settings.RESEARCH_MODEL,
+        "qc": settings.QC_MODEL,
     }
 
 

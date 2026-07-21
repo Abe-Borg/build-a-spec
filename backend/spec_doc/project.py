@@ -21,6 +21,7 @@ def save_project(
     module_id: str = "",
     requirements_profile: dict[str, Any] | None = None,
     audit_result: dict[str, Any] | None = None,
+    qc_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -34,6 +35,8 @@ def save_project(
         payload["requirements_profile"] = requirements_profile
     if audit_result:
         payload["audit_result"] = audit_result
+    if qc_result:
+        payload["qc_result"] = qc_result
     return payload
 
 
@@ -112,6 +115,7 @@ def load_project(data: Any, session) -> None:
     # degrades to "not researched" rather than failing the load (the doc
     # and history are the load-bearing content).
     from ..compliance import AuditRunner
+    from ..qc import QCResult, QCRunner
     from ..research import RequirementsProfile, ResearchRunner
 
     session.research = ResearchRunner()
@@ -122,6 +126,12 @@ def load_project(data: Any, session) -> None:
     audit_result = data.get("audit_result")
     if isinstance(audit_result, dict) and audit_result.get("coverage"):
         session.audit.restore(audit_result)
+    # A completed Final-QC result rides the project file the same way; a
+    # malformed one degrades to "not run" rather than failing the load.
+    session.qc = QCRunner()
+    restored_qc = QCResult.from_dict(data.get("qc_result"))
+    if restored_qc is not None:
+        session.qc.restore(restored_qc)
     # The meter is per-session; a resumed project starts its own count (the
     # prior session's spend lives in that session's traces, not this file).
     session.usage.reset()

@@ -36,7 +36,9 @@ backend/
                            port 8756, env knobs
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
                            /api/draft/full (Batch 3 directive); doc/undo/redo/edit,
-                           docx export, project save/load endpoints
+                           docx export, project save/load endpoints; Batch 4 adds
+                           /api/qc/start|status|stream|apply|dismiss|export +
+                           /api/readiness (audit endpoints kept, deprecated)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides);
@@ -70,7 +72,22 @@ backend/
                            unclear, always complete); strict tool + tagged
                            fallback; single streaming call, no chunking
   compliance/runner.py     AuditRunner: thread/status; result stamps
-                           audited_at + version_index (staleness marker)
+                           audited_at + version_index (staleness marker).
+                           DEPRECATED (Batch 4): the qc/ code_compliance +
+                           completeness lenses supersede it; endpoints retained
+  qc/schema.py             [Batch 4] QCLens defs (5 lenses) + submit_qc_findings /
+                           submit_qc_verdict strict tools (strict conventions from
+                           research/schema; Fable added to _STRICT_CAPABLE_MODELS) +
+                           findings/verdict normalization + median-severity math
+  qc/engine.py             [Batch 4, pattern: research/engine.py] run_final_qc:
+                           lens fan-out (ThreadPool cap 4, pause_turn loop, 2×
+                           search ceiling, PDF elision, retry policy, grounding) →
+                           adversarial verification panel (tie→refuters) → ops
+                           dry-run validation → QCResult (content-addressed
+                           findings, dismiss memory)
+  qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
+                           daemon thread, event log, snapshot, SSE follow +
+                           stream_end; accept/dismiss mutators under lock
   tracing/                 [PORT: Spec Critic src/tracing/ core ≈verbatim]
                            recorder (JSONL spans/events/prompts + run.json,
                            writer thread, ContextVar parents), spans (BAS
@@ -85,7 +102,8 @@ backend/
                            research/audit), thread-safe, cost estimate from
                            settings.PRICING; not persisted (per-session meter)
   sessions.py              single module-level SessionState (history + DocumentStore
-                           + SpecModule + ResearchRunner + UsageLedger)
+                           + SpecModule + ResearchRunner + AuditRunner + QCRunner
+                           + UsageLedger)
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint
                            vocabulary, dormant research dimensions); import-time
@@ -111,9 +129,11 @@ backend/
                            deterministic advisory lint: stale editions vs effective
                            pins (negation suppression), placeholders/markers,
                            empty/duplicate articles, unset header
-  spec_doc/docx_export.py  python-docx rendering + assumptions/open-items schedules
+  spec_doc/docx_export.py  python-docx rendering + assumptions/open-items schedules;
+                           Batch 4 adds build_qc_memo (standalone QC memo) + a QC
+                           closing that supersedes the audit closing in build_docx
   spec_doc/project.py      JSON project files (save/resume) + chat transcript +
-                           module_id
+                           module_id + audit_result + qc_result
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
                            FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message)
@@ -121,10 +141,12 @@ backend/
                            lint event + standards_payload
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
-                           standards, changed ids, health, usage, settings-open,
-                           send loop (SSE switch incl. status/thinking_delta)
+                           standards, changed ids, health, usage, qc, readiness,
+                           settings-open, send loop (SSE switch incl.
+                           status/thinking_delta); QC follow-stream + accept/dismiss
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
-                           draftFull; key status/delete/test; usage
+                           draftFull; key status/delete/test; usage; Batch 4 qc
+                           start/status/stream/apply/dismiss + readiness
   lib/useSmoothText.ts     [Batch 2] rAF typewriter smoothing + reduced-motion +
                            splitStableTail (cheap-markdown prefix/tail split)
   lib/reviewQueue.ts       [Batch 3] pure buildQueue(doc, mode) — the review
@@ -134,10 +156,14 @@ frontend/src/
                            Composer (WI2 ask-model prefill) / ArtifactPanel (stepper,
                            export, save/open, ⚠ badge, "Draft full section" button,
                            open items) / ReviewDrawer (Batch 3 keyboard review walk) /
-                           IssuesDrawer (lint + StandardsStrip) / SpecDocument (paper
-                           rendering + inline manual-edit affordances) / Header (spend
-                           ticker) / ApiKeyBanner / StatusStrip (live status strip) /
-                           SettingsPanel (key mgmt + usage table + about)
+                           IssuesDrawer (lint + StandardsStrip) / ResearchDrawer
+                           (research only — audit UI retired in Batch 4) / QCDrawer
+                           (Batch 4: readiness checklist, lens progress, accept/dismiss
+                           fix queue, hold-to-apply-criticals, refuted appendix) /
+                           SpecDocument (paper rendering + inline manual-edit
+                           affordances) / Header (spend ticker) / ApiKeyBanner /
+                           StatusStrip (live status strip) / SettingsPanel (key mgmt +
+                           usage table + about)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
   conftest.py              hermetic env + fresh session per test
@@ -149,6 +175,10 @@ tests/
   test_standards.py        pins, overrides, rendering helpers
   test_spec_modules.py     registry-validation failure modes
   test_linting.py          every lint rule + suppression + override interplay
+  test_qc.py               [Batch 4] lens fan-out, adversarial verification (tie
+                           kills, median severity), ops validation, apply (one undo
+                           step + stale skip), dismiss memory, runner lifecycle,
+                           readiness, memo export, Fable-priced usage
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -188,6 +218,22 @@ the run's event log from seq 0 and follows until terminal, closing with a
 `stream_end` sentinel (event types: `research_started`,
 `dimension_complete`, `dimension_failed`, `research_complete`,
 `research_failed`).
+
+Final QC (Batch 4) has the same channel shape (a QC run also outlives a
+chat turn): `POST /api/qc/start` (400 empty draft / no key; 409 while a turn
+streams or QC runs — research is NOT required), `GET /api/qc/status`
+(snapshot: status/error/events/result view), `GET /api/qc/stream` (replay +
+follow + `stream_end`; event types `qc_started`, `lens_complete`,
+`lens_failed`, `verify_progress` {done,total}, `qc_complete`, `qc_failed`),
+`POST /api/qc/apply` (`{finding_ids}` → one undoable version; per-finding
+`applied`/`stale`/`no_ops`/`unknown` outcomes; 409 while a turn streams),
+`POST /api/qc/dismiss` (`{finding_id, reason?}` → remembered by
+content-addressed id across re-runs), and `GET /api/qc/export` (the
+standalone QC memo `.docx`). `GET /api/readiness` is a deterministic
+checklist (no model call): `{checks: [{id, ok, detail, advisory}], ready}`
+— `ready` = all non-advisory checks ok (no open items, no unreviewed
+imported/assumed, lint clean, research complete, QC current with no open
+criticals; `profile_complete` is advisory).
 
 ## Conversation engine invariants
 
@@ -447,11 +493,11 @@ Interview policy (decided 2026-07-21, conversation w/ Abraham):
   options with plain-language tradeoffs (novices pick, experts type). Plus
   an "explain why you're asking" affordance on any question.
 - **Model routing (revised 2026-07-21, w/ Abraham).** Everything runs on
-  Sonnet 5 — no user-facing model picker, ever. The one planned exception
-  is the future "Final QC" pass: a user-triggered, spare-no-expense
-  multi-agent review on Fable 5 (`claude-fable-5`) before a section goes
-  out the door. The `stream_user_turn(model=...)` override remains the
-  seam for it.
+  Sonnet 5 — no user-facing model picker, ever. The one exception is the
+  "Final QC" pass (shipped Batch 4, v0.9.0): a user-triggered,
+  spare-no-expense multi-agent review on Fable 5 (`claude-fable-5`) before a
+  section goes out the door. It runs on its own channel (`backend/qc/`),
+  NOT through `stream_user_turn` — the interview loop stays Sonnet-only.
 
 ## Batch 2 — implemented notes (v0.7.0: streaming UX, editing, settings, meter)
 
@@ -564,6 +610,83 @@ status. Frozen decisions honored throughout.
   → Composer; the drawer stays open and recomputes when the turn completes.
 - **No new SSE events, no new env vars, no new Python deps.** Only new REST
   route: `POST /api/draft/full`.
+
+## Batch 4 — implemented notes (v0.9.0: Final QC on Fable 5)
+
+The one place a model other than Sonnet 5 appears (frozen decision):
+`settings.QC_MODEL` defaults to `MODEL_FABLE_5` ("claude-fable-5"), added to
+`schema._STRICT_CAPABLE_MODELS`. Fable 5's adaptive thinking is always-on;
+QC requests state `thinking: {type: adaptive}` + `output_config.effort`
+(`QC_EFFORT`, default xhigh) — never a manual budget (a `{type: disabled}`
+would 400; the engine never sends it). Pricing was already in the Batch 2
+table ($10/$50; VERIFIED against the claude-api reference 2026-07).
+
+- **`backend/qc/` is a structural clone of `research/`** (the port plan is
+  complete; QC is native Build-a-Spec, not a Spec Critic port). `engine.py`
+  lifts the streaming shape from `research/engine._run_dimension`
+  verbatim-in-shape: one synchronous `run_final_qc`, ThreadPoolExecutor cap
+  4, the `pause_turn` continuation loop, the 2× search-budget runaway
+  ceiling, `sanitize_messages_for_resend` PDF elision on resume, and the
+  ported realtime retry policy with cross-attempt billed-usage aggregation.
+  `runner.py` is `ResearchRunner` re-typed for QC (daemon thread, event log,
+  snapshot, replay-and-follow SSE with `stream_end`, zombie-run abandonment
+  on reset/load, meter-before-terminal-flip).
+- **Three phases.** (1) Five lenses (`code_compliance`,
+  `coordination_consistency`, `completeness`, `enforceability_language`,
+  `provenance_hygiene`) fan out over the full `outline(section,
+  max_text=None)` rendering + standards block + research profile + the lens
+  brief; only `code_compliance` gets web tools (the big search allowance) —
+  the rest reason from the document. One lens failing never cancels the
+  others; all five failing raises `QCFanoutError` (run fails clean).
+  Findings are grounded against retrieved URLs (`validate_cited_sources`,
+  same trust model as research). (2) Every finding faces a panel of
+  independent refuters (`QC_VERIFIERS_STANDARD` 2 for medium/low,
+  `QC_VERIFIERS_CRITICAL` 3 for critical/high); survives iff `upholds >=
+  size//2 + 1` (**a tie goes to the refuters**; a dead verifier counts as a
+  non-uphold — default-refuted). Verifications for all findings flatten into
+  ONE thread pool (per-`(finding, verifier)` task); `verify_progress`
+  {done,total} fires as each finding's panel resolves. Surviving severity =
+  `median_severity([original, *upheld revisions])`. Refuted findings are
+  retained under `QCResult.refuted` (transparency, never shown as issues).
+  (3) Deterministic ops validation: each surviving finding's `proposed_ops`
+  is dry-run via `apply_edits(deepcopy(snapshot))` (copy per finding — they
+  never see each other's effects); invalid → `ops_valid=False` +
+  `ops_invalid_reason`, kept advisory, never trusted raw.
+- **Content-addressed findings + dismiss memory.** `finding_id = qc- +
+  sha256((lens, element_id, title, issue))[:12]`. The runner captures the
+  prior result's `dismissed_ids` before `start()` clears it and threads them
+  as `remembered_dismissed`; a re-generated finding whose id matches
+  auto-marks `dismissed`. Dismiss decisions survive re-runs and the project
+  file.
+- **Apply is one undo step, staleness-safe.** `POST /api/qc/apply`
+  re-validates each finding's ops onto an ACCUMULATING working copy of the
+  CURRENT doc (so the combined batch is guaranteed to replay); a finding
+  whose target moved raises `SpecEditError` on the working copy → reported
+  `stale`, skipped, never partially applied. The combined batch commits as
+  one `begin_turn`/`apply_edits`/`commit_turn` (one undo snapshot for the
+  whole accept-set); a generation-race after begin rolls back.
+- **QC audits a SNAPSHOT** (`SpecSection.from_dict(doc.to_dict())` at start)
+  so a streaming turn can't mutate the tree under the call — the audit's
+  anti-mutation pattern. `version_index` stamps the reviewed version →
+  staleness marker in the drawer / memo / readiness gate.
+- **Migration — the compliance audit is deprecated.** The `code_compliance`
+  + `completeness` lenses supersede it. The audit BUTTON is retired from the
+  UI (`ResearchDrawer` is research-only; the frontend no longer calls
+  `/api/audit/*`); the endpoints + `AuditRunner` remain untouched. The main
+  export closing renders the QC summary when a QC result exists, else falls
+  back to the audit closing (`build_docx(..., qc_result=...)`).
+- **Persistence + serialization.** `QCResult.to_dict`/`from_dict` round-trip
+  the full result; `spec_doc/project.py` gains a `qc_result` field restored
+  via `QCRunner.restore` (same as the audit's). `usage_ledger` gains a `qc`
+  category priced on `QC_MODEL`.
+- **Tracing.** A `qc` span (`KIND_QC`) with mirrored `qc_progress` events;
+  hooks never raise (`capture.qc_start/qc_event/qc_end`).
+- **Deliberate non-ports.** Server-side refusal `fallbacks` (recommended for
+  Fable 5 by the claude-api skill) is NOT wired: it needs the beta endpoint
+  and is out of the batch's plan scope; a refusal surfaces as an incomplete
+  stop_reason → the lens fails clean under the existing failure policy.
+  Fable 5 requires 30-day data retention — a ZDR org 400s every QC request
+  (operational caveat, not a code concern).
 
 ## Commands
 

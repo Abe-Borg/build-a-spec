@@ -265,6 +265,102 @@ export interface AuditSnapshot {
   result?: AuditResult;
 }
 
+/* --- Final QC (Batch 4) --- */
+
+export type QcRunStatus = "idle" | "running" | "complete" | "failed";
+export type Severity = "critical" | "high" | "medium" | "low";
+export type QcFindingStatus = "open" | "applied" | "dismissed";
+
+export interface QcVerdict {
+  upholds: boolean;
+  revised_severity: string;
+  note: string;
+}
+
+export interface QcFinding {
+  finding_id: string;
+  lens_id: string;
+  severity: Severity;
+  element_id: string;
+  title: string;
+  issue: string;
+  rationale: string;
+  source_urls: string[];
+  accepted_sources: string[];
+  grounded: boolean;
+  proposed_ops: Record<string, unknown>[];
+  ops_valid: boolean;
+  ops_invalid_reason: string;
+  verdicts: QcVerdict[];
+  status: QcFindingStatus;
+  dismiss_reason: string;
+}
+
+export interface QcLensStatus {
+  lens_id: string;
+  title: string;
+  status: string;
+  finding_count: number;
+  grounded_count: number;
+  error: string;
+}
+
+export interface QcResultView {
+  summary: string;
+  findings: QcFinding[];
+  refuted: QcFinding[];
+  lens_statuses: QcLensStatus[];
+  started_at: string;
+  finished_at: string;
+  version_index: number;
+  model: string;
+  usage_totals: Record<string, number>;
+  research_profile_present: boolean;
+  dismissed_ids: string[];
+}
+
+export interface QcEvent {
+  seq: number;
+  ts: string;
+  type: string;
+  lens_id?: string;
+  title?: string;
+  finding_count?: number;
+  grounded_count?: number;
+  error?: string;
+  done?: number;
+  total?: number;
+  lenses?: { lens_id: string; title: string }[];
+  open_criticals?: number;
+  status?: QcRunStatus;
+}
+
+export interface QcSnapshot {
+  status: QcRunStatus;
+  error: string;
+  events: QcEvent[];
+  result?: QcResultView;
+}
+
+export interface QcApplyResult extends DocPayload {
+  ok: boolean;
+  outcomes: Record<string, string>;
+}
+
+/* --- Issue readiness checklist (Batch 4) --- */
+
+export interface ReadinessCheck {
+  id: string;
+  ok: boolean;
+  detail: string;
+  advisory: boolean;
+}
+
+export interface ReadinessPayload {
+  checks: ReadinessCheck[];
+  ready: boolean;
+}
+
 export interface UpdateCheckPayload {
   status: string;
   current: string;

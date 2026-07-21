@@ -74,14 +74,18 @@ def _schedule_table(document, rows: list[tuple[str, str]], headers: tuple[str, s
     return table
 
 
-def build_docx(section: SpecSection, audit_result: dict | None = None) -> bytes:
-    """Render the section; ``audit_result`` adds the compliance closing.
+def build_docx(
+    section: SpecSection,
+    audit_result: dict | None = None,
+    qc_result: dict | None = None,
+) -> bytes:
+    """Render the section; a QC or audit closing carries the review trail.
 
-    ``audit_result`` is the Phase 5 audit dict ``{summary, coverage,
-    findings, audited_at, version_index}`` — rendered as a closing section
-    so the issued package carries the audit trail. The caller passes the
-    session's result regardless of staleness; the rendering states which
-    document version was audited.
+    ``qc_result`` is the Batch 4 Final-QC dict (:meth:`QCResult.to_dict`);
+    ``audit_result`` is the Phase 5 audit dict. When a QC result is present
+    it supersedes the audit closing (the QC lenses cover the audit's ground
+    and more); otherwise the audit closing is rendered as before. The
+    rendering states which document version was reviewed.
     """
     document = Document()
     _style_base(document)
@@ -168,8 +172,11 @@ def build_docx(section: SpecSection, audit_result: dict | None = None) -> bytes:
         ]
         _schedule_table(document, rows, ("Ref", "Open item"))
 
+    # -- Final QC closing (Batch 4) supersedes the audit closing -----------
+    if qc_result and (qc_result.get("findings") or qc_result.get("lens_statuses")):
+        _render_qc_closing(document, qc_result, compact=True)
     # -- compliance audit closing section (Phase 5) ------------------------
-    if audit_result and audit_result.get("coverage"):
+    elif audit_result and audit_result.get("coverage"):
         document.add_page_break()
         _centered(document, "COMPLIANCE AUDIT SUMMARY")
         audited_at = audit_result.get("audited_at", "")
@@ -227,3 +234,179 @@ def export_filename(section: SpecSection) -> str:
         stem += f" - {section.title}"
     stem = re.sub(r'[\\/:*?"<>|]+', "", stem).strip() or "DRAFT SECTION"
     return f"{stem}.docx"
+
+
+# ---------------------------------------------------------------------------
+# Final QC memo (Batch 4)
+# ---------------------------------------------------------------------------
+
+_SEVERITY_ORDER = ("critical", "high", "medium", "low")
+
+
+def _qc_version_note(qc_result: dict) -> str:
+    version_index = qc_result.get("version_index")
+    if isinstance(version_index, int):
+        return f" of document version v{version_index + 1}"
+    return ""
+
+
+def _render_qc_closing(document, qc_result: dict, *, compact: bool) -> None:
+    """The Final-QC section appended to the issued spec (compact form)."""
+    document.add_page_break()
+    _centered(document, "FINAL QC SUMMARY")
+    model = str(qc_result.get("model") or "the QC model")
+    finished = str(qc_result.get("finished_at") or "")
+    document.add_paragraph(
+        f"Final quality-control review{_qc_version_note(qc_result)} by "
+        f"{model} ({finished}). Every finding below survived an adversarial "
+        "verification pass. This summary is advisory and is not a substitute "
+        "for review by a licensed design professional."
+    )
+    summary = str(qc_result.get("summary") or "").strip()
+    if summary:
+        document.add_paragraph(summary)
+
+    findings = qc_result.get("findings") or []
+    open_findings = [f for f in findings if f.get("status") == "open"]
+    if open_findings:
+        rows = [
+            (
+                str(f.get("severity", "")).upper(),
+                (f"[{f.get('element_id')}] " if f.get("element_id") else "")
+                + str(f.get("title", "")),
+            )
+            for f in _sorted_by_severity(open_findings)
+        ]
+        _schedule_table(document, rows, ("Severity", "Open finding"))
+    else:
+        document.add_paragraph("No open findings — every finding was applied or dismissed.")
+
+    if not compact:
+        return
+    applied = sum(1 for f in findings if f.get("status") == "applied")
+    dismissed = sum(1 for f in findings if f.get("status") == "dismissed")
+    document.add_paragraph(
+        f"Disposition: {len(open_findings)} open, {applied} applied, "
+        f"{dismissed} dismissed. "
+        f"{len(qc_result.get('refuted') or [])} finding(s) were refuted in "
+        "verification and are not shown."
+    )
+
+
+def _sorted_by_severity(findings: list[dict]) -> list[dict]:
+    rank = {s: i for i, s in enumerate(_SEVERITY_ORDER)}
+    return sorted(findings, key=lambda f: rank.get(str(f.get("severity")), 99))
+
+
+def build_qc_memo(qc_result: dict, section: SpecSection, *, stale: bool) -> bytes:
+    """The standalone Final-QC memo a senior reviewer signs off on.
+
+    Header (project, section, model, date, doc version ± staleness), the
+    summary, findings by severity with element refs / rationale / sources /
+    disposition, and the refuted appendix. ``stale`` is True when the
+    document has moved on from the version QC reviewed.
+    """
+    document = Document()
+    _style_base(document)
+
+    _centered(document, "FINAL QC REVIEW MEMORANDUM")
+    profile = section.project_profile or {}
+    where = ", ".join(
+        v
+        for v in (
+            profile.get("city"),
+            profile.get("state_or_province"),
+            profile.get("country"),
+        )
+        if v
+    )
+    _centered(
+        document,
+        f"SECTION {section.number or '[TBD]'} — "
+        f"{section.title or '[TBD]'}",
+        bold=False,
+    )
+    header_bits = [
+        b
+        for b in (
+            where,
+            f"Client: {profile['client_name']}" if profile.get("client_name") else "",
+        )
+        if b
+    ]
+    if header_bits:
+        _centered(document, " | ".join(header_bits), bold=False)
+    model = str(qc_result.get("model") or "the QC model")
+    finished = str(qc_result.get("finished_at") or "")
+    document.add_paragraph(
+        f"Reviewed by {model}{_qc_version_note(qc_result)}, {finished}. "
+        "Every finding below survived an adversarial verification panel."
+    )
+    if stale:
+        p = document.add_paragraph()
+        run = p.add_run(
+            "STALE: the document has changed since this QC ran — re-run "
+            "Final QC before relying on this memo."
+        )
+        run.bold = True
+    summary = str(qc_result.get("summary") or "").strip()
+    if summary:
+        document.add_paragraph(summary)
+
+    findings = qc_result.get("findings") or []
+    if not findings:
+        document.add_paragraph("No findings survived verification.")
+    for severity in _SEVERITY_ORDER:
+        band = [f for f in findings if str(f.get("severity")) == severity]
+        if not band:
+            continue
+        _centered(document, f"{severity.upper()} FINDINGS ({len(band)})")
+        for finding in band:
+            _render_memo_finding(document, finding)
+
+    refuted = qc_result.get("refuted") or []
+    if refuted:
+        document.add_page_break()
+        _centered(document, "APPENDIX — REFUTED FINDINGS")
+        document.add_paragraph(
+            "The following candidate findings were raised by a lens but did "
+            "not survive verification. They are recorded for transparency and "
+            "are not open issues."
+        )
+        for finding in refuted:
+            rp = document.add_paragraph(style="List Bullet")
+            rp.add_run(
+                f"[{str(finding.get('severity','')).upper()}] "
+                f"{finding.get('title','')}"
+            )
+
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def _render_memo_finding(document, finding: dict) -> None:
+    p = document.add_paragraph()
+    element = finding.get("element_id")
+    label = f"[{element}] " if element else "[section-level] "
+    p.add_run(f"{label}{finding.get('title', '')}").bold = True
+    disposition = str(finding.get("status") or "open")
+    if disposition != "open":
+        note = document.add_paragraph()
+        run = note.add_run(f"Disposition: {disposition.upper()}")
+        run.italic = True
+        if finding.get("dismiss_reason"):
+            note.add_run(f" — {finding['dismiss_reason']}").italic = True
+    issue = str(finding.get("issue") or "").strip()
+    if issue:
+        document.add_paragraph(f"Issue: {issue}")
+    rationale = str(finding.get("rationale") or "").strip()
+    if rationale:
+        document.add_paragraph(f"Rationale: {rationale}")
+    sources = finding.get("accepted_sources") or []
+    if sources:
+        document.add_paragraph("Sources: " + ", ".join(str(s) for s in sources))
+    elif finding.get("source_urls"):
+        document.add_paragraph(
+            "Cited (unverified): " + ", ".join(str(s) for s in finding["source_urls"])
+        )

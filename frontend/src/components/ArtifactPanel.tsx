@@ -5,15 +5,18 @@
  */
 import { useMemo, useRef } from "react";
 import type {
-  AuditSnapshot,
   EditOp,
   LintIssue,
   OpenItem,
+  QcSnapshot,
+  ReadinessPayload,
   ResearchSnapshot,
   SpecDoc,
   StandardInfo,
+  UsageSummary,
 } from "../types";
 import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
+import QCDrawer from "./QCDrawer";
 import ResearchDrawer from "./ResearchDrawer";
 import ReviewDrawer from "./ReviewDrawer";
 import SpecDocument from "./SpecDocument";
@@ -25,7 +28,9 @@ interface Props {
   standards: StandardInfo[];
   profileComplete: boolean;
   research: ResearchSnapshot | null;
-  audit: AuditSnapshot | null;
+  qc: QcSnapshot | null;
+  readiness: ReadinessPayload | null;
+  usage: UsageSummary | null;
   changedIds: ReadonlySet<string>;
   busy: boolean;
   onUndo: () => void;
@@ -34,7 +39,9 @@ interface Props {
   onLoadProject: (file: File) => void;
   onImportMaster: (file: File) => void;
   onStartResearch: () => void;
-  onStartAudit: () => void;
+  onStartQc: () => void;
+  onApplyQc: (findingIds: string[]) => void;
+  onDismissQc: (findingId: string, reason?: string) => void;
   onDraftFull: () => void;
   onAskModel: (text: string) => void;
 }
@@ -85,7 +92,9 @@ export default function ArtifactPanel({
   standards,
   profileComplete,
   research,
-  audit,
+  qc,
+  readiness,
+  usage,
   changedIds,
   busy,
   onUndo,
@@ -94,7 +103,9 @@ export default function ArtifactPanel({
   onLoadProject,
   onImportMaster,
   onStartResearch,
-  onStartAudit,
+  onStartQc,
+  onApplyQc,
+  onDismissQc,
   onDraftFull,
   onAskModel,
 }: Props) {
@@ -284,11 +295,19 @@ export default function ArtifactPanel({
         doc={doc}
         profileComplete={profileComplete}
         research={research}
-        audit={audit}
-        canAudit={hasContent && research?.status === "complete"}
         busy={busy}
         onStart={onStartResearch}
-        onStartAudit={onStartAudit}
+      />
+
+      <QCDrawer
+        qc={qc}
+        readiness={readiness}
+        doc={doc}
+        busy={busy}
+        usage={usage}
+        onStart={onStartQc}
+        onApply={onApplyQc}
+        onDismiss={onDismissQc}
         onJump={scrollToElement}
       />
 

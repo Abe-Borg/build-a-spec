@@ -403,6 +403,66 @@ def pause_response(
     )
 
 
+def qc_findings_response(
+    lens: str,
+    *,
+    findings: list[dict] | None = None,
+    summary: str = "",
+    searched_urls: list[str] | None = None,
+    stop_reason: str = "tool_use",
+    searches: int | None = None,
+    fetches: int = 0,
+    tokens: dict[str, int] | None = None,
+) -> SimpleNamespace:
+    """A terminal Final-QC lens response: search results + submit_qc_findings.
+
+    ``findings`` are raw payload finding dicts (the engine normalizes them);
+    ``lens`` is only for readability in the test. ``findings=None`` produces a
+    response with NO tool call (a parse-failure case)."""
+    content: list[SimpleNamespace] = []
+    if searched_urls:
+        content.append(search_result_block(searched_urls))
+    if findings is not None:
+        content.append(
+            tool_use_block(
+                "toolu_qc_findings",
+                "submit_qc_findings",
+                {"summary": summary, "findings": findings},
+            )
+        )
+    return SimpleNamespace(
+        content=content,
+        stop_reason=stop_reason,
+        usage=usage(
+            searches if searches is not None else len(searched_urls or []),
+            fetches,
+            **(tokens or {}),
+        ),
+    )
+
+
+def qc_verdict_response(
+    upholds: bool,
+    *,
+    severity: str | None = None,
+    note: str = "",
+    stop_reason: str = "tool_use",
+    tokens: dict[str, int] | None = None,
+) -> SimpleNamespace:
+    """A Final-QC verifier response: a submit_qc_verdict tool call."""
+    return SimpleNamespace(
+        content=[
+            tool_use_block(
+                "toolu_qc_verdict",
+                "submit_qc_verdict",
+                {"upholds": upholds, "revised_severity": severity, "note": note},
+            )
+        ],
+        stop_reason=stop_reason,
+        usage=usage(**(tokens or {})),
+    )
+
+
 class SequencedFakeClient:
     """Fake client whose scripted turns are keyed by dimension.
 

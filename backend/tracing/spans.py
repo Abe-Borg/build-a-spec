@@ -28,6 +28,7 @@ KIND_TOOL_DISPATCH = "tool_dispatch"
 KIND_RESEARCH = "research"
 KIND_RESEARCH_DIMENSION = "research_dimension"
 KIND_COMPLIANCE = "compliance"
+KIND_QC = "qc"
 KIND_IMPORT = "import"
 
 # ---- Event types -------------------------------------------------------

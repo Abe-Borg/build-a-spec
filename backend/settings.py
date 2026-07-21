@@ -17,12 +17,16 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Build-a-Spec"
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 
 # --- Models -----------------------------------------------------------------
 
 MODEL_SONNET_5 = "claude-sonnet-5"
 MODEL_OPUS_48 = "claude-opus-4-8"
+# Batch 4 "Final QC" runs on Fable 5 — the one place a model other than
+# Sonnet 5 appears (frozen decision). Thinking is always-on on Fable 5;
+# requests state adaptive thinking + an effort level, never a manual budget.
+MODEL_FABLE_5 = "claude-fable-5"
 
 INTERVIEW_MODEL_DEFAULT = MODEL_SONNET_5
 INTERVIEW_MODEL = (
@@ -100,6 +104,31 @@ RESEARCH_MAX_TOKENS = _int_env(
 )
 RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "xhigh")
 
+# --- Final QC (Batch 4: spare-no-expense pre-issue review on Fable 5) --------
+
+# The one model other than Sonnet 5 in the app (frozen decision). A
+# user-triggered lens fan-out + adversarial verification pass before a
+# section goes out the door. Fable 5's adaptive thinking is always-on;
+# depth is set via output_config effort (default xhigh — quality over cost).
+QC_MODEL = os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip() or MODEL_FABLE_5
+QC_MAX_TOKENS = _int_env("BUILD_A_SPEC_QC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS)
+QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "xhigh")
+
+# Adversarial verification panel sizes. Medium/low findings face
+# QC_VERIFIERS_STANDARD refuters; critical/high face QC_VERIFIERS_CRITICAL.
+# Majority upholds → the finding survives (a tie goes to the refuters —
+# that is the point of the pass).
+QC_VERIFIERS_STANDARD = _int_env("BUILD_A_SPEC_QC_VERIFIERS_STANDARD", 2)
+QC_VERIFIERS_CRITICAL = _int_env("BUILD_A_SPEC_QC_VERIFIERS_CRITICAL", 3)
+
+# Per-call web allowances (runaway guards, not budgets — env-overridable).
+# The code-compliance lens gets the big search allowance to check standards'
+# actual current content; the other lenses and verifiers get the small one.
+QC_MAX_SEARCHES_COMPLIANCE = _int_env("BUILD_A_SPEC_QC_MAX_SEARCHES_COMPLIANCE", 24)
+QC_MAX_SEARCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_SEARCHES_LENS", 8)
+QC_MAX_FETCHES_COMPLIANCE = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_COMPLIANCE", 8)
+QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4)
+
 # --- Pricing (WI4 cost meter) -----------------------------------------------
 
 # USD per token unless noted. VERIFIED 2026-07 against the claude-api
@@ -123,7 +152,7 @@ PRICING: dict[str, dict[str, float]] = {
         "cache_read": 0.50 / 1_000_000,
         "cache_write": 6.25 / 1_000_000,
     },
-    "claude-fable-5": {
+    MODEL_FABLE_5: {
         "input": 10.0 / 1_000_000,
         "output": 50.0 / 1_000_000,
         "cache_read": 1.00 / 1_000_000,

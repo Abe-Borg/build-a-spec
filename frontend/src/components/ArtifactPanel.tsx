@@ -109,8 +109,14 @@ export default function ArtifactPanel({
             ›
           </button>
           <span className="mx-1 h-4 w-px bg-edge" />
+          {/* Downloads are disabled while a turn streams: mid-turn the live
+              doc holds provisional edits and the version history only holds
+              committed ones — either download would be misleading. */}
           <a
-            className={actionButton + (hasContent ? "" : " pointer-events-none opacity-40")}
+            className={
+              actionButton +
+              (hasContent && !busy ? "" : " pointer-events-none opacity-40")
+            }
             href="/api/export/docx"
             download
             title="Export the section as .docx with the assumptions schedule"
@@ -118,7 +124,9 @@ export default function ArtifactPanel({
             Export .docx
           </a>
           <a
-            className={actionButton}
+            className={
+              actionButton + (busy ? " pointer-events-none opacity-40" : "")
+            }
             href="/api/project/save"
             download
             title="Save the project (conversation + document) as JSON"

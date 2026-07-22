@@ -48,11 +48,16 @@ backend/
                            Batch 6 adds POST /api/onboarding/demo (guided-tour
                            demo directive; 409 unless the document is blank);
                            Batch 7 adds POST /api/chat/stop + /api/research/stop
-                           + /api/qc/stop (409 when nothing is running/streaming)
+                           + /api/qc/stop (409 when nothing is running/streaming);
+                           Batch 8 adds an optional reset body {module_id,
+                           discipline} + GET /api/modules + health.discipline +
+                           a 400 research backstop (generic module, no discipline)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides);
-                           standards_context_block; validate_overrides_shape
+                           standards_context_block; validate_overrides_shape;
+                           Batch 8 adds StandardsBasis.unpinned (sanctioned
+                           pinless basis + its own context-block posture)
   project_profile.py       [PORT: Spec Critic src/core/project_profile.py]
                            ProjectProfile: US/CA tables, country/state
                            normalization, web_search_user_location, fingerprint
@@ -64,7 +69,10 @@ backend/
                            render_text + research_context_block (trim-to-cap);
                            Batch 7 threads a should_stop callback into
                            _run_dimension (checked before each retry/continuation
-                           — cooperative, not mid-call interruption)
+                           — cooperative, not mid-call interruption); Batch 8
+                           threads discipline into the dimension kwargs (set
+                           unconditionally — no KeyError) + the header line
+                           (only when non-empty — curated runs byte-identical)
   research/grounding.py    [PORT: source_grounding.py + verifier collectors]
                            normalize_url, validate_cited_sources, evidence
                            collectors, stop-reason classes
@@ -100,7 +108,9 @@ backend/
                            dry-run validation → QCResult (content-addressed
                            findings, dismiss memory); Batch 7 threads should_stop
                            into _run_lens/_verify_one (same cooperative pattern
-                           as research/engine.py)
+                           as research/engine.py); Batch 8 threads discipline into
+                           the lens user message (<project_discipline>, only when
+                           non-empty)
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
                            daemon thread, event log, snapshot, SSE follow +
                            stream_end; accept/dismiss mutators under lock;
@@ -120,7 +130,8 @@ backend/
                            research/audit), thread-safe, cost estimate from
                            settings.PRICING; not persisted (per-session meter)
   sessions.py              single module-level SessionState (history + DocumentStore
-                           + SpecModule + ResearchRunner + AuditRunner + QCRunner
+                           + SpecModule + discipline (Batch 8, session-level like
+                           module) + ResearchRunner + AuditRunner + QCRunner
                            + UsageLedger) + has_unsaved_progress /
                            project_payload / project_default_stem (shared by
                            /api/project/save and the native save-on-close)
@@ -135,6 +146,12 @@ backend/
                            [SEED: Spec Critic src/modules/datacenter_fire.py]
                            first module: 21 13 13 lead + sibling catalog, playbook,
                            current-edition NFPA pins w/ provenance, research dims
+  spec_modules/generic.py  [Batch 8, native] the any-discipline module (USA &
+                           Canada): unpinned basis (NO pins — editions enter via
+                           set_standard_edition w/ stated basis), open_catalog
+                           (empty catalog; section from the session discipline),
+                           generic scaffold playbook w/ META-defaults,
+                           {discipline}-parameterized research dimensions
   spec_doc/model.py        SectionFormat tree; stable ids (pt1.a2.p3); statuses
                            (confirmed/assumed/needs_input/imported);
                            transactional apply_edits; edition_overrides +
@@ -155,7 +172,11 @@ backend/
   spec_doc/linting.py      [PORT: Spec Critic src/input/preprocessor.py logic]
                            deterministic advisory lint: stale editions vs effective
                            pins (negation suppression), placeholders/markers,
-                           empty/duplicate articles, unset header
+                           empty/duplicate articles, unset header; Batch 8 adds
+                           unrecorded_edition (unpinned modules ONLY: designation
+                           cited w/ a year but absent from effective_editions —
+                           publisher-grammar discovery, then the same four
+                           citation shapes/suppression as the stale rule)
   spec_doc/docx_export.py  python-docx rendering + assumptions/open-items schedules;
                            Batch 4 adds build_qc_memo (standalone QC memo) + a QC
                            closing that supersedes the audit closing in build_docx;
@@ -164,15 +185,26 @@ backend/
                            ins/del via docx.oxml; clean path untouched, byte-stable)
                            + redline_filename
   spec_doc/project.py      JSON project files (save/resume) + chat transcript +
-                           module_id + audit_result + qc_result (baseline_index
-                           rides store.to_dict/load — no project.py change)
+                           module_id + discipline (Batch 8: saved unconditionally,
+                           loaded w/ sanitize + the open-catalog invariant; old
+                           files degrade to "") + audit_result + qc_result
+                           (baseline_index rides store.to_dict/load — no
+                           project.py change)
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
                            FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message);
                            Batch 6 adds onboarding_demo_directive (discipline-
-                           sanitized) + _ONBOARDING_POLICY in the stable prompt
+                           sanitized) + _ONBOARDING_POLICY in the stable prompt;
+                           Batch 8 splits sanitize_discipline (public, no
+                           fallback — shared w/ reset + project load), renders
+                           open-catalog guidance in _render_catalog, and rewords
+                           _STANDARDS_POLICY/_PROVENANCE/FULL_DRAFT_DIRECTIVE
+                           to stay true for pinless modules
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
-                           lint event + standards_payload; Batch 7 adds
+                           lint event + standards_payload; Batch 8 renders the
+                           PROJECT DISCIPLINE line first in PROJECT CONTEXT
+                           (open-catalog sessions only — curated request bytes
+                           unchanged); Batch 7 adds
                            SessionState.stop_requested (threading.Event) — a
                            user stop ends the round loop early but still
                            commits (current_message_snapshot, not
@@ -181,7 +213,10 @@ backend/
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
-                           baselineIndex, settings-open, closePromptOpen
+                           baselineIndex, pickerOpen + modules (Batch 8 module
+                           picker; New session → picker → reset-with-body; the
+                           raw newSession stays bodyless for the tour),
+                           settings-open, closePromptOpen
                            (window.buildaspecRequestClose hook), send loop (SSE
                            switch incl. status/thinking_delta); QC follow-stream
                            + accept/dismiss; Batch 6: drawerNonces + useOnboarding
@@ -193,7 +228,9 @@ frontend/src/
                            draftFull; key status/delete/test; usage; Batch 4 qc
                            start/status/stream/apply/dismiss + readiness; Batch 5
                            getDocDiff; Batch 7 stopChat/stopResearch/stopQc (409
-                           from an already-settled run/turn is swallowed, not thrown)
+                           from an already-settled run/turn is swallowed, not
+                           thrown); Batch 8 resetSession(opts?) (JSON body only
+                           when opts given) + getModules
   lib/useSmoothText.ts     [Batch 2] rAF typewriter smoothing + reduced-motion +
                            splitStableTail (cheap-markdown prefix/tail split)
   lib/reviewQueue.ts       [Batch 3] pure buildQueue(doc, mode) — the review
@@ -236,7 +273,12 @@ frontend/src/
                            data-tour anchors) / ConfirmDialog (Batch 7: generic
                            title/body/confirm/cancel modal — the lose-progress
                            warnings for stopping research/QC; the Final-QC launch
-                           confirmation stays its own purpose-built modal)
+                           confirmation stays its own purpose-built modal) /
+                           ModalShell (Batch 8: extracted from OnboardingOverlay
+                           + primaryBtn/quietBtn, shared) / ModulePickerDialog
+                           (Batch 8: session-start module cards + discipline
+                           chips/input for generic; Header label shows
+                           "Generic — {discipline}" when set)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
   conftest.py              hermetic env + fresh session per test
@@ -273,6 +315,11 @@ tests/
                            409 once already resolved, the abandoned thread's
                            eventual completion can't clobber the resolved status,
                            immediate restart works)
+  test_session_modules.py  [Batch 8] reset-with-body matrix (bodyless keeps,
+                           switch + invariant, unknown degrades, sanitize),
+                           GET /api/modules, discipline in context / not the
+                           stable block, project round-trip + old-file compat +
+                           invariant-on-load
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -1069,6 +1116,98 @@ batch: no new SSE event types, no new env vars, no new Python deps.
   replays a fixed script) — sufficient to prove the mechanism (the live SSE
   stream truncates; the turn still commits) without reimplementing the
   SDK's accumulator.
+
+## Batch 8 — implemented notes (v1.3.0: generic any-discipline module)
+
+"Max flexibility" tier 2 (decided w/ Abraham 2026-07-22): a second module,
+`generic`, drafts ANY discipline for projects anywhere in the USA or Canada,
+leaning on model knowledge + the existing research fan-out. Tier 3
+(model-synthesized modules) is deferred pending Abraham's go-ahead. Same
+batch shape as always: no new SSE events, no new env vars, no new deps. One
+new REST route (`GET /api/modules`) + an optional body on the reset route.
+
+- **The unpinned basis is the design center.** `StandardsBasis.unpinned`
+  sanctions a pinless basis (registration coherence matrix: unpinned pins
+  NOTHING; pinned keeps the old non-empty rules — an accidentally-empty
+  basis still fails startup). The generic module ships ZERO pins: every
+  referenced-standard edition enters per-project through the existing
+  `set_standard_edition` op with a mandatory stated basis — a grounded
+  research item id, the user's statement, or an honestly-labeled model
+  proposal ("model-proposed, unverified"). Until recorded, designations are
+  cited year-free. `standards_context_block` renders a dedicated unpinned
+  posture (recorded-overrides-only list + the mandatory-basis directive);
+  the pinned rendering is byte-identical to v1.2.0.
+- **Enforcement is lint + readiness, never a gate.** New rule
+  `unrecorded_edition` (linting.py), active ONLY when `basis.unpinned`: a
+  publisher-grammar designation scan (CAN/ULC…UL, longest-first,
+  case-sensitive) finds designations absent from `effective_editions`, then
+  reuses the stale rule's four citation shapes + span-dedup + negation
+  suppression to flag year citations on them. Recorded-but-wrong-year stays
+  `stale_edition`; not-recorded-at-all is `unrecorded_edition` — never both.
+  Hyphen/space designation forms match the same record. The readiness
+  checklist's existing "lint clean" check makes this the no-pins posture's
+  gate without blocking any edit or turn. Hyperscale lint output is
+  unchanged by construction (the scan is unreachable for pinned modules).
+- **Open catalog.** `SpecModule.open_catalog` allows an empty
+  `section_catalog` (validated per-entry when suggestions ARE shipped);
+  `_render_catalog` renders establish-the-section-from-discipline guidance
+  instead of a list. `lead_section()` has no runtime callers (verified) so
+  an empty catalog needs no engine guard.
+- **Discipline is session state, captured at session start.**
+  `SessionState.discipline` (kept on reset, like `module`); the INVARIANT —
+  non-empty ⇒ the active module is open-catalog — is enforced at the only
+  two write sites (`POST /api/session/reset` with the Batch 8 optional
+  body, and `load_project`), so a curated module can never carry a stale
+  discipline and the Header label ("Generic — {discipline}") needs no extra
+  state. Sanitized by the shared `sanitize_discipline` (whitespace fold,
+  80-char cap, empty stays empty — the onboarding demo keeps its own
+  fallback wrapper). Persisted as a top-level project-file key beside
+  `module_id` (no PROJECT_FORMAT bump; old files degrade to "").
+- **Context placement (the cache rule).** The discipline renders as the
+  FIRST line of PROJECT CONTEXT (`PROJECT DISCIPLINE: …`, or an
+  ask-the-user line when an open-catalog session hasn't stated one) —
+  never the stable prompt, which for the generic module carries only the
+  policy POINTER naming the line. Curated sessions render neither, so
+  their request bytes are unchanged. Research threads discipline into the
+  dimension-template kwargs (set unconditionally — a `{discipline}`
+  template can never KeyError; dummy kwarg registration-checks it) and the
+  fan-out header; QC threads it as a `<project_discipline>` block in the
+  lens user message; both only when non-empty (curated runs byte-identical).
+  `POST /api/research/start` 400s for an open-catalog module with no
+  discipline (backstop — the picker normally guarantees it).
+- **The generic module's content** (spec_modules/generic.py, native):
+  discipline-agnostic scaffold playbook — 3 must-ask topics
+  (section_selection / project_identity / scope_basis, the hazard_picture
+  analog) + 9 defaultable topics whose defaults are honest META-defaults
+  ("propose the discipline-standard practice… stamp assumed"), including
+  the no-pins posture itself as the standards_editions default and a
+  units topic (USA inch-pound / Canada SI). Conventions carry the
+  region-aware prose: USA (I-codes model context, adoption per-project,
+  UL/FM) vs Canada (NBC/NFC as provincially adopted, CSA/ULC + ULC
+  listings, metric, no silent US→CA standard mapping). Research dimensions
+  mirror the hyperscale four (same ids + budgets), `{discipline}`-
+  parameterized and two-country aware. `DEFAULT_MODULE` stays
+  `hyperscale_fire`.
+- **Frontend.** "New session" now opens `ModulePickerDialog` (module cards,
+  current preselected; generic card reveals DISCIPLINES chips that prefill
+  a free-text input; Start disabled until valid; Cancel keeps the session;
+  fetch-failure degrades to the plain old reset). `ModalShell` +
+  `primaryBtn`/`quietBtn` extracted from OnboardingOverlay for reuse. The
+  raw bodyless `newSession` survives untouched for the tour (Batch 6
+  never-re-wrap rule); `resetSession(opts?)` sends a body only when given.
+  `StandardsStrip` already self-hides on an empty list (a state previously
+  unreachable — on a generic session it appears with the first recorded
+  override; the tour's standards anchor falls back to a centered bubble).
+- **Tests.** conftest now restores the default module + empty discipline
+  around every test (reset keeps them by design — restoration is test-only
+  leak hygiene). New: test_session_modules.py; unpinned/open-catalog
+  validation matrix + generic coherence/prompt tests (test_spec_modules);
+  unpinned context-block rendering (test_standards); the
+  unrecorded_edition matrix incl. the pinned-module-scoped-off byte
+  guard (test_linting); research discipline threading via
+  SequencedFakeClient keys that CONTAIN the discipline (routing success ==
+  the proof) + the 400 backstop (test_research_api); the lens-message
+  discipline block (test_qc).
 
 ## Commands
 

@@ -4,6 +4,7 @@ import type {
   Health,
   ImportResultPayload,
   KeyStatus,
+  ModuleInfo,
   ProjectLoadResult,
   QcApplyResult,
   QcEvent,
@@ -35,8 +36,34 @@ export async function saveApiKey(apiKey: string): Promise<void> {
   }
 }
 
-export async function resetSession(): Promise<void> {
+/**
+ * Reset the session. With `opts` (the Batch 8 module picker) the chosen
+ * module/discipline ride a JSON body; without, the historical bodyless call
+ * — reset keeps the active module + discipline (the onboarding tour's path).
+ */
+export async function resetSession(opts?: {
+  module_id?: string;
+  discipline?: string;
+}): Promise<void> {
+  if (opts) {
+    await fetch("/api/session/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(opts),
+    });
+    return;
+  }
   await fetch("/api/session/reset", { method: "POST" });
+}
+
+/** The selectable module registry (Batch 8 session-start picker). */
+export async function getModules(): Promise<ModuleInfo[]> {
+  const resp = await fetch("/api/modules");
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `modules failed (${resp.status})`);
+  }
+  return data.modules ?? [];
 }
 
 /* --- API key management (WI3) --- */

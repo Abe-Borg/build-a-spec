@@ -162,7 +162,13 @@ def test_session_reset_clears_history_and_document(monkeypatch):
     assert not sessions.get_session().doc.doc.is_empty()
 
     resp = client.post("/api/session/reset")
-    assert resp.json() == {"ok": True}
+    # Batch 8: the reset response reports the (kept) module + discipline.
+    assert resp.json() == {
+        "ok": True,
+        "module_id": "hyperscale_fire",
+        "module": sessions.get_session().module.display_name,
+        "discipline": "",
+    }
     assert sessions.get_session().history == []
     assert sessions.get_session().doc.doc.is_empty()
     assert len(sessions.get_session().doc.versions) == 1

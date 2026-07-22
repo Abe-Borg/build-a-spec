@@ -274,3 +274,142 @@ def test_references_article_line_shape_is_checked():
         i for i in lint_document(doc3, DEFAULT_MODULE)
         if i["rule"] == "stale_edition"
     ] == []
+
+
+# ---------------------------------------------------------------------------
+# Batch 8: unrecorded_edition (unpinned-basis modules only)
+# ---------------------------------------------------------------------------
+
+
+def _generic():
+    from backend.spec_modules.generic import GENERIC
+
+    return GENERIC
+
+
+def _record(standard: str, edition: str) -> dict:
+    return {
+        "action": "set_standard_edition",
+        "target_id": "sec",
+        "standard": standard,
+        "edition": edition,
+        "basis": "user stated",
+    }
+
+
+def _unrecorded(issues):
+    return [i for i in issues if i["rule"] == "unrecorded_edition"]
+
+
+def test_unrecorded_edition_fires_on_the_engine_citation_shapes():
+    doc = _doc_with(
+        _base(
+            "Comply with NFPA 13-2019 throughout.",
+            "Install per NFPA 13, 2019 edition.",
+            "Test per the 2019 edition of NFPA 13.",
+            "NFPA 13 - Standard for the Installation of Sprinkler Systems "
+            "(2019 edition).",
+        )
+    )
+    issues = _unrecorded(lint_document(doc, _generic()))
+    assert len(issues) == 4
+    assert all("no edition is recorded" in i["message"] for i in issues)
+    assert all("set_standard_edition" in i["message"] for i in issues)
+    assert issues[0]["severity"] == "warn"
+    # No stale_edition double-fire: nothing is in the effective set.
+    assert [
+        i for i in lint_document(doc, _generic())
+        if i["rule"] == "stale_edition"
+    ] == []
+
+
+def test_unrecorded_edition_covers_publisher_grammar_designations():
+    doc = _doc_with(
+        _base(
+            "Fire tests per CAN/ULC-S524-2019.",
+            "Energy performance per ASHRAE 90.1-2022.",
+        )
+    )
+    issues = _unrecorded(lint_document(doc, _generic()))
+    assert {i["match"] for i in issues} == {
+        "CAN/ULC-S524-2019",
+        "ASHRAE 90.1-2022",
+    }
+
+
+def test_year_free_designations_are_silent():
+    doc = _doc_with(
+        _base(
+            "Pipe per ASTM A53 and ASTM A795.",
+            "Sprinklers listed per UL 199.",
+        )
+    )
+    assert _unrecorded(lint_document(doc, _generic())) == []
+
+
+def test_recording_the_edition_silences_the_rule():
+    doc = _doc_with(
+        _base("Comply with NFPA 13-2019 throughout.")
+        + [_record("NFPA 13", "2019")]
+    )
+    issues = lint_document(doc, _generic())
+    assert _unrecorded(issues) == []
+    # Year matches the recorded edition — stale is silent too.
+    assert [i for i in issues if i["rule"] == "stale_edition"] == []
+
+
+def test_recorded_but_wrong_year_is_stale_not_unrecorded():
+    doc = _doc_with(
+        _base("Comply with NFPA 13-2019 throughout.")
+        + [_record("NFPA 13", "2022")]
+    )
+    issues = lint_document(doc, _generic())
+    assert _unrecorded(issues) == []
+    stale = [i for i in issues if i["rule"] == "stale_edition"]
+    assert len(stale) == 1 and "edition in effect is 2022" in stale[0]["message"]
+
+
+def test_hyphen_and_space_designation_forms_match_the_record():
+    # Text writes "CAN/ULC-S524", the override was recorded as "CAN/ULC S524"
+    # — the same standard; the rule must treat it as recorded.
+    doc = _doc_with(
+        _base("Fire alarm per CAN/ULC-S524-2019.")
+        + [_record("CAN/ULC S524", "2019")]
+    )
+    assert _unrecorded(lint_document(doc, _generic())) == []
+
+
+def test_unrecorded_edition_respects_negation_suppression():
+    doc = _doc_with(
+        _base(
+            "NFPA 13-2016 is superseded and shall not be used.",
+            "Previously designed under ASHRAE 90.1-2016.",
+        )
+    )
+    assert _unrecorded(lint_document(doc, _generic())) == []
+
+
+def test_mixed_recorded_and_unrecorded_designations():
+    doc = _doc_with(
+        _base("Comply with NFPA 13-2019 and NFPA 72-2019.")
+        + [_record("NFPA 13", "2019")]
+    )
+    issues = _unrecorded(lint_document(doc, _generic()))
+    assert len(issues) == 1 and "NFPA 72" in issues[0]["message"]
+
+
+def test_pinned_module_never_runs_the_unrecorded_rule():
+    # ASTM E84 is not among the hyperscale pins; a year citation on it
+    # produces NOTHING for a pinned module (the rule is scoped off), and
+    # the full lint output is exactly the pre-Batch-8 expectation.
+    doc = _doc_with(
+        _base(
+            "Surface burning per ASTM E84 (2021 edition).",
+            "Comply with NFPA 13-2019 throughout.",
+        )
+    )
+    issues = lint_document(doc, DEFAULT_MODULE)
+    assert _unrecorded(issues) == []
+    assert [(i["rule"], i["element_id"]) for i in issues] == [
+        ("stale_edition", "pt1.a1.p2")
+    ]

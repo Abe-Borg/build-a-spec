@@ -694,3 +694,35 @@ def test_qc_result_from_dict_round_trips():
     assert again is not None
     assert again.findings[0].title == "Round trip"
     assert again.model == "claude-fable-5"
+
+
+# ---------------------------------------------------------------------------
+# Batch 8: session discipline in the lens user message
+# ---------------------------------------------------------------------------
+
+
+def test_lens_user_message_carries_discipline_only_when_stated():
+    from backend.llm.conversation import SessionState
+    from backend.qc.engine import _lens_user_message
+    from backend.spec_doc.model import SpecSection
+
+    section = SpecSection()
+    lens = QC_LENSES[0]
+    module = SessionState().module  # the curated default
+
+    without = _lens_user_message(lens, section, module, None)
+    assert "<project_discipline>" not in without
+
+    with_discipline = _lens_user_message(
+        lens, section, module, None, "Electrical"
+    )
+    assert (
+        "<project_discipline>\nElectrical\n</project_discipline>"
+        in with_discipline
+    )
+    # The discipline block sits immediately after the brief (the lens
+    # brief text itself legitimately mentions <standards_in_effect>, so a
+    # naive index-ordering check would trip on it).
+    assert "</lens_brief>\n\n<project_discipline>" in with_discipline
+    # Empty discipline (the curated case) is byte-identical to before.
+    assert _lens_user_message(lens, section, module, None, "") == without

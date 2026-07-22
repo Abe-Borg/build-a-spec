@@ -59,7 +59,7 @@ _PROVENANCE = """\
 Stamp every paragraph honestly:
 
 - confirmed — the user stated it, or explicitly approved your proposal.
-- assumed — your defensible default (from the playbook, the pinned standards, or domain norms) that the user has not confirmed. Say in chat, in one line, what you assumed.
+- assumed — your defensible default (from the playbook, the standards editions in effect, or domain norms) that the user has not confirmed. Say in chat, in one line, what you assumed.
 - needs_input — a placeholder that cannot stand without an answer.
 - imported — master-spec content not yet reviewed for this project. You never CREATE imported blocks; they arrive via master import, and your job is to retire the status (see gap-and-adapt below).
 
@@ -105,7 +105,7 @@ _INTERVIEW_POLICY = """\
 _STANDARDS_POLICY = """\
 # Standards editions
 
-The editions in effect for this project (module defaults plus any recorded jurisdiction overrides) are listed in the PROJECT CONTEXT block each turn. Draft the PART 1 REFERENCES article from that list — designation, full title, edition. When the user states that the project's jurisdiction has adopted a different edition (e.g. through its building/fire code), record it with a set_standard_edition operation, quoting the stated adoption as the basis — then draft to it consistently. Never cite an edition you have no basis for, never switch editions silently, and never record an override the user (or grounded research) did not supply. The live lint checks the draft against the editions in effect; treat its stale-edition findings as drafting errors to fix."""
+The editions in effect for this project (any module default editions plus recorded per-project overrides — some modules pin no defaults, in which case every edition in effect was recorded with its basis) are listed in the PROJECT CONTEXT block each turn. Draft the PART 1 REFERENCES article from that list — designation, full title, edition. When the user states that the project's jurisdiction has adopted a different edition (e.g. through its building/fire code), record it with a set_standard_edition operation, quoting the stated adoption as the basis — then draft to it consistently. Never cite an edition you have no basis for, never switch editions silently, and never record an override the user (or grounded research) did not supply. The live lint checks the draft against the editions in effect; treat its stale-edition findings as drafting errors to fix."""
 
 _RESEARCH_POLICY = """\
 # Project profile and grounded research
@@ -135,7 +135,7 @@ Never fabricate project facts, code adoptions, or client standards — ask, or d
 FULL_DRAFT_DIRECTIVE = """\
 Draft the COMPLETE section now — the full first pass, top to bottom.
 
-- Lay down every PART and every article this section conventionally carries (per the section catalog and the interview playbook), plus anything the project's known facts call for. Structure first, then flesh each article out.
+- Lay down every PART and every article this section conventionally carries (per the section catalog where this module carries one — otherwise per the discipline's conventional section structure — and the interview playbook), plus anything the project's known facts call for. Structure first, then flesh each article out.
 - Use everything already established: my interview answers, the project profile, the standards editions in effect, and the grounded research items. Draft to them — and when a provision derives from a research item, tag it with that item's source_item_id.
 - Stamp provenance honestly: confirmed only for what I've actually stated or approved; assumed for your defensible playbook / standards / domain defaults (say in one line what you assumed); [TBD: …] or needs_input for anything that genuinely can't be defaulted yet. Over-flag rather than silently guess — I'll walk the assumptions afterward.
 - Keep each apply_spec_edits call to a sensible size (an article or a few related articles) so the document assembles visibly as you go, not in one silent mega-batch at the end.
@@ -163,16 +163,23 @@ This is the guided-tour DEMO pass — I'm brand new here, and the tour is about 
 - Close with 2-3 sentences in chat saying what you built and that it's a demo. Ask NO follow-up questions — the guided tour drives what happens next."""
 
 
-def _sanitize_discipline(discipline: str) -> str:
-    """Collapse the picker's free text to one bounded line.
+def sanitize_discipline(discipline: str) -> str:
+    """Collapse free-text discipline input to one bounded line.
 
-    Whitespace folding neutralizes newline injection into the directive's
-    bullet structure; the cap keeps a pasted paragraph from bloating the
-    turn. Empty (or whitespace-only) input falls back to the module's home
+    Whitespace folding neutralizes newline injection into prompt/directive
+    structure; the cap keeps a pasted paragraph from bloating a turn. Empty
+    (or whitespace-only) input stays empty — callers choose their own
+    fallback. Shared by the session-level discipline (Batch 8: the reset
+    endpoint and project load) and the onboarding demo directive below.
+    """
+    return " ".join((discipline or "").split())[:_MAX_DISCIPLINE_LEN].strip()
+
+
+def _sanitize_discipline(discipline: str) -> str:
+    """Demo-directive variant: empty input falls back to the module's home
     discipline rather than erroring — the demo must always be startable.
     """
-    cleaned = " ".join(discipline.split())[:_MAX_DISCIPLINE_LEN].strip()
-    return cleaned or _DEFAULT_DEMO_DISCIPLINE
+    return sanitize_discipline(discipline) or _DEFAULT_DEMO_DISCIPLINE
 
 
 def onboarding_demo_directive(discipline: str) -> str:
@@ -183,6 +190,25 @@ def onboarding_demo_directive(discipline: str) -> str:
 
 
 def _render_catalog(module: SpecModule) -> str:
+    if not module.section_catalog and module.open_catalog:
+        return "\n".join(
+            [
+                "# Section catalog",
+                "",
+                "This module carries an OPEN catalog — it can author any "
+                "CSI MasterFormat section:",
+                "",
+                "- Establish the MasterFormat section number and title from "
+                "the user's stated discipline and scope; when unsure, "
+                "propose the 2-3 most likely sections with one-line scope "
+                "distinctions and let the user pick.",
+                "- Set the section header immediately once chosen (replace "
+                "on \"sec\" with the number and title).",
+                "- Respect conventional sibling-section boundaries for the "
+                "discipline: coordinate with related sections, never "
+                "duplicate their scope.",
+            ]
+        )
     lines = [
         "# Section catalog",
         "",

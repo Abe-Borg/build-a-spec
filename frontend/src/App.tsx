@@ -4,6 +4,7 @@ import type {
   EditOp,
   Health,
   LintIssue,
+  ModuleInfo,
   OpenItem,
   QcSnapshot,
   ReadinessPayload,
@@ -22,6 +23,7 @@ import {
   getDoc,
   getDocDiff,
   getHealth,
+  getModules,
   getQcStatus,
   getReadiness,
   getResearchStatus,
@@ -48,6 +50,7 @@ import ArtifactPanel from "./components/ArtifactPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import HelpModal, { type HelpTopic } from "./components/HelpModal";
 import OnboardingOverlay from "./components/OnboardingOverlay";
+import ModulePickerDialog from "./components/ModulePickerDialog";
 import { useOnboarding, type DrawerName } from "./lib/useOnboarding";
 import CloseDialog from "./components/CloseDialog";
 
@@ -84,6 +87,10 @@ export default function App() {
     qc: 0,
     openItems: 0,
   });
+  // Session-start module picker (Batch 8). The registry is fetched lazily on
+  // first open, then cached for the app's lifetime (it's static per build).
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [modules, setModules] = useState<ModuleInfo[] | null>(null);
   const busyRef = useRef(false);
   const researchFollowRef = useRef(false);
   const qcFollowRef = useRef(false);
@@ -560,8 +567,8 @@ export default function App() {
     setPrefill((p) => ({ text, nonce: p.nonce + 1 }));
   };
 
-  const newSession = async () => {
-    await resetSession();
+  /** Shared post-reset clear+refresh — every session-start path runs this. */
+  const clearSessionState = () => {
     setMessages([]);
     setOpenItems([]);
     setLintIssues([]);
@@ -571,6 +578,36 @@ export default function App() {
     refreshResearch();
     refreshQc();
     refreshReadiness();
+  };
+
+  // The RAW bodyless reset (keeps module + discipline). The onboarding hook
+  // depends on receiving exactly this — never re-wrap it (Batch 6 rule).
+  const newSession = async () => {
+    await resetSession();
+    clearSessionState();
+  };
+
+  /** Open the module picker (Batch 8), fetching the registry on first use. */
+  const openPicker = async () => {
+    if (modules === null) {
+      try {
+        setModules(await getModules());
+      } catch {
+        // Registry unreachable — degrade to the plain reset (old behavior).
+        void newSession();
+        return;
+      }
+    }
+    setPickerOpen(true);
+  };
+
+  /** Picker confirm: reset into the chosen module, then resync everything. */
+  const onPickerConfirm = async (moduleId: string, discipline: string) => {
+    setPickerOpen(false);
+    await resetSession({ module_id: moduleId, discipline });
+    clearSessionState();
+    // The Header label renders module/discipline from health — resync it.
+    refreshHealth();
   };
 
   const applyDocPayload = (payload: {
@@ -692,9 +729,10 @@ export default function App() {
         usage={usage}
         onNewSession={() => {
           // The header button is session-changing work: kill the tour first
-          // (the hook's own fresh-start path calls the raw newSession).
+          // (the hook's own fresh-start path calls the raw newSession). The
+          // picker owns the actual reset — Cancel keeps the session.
           onboarding.abort();
-          void newSession();
+          void openPicker();
         }}
         onStartTour={onboarding.start}
         onInstallUpdate={onInstallUpdate}
@@ -729,6 +767,14 @@ export default function App() {
         qcStatus={qc?.status ?? "idle"}
         hasContent={hasContent}
         bumpDrawer={bumpDrawer}
+      />
+      <ModulePickerDialog
+        open={pickerOpen}
+        modules={modules ?? []}
+        busy={busy}
+        currentModuleId={health?.module_id}
+        onCancel={() => setPickerOpen(false)}
+        onConfirm={onPickerConfirm}
       />
       <CloseDialog
         open={closePromptOpen}

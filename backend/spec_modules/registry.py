@@ -10,9 +10,10 @@ what keeps project files written by other builds loading cleanly.
 from __future__ import annotations
 
 from .base import SpecModule, validate_module_registry
+from .generic import GENERIC
 from .hyperscale_fire import HYPERSCALE_FIRE
 
-_ALL_MODULES: tuple[SpecModule, ...] = (HYPERSCALE_FIRE,)
+_ALL_MODULES: tuple[SpecModule, ...] = (HYPERSCALE_FIRE, GENERIC)
 
 validate_module_registry(_ALL_MODULES)
 

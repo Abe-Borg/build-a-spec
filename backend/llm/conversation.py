@@ -125,6 +125,13 @@ class SessionState:
     doc: DocumentStore = field(default_factory=DocumentStore)
     generation: int = 0
     module: SpecModule = field(default_factory=lambda: get_module(None))
+    # Session-level discipline (Batch 8), meaningful only with an
+    # open-catalog module — invariant: non-empty ⇒ the active module is
+    # open-catalog, enforced at the two write sites (the reset endpoint and
+    # project load). Like ``module``, reset keeps it (the session-start
+    # picker always sends explicit values). Rendered into PROJECT CONTEXT
+    # each turn, never the cached stable prompt.
+    discipline: str = ""
     research: ResearchRunner = field(default_factory=ResearchRunner)
     audit: AuditRunner = field(default_factory=AuditRunner)
     # Final QC on Fable 5 (Batch 4). Replaced on reset/load like the other
@@ -229,7 +236,21 @@ def _turn_context_text(session: SessionState) -> str:
     state block, never a stale one.
     """
     doc = session.doc.doc
-    parts = [
+    parts = []
+    # Session discipline (Batch 8): renders only for open-catalog sessions
+    # (never for curated modules — their request bytes are unchanged).
+    if session.discipline:
+        parts.append(
+            f"PROJECT DISCIPLINE: {session.discipline} (session-selected — "
+            "governs section selection, conventions, terminology, and "
+            "research)"
+        )
+    elif getattr(session.module, "open_catalog", False):
+        parts.append(
+            "PROJECT DISCIPLINE: [not yet stated] — ask the user what "
+            "discipline this section is for before drafting domain content."
+        )
+    parts += [
         standards_context_block(session.module.basis, doc.edition_overrides),
         _profile_status_block(doc.project_profile),
     ]

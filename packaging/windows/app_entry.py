@@ -70,12 +70,39 @@ def _selfcheck() -> int:
     return 0
 
 
+def _boot_check() -> int:
+    """Actually start the backend the way the app does and confirm it serves
+    ``/api/health``, then exit. Unlike ``--selfcheck`` (imports only), this
+    exercises the real uvicorn startup — catching windowed-mode boot crashes
+    such as the ``None`` std-stream logging failure that a pure import check
+    can't see. Runs headless (no window)."""
+    try:
+        from main import _start_backend, _wait_for_health
+
+        _start_backend()
+        healthy = _wait_for_health(timeout_s=30.0)
+    except Exception:
+        import traceback
+
+        _emit("BOOT CHECK FAILED:\n" + traceback.format_exc())
+        return 1
+    if not healthy:
+        _emit("BOOT CHECK FAILED: backend did not become healthy")
+        return 1
+    from backend import settings as _settings
+
+    _emit(f"BuildASpec {_settings.VERSION} boot ok")
+    return 0
+
+
 def main() -> int:
     args = sys.argv[1:]
     if "--version" in args:
         return _print_version()
     if "--selfcheck" in args:
         return _selfcheck()
+    if "--boot-check" in args:
+        return _boot_check()
     from main import main as app_main
 
     app_main()

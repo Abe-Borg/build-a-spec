@@ -381,6 +381,21 @@ The backend serves the built frontend from `frontend/dist` in normal use; in dev
 - Node 20+ (only to build or develop the frontend)
 - An Anthropic API key
 
+## Install (Windows, prebuilt)
+
+Most users don't need any tooling. Download the latest
+**BuildASpecSetup.exe** from the
+[Releases page](https://github.com/Abe-Borg/build-a-spec/releases/latest)
+and run it — Python, Node, and every dependency are bundled, and the
+installer adds the Edge WebView2 runtime if your machine doesn't already
+have it.
+
+The app is not code-signed, so on first run Windows SmartScreen shows
+"Windows protected your PC" → **More info → Run anyway**. Updates are
+delivered in-app and SHA-256-verified before they install. Maintainers:
+see [`docs/RELEASE_WINDOWS.md`](docs/RELEASE_WINDOWS.md) for how releases
+are cut (a tag push builds and publishes the installer via GitHub Actions).
+
 ## Install & Run (from source, Windows)
 
 ```bat

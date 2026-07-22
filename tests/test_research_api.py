@@ -98,6 +98,77 @@ def test_profile_op_normalizes_and_gates_research(monkeypatch):
     assert '"complete": true' in tool_result["content"]
 
 
+_PARTIAL_PROFILE_EDITS = {
+    "edits": [
+        {
+            "action": "set_project_profile",
+            "target_id": "sec",
+            "city": "Ashburn",
+            "state": "Virginia",
+        }
+    ]
+}
+
+
+def test_profile_status_block_lists_every_missing_field_before_recording(
+    monkeypatch,
+):
+    client = _client()
+    fake = FakeClient([text_turn(["Let's get started."])])
+    _patch_chat_client(monkeypatch, fake)
+    client.post("/api/chat", json={"message": "hello"})
+
+    context = request_context_text(fake.messages.last_request)
+    assert "PROJECT PROFILE (city, state/province, country, client):" in context
+    assert "- city: [not yet recorded]" in context
+    assert "- state/province: [not yet recorded]" in context
+    assert "- country: [not yet recorded]" in context
+    assert "- client: [not yet recorded]" in context
+    assert (
+        "Incomplete — missing city, state/province, country, client."
+        in context
+    )
+
+
+def test_profile_status_block_narrows_as_fields_arrive_then_completes(
+    monkeypatch,
+):
+    """The PROJECT PROFILE block (rendered every turn) is what lets the
+    model chase a still-missing field incrementally instead of only once:
+    it narrows the "missing" list turn by turn and reports "Complete." the
+    moment the last field lands, whichever entry path (chat or the panel
+    form) supplied it."""
+    client = _client()
+    fake = FakeClient(
+        [tool_turn(["Noted."], _PARTIAL_PROFILE_EDITS), text_turn(["Continuing."])]
+    )
+    _patch_chat_client(monkeypatch, fake)
+    resp = client.post("/api/chat", json={"message": "Ashburn, Virginia"})
+    assert _parse_sse(resp.text)[-1]["type"] == "turn_complete"
+
+    fake2 = FakeClient([text_turn(["Still missing some."])])
+    _patch_chat_client(monkeypatch, fake2)
+    client.post("/api/chat", json={"message": "continue"})
+    context = request_context_text(fake2.messages.last_request)
+    assert "- city: Ashburn" in context
+    assert "- state/province: VA" in context
+    assert "- country: [not yet recorded]" in context
+    assert "- client: [not yet recorded]" in context
+    assert "Incomplete — missing country, client." in context
+
+    _record_profile(client, monkeypatch)
+    fake3 = FakeClient([text_turn(["All set."])])
+    _patch_chat_client(monkeypatch, fake3)
+    client.post("/api/chat", json={"message": "continue"})
+    final_context = request_context_text(fake3.messages.last_request)
+    assert "- city: Ashburn" in final_context
+    assert "- state/province: VA" in final_context
+    assert "- country: US" in final_context
+    assert "- client: ExampleCo" in final_context
+    assert "Complete." in final_context
+    assert "Incomplete" not in final_context
+
+
 def test_profile_op_rejects_unknown_country(monkeypatch):
     fake = FakeClient(
         [

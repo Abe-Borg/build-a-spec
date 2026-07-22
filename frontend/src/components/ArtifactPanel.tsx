@@ -508,6 +508,7 @@ export default function ArtifactPanel({
         research={research}
         busy={busy}
         onStart={onStartResearch}
+        onEditDoc={onEditDoc}
       />
 
       <QCDrawer

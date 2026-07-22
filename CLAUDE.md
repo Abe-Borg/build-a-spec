@@ -181,7 +181,8 @@ frontend/src/
                            menu, save/open, ⚠ badge, "Draft full section" button,
                            open items) / ReviewDrawer (Batch 3 keyboard review walk) /
                            IssuesDrawer (lint + StandardsStrip) / ResearchDrawer
-                           (research only — audit UI retired in Batch 4) / QCDrawer
+                           (research only — audit UI retired in Batch 4; also hosts
+                           the project-profile form for direct upfront entry) / QCDrawer
                            (Batch 4: readiness checklist, lens progress, accept/dismiss
                            fix queue, hold-to-apply-criticals, refuted appendix) /
                            SpecDocument (paper rendering + inline manual-edit
@@ -396,13 +397,23 @@ criticals; `profile_complete` is advisory).
 
 ## Phase 4 — implemented notes
 
-- **Profile enters conversationally** via the `set_project_profile` op
-  (target `sec`; fields city/state/country/client; provided fields
-  update, explicit `""` clears; country folds to US/CA or the op errors;
-  state names fold to codes). Stored on `SpecSection.project_profile` —
-  transactional, undoable, persisted like `edition_overrides`. The
-  applied record reports `complete`, and `_doc_payload.profile_complete`
-  gates the panel's research button.
+- **Profile enters conversationally, or directly from the panel** — both
+  paths post the same `set_project_profile` op (target `sec`; fields
+  city/state/country/client; provided fields update, explicit `""`
+  clears; country folds to US/CA or the op errors; state names fold to
+  codes): the model calls it as a tool during the interview, and
+  `ResearchDrawer`'s project-profile form posts it through the existing
+  `POST /api/doc/edit` manual-edit path (no new endpoint — the op
+  vocabulary there was already unrestricted) so the user can fill the
+  whole profile out up front without touching chat. Stored on
+  `SpecSection.project_profile` — transactional, undoable, persisted
+  like `edition_overrides`. The applied record reports `complete`, and
+  `_doc_payload.profile_complete` gates the panel's research button.
+  `project_identity` is a non-defaultable playbook topic, and a
+  per-field `PROJECT PROFILE` status block renders into every turn's
+  PROJECT CONTEXT (`conversation._profile_status_block`) naming exactly
+  what's still missing — the model uses it to ask about a missing field
+  incrementally, a turn or several apart, rather than only once.
 - **Research never auto-triggers.** `POST /api/research/start` is the
   only entry: validates profile completeness + module dimensions + key,
   then `ResearchRunner.start` fans out on a daemon thread with the

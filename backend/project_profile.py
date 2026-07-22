@@ -2,11 +2,16 @@
 
 Ported ≈verbatim from Claude-Spec-Critic ``src/core/project_profile.py``
 (WS-2 of its hyperscale plan), with the Build-a-Spec entry path swapped in:
-Spec Critic collects the profile through a GUI form; here the model records
-it through the ``set_project_profile`` document operation as the user
-states location and client in the interview, and the stored dict lives on
-``SpecSection.project_profile`` (riding the tree's transactional apply /
-undo / project-file machinery).
+Spec Critic collects the profile through a standalone GUI form; here the
+same ``set_project_profile`` document operation backs two entry paths —
+the model records it as the user states location and client in the
+interview, and the panel's project-profile form (``ResearchDrawer``)
+posts the identical op through ``POST /api/doc/edit`` so the user can
+fill it out directly at any time, start to finish. Either way the stored
+dict lives on ``SpecSection.project_profile`` (riding the tree's
+transactional apply / undo / project-file machinery), and the model sees
+a per-turn completeness reminder so it can chase whatever is still
+missing incrementally instead of only asking once.
 
 **Normalization is load-bearing, not cosmetic.**
 :meth:`ProjectProfile.web_search_user_location` steers every research

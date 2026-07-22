@@ -163,18 +163,61 @@ def _stable_system_blocks(session: SessionState) -> list[dict[str, Any]]:
     ]
 
 
+# project_profile dict key -> the label used in the PROJECT PROFILE block
+# and in the model's follow-up questions.
+_PROFILE_FIELD_LABELS: tuple[tuple[str, str], ...] = (
+    ("city", "city"),
+    ("state_or_province", "state/province"),
+    ("country", "country"),
+    ("client_name", "client"),
+)
+
+
+def _profile_status_block(project_profile: dict[str, str]) -> str:
+    """Per-field PROJECT PROFILE status for the PROJECT CONTEXT block.
+
+    Renders every turn — not only when the profile changes — so the model
+    always knows what is still missing without relying on memory of
+    earlier turns. ``project_identity`` is a non-defaultable playbook
+    topic (no default to fall back on); this is what lets the model
+    re-raise a still-missing field every so often instead of dropping it
+    after a single unanswered ask, and lets it recognize a field the user
+    just filled in from the panel form as already settled.
+    """
+    stored = project_profile or {}
+    lines = ["PROJECT PROFILE (city, state/province, country, client):"]
+    missing = []
+    for key, label in _PROFILE_FIELD_LABELS:
+        value = stored.get(key, "")
+        lines.append(f"- {label}: {value or '[not yet recorded]'}")
+        if not value:
+            missing.append(label)
+    if missing:
+        lines.append(
+            "Incomplete — missing " + ", ".join(missing) + ". This has no "
+            "default: ask about the missing field(s) when it fits "
+            "naturally, and raise it again in a later turn if it goes "
+            "unanswered."
+        )
+    else:
+        lines.append("Complete.")
+    return "\n".join(lines)
+
+
 def _turn_context_text(session: SessionState) -> str:
     """The PROJECT CONTEXT block: everything live, rendered at turn start.
 
-    Standards editions in effect, the research profile (when one exists),
-    the FULL document text with ids/statuses/provenance, the lint report,
-    and the open-item list. Spliced ahead of the user's text in the newest
-    user message and stripped again at commit — each request carries
-    exactly one, current, state block, never a stale one.
+    Standards editions in effect, the project-profile status, the research
+    profile (when one exists), the FULL document text with
+    ids/statuses/provenance, the lint report, and the open-item list.
+    Spliced ahead of the user's text in the newest user message and
+    stripped again at commit — each request carries exactly one, current,
+    state block, never a stale one.
     """
     doc = session.doc.doc
     parts = [
-        standards_context_block(session.module.basis, doc.edition_overrides)
+        standards_context_block(session.module.basis, doc.edition_overrides),
+        _profile_status_block(doc.project_profile),
     ]
     research_profile = getattr(session.research, "profile_result", None)
     if research_profile is not None:

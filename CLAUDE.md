@@ -185,7 +185,10 @@ frontend/src/
                            (window.buildaspecRequestClose hook), send loop (SSE
                            switch incl. status/thinking_delta); QC follow-stream
                            + accept/dismiss; Batch 6: drawerNonces + useOnboarding
-                           wiring, send → Promise<boolean> (clean-turn signal)
+                           wiring, send → Promise<boolean> (clean-turn signal);
+                           addNote posts a terse, non-conversational chat marker
+                           when research / Final QC starts (acknowledges the
+                           panel-button click in the chat window)
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
                            draftFull; key status/delete/test; usage; Batch 4 qc
                            start/status/stream/apply/dismiss + readiness; Batch 5
@@ -205,7 +208,8 @@ frontend/src/
   lib/onboardingStorage.ts [Batch 6] "tour completed" flag — the codebase's first
                            localStorage use; try/caught, cosmetic only
   components/*             Chat (Batch 6 starter chips in the empty state) /
-                           MessageBubble (smoothing + thinking block) /
+                           MessageBubble (smoothing + thinking block; renders a
+                           ChatMessage.note as a compact centered event marker) /
                            Composer (WI2 ask-model prefill; Batch 7 swaps the send
                            button for a stop-square while streaming, Claude.ai-style
                            — always clickable, no confirmation) / ArtifactPanel

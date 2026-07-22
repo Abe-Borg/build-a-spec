@@ -131,6 +131,19 @@ export default function App() {
       .catch(() => setUsage(null));
   }, []);
 
+  /**
+   * Append a terse workflow-event note to the chat (e.g. research / Final QC
+   * kicked off). Not a turn, not a model message — a quiet, compact marker so
+   * the user gets an acknowledgment in the chat without adding conversational
+   * noise. Ephemeral, like the import/update acknowledgments.
+   */
+  const addNote = useCallback((text: string) => {
+    setMessages((prev) => [
+      ...prev,
+      { id: newId(), role: "assistant", text, note: true },
+    ]);
+  }, []);
+
   useEffect(() => {
     refreshHealth();
     refreshDoc();
@@ -171,6 +184,7 @@ export default function App() {
   const onStartQc = useCallback(async () => {
     try {
       await startQc();
+      addNote("Sent to Final QC — findings will appear in the Final QC panel.");
       void followQc();
     } catch (e) {
       setQc((prev) => ({
@@ -179,7 +193,7 @@ export default function App() {
         events: prev?.events ?? [],
       }));
     }
-  }, [followQc]);
+  }, [followQc, addNote]);
 
   /** Stop the running Final QC pass (confirmed in the drawer — loses progress). */
   const onStopQc = useCallback(async () => {
@@ -336,6 +350,7 @@ export default function App() {
   const onStartResearch = useCallback(async () => {
     try {
       await startResearch();
+      addNote("Started requirements research — progress in the Research panel.");
       void followResearch();
     } catch (e) {
       setResearch((prev) => ({
@@ -344,7 +359,7 @@ export default function App() {
         events: prev?.events ?? [],
       }));
     }
-  }, [followResearch]);
+  }, [followResearch, addNote]);
 
   /** Stop the running research fan-out (confirmed in the drawer — loses progress). */
   const onStopResearch = useCallback(async () => {

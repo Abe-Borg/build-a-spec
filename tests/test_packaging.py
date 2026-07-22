@@ -87,8 +87,15 @@ def test_windowed_startup_survives_none_std_streams(monkeypatch):
     main._ensure_std_streams()
 
     assert sys.stdout is not None and sys.stderr is not None
-    assert sys.stdout.isatty() is False and sys.stderr.isatty() is False
+    # isatty() must be callable without raising (the crash was AttributeError
+    # on None). Its bool value is platform-dependent — Windows' 'nul' device
+    # reports isatty() == True — and irrelevant here: it only toggles ANSI
+    # colours, which are discarded. What matters is no crash.
+    assert isinstance(sys.stdout.isatty(), bool)
+    assert isinstance(sys.stderr.isatty(), bool)
+    sys.stdout.write("")  # writable, no crash
+    sys.stderr.write("")
 
     # The exact path that used to raise: Config -> configure_logging ->
-    # ColourizedFormatter.__init__ -> sys.stdout.isatty().
+    # ColourizedFormatter.__init__ -> sys.stdout.isatty(). Must not raise.
     uvicorn.Config("backend.app:app", host="127.0.0.1", port=8756, log_level="warning")

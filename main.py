@@ -174,12 +174,12 @@ class _CloseController:
         session = sessions.get_session()
         try:
             payload = sessions.project_payload(session)
-            stem = sessions.project_default_stem(session)
+            filename = sessions.project_default_filename(session)
         except Exception:
             return False
         target = self._window.create_file_dialog(
             webview.SAVE_DIALOG,
-            save_filename=f"buildaspec-{stem}.json",
+            save_filename=filename,
             file_types=("Build-a-Spec project (*.json)", "All files (*.*)"),
         )
         if not target:

@@ -554,6 +554,7 @@ def _run_dimension(
     dimension: ResearchDimension,
     model: str,
     max_tokens: int,
+    should_stop: Callable[[], bool] = lambda: False,
 ) -> _DimensionOutcome:
     """One dimension's full lifecycle: request → continuations → parse → ground.
 
@@ -561,6 +562,14 @@ def _run_dimension(
     path returns a ``failed`` outcome so the fan-out's partial-failure
     policy is enforced in one place. Runs on a worker thread — no event
     emission here; telemetry rides the outcome back to the coordinator.
+
+    ``should_stop`` is a cooperative-cancellation check (user-initiated stop,
+    :meth:`backend.research.runner.ResearchRunner.stop`): checked before each
+    retry attempt and each pause_turn continuation, so a dimension that
+    hasn't started its next network call yet bails immediately rather than
+    spending on work nobody will see. A call already in flight is not
+    interrupted mid-stream — it finishes naturally and its outcome is
+    discarded by the caller.
     """
     max_searches = dimension.max_searches or RESEARCH_DEFAULT_MAX_SEARCHES
     max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
@@ -629,12 +638,21 @@ def _run_dimension(
     billed_responses: list[Any] = []
 
     for attempt in range(attempts_planned):
+        if should_stop():
+            return _failed(
+                "Cancelled by user.", responses=billed_responses
+            )
         is_last_attempt = attempt == attempts_planned - 1
         all_responses: list[Any] = []
         try:
             messages: list[dict] = [{"role": "user", "content": user_message}]
             completed = False
             for _ in range(RESEARCH_MAX_CONTINUATIONS + 1):
+                if should_stop():
+                    return _failed(
+                        "Cancelled by user.",
+                        responses=[*billed_responses, *all_responses],
+                    )
                 with client.messages.stream(
                     messages=messages, **request_kwargs
                 ) as stream:
@@ -771,6 +789,7 @@ def run_requirements_research(
     model: str,
     max_tokens: int,
     event_sink: EventSink = _noop_sink,
+    should_stop: Callable[[], bool] = lambda: False,
 ) -> RequirementsProfile:
     """Run every module research dimension in parallel; merge the results.
 
@@ -779,7 +798,8 @@ def run_requirements_research(
     the terminal event is the runner's job (it knows whether the result
     was adopted). Failure policy: per-dimension failures are recorded in
     ``dimension_statuses``; if EVERY dimension fails this raises
-    :exc:`ResearchFanoutError`.
+    :exc:`ResearchFanoutError` (a total cancellation via ``should_stop``
+    takes this same path — every dimension reports "Cancelled by user.").
     """
     dimensions = module.research_dimensions
     if not dimensions:
@@ -810,6 +830,7 @@ def run_requirements_research(
                 dimension=dimension,
                 model=model,
                 max_tokens=max_tokens,
+                should_stop=should_stop,
             ): dimension
             for dimension in dimensions
         }

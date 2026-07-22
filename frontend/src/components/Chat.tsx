@@ -11,6 +11,8 @@ interface Props {
   onSend: (text: string) => void;
   /** Start the guided tour (Batch 6) — the onboarding starter chip. */
   onStartOnboarding: () => void;
+  /** Stop the in-flight turn, forwarded to the composer. */
+  onStop: () => void;
   /** WI2 "Ask model" prefill, forwarded to the composer. */
   prefill?: { text: string; nonce: number };
 }
@@ -20,6 +22,7 @@ export default function Chat({
   busy,
   onSend,
   onStartOnboarding,
+  onStop,
   prefill,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -124,7 +127,7 @@ export default function Chat({
           </div>
         )}
       </div>
-      <Composer disabled={busy} onSend={onSend} prefill={prefill} />
+      <Composer disabled={busy} onSend={onSend} onStop={onStop} prefill={prefill} />
     </section>
   );
 }

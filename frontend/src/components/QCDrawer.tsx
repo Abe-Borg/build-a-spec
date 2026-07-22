@@ -28,6 +28,7 @@ import type {
   SpecDoc,
   UsageSummary,
 } from "../types";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface Props {
   qc: QcSnapshot | null;
@@ -36,6 +37,7 @@ interface Props {
   busy: boolean;
   usage: UsageSummary | null;
   onStart: () => void;
+  onStop: () => void;
   onApply: (findingIds: string[]) => void;
   onDismiss: (findingId: string, reason?: string) => void;
   onJump: (elementId: string) => void;
@@ -82,6 +84,7 @@ export default function QCDrawer({
   busy,
   usage,
   onStart,
+  onStop,
   onApply,
   onDismiss,
   onJump,
@@ -97,6 +100,7 @@ export default function QCDrawer({
   const [showRefuted, setShowRefuted] = useState(false);
   const [holding, setHolding] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const holdTimer = useRef<number | undefined>(undefined);
 
   const status = qc?.status ?? "idle";
@@ -202,11 +206,43 @@ export default function QCDrawer({
         >
           {startLabel}
         </button>
+        {running && (
+          <button
+            className="shrink-0 rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-err hover:text-err"
+            onClick={() => setStopConfirmOpen(true)}
+            title="Stop Final QC"
+          >
+            Stop
+          </button>
+        )}
       </div>
 
       {status === "failed" && qc?.error && (
         <p className="mt-1 text-[11px] text-err">Final QC: {qc.error}</p>
       )}
+
+      <ConfirmDialog
+        open={stopConfirmOpen}
+        title="Stop Final QC?"
+        body={
+          <p>
+            This stops the Final QC pass now in progress.{" "}
+            <strong className="text-ink">
+              Any progress made so far will be lost
+            </strong>{" "}
+            — findings already reviewed won&apos;t be saved, and the Fable 5
+            spend already incurred is not refunded. You&apos;ll need to
+            re-run the whole pass.
+          </p>
+        }
+        confirmLabel="Stop Final QC"
+        danger
+        onConfirm={() => {
+          setStopConfirmOpen(false);
+          onStop();
+        }}
+        onCancel={() => setStopConfirmOpen(false)}
+      />
 
       {expanded && (
         <div className="mt-1.5 max-h-[28rem] space-y-3 overflow-y-auto pb-1">

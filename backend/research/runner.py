@@ -46,6 +46,7 @@ class ResearchRunner:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._cancel_event: threading.Event | None = None
         self.status = STATUS_IDLE
         self.error = ""
         self.profile_result: RequirementsProfile | None = None
@@ -90,6 +91,8 @@ class ResearchRunner:
             self.error = ""
             self.profile_result = None
             self.events = []
+            cancel_event = threading.Event()
+            self._cancel_event = cancel_event
 
         trace_handle = _trace.research_start(
             project=project_profile.display_line(),
@@ -109,49 +112,44 @@ class ResearchRunner:
                     model=model,
                     max_tokens=max_tokens,
                     event_sink=_sink,
+                    should_stop=cancel_event.is_set,
                 )
             except ResearchFanoutError as exc:
-                with self._lock:
-                    self.status = STATUS_FAILED
-                    self.error = str(exc)
-                self._emit({"type": "research_failed", "error": str(exc)})
-                _trace.research_end(
-                    trace_handle, status=STATUS_FAILED, error=str(exc)
-                )
+                if self._try_resolve(STATUS_FAILED, error=str(exc)):
+                    self._emit({"type": "research_failed", "error": str(exc)})
+                    _trace.research_end(
+                        trace_handle, status=STATUS_FAILED, error=str(exc)
+                    )
             except Exception as exc:  # noqa: BLE001 — surfaced, never raised
                 message = f"{type(exc).__name__}: {exc}"
-                with self._lock:
-                    self.status = STATUS_FAILED
-                    self.error = message
-                self._emit({"type": "research_failed", "error": message})
-                _trace.research_end(
-                    trace_handle, status=STATUS_FAILED, error=message
-                )
+                if self._try_resolve(STATUS_FAILED, error=message):
+                    self._emit({"type": "research_failed", "error": message})
+                    _trace.research_end(
+                        trace_handle, status=STATUS_FAILED, error=message
+                    )
             else:
-                # Meter first, then flip to terminal — a status poller that
-                # sees "complete" must find the ledger already updated.
+                # Meter first — the spend is real even on a run that ends up
+                # discarded below (stopped, or superseded by a fresh start).
                 if usage_sink is not None:
                     try:
                         usage_sink(result.usage_total())
                     except Exception:  # noqa: BLE001 — metering never sinks a run
                         pass
-                with self._lock:
-                    self.status = STATUS_COMPLETE
-                    self.profile_result = result
-                self._emit(
-                    {
-                        "type": "research_complete",
-                        "item_count": len(result.items),
-                        "grounded_count": len(result.grounded_items()),
-                        "completed_dimensions": result.completed_dimensions,
-                        "failed_dimensions": result.failed_dimensions,
-                    }
-                )
-                _trace.research_end(
-                    trace_handle,
-                    status=STATUS_COMPLETE,
-                    items=len(result.items),
-                )
+                if self._try_resolve(STATUS_COMPLETE, profile_result=result):
+                    self._emit(
+                        {
+                            "type": "research_complete",
+                            "item_count": len(result.items),
+                            "grounded_count": len(result.grounded_items()),
+                            "completed_dimensions": result.completed_dimensions,
+                            "failed_dimensions": result.failed_dimensions,
+                        }
+                    )
+                    _trace.research_end(
+                        trace_handle,
+                        status=STATUS_COMPLETE,
+                        items=len(result.items),
+                    )
             finally:
                 if on_settled is not None:
                     try:
@@ -162,6 +160,50 @@ class ResearchRunner:
         thread = threading.Thread(target=_work, daemon=True)
         self._thread = thread
         thread.start()
+        return True
+
+    def _try_resolve(
+        self,
+        status: str,
+        *,
+        error: str = "",
+        profile_result: RequirementsProfile | None = None,
+    ) -> bool:
+        """Atomically move RUNNING -> a terminal status; False if it lost the race.
+
+        The single compare-and-set point for every way a run can end
+        (success, failure, or :meth:`stop`) — whichever caller acquires the
+        lock first while status is still ``running`` wins; a losing caller's
+        result/error is silently discarded rather than clobbering whatever
+        already resolved it.
+        """
+        with self._lock:
+            if self.status != STATUS_RUNNING:
+                return False
+            self.status = status
+            self.error = error
+            if profile_result is not None:
+                self.profile_result = profile_result
+            return True
+
+    def stop(self) -> bool:
+        """Request cancellation of the running run. False if none is running.
+
+        Resolves the run as ``failed`` immediately (the UI never waits on the
+        background thread) and signals ``should_stop`` so dimension work that
+        hasn't started its network call yet bails without spending anything;
+        a dimension already mid-call completes naturally but its result is
+        discarded — ``_try_resolve`` in the background thread's completion
+        handler will find the status already resolved and do nothing.
+        """
+        if not self._try_resolve(
+            STATUS_FAILED,
+            error="Stopped by user — progress was discarded.",
+        ):
+            return False
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+        self._emit({"type": "research_failed", "error": self.error})
         return True
 
     def restore(self, profile: RequirementsProfile) -> None:

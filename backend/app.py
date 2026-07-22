@@ -9,6 +9,9 @@ Endpoints (all JSON unless noted):
 - ``POST /api/key/test``      → validate a candidate/stored key (no save).
 - ``POST /api/session/reset`` → clear the conversation and the document.
 - ``POST /api/chat``          → Server-Sent Events stream of turn events.
+- ``POST /api/chat/stop``     → stop the in-flight turn (Claude.ai-style);
+  keeps whatever text/edits landed so far instead of rolling back (409 if
+  no turn is streaming).
 - ``POST /api/draft/full``    → the canned full-section draft directive for
   the frontend to send through the normal chat path (409 while a turn or
   research runs).
@@ -31,9 +34,13 @@ Endpoints (all JSON unless noted):
 - ``GET  /api/usage``         → this session's billed usage + est. cost.
 - ``GET  /api/research/status`` → research state + event log + profile view.
 - ``GET  /api/research/stream`` → SSE follow of the active/last run.
+- ``POST /api/research/stop``  → stop the running research fan-out (discards
+  whatever it found so far; 409 if none is running).
 - ``POST /api/qc/start``       → launch Final QC on Fable 5 (Batch 4).
 - ``GET  /api/qc/status``      → QC state + event log + result view.
 - ``GET  /api/qc/stream``      → SSE follow of the active/last QC run.
+- ``POST /api/qc/stop``        → stop the running Final QC pass (discards
+  whatever it found so far; 409 if none is running).
 - ``POST /api/qc/apply``       → apply accepted findings' fixes (one undo step).
 - ``POST /api/qc/dismiss``     → dismiss a finding (remembered across re-runs).
 - ``GET  /api/qc/export``      → the QC memo as a standalone ``.docx``.
@@ -374,6 +381,24 @@ def create_app() -> FastAPI:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.post("/api/chat/stop")
+    def chat_stop() -> JSONResponse:
+        """Stop the in-flight turn (Claude.ai-style stop button).
+
+        Not a rollback: whatever text/edits the turn produced before this
+        call lands normally through the SAME turn's ``turn_complete`` — the
+        streaming response just ends sooner. A 409 means no turn is
+        streaming (it likely just finished on its own); safe to ignore.
+        """
+        session = sessions.get_session()
+        if not session.turn_active:
+            return JSONResponse(
+                {"ok": False, "error": "No turn is streaming."},
+                status_code=409,
+            )
+        session.stop_requested.set()
+        return JSONResponse({"ok": True})
 
     @app.post("/api/draft/full")
     def draft_full() -> JSONResponse:
@@ -726,6 +751,20 @@ def create_app() -> FastAPI:
     def research_status() -> dict:
         return sessions.get_session().research.snapshot()
 
+    @app.post("/api/research/stop")
+    def research_stop() -> JSONResponse:
+        """Stop the running research fan-out. Discards whatever it found.
+
+        Resolves immediately as a failed run (the UI never waits on the
+        background thread to notice); a 409 means nothing is running.
+        """
+        if not sessions.get_session().research.stop():
+            return JSONResponse(
+                {"ok": False, "error": "Research is not running."},
+                status_code=409,
+            )
+        return JSONResponse({"ok": True})
+
     @app.get("/api/research/stream")
     def research_stream() -> StreamingResponse:
         runner = sessions.get_session().research
@@ -853,6 +892,20 @@ def create_app() -> FastAPI:
     @app.get("/api/qc/status")
     def qc_status() -> dict:
         return sessions.get_session().qc.snapshot()
+
+    @app.post("/api/qc/stop")
+    def qc_stop() -> JSONResponse:
+        """Stop the running Final QC pass. Discards whatever it found.
+
+        Resolves immediately as a failed run (the UI never waits on the
+        background thread to notice); a 409 means nothing is running.
+        """
+        if not sessions.get_session().qc.stop():
+            return JSONResponse(
+                {"ok": False, "error": "Final QC is not running."},
+                status_code=409,
+            )
+        return JSONResponse({"ok": True})
 
     @app.get("/api/qc/stream")
     def qc_stream() -> StreamingResponse:

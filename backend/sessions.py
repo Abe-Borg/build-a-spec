@@ -58,13 +58,15 @@ def project_default_stem(session: SessionState) -> str:
 
 
 def project_default_filename(session: SessionState) -> str:
-    """Date-stamped filename for a saved project.
+    """Timestamped filename for a saved project.
 
-    ``buildaspec-<stem>-<YYYY-MM-DD>.json``. Single source of truth for both
-    the ``/api/project/save`` download and the native save-on-close path, so
-    successive saves on the same day/section are easy to tell apart in a
-    folder without overwriting each other's date-less predecessor.
+    ``buildaspec-<stem>-<YYYY-MM-DD-HHMMSS>.json`` (UTC). Single source of
+    truth for both the ``/api/project/save`` download and the native
+    save-on-close path. The time component (not just the date) is
+    deliberate: two saves of the same section on the same day still need
+    distinct names, or the native Save dialog would default to the prior
+    save's filename and risk silently overwriting it.
     """
     stem = project_default_stem(session)
-    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return f"buildaspec-{stem}-{date}.json"
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
+    return f"buildaspec-{stem}-{stamp}.json"

@@ -123,8 +123,9 @@ backend/
                            + SpecModule + ResearchRunner + AuditRunner + QCRunner
                            + UsageLedger) + has_unsaved_progress /
                            project_payload / project_default_stem /
-                           project_default_filename (date-stamped
-                           buildaspec-<stem>-<YYYY-MM-DD>.json; shared by
+                           project_default_filename (timestamped
+                           buildaspec-<stem>-<YYYY-MM-DD-HHMMSS>.json, so
+                           same-day re-saves never collide; shared by
                            /api/project/save and the native save-on-close)
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint

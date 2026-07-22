@@ -62,6 +62,7 @@ from typing import Any, Iterator
 import anthropic
 
 from .. import settings
+from ..figures import CREATE_FIGURE_TOOL, FigureError, FigureStore
 from ..spec_doc import (
     APPLY_SPEC_EDITS_TOOL,
     DocumentStore,
@@ -70,6 +71,7 @@ from ..spec_doc import (
     open_questions,
     outline,
 )
+from ..spec_doc.project import chat_transcript
 from ..compliance import AuditRunner
 from ..qc import QCRunner
 from ..research import ResearchRunner, research_context_block
@@ -104,6 +106,7 @@ def _chat_tools() -> list[dict[str, Any]]:
     """
     return [
         APPLY_SPEC_EDITS_TOOL,
+        CREATE_FIGURE_TOOL,
         build_web_search_tool(max_uses=settings.CHAT_MAX_SEARCHES),
         build_web_fetch_tool(max_uses=settings.CHAT_MAX_FETCHES),
     ]
@@ -130,6 +133,10 @@ class SessionState:
     # Final QC on Fable 5 (Batch 4). Replaced on reset/load like the other
     # runners so an in-flight run settles into the abandoned object.
     qc: QCRunner = field(default_factory=QCRunner)
+    # Chat-authored figures (diagrams/schematics/tables). Like the document
+    # store it is reset in place (never reassigned) so a zombie turn's
+    # commit/rollback settles harmlessly against the cleared store.
+    figures: FigureStore = field(default_factory=FigureStore)
     # Session-scoped billed-usage meter (WI4). Reset/load clear it.
     usage: UsageLedger = field(default_factory=UsageLedger)
     # True while a model turn owns the document store (WI2). Manual edits are
@@ -150,6 +157,9 @@ class SessionState:
         self.research = ResearchRunner()
         self.audit = AuditRunner()
         self.qc = QCRunner()
+        # In-place reset (see the field comment): a still-streaming zombie
+        # turn holds this same object; clearing turn state neutralizes it.
+        self.figures.reset()
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()
@@ -264,6 +274,9 @@ def _turn_context_text(session: SessionState) -> str:
                 f"{item.get('label')} (element {item.get('element_id')})"
             )
         parts.append("\n".join(lines))
+    figure_stubs = session.figures.context_stubs()
+    if figure_stubs:
+        parts.append(figure_stubs)
     return (
         "=== PROJECT CONTEXT (current state — supersedes anything "
         "remembered from earlier turns) ===\n\n"
@@ -448,6 +461,8 @@ def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
                 yield {"type": "status", "kind": "writing"}
             elif btype == "tool_use" and bname == "apply_spec_edits":
                 yield {"type": "status", "kind": "drafting", "progress_chars": 0}
+            elif btype == "tool_use" and bname == "create_figure":
+                yield {"type": "status", "kind": "drawing"}
             elif btype == "server_tool_use" and bname == "web_search":
                 yield {"type": "status", "kind": "searching"}
             elif btype == "server_tool_use" and bname == "web_fetch":
@@ -537,8 +552,58 @@ def _enter_stream(
         return manager, manager.__enter__()
 
 
+def _run_create_figure(
+    session: SessionState,
+    block: dict[str, Any],
+    *,
+    message_index: int,
+    trace_handle: Any = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Execute one ``create_figure`` tool_use block.
+
+    On success the tool result echoes only id/kind/title (NOT the source —
+    the source never re-enters the model's context), and a ``figure`` UI
+    event carries the full figure to the chat for inline rendering. A bad
+    payload becomes an ``is_error`` result the model can correct.
+    """
+    try:
+        figure = session.figures.create(
+            block.get("input") or {}, message_index=message_index
+        )
+    except FigureError as exc:
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": f"create_figure rejected (nothing was created): {exc}",
+                "is_error": True,
+            },
+            [],
+        )
+    _trace.note(trace_handle, f"created figure {figure.fid} ({figure.kind})")
+    result = {
+        "type": "tool_result",
+        "tool_use_id": block.get("id"),
+        "content": json.dumps(
+            {
+                "created": {
+                    "fid": figure.fid,
+                    "kind": figure.kind,
+                    "title": figure.title,
+                }
+            },
+            ensure_ascii=False,
+        ),
+    }
+    return result, [{"type": "figure", "figure": figure.to_dict()}]
+
+
 def _run_tool(
-    session: SessionState, block: dict[str, Any], trace_handle: Any = None
+    session: SessionState,
+    block: dict[str, Any],
+    trace_handle: Any = None,
+    *,
+    message_index: int = 0,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Execute one (serialized) tool_use block.
 
@@ -546,12 +611,17 @@ def _run_tool(
     ``is_error`` results for the model to correct — they never abort the
     turn.
     """
-    if block.get("name") != "apply_spec_edits":
+    name = block.get("name")
+    if name == "create_figure":
+        return _run_create_figure(
+            session, block, message_index=message_index, trace_handle=trace_handle
+        )
+    if name != "apply_spec_edits":
         return (
             {
                 "type": "tool_result",
                 "tool_use_id": block.get("id"),
-                "content": f"Unknown tool: {block.get('name')}",
+                "content": f"Unknown tool: {name}",
                 "is_error": True,
             },
             [],
@@ -637,7 +707,17 @@ def stream_user_turn(
             ],
         }
     ]
+    # Ordinal of the assistant chat bubble this turn will become — used to
+    # re-inline figures into the right bubble when a saved project reloads
+    # (the transcript merges a turn's assistant text into one bubble, so all
+    # of a turn's figures share this index).
+    message_index = sum(
+        1
+        for entry in chat_transcript(session.history)
+        if entry["role"] == "assistant"
+    )
     session.doc.begin_turn()
+    session.figures.begin_turn()
     session.turn_active = True
     session.stop_requested.clear()
     generation = session.generation
@@ -770,7 +850,9 @@ def stream_user_turn(
                 if block.get("type") != "tool_use":
                     continue
                 check_session()
-                result, ui_events = _run_tool(session, block, trace_handle)
+                result, ui_events = _run_tool(
+                    session, block, trace_handle, message_index=message_index
+                )
                 tool_results.append(result)
                 for event in ui_events:
                     yield event
@@ -814,6 +896,7 @@ def stream_user_turn(
             return
         session.history.extend(_committed_messages(new_messages, user_text))
         doc_changed = session.doc.commit_turn()
+        session.figures.commit_turn()
         committed = True
     finally:
         # Runs on every exit — including GeneratorExit when the SSE client
@@ -826,6 +909,7 @@ def stream_user_turn(
             session.usage.add("interview", usage_totals, count_turn=True)
         if not committed:
             session.doc.rollback_turn()
+            session.figures.rollback_turn()
             _trace.turn_end(
                 trace_handle,
                 stop_reason=stop_reason,

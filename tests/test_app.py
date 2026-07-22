@@ -117,6 +117,7 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
     assert "document" in context
     assert [t["name"] for t in request["tools"]] == [
         "apply_spec_edits",
+        "create_figure",
         "web_search",
         "web_fetch",
     ]

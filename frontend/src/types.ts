@@ -10,6 +10,10 @@ export interface ChatMessage {
   status?: StreamStatus | null;
   /** Accumulated adaptive-thinking summary (WI1), shown collapsed. */
   thinking?: string;
+  /** Terse workflow-event acknowledgment (e.g. research / Final QC kicked
+   *  off) — rendered as a compact centered marker, not a model message, so
+   *  these never crowd the conversation. */
+  note?: boolean;
 }
 
 /** Transient streaming status kinds (WI1 status strip). */

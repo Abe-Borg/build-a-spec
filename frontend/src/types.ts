@@ -115,13 +115,24 @@ export interface DocOp {
   removed?: boolean;
 }
 
-/** A manual edit op sent to POST /api/doc/edit (WI2). */
+/** A manual edit op sent to POST /api/doc/edit (WI2; Batch 6 adds
+ *  set_project_profile for the tour's deterministic profile fill). */
 export interface EditOp {
-  action: "replace" | "delete" | "set_status" | "add_paragraph";
+  action:
+    | "replace"
+    | "delete"
+    | "set_status"
+    | "add_paragraph"
+    | "set_project_profile";
   target_id: string;
   text?: string;
   status?: BlockStatus;
   source_item_id?: string;
+  /** set_project_profile fields (target_id must be "sec"). */
+  city?: string;
+  state?: string;
+  country?: string;
+  client?: string;
 }
 
 export interface OpenItem {

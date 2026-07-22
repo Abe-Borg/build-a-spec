@@ -184,6 +184,25 @@ export async function draftFull(): Promise<string> {
   return data.message as string;
 }
 
+/**
+ * Fetch the guided-tour demo directive (Batch 6). The caller sends the
+ * returned text back through {@link streamChat} as a normal user turn, so
+ * the demo rides the one chat pipeline. 409 while a turn or research runs,
+ * or when the document is not blank.
+ */
+export async function startOnboardingDemo(discipline: string): Promise<string> {
+  const resp = await fetch("/api/onboarding/demo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ discipline }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `demo failed (${resp.status})`);
+  }
+  return data.message as string;
+}
+
 /** POST /api/chat and yield parsed SSE events as they arrive. */
 export async function* streamChat(
   message: string,

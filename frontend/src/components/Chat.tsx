@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ChatMessage } from "../types";
+import { STARTER_PROMPTS } from "../lib/tour";
+import { hasCompletedOnboarding } from "../lib/onboardingStorage";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 
@@ -7,11 +9,19 @@ interface Props {
   messages: ChatMessage[];
   busy: boolean;
   onSend: (text: string) => void;
+  /** Start the guided tour (Batch 6) — the onboarding starter chip. */
+  onStartOnboarding: () => void;
   /** WI2 "Ask model" prefill, forwarded to the composer. */
   prefill?: { text: string; nonce: number };
 }
 
-export default function Chat({ messages, busy, onSend, prefill }: Props) {
+export default function Chat({
+  messages,
+  busy,
+  onSend,
+  onStartOnboarding,
+  prefill,
+}: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
 
@@ -43,8 +53,13 @@ export default function Chat({ messages, busy, onSend, prefill }: Props) {
       el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
+  const toured = hasCompletedOnboarding();
+
   return (
-    <section className="flex min-w-[420px] flex-1 basis-[46%] flex-col border-r border-edge">
+    <section
+      className="flex min-w-[420px] flex-1 basis-[46%] flex-col border-r border-edge"
+      data-tour="chat-pane"
+    >
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -59,9 +74,47 @@ export default function Chat({ messages, busy, onSend, prefill }: Props) {
             <p className="mt-3 max-w-md text-sm leading-relaxed text-ink-dim">
               Tell me about the project — section, location, client — and
               I&apos;ll interview you through the rest while the spec takes
-              shape. For example: “21 13 13 wet-pipe for a hyperscale campus
-              in Council Bluffs, Iowa.”
+              shape. Or start from one of these:
             </p>
+            <div className="mt-6 flex w-full max-w-md flex-col gap-2 text-left">
+              {STARTER_PROMPTS.map((p) =>
+                p.kind === "onboarding" ? (
+                  <button
+                    key={p.label}
+                    onClick={onStartOnboarding}
+                    disabled={busy}
+                    className={`rounded-xl border border-accent/50 bg-accent/10 px-4 py-2.5 transition-colors hover:border-accent hover:bg-accent/15 disabled:pointer-events-none disabled:opacity-40 ${
+                      toured ? "" : "chip-pulse"
+                    }`}
+                  >
+                    <span className="block text-sm text-ink">
+                      🧭 {p.label}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-ink-faint">
+                      {toured
+                        ? "Take the tour again — live demo, ~5 minutes"
+                        : "Guided tour with a live demo · ~5 minutes"}
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    key={p.label}
+                    onClick={() => onSend(p.label)}
+                    disabled={busy}
+                    className="rounded-xl border border-edge bg-surface px-4 py-2.5 transition-colors hover:border-accent/70 hover:bg-raised disabled:pointer-events-none disabled:opacity-40"
+                  >
+                    <span className="block text-sm leading-snug text-ink-dim">
+                      {p.label}
+                    </span>
+                    {p.sub && (
+                      <span className="mt-0.5 block text-[11px] text-ink-faint">
+                        {p.sub}
+                      </span>
+                    )}
+                  </button>
+                ),
+              )}
+            </div>
           </div>
         ) : (
           <div className="mx-auto flex max-w-3xl flex-col gap-5">

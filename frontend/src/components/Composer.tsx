@@ -43,7 +43,7 @@ export default function Composer({ disabled, onSend, prefill }: Props) {
   };
 
   return (
-    <div className="border-t border-edge bg-surface p-4">
+    <div className="border-t border-edge bg-surface p-4" data-tour="composer">
       <div className="flex items-end gap-2 rounded-2xl border border-edge bg-bg p-2 focus-within:border-accent/70">
         <textarea
           ref={ref}

@@ -40,7 +40,9 @@ backend/
                            /api/qc/start|status|stream|apply|dismiss|export +
                            /api/readiness (audit endpoints kept, deprecated); Batch 5
                            adds GET /api/doc/diff + ?redline=master|version on
-                           /api/export/docx (+ baseline_index in _doc_payload)
+                           /api/export/docx (+ baseline_index in _doc_payload);
+                           Batch 6 adds POST /api/onboarding/demo (guided-tour
+                           demo directive; 409 unless the document is blank)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides);
@@ -150,14 +152,18 @@ backend/
                            rides store.to_dict/load — no project.py change)
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
-                           FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message)
+                           FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message);
+                           Batch 6 adds onboarding_demo_directive (discipline-
+                           sanitized) + _ONBOARDING_POLICY in the stable prompt
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
                            lint event + standards_payload
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
                            baselineIndex, settings-open, send loop (SSE switch incl.
-                           status/thinking_delta); QC follow-stream + accept/dismiss
+                           status/thinking_delta); QC follow-stream + accept/dismiss;
+                           Batch 6: drawerNonces + useOnboarding wiring, send →
+                           Promise<boolean> (clean-turn signal)
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
                            draftFull; key status/delete/test; usage; Batch 4 qc
                            start/status/stream/apply/dismiss + readiness; Batch 5
@@ -167,7 +173,16 @@ frontend/src/
   lib/reviewQueue.ts       [Batch 3] pure buildQueue(doc, mode) — the review
                            queue as a document-order walk (port of iter_paragraphs);
                            reviewCounts (outstanding imported/assumed)
-  components/*             Chat / MessageBubble (smoothing + thinking block) /
+  lib/tour.ts              [Batch 6] the guided tour as pure data: STARTER_PROMPTS,
+                           DISCIPLINES, DEMO_PROFILE, 22 steps in 4 chunks,
+                           anchorSelector (data-tour / el-* / doc-snapshot resolvers)
+  lib/useOnboarding.ts     [Batch 6] tour phase machine: runId zombie guard on
+                           every await, key-gate auto-advance, do-this-for-me +
+                           run-it dispatch, fresh-vs-keep resolution
+  lib/onboardingStorage.ts [Batch 6] "tour completed" flag — the codebase's first
+                           localStorage use; try/caught, cosmetic only
+  components/*             Chat (Batch 6 starter chips in the empty state) /
+                           MessageBubble (smoothing + thinking block) /
                            Composer (WI2 ask-model prefill) / ArtifactPanel (stepper,
                            Batch 5 Compare toggle + base picker + stat line + export
                            menu, save/open, ⚠ badge, "Draft full section" button,
@@ -178,9 +193,12 @@ frontend/src/
                            fix queue, hold-to-apply-criticals, refuted appendix) /
                            SpecDocument (paper rendering + inline manual-edit
                            affordances; Batch 5 read-only diff render via `diff` prop)
-                           / Header (spend ticker) / ApiKeyBanner /
+                           / Header (spend ticker; Batch 6 Tour button) / ApiKeyBanner /
                            StatusStrip (live status strip) / SettingsPanel (key mgmt +
-                           usage table + about)
+                           usage table + about) / OnboardingOverlay (Batch 6:
+                           spotlight cutout + step bubbles + discipline/entry/
+                           work-choice dialogs + resume pill; drawers gain an
+                           openNonce prop, controls gain data-tour anchors)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
   conftest.py              hermetic env + fresh session per test
@@ -205,6 +223,11 @@ tests/
                            (author/date/unique id, w:delText not w:t, para-mark
                            ins/del), doc/diff + redline API validation, no-baseline
                            400, baseline_index project round-trip, clean-path no-marks
+  test_onboarding.py       [Batch 6] demo-endpoint guards (incl. the blank-doc gate,
+                           with a profile-only variant pinning is_empty), directive
+                           snapshot + discipline sanitization, stable-policy
+                           snapshot, scripted 3-round demo e2e (patches per PART,
+                           one undo step, open_questions carries tbd+needs_input)
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -244,6 +267,13 @@ baseline_index}`; 400 out-of-range or base==cur), and `GET
 /api/export/docx?redline=master|version&base=N` streams a tracked-changes
 `.docx` (400 when `redline=master` and no baseline; filename gains
 ` - REDLINE`). The clean `GET /api/export/docx` is byte-identical to before.
+
+The Batch 6 onboarding surface is REST-only too, NO new SSE event:
+`POST /api/onboarding/demo` (`{discipline}`) returns `{ok, message}` (409
+while a turn streams / research runs, or when the document is non-empty)
+and the frontend sends `message` through `POST /api/chat` — the demo draft
+is an ordinary turn on the one streaming path, exactly like the Batch 3
+full-draft pass.
 
 Research has its own channel (a run outlives any one chat turn):
 `POST /api/research/start` (400 incomplete profile / no key; 409 while
@@ -804,6 +834,93 @@ events, no new env vars, no new Python deps (`difflib` is stdlib).
   literally "SpecDocument renders diff mode", kept read-only. (3) No vitest was
   added; the diff contract is pinned by the Python suite and the frontend
   consumes the identical serialization.
+
+## Batch 6 — implemented notes (v1.1.0: guided onboarding + starter prompts)
+
+Five starter-prompt chips in the empty chat; the first (verbatim, a frozen
+ask: "New to this software, show me how to use this") runs a guided tour of
+the whole workflow on a model-drafted demo spec. No new SSE events, no new
+deps (Python or npm), one new REST route.
+
+- **The demo rides the Batch 3 directive pattern.** `POST
+  /api/onboarding/demo` (`{discipline}`) is thin: 409 while a turn streams
+  or research runs, PLUS 409 when the document is non-empty — the tour
+  drafts onto a blank page only (the frontend's entry guard offers
+  fresh-start first; the endpoint backstops it). Returns `{ok, message:
+  onboarding_demo_directive(discipline)}` — server-owned in `prompts.py`,
+  sent back through `/api/chat` as a visible user turn.
+  `_sanitize_discipline` folds all whitespace (newline-injection guard),
+  caps at 80 chars, and falls back to the fire default when empty. The
+  directive demands: deliberately SMALL (ONE brief article per PART),
+  header via replace-on-`sec` (free-form, so any discipline works at the
+  document level), honest provenance (user said nothing → ≈all `assumed`),
+  exactly one `[TBD: …]` + one `needs_input` (live material for the tour's
+  open-items and review steps), NO profile / NO overrides (later steps
+  teach those), ~one-PART-per-call batches, a 2-3 sentence close, and NO
+  follow-up questions (the tour drives what happens next).
+- **`_ONBOARDING_POLICY`** ("# Guided-tour demo pass") joins the STABLE
+  prompt right after `_FULL_DRAFT_POLICY`: honor the stated discipline over
+  the catalog steer, small is correct, provenance/spec-language rules
+  stand. Module-stable, zero session data (the cache rule).
+- **The tour is scripted frontend, never model-driven.** `lib/tour.ts` is
+  pure data (the `reviewQueue.ts` convention): STARTER_PROMPTS,
+  DISCIPLINES, DEMO_PROFILE, 22 `TourStep`s in 4 chunks (*Reading the page
+  / Tell it about the project / Make it yours / Out the door*), and
+  `anchorSelector` (data-tour attrs, literal `el-*` ids, and
+  first-assumed/first-paragraph resolvers over the doc snapshot).
+  `lib/useOnboarding.ts` is the phase machine (`idle → entry-guard →
+  discipline → key-gate → generating → touring ↔ chunk-break ↔ paused →
+  work-choice`) with a `runId` counter re-checked after every await — the
+  frontend mirror of the backend `generation` zombie guard. Caps arrive
+  per render via latest-refs (StrictMode-safe); generation only ever
+  starts from a click handler; the key-gate effect auto-advances when
+  `health.api_key_present` flips (the banner's save already refreshes
+  health).
+- **Spotlight = no click shield (deliberate posture).** One
+  `pointer-events: none` div whose `box-shadow: 0 0 0 9999px` paints the
+  dim (box-shadows are never hit-testable) + an accent ring — every
+  control stays usable at every step; the tour directs attention, it never
+  jails. Anchor pipeline: querySelector retry (150ms × 14, drawers render
+  a frame after their nonce bump) → `scrollIntoView` → rAF settle (rect
+  stable 2 frames, ≤650ms) → follow via resize + capture-phase scroll +
+  ResizeObserver; re-resolve on doc-version change (undo can delete the
+  anchor); missing anchor → centered bubble, never a hang. z-layers:
+  cutout 60, bubbles/pill 65, tour dialogs 70 (app modals stay 50).
+- **`App.send` now returns `Promise<boolean>`** (true = the turn completed
+  cleanly); the generating phase awaits it. Existing callers ignore the
+  value. Failure → error card with Retry — safe because the failed turn
+  rolled back server-side, so the doc is still blank and the 409 guard
+  still passes.
+- **Drawer opening = optional `openNonce` prop** (Review / Research / QC
+  drawers + the panel's open-items block): a bump does `setExpanded(true)`;
+  users can re-collapse and the tour never fights back. App owns
+  `drawerNonces` + `bumpDrawer` (the `prefill.nonce` idiom).
+- **"Do this for me" is deterministic where possible**: the profile step
+  POSTs `set_project_profile` through `/api/doc/edit` (DEMO_PROFILE =
+  Phoenix, Arizona, USA, "Demo Client (tour)"; the frontend `EditOp` type
+  gained the action + fields), the review step confirms
+  `buildQueue(doc,"all")[0]` via `set_status`. The research and Final QC
+  steps offer REAL runs — "Run it now" + honest cost/time note + a
+  prominent skip (Abraham's call, AskUserQuestion 2026-07-22) — gated like
+  the drawers' own buttons (`profileComplete`/`hasContent`, not running,
+  not busy). The QC run-it intentionally bypasses QCDrawer's confirm
+  modal: the bubble's cost note IS that informed-consent step.
+- **Fresh-vs-keep**: the work-choice dialog fires on any exit into real
+  work (chunk-break "Start real work", the final Finish, the paused pill's
+  ✕). Fresh = `newSession()`; keep = end the tour. Either marks
+  `onboarding-completed` in localStorage (the codebase's FIRST localStorage
+  use — try/caught, cosmetic, drives only the chip sub-line/pulse). The
+  Header's "New session" and project load call `onboarding.abort()`; the
+  hook's own fresh paths call the RAW `newSession` — never re-wrap it.
+- **Re-entry**: a "Tour" button in the Header nav; same entry guard.
+- **Tests**: `tests/test_onboarding.py` clones the `test_full_draft.py`
+  shape (guards incl. a profile-only non-empty variant pinning the
+  `is_empty` gate, directive snapshot, sanitization, stable-policy
+  snapshot, and a scripted 3-round e2e). The frontend stays pinned by
+  `npm run build` (tsc) — the no-vitest convention stands; a Playwright
+  smoke of the pre-generation flow (chips → discipline → key-gate →
+  entry-guard → fresh-start) was verified against the real DOM during
+  development.
 
 ## Commands
 

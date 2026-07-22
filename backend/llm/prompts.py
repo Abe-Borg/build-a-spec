@@ -85,6 +85,15 @@ The user can ask you — through a "Draft the complete section" action — to la
 - Keep each apply_spec_edits call to a sensible batch (roughly an article or a few related articles — about 25 ops as a soft guide) instead of one enormous batch, so edit patches stream steadily and the user watches the section assemble live. This is a pacing guide, never a cap: don't hold back content to hit a number.
 - Everything else is unchanged — the provenance discipline, the standards editions in effect, grounded research items (tag derived provisions with source_item_id), and the defaults-first posture all apply exactly as in a normal turn. The user reviews the assumed blocks one at a time afterward, so honest over-flagging is exactly right; never silently confirm a guess to look finished."""
 
+_ONBOARDING_POLICY = """\
+# Guided-tour demo pass
+
+The app ships a guided onboarding tour that can send you a demo-draft directive (it announces itself as "the guided-tour DEMO pass"). When that directive arrives:
+
+- Honor its stated discipline even when it is outside this module's specialty: the demo exists to teach the app's mechanics, so draft brief, plainly competent provisions in that discipline instead of steering back to the section catalog.
+- Small is correct there. One short article per PART, small edit batches, a 2-3 sentence close, and no follow-up questions — the tour, not you, drives the next steps. Resist the instinct to be thorough.
+- Everything else stands: the provenance stamps, [TBD: ...] markers, and imperative spec language apply exactly as in real work."""
+
 _INTERVIEW_POLICY = """\
 # Interview policy — defaults-first
 
@@ -130,6 +139,46 @@ Draft the COMPLETE section now — the full first pass, top to bottom.
 - Stamp provenance honestly: confirmed only for what I've actually stated or approved; assumed for your defensible playbook / standards / domain defaults (say in one line what you assumed); [TBD: …] or needs_input for anything that genuinely can't be defaulted yet. Over-flag rather than silently guess — I'll walk the assumptions afterward.
 - Keep each apply_spec_edits call to a sensible size (an article or a few related articles) so the document assembles visibly as you go, not in one silent mega-batch at the end.
 - When you're done, give me a short summary in chat plus the 2–3 highest-value follow-up questions."""
+
+
+# The guided-tour demo directive (Batch 6). Like FULL_DRAFT_DIRECTIVE it is
+# an ordinary user message the frontend sends back through the normal chat
+# path, server-owned so the demo's obligations stay versioned with the
+# engine. The complementary stable-prompt policy is ``_ONBOARDING_POLICY``.
+# The discipline is free text from the tour's picker — sanitized here, and
+# rendered only into this per-turn user message, never the cached stable
+# prompt.
+_DEFAULT_DEMO_DISCIPLINE = "Fire Protection & Suppression"
+_MAX_DISCIPLINE_LEN = 80
+
+_ONBOARDING_DEMO_DIRECTIVE = """\
+This is the guided-tour DEMO pass — I'm brand new here, and the tour is about to teach me the app on whatever you draft. Draft a deliberately SMALL demonstration section for my discipline: {discipline}.
+
+- Keep it genuinely short: set the section header (replace on "sec") with a sensible section number and title for this discipline, then ONE brief article per PART with 2-4 short paragraphs each. It is a teaching prop, not a deliverable — do not expand it.
+- If the discipline is outside your specialty, draft it anyway, plainly and competently, in generic {discipline} conventions — the demo teaches the app's mechanics, not deep domain content.
+- Stamp provenance honestly: I've told you nothing, so nearly everything will be assumed. Include exactly one inline [TBD: ...] marker and exactly one needs_input paragraph so the open-items tracking has live material for the tour.
+- Do NOT set the project profile and do NOT record edition overrides — later tour steps teach those.
+- Keep each apply_spec_edits call small (about one PART per call) so the document assembles visibly while I watch.
+- Close with 2-3 sentences in chat saying what you built and that it's a demo. Ask NO follow-up questions — the guided tour drives what happens next."""
+
+
+def _sanitize_discipline(discipline: str) -> str:
+    """Collapse the picker's free text to one bounded line.
+
+    Whitespace folding neutralizes newline injection into the directive's
+    bullet structure; the cap keeps a pasted paragraph from bloating the
+    turn. Empty (or whitespace-only) input falls back to the module's home
+    discipline rather than erroring — the demo must always be startable.
+    """
+    cleaned = " ".join(discipline.split())[:_MAX_DISCIPLINE_LEN].strip()
+    return cleaned or _DEFAULT_DEMO_DISCIPLINE
+
+
+def onboarding_demo_directive(discipline: str) -> str:
+    """The guided-tour demo directive for ``discipline`` (Batch 6)."""
+    return _ONBOARDING_DEMO_DIRECTIVE.format(
+        discipline=_sanitize_discipline(discipline)
+    )
 
 
 def _render_catalog(module: SpecModule) -> str:
@@ -193,6 +242,7 @@ def render_system_prompt(module: SpecModule) -> str:
             _RESEARCH_POLICY,
             _GAP_AND_ADAPT,
             _FULL_DRAFT_POLICY,
+            _ONBOARDING_POLICY,
             _render_catalog(module),
             _render_playbook(module),
             conventions,

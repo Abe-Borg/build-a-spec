@@ -11,7 +11,7 @@
  * Final QC drawer supersedes it (its code_compliance + completeness lenses
  * cover the audit's ground and more).
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ResearchRunStatus, ResearchSnapshot, SpecDoc } from "../types";
 import Tip from "./Tip";
 
@@ -21,6 +21,8 @@ interface Props {
   research: ResearchSnapshot | null;
   busy: boolean;
   onStart: () => void;
+  /** Guided-tour "ensure open" (Batch 6): a bump expands the drawer. */
+  openNonce?: number;
 }
 
 const statusLabel: Record<ResearchRunStatus, string> = {
@@ -47,8 +49,14 @@ export default function ResearchDrawer({
   research,
   busy,
   onStart,
+  openNonce,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
+  // The tour opens the drawer by bumping the nonce; the user can still
+  // collapse it freely — the tour never fights back.
+  useEffect(() => {
+    if (openNonce) setExpanded(true);
+  }, [openNonce]);
   const status: ResearchRunStatus = research?.status ?? "idle";
   const running = status === "running";
   const items = research?.profile?.items ?? [];
@@ -66,7 +74,10 @@ export default function ResearchDrawer({
         : "Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).";
 
   return (
-    <div className="border-t border-edge bg-bg/70 px-5 py-2">
+    <div
+      className="border-t border-edge bg-bg/70 px-5 py-2"
+      data-tour="research-drawer"
+    >
       <div className="flex items-baseline gap-2">
         <button
           className="flex min-w-0 flex-1 items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
@@ -92,6 +103,7 @@ export default function ResearchDrawer({
             className="rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
             onClick={onStart}
             disabled={startDisabled}
+            data-tour="research-start"
           >
             {status === "complete" ? "Re-research" : "Research requirements"}
           </button>

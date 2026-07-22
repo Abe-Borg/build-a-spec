@@ -10,6 +10,8 @@ interface Props {
   onInstallUpdate: () => void;
   onOpenSettings: () => void;
   onOpenHelp: (topic: HelpTopic) => void;
+  /** Restart the guided tour (Batch 6) — same entry guard as the chip. */
+  onStartTour: () => void;
 }
 
 export default function Header({
@@ -21,6 +23,7 @@ export default function Header({
   onInstallUpdate,
   onOpenSettings,
   onOpenHelp,
+  onStartTour,
 }: Props) {
   const spend = usage?.estimated_cost_usd.total ?? 0;
   const spendLabel = spend > 0 ? `≈ $${spend.toFixed(2)}` : "—";
@@ -47,6 +50,13 @@ export default function Header({
             {t.label}
           </button>
         ))}
+        <button
+          onClick={onStartTour}
+          title="Guided tour of the whole workflow, on a live demo spec"
+          className="rounded-md px-2.5 py-1 text-xs text-ink-dim transition-colors hover:bg-raised hover:text-ink"
+        >
+          Tour
+        </button>
       </nav>
       <div className="flex-1" />
       <div className="flex flex-none items-center gap-3">
@@ -73,6 +83,7 @@ export default function Header({
         <button
           onClick={onOpenSettings}
           title="Estimated spend this session — click for the breakdown"
+          data-tour="spend-pill"
           className="rounded-full border border-edge bg-raised px-3 py-1 text-xs text-ink-dim tabular-nums transition-colors hover:border-accent hover:text-accent"
         >
           {spendLabel}
@@ -91,6 +102,7 @@ export default function Header({
         <button
           onClick={onNewSession}
           disabled={busy}
+          data-tour="new-session"
           className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-xs text-ink transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
         >
           New session
@@ -99,6 +111,7 @@ export default function Header({
           onClick={onOpenSettings}
           title="Settings"
           aria-label="Settings"
+          data-tour="settings"
           className="flex h-8 w-8 items-center justify-center rounded-lg border border-edge bg-raised text-ink-dim transition-colors hover:border-accent hover:text-accent"
         >
           <svg

@@ -23,7 +23,10 @@ export default function IssuesDrawer({
 }) {
   if (issues.length === 0) return null;
   return (
-    <div className="max-h-44 overflow-y-auto border-t border-edge bg-bg/60 px-5 py-2.5">
+    <div
+      className="max-h-44 overflow-y-auto border-t border-edge bg-bg/60 px-5 py-2.5"
+      data-tour="lint-issues"
+    >
       <p className="text-[11px] font-medium tracking-wide text-ink-dim uppercase">
         Issues ({issues.length}) — advisory
       </p>
@@ -56,7 +59,10 @@ export function StandardsStrip({ standards }: { standards: StandardInfo[] }) {
   const overrides = standards.filter((s) => s.is_override);
 
   return (
-    <div className="border-t border-edge bg-bg/80 px-5 py-2">
+    <div
+      className="border-t border-edge bg-bg/80 px-5 py-2"
+      data-tour="standards-strip"
+    >
       <button
         className="flex w-full items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
         onClick={() => setExpanded((v) => !v)}

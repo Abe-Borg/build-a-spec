@@ -86,6 +86,19 @@ export default function MessageBubble({
   const streaming = !!msg.streaming;
   const smoothed = useSmoothText(msg.text, streaming);
 
+  // A workflow-event note (research / Final QC started): a compact, muted,
+  // centered marker — clearly an event, not the model speaking, and quiet
+  // enough to not read as chat noise.
+  if (msg.note) {
+    return (
+      <div className="flex justify-center">
+        <span className="rounded-full border border-edge bg-surface/50 px-3 py-1 text-[11px] text-ink-faint">
+          {msg.text}
+        </span>
+      </div>
+    );
+  }
+
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">

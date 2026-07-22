@@ -75,7 +75,10 @@ backend/
   research/runner.py       session-bound run lifecycle: daemon thread, event
                            log, snapshot, SSE follow generator (Build-a-Spec
                            native — no Spec Critic source); Batch 7 adds stop()
-                           (per-run cancel_event + race-free _try_resolve)
+                           (per-run cancel_event + race-free _try_resolve). The
+                           snapshot's per-dimension view now carries the human
+                           dimension title (DimensionStatus.title, defaulted +
+                           serialized) for the findings-report headings
   updates.py               [PORT ≈verbatim: Spec Critic src/core/updates.py]
                            GitHub-Releases manifest updater: https-only +
                            redirect-downgrade guard, SHA-256 verify before
@@ -130,7 +133,10 @@ backend/
   sessions.py              single module-level SessionState (history + DocumentStore
                            + SpecModule + ResearchRunner + AuditRunner + QCRunner
                            + FigureStore + UsageLedger) + has_unsaved_progress /
-                           project_payload / project_default_stem (shared by
+                           project_payload / project_default_stem /
+                           project_default_filename (timestamped
+                           buildaspec-<stem>-<YYYY-MM-DD-HHMMSS>.json, so
+                           same-day re-saves never collide; shared by
                            /api/project/save and the native save-on-close)
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint
@@ -193,7 +199,10 @@ frontend/src/
                            (window.buildaspecRequestClose hook), send loop (SSE
                            switch incl. status/thinking_delta); QC follow-stream
                            + accept/dismiss; Batch 6: drawerNonces + useOnboarding
-                           wiring, send → Promise<boolean> (clean-turn signal)
+                           wiring, send → Promise<boolean> (clean-turn signal);
+                           addNote posts a terse, non-conversational chat marker
+                           when research / Final QC starts (acknowledges the
+                           panel-button click in the chat window)
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
                            draftFull; key status/delete/test; usage; Batch 4 qc
                            start/status/stream/apply/dismiss + readiness; Batch 5
@@ -219,7 +228,8 @@ frontend/src/
                            downloads — the render-time sanitization boundary for
                            model-authored markup (never inline into the bridge DOM)
   components/*             Chat (Batch 6 starter chips in the empty state) /
-                           MessageBubble (smoothing + thinking block) /
+                           MessageBubble (smoothing + thinking block; renders a
+                           ChatMessage.note as a compact centered event marker) /
                            Composer (WI2 ask-model prefill; Batch 7 swaps the send
                            button for a stop-square while streaming, Claude.ai-style
                            — always clickable, no confirmation) / ArtifactPanel
@@ -230,7 +240,13 @@ frontend/src/
                            ResearchDrawer (research only — audit UI retired in
                            Batch 4; also hosts the project-profile form for direct
                            upfront entry; Batch 7 adds a Stop button while running,
-                           gated by ConfirmDialog) / QCDrawer (Batch 4: readiness
+                           gated by ConfirmDialog; a "View report" button opens
+                           ResearchReportModal) / ResearchReportModal (the full
+                           research findings report — a read-only modal grouping
+                           the completed profile's items by dimension/agent with
+                           per-dimension telemetry + full item detail; the same
+                           profile already rides the chat model's per-turn context)
+                           / QCDrawer (Batch 4: readiness
                            checklist, lens progress, accept/dismiss fix queue,
                            hold-to-apply-criticals, refuted appendix; Batch 7 adds a
                            Stop button while running, gated by ConfirmDialog) /

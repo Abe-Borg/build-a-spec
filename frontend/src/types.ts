@@ -13,6 +13,10 @@ export interface ChatMessage {
   /** Ids of figures the model created in this assistant turn (rendered
    * inline beneath the text). Resolved against the session figure map. */
   figureIds?: string[];
+  /** Terse workflow-event acknowledgment (e.g. research / Final QC kicked
+   *  off) — rendered as a compact centered marker, not a model message, so
+   *  these never crowd the conversation. */
+  note?: boolean;
 }
 
 /** Transient streaming status kinds (WI1 status strip). */
@@ -280,6 +284,9 @@ export interface ResearchItemView {
 
 export interface ResearchDimensionView {
   dimension_id: string;
+  /** Human title of the research dimension/agent (e.g. "Governing building
+   *  and fire codes"); empty on legacy profiles saved before it was stored. */
+  title: string;
   status: string;
   item_count: number;
   grounded_count: number;

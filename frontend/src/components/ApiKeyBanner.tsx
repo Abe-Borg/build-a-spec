@@ -26,7 +26,7 @@ export default function ApiKeyBanner({ onSaved }: Props) {
   };
 
   return (
-    <div className="border-b border-edge bg-raised px-5 py-3">
+    <div className="border-b border-edge bg-raised px-5 py-3" data-tour="key-banner">
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-sm text-ink-dim">
           Enter your Anthropic API key to start building:

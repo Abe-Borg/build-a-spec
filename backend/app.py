@@ -12,6 +12,9 @@ Endpoints (all JSON unless noted):
 - ``POST /api/draft/full``    → the canned full-section draft directive for
   the frontend to send through the normal chat path (409 while a turn or
   research runs).
+- ``POST /api/onboarding/demo`` → the guided-tour demo directive (Batch 6)
+  for the frontend to send through the normal chat path (409 while a turn
+  or research runs, or when the document is not blank).
 - ``GET  /api/doc``           → current document snapshot + open questions.
 - ``POST /api/doc/undo``      → step to the previous per-turn version.
 - ``POST /api/doc/redo``      → step forward again.
@@ -77,7 +80,7 @@ from .llm.client import (
     reset_client_cache,
 )
 from .llm.conversation import standards_payload, stream_user_turn
-from .llm.prompts import FULL_DRAFT_DIRECTIVE
+from .llm.prompts import FULL_DRAFT_DIRECTIVE, onboarding_demo_directive
 from .project_profile import ProjectProfile
 from .spec_doc import SpecEditError, diff_sections, lint_document, open_questions
 from .spec_doc.docx_export import (
@@ -106,6 +109,10 @@ class SaveKeyRequest(BaseModel):
 
 class EditDocRequest(BaseModel):
     ops: list[dict[str, Any]]
+
+
+class OnboardingDemoRequest(BaseModel):
+    discipline: str
 
 
 class QcApplyRequest(BaseModel):
@@ -400,6 +407,49 @@ def create_app() -> FastAPI:
                 status_code=409,
             )
         return JSONResponse({"ok": True, "message": FULL_DRAFT_DIRECTIVE})
+
+    @app.post("/api/onboarding/demo")
+    def onboarding_demo(body: OnboardingDemoRequest) -> JSONResponse:
+        """Hand the frontend the guided-tour demo directive (Batch 6).
+
+        Thin like ``/api/draft/full``: the returned message goes back
+        through ``/api/chat`` as an ordinary, visible user turn, so the
+        demo rides the one streaming path. The extra guard is the blank
+        document — the tour drafts its demo onto a clean page only; the
+        frontend offers "start fresh" first, and this 409 backstops it.
+        """
+        session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is already streaming — wait for "
+                    "it to finish before starting the demo.",
+                },
+                status_code=409,
+            )
+        if session.research.status == "running":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Requirements research is running — let it "
+                    "finish before starting the demo.",
+                },
+                status_code=409,
+            )
+        if not session.doc.doc.is_empty():
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "The guided tour drafts its demo into a blank "
+                    "session — start a New session first (the tour offers "
+                    "this).",
+                },
+                status_code=409,
+            )
+        return JSONResponse(
+            {"ok": True, "message": onboarding_demo_directive(body.discipline)}
+        )
 
     # --- Document ----------------------------------------------------------
 

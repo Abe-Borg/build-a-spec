@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 /** True when the user asked for reduced motion (live-updates on change). */
-function usePrefersReducedMotion(): boolean {
+export function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(
     () =>
       typeof window !== "undefined" &&

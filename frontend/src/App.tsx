@@ -44,6 +44,8 @@ import Chat from "./components/Chat";
 import ArtifactPanel from "./components/ArtifactPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import HelpModal, { type HelpTopic } from "./components/HelpModal";
+import OnboardingOverlay from "./components/OnboardingOverlay";
+import { useOnboarding, type DrawerName } from "./lib/useOnboarding";
 import CloseDialog from "./components/CloseDialog";
 
 let nextId = 0;
@@ -72,6 +74,13 @@ export default function App() {
   // Composer prefill for the review queue's "Ask model" (WI2). The nonce
   // fires the composer's effect even when the same ref is asked twice.
   const [prefill, setPrefill] = useState({ text: "", nonce: 0 });
+  // Guided-tour drawer-open nonces (Batch 6) — a bump expands that drawer.
+  const [drawerNonces, setDrawerNonces] = useState({
+    review: 0,
+    research: 0,
+    qc: 0,
+    openItems: 0,
+  });
   const busyRef = useRef(false);
   const researchFollowRef = useRef(false);
   const qcFollowRef = useRef(false);
@@ -363,8 +372,11 @@ export default function App() {
     });
   };
 
-  const send = async (text: string) => {
-    if (busyRef.current) return;
+  // Resolves true only when the server completed the turn cleanly — the
+  // guided tour awaits this to advance past its demo-generation phase.
+  // Existing callers ignore the value.
+  const send = async (text: string): Promise<boolean> => {
+    if (busyRef.current) return false;
     busyRef.current = true;
     setBusy(true);
     setChangedIds(new Set());
@@ -378,6 +390,7 @@ export default function App() {
     // that dies without one — network drop, fetch abort, backend restart —
     // was rolled back server-side, so the panel must resync.
     let sawTerminalEvent = false;
+    let failed = false;
     try {
       for await (const evt of streamChat(text)) {
         if (evt.type === "text_delta") {
@@ -423,6 +436,7 @@ export default function App() {
           setStandards(evt.standards);
         } else if (evt.type === "error") {
           sawTerminalEvent = true;
+          failed = true;
           updateLast({
             text: evt.message,
             error: true,
@@ -448,6 +462,7 @@ export default function App() {
         // crashes the UI.
       }
     } catch (e) {
+      failed = true;
       updateLast({
         text: e instanceof Error ? e.message : String(e),
         error: true,
@@ -462,6 +477,7 @@ export default function App() {
       busyRef.current = false;
       setBusy(false);
     }
+    return sawTerminalEvent && !failed;
   };
 
   /** Fetch the canned full-draft directive and send it as a normal turn. */
@@ -562,6 +578,9 @@ export default function App() {
   };
 
   const onLoadProject = async (file: File) => {
+    // Loading a project is session-changing work — a mid-tour load kills
+    // the tour (the runId guard keeps any in-flight step from advancing).
+    onboarding.abort();
     try {
       const parsed: unknown = JSON.parse(await file.text());
       const result = await loadProject(parsed);
@@ -587,6 +606,29 @@ export default function App() {
     }
   };
 
+  // --- Guided tour (Batch 6) ---
+  const hasContent =
+    !!doc &&
+    (doc.section.number !== "" ||
+      doc.section.title !== "" ||
+      doc.parts.some((p) => p.articles.length > 0));
+
+  const bumpDrawer = useCallback((name: DrawerName) => {
+    setDrawerNonces((prev) => ({ ...prev, [name]: prev[name] + 1 }));
+  }, []);
+
+  const onboarding = useOnboarding({
+    send,
+    editDoc: onEditDoc,
+    startResearch: onStartResearch,
+    startQc: onStartQc,
+    newSession,
+    prefillComposer: onAskModel,
+    health,
+    doc,
+    hasContent,
+  });
+
   return (
     <div className="flex h-full flex-col">
       <Header
@@ -594,7 +636,13 @@ export default function App() {
         busy={busy}
         update={update}
         usage={usage}
-        onNewSession={newSession}
+        onNewSession={() => {
+          // The header button is session-changing work: kill the tour first
+          // (the hook's own fresh-start path calls the raw newSession).
+          onboarding.abort();
+          void newSession();
+        }}
+        onStartTour={onboarding.start}
         onInstallUpdate={onInstallUpdate}
         onOpenSettings={() => {
           setSettingsOpen(true);
@@ -618,6 +666,16 @@ export default function App() {
         onNavigate={setHelpTopic}
         health={health}
       />
+      <OnboardingOverlay
+        ob={onboarding}
+        doc={doc}
+        busy={busy}
+        profileComplete={profileComplete}
+        researchStatus={research?.status ?? "idle"}
+        qcStatus={qc?.status ?? "idle"}
+        hasContent={hasContent}
+        bumpDrawer={bumpDrawer}
+      />
       <CloseDialog
         open={closePromptOpen}
         onSave={() => {
@@ -631,7 +689,13 @@ export default function App() {
         onCancel={() => setClosePromptOpen(false)}
       />
       <main className="flex min-h-0 flex-1">
-        <Chat messages={messages} busy={busy} onSend={send} prefill={prefill} />
+        <Chat
+          messages={messages}
+          busy={busy}
+          onSend={send}
+          onStartOnboarding={onboarding.start}
+          prefill={prefill}
+        />
         <ArtifactPanel
           doc={doc}
           openItems={openItems}
@@ -657,6 +721,7 @@ export default function App() {
           onDraftFull={onDraftFull}
           onAskModel={onAskModel}
           onFetchDiff={getDocDiff}
+          drawerNonces={drawerNonces}
         />
       </main>
     </div>

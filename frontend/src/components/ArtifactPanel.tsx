@@ -49,6 +49,13 @@ interface Props {
   onDraftFull: () => void;
   onAskModel: (text: string) => void;
   onFetchDiff: (base: number, cur?: number) => Promise<SectionDiffPayload>;
+  /** Guided-tour "ensure open" nonces (Batch 6), one per drawer. */
+  drawerNonces?: {
+    review: number;
+    research: number;
+    qc: number;
+    openItems: number;
+  };
 }
 
 function EmptyState() {
@@ -115,12 +122,18 @@ export default function ArtifactPanel({
   onDraftFull,
   onAskModel,
   onFetchDiff,
+  drawerNonces,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
   // Open-items list collapses like the Review / Final QC drawers; the count
   // stays visible in the bar, so nothing is lost at a glance when collapsed.
   const [openItemsExpanded, setOpenItemsExpanded] = useState(false);
+  // The tour opens the list by bumping the nonce (same idiom as the drawers).
+  const openItemsNonce = drawerNonces?.openItems ?? 0;
+  useEffect(() => {
+    if (openItemsNonce) setOpenItemsExpanded(true);
+  }, [openItemsNonce]);
   // item_id -> short tooltip text for the paper's source chips.
   const sourceLookup = useMemo(() => {
     const map = new Map<string, string>();
@@ -239,7 +252,10 @@ export default function ArtifactPanel({
     "rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
 
   return (
-    <aside className="flex min-w-[420px] flex-1 basis-[54%] flex-col bg-surface">
+    <aside
+      className="flex min-w-[420px] flex-1 basis-[54%] flex-col bg-surface"
+      data-tour="doc-panel"
+    >
       <div className="flex items-center justify-between gap-3 border-b border-edge px-5 py-2.5">
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="flex items-center gap-2 text-xs font-medium tracking-wide text-ink-dim uppercase">
@@ -260,31 +276,37 @@ export default function ArtifactPanel({
               }`}
               onClick={onDraftFull}
               disabled={draftDisabled}
+              data-tour="draft-full"
             >
               ✨ Draft full section
             </button>
           </Tip>
         </div>
         <div className="flex items-center gap-1.5">
-          <button
-            className={actionButton}
-            onClick={onUndo}
-            disabled={busy || compareMode || version.index === 0}
-            title="Step back one version"
+          <span
+            className="flex items-center gap-1.5"
+            data-tour="version-stepper"
           >
-            ‹
-          </button>
-          <span className="px-0.5 text-[11px] text-ink-faint tabular-nums">
-            v{version.index + 1}/{version.count}
+            <button
+              className={actionButton}
+              onClick={onUndo}
+              disabled={busy || compareMode || version.index === 0}
+              title="Step back one version"
+            >
+              ‹
+            </button>
+            <span className="px-0.5 text-[11px] text-ink-faint tabular-nums">
+              v{version.index + 1}/{version.count}
+            </span>
+            <button
+              className={actionButton}
+              onClick={onRedo}
+              disabled={busy || compareMode || version.index >= version.count - 1}
+              title="Step forward one version"
+            >
+              ›
+            </button>
           </span>
-          <button
-            className={actionButton}
-            onClick={onRedo}
-            disabled={busy || compareMode || version.index >= version.count - 1}
-            title="Step forward one version"
-          >
-            ›
-          </button>
           <Tip
             tip={
               !canCompare
@@ -302,6 +324,7 @@ export default function ArtifactPanel({
                 compareMode ? setCompareMode(false) : enterCompare()
               }
               disabled={busy || !canCompare}
+              data-tour="compare"
             >
               {compareMode ? "Exit compare" : "Compare"}
             </button>
@@ -311,7 +334,7 @@ export default function ArtifactPanel({
               redline vs the master / a chosen version. Downloads are disabled
               while a turn streams — mid-turn the live doc holds provisional
               edits and only committed versions are downloadable. */}
-          <div className="relative">
+          <div className="relative" data-tour="export">
             <button
               className={
                 actionButton +
@@ -384,6 +407,7 @@ export default function ArtifactPanel({
             aria-disabled={busy}
             download
             title="Save the project (conversation + document) as JSON"
+            data-tour="save"
           >
             Save
           </a>
@@ -419,6 +443,7 @@ export default function ArtifactPanel({
               className={actionButton}
               onClick={() => importRef.current?.click()}
               disabled={busy || hasContent}
+              data-tour="import-master"
             >
               Import master
             </button>
@@ -500,6 +525,7 @@ export default function ArtifactPanel({
         onEditDoc={onEditDoc}
         onAskModel={onAskModel}
         onJump={scrollToElement}
+        openNonce={drawerNonces?.review}
       />
 
       <ResearchDrawer
@@ -509,6 +535,7 @@ export default function ArtifactPanel({
         busy={busy}
         onStart={onStartResearch}
         onEditDoc={onEditDoc}
+        openNonce={drawerNonces?.research}
       />
 
       <QCDrawer
@@ -521,12 +548,16 @@ export default function ArtifactPanel({
         onApply={onApplyQc}
         onDismiss={onDismissQc}
         onJump={scrollToElement}
+        openNonce={drawerNonces?.qc}
       />
 
       <IssuesDrawer issues={lintIssues} onJump={scrollToElement} />
 
       {openItems.length > 0 && (
-        <div className="border-t border-edge bg-bg/70 px-5 py-2">
+        <div
+          className="border-t border-edge bg-bg/70 px-5 py-2"
+          data-tour="open-items"
+        >
           <button
             className="flex w-full items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
             onClick={() => setOpenItemsExpanded((v) => !v)}

@@ -1,12 +1,59 @@
 # Build-a-Spec
 
-**v1.0.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.1.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First target domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## Current Status — v1.0.0 (Batch 5: Redline export + version diff)
+## Current Status — v1.1.0 (Batch 6: Guided onboarding + starter prompts)
+
+**A first-time user goes from an empty chat to "I understand this whole app"
+in about five minutes, on a live demo.** The empty chat now opens with five
+starter-prompt chips; the first — *"New to this software, show me how to use
+this"* — runs a guided tour of the entire workflow on a demo spec the model
+drafts in front of you.
+
+- **Discipline first, then a live demo.** The tour asks your discipline
+  (Fire Protection & Suppression / Mechanical (HVAC) / Plumbing / Electrical /
+  free-text other), fetches a server-owned demo directive
+  (`POST /api/onboarding/demo` — the Batch 3 thin-directive pattern, 409
+  unless the document is blank), and sends it through the ordinary chat
+  path: the demo streams onto the paper like any real turn, deliberately
+  small (one brief article per PART, plus one planted `[TBD: …]` and one
+  needs-input block so the training has live open items to point at). A new
+  stable-prompt policy ("Guided-tour demo pass") keeps the fire-module
+  persona from steering a Plumbing demo back to sprinklers.
+- **A scripted spotlight tour, in chunks.** 22 steps in 4 chunks — *Reading
+  the page / Tell it about the project / Make it yours / Out the door* —
+  cover every station of the workflow: statuses & provenance, open items,
+  lint, standards, the spend meter, the defaults-first interview, profile,
+  research, draft-full, inline edits, versions, the review queue, compare,
+  master import, Final QC, readiness, export, save/open, settings. Each step
+  dims the screen around the real control (a pointer-events-none box-shadow
+  cutout — nothing is ever click-jailed) with a dismissible bubble beside
+  it. Chunk breaks pause for *Continue / Ask a question / Start real work*.
+- **"Do this for me" where input is needed.** The profile step records a
+  demo profile deterministically through `POST /api/doc/edit`
+  (`set_project_profile` — no tokens, one undo step) or prefills the
+  composer so you type your own; the review step can confirm the first
+  outstanding block for you. The research and Final QC steps offer real
+  **"Run it now"** buttons with honest cost/time notes and a prominent skip
+  (decided with Abraham 2026-07-22) — runs stream in their drawers while the
+  tour continues.
+- **Start fresh or keep it.** Leaving the tour for real work (mid-tour or at
+  the end) asks: start fresh (session reset) or keep the demo as a scratch
+  starting point. Starting the tour over a non-empty session hits an entry
+  guard (save-first hint + fresh-start), and the endpoint's blank-document
+  409 backstops it server-side.
+- **Re-entry + polish.** A "Tour" button in the header restarts it any time.
+  ✕ / Escape collapse the tour to a floating "Resume tour" pill — nothing is
+  lost. The onboarding chip pulses until the first completion (the
+  codebase's first, cosmetic-only, localStorage use). Reduced motion is
+  honored throughout, and a missing anchor degrades to a centered bubble,
+  never a hang.
+
+## Shipped in v1.0.0 (Batch 5: Redline export + version diff) and still current
 
 **The single most impressive thing the app can hand another human: a `.docx`
 with genuine Word tracked changes showing exactly what Build-a-Spec did to
@@ -262,7 +309,8 @@ All five roadmap phases are shipped. What remains is real-world hardening: cutti
 main.py                  pywebview shell: starts the backend, opens the native window
 backend/                 FastAPI + the conversation engine (Python 3.11+)
   app.py                 /api/health, /api/key, /api/session/reset, /api/chat (SSE),
-                         /api/draft/full, /api/doc (+ undo/redo/edit/diff),
+                         /api/draft/full, /api/onboarding/demo,
+                         /api/doc (+ undo/redo/edit/diff),
                          /api/export/docx (+ ?redline=master|version),
                          /api/import/master,
                          /api/research/start|status|stream,
@@ -340,6 +388,7 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
   llm/
     client.py            Anthropic client factory (monkeypatch seam for tests)
     prompts.py           engine prompt protocol + module-rendered system prompt
+                         + the full-draft and onboarding-demo directives
     conversation.py      streaming turn loop: apply_spec_edits dispatch,
                          web_search/web_fetch with pause_turn continuation,
                          adaptive thinking, the per-turn PROJECT CONTEXT
@@ -349,10 +398,19 @@ frontend/                Vite + React + TypeScript + Tailwind v4
   src/App.tsx            state owner: chat + document + lint + research + QC +
                          readiness + update + SSE dispatch
   src/lib/api.ts         SSE parsing over fetch; doc/undo/edit/diff/draft-full/
-                         project/research/import/qc/readiness/update calls
+                         onboarding-demo/project/research/import/qc/readiness/
+                         update calls
   src/lib/reviewQueue.ts buildQueue(doc, mode): the review queue as a pure
                          document-order walk (port of iter_paragraphs)
-  src/components/        Chat, MessageBubble (markdown), Composer (ask-model prefill),
+  src/lib/tour.ts        the guided tour as pure data: starter prompts,
+                         disciplines, 22 steps in 4 chunks, anchor resolvers
+  src/lib/useOnboarding.ts  the tour's phase machine (runId zombie guard,
+                         key-gate auto-advance, do-this-for-me dispatch)
+  src/lib/onboardingStorage.ts  "tour completed" flag (cosmetic localStorage)
+  src/components/        Chat (starter chips), MessageBubble (markdown),
+                         Composer (ask-model prefill),
+                         OnboardingOverlay (spotlight cutout + bubbles +
+                         discipline/entry/work-choice dialogs + resume pill),
                          Header (spend ticker + update pill), ApiKeyBanner,
                          ArtifactPanel (stepper, Compare toggle + base picker,
                          export menu, import, "Draft full section", open items),

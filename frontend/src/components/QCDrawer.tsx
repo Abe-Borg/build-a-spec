@@ -39,6 +39,8 @@ interface Props {
   onApply: (findingIds: string[]) => void;
   onDismiss: (findingId: string, reason?: string) => void;
   onJump: (elementId: string) => void;
+  /** Guided-tour "ensure open" (Batch 6): a bump expands the drawer. */
+  openNonce?: number;
 }
 
 const HOLD_MS = 800;
@@ -83,8 +85,14 @@ export default function QCDrawer({
   onApply,
   onDismiss,
   onJump,
+  openNonce,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
+  // The tour opens the drawer by bumping the nonce; the user can still
+  // collapse it freely — the tour never fights back.
+  useEffect(() => {
+    if (openNonce) setExpanded(true);
+  }, [openNonce]);
   const [openRationale, setOpenRationale] = useState<Record<string, boolean>>({});
   const [showRefuted, setShowRefuted] = useState(false);
   const [holding, setHolding] = useState(false);
@@ -155,7 +163,10 @@ export default function QCDrawer({
 
   return (
     <>
-    <div className="border-t border-edge bg-bg/70 px-5 py-2">
+    <div
+      className="border-t border-edge bg-bg/70 px-5 py-2"
+      data-tour="qc-drawer"
+    >
       <div className="flex items-baseline gap-2">
         <button
           className="flex min-w-0 flex-1 items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
@@ -201,7 +212,10 @@ export default function QCDrawer({
         <div className="mt-1.5 max-h-[28rem] space-y-3 overflow-y-auto pb-1">
           {/* Issue readiness */}
           {readiness && (
-            <div className="rounded-lg border border-edge bg-surface/50 p-2.5">
+            <div
+              className="rounded-lg border border-edge bg-surface/50 p-2.5"
+              data-tour="readiness"
+            >
               <p className="flex items-center gap-2 text-[11px] font-medium tracking-wide text-ink-dim uppercase">
                 Issue readiness
                 <span

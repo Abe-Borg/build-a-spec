@@ -116,7 +116,7 @@ export interface DocOp {
 }
 
 /** A manual edit op sent to POST /api/doc/edit (WI2; set_project_profile added
- * for the panel's project-profile form). */
+ * for the panel's project-profile form and the tour's deterministic fill). */
 export interface EditOp {
   action:
     | "replace"
@@ -128,8 +128,8 @@ export interface EditOp {
   text?: string;
   status?: BlockStatus;
   source_item_id?: string;
-  /** set_project_profile fields — provide only the ones being changed; an
-   * explicit empty string clears that field. */
+  /** set_project_profile fields (target_id must be "sec") — provide only
+   * the ones being changed; an explicit empty string clears that field. */
   city?: string;
   state?: string;
   country?: string;

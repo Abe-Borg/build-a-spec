@@ -174,6 +174,17 @@ body {
   }
 }
 
+/* First-run attention pulse on the guided-tour starter chip (Batch 6).
+   Same posture as .draft-pulse: a few glows, then it settles. */
+.chip-pulse {
+  animation: draft-pulse 1.3s ease-in-out 3;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chip-pulse {
+    animation: none;
+  }
+}
+
 /* Blinking caret shown while a reply streams */
 .streaming-caret::after {
   content: "▍";

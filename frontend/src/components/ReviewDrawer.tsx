@@ -29,6 +29,8 @@ interface Props {
   onEditDoc: (ops: EditOp[]) => void | Promise<unknown>;
   onAskModel: (text: string) => void;
   onJump: (elementId: string) => void;
+  /** Guided-tour "ensure open" (Batch 6): a bump expands the drawer. */
+  openNonce?: number;
 }
 
 const HOLD_MS = 800;
@@ -51,8 +53,14 @@ export default function ReviewDrawer({
   onEditDoc,
   onAskModel,
   onJump,
+  openNonce,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
+  // The tour opens the drawer by bumping the nonce; the user can still
+  // collapse it freely — the tour never fights back.
+  useEffect(() => {
+    if (openNonce) setExpanded(true);
+  }, [openNonce]);
   const [mode, setMode] = useState<ReviewMode>("all");
   const [cursor, setCursor] = useState(0);
   const [editing, setEditing] = useState(false);
@@ -293,7 +301,10 @@ export default function ReviewDrawer({
     "rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
 
   return (
-    <div className="border-t border-edge bg-bg/70 px-5 py-2">
+    <div
+      className="border-t border-edge bg-bg/70 px-5 py-2"
+      data-tour="review-drawer"
+    >
       <div className="flex items-baseline gap-2">
         <button
           className="flex min-w-0 flex-1 items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"

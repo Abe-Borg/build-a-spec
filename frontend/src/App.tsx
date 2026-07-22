@@ -710,7 +710,6 @@ export default function App() {
       <SettingsPanel
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        health={health}
         usage={usage}
         onKeyChange={refreshHealth}
       />

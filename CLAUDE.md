@@ -28,7 +28,11 @@ file is the working reference for AI-assisted development sessions.
 ## Layout
 
 ```
-main.py                    entry point: uvicorn thread + pywebview window
+main.py                    entry point: uvicorn thread + pywebview window;
+                           _CloseController offers to save progress on window
+                           close (closing-event veto → off-thread frontend
+                           prompt → js_api save_and_close/discard_and_close,
+                           native save via SAVE_DIALOG; never traps the user)
 backend/
   settings.py              models (claude-sonnet-5 default), effort levels
                            (interview high / research xhigh), max_tokens at
@@ -105,7 +109,9 @@ backend/
                            settings.PRICING; not persisted (per-session meter)
   sessions.py              single module-level SessionState (history + DocumentStore
                            + SpecModule + ResearchRunner + AuditRunner + QCRunner
-                           + UsageLedger)
+                           + UsageLedger) + has_unsaved_progress /
+                           project_payload / project_default_stem (shared by
+                           /api/project/save and the native save-on-close)
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint
                            vocabulary, dormant research dimensions); import-time
@@ -156,8 +162,10 @@ backend/
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
-                           baselineIndex, settings-open, send loop (SSE switch incl.
-                           status/thinking_delta); QC follow-stream + accept/dismiss
+                           baselineIndex, settings-open, closePromptOpen
+                           (window.buildaspecRequestClose hook), send loop (SSE
+                           switch incl. status/thinking_delta); QC follow-stream
+                           + accept/dismiss
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
                            draftFull; key status/delete/test; usage; Batch 4 qc
                            start/status/stream/apply/dismiss + readiness; Batch 5
@@ -180,7 +188,8 @@ frontend/src/
                            affordances; Batch 5 read-only diff render via `diff` prop)
                            / Header (spend ticker) / ApiKeyBanner /
                            StatusStrip (live status strip) / SettingsPanel (key mgmt +
-                           usage table + about)
+                           usage table + about) / CloseDialog (save-before-leaving
+                           prompt: Save & close / Close without saving / Cancel)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
   conftest.py              hermetic env + fresh session per test

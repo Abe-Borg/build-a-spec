@@ -263,6 +263,26 @@ class _FakeStreamCtx:
             usage=getattr(self._turn, "usage", None),
         )
 
+    @property
+    def current_message_snapshot(self):
+        """Stand-in for the real SDK's incrementally-accumulated snapshot.
+
+        The real ``MessageStream`` updates this on every raw event, so a
+        consumer that stops mid-iteration (see ``stream_user_turn``'s
+        stop-request check) sees exactly what streamed so far, no more. This
+        fake replays a fixed script rather than truly accumulating event by
+        event, so it returns the same (full) content ``get_final_message``
+        would — good enough to exercise the "read the snapshot instead of
+        draining the stream" code path without duplicating the SDK's
+        accumulation logic. ``stop_reason`` is ``None``, matching the real
+        API (only set once the message is fully complete).
+        """
+        return SimpleNamespace(
+            content=self._turn.content,
+            stop_reason=None,
+            usage=getattr(self._turn, "usage", None),
+        )
+
 
 class _FakeMessages:
     def __init__(self, turns: list[Any]):

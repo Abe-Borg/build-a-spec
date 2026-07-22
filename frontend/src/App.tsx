@@ -33,6 +33,9 @@ import {
   resetSession,
   startQc,
   startResearch,
+  stopChat,
+  stopQc,
+  stopResearch,
   streamChat,
   streamQc,
   streamResearch,
@@ -177,6 +180,18 @@ export default function App() {
       }));
     }
   }, [followQc]);
+
+  /** Stop the running Final QC pass (confirmed in the drawer — loses progress). */
+  const onStopQc = useCallback(async () => {
+    try {
+      await stopQc();
+    } catch {
+      // Best-effort — the run may have already settled on its own.
+    } finally {
+      refreshQc();
+      refreshReadiness();
+    }
+  }, [refreshQc, refreshReadiness]);
 
   // A page load during a running QC (or a resumed project) picks it back up.
   useEffect(() => {
@@ -331,6 +346,17 @@ export default function App() {
     }
   }, [followResearch]);
 
+  /** Stop the running research fan-out (confirmed in the drawer — loses progress). */
+  const onStopResearch = useCallback(async () => {
+    try {
+      await stopResearch();
+    } catch {
+      // Best-effort — the run may have already settled on its own.
+    } finally {
+      refreshResearch();
+    }
+  }, [refreshResearch]);
+
   // A page load during a running research (or a resumed project) picks the
   // stream back up.
   useEffect(() => {
@@ -478,6 +504,19 @@ export default function App() {
       setBusy(false);
     }
     return sawTerminalEvent && !failed;
+  };
+
+  /**
+   * Stop the in-flight turn (Claude.ai-style). No confirmation — whatever
+   * text/edits already landed stay; the turn ends through its own normal
+   * `turn_complete`, same as if the model had finished on its own.
+   */
+  const onStop = async () => {
+    try {
+      await stopChat();
+    } catch {
+      // Best-effort — the turn may have already finished on its own.
+    }
   };
 
   /** Fetch the canned full-draft directive and send it as a normal turn. */
@@ -694,6 +733,7 @@ export default function App() {
           busy={busy}
           onSend={send}
           onStartOnboarding={onboarding.start}
+          onStop={onStop}
           prefill={prefill}
         />
         <ArtifactPanel
@@ -715,7 +755,9 @@ export default function App() {
           onLoadProject={onLoadProject}
           onImportMaster={onImportMaster}
           onStartResearch={onStartResearch}
+          onStopResearch={onStopResearch}
           onStartQc={onStartQc}
+          onStopQc={onStopQc}
           onApplyQc={onApplyQc}
           onDismissQc={onDismissQc}
           onDraftFull={onDraftFull}

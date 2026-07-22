@@ -20,6 +20,7 @@ import type {
   ResearchSnapshot,
   SpecDoc,
 } from "../types";
+import ConfirmDialog from "./ConfirmDialog";
 import Tip from "./Tip";
 
 interface Props {
@@ -28,6 +29,7 @@ interface Props {
   research: ResearchSnapshot | null;
   busy: boolean;
   onStart: () => void;
+  onStop: () => void;
   onEditDoc: (ops: EditOp[]) => void;
   /** Guided-tour "ensure open" (Batch 6): a bump expands the drawer. */
   openNonce?: number;
@@ -164,6 +166,7 @@ export default function ResearchDrawer({
   research,
   busy,
   onStart,
+  onStop,
   onEditDoc,
   openNonce,
 }: Props) {
@@ -173,6 +176,7 @@ export default function ResearchDrawer({
   useEffect(() => {
     if (openNonce) setExpanded(true);
   }, [openNonce]);
+  const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const status: ResearchRunStatus = research?.status ?? "idle";
   const running = status === "running";
   const items = research?.profile?.items ?? [];
@@ -239,11 +243,42 @@ export default function ResearchDrawer({
             )}
           </button>
         </Tip>
+        {running && (
+          <button
+            className="shrink-0 rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-err hover:text-err"
+            onClick={() => setStopConfirmOpen(true)}
+            title="Stop research"
+          >
+            Stop
+          </button>
+        )}
       </div>
 
       {status === "failed" && research?.error && (
         <p className="mt-1 text-[11px] text-err">{research.error}</p>
       )}
+
+      <ConfirmDialog
+        open={stopConfirmOpen}
+        title="Stop research?"
+        body={
+          <p>
+            This stops the requirements research now in progress.{" "}
+            <strong className="text-ink">
+              Any progress made so far will be lost
+            </strong>{" "}
+            — completed dimensions won&apos;t be saved, and you&apos;ll need
+            to start over.
+          </p>
+        }
+        confirmLabel="Stop research"
+        danger
+        onConfirm={() => {
+          setStopConfirmOpen(false);
+          onStop();
+        }}
+        onCancel={() => setStopConfirmOpen(false)}
+      />
 
       {expanded && (
         <div className="mt-1.5">

@@ -42,10 +42,19 @@ turn commits (one undo snapshot per changed turn) only after a fully
 successful turn. Every failure path yields one ``error`` event, rolls the
 document back to its pre-turn state, and leaves history unchanged, so a
 resend never duplicates anything.
+
+User-initiated stop (``POST /api/chat/stop``) is deliberately NOT a failure
+path: it sets ``SessionState.stop_requested``, which this loop checks
+between streamed events and between rounds. Stopping closes the in-flight
+request immediately (no draining the rest of the network stream) but takes
+the SAME commit path as a normal turn — whatever text/edits landed before
+the click are kept, exactly like Claude.ai's stop button — rather than the
+rollback a genuine failure gets.
 """
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterator
@@ -127,6 +136,11 @@ class SessionState:
     # rejected in this window — a mid-turn manual edit would be swept into the
     # streaming turn's commit or rollback.
     turn_active: bool = False
+    # Set by POST /api/chat/stop to ask the in-flight turn to stop generating.
+    # Cleared at the start of every turn. Checked between streamed events and
+    # between rounds; stopping commits whatever was produced so far (like
+    # Claude.ai's stop button) rather than rolling back like a failure.
+    stop_requested: threading.Event = field(default_factory=threading.Event)
 
     def reset(self) -> None:
         self.history.clear()
@@ -600,7 +614,10 @@ def stream_user_turn(
     ``turn_complete``, which carries the turn's aggregated billed usage.
     ``status`` frames are transient UI hints, never persisted. Any failure
     yields a single ``error`` event, rolls the document back, and leaves
-    history unchanged.
+    history unchanged. A user-initiated stop (``session.stop_requested``) is
+    not a failure: it ends the round loop early but still commits — history
+    and the document keep whatever was produced before the click — and the
+    turn still ends in a normal ``turn_complete``.
     """
     user_text = (user_text or "").strip()
     if not user_text:
@@ -622,6 +639,7 @@ def stream_user_turn(
     ]
     session.doc.begin_turn()
     session.turn_active = True
+    session.stop_requested.clear()
     generation = session.generation
     trace_handle = _trace.turn_start(
         model=model or settings.INTERVIEW_MODEL,
@@ -658,6 +676,28 @@ def stream_user_turn(
         resumed_from_pause = False
         for _round in range(MAX_TOOL_ROUNDS):
             check_session()
+            if session.stop_requested.is_set():
+                # Caught between rounds (e.g. right after a tool dispatch, or
+                # before round 0 even started) rather than mid-stream: end the
+                # turn now with whatever prior rounds produced. The message
+                # list must still end on an assistant turn — a dangling
+                # tool_result (or, at round 0, nothing at all) would leave two
+                # consecutive user-role messages once the next turn's message
+                # is appended, which the API rejects.
+                stop_reason = "user_stop"
+                if new_messages[-1].get("role") != "assistant":
+                    new_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "[Generation stopped by user.]",
+                                }
+                            ],
+                        }
+                    )
+                break
             # Never dead air between rounds: from send to first token there is
             # always a live status. A pause_turn resume keeps server work
             # visible as "searching" rather than a generic "working".
@@ -670,15 +710,28 @@ def stream_user_turn(
             manager, stream = _enter_stream(
                 client, request_kwargs(), trace_handle
             )
+            stopped_mid_stream = False
             try:
-                yield from _stream_events(stream)
-                final = stream.get_final_message()
+                for ui_event in _stream_events(stream):
+                    yield ui_event
+                    if session.stop_requested.is_set():
+                        stopped_mid_stream = True
+                        break
+                # A stop closes the request now — draining the rest via
+                # get_final_message() would keep paying for tokens the UI
+                # already stopped showing. current_message_snapshot holds
+                # exactly what was accumulated from the events seen so far.
+                final = (
+                    stream.current_message_snapshot
+                    if stopped_mid_stream
+                    else stream.get_final_message()
+                )
             finally:
                 manager.__exit__(None, None, None)
 
             _merge_usage(usage_totals, getattr(final, "usage", None))
             content = _content_blocks_to_dicts(final.content)
-            stop_reason = final.stop_reason
+            stop_reason = "user_stop" if stopped_mid_stream else final.stop_reason
 
             if stop_reason == "pause_turn":
                 # Long server-tool work paused server-side: re-send the
@@ -689,12 +742,25 @@ def stream_user_turn(
                 resumed_from_pause = True
                 continue
             if stop_reason != "tool_use":
-                # A truncated response (e.g. max_tokens) can still carry
-                # tool_use blocks; committing one without a tool_result
-                # would make every later request invalid. Keep the text.
-                content = [b for b in content if b["type"] != "tool_use"] or [
-                    {"type": "text", "text": "[Response was cut off before completion.]"}
-                ]
+                # A truncated response (max_tokens, or a user stop) can still
+                # carry a tool_use block (whole or mid-input-JSON); committing
+                # one without a tool_result would make every later request
+                # invalid, so it's dropped. An empty/whitespace-only text
+                # block left over from a stop clicked before any real content
+                # arrived is dropped too, rather than committing blank text.
+                fallback = (
+                    "[Generation stopped by user.]"
+                    if stop_reason == "user_stop"
+                    else "[Response was cut off before completion.]"
+                )
+                content = [
+                    b
+                    for b in content
+                    if b.get("type") != "tool_use"
+                    and not (
+                        b.get("type") == "text" and not b.get("text", "").strip()
+                    )
+                ] or [{"type": "text", "text": fallback}]
                 new_messages.append({"role": "assistant", "content": content})
                 break
             new_messages.append({"role": "assistant", "content": content})

@@ -222,6 +222,20 @@ export async function* streamChat(
   yield* readSse<StreamEvent>(resp);
 }
 
+/**
+ * Stop the in-flight turn (Claude.ai-style stop button). Whatever text/edits
+ * landed before this call still lands normally through that turn's own
+ * `turn_complete` — this just asks the stream to end sooner. A 409 (no turn
+ * streaming) means it likely already finished on its own; safe to ignore.
+ */
+export async function stopChat(): Promise<void> {
+  const resp = await fetch("/api/chat/stop", { method: "POST" });
+  if (!resp.ok && resp.status !== 409) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error ?? `stop failed (${resp.status})`);
+  }
+}
+
 /* --- Research (Phase 4) --- */
 
 export async function startResearch(): Promise<void> {
@@ -229,6 +243,15 @@ export async function startResearch(): Promise<void> {
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
     throw new Error(data.error ?? `research start failed (${resp.status})`);
+  }
+}
+
+/** Stop the running research fan-out. Discards whatever it found so far. */
+export async function stopResearch(): Promise<void> {
+  const resp = await fetch("/api/research/stop", { method: "POST" });
+  if (!resp.ok && resp.status !== 409) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error ?? `stop failed (${resp.status})`);
   }
 }
 
@@ -268,6 +291,15 @@ export async function startQc(): Promise<void> {
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
     throw new Error(data.error ?? `QC start failed (${resp.status})`);
+  }
+}
+
+/** Stop the running Final QC pass. Discards whatever it found so far. */
+export async function stopQc(): Promise<void> {
+  const resp = await fetch("/api/qc/stop", { method: "POST" });
+  if (!resp.ok && resp.status !== 409) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error ?? `stop failed (${resp.status})`);
   }
 }
 

@@ -43,7 +43,9 @@ interface Props {
   onLoadProject: (file: File) => void;
   onImportMaster: (file: File) => void;
   onStartResearch: () => void;
+  onStopResearch: () => void;
   onStartQc: () => void;
+  onStopQc: () => void;
   onApplyQc: (findingIds: string[]) => void;
   onDismissQc: (findingId: string, reason?: string) => void;
   onDraftFull: () => void;
@@ -116,7 +118,9 @@ export default function ArtifactPanel({
   onLoadProject,
   onImportMaster,
   onStartResearch,
+  onStopResearch,
   onStartQc,
+  onStopQc,
   onApplyQc,
   onDismissQc,
   onDraftFull,
@@ -534,6 +538,7 @@ export default function ArtifactPanel({
         research={research}
         busy={busy}
         onStart={onStartResearch}
+        onStop={onStopResearch}
         onEditDoc={onEditDoc}
         openNonce={drawerNonces?.research}
       />
@@ -545,6 +550,7 @@ export default function ArtifactPanel({
         busy={busy}
         usage={usage}
         onStart={onStartQc}
+        onStop={onStopQc}
         onApply={onApplyQc}
         onDismiss={onDismissQc}
         onJump={scrollToElement}

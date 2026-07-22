@@ -46,7 +46,9 @@ backend/
                            adds GET /api/doc/diff + ?redline=master|version on
                            /api/export/docx (+ baseline_index in _doc_payload);
                            Batch 6 adds POST /api/onboarding/demo (guided-tour
-                           demo directive; 409 unless the document is blank)
+                           demo directive; 409 unless the document is blank);
+                           Batch 7 adds POST /api/chat/stop + /api/research/stop
+                           + /api/qc/stop (409 when nothing is running/streaming)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides);
@@ -59,7 +61,10 @@ backend/
                            pause_turn continuation loop, 2× search-budget ceiling,
                            structured→tagged-JSON parse, grounding, retries with
                            billed-usage aggregation; RequirementsProfile +
-                           render_text + research_context_block (trim-to-cap)
+                           render_text + research_context_block (trim-to-cap);
+                           Batch 7 threads a should_stop callback into
+                           _run_dimension (checked before each retry/continuation
+                           — cooperative, not mid-call interruption)
   research/grounding.py    [PORT: source_grounding.py + verifier collectors]
                            normalize_url, validate_cited_sources, evidence
                            collectors, stop-reason classes
@@ -69,7 +74,8 @@ backend/
                            api_config.py web-tool builders + domain blocklist]
   research/runner.py       session-bound run lifecycle: daemon thread, event
                            log, snapshot, SSE follow generator (Build-a-Spec
-                           native — no Spec Critic source)
+                           native — no Spec Critic source); Batch 7 adds stop()
+                           (per-run cancel_event + race-free _try_resolve)
   updates.py               [PORT ≈verbatim: Spec Critic src/core/updates.py]
                            GitHub-Releases manifest updater: https-only +
                            redirect-downgrade guard, SHA-256 verify before
@@ -92,10 +98,14 @@ backend/
                            search ceiling, PDF elision, retry policy, grounding) →
                            adversarial verification panel (tie→refuters) → ops
                            dry-run validation → QCResult (content-addressed
-                           findings, dismiss memory)
+                           findings, dismiss memory); Batch 7 threads should_stop
+                           into _run_lens/_verify_one (same cooperative pattern
+                           as research/engine.py)
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
                            daemon thread, event log, snapshot, SSE follow +
-                           stream_end; accept/dismiss mutators under lock
+                           stream_end; accept/dismiss mutators under lock;
+                           Batch 7 adds stop() (same cancel_event/_try_resolve
+                           pattern as research/runner.py)
   tracing/                 [PORT: Spec Critic src/tracing/ core ≈verbatim]
                            recorder (JSONL spans/events/prompts + run.json,
                            writer thread, ContextVar parents), spans (BAS
@@ -162,7 +172,12 @@ backend/
                            Batch 6 adds onboarding_demo_directive (discipline-
                            sanitized) + _ONBOARDING_POLICY in the stable prompt
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
-                           lint event + standards_payload
+                           lint event + standards_payload; Batch 7 adds
+                           SessionState.stop_requested (threading.Event) — a
+                           user stop ends the round loop early but still
+                           commits (current_message_snapshot, not
+                           get_final_message(), so the closed request doesn't
+                           drain)
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -174,7 +189,8 @@ frontend/src/
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
                            draftFull; key status/delete/test; usage; Batch 4 qc
                            start/status/stream/apply/dismiss + readiness; Batch 5
-                           getDocDiff
+                           getDocDiff; Batch 7 stopChat/stopResearch/stopQc (409
+                           from an already-settled run/turn is swallowed, not thrown)
   lib/useSmoothText.ts     [Batch 2] rAF typewriter smoothing + reduced-motion +
                            splitStableTail (cheap-markdown prefix/tail split)
   lib/reviewQueue.ts       [Batch 3] pure buildQueue(doc, mode) — the review
@@ -190,15 +206,20 @@ frontend/src/
                            localStorage use; try/caught, cosmetic only
   components/*             Chat (Batch 6 starter chips in the empty state) /
                            MessageBubble (smoothing + thinking block) /
-                           Composer (WI2 ask-model prefill) / ArtifactPanel (stepper,
-                           Batch 5 Compare toggle + base picker + stat line + export
-                           menu, save/open, ⚠ badge, "Draft full section" button,
-                           open items) / ReviewDrawer (Batch 3 keyboard review walk) /
-                           IssuesDrawer (lint + StandardsStrip) / ResearchDrawer
-                           (research only — audit UI retired in Batch 4; also hosts
-                           the project-profile form for direct upfront entry) / QCDrawer
-                           (Batch 4: readiness checklist, lens progress, accept/dismiss
-                           fix queue, hold-to-apply-criticals, refuted appendix) /
+                           Composer (WI2 ask-model prefill; Batch 7 swaps the send
+                           button for a stop-square while streaming, Claude.ai-style
+                           — always clickable, no confirmation) / ArtifactPanel
+                           (stepper, Batch 5 Compare toggle + base picker + stat line
+                           + export menu, save/open, ⚠ badge, "Draft full section"
+                           button, open items) / ReviewDrawer (Batch 3 keyboard
+                           review walk) / IssuesDrawer (lint + StandardsStrip) /
+                           ResearchDrawer (research only — audit UI retired in
+                           Batch 4; also hosts the project-profile form for direct
+                           upfront entry; Batch 7 adds a Stop button while running,
+                           gated by ConfirmDialog) / QCDrawer (Batch 4: readiness
+                           checklist, lens progress, accept/dismiss fix queue,
+                           hold-to-apply-criticals, refuted appendix; Batch 7 adds a
+                           Stop button while running, gated by ConfirmDialog) /
                            SpecDocument (paper rendering + inline manual-edit
                            affordances; Batch 5 read-only diff render via `diff` prop)
                            / Header (spend ticker; Batch 6 Tour button) / ApiKeyBanner /
@@ -208,7 +229,10 @@ frontend/src/
                            / OnboardingOverlay (Batch 6: spotlight cutout + step
                            bubbles + discipline/entry/work-choice dialogs + resume
                            pill; drawers gain an openNonce prop, controls gain
-                           data-tour anchors)
+                           data-tour anchors) / ConfirmDialog (Batch 7: generic
+                           title/body/confirm/cancel modal — the lose-progress
+                           warnings for stopping research/QC; the Final-QC launch
+                           confirmation stays its own purpose-built modal)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
   conftest.py              hermetic env + fresh session per test
@@ -238,6 +262,13 @@ tests/
                            snapshot + discipline sanitization, stable-policy
                            snapshot, scripted 3-round demo e2e (patches per PART,
                            one undo step, open_questions carries tbd+needs_input)
+  test_stop.py             [Batch 7] chat stop mid-stream (truncates the live
+                           SSE events, still commits, history stays alternating
+                           even when caught right after a tool dispatch) +
+                           endpoint 409/200; research/QC stop (discards the run,
+                           409 once already resolved, the abandoned thread's
+                           eventual completion can't clobber the resolved status,
+                           immediate restart works)
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -310,6 +341,17 @@ checklist (no model call): `{checks: [{id, ok, detail, advisory}], ready}`
 imported/assumed, lint clean, research complete, QC current with no open
 criticals; `profile_complete` is advisory).
 
+`POST /api/research/stop` / `POST /api/qc/stop` (Batch 7) stop a running
+fan-out — unlike the chat stop, this one IS lossy (the drawer's confirm
+dialog says so): `ResearchRunner.stop()` / `QCRunner.stop()` resolve the run
+as `failed` immediately via a lock-guarded compare-and-set
+(`_try_resolve`), so the UI never waits on the background thread, and set a
+per-run `cancel_event` the engine's `should_stop` callback polls before each
+retry/continuation — work that hasn't started its next network call yet
+bails without spending anything; a call already in flight finishes
+naturally but its outcome is discarded (`_try_resolve` finds the status
+already resolved and does nothing). 409 when nothing is running.
+
 ## Conversation engine invariants
 
 - Turn atomicity spans both stores: history mutates and the document turn
@@ -323,6 +365,23 @@ criticals; `profile_complete` is advisory).
   `begin_turn` self-heals from an abandoned backup). A truncated response
   (`max_tokens`) strips unexecuted `tool_use` blocks before commit — a
   dangling tool call would invalidate every later request.
+- **User stop is the one deliberate exception to "every failure rolls back"
+  (Batch 7).** `POST /api/chat/stop` sets `SessionState.stop_requested`
+  (a `threading.Event`, cleared at the start of every turn); the round loop
+  checks it after every streamed event (not just between rounds) and, when
+  set, closes the request immediately via `stream.current_message_snapshot`
+  rather than `stream.get_final_message()` — the latter would drain the rest
+  of the network stream, defeating an "immediate" stop. This is **not**
+  treated as a failure: it takes the SAME truncation branch as a
+  `max_tokens` cutoff (strip dangling `tool_use`, keep the text) and falls
+  through to the normal commit, so whatever text/edits landed before the
+  click survive, same as Claude.ai's stop button. The one extra guard: if
+  the stop lands between rounds (e.g. right after a tool dispatch, before
+  the model has replied to the `tool_result`) the message list doesn't yet
+  end on an assistant turn, so a placeholder assistant message
+  (`"[Generation stopped by user.]"`) is appended first — otherwise the next
+  turn's user message would sit right after another user-role message
+  (the dangling `tool_result`), which the API rejects.
 - `SessionState.generation` increments on reset and project load; an
   in-flight turn checks it before each round, each tool dispatch, and the
   final commit, so a zombie turn discards itself instead of polluting the
@@ -941,6 +1000,71 @@ deps (Python or npm), one new REST route.
   smoke of the pre-generation flow (chips → discipline → key-gate →
   entry-guard → fresh-start) was verified against the real DOM during
   development.
+
+## Batch 7 — implemented notes (v1.2.0: stop generation / research / QC)
+
+Three stop affordances, deliberately NOT uniform in behavior — chat stop
+preserves progress (Claude.ai's actual behavior), research/QC stop discards
+it (spelled out to the user before they click). Same shape as every prior
+batch: no new SSE event types, no new env vars, no new Python deps.
+
+- **Chat stop is graceful, not a rollback.** `Composer` swaps the send
+  button for a filled stop-square the instant a turn starts streaming —
+  same button, same position, Claude.ai's actual affordance — with no
+  confirmation dialog (matching Claude.ai; a chat turn loses nothing by
+  stopping, so there's nothing to warn about). `POST /api/chat/stop` sets
+  `SessionState.stop_requested`; `stream_user_turn` checks it after every
+  streamed event and, on the next check, closes the request via
+  `stream.current_message_snapshot` (NOT `get_final_message()`, which would
+  drain the rest of the network stream first) and takes the same
+  content-truncation branch as a `max_tokens` cutoff. The turn still
+  commits normally — history and any document edits from completed rounds
+  survive, exactly what the user saw stays. See the Conversation engine
+  invariants section for the one added wrinkle (a stop caught between
+  rounds, right after a tool dispatch, needs a placeholder assistant
+  message so history keeps alternating roles).
+- **Research/QC stop is cooperative cancellation, explicitly lossy.**
+  `ResearchDrawer` / `QCDrawer` show a **Stop** button only while running,
+  gated by the new `ConfirmDialog` (generic reusable confirm modal —
+  backdrop/Escape cancel, danger-red confirm) spelling out that progress is
+  discarded (the QC dialog also notes the Fable 5 spend already incurred
+  isn't refunded). `POST /api/research/stop` / `POST /api/qc/stop` call
+  `ResearchRunner.stop()` / `QCRunner.stop()`, which resolve the run as
+  `failed` (`"Stopped by user — progress was discarded."`) through a
+  lock-guarded compare-and-set (`_try_resolve`) — the SAME single choke
+  point every terminal transition goes through (success, failure, or stop),
+  so whichever caller gets there first wins and the loser's mutation is
+  silently dropped. This is what makes "stop, then immediately restart"
+  safe: `stop()` flips status away from `running` synchronously, so a
+  fresh `start()` right after is never blocked by the old (still-unwinding)
+  background thread, and that old thread's eventual result — discarded by
+  `_try_resolve` finding the status already resolved — can never clobber
+  the new run. Pinned by `test_research_stop_discards_running_work_and_
+  allows_immediate_restart` / the QC equivalent in `test_stop.py`, using the
+  same blocking-fake-plus-release-event technique the existing
+  double-start/reset-abandons tests already established.
+- **No mid-call interruption for research/QC (scoped deliberately).** Unlike
+  chat, `_run_dimension` / `_run_streaming_call` still call
+  `stream.get_final_message()` — a `should_stop` callback (threaded through
+  `run_requirements_research`/`run_final_qc` down to `_run_dimension`,
+  `_run_lens`, `_verify_one`) is checked at each worker's entry and before
+  each retry attempt / pause_turn continuation, so anything that hasn't
+  started its next network call yet bails immediately and for free; a call
+  already in flight (bounded by the `ThreadPoolExecutor` cap of 4) completes
+  naturally and its result is simply discarded. Restructuring the ported
+  research/QC engines to interrupt an in-flight streaming call the way the
+  chat loop now does would touch the "hard-won" fan-out machinery for
+  marginal benefit given stopping is already lossy by design — not worth
+  it. The spend already committed to those in-flight calls is still metered
+  into the usage ledger even though the result is thrown away (mirrors the
+  existing "the spend is real even on a failed turn" posture).
+- **Fake streaming client gains `current_message_snapshot`**
+  (`tests/fakes.py`) so `test_stop.py` can exercise the "read the snapshot
+  instead of draining the stream" branch. It mirrors `get_final_message()`
+  rather than truly accumulating event-by-event like the real SDK (the fake
+  replays a fixed script) — sufficient to prove the mechanism (the live SSE
+  stream truncates; the turn still commits) without reimplementing the
+  SDK's accumulator.
 
 ## Commands
 

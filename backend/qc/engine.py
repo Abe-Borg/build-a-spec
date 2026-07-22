@@ -489,8 +489,15 @@ def _run_streaming_call(
     model: str,
     max_tokens: int,
     max_searches: int,
+    should_stop: Callable[[], bool] = lambda: False,
 ) -> _CallResult:
-    """One QC call: request → pause_turn continuations → parse. Never raises."""
+    """One QC call: request → pause_turn continuations → parse. Never raises.
+
+    ``should_stop`` (user-initiated stop) is checked before each retry
+    attempt and each pause_turn continuation — a call that hasn't started
+    its next network round yet bails immediately; one already in flight
+    finishes naturally and its result is discarded by the caller.
+    """
     tools = list(tools)
     tools[-1]["cache_control"] = {"type": "ephemeral"}
     request_kwargs: dict[str, Any] = {
@@ -516,12 +523,21 @@ def _run_streaming_call(
     billed: list[Any] = []
 
     for attempt in range(attempts):
+        if should_stop():
+            return _CallResult(None, [], billed, "Cancelled by user.")
         is_last = attempt == attempts - 1
         all_responses: list[Any] = []
         try:
             messages: list[dict] = [{"role": "user", "content": user_message}]
             completed = False
             for _ in range(QC_MAX_CONTINUATIONS + 1):
+                if should_stop():
+                    return _CallResult(
+                        None,
+                        all_responses,
+                        [*billed, *all_responses],
+                        "Cancelled by user.",
+                    )
                 with client.messages.stream(
                     messages=messages, **request_kwargs
                 ) as stream:
@@ -658,8 +674,19 @@ def _run_lens(
     profile: RequirementsProfile | None,
     model: str,
     max_tokens: int,
+    should_stop: Callable[[], bool] = lambda: False,
 ) -> _LensOutcome:
     """One lens's full lifecycle. Never raises (KeyboardInterrupt aside)."""
+    if should_stop():
+        return _LensOutcome(
+            lens=lens,
+            status=QCLensStatus(
+                lens_id=lens.lens_id,
+                title=lens.title,
+                status="failed",
+                error="Cancelled by user.",
+            ),
+        )
     result = _run_streaming_call(
         client,
         system_prompt=_lens_system_prompt(module),
@@ -670,6 +697,7 @@ def _run_lens(
         model=model,
         max_tokens=max_tokens,
         max_searches=lens.max_searches if lens.web else 0,
+        should_stop=should_stop,
     )
     if result.payload is None:
         return _LensOutcome(
@@ -720,7 +748,12 @@ def _verify_one(
     module: SpecModule,
     model: str,
     max_tokens: int,
+    should_stop: Callable[[], bool] = lambda: False,
 ) -> tuple[QCVerdict | None, list[Any]]:
+    if should_stop():
+        # Same shape as a dead/parse-failed verifier: counts as a
+        # non-uphold (default-refuted) — no special handling needed upstream.
+        return None, []
     tools: list[dict] = []
     # Verifiers on compliance-class findings get a small web allowance to
     # check facts; the rest reason from the document alone.
@@ -738,6 +771,7 @@ def _verify_one(
         model=model,
         max_tokens=max_tokens,
         max_searches=settings.QC_MAX_SEARCHES_LENS if lens.web else 0,
+        should_stop=should_stop,
     )
     if result.payload is None:
         return None, result.billed
@@ -798,13 +832,18 @@ def run_final_qc(
     finished_at: str,
     remembered_dismissed: set[str] | None = None,
     event_sink: EventSink = _noop_sink,
+    should_stop: Callable[[], bool] = lambda: False,
 ) -> QCResult:
     """Run the full QC pipeline over ``section``; return a :class:`QCResult`.
 
     ``section`` is a SNAPSHOT (deep-copied at start) so a streaming turn can't
     mutate it under the call. ``remembered_dismissed`` carries the prior
     result's dismissed finding ids so re-generated findings auto-mark
-    dismissed. Raises :exc:`QCFanoutError` only when EVERY lens fails.
+    dismissed. Raises :exc:`QCFanoutError` only when EVERY lens fails (a
+    total cancellation via ``should_stop`` takes this same path — every lens
+    reports "Cancelled by user."). ``should_stop`` also reaches every
+    verifier in phase 2, so cancelling mid-verification stops new verifier
+    calls from starting too.
     """
     remembered = set(remembered_dismissed or ())
     usage_totals: dict[str, int] = {}
@@ -832,6 +871,7 @@ def run_final_qc(
                 profile=profile,
                 model=model,
                 max_tokens=max_tokens,
+                should_stop=should_stop,
             ): lens
             for lens in QC_LENSES
         }
@@ -911,6 +951,7 @@ def run_final_qc(
                     module=module,
                     model=model,
                     max_tokens=max_tokens,
+                    should_stop=should_stop,
                 ): (i, j)
                 for (i, j) in tasks
             }

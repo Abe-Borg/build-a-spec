@@ -117,6 +117,9 @@ export default function ArtifactPanel({
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  // Open-items list collapses like the Review / Final QC drawers; the count
+  // stays visible in the bar, so nothing is lost at a glance when collapsed.
+  const [openItemsExpanded, setOpenItemsExpanded] = useState(false);
   // item_id -> short tooltip text for the paper's source chips.
   const sourceLookup = useMemo(() => {
     const map = new Map<string, string>();
@@ -493,32 +496,46 @@ export default function ArtifactPanel({
       <IssuesDrawer issues={lintIssues} onJump={scrollToElement} />
 
       {openItems.length > 0 && (
-        <div className="max-h-44 overflow-y-auto border-t border-edge bg-bg/60 px-5 py-2.5">
-          <p className="text-[11px] font-medium tracking-wide text-ink-dim uppercase">
-            Open items ({openItems.length})
-          </p>
-          <ul className="mt-1.5 space-y-1">
-            {openItems.map((item) => (
-              <li key={item.id}>
-                <button
-                  className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-xs text-ink-dim transition-colors hover:bg-raised hover:text-ink"
-                  onClick={() => scrollToElement(item.element_id)}
-                  title="Jump to this provision"
-                >
-                  <span
-                    className={`h-1.5 w-1.5 shrink-0 translate-y-[-1px] rounded-full ${kindDot[item.kind]}`}
-                  />
-                  <span className="shrink-0 font-medium text-ink tabular-nums">
-                    {item.ref}
-                  </span>
-                  <span className="truncate">
-                    {item.kind === "needs_input" ? "needs input — " : "TBD — "}
-                    {item.label}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+        <div className="border-t border-edge bg-bg/70 px-5 py-2">
+          <button
+            className="flex w-full items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
+            onClick={() => setOpenItemsExpanded((v) => !v)}
+            title="Unresolved provisions — [TBD] markers and needs-input blocks"
+          >
+            <span className="shrink-0 font-medium tracking-wide uppercase">
+              Open items
+            </span>
+            <span className="truncate">
+              {openItems.length} unresolved
+            </span>
+            <span className="ml-auto shrink-0">
+              {openItemsExpanded ? "▾" : "▸"}
+            </span>
+          </button>
+          {openItemsExpanded && (
+            <ul className="mt-1.5 max-h-44 space-y-1 overflow-y-auto">
+              {openItems.map((item) => (
+                <li key={item.id}>
+                  <button
+                    className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-xs text-ink-dim transition-colors hover:bg-raised hover:text-ink"
+                    onClick={() => scrollToElement(item.element_id)}
+                    title="Jump to this provision"
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 translate-y-[-1px] rounded-full ${kindDot[item.kind]}`}
+                    />
+                    <span className="shrink-0 font-medium text-ink tabular-nums">
+                      {item.ref}
+                    </span>
+                    <span className="truncate">
+                      {item.kind === "needs_input" ? "needs input — " : "TBD — "}
+                      {item.label}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 

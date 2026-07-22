@@ -20,6 +20,7 @@ import {
   draftFull,
   editDoc,
   getDoc,
+  getDocDiff,
   getHealth,
   getQcStatus,
   getReadiness,
@@ -62,6 +63,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
+  const [baselineIndex, setBaselineIndex] = useState<number | null>(null);
   // Composer prefill for the review queue's "Ask model" (WI2). The nonce
   // fires the composer's effect even when the same ref is asked twice.
   const [prefill, setPrefill] = useState({ text: "", nonce: 0 });
@@ -89,6 +91,7 @@ export default function App() {
         setLintIssues(payload.lint);
         setStandards(payload.standards);
         setProfileComplete(payload.profile_complete);
+        setBaselineIndex(payload.baseline_index ?? null);
       })
       .catch(() => setDoc(null));
   }, []);
@@ -491,12 +494,14 @@ export default function App() {
     lint: LintIssue[];
     standards: StandardInfo[];
     profile_complete: boolean;
+    baseline_index?: number | null;
   }) => {
     setDoc(payload.doc);
     setOpenItems(payload.open_questions);
     setLintIssues(payload.lint);
     setStandards(payload.standards);
     setProfileComplete(payload.profile_complete);
+    setBaselineIndex(payload.baseline_index ?? null);
     setChangedIds(new Set());
   };
 
@@ -604,6 +609,7 @@ export default function App() {
           readiness={readiness}
           usage={usage}
           changedIds={changedIds}
+          baselineIndex={baselineIndex}
           busy={busy}
           onUndo={onUndo}
           onRedo={onRedo}
@@ -616,6 +622,7 @@ export default function App() {
           onDismissQc={onDismissQc}
           onDraftFull={onDraftFull}
           onAskModel={onAskModel}
+          onFetchDiff={getDocDiff}
         />
       </main>
     </div>

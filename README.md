@@ -1,12 +1,57 @@
 # Build-a-Spec
 
-**v0.9.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.0.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First target domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## Current Status — v0.9.0 (Batch 4: Final QC on Fable 5)
+## Current Status — v1.0.0 (Batch 5: Redline export + version diff)
+
+**The single most impressive thing the app can hand another human: a `.docx`
+with genuine Word tracked changes showing exactly what Build-a-Spec did to
+the office master.** Spec reviewers live on redlines. One deterministic diff
+engine powers both the export and an in-app version-compare view.
+
+- **Real tracked changes, not a colored diff.** Export a redline vs the
+  imported master (or any prior version) and open it in Word: insertions,
+  deletions, and word-level edits render as native `w:ins`/`w:del` revisions
+  authored by "Build-a-Spec". **Accept All** yields exactly the issued draft
+  (numbering included); **Reject All** yields the master's provisions. That
+  round-trip is a hard test in the suite — the redline re-imported through the
+  Accept-All resolver reproduces the current document, and a Reject-All reading
+  reproduces the baseline's provision text. (Display numbering — A., 1.1, a. —
+  is positional and recomputes to the rendered view rather than being tracked,
+  so a clause that shifts position shows the current number under both
+  resolutions; the *text* is always faithful.)
+- **Word-level, reviewer-grade diffs.** Text edits diff at the word (not
+  character) grain — no unreadable confetti in legal-style review. Whole-block
+  insertions and deletions flag the paragraph *mark* too, so Word collapses a
+  deleted provision cleanly on accept. Pure moves are deliberately *not*
+  marked (display numbering is positional and recomputes) — a reviewer sees
+  real changes, not renumbering noise.
+- **Compare mode, in the panel.** The version stepper gains a **Compare**
+  toggle: pick the master (pinned first when a master was imported), the blank
+  start, or any prior version, and the paper surface renders the diff inline —
+  green/underline insertions, red/strikethrough deletions, whole-block
+  insert/delete badges, a provenance **status-changes** strip, and a
+  `+N added / −M removed / K edited` stat line. It matches the exported
+  redline run-for-run because both read the same diff.
+- **Stable ids make it exact, not fuzzy.** Baseline↔current alignment is an id
+  join on the never-reused element uids, not a text match — so a provision
+  that only had its status confirmed shows as a status change, never a
+  spurious edit. The imported-master version is remembered as the redline
+  baseline and survives save/resume (old project files simply have no
+  baseline).
+- **Export menu.** The single Export button becomes a small menu: *Export
+  clean*, *Redline vs master* (shown only when a master was imported), and
+  *Redline vs version…* (uses the compare picker's selection). The clean path
+  is byte-identical to v0.9.0 — a regression guard pins it.
+
+This is the **1.0 release milestone**. Cut the first Windows build per
+`docs/RELEASE_WINDOWS.md` after this lands.
+
+## Shipped in v0.9.0 (Batch 4: Final QC on Fable 5) and still current
 
 **One button, a fleet of Fable 5 reviewers, an accept/dismiss fix queue, and
 a signed-off QC memo.** The one place a model other than Sonnet 5 appears:
@@ -217,8 +262,9 @@ All five roadmap phases are shipped. What remains is real-world hardening: cutti
 main.py                  pywebview shell: starts the backend, opens the native window
 backend/                 FastAPI + the conversation engine (Python 3.11+)
   app.py                 /api/health, /api/key, /api/session/reset, /api/chat (SSE),
-                         /api/draft/full, /api/doc (+ undo/redo/edit),
-                         /api/export/docx, /api/import/master,
+                         /api/draft/full, /api/doc (+ undo/redo/edit/diff),
+                         /api/export/docx (+ ?redline=master|version),
+                         /api/import/master,
                          /api/research/start|status|stream,
                          /api/qc/start|status|stream|apply|dismiss|export,
                          /api/readiness, /api/audit/* (deprecated),
@@ -284,8 +330,11 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                                                                   [ported from Spec Critic]
     linting.py           deterministic lint: stale editions, placeholders, structure
                                                                   [ported from Spec Critic]
+    diffing.py           deterministic version diff (uid join, word-level runs,
+                         status changes) powering the redline export + compare view
     docx_export.py       .docx rendering + assumptions/imported/open-items
-                         schedules + QC/compliance closing + the QC memo
+                         schedules + QC/compliance closing + the QC memo +
+                         the tracked-changes (redline) body writer
     project.py           JSON project files: save/resume, chat transcript, module id,
                          requirements profile, audit result, QC result
   llm/
@@ -299,18 +348,20 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
 frontend/                Vite + React + TypeScript + Tailwind v4
   src/App.tsx            state owner: chat + document + lint + research + QC +
                          readiness + update + SSE dispatch
-  src/lib/api.ts         SSE parsing over fetch; doc/undo/edit/draft-full/project/
-                         research/import/qc/readiness/update calls
+  src/lib/api.ts         SSE parsing over fetch; doc/undo/edit/diff/draft-full/
+                         project/research/import/qc/readiness/update calls
   src/lib/reviewQueue.ts buildQueue(doc, mode): the review queue as a pure
                          document-order walk (port of iter_paragraphs)
   src/components/        Chat, MessageBubble (markdown), Composer (ask-model prefill),
                          Header (spend ticker + update pill), ApiKeyBanner,
-                         ArtifactPanel (stepper, export, import, "Draft full section",
-                         open items), ReviewDrawer (keyboard review walk),
+                         ArtifactPanel (stepper, Compare toggle + base picker,
+                         export menu, import, "Draft full section", open items),
+                         ReviewDrawer (keyboard review walk),
                          IssuesDrawer (lint + standards strip),
                          ResearchDrawer (profile + research),
                          QCDrawer (readiness checklist, lens progress, accept/dismiss
-                         fix queue), SpecDocument (SectionFormat rendering + ◆ chips)
+                         fix queue), SpecDocument (SectionFormat rendering + ◆ chips
+                         + the read-only compare/diff render)
 packaging/windows/       build-a-spec.spec (PyInstaller), installer.iss (Inno),
                          app_entry.py (--version/--selfcheck), make_manifest.py,
                          check_release_version.py       [cloned from Spec Critic]
@@ -435,6 +486,7 @@ Ported so far (adapted, same design): `api_key_store.py`, `app_paths.py`, the he
 2. **Phase 2 — Living document.** Server-owned SectionFormat tree (Section → PART → article → paragraph) with stable element ids and per-block provenance (`confirmed` / `assumed` / `needs_input`); `apply_spec_edits` tool-use so drafts land in the panel, not chat; a defaults-first interview where "I don't know" is a valid answer — the model applies a defensible default and flags it, with assumptions badged in the panel and scheduled in the `.docx` export; change highlighting + version history; `.docx` export; save/resume project files. *(Shipped in v0.2.0.)*
 3. **Phase 3 — Spec modules.** Registry-validated `SpecModule` (interview playbook, section catalog, code basis, pinned standards editions — NFPA 13-2025 default, jurisdiction-adopted editions override via `set_standard_edition` with the adoption basis recorded, never silently); live deterministic linting of the draft with an issues drawer and standards strip. *(Shipped in v0.3.0.)*
 4. **Phase 4 — Research agents.** Port of the requirements-research fan-out: grounded web-search agents for governing codes, AHJ, client/insurer, and site environment, launched on demand from a conversationally-recorded project profile; accepted-vs-cited citation grounding; results in a panel drawer, spliced into drafting context, linked to provisions via `source_item_id`, and feeding jurisdiction edition overrides. *(Shipped in v0.4.0.)*
-5. **Phase 5 — Ship (this release).** Master-spec import with gap-and-adapt (imported provenance status, Accept-All tracked-changes handling), the compliance audit of the draft against the researched profile (coverage matrix + export closing section), Windows packaging/installer with the SHA-256-verified auto-updater, and session tracing with the bundled viewer.
+5. **Phase 5 — Ship.** Master-spec import with gap-and-adapt (imported provenance status, Accept-All tracked-changes handling), the compliance audit of the draft against the researched profile (coverage matrix + export closing section), Windows packaging/installer with the SHA-256-verified auto-updater, and session tracing with the bundled viewer. *(Shipped in v0.5.0.)*
+6. **Post-ship batches (v0.6.0 → v1.0.0).** "Sonnet unleashed" no-limits context architecture (v0.6.0); streaming UX + manual editing + settings + cost meter (v0.7.0); full-section draft + keyboard review queue (v0.8.0); Final QC on Fable 5 with adversarial verification + accept/dismiss fix queue (v0.9.0); and the **1.0 release** — genuine tracked-changes redline export (vs the imported master or any version) plus the in-app version-compare view, one diff engine behind both (v1.0.0, this release).
 
 Build-a-Spec is an AI-assisted drafting aid, not an authority. Its output is advisory and is not a substitute for review by a licensed design professional.

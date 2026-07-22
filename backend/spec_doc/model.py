@@ -823,6 +823,11 @@ class DocumentStore:
         self.index = 0
         self._turn_backup: dict[str, Any] | None = None
         self._dirty = False
+        # The version index of the imported master, if any — the baseline for
+        # a "redline vs master" export (Batch 5). ``None`` for from-scratch
+        # projects (they can still redline against any prior version, or
+        # against the empty version 0). Set by :meth:`adopt_imported`.
+        self.baseline_index: int | None = None
 
     # -- snapshots ----------------------------------------------------------
 
@@ -850,6 +855,12 @@ class DocumentStore:
         """Snapshot the turn's changes; returns whether the doc changed."""
         changed = self._dirty
         if changed:
+            # A new edit after undo truncates the redo tail. If the imported
+            # baseline lived in that abandoned future, it no longer exists as
+            # a version — drop the marker so "redline vs master" can't point
+            # at a truncated snapshot.
+            if self.baseline_index is not None and self.baseline_index > self.index:
+                self.baseline_index = None
             del self.versions[self.index + 1 :]
             self.versions.append(self.doc.to_dict())
             self.index += 1
@@ -876,6 +887,8 @@ class DocumentStore:
         self.versions.append(snapshot)
         self.index += 1
         self._dirty = False
+        # This version is the baseline for "redline vs master" (Batch 5).
+        self.baseline_index = self.index
 
     def rollback_turn(self) -> None:
         if self._turn_backup is not None:
@@ -908,7 +921,11 @@ class DocumentStore:
     # -- persistence --------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
-        return {"versions": self.versions, "index": self.index}
+        return {
+            "versions": self.versions,
+            "index": self.index,
+            "baseline_index": self.baseline_index,
+        }
 
     def load(self, data: dict[str, Any]) -> None:
         versions = data.get("versions")
@@ -922,9 +939,16 @@ class DocumentStore:
             raise ValueError("Malformed document history.")
         # Validate every snapshot before adopting any of it.
         parsed = [SpecSection.from_dict(v) for v in versions]
+        # The redline baseline (Batch 5). Old project files predate it — a
+        # missing/out-of-range value degrades to "no master baseline" rather
+        # than failing the load.
+        baseline = data.get("baseline_index")
+        if not (isinstance(baseline, int) and 0 <= baseline < len(versions)):
+            baseline = None
         self.versions = versions
         self.index = index
         self.doc = parsed[index]
+        self.baseline_index = baseline
         self._turn_backup = None
         self._dirty = False
 

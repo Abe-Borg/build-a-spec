@@ -133,6 +133,27 @@ body {
   transition: background 0.6s ease;
 }
 
+/* Compare mode (Batch 5): tracked-changes rendering on the paper surface.
+   Muted legal-redline tones — green insertions, red deletions. */
+.diff-ins {
+  color: #3f6d2c;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.diff-del {
+  color: #a83b30;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.diff-block-ins {
+  background: #eef5e2;
+  box-shadow: inset 3px 0 0 #7fa650;
+}
+.diff-block-del {
+  background: #f7e7e3;
+  box-shadow: inset 3px 0 0 var(--color-err);
+}
+
 /* One-time attention pulse on the "Draft full section" button once research
    has landed and the page is still sparse. A few glows, then it settles. */
 .draft-pulse {

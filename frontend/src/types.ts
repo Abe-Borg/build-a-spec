@@ -159,6 +159,50 @@ export interface DocPayload {
   standards: StandardInfo[];
   profile_complete: boolean;
   research_status: ResearchRunStatus;
+  /** Imported-master version index (Batch 5); null for from-scratch. */
+  baseline_index: number | null;
+}
+
+/* --- Version diff / redline (Batch 5, mirrors backend/spec_doc/diffing.py) --- */
+
+export interface DiffRun {
+  op: "equal" | "ins" | "del";
+  text: string;
+}
+
+export interface ElementDiff {
+  uid: string;
+  node_type: "section" | "part" | "article" | "paragraph";
+  kind: "unchanged" | "changed" | "inserted" | "deleted";
+  depth: number;
+  label: string;
+  ref_base: string;
+  ref_cur: string;
+  base_text: string;
+  cur_text: string;
+  runs: DiffRun[] | null;
+  number_base: string;
+  number_cur: string;
+}
+
+export interface DiffStatusChange {
+  uid: string;
+  ref: string;
+  status_base: string;
+  status_cur: string;
+}
+
+export interface SectionDiff {
+  elements: ElementDiff[];
+  status_changes: DiffStatusChange[];
+  stats: { inserted: number; deleted: number; changed: number; unchanged: number };
+}
+
+export interface SectionDiffPayload extends SectionDiff {
+  ok: boolean;
+  base_index: number;
+  cur_index: number;
+  baseline_index: number | null;
 }
 
 /* --- Research (Phase 4) --- */

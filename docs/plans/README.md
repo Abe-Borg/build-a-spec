@@ -12,7 +12,7 @@ detail, test plan, and acceptance criteria.
 | 2 | `BATCH_2_STREAMING_UX_AND_CONTROL.md` | v0.7.0 | shipped |
 | 3 | `BATCH_3_FULL_DRAFT_AND_REVIEW_QUEUE.md` | v0.8.0 | shipped |
 | 4 | `BATCH_4_FINAL_QC_ON_FABLE.md` | v0.9.0 | shipped |
-| 5 | `BATCH_5_REDLINE_EXPORT.md` | v1.0.0 | planned |
+| 5 | `BATCH_5_REDLINE_EXPORT.md` | v1.0.0 | shipped |
 
 The reusable kickoff prompt for each Claude Code session lives in
 `AGENT_PROMPT.md` — Abraham pastes it at the start of every batch; it

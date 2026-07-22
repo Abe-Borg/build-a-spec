@@ -10,12 +10,18 @@ schedule ([TBD: ...] markers and ``needs_input`` blocks).
 from __future__ import annotations
 
 import io
+import itertools
 import re
+from datetime import datetime, timezone
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 
+from .. import settings
+from .diffing import ElementDiff, SectionDiff
 from .model import (
     SpecSection,
     _paragraph_label,
@@ -78,6 +84,8 @@ def build_docx(
     section: SpecSection,
     audit_result: dict | None = None,
     qc_result: dict | None = None,
+    redline: SectionDiff | None = None,
+    redline_date: str | None = None,
 ) -> bytes:
     """Render the section; a QC or audit closing carries the review trail.
 
@@ -86,43 +94,32 @@ def build_docx(
     it supersedes the audit closing (the QC lenses cover the audit's ground
     and more); otherwise the audit closing is rendered as before. The
     rendering states which document version was reviewed.
+
+    When ``redline`` (a :class:`SectionDiff`) is supplied (Batch 5), the body
+    is rendered as genuine Word tracked changes (``w:ins``/``w:del`` with
+    ``w:delText``, deleted/inserted paragraph marks) instead of the plain
+    tree. **Accept All** reproduces ``section`` (the cur tree) exactly,
+    numbering included; **Reject All** reproduces the diff's base tree's
+    provision *text*. Display numbering (A. / 1.1 / a.) is positional and
+    recomputes to the rendered view — it is written as a plain literal so a
+    survivor whose position shifted keeps the current label, never a tracked
+    mark (the frozen "moves are not marked" decision). The schedules below are
+    always rendered plainly from ``section`` (the current document), never
+    redlined. ``redline_date`` overrides the ISO-8601 ``w:date`` stamp.
     """
     document = Document()
     _style_base(document)
 
-    _centered(document, f"SECTION {section.number or '[TBD]'}")
-    _centered(document, section.title or "[TBD: SECTION TITLE]")
-    document.add_paragraph()
-
-    for part in section.parts:
-        p = document.add_paragraph()
-        p.paragraph_format.space_before = Pt(12)
-        p.add_run(part.title).bold = True
-        if not part.articles:
-            document.add_paragraph("(Not used.)")
-        for a_idx, article in enumerate(part.articles):
-            ap = document.add_paragraph()
-            apf = ap.paragraph_format
-            apf.space_before = Pt(10)
-            apf.tab_stops.add_tab_stop(_LEVEL_INDENT, WD_TAB_ALIGNMENT.LEFT)
-            ap.add_run(
-                f"{part.number}.{a_idx + 1}\t{article.title.upper()}"
-            ).bold = True
-
-            def walk(paragraphs, depth: int) -> None:
-                for i, para in enumerate(paragraphs):
-                    _labelled(
-                        document,
-                        _paragraph_label(depth, i),
-                        para.text,
-                        depth,
-                    )
-                    walk(para.children, depth + 1)
-
-            walk(article.paragraphs, 0)
-
-    document.add_paragraph()
-    _centered(document, f"END OF SECTION {section.number or ''}".rstrip())
+    if redline is not None:
+        _render_redline_body(
+            document,
+            section,
+            redline,
+            settings.APP_NAME,
+            redline_date or _redline_now(),
+        )
+    else:
+        _render_clean_body(document, section)
 
     # -- assumptions schedule ----------------------------------------------
     document.add_page_break()
@@ -228,12 +225,285 @@ def build_docx(
     return buffer.getvalue()
 
 
+def _render_clean_body(document, section: SpecSection) -> None:
+    """The plain SectionFormat body: header, parts/articles, END OF SECTION."""
+    _centered(document, f"SECTION {section.number or '[TBD]'}")
+    _centered(document, section.title or "[TBD: SECTION TITLE]")
+    document.add_paragraph()
+
+    for part in section.parts:
+        p = document.add_paragraph()
+        p.paragraph_format.space_before = Pt(12)
+        p.add_run(part.title).bold = True
+        if not part.articles:
+            document.add_paragraph("(Not used.)")
+        for a_idx, article in enumerate(part.articles):
+            ap = document.add_paragraph()
+            apf = ap.paragraph_format
+            apf.space_before = Pt(10)
+            apf.tab_stops.add_tab_stop(_LEVEL_INDENT, WD_TAB_ALIGNMENT.LEFT)
+            ap.add_run(
+                f"{part.number}.{a_idx + 1}\t{article.title.upper()}"
+            ).bold = True
+
+            def walk(paragraphs, depth: int) -> None:
+                for i, para in enumerate(paragraphs):
+                    _labelled(
+                        document,
+                        _paragraph_label(depth, i),
+                        para.text,
+                        depth,
+                    )
+                    walk(para.children, depth + 1)
+
+            walk(article.paragraphs, 0)
+
+    document.add_paragraph()
+    _centered(document, f"END OF SECTION {section.number or ''}".rstrip())
+
+
 def export_filename(section: SpecSection) -> str:
     stem = f"SECTION {section.number}" if section.number else "DRAFT SECTION"
     if section.title:
         stem += f" - {section.title}"
     stem = re.sub(r'[\\/:*?"<>|]+', "", stem).strip() or "DRAFT SECTION"
     return f"{stem}.docx"
+
+
+def redline_filename(section: SpecSection) -> str:
+    """The clean export name with a `` - REDLINE`` suffix before ``.docx``."""
+    name = export_filename(section)
+    return name[: -len(".docx")] + " - REDLINE.docx"
+
+
+# ---------------------------------------------------------------------------
+# Tracked-changes (redline) body — Batch 5
+#
+# python-docx has no tracked-changes API, so the w:ins / w:del / w:delText
+# elements are built directly with docx.oxml, mirroring the shapes the
+# importer's tests already manufacture (tests/test_importer.py). The killer
+# invariant: re-importing this export (Accept-All resolution) reproduces the
+# cur tree exactly; a Reject-All reading reproduces the base tree's provision
+# TEXT. Display numbering (A. / 1.1 / a.) is positional and recomputes to the
+# rendered view — it is a literal label, not tracked content, so a survivor
+# whose position shifted shows the current number under both resolutions
+# (the frozen "moves are not marked" decision). Reject-All is therefore
+# text-faithful, not label-faithful, for position-shifted survivors.
+# ---------------------------------------------------------------------------
+
+
+def _redline_now() -> str:
+    """ISO-8601 UTC stamp for w:date (e.g. ``2026-07-21T14:30:00Z``)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _set_revision_attrs(element, ids, author: str, date: str) -> None:
+    element.set(qn("w:id"), str(next(ids)))
+    element.set(qn("w:author"), author)
+    element.set(qn("w:date"), date)
+
+
+def _content_run(text: str, *, del_text: bool = False, bold: bool = False):
+    """A ``w:r`` carrying ``text``; tabs become ``w:tab`` for real indents.
+
+    Uses ``w:delText`` inside deletions (required) and ``w:t`` otherwise;
+    ``xml:space=preserve`` keeps token whitespace byte-exact.
+    """
+    run = OxmlElement("w:r")
+    if bold:
+        rpr = OxmlElement("w:rPr")
+        rpr.append(OxmlElement("w:b"))
+        run.append(rpr)
+    tag = "w:delText" if del_text else "w:t"
+    for i, segment in enumerate(text.split("\t")):
+        if i > 0:
+            run.append(OxmlElement("w:tab"))
+        if segment:
+            text_el = OxmlElement(tag)
+            text_el.set(qn("xml:space"), "preserve")
+            text_el.text = segment
+            run.append(text_el)
+    return run
+
+
+def _append_equal(paragraph, text: str, *, bold: bool = False) -> None:
+    paragraph._p.append(_content_run(text, bold=bold))
+
+
+def _append_ins(paragraph, text: str, ids, author, date, *, bold=False) -> None:
+    ins = OxmlElement("w:ins")
+    _set_revision_attrs(ins, ids, author, date)
+    ins.append(_content_run(text, bold=bold))
+    paragraph._p.append(ins)
+
+
+def _append_del(paragraph, text: str, ids, author, date, *, bold=False) -> None:
+    dele = OxmlElement("w:del")
+    _set_revision_attrs(dele, ids, author, date)
+    dele.append(_content_run(text, del_text=True, bold=bold))
+    paragraph._p.append(dele)
+
+
+def _append_runs(paragraph, runs, ids, author, date, *, bold=False) -> None:
+    for run in runs:
+        if run.op == "equal":
+            _append_equal(paragraph, run.text, bold=bold)
+        elif run.op == "ins":
+            _append_ins(paragraph, run.text, ids, author, date, bold=bold)
+        else:  # del
+            _append_del(paragraph, run.text, ids, author, date, bold=bold)
+
+
+def _mark_paragraph(paragraph, tag: str, ids, author, date) -> None:
+    """Flag the paragraph MARK as inserted/deleted (``w:pPr/w:rPr/<tag>``).
+
+    A deleted paragraph mark is what makes Word collapse the whole paragraph
+    on Accept; an inserted one makes Reject remove it. ``w:rPr`` is the last
+    child of ``w:pPr`` per the schema, so appending it is valid.
+    """
+    ppr = paragraph._p.get_or_add_pPr()
+    rpr = ppr.find(qn("w:rPr"))
+    if rpr is None:
+        rpr = OxmlElement("w:rPr")
+        ppr.append(rpr)
+    marker = OxmlElement(tag)
+    _set_revision_attrs(marker, ids, author, date)
+    rpr.append(marker)
+
+
+def _redline_paragraph_format(paragraph, level: int) -> None:
+    pf = paragraph.paragraph_format
+    pf.left_indent = _LEVEL_INDENT * (level + 1)
+    pf.first_line_indent = -_LEVEL_INDENT
+    pf.tab_stops.add_tab_stop(_LEVEL_INDENT * (level + 1), WD_TAB_ALIGNMENT.LEFT)
+    pf.space_after = Pt(6)
+
+
+def _render_redline_section(document, element: ElementDiff, ids, author, date):
+    # SECTION <number> line (centered). The clean body substitutes "[TBD]" for
+    # an empty number, so an empty side must carry that placeholder too, or the
+    # round-trip diverges on a from-scratch (vs-empty) redline.
+    p = document.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _append_equal(p, "SECTION ", bold=True)
+    if element.number_base == element.number_cur:
+        _append_equal(p, element.number_cur or "[TBD]", bold=True)
+    else:
+        _append_del(p, element.number_base or "[TBD]", ids, author, date, bold=True)
+        _append_ins(p, element.number_cur or "[TBD]", ids, author, date, bold=True)
+
+    # Section title line (centered): word-level diff when both sides have a
+    # title, whole del/ins with the placeholder when a side is empty.
+    q = document.add_paragraph()
+    q.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    placeholder = "[TBD: SECTION TITLE]"
+    if element.base_text == element.cur_text:
+        _append_equal(q, element.cur_text or placeholder, bold=True)
+    elif not element.base_text or not element.cur_text:
+        _append_del(q, element.base_text or placeholder, ids, author, date, bold=True)
+        _append_ins(q, element.cur_text or placeholder, ids, author, date, bold=True)
+    else:
+        _append_runs(q, element.runs or [], ids, author, date, bold=True)
+    document.add_paragraph()
+
+
+def _render_redline_article(document, element: ElementDiff, ids, author, date):
+    p = document.add_paragraph()
+    apf = p.paragraph_format
+    apf.space_before = Pt(10)
+    apf.tab_stops.add_tab_stop(_LEVEL_INDENT, WD_TAB_ALIGNMENT.LEFT)
+    number = element.ref_cur or element.ref_base
+    if element.kind == "inserted":
+        _append_ins(
+            p, f"{number}\t{element.cur_text.upper()}", ids, author, date, bold=True
+        )
+        _mark_paragraph(p, "w:ins", ids, author, date)
+    elif element.kind == "deleted":
+        _append_del(
+            p, f"{number}\t{element.base_text.upper()}", ids, author, date, bold=True
+        )
+        _mark_paragraph(p, "w:del", ids, author, date)
+    elif element.kind == "changed":
+        _append_equal(p, f"{number}\t", bold=True)
+        upper = [
+            type(run)(run.op, run.text.upper()) for run in (element.runs or [])
+        ]
+        _append_runs(p, upper, ids, author, date, bold=True)
+    else:  # unchanged
+        _append_equal(p, f"{number}\t{element.cur_text.upper()}", bold=True)
+
+
+def _render_redline_paragraph(document, element: ElementDiff, ids, author, date):
+    p = document.add_paragraph()
+    _redline_paragraph_format(p, element.depth)
+    label = element.label
+    if element.kind == "inserted":
+        _append_ins(p, f"{label}\t{element.cur_text}", ids, author, date)
+        _mark_paragraph(p, "w:ins", ids, author, date)
+    elif element.kind == "deleted":
+        _append_del(p, f"{label}\t{element.base_text}", ids, author, date)
+        _mark_paragraph(p, "w:del", ids, author, date)
+    elif element.kind == "changed":
+        _append_equal(p, f"{label}\t")
+        _append_runs(p, element.runs or [], ids, author, date)
+    else:  # unchanged
+        _append_equal(p, f"{label}\t{element.cur_text}")
+
+
+def _render_redline_body(
+    document, section: SpecSection, redline: SectionDiff, author: str, date: str
+) -> None:
+    ids = itertools.count(1)
+    # Per part, does it hold any article in cur / in base? The clean body
+    # prints "(Not used.)" for an empty part, so a part that empties (or fills)
+    # between the two versions must track that placeholder — else Accept-All
+    # (or Reject-All) would not reproduce the clean export. An article row's
+    # kind says which side it exists on: not-deleted => in cur; not-inserted
+    # => in base.
+    part_cur: dict[str, bool] = {}
+    part_base: dict[str, bool] = {}
+    current_part: str | None = None
+    for element in redline.elements:
+        if element.node_type == "part":
+            current_part = element.uid
+            part_cur.setdefault(current_part, False)
+            part_base.setdefault(current_part, False)
+        elif element.node_type == "article" and current_part is not None:
+            if element.kind != "deleted":
+                part_cur[current_part] = True
+            if element.kind != "inserted":
+                part_base[current_part] = True
+
+    for element in redline.elements:
+        if element.node_type == "section":
+            _render_redline_section(document, element, ids, author, date)
+        elif element.node_type == "part":
+            p = document.add_paragraph()
+            p.paragraph_format.space_before = Pt(12)
+            p.add_run(element.cur_text).bold = True
+            has_cur = part_cur.get(element.uid, False)
+            has_base = part_base.get(element.uid, False)
+            if not has_cur and not has_base:
+                document.add_paragraph("(Not used.)")  # empty both ways
+            elif not has_cur:
+                # Emptied in cur (articles all deleted): "(Not used.)" appears
+                # on Accept, is gone on Reject (where the articles return).
+                np = document.add_paragraph()
+                _append_ins(np, "(Not used.)", ids, author, date)
+                _mark_paragraph(np, "w:ins", ids, author, date)
+            elif not has_base:
+                # Filled in cur (empty in base): "(Not used.)" appears on
+                # Reject, is gone on Accept (where the articles are present).
+                np = document.add_paragraph()
+                _append_del(np, "(Not used.)", ids, author, date)
+                _mark_paragraph(np, "w:del", ids, author, date)
+        elif element.node_type == "article":
+            _render_redline_article(document, element, ids, author, date)
+        else:  # paragraph
+            _render_redline_paragraph(document, element, ids, author, date)
+
+    document.add_paragraph()
+    _centered(document, f"END OF SECTION {section.number or ''}".rstrip())
 
 
 # ---------------------------------------------------------------------------

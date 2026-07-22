@@ -9,7 +9,15 @@
  * (delete). All affordances are disabled while a model turn streams.
  */
 import { useState } from "react";
-import type { DocParagraph, DocPart, EditOp, SpecDoc } from "../types";
+import type {
+  DiffRun,
+  DocParagraph,
+  DocPart,
+  EditOp,
+  ElementDiff,
+  SectionDiff,
+  SpecDoc,
+} from "../types";
 
 const TBD_SPLIT = /(\[TBD:[^\]]*\])/g;
 
@@ -386,19 +394,193 @@ function PartBlock({
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Compare (diff) mode — read-only render of a SectionDiff (Batch 5).  */
+/* ins runs green/underline, del runs red/strikethrough; inserted and  */
+/* deleted whole blocks carry a left border + badge.                   */
+/* ------------------------------------------------------------------ */
+
+function DiffRunSpans({ runs }: { runs: DiffRun[] }) {
+  return (
+    <>
+      {runs.map((run, i) =>
+        run.op === "equal" ? (
+          <span key={i}>{run.text}</span>
+        ) : (
+          <span key={i} className={run.op === "ins" ? "diff-ins" : "diff-del"}>
+            {run.text}
+          </span>
+        ),
+      )}
+    </>
+  );
+}
+
+/** The text of one element rendered per its change kind. */
+function DiffText({ e, upper = false }: { e: ElementDiff; upper?: boolean }) {
+  const cls = upper ? "uppercase" : undefined;
+  if (e.kind === "inserted") {
+    return <span className={`diff-ins ${cls ?? ""}`}>{e.cur_text}</span>;
+  }
+  if (e.kind === "deleted") {
+    return <span className={`diff-del ${cls ?? ""}`}>{e.base_text}</span>;
+  }
+  if (e.kind === "changed" && e.runs) {
+    return (
+      <span className={cls}>
+        <DiffRunSpans runs={e.runs} />
+      </span>
+    );
+  }
+  return <span className={cls}>{e.cur_text}</span>;
+}
+
+function DiffBadge({ kind }: { kind: ElementDiff["kind"] }) {
+  if (kind === "inserted")
+    return (
+      <span className="ml-2 rounded border border-[#5f7d33]/50 bg-[#e7f0d8] px-1 py-px align-middle text-[9px] font-semibold tracking-wide text-[#4a6327] uppercase">
+        new
+      </span>
+    );
+  if (kind === "deleted")
+    return (
+      <span className="ml-2 rounded border border-[#b23b32]/50 bg-[#f6ded9] px-1 py-px align-middle text-[9px] font-semibold tracking-wide text-[#8f2f27] uppercase">
+        removed
+      </span>
+    );
+  return null;
+}
+
+function diffBlockClass(kind: ElementDiff["kind"]): string {
+  if (kind === "inserted") return "diff-block-ins";
+  if (kind === "deleted") return "diff-block-del";
+  return "";
+}
+
+function DiffElementRow({ e }: { e: ElementDiff }) {
+  if (e.node_type === "section") {
+    const numberChanged = e.number_base !== e.number_cur;
+    return (
+      <div className="text-center">
+        <p className="rounded text-[13px] font-semibold tracking-wide">
+          SECTION{" "}
+          {numberChanged ? (
+            <>
+              {e.number_base && <span className="diff-del">{e.number_base}</span>}
+              {e.number_base && e.number_cur ? " " : ""}
+              {e.number_cur && <span className="diff-ins">{e.number_cur}</span>}
+            </>
+          ) : (
+            e.number_cur || "[TBD]"
+          )}
+        </p>
+        <p className="mt-1 rounded text-[13px] font-semibold tracking-wide uppercase">
+          {e.kind === "changed" && e.runs ? (
+            <DiffRunSpans runs={e.runs} />
+          ) : (
+            e.cur_text || "[TBD: section title]"
+          )}
+        </p>
+      </div>
+    );
+  }
+  if (e.node_type === "part") {
+    return <p className="mt-8 text-[13px] font-semibold">{e.cur_text}</p>;
+  }
+  if (e.node_type === "article") {
+    const number = e.ref_cur || e.ref_base;
+    return (
+      <p
+        className={`mt-3 flex items-baseline gap-2 rounded px-1 text-[13px] font-semibold ${diffBlockClass(
+          e.kind,
+        )}`}
+      >
+        <span>{number}</span>
+        <span>
+          <DiffText e={e} upper />
+        </span>
+        <DiffBadge kind={e.kind} />
+      </p>
+    );
+  }
+  // paragraph
+  return (
+    <div
+      className={`mt-1 flex gap-2 rounded px-1 py-0.5 ${diffBlockClass(e.kind)}`}
+      style={{ marginLeft: `${e.depth * 1.4}rem` }}
+    >
+      <span className="w-6 shrink-0 text-right">{e.label}</span>
+      <span className="min-w-0 flex-1">
+        <DiffText e={e} />
+        <DiffBadge kind={e.kind} />
+      </span>
+    </div>
+  );
+}
+
+const statusLabels: Record<string, string> = {
+  confirmed: "confirmed",
+  assumed: "assumed",
+  needs_input: "needs input",
+  imported: "imported",
+};
+
+function DiffDocument({ diff }: { diff: SectionDiff }) {
+  const section = diff.elements.find((e) => e.node_type === "section");
+  const sectionNumber = section?.number_cur ?? "";
+  return (
+    <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
+      {diff.elements.map((e, i) => (
+        <DiffElementRow key={`${e.uid}-${e.kind}-${i}`} e={e} />
+      ))}
+      <p className="mt-10 text-center text-[13px] font-semibold tracking-wide">
+        END OF SECTION {sectionNumber}
+      </p>
+
+      {diff.status_changes.length > 0 && (
+        <div className="mt-8 border-t border-paper-edge pt-3">
+          <p className="text-[11px] font-medium tracking-wide text-paper-dim uppercase">
+            Status changes ({diff.status_changes.length})
+          </p>
+          <ul className="mt-1.5 flex flex-wrap gap-1.5">
+            {diff.status_changes.map((sc) => (
+              <li
+                key={sc.uid}
+                className="rounded border border-paper-edge bg-white/60 px-1.5 py-0.5 text-[11px] text-paper-dim"
+                title="Provenance status changed (not a text edit — no redline mark)"
+              >
+                <span className="font-medium text-paper-ink tabular-nums">
+                  {sc.ref}
+                </span>{" "}
+                {statusLabels[sc.status_base] ?? sc.status_base} →{" "}
+                {statusLabels[sc.status_cur] ?? sc.status_cur}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SpecDocument({
   doc,
   changedIds,
   sourceLookup = new Map(),
   busy = false,
   onEdit = () => {},
+  diff = null,
 }: {
   doc: SpecDoc;
   changedIds: ReadonlySet<string>;
   sourceLookup?: ReadonlyMap<string, string>;
   busy?: boolean;
   onEdit?: (ops: EditOp[]) => void;
+  diff?: SectionDiff | null;
 }) {
+  if (diff) {
+    return <DiffDocument diff={diff} />;
+  }
   return (
     <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
       <div id="el-sec" className="text-center">

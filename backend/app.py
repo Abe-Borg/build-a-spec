@@ -17,8 +17,12 @@ Endpoints (all JSON unless noted):
 - ``POST /api/doc/redo``      → step forward again.
 - ``POST /api/doc/edit``      → apply a manual edit batch (one undoable
   version; 409 while a model turn streams).
+- ``GET  /api/doc/diff``      → serialized version diff (``?base=N[&cur=M]``)
+  for the in-app compare view (Batch 5).
 - ``GET  /api/export/docx``   → the section as a SectionFormat ``.docx``
-  (with the assumptions schedule), as a download.
+  (with the assumptions schedule), as a download. ``?redline=master`` or
+  ``?redline=version&base=N`` (Batch 5) exports genuine Word tracked changes
+  vs the imported master or a chosen version.
 - ``POST /api/research/start``  → launch the requirements-research fan-out
   (requires a complete project profile; 409 while one runs).
 - ``GET  /api/usage``         → this session's billed usage + est. cost.
@@ -75,8 +79,13 @@ from .llm.client import (
 from .llm.conversation import standards_payload, stream_user_turn
 from .llm.prompts import FULL_DRAFT_DIRECTIVE
 from .project_profile import ProjectProfile
-from .spec_doc import SpecEditError, lint_document, open_questions
-from .spec_doc.docx_export import build_docx, build_qc_memo, export_filename
+from .spec_doc import SpecEditError, diff_sections, lint_document, open_questions
+from .spec_doc.docx_export import (
+    build_docx,
+    build_qc_memo,
+    export_filename,
+    redline_filename,
+)
 from .spec_doc.importer import MasterImportError, parse_master_docx
 from .spec_doc.model import SpecSection, apply_edits, iter_paragraphs
 from .spec_doc.project import chat_transcript, load_project, save_project
@@ -141,6 +150,9 @@ def _doc_payload(session) -> dict[str, Any]:
         "standards": standards_payload(session),
         "profile_complete": bool(profile and profile.is_complete()),
         "research_status": session.research.status,
+        # The imported-master version index (Batch 5), for the compare
+        # picker's "Master (import)" option; ``None`` for from-scratch.
+        "baseline_index": session.doc.baseline_index,
     }
 
 
@@ -457,16 +469,64 @@ def create_app() -> FastAPI:
         session.doc.commit_turn()
         return JSONResponse({"ok": True, "applied": applied, **_doc_payload(session)})
 
+    def _redline_for_export(
+        store, redline: str | None, base: int | None
+    ) -> tuple[Any | None, JSONResponse | None]:
+        """Resolve the ``?redline=`` export mode into a SectionDiff (or 400).
+
+        ``master`` diffs the current doc against the imported baseline;
+        ``version`` against ``versions[base]``. Returns ``(diff, None)`` on
+        success or ``(None, error_response)`` on a bad request.
+        """
+        if redline is None:
+            return None, None
+        if redline == "master":
+            if store.baseline_index is None:
+                return None, JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "This project has no imported master — "
+                        "choose a version to compare against.",
+                    },
+                    status_code=400,
+                )
+            base_index = store.baseline_index
+        elif redline == "version":
+            if base is None or not (0 <= base < len(store.versions)):
+                return None, JSONResponse(
+                    {"ok": False, "error": "Provide a valid 'base' version index."},
+                    status_code=400,
+                )
+            base_index = base
+        else:
+            return None, JSONResponse(
+                {"ok": False, "error": "redline must be 'master' or 'version'."},
+                status_code=400,
+            )
+        base_section = SpecSection.from_dict(store.versions[base_index])
+        return diff_sections(base_section, store.doc), None
+
     @app.get("/api/export/docx")
-    def export_docx() -> Response:
+    def export_docx(
+        redline: str | None = None, base: int | None = None
+    ) -> Response:
         session = sessions.get_session()
+        store = session.doc
+        redline_diff, error = _redline_for_export(store, redline, base)
+        if error is not None:
+            return error
         qc_result = session.qc.result.to_dict() if session.qc.result else None
         payload = build_docx(
-            session.doc.doc,
+            store.doc,
             audit_result=session.audit.result,
             qc_result=qc_result,
+            redline=redline_diff,
         )
-        filename = export_filename(session.doc.doc)
+        filename = (
+            redline_filename(store.doc)
+            if redline_diff is not None
+            else export_filename(store.doc)
+        )
         return Response(
             content=payload,
             media_type=(
@@ -474,6 +534,42 @@ def create_app() -> FastAPI:
                 ".wordprocessingml.document"
             ),
             headers=_attachment_headers(filename),
+        )
+
+    @app.get("/api/doc/diff")
+    def doc_diff(base: int, cur: int | None = None) -> JSONResponse:
+        """Serialized SectionDiff between two versions (in-app compare view).
+
+        ``cur`` defaults to the current version index. Indices must be in
+        range and distinct.
+        """
+        store = sessions.get_session().doc
+        cur_index = store.index if cur is None else cur
+        n = len(store.versions)
+        if not (0 <= base < n) or not (0 <= cur_index < n):
+            return JSONResponse(
+                {"ok": False, "error": "Version index out of range."},
+                status_code=400,
+            )
+        if base == cur_index:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Choose two different versions to compare.",
+                },
+                status_code=400,
+            )
+        base_section = SpecSection.from_dict(store.versions[base])
+        cur_section = SpecSection.from_dict(store.versions[cur_index])
+        diff = diff_sections(base_section, cur_section)
+        return JSONResponse(
+            {
+                "ok": True,
+                **diff.to_dict(),
+                "base_index": base,
+                "cur_index": cur_index,
+                "baseline_index": store.baseline_index,
+            }
         )
 
     # --- Master-spec import (Phase 5) ---------------------------------------

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Health, KeyStatus, UsageSummary } from "../types";
 import {
-  checkUpdate,
   deleteKey,
   getKeyStatus,
   saveApiKey,
@@ -126,7 +125,6 @@ export default function SettingsPanel({
   const [busy, setBusy] = useState(false);
   const [testResult, setTestResult] = useState<TestResult>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  const [updateMsg, setUpdateMsg] = useState<string | null>(null);
 
   const refreshStatus = useCallback(() => {
     getKeyStatus()
@@ -140,7 +138,6 @@ export default function SettingsPanel({
       setReplaceValue("");
       setTestResult(null);
       setConfirmRemove(false);
-      setUpdateMsg(null);
     }
   }, [open, refreshStatus]);
 
@@ -191,22 +188,6 @@ export default function SettingsPanel({
       // Leave the current status; the banner/health will reflect reality.
     }
     setBusy(false);
-  };
-
-  const runUpdateCheck = async () => {
-    setUpdateMsg("Checking…");
-    try {
-      const r = await checkUpdate(true);
-      if (r.status === "UPDATE_AVAILABLE" && r.version) {
-        setUpdateMsg(`v${r.version} available — see the header to install.`);
-      } else if (r.error) {
-        setUpdateMsg(`Check failed: ${r.error}`);
-      } else {
-        setUpdateMsg("You're on the latest version.");
-      }
-    } catch {
-      setUpdateMsg("Update check failed.");
-    }
   };
 
   const label = "text-[11px] font-medium tracking-wide text-ink-dim uppercase";
@@ -340,29 +321,6 @@ export default function SettingsPanel({
                 No spend recorded yet this session.
               </p>
             )}
-          </section>
-
-          {/* --- About --- */}
-          <section>
-            <p className={label}>About</p>
-            <div className="mt-2 space-y-1 text-sm text-ink-dim">
-              <p>
-                Build-a-Spec{" "}
-                <span className="text-ink">v{health?.version ?? "…"}</span>
-              </p>
-              <p>
-                Model <span className="text-ink">{health?.model ?? "…"}</span>
-              </p>
-              <button
-                className="text-accent underline underline-offset-2 hover:text-accent-hover"
-                onClick={runUpdateCheck}
-              >
-                Check for updates
-              </button>
-              {updateMsg && (
-                <p className="text-xs text-ink-faint">{updateMsg}</p>
-              )}
-            </div>
           </section>
         </div>
       </div>

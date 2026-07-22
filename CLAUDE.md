@@ -122,7 +122,9 @@ backend/
   sessions.py              single module-level SessionState (history + DocumentStore
                            + SpecModule + ResearchRunner + AuditRunner + QCRunner
                            + UsageLedger) + has_unsaved_progress /
-                           project_payload / project_default_stem (shared by
+                           project_payload / project_default_stem /
+                           project_default_filename (date-stamped
+                           buildaspec-<stem>-<YYYY-MM-DD>.json; shared by
                            /api/project/save and the native save-on-close)
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint

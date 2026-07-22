@@ -12,6 +12,7 @@ import json
 import sys
 import time
 import types
+from datetime import datetime, timezone
 
 from backend import sessions
 from backend.llm.conversation import SessionState
@@ -58,6 +59,20 @@ def test_project_default_stem_from_section_number():
     session = SessionState()
     session.doc.doc.number = "21 13 13"
     assert sessions.project_default_stem(session) == "211313"
+
+
+def test_project_default_filename_is_date_stamped():
+    session = SessionState()
+    session.doc.doc.number = "21 13 13"
+    filename = sessions.project_default_filename(session)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    assert filename == f"buildaspec-211313-{today}.json"
+
+
+def test_project_default_filename_fallback_stem():
+    filename = sessions.project_default_filename(SessionState())
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    assert filename == f"buildaspec-draft-{today}.json"
 
 
 # --- _CloseController driven by a fake pywebview window ---------------------

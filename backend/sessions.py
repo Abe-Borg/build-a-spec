@@ -6,6 +6,7 @@ on-disk persistence (the JSON project file) arrive with the document model.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from .llm.conversation import SessionState
@@ -54,3 +55,16 @@ def project_payload(session: SessionState) -> dict[str, Any]:
 def project_default_stem(session: SessionState) -> str:
     """Filename stem for a saved project (``buildaspec-<stem>.json``)."""
     return session.doc.doc.number.replace(" ", "") or "draft"
+
+
+def project_default_filename(session: SessionState) -> str:
+    """Date-stamped filename for a saved project.
+
+    ``buildaspec-<stem>-<YYYY-MM-DD>.json``. Single source of truth for both
+    the ``/api/project/save`` download and the native save-on-close path, so
+    successive saves on the same day/section are easy to tell apart in a
+    folder without overwriting each other's date-less predecessor.
+    """
+    stem = project_default_stem(session)
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return f"buildaspec-{stem}-{date}.json"

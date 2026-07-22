@@ -1055,11 +1055,11 @@ def create_app() -> FastAPI:
     def project_save() -> Response:
         session = sessions.get_session()
         payload = sessions.project_payload(session)
-        stem = sessions.project_default_stem(session)
+        filename = sessions.project_default_filename(session)
         return Response(
             content=json.dumps(payload, ensure_ascii=False, indent=2),
             media_type="application/json",
-            headers=_attachment_headers(f"buildaspec-{stem}.json"),
+            headers=_attachment_headers(filename),
         )
 
     @app.post("/api/project/load")

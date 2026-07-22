@@ -50,6 +50,7 @@ import HelpModal, { type HelpTopic } from "./components/HelpModal";
 import OnboardingOverlay from "./components/OnboardingOverlay";
 import { useOnboarding, type DrawerName } from "./lib/useOnboarding";
 import CloseDialog from "./components/CloseDialog";
+import ConfirmDialog from "./components/ConfirmDialog";
 
 let nextId = 0;
 const newId = () => `m${++nextId}`;
@@ -728,6 +729,26 @@ export default function App() {
         qcStatus={qc?.status ?? "idle"}
         hasContent={hasContent}
         bumpDrawer={bumpDrawer}
+      />
+      {/* Closing (✕ / backdrop) any tour popup confirms here first, so the
+          guided tour is never dismissed by accident. Elevated above the
+          overlay's own modals. */}
+      <ConfirmDialog
+        open={onboarding.endConfirm && onboarding.phase.kind !== "idle"}
+        elevated
+        danger
+        title="End the guided tour?"
+        body={
+          <>
+            You can restart it anytime from the{" "}
+            <b className="text-ink">Tour</b> button in the header — the demo
+            section stays on the page either way.
+          </>
+        }
+        confirmLabel="End tour"
+        cancelLabel="Continue tour"
+        onConfirm={onboarding.abort}
+        onCancel={onboarding.cancelEnd}
       />
       <CloseDialog
         open={closePromptOpen}

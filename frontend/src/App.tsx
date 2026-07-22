@@ -44,6 +44,7 @@ import Chat from "./components/Chat";
 import ArtifactPanel from "./components/ArtifactPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import HelpModal, { type HelpTopic } from "./components/HelpModal";
+import CloseDialog from "./components/CloseDialog";
 
 let nextId = 0;
 const newId = () => `m${++nextId}`;
@@ -63,6 +64,8 @@ export default function App() {
   const [update, setUpdate] = useState<UpdateCheckPayload | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpTopic, setHelpTopic] = useState<HelpTopic | null>(null);
+  // Shown when the pywebview shell reports a window-close with unsaved work.
+  const [closePromptOpen, setClosePromptOpen] = useState(false);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
   const [baselineIndex, setBaselineIndex] = useState<number | null>(null);
@@ -170,6 +173,16 @@ export default function App() {
   useEffect(() => {
     if (qc?.status === "running") void followQc();
   }, [qc?.status, followQc]);
+
+  // The native shell calls this when the user tries to close the window and
+  // the session holds unsaved work; show the save-before-leaving dialog. The
+  // shell has already vetoed the close and awaits a js_api call (or a stay).
+  useEffect(() => {
+    window.buildaspecRequestClose = () => setClosePromptOpen(true);
+    return () => {
+      delete window.buildaspecRequestClose;
+    };
+  }, []);
 
   const onApplyQc = useCallback(
     async (findingIds: string[]) => {
@@ -604,6 +617,18 @@ export default function App() {
         onClose={() => setHelpTopic(null)}
         onNavigate={setHelpTopic}
         health={health}
+      />
+      <CloseDialog
+        open={closePromptOpen}
+        onSave={() => {
+          setClosePromptOpen(false);
+          void window.pywebview?.api?.save_and_close?.();
+        }}
+        onDiscard={() => {
+          setClosePromptOpen(false);
+          void window.pywebview?.api?.discard_and_close?.();
+        }}
+        onCancel={() => setClosePromptOpen(false)}
       />
       <main className="flex min-h-0 flex-1">
         <Chat messages={messages} busy={busy} onSend={send} prefill={prefill} />

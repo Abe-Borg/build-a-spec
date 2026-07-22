@@ -88,7 +88,7 @@ from .spec_doc.docx_export import (
 )
 from .spec_doc.importer import MasterImportError, parse_master_docx
 from .spec_doc.model import SpecSection, apply_edits, iter_paragraphs
-from .spec_doc.project import chat_transcript, load_project, save_project
+from .spec_doc.project import chat_transcript, load_project
 
 _DEV_ORIGINS = [
     "http://localhost:5173",
@@ -951,18 +951,8 @@ def create_app() -> FastAPI:
     @app.get("/api/project/save")
     def project_save() -> Response:
         session = sessions.get_session()
-        research_profile = session.research.profile_result
-        payload = save_project(
-            session.history,
-            session.doc,
-            session.module.module_id,
-            requirements_profile=(
-                research_profile.to_dict() if research_profile else None
-            ),
-            audit_result=session.audit.result,
-            qc_result=session.qc.result.to_dict() if session.qc.result else None,
-        )
-        stem = session.doc.doc.number.replace(" ", "") or "draft"
+        payload = sessions.project_payload(session)
+        stem = sessions.project_default_stem(session)
         return Response(
             content=json.dumps(payload, ensure_ascii=False, indent=2),
             media_type="application/json",

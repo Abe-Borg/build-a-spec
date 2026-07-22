@@ -1,9 +1,35 @@
 import { memo, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ChatMessage } from "../types";
+import type { ChatMessage, Figure } from "../types";
 import { splitStableTail, useSmoothText } from "../lib/useSmoothText";
+import FigureCard from "./FigureCard";
 import StatusStrip from "./StatusStrip";
+
+/** Figures the model created in this turn, rendered inline beneath the text.
+ *  Ids that no longer resolve (e.g. a rolled-back turn) are simply skipped. */
+function AttachedFigures({
+  ids,
+  figuresById,
+  onDelete,
+}: {
+  ids?: string[];
+  figuresById?: Map<string, Figure>;
+  onDelete?: (fid: string) => void;
+}) {
+  if (!ids?.length || !figuresById) return null;
+  const figures = ids
+    .map((id) => figuresById.get(id))
+    .filter((f): f is Figure => !!f);
+  if (!figures.length) return null;
+  return (
+    <>
+      {figures.map((figure) => (
+        <FigureCard key={figure.fid} figure={figure} onDelete={onDelete} />
+      ))}
+    </>
+  );
+}
 
 /** Memoized markdown for the settled prefix — re-parses only when the prefix
  *  grows past another paragraph break, not on every animation frame. */
@@ -48,7 +74,15 @@ function ThinkingBlock({
   );
 }
 
-export default function MessageBubble({ msg }: { msg: ChatMessage }) {
+export default function MessageBubble({
+  msg,
+  figuresById,
+  onDeleteFigure,
+}: {
+  msg: ChatMessage;
+  figuresById?: Map<string, Figure>;
+  onDeleteFigure?: (fid: string) => void;
+}) {
   const streaming = !!msg.streaming;
   const smoothed = useSmoothText(msg.text, streaming);
 
@@ -100,6 +134,11 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
             <span className="streaming-caret" />
           )
         )}
+        <AttachedFigures
+          ids={msg.figureIds}
+          figuresById={figuresById}
+          onDelete={onDeleteFigure}
+        />
       </div>
     );
   }
@@ -110,6 +149,11 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
       <ReactMarkdown remarkPlugins={[remarkGfm]}>
         {msg.text || "…"}
       </ReactMarkdown>
+      <AttachedFigures
+        ids={msg.figureIds}
+        figuresById={figuresById}
+        onDelete={onDeleteFigure}
+      />
     </div>
   );
 }

@@ -43,6 +43,7 @@ import ApiKeyBanner from "./components/ApiKeyBanner";
 import Chat from "./components/Chat";
 import ArtifactPanel from "./components/ArtifactPanel";
 import SettingsPanel from "./components/SettingsPanel";
+import HelpModal, { type HelpTopic } from "./components/HelpModal";
 
 let nextId = 0;
 const newId = () => `m${++nextId}`;
@@ -61,6 +62,7 @@ export default function App() {
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [update, setUpdate] = useState<UpdateCheckPayload | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpTopic, setHelpTopic] = useState<HelpTopic | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
   const [baselineIndex, setBaselineIndex] = useState<number | null>(null);
@@ -585,6 +587,7 @@ export default function App() {
           setSettingsOpen(true);
           refreshUsage();
         }}
+        onOpenHelp={setHelpTopic}
       />
       {health && !health.api_key_present && (
         <ApiKeyBanner onSaved={refreshHealth} />
@@ -595,6 +598,12 @@ export default function App() {
         health={health}
         usage={usage}
         onKeyChange={refreshHealth}
+      />
+      <HelpModal
+        topic={helpTopic}
+        onClose={() => setHelpTopic(null)}
+        onNavigate={setHelpTopic}
+        health={health}
       />
       <main className="flex min-h-0 flex-1">
         <Chat messages={messages} busy={busy} onSend={send} prefill={prefill} />

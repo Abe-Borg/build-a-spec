@@ -1,4 +1,5 @@
 import type { Health, UpdateCheckPayload, UsageSummary } from "../types";
+import { HELP_TOPICS, type HelpTopic } from "./HelpModal";
 
 interface Props {
   health: Health | null;
@@ -8,6 +9,7 @@ interface Props {
   onNewSession: () => void;
   onInstallUpdate: () => void;
   onOpenSettings: () => void;
+  onOpenHelp: (topic: HelpTopic) => void;
 }
 
 export default function Header({
@@ -18,22 +20,36 @@ export default function Header({
   onNewSession,
   onInstallUpdate,
   onOpenSettings,
+  onOpenHelp,
 }: Props) {
   const spend = usage?.estimated_cost_usd.total ?? 0;
   const spendLabel = spend > 0 ? `≈ $${spend.toFixed(2)}` : "—";
   const updateAvailable =
     update?.status === "UPDATE_AVAILABLE" && !!update.version;
   return (
-    <header className="flex items-center justify-between border-b border-edge bg-surface px-5 py-3">
-      <div className="flex items-baseline gap-3">
+    <header className="flex items-center gap-4 border-b border-edge bg-surface px-5 py-3">
+      <div className="flex flex-none items-baseline gap-3">
         <h1 className="font-[family-name:var(--font-display)] text-lg font-semibold tracking-tight">
           Build-a-Spec
         </h1>
-        <span className="text-xs text-ink-dim">
+        <span className="hidden text-xs text-ink-dim xl:inline">
           {health?.module ?? "Division 21 — Hyperscale Fire Suppression"}
         </span>
       </div>
-      <div className="flex items-center gap-3">
+      <span className="h-5 w-px flex-none bg-edge" aria-hidden="true" />
+      <nav className="flex flex-none items-center gap-0.5">
+        {HELP_TOPICS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => onOpenHelp(t.id)}
+            className="rounded-md px-2.5 py-1 text-xs text-ink-dim transition-colors hover:bg-raised hover:text-ink"
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
+      <div className="flex-1" />
+      <div className="flex flex-none items-center gap-3">
         {updateAvailable &&
           (update?.platform_supported ? (
             <button

@@ -161,6 +161,7 @@ class DimensionStatus:
 
     dimension_id: str
     status: str  # "completed" | "failed"
+    title: str = ""
     item_count: int = 0
     grounded_count: int = 0
     web_search_requests: int = 0
@@ -326,6 +327,7 @@ class RequirementsProfile:
                 DimensionStatus(
                     dimension_id=str(raw.get("dimension_id", "") or ""),
                     status=str(raw.get("status", "") or "failed"),
+                    title=str(raw.get("title", "") or ""),
                     item_count=int(raw.get("item_count", 0) or 0),
                     grounded_count=int(raw.get("grounded_count", 0) or 0),
                     web_search_requests=int(
@@ -584,6 +586,7 @@ def _run_dimension(
             status=DimensionStatus(
                 dimension_id=dimension.dimension_id,
                 status="failed",
+                title=dimension.title,
                 web_search_requests=sum(web_search_count(r) for r in billed),
                 web_fetch_requests=sum(web_fetch_count(r) for r in billed),
                 input_tokens=tokens.get("input_tokens", 0),
@@ -736,6 +739,7 @@ def _run_dimension(
                 status=DimensionStatus(
                     dimension_id=dimension.dimension_id,
                     status="completed",
+                    title=dimension.title,
                     item_count=len(items),
                     grounded_count=sum(1 for i in items if i.grounded),
                     web_search_requests=sum(
@@ -843,6 +847,7 @@ def run_requirements_research(
                     status=DimensionStatus(
                         dimension_id=dimension.dimension_id,
                         status="failed",
+                        title=dimension.title,
                         error=f"{type(exc).__name__}: {exc}",
                     )
                 )

@@ -226,9 +226,9 @@ export const TOUR: readonly TourChunk[] = [
         title: "The project profile",
         body:
           "Research needs four facts: city, state, country, client. " +
-          "Normally you just mention them in chat and the model records " +
-          "them — or take the shortcut below and watch the research " +
-          "button unlock.",
+          "Mention them in chat and the model records them, fill the form " +
+          "right here in the drawer — or take the demo shortcut below and " +
+          "watch the research button unlock.",
         actions: [
           {
             kind: "profile-fill",

@@ -115,8 +115,8 @@ export interface DocOp {
   removed?: boolean;
 }
 
-/** A manual edit op sent to POST /api/doc/edit (WI2; Batch 6 adds
- *  set_project_profile for the tour's deterministic profile fill). */
+/** A manual edit op sent to POST /api/doc/edit (WI2; set_project_profile added
+ * for the panel's project-profile form and the tour's deterministic fill). */
 export interface EditOp {
   action:
     | "replace"
@@ -128,7 +128,8 @@ export interface EditOp {
   text?: string;
   status?: BlockStatus;
   source_item_id?: string;
-  /** set_project_profile fields (target_id must be "sec"). */
+  /** set_project_profile fields (target_id must be "sec") — provide only
+   * the ones being changed; an explicit empty string clears that field. */
   city?: string;
   state?: string;
   country?: string;
@@ -458,3 +459,21 @@ export type StreamEvent =
   | { type: "lint"; items: LintIssue[]; standards: StandardInfo[] }
   | { type: "turn_complete"; stop_reason: string | null; usage?: TurnUsage }
   | { type: "error"; message: string };
+
+/**
+ * Native bridge surfaced by the pywebview shell (undefined in a plain
+ * browser / dev). `pywebview.api` exposes the close controller's methods;
+ * `buildaspecRequestClose` is the hook the shell calls when the user tries
+ * to close the window so the app can offer to save first.
+ */
+declare global {
+  interface Window {
+    pywebview?: {
+      api?: {
+        save_and_close?: () => Promise<void>;
+        discard_and_close?: () => Promise<void>;
+      };
+    };
+    buildaspecRequestClose?: () => void;
+  }
+}

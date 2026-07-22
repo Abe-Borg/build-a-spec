@@ -255,6 +255,82 @@ def test_batch_set_status_rejects_whole_batch_on_one_bad_op(monkeypatch):
     assert client.get("/api/doc").json()["doc"] == before
 
 
+def test_manual_set_project_profile_edit():
+    """The panel's project-profile form posts the same op the model's tool
+    uses, through the same manual-edit path as any other direct edit — no
+    dedicated endpoint, no restricted op vocabulary."""
+    client = _client()
+    resp = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_project_profile",
+                    "target_id": "sec",
+                    "city": "Ashburn",
+                    "state": "Virginia",
+                    "country": "USA",
+                    "client": "ExampleCo",
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["applied"] == [
+        {"action": "set_project_profile", "id": "sec", "complete": True}
+    ]
+    assert data["doc"]["project_profile"] == {
+        "city": "Ashburn",
+        "state_or_province": "VA",
+        "country": "US",
+        "client_name": "ExampleCo",
+    }
+    assert data["profile_complete"] is True
+
+
+def test_manual_set_project_profile_edit_is_undoable():
+    client = _client()
+    client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_project_profile",
+                    "target_id": "sec",
+                    "city": "Ashburn",
+                    "state": "VA",
+                    "country": "US",
+                    "client": "ExampleCo",
+                }
+            ]
+        },
+    )
+    undone = client.post("/api/doc/undo").json()
+    assert undone["doc"]["project_profile"] == {}
+    assert undone["profile_complete"] is False
+
+
+def test_manual_set_project_profile_rejects_unknown_country():
+    client = _client()
+    resp = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_project_profile",
+                    "target_id": "sec",
+                    "country": "France",
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 400
+    assert "country" in resp.json()["error"]
+    assert sessions.get_session().doc.doc.project_profile == {}
+
+
 def test_confirming_removes_block_from_assumptions_schedule(monkeypatch):
     client = _client()
     _seed(client, monkeypatch)

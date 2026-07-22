@@ -534,6 +534,7 @@ export default function ArtifactPanel({
         research={research}
         busy={busy}
         onStart={onStartResearch}
+        onEditDoc={onEditDoc}
         openNonce={drawerNonces?.research}
       />
 

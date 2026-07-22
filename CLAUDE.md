@@ -28,7 +28,11 @@ file is the working reference for AI-assisted development sessions.
 ## Layout
 
 ```
-main.py                    entry point: uvicorn thread + pywebview window
+main.py                    entry point: uvicorn thread + pywebview window;
+                           _CloseController offers to save progress on window
+                           close (closing-event veto → off-thread frontend
+                           prompt → js_api save_and_close/discard_and_close,
+                           native save via SAVE_DIALOG; never traps the user)
 backend/
   settings.py              models (claude-sonnet-5 default), effort levels
                            (interview high / research xhigh), max_tokens at
@@ -107,7 +111,9 @@ backend/
                            settings.PRICING; not persisted (per-session meter)
   sessions.py              single module-level SessionState (history + DocumentStore
                            + SpecModule + ResearchRunner + AuditRunner + QCRunner
-                           + UsageLedger)
+                           + UsageLedger) + has_unsaved_progress /
+                           project_payload / project_default_stem (shared by
+                           /api/project/save and the native save-on-close)
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint
                            vocabulary, dormant research dimensions); import-time
@@ -160,10 +166,11 @@ backend/
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
-                           baselineIndex, settings-open, send loop (SSE switch incl.
-                           status/thinking_delta); QC follow-stream + accept/dismiss;
-                           Batch 6: drawerNonces + useOnboarding wiring, send →
-                           Promise<boolean> (clean-turn signal)
+                           baselineIndex, settings-open, closePromptOpen
+                           (window.buildaspecRequestClose hook), send loop (SSE
+                           switch incl. status/thinking_delta); QC follow-stream
+                           + accept/dismiss; Batch 6: drawerNonces + useOnboarding
+                           wiring, send → Promise<boolean> (clean-turn signal)
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
                            draftFull; key status/delete/test; usage; Batch 4 qc
                            start/status/stream/apply/dismiss + readiness; Batch 5
@@ -188,17 +195,20 @@ frontend/src/
                            menu, save/open, ⚠ badge, "Draft full section" button,
                            open items) / ReviewDrawer (Batch 3 keyboard review walk) /
                            IssuesDrawer (lint + StandardsStrip) / ResearchDrawer
-                           (research only — audit UI retired in Batch 4) / QCDrawer
+                           (research only — audit UI retired in Batch 4; also hosts
+                           the project-profile form for direct upfront entry) / QCDrawer
                            (Batch 4: readiness checklist, lens progress, accept/dismiss
                            fix queue, hold-to-apply-criticals, refuted appendix) /
                            SpecDocument (paper rendering + inline manual-edit
                            affordances; Batch 5 read-only diff render via `diff` prop)
                            / Header (spend ticker; Batch 6 Tour button) / ApiKeyBanner /
                            StatusStrip (live status strip) / SettingsPanel (key mgmt +
-                           usage table + about) / OnboardingOverlay (Batch 6:
-                           spotlight cutout + step bubbles + discipline/entry/
-                           work-choice dialogs + resume pill; drawers gain an
-                           openNonce prop, controls gain data-tour anchors)
+                           usage table + about) / CloseDialog (save-before-leaving
+                           prompt: Save & close / Close without saving / Cancel)
+                           / OnboardingOverlay (Batch 6: spotlight cutout + step
+                           bubbles + discipline/entry/work-choice dialogs + resume
+                           pill; drawers gain an openNonce prop, controls gain
+                           data-tour anchors)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
   conftest.py              hermetic env + fresh session per test
@@ -417,13 +427,23 @@ criticals; `profile_complete` is advisory).
 
 ## Phase 4 — implemented notes
 
-- **Profile enters conversationally** via the `set_project_profile` op
-  (target `sec`; fields city/state/country/client; provided fields
-  update, explicit `""` clears; country folds to US/CA or the op errors;
-  state names fold to codes). Stored on `SpecSection.project_profile` —
-  transactional, undoable, persisted like `edition_overrides`. The
-  applied record reports `complete`, and `_doc_payload.profile_complete`
-  gates the panel's research button.
+- **Profile enters conversationally, or directly from the panel** — both
+  paths post the same `set_project_profile` op (target `sec`; fields
+  city/state/country/client; provided fields update, explicit `""`
+  clears; country folds to US/CA or the op errors; state names fold to
+  codes): the model calls it as a tool during the interview, and
+  `ResearchDrawer`'s project-profile form posts it through the existing
+  `POST /api/doc/edit` manual-edit path (no new endpoint — the op
+  vocabulary there was already unrestricted) so the user can fill the
+  whole profile out up front without touching chat. Stored on
+  `SpecSection.project_profile` — transactional, undoable, persisted
+  like `edition_overrides`. The applied record reports `complete`, and
+  `_doc_payload.profile_complete` gates the panel's research button.
+  `project_identity` is a non-defaultable playbook topic, and a
+  per-field `PROJECT PROFILE` status block renders into every turn's
+  PROJECT CONTEXT (`conversation._profile_status_block`) naming exactly
+  what's still missing — the model uses it to ask about a missing field
+  incrementally, a turn or several apart, rather than only once.
 - **Research never auto-triggers.** `POST /api/research/start` is the
   only entry: validates profile completeness + module dimensions + key,
   then `ResearchRunner.start` fans out on a daemon thread with the

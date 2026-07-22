@@ -102,12 +102,19 @@ def main() -> None:
         except Exception:
             pass  # older pywebview without the settings dict
 
+        # pywebview disables text selection by default (native-app feel),
+        # injecting CSS that blocks selection everywhere except form fields.
+        # That leaves the chat transcript unselectable — no copy, no
+        # highlight. text_select=True suppresses that injection so plain
+        # content is selectable; the app's own `select-none` (e.g. the
+        # panel stepper) still governs where selection is intentionally off.
         webview.create_window(
             settings.APP_NAME,
             url,
             width=1440,
             height=900,
             min_size=(1100, 700),
+            text_select=True,
         )
         webview.start()
     except Exception:

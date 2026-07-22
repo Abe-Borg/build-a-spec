@@ -3,7 +3,11 @@
  * an accept/dismiss fix queue, and an issue-readiness checklist.
  *
  * Idle → a "Send to Final QC" button + a cost expectation line + the
- * readiness checklist. Running → the five lens rows with live status, then a
+ * readiness checklist. The button never launches a run directly: because a
+ * pass runs on Fable 5 (expensive) and takes minutes, it opens a confirmation
+ * dialog that spells out what the pass does, why it costs, and why it's slow —
+ * the user opts in explicitly. Running → the five lens rows with live status,
+ * then a
  * "Verifying findings…" counter (fed by the SSE stream). Complete → findings
  * grouped by severity, each with a jump-to-element ref, collapsible
  * rationale, an Apply fix (with an ops preview) / Dismiss action, an "Apply
@@ -15,7 +19,7 @@
  * the drawer shows lens-by-lens progress the whole time) and Batch 3's
  * hold-to-confirm affordance.
  */
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   QcFinding,
   QcSnapshot,
@@ -84,6 +88,7 @@ export default function QCDrawer({
   const [openRationale, setOpenRationale] = useState<Record<string, boolean>>({});
   const [showRefuted, setShowRefuted] = useState(false);
   const [holding, setHolding] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const holdTimer = useRef<number | undefined>(undefined);
 
   const status = qc?.status ?? "idle";
@@ -128,13 +133,28 @@ export default function QCDrawer({
       ? `Runs on Claude Fable 5 — the strongest model. This session's QC: ≈ $${observedCost.toFixed(2)}.`
       : "Runs on Claude Fable 5 — the strongest model. Typically a few dollars per pass.";
 
+  // Cost-focused line for the confirmation dialog (the model name is already
+  // stated there). A re-run folds the session's prior QC spend in.
+  const costEstimate =
+    observedCost && observedCost > 0
+      ? `This session's Final QC has cost ≈ $${observedCost.toFixed(2)} so far; expect a few dollars for another pass.`
+      : "Expect a few dollars per pass.";
+
   const startLabel = running
     ? "Reviewing…"
     : result
       ? "Re-run Final QC"
       : "Send to Final QC";
 
+  // The start button opens the confirmation dialog; the run only fires once
+  // the user confirms in it (Fable 5 is expensive and a pass takes minutes).
+  const confirmStart = () => {
+    setConfirmOpen(false);
+    onStart();
+  };
+
   return (
+    <>
     <div className="border-t border-edge bg-bg/70 px-5 py-2">
       <div className="flex items-baseline gap-2">
         <button
@@ -165,9 +185,9 @@ export default function QCDrawer({
               ? "border-edge bg-raised text-ink-dim hover:border-accent hover:text-accent"
               : "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25"
           }`}
-          onClick={onStart}
+          onClick={() => setConfirmOpen(true)}
           disabled={running || busy}
-          title="Runs the full lens fan-out + adversarial verification on Fable 5 (uses your API key)"
+          title="Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Fable 5 (uses your API key)"
         >
           {startLabel}
         </button>
@@ -367,6 +387,142 @@ export default function QCDrawer({
           )}
         </div>
       )}
+    </div>
+
+    {confirmOpen && (
+      <ConfirmQCModal
+        isRerun={!!result}
+        costEstimate={costEstimate}
+        busy={busy}
+        onConfirm={confirmStart}
+        onCancel={() => setConfirmOpen(false)}
+      />
+    )}
+    </>
+  );
+}
+
+/**
+ * Pre-flight confirmation for a Final QC pass. A run is expensive (Fable 5)
+ * and slow (minutes), so this dialog states plainly what the pass does, why it
+ * costs, and why it takes a while, and makes the user opt in. Mirrors the
+ * SettingsPanel overlay pattern (backdrop click / ✕ / Escape all cancel).
+ */
+function ConfirmQCModal({
+  isRerun,
+  costEstimate,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  isRerun: boolean;
+  costEstimate: string;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  const sectionLabel =
+    "text-[11px] font-semibold tracking-wide text-ink-faint uppercase";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-6 pt-16"
+      onClick={onCancel}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="w-full max-w-lg overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-edge px-5 py-3">
+          <h2 className="font-[family-name:var(--font-display)] text-lg font-semibold">
+            {isRerun ? "Re-run Final QC?" : "Run Final QC?"}
+          </h2>
+          <button
+            onClick={onCancel}
+            className="rounded-lg px-2 py-1 text-ink-dim transition-colors hover:text-ink"
+            title="Cancel"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-5 text-[13px] leading-relaxed text-ink-dim">
+          <p>
+            Final QC is a spare-no-expense review of the whole section before it
+            goes out the door. It runs on{" "}
+            <strong className="text-ink">Claude Fable 5</strong>, the most
+            capable model — not the Sonnet&nbsp;5 model that runs the interview.
+          </p>
+
+          <div className="space-y-1.5">
+            <p className={sectionLabel}>What it does</p>
+            <ul className="list-disc space-y-1 pl-5">
+              <li>
+                Five independent reviewers read the entire draft in parallel —
+                code compliance, coordination &amp; consistency, completeness,
+                enforceability language, and provenance hygiene.
+              </li>
+              <li>
+                The code-compliance reviewer searches the web to check standards
+                against their current published text.
+              </li>
+              <li>
+                Every finding is then re-checked by an adversarial verification
+                panel, so weak or unfounded findings are filtered out before you
+                see them.
+              </li>
+            </ul>
+          </div>
+
+          <div className="space-y-1.5">
+            <p className={sectionLabel}>Why it&apos;s expensive</p>
+            <p>
+              Fable&nbsp;5 costs several times more per token than the interview
+              model, and a pass is not a single call — it&apos;s the five
+              reviewers plus a panel of verifiers for every finding they raise,
+              each reasoning at the highest effort. That adds up to dozens of
+              model calls, billed to your own Anthropic API key.
+            </p>
+            <p className="text-ink-faint italic">{costEstimate}</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <p className={sectionLabel}>Why it takes a while</p>
+            <p>
+              The reviewers reason deeply (and one searches the web live), then
+              every finding goes through verification. A pass usually takes
+              several minutes. You can keep working while it runs — progress
+              shows lens by lens.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-edge px-5 py-3">
+          <button
+            className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm text-ink-dim transition-colors hover:border-ink-faint hover:text-ink"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {isRerun ? "Re-run Final QC" : "Run Final QC"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

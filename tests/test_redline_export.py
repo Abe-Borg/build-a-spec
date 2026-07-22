@@ -10,6 +10,7 @@ default path.
 from __future__ import annotations
 
 import io
+import zipfile
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -506,9 +507,25 @@ def test_baseline_index_survives_project_save_and_load(tmp_path):
     assert sessions.get_session().doc.baseline_index == 1
 
 
+def _docx_member_contents(docx_bytes: bytes) -> dict[str, bytes]:
+    """Member name -> content for a ``.docx`` (a zip), ignoring zip metadata.
+
+    python-docx writes each zip entry's last-modified stamp from the wall
+    clock at save time (2-second DOS resolution), so two exports a moment
+    apart are NOT raw-byte identical when they straddle a 2-second boundary
+    — the envelope timestamps differ even though every member's *content*
+    is identical. Comparing member contents is the timestamp-insensitive
+    way to assert the clean export is deterministic, which is what
+    "byte-stable" means here (the clean path writes no dynamic dates into
+    the document itself — ``_redline_now`` is only reached with a redline).
+    """
+    with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
+        return {name: zf.read(name) for name in sorted(zf.namelist())}
+
+
 def test_clean_export_has_no_tracked_changes():
-    """Regression guard: the default export path is byte-stable and carries
-    zero redline markup (no w:ins/w:del)."""
+    """Regression guard: the default export path is deterministic (stable
+    content) and carries zero redline markup (no w:ins/w:del)."""
     from backend import sessions
 
     client = TestClient(create_app())
@@ -516,7 +533,9 @@ def test_clean_export_has_no_tracked_changes():
 
     first = client.get("/api/export/docx").content
     second = client.get("/api/export/docx").content
-    assert first == second  # deterministic
+    # Deterministic content — compare member contents, not raw zip bytes,
+    # so the zip's wall-clock entry timestamps don't make this flaky.
+    assert _docx_member_contents(first) == _docx_member_contents(second)
 
     body = Document(io.BytesIO(first)).element.body
     assert body.findall(".//" + _W_INS) == []

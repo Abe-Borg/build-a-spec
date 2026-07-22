@@ -1,6 +1,7 @@
 import type {
   DocPayload,
   EditOp,
+  Figure,
   Health,
   ImportResultPayload,
   KeyStatus,
@@ -80,6 +81,32 @@ export async function getDoc(): Promise<DocPayload> {
   const resp = await fetch("/api/doc");
   if (!resp.ok) throw new Error(`doc ${resp.status}`);
   return resp.json();
+}
+
+/* --- Chat-authored figures (diagrams / schematics / tables) --- */
+
+/** Snapshot of the session's figures (also carried on every DocPayload). */
+export async function getFigures(): Promise<Figure[]> {
+  const resp = await fetch("/api/figures");
+  if (!resp.ok) throw new Error(`figures ${resp.status}`);
+  return (await resp.json()).figures as Figure[];
+}
+
+/** Delete a figure. 409 while a turn streams; returns the remaining figures. */
+export async function deleteFigure(fid: string): Promise<Figure[]> {
+  const resp = await fetch(`/api/figure/${encodeURIComponent(fid)}`, {
+    method: "DELETE",
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `delete failed (${resp.status})`);
+  }
+  return data.figures as Figure[];
+}
+
+/** URL for a table figure's CSV download (server-rendered, text/csv). */
+export function figureCsvUrl(fid: string): string {
+  return `/api/figure/${encodeURIComponent(fid)}/csv`;
 }
 
 /** Step the document one version back/forward; null when at the end stop. */

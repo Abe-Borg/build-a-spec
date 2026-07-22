@@ -22,6 +22,7 @@ import QCDrawer from "./QCDrawer";
 import ResearchDrawer from "./ResearchDrawer";
 import ReviewDrawer from "./ReviewDrawer";
 import SpecDocument from "./SpecDocument";
+import Tip from "./Tip";
 
 interface Props {
   doc: SpecDoc | null;
@@ -145,6 +146,16 @@ export default function ArtifactPanel({
     doc?.parts.reduce((n, p) => n + p.articles.length, 0) ?? 0;
   const isSparse = articleCount < 3;
   const draftPulse = isSparse && research?.status === "complete";
+  // Kept visible (never hidden) so the feature is discoverable, but a wholesale
+  // draft is the wrong tool once the section has real content.
+  const draftDisabled = busy || !isSparse;
+  const draftTip = !isSparse
+    ? `The section already has ${articleCount} article${
+        articleCount === 1 ? "" : "s"
+      } — a one-pass full draft is for starting from an empty or sparse section. Edit inline or ask the model to extend it.`
+    : busy
+      ? "Finish the current turn first."
+      : "Draft the complete section in one pass — every PART and article, stamped from what's known so far. One click to undo.";
 
   // --- Compare (diff) mode (Batch 5) ---
   const curIndex = version.index;
@@ -242,18 +253,17 @@ export default function ArtifactPanel({
               </span>
             )}
           </span>
-          {isSparse && (
+          <Tip tip={draftTip} className="shrink-0">
             <button
-              className={`shrink-0 rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${
+              className={`rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${
                 draftPulse ? "draft-pulse" : ""
               }`}
               onClick={onDraftFull}
-              disabled={busy}
-              title="Draft the complete section in one pass — every PART and article, stamped from what's known so far. One click to undo."
+              disabled={draftDisabled}
             >
               ✨ Draft full section
             </button>
-          )}
+          </Tip>
         </div>
         <div className="flex items-center gap-1.5">
           <button
@@ -275,20 +285,27 @@ export default function ArtifactPanel({
           >
             ›
           </button>
-          <button
-            className={
-              actionButton + (compareMode ? " border-accent text-accent" : "")
-            }
-            onClick={() => (compareMode ? setCompareMode(false) : enterCompare())}
-            disabled={busy || !canCompare}
-            title={
-              canCompare
-                ? "Compare the current version against the master or a prior version"
-                : "Compare needs a prior version or an imported master"
+          <Tip
+            tip={
+              !canCompare
+                ? "Compare needs a prior version or an imported master — make an edit or import a master first."
+                : busy
+                  ? "Finish the current turn first."
+                  : "Compare the current version against the master or a prior version."
             }
           >
-            {compareMode ? "Exit compare" : "Compare"}
-          </button>
+            <button
+              className={
+                actionButton + (compareMode ? " border-accent text-accent" : "")
+              }
+              onClick={() =>
+                compareMode ? setCompareMode(false) : enterCompare()
+              }
+              disabled={busy || !canCompare}
+            >
+              {compareMode ? "Exit compare" : "Compare"}
+            </button>
+          </Tip>
           <span className="mx-1 h-4 w-px bg-edge" />
           {/* Export menu (Batch 5): clean, or a genuine tracked-changes
               redline vs the master / a chosen version. Downloads are disabled
@@ -320,7 +337,7 @@ export default function ArtifactPanel({
                 >
                   Export clean
                 </a>
-                {baselineIndex !== null && (
+                {baselineIndex !== null ? (
                   <a
                     className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
                     href="/api/export/docx?redline=master"
@@ -330,6 +347,13 @@ export default function ArtifactPanel({
                   >
                     Redline vs master
                   </a>
+                ) : (
+                  <span
+                    className="block cursor-default px-3 py-1.5 text-ink-faint"
+                    title="Import an office master first (Import master) — then this shows every change vs that master as Word tracked changes"
+                  >
+                    Redline vs master
+                  </span>
                 )}
                 {compareMode && compareBase !== null ? (
                   <a
@@ -382,18 +406,23 @@ export default function ArtifactPanel({
               e.target.value = "";
             }}
           />
-          <button
-            className={actionButton}
-            onClick={() => importRef.current?.click()}
-            disabled={busy || hasContent}
-            title={
+          <Tip
+            tip={
               hasContent
-                ? "Import needs a blank document — start a new session first"
-                : "Import an office master (.docx) as the starting point; the interview pivots to gap-and-adapt"
+                ? "Import needs a blank document — start a new session first (New session)."
+                : busy
+                  ? "Finish the current turn first."
+                  : "Import an office master (.docx) as the starting point; the interview pivots to gap-and-adapt."
             }
           >
-            Import master
-          </button>
+            <button
+              className={actionButton}
+              onClick={() => importRef.current?.click()}
+              disabled={busy || hasContent}
+            >
+              Import master
+            </button>
+          </Tip>
           <input
             ref={importRef}
             type="file"

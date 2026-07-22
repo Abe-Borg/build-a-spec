@@ -1,10 +1,11 @@
 /**
  * The requirements-research surface under the document panel: the project
- * profile line, the launch button (enabled once the interview records a
- * complete profile), live per-dimension progress while a run streams, and
- * the grounded-citations list when it completes. Ungrounded items are
- * marked [UNVERIFIED]; process advisories are marked [PROCESS] and never
- * become spec text.
+ * profile line, the launch button, live per-dimension progress while a run
+ * streams, and the grounded-citations list when it completes. The strip is
+ * always visible so the feature is discoverable; the launch button stays
+ * disabled (with a hover tooltip explaining why) until the interview records
+ * a complete project profile. Ungrounded items are marked [UNVERIFIED];
+ * process advisories are marked [PROCESS] and never become spec text.
  *
  * The Phase 5 compliance-audit control moved out of here in Batch 4 — the
  * Final QC drawer supersedes it (its code_compliance + completeness lenses
@@ -12,6 +13,7 @@
  */
 import { useState } from "react";
 import type { ResearchRunStatus, ResearchSnapshot, SpecDoc } from "../types";
+import Tip from "./Tip";
 
 interface Props {
   doc: SpecDoc | null;
@@ -54,7 +56,14 @@ export default function ResearchDrawer({
   const profile = profileLine(doc);
   const lastEvent = research?.events[research.events.length - 1];
 
-  if (!profile && status === "idle") return null;
+  const startDisabled = !profileComplete || running || busy;
+  const startTip = !profileComplete
+    ? "Complete the project profile in the interview first — city, state, country, and client."
+    : running
+      ? "Research is already running."
+      : busy
+        ? "Finish the current turn first."
+        : "Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).";
 
   return (
     <div className="border-t border-edge bg-bg/70 px-5 py-2">
@@ -78,18 +87,15 @@ export default function ResearchDrawer({
           </span>
           <span className="ml-auto shrink-0">{expanded ? "▾" : "▸"}</span>
         </button>
-        <button
-          className="shrink-0 rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
-          onClick={onStart}
-          disabled={!profileComplete || running || busy}
-          title={
-            profileComplete
-              ? "Run grounded web research for this jurisdiction, AHJ, and client (uses your API key)"
-              : "Complete the project profile in the interview first (city, state, country, client)"
-          }
-        >
-          {status === "complete" ? "Re-research" : "Research requirements"}
-        </button>
+        <Tip tip={startTip} className="shrink-0">
+          <button
+            className="rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
+            onClick={onStart}
+            disabled={startDisabled}
+          >
+            {status === "complete" ? "Re-research" : "Research requirements"}
+          </button>
+        </Tip>
       </div>
 
       {status === "failed" && research?.error && (

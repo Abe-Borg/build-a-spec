@@ -53,6 +53,20 @@ _MAX_ROWS = 500
 _MAX_CELL = 2_000
 
 
+# Leading characters that make a spreadsheet treat a CSV cell as a formula
+# (Excel / Sheets / LibreOffice). Table content is model-authored/untrusted,
+# so any such cell is prefixed with a single quote — the spreadsheet
+# "force text" marker, hidden on display — before export (CWE-1236).
+_CSV_FORMULA_LEADERS = "=+-@\t\r"
+
+
+def _csv_safe(value: str) -> str:
+    """Neutralize spreadsheet formula injection in one CSV cell."""
+    if value and value[0] in _CSV_FORMULA_LEADERS:
+        return "'" + value
+    return value
+
+
 class FigureError(ValueError):
     """A malformed ``create_figure`` request. Reported to the model to fix."""
 
@@ -115,9 +129,9 @@ class Figure:
         buffer = io.StringIO()
         writer = csv.writer(buffer)
         if self.columns:
-            writer.writerow(self.columns)
+            writer.writerow([_csv_safe(c) for c in self.columns])
         for row in self.rows:
-            writer.writerow(row)
+            writer.writerow([_csv_safe(c) for c in row])
         return buffer.getvalue()
 
 

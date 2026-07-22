@@ -175,6 +175,29 @@ def test_to_csv_renders_table_rows():
     assert "Office,0.10,1500" in csv_text
 
 
+def test_to_csv_neutralizes_formula_injection():
+    """A model-authored cell that would execute as a spreadsheet formula is
+    prefixed with a single quote (CWE-1236); benign cells are untouched."""
+    fig = FigureStore().create(
+        {
+            "kind": "table",
+            "title": "t",
+            "columns": ["=danger()", "Note"],
+            "rows": [
+                ["=SUM(A1:A2)", "+1"],
+                ["@cmd", "-5"],
+                ["Office", "0.10"],
+            ],
+        }
+    )
+    csv_text = fig.to_csv()
+    for dangerous in ("'=danger()", "'=SUM(A1:A2)", "'+1", "'@cmd", "'-5"):
+        assert dangerous in csv_text
+    # A benign numeric/text cell is not mangled.
+    assert "Office,0.10" in csv_text
+    assert "'Office" not in csv_text
+
+
 def test_context_stubs_name_figures_but_hide_source():
     store = FigureStore()
     store.create(_MERMAID_FIGURE)

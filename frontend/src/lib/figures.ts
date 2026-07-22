@@ -132,11 +132,37 @@ function withPixelSize(svg: string, width: number, height: number): string {
   });
 }
 
+// Raster output caps. A model-authored SVG can declare enormous intrinsic
+// dimensions (or viewBox); without a cap, PNG export would allocate a canvas
+// large enough to hang or crash the webview. These bound either side and the
+// total pixel count while preserving aspect ratio — ample for any schematic.
+const MAX_PNG_SIDE = 8192;
+const MAX_PNG_PIXELS = 16_000_000; // ~4k × 4k
+
 /** Rasterize sanitized SVG to a PNG Blob via an offscreen canvas.
- *  The SVG has no external refs (sanitized) so the canvas is never tainted. */
+ *  The SVG has no external refs (sanitized) so the canvas is never tainted.
+ *  Output dimensions are clamped so an oversized SVG can't exhaust memory. */
 export async function svgToPngBlob(svg: string, scale = 2): Promise<Blob> {
   const { width, height } = svgPixelSize(svg);
-  const sized = withPixelSize(svg, width, height);
+
+  let outW = Math.max(1, Math.round(width * scale));
+  let outH = Math.max(1, Math.round(height * scale));
+  const longest = Math.max(outW, outH);
+  if (longest > MAX_PNG_SIDE) {
+    const k = MAX_PNG_SIDE / longest;
+    outW = Math.max(1, Math.round(outW * k));
+    outH = Math.max(1, Math.round(outH * k));
+  }
+  const area = outW * outH;
+  if (area > MAX_PNG_PIXELS) {
+    const k = Math.sqrt(MAX_PNG_PIXELS / area);
+    outW = Math.max(1, Math.round(outW * k));
+    outH = Math.max(1, Math.round(outH * k));
+  }
+
+  // Draw the SVG at the CLAMPED destination size (no giant intermediate
+  // bitmap — an <img> SVG rasterizes to the drawImage destination).
+  const sized = withPixelSize(svg, outW, outH);
   const url =
     "data:image/svg+xml;charset=utf-8," + encodeURIComponent(sized);
 
@@ -149,13 +175,13 @@ export async function svgToPngBlob(svg: string, scale = 2): Promise<Blob> {
   });
 
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(width * scale));
-  canvas.height = Math.max(1, Math.round(height * scale));
+  canvas.width = outW;
+  canvas.height = outH;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas is unavailable for PNG export.");
   ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, outW, outH);
+  ctx.drawImage(img, 0, 0, outW, outH);
 
   return await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(

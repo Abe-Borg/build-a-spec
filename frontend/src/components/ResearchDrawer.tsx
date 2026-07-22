@@ -1,18 +1,20 @@
 /**
  * The requirements-research surface under the document panel: the project
- * profile line, the launch button, live per-dimension progress while a run
- * streams, and the grounded-citations list when it completes. The strip is
- * always visible so the feature is discoverable; the launch button stays
- * disabled (with a hover tooltip explaining why) until the interview records
- * a complete project profile. Ungrounded items are marked [UNVERIFIED];
- * process advisories are marked [PROCESS] and never become spec text.
+ * profile line (with an inline form so the user can fill it out directly at
+ * any time, rather than only through chat), the launch button, live
+ * per-dimension progress while a run streams, and the grounded-citations
+ * list when it completes. The strip is always visible so the feature is
+ * discoverable; the launch button stays disabled (with a hover tooltip
+ * explaining why) until the profile is complete. Ungrounded items are
+ * marked [UNVERIFIED]; process advisories are marked [PROCESS] and never
+ * become spec text.
  *
  * The Phase 5 compliance-audit control moved out of here in Batch 4 — the
  * Final QC drawer supersedes it (its code_compliance + completeness lenses
  * cover the audit's ground and more).
  */
 import { useState } from "react";
-import type { ResearchRunStatus, ResearchSnapshot, SpecDoc } from "../types";
+import type { EditOp, ResearchRunStatus, ResearchSnapshot, SpecDoc } from "../types";
 import Tip from "./Tip";
 
 interface Props {
@@ -21,6 +23,7 @@ interface Props {
   research: ResearchSnapshot | null;
   busy: boolean;
   onStart: () => void;
+  onEditDoc: (ops: EditOp[]) => void;
 }
 
 const statusLabel: Record<ResearchRunStatus, string> = {
@@ -41,12 +44,120 @@ function profileLine(doc: SpecDoc | null): string {
     .join(" — ");
 }
 
+interface ProfileFormState {
+  city: string;
+  state: string;
+  country: string;
+  client: string;
+}
+
+function profileFormFromDoc(doc: SpecDoc | null): ProfileFormState {
+  const p = doc?.project_profile;
+  return {
+    city: p?.city ?? "",
+    state: p?.state_or_province ?? "",
+    country: p?.country ?? "",
+    client: p?.client_name ?? "",
+  };
+}
+
+const profileInputClass =
+  "rounded border border-edge bg-raised px-2 py-1 text-[11px] text-ink outline-none focus:border-accent disabled:opacity-40";
+
+function ProjectProfileForm({
+  doc,
+  busy,
+  onEditDoc,
+}: {
+  doc: SpecDoc | null;
+  busy: boolean;
+  onEditDoc: (ops: EditOp[]) => void;
+}) {
+  const [form, setForm] = useState<ProfileFormState>(() => profileFormFromDoc(doc));
+  const [saving, setSaving] = useState(false);
+  const allBlank =
+    !form.city.trim() && !form.state.trim() && !form.country.trim() && !form.client.trim();
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onEditDoc([
+        {
+          action: "set_project_profile",
+          target_id: "sec",
+          city: form.city.trim(),
+          state: form.state.trim(),
+          country: form.country.trim(),
+          client: form.client.trim(),
+        },
+      ]);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const disabled = busy || saving;
+  return (
+    <div className="space-y-1.5 rounded border border-edge/70 bg-bg/40 p-2">
+      <p className="text-[11px] font-medium tracking-wide text-ink-faint uppercase">
+        Project profile
+      </p>
+      <div className="grid grid-cols-2 gap-1.5">
+        <input
+          className={profileInputClass}
+          placeholder="City"
+          value={form.city}
+          disabled={disabled}
+          onChange={(e) => setForm({ ...form, city: e.target.value })}
+        />
+        <input
+          className={profileInputClass}
+          placeholder="State / province"
+          value={form.state}
+          disabled={disabled}
+          onChange={(e) => setForm({ ...form, state: e.target.value })}
+        />
+        <select
+          className={profileInputClass}
+          value={form.country}
+          disabled={disabled}
+          onChange={(e) => setForm({ ...form, country: e.target.value })}
+        >
+          <option value="">Country…</option>
+          <option value="US">United States</option>
+          <option value="CA">Canada</option>
+        </select>
+        <input
+          className={profileInputClass}
+          placeholder="Client / owner"
+          value={form.client}
+          disabled={disabled}
+          onChange={(e) => setForm({ ...form, client: e.target.value })}
+        />
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          className="rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
+          onClick={() => void save()}
+          disabled={disabled || allBlank}
+        >
+          {saving ? "Saving…" : "Save profile"}
+        </button>
+        <span className="text-[11px] text-ink-faint">
+          Fill this out up front, or let it come up naturally in chat.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function ResearchDrawer({
   doc,
   profileComplete,
   research,
   busy,
   onStart,
+  onEditDoc,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const status: ResearchRunStatus = research?.status ?? "idle";
@@ -58,7 +169,7 @@ export default function ResearchDrawer({
 
   const startDisabled = !profileComplete || running || busy;
   const startTip = !profileComplete
-    ? "Complete the project profile in the interview first — city, state, country, and client."
+    ? "Complete the project profile first — city, state, country, and client — via the form below or in chat."
     : running
       ? "Research is already running."
       : busy
@@ -100,6 +211,12 @@ export default function ResearchDrawer({
 
       {status === "failed" && research?.error && (
         <p className="mt-1 text-[11px] text-err">{research.error}</p>
+      )}
+
+      {expanded && (
+        <div className="mt-1.5">
+          <ProjectProfileForm doc={doc} busy={busy} onEditDoc={onEditDoc} />
+        </div>
       )}
 
       {expanded && research && (

@@ -323,6 +323,52 @@ def _content_blocks_to_dicts(content: Any) -> list[dict[str, Any]]:
 _TRANSIENT_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
 
 
+def _elide_figure_tool_inputs(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Strip the heavy ``source``/``rows`` out of ``create_figure`` tool_use
+    blocks in committed history (copy-on-write).
+
+    The full figure markup already lives in the figure store; leaving it in
+    the assistant's tool_use block would re-send it as cached history every
+    later turn and balloon the project file. The model never needs the old
+    source (a per-turn FIGURES stub tells it the figure exists) — mirrors the
+    fetched-PDF elision. ``kind``/``title`` are kept so the call stays
+    readable; the tool_result was already compact.
+    """
+    result: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") != "assistant":
+            result.append(message)
+            continue
+        content = message.get("content") or []
+        changed = False
+        new_content: list[dict[str, Any]] = []
+        for block in content:
+            if (
+                block.get("type") == "tool_use"
+                and block.get("name") == "create_figure"
+            ):
+                inp = block.get("input") or {}
+                new_content.append(
+                    {
+                        **block,
+                        "input": {
+                            "kind": inp.get("kind"),
+                            "title": inp.get("title"),
+                            "_elided": "source stored with the figure",
+                        },
+                    }
+                )
+                changed = True
+            else:
+                new_content.append(block)
+        result.append(
+            {**message, "content": new_content} if changed else message
+        )
+    return result
+
+
 def _committed_messages(
     new_messages: list[dict[str, Any]], user_text: str
 ) -> list[dict[str, Any]]:
@@ -335,6 +381,8 @@ def _committed_messages(
       them within the turn that produced them.
     - Fetched-PDF payloads are elided wholesale (see
       :func:`elide_all_pdf_sources`); search results and citations stay.
+    - ``create_figure`` tool inputs shed their heavy source (see
+      :func:`_elide_figure_tool_inputs`) — the figure store holds it.
     """
     committed: list[dict[str, Any]] = [
         {"role": "user", "content": [{"type": "text", "text": user_text}]}
@@ -351,7 +399,7 @@ def _committed_messages(
         if not content:
             content = [{"type": "text", "text": "[Model reasoning omitted.]"}]
         committed.append({"role": "assistant", "content": content})
-    return elide_all_pdf_sources(committed)
+    return _elide_figure_tool_inputs(elide_all_pdf_sources(committed))
 
 
 def _with_tail_cache_breakpoint(

@@ -216,19 +216,26 @@ def test_create_figure_emits_event_persists_and_hides_source_from_the_model(
     assert [f["fid"] for f in figures] == ["fig-1"]
     assert client.get("/api/doc").json()["figures"][0]["fid"] == "fig-1"
 
-    # Token discipline: the tool RESULT the model sees echoes only id/kind/
-    # title — never the heavy source (which would re-bill every later turn).
+    # Token discipline: the heavy source lives ONLY in the figure store —
+    # it must not appear ANYWHERE in committed history (not the compact tool
+    # result, and not the create_figure tool_use input, which is elided at
+    # commit like a fetched PDF). Either would re-bill on every later turn.
     history = sessions.get_session().history
-    tool_results = [
+    history_json = json.dumps(history)
+    assert "fig-1" in history_json  # the compact reference survives
+    assert _MERMAID not in history_json  # the source does not
+
+    tool_uses = [
         block
         for message in history
         for block in (message.get("content") or [])
-        if isinstance(block, dict) and block.get("type") == "tool_result"
+        if isinstance(block, dict)
+        and block.get("type") == "tool_use"
+        and block.get("name") == "create_figure"
     ]
-    assert tool_results, "the create_figure tool result should be in history"
-    joined = json.dumps(tool_results)
-    assert "fig-1" in joined
-    assert _MERMAID not in joined
+    assert tool_uses, "the create_figure tool_use should be in history"
+    assert "source" not in tool_uses[0]["input"]
+    assert tool_uses[0]["input"].get("_elided")
 
 
 def test_figure_source_stays_out_of_the_next_turns_context(monkeypatch):

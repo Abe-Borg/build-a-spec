@@ -258,6 +258,9 @@ export interface ResearchItemView {
 
 export interface ResearchDimensionView {
   dimension_id: string;
+  /** Human title of the research dimension/agent (e.g. "Governing building
+   *  and fire codes"); empty on legacy profiles saved before it was stored. */
+  title: string;
   status: string;
   item_count: number;
   grounded_count: number;

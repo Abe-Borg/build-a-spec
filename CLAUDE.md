@@ -75,7 +75,10 @@ backend/
   research/runner.py       session-bound run lifecycle: daemon thread, event
                            log, snapshot, SSE follow generator (Build-a-Spec
                            native — no Spec Critic source); Batch 7 adds stop()
-                           (per-run cancel_event + race-free _try_resolve)
+                           (per-run cancel_event + race-free _try_resolve). The
+                           snapshot's per-dimension view now carries the human
+                           dimension title (DimensionStatus.title, defaulted +
+                           serialized) for the findings-report headings
   updates.py               [PORT ≈verbatim: Spec Critic src/core/updates.py]
                            GitHub-Releases manifest updater: https-only +
                            redirect-downgrade guard, SHA-256 verify before
@@ -223,7 +226,13 @@ frontend/src/
                            ResearchDrawer (research only — audit UI retired in
                            Batch 4; also hosts the project-profile form for direct
                            upfront entry; Batch 7 adds a Stop button while running,
-                           gated by ConfirmDialog) / QCDrawer (Batch 4: readiness
+                           gated by ConfirmDialog; a "View report" button opens
+                           ResearchReportModal) / ResearchReportModal (the full
+                           research findings report — a read-only modal grouping
+                           the completed profile's items by dimension/agent with
+                           per-dimension telemetry + full item detail; the same
+                           profile already rides the chat model's per-turn context)
+                           / QCDrawer (Batch 4: readiness
                            checklist, lens progress, accept/dismiss fix queue,
                            hold-to-apply-criticals, refuted appendix; Batch 7 adds a
                            Stop button while running, gated by ConfirmDialog) /

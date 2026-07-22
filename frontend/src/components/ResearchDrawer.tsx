@@ -175,6 +175,13 @@ export default function ResearchDrawer({
       : busy
         ? "Finish the current turn first."
         : "Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).";
+  const startLabel = running
+    ? lastEvent?.done != null
+      ? `Researching… (${lastEvent.done}/${lastEvent.total})`
+      : "Research in progress…"
+    : status === "complete"
+      ? "Re-research"
+      : "Research requirements";
 
   return (
     <div className="border-t border-edge bg-bg/70 px-5 py-2">
@@ -200,11 +207,19 @@ export default function ResearchDrawer({
         </button>
         <Tip tip={startTip} className="shrink-0">
           <button
-            className="rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
+            className={`rounded-md border bg-raised px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none ${
+              running
+                ? "border-accent/40 text-ink-dim"
+                : "border-edge text-ink-dim hover:border-accent hover:text-accent disabled:opacity-40"
+            }`}
             onClick={onStart}
             disabled={startDisabled}
           >
-            {status === "complete" ? "Re-research" : "Research requirements"}
+            {running ? (
+              <span className="status-shimmer">{startLabel}</span>
+            ) : (
+              startLabel
+            )}
           </button>
         </Tip>
       </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Health, KeyStatus, UsageSummary } from "../types";
+import type { KeyStatus, UsageSummary } from "../types";
 import {
   deleteKey,
   getKeyStatus,
@@ -10,7 +10,6 @@ import {
 interface Props {
   open: boolean;
   onClose: () => void;
-  health: Health | null;
   /** Called after the stored key changes so the app can refresh health. */
   onKeyChange: () => void;
   /** Session usage snapshot (WI4 meter); null until first load. */
@@ -116,7 +115,6 @@ type TestResult = { ok: boolean; error?: string } | null;
 export default function SettingsPanel({
   open,
   onClose,
-  health,
   onKeyChange,
   usage,
 }: Props) {

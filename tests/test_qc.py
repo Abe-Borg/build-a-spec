@@ -694,3 +694,44 @@ def test_qc_result_from_dict_round_trips():
     assert again is not None
     assert again.findings[0].title == "Round trip"
     assert again.model == "claude-fable-5"
+
+
+def test_qc_proposed_ops_allow_set_standard_suppressed():
+    """A QC fix may propose set_standard_suppressed (the standards-manager op):
+    it survives normalize_findings/_clean_op with its fields intact, so a
+    standards-scope fix QC can now describe is also one Apply QC can enact —
+    matching the /api/doc/edit vocabulary the lens reasons from."""
+    from backend.qc.schema import QC_OP_ACTIONS, normalize_findings
+
+    assert "set_standard_suppressed" in QC_OP_ACTIONS
+    op = {
+        "action": "set_standard_suppressed",
+        "target_id": "sec",
+        "standard": "NFPA 2001",
+        "suppressed": True,
+        "basis": "no clean-agent system in scope",
+    }
+    payload = {
+        "summary": "s",
+        "findings": [
+            _finding(
+                "Exclude NFPA 2001",
+                "No clean-agent system; it should not reach REFERENCES.",
+                element_id="sec",
+                ops=[op],
+            )
+        ],
+    }
+    cleaned = normalize_findings(payload)["findings"][0]["proposed_ops"]
+    assert cleaned == [op]
+    # An added standard's title also rides through (the other mirrored field).
+    add = {
+        "action": "set_standard_edition",
+        "target_id": "sec",
+        "standard": "NFPA 30",
+        "edition": "2024",
+        "basis": "on-site flammable storage",
+        "title": "Flammable and Combustible Liquids Code",
+    }
+    add_payload = {"summary": "s", "findings": [_finding("Add", "x", ops=[add])]}
+    assert normalize_findings(add_payload)["findings"][0]["proposed_ops"] == [add]

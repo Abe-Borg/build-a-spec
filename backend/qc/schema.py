@@ -146,7 +146,10 @@ QC_LENS_BY_ID: dict[str, QCLens] = {lens.lens_id: lens for lens in QC_LENSES}
 # ---------------------------------------------------------------------------
 
 # The op actions a QC fix may use. set_project_profile is excluded — QC never
-# touches the project identity.
+# touches the project identity. set_standard_suppressed IS included: a
+# standards-scope fix (e.g. excluding a standard that shouldn't reach
+# REFERENCES) is a legitimate QC proposal, and /api/doc/edit accepts it — the
+# QC allow-list must mirror the apply_spec_edits vocabulary it reasons from.
 QC_OP_ACTIONS: tuple[str, ...] = (
     "add_article",
     "add_paragraph",
@@ -154,6 +157,7 @@ QC_OP_ACTIONS: tuple[str, ...] = (
     "delete",
     "set_status",
     "set_standard_edition",
+    "set_standard_suppressed",
 )
 
 # Known op keys carried through to the dry-run (nulls dropped at parse). No
@@ -170,6 +174,8 @@ _QC_OP_KEYS: tuple[str, ...] = (
     "standard",
     "edition",
     "basis",
+    "title",
+    "suppressed",
 )
 
 _QC_OP_SCHEMA: dict[str, Any] = {
@@ -190,6 +196,8 @@ _QC_OP_SCHEMA: dict[str, Any] = {
         "standard": {"type": ["string", "null"]},
         "edition": {"type": ["string", "null"]},
         "basis": {"type": ["string", "null"]},
+        "title": {"type": ["string", "null"]},
+        "suppressed": {"type": ["boolean", "null"]},
     },
 }
 

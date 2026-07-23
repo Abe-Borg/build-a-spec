@@ -1345,6 +1345,13 @@ merge. No new SSE event, no new REST route, no new Python/npm deps.
   (one undo step), modeled on `ProjectProfileForm`. `StandardInfo` gains
   `is_added` / `is_suppressed` / `reason`; `EditOp` / `DocOp` gain the two
   standards actions + `standard`/`edition`/`basis`/`title`/`suppressed`.
+- **QC apply parity**: `qc/schema.py` `QC_OP_ACTIONS` + `_QC_OP_KEYS`
+  (+ `_QC_OP_SCHEMA`) mirror `set_standard_suppressed` and the new
+  `title`/`suppressed` fields, so a standards-scope fix a lens proposes
+  (e.g. exclude a standard that shouldn't reach REFERENCES) survives
+  `_clean_op` and Apply QC can enact it — the QC allow-list must track the
+  `apply_spec_edits` vocabulary the lens reasons from (`set_project_profile`
+  stays excluded).
 - **Serialization / no-change surfaces**: `suppressed_standards` rides
   `SpecSection.to_dict`/`from_dict` (+ `validate_suppressed_shape`, reason
   optional) and `is_empty()`; the diff/redline engine, `project.py`,

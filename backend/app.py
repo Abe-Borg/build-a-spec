@@ -170,6 +170,11 @@ def _doc_payload(session) -> dict[str, Any]:
         # Chat-authored figures (diagrams/schematics/tables) — full source so
         # the frontend can render + offer downloads. Not part of the doc tree.
         "figures": session.figures.snapshot(),
+        # Suggested-reply chips staged by the model (Batch 9); [] when none.
+        # Surfaced here so boot, project load, undo/redo, and the failed-turn
+        # refresh all sync the bar one way — a failed turn's refresh returns
+        # the untouched pre-turn list, restoring the bar for free.
+        "suggested_prompts": list(session.suggested_prompts),
     }
 
 

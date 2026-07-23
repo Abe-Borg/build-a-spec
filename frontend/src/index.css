@@ -185,6 +185,22 @@ body {
   }
 }
 
+/* Suggested reply chips (Batch 9): a subtle rise-in as a new set lands. */
+.prompt-chip-in {
+  animation: prompt-chip-in 0.22s ease-out;
+}
+@keyframes prompt-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prompt-chip-in {
+    animation: none;
+  }
+}
+
 /* Blinking caret shown while a reply streams */
 .streaming-caret::after {
   content: "▍";

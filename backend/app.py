@@ -577,6 +577,20 @@ def create_app() -> FastAPI:
             "discipline": session.discipline,
         }
 
+    @app.get("/api/session/unsaved")
+    def session_unsaved() -> dict:
+        """Whether the session holds work worth saving before it is discarded.
+
+        The in-app New-session / Open-project save gate calls this so it uses
+        the SAME predicate as the native window-close prompt
+        (``main._CloseController``) — one source of truth for "is there
+        anything to lose here?".
+        """
+        return {
+            "ok": True,
+            "unsaved": sessions.has_unsaved_progress(sessions.get_session()),
+        }
+
     @app.get("/api/modules")
     def modules() -> dict:
         """The selectable module registry, for the session-start picker."""

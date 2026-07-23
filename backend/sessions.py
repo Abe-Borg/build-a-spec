@@ -27,13 +27,18 @@ def reset_session() -> None:
 def has_unsaved_progress(session: SessionState) -> bool:
     """True when the session holds work worth saving before it is discarded.
 
-    Any conversation history or any document content counts. Deliberately
-    coarse — there is no since-last-save dirty flag, so a fresh, untouched
-    session never prompts, and anything else always offers the save.
+    Any conversation history, document content, chat-authored figure, or
+    imported source counts. Deliberately coarse — there is no since-last-save
+    dirty flag, so a fresh, untouched session never prompts, and anything else
+    always offers the save. Figures are counted explicitly so a session whose
+    only work is a diagram/schematic/table still offers to save (they must not
+    merely ride the chat history that produced them — the New-session / Open
+    save gate depends on this being true).
     """
     return (
         bool(session.history)
         or not session.doc.doc.is_empty()
+        or bool(session.figures.figures)
         or session.import_report is not None
         or session.source_docx_bytes is not None
     )

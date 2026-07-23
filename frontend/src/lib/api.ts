@@ -67,6 +67,18 @@ export async function getModules(): Promise<ModuleInfo[]> {
   return data.modules ?? [];
 }
 
+/**
+ * Whether the session holds unsaved work (any chat history, document content,
+ * or chat-authored figure). The in-app New-session / Open-project save gate
+ * calls this so it matches the native window-close prompt's predicate.
+ */
+export async function checkUnsaved(): Promise<boolean> {
+  const resp = await fetch("/api/session/unsaved");
+  if (!resp.ok) throw new Error(`unsaved ${resp.status}`);
+  const data = await resp.json();
+  return !!data.unsaved;
+}
+
 /* --- API key management (WI3) --- */
 
 export async function getKeyStatus(): Promise<KeyStatus> {
@@ -192,6 +204,35 @@ export async function loadProjectFile(file: File): Promise<ProjectLoadResult> {
     throw new Error(data.error ?? `load failed (${resp.status})`);
   }
   return data;
+}
+
+/**
+ * Browser/dev fallback for the in-app save gate: download the project file.
+ * The native pywebview Save dialog (`window.pywebview.api.save_project`) is
+ * preferred when the bridge is present; this is only reached in a plain
+ * browser (dev mode). The payload is fetched (awaited) BEFORE the caller
+ * proceeds to reset/load, so a fast reset can't race the save and capture an
+ * already-cleared session. The server names the file via Content-Disposition.
+ */
+export async function downloadProjectFile(): Promise<void> {
+  const resp = await fetch("/api/project/save");
+  if (!resp.ok) throw new Error(`save failed (${resp.status})`);
+  const blob = await resp.blob();
+  const cd = resp.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^"]+)"?/.exec(cd);
+  const filename = match?.[1] ?? "buildaspec-project.json";
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Defer revocation: some browsers consume the object URL asynchronously, so
+  // revoking synchronously after click() can cancel the download — which would
+  // let the caller reset/load and lose the session with no saved file. Mirrors
+  // downloadBlob() in lib/figures.ts.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** Read SSE frames off a fetch Response body and yield parsed JSON. */

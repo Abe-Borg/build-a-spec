@@ -110,6 +110,13 @@ function FigureCard({
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pngBusy, setPngBusy] = useState(false);
+  // Minimize is a non-destructive view fold: the figure stays in the session
+  // (and in every save) — only its rendered body/downloads collapse. Local
+  // state, so it survives in-session re-syncs (the card is keyed by fid) and
+  // resets naturally on New session / project load (the bubbles remount).
+  const [collapsed, setCollapsed] = useState(false);
+  // Two-step delete confirm, matching the doc-tree row 🗑 (SpecDocument).
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   // Resolve mermaid/svg to a sanitized SVG string once per figure.
   useEffect(() => {
@@ -147,72 +154,115 @@ function FigureCard({
           {kindBadge[figure.kind]}
         </span>
         <span className="flex-1 text-sm font-medium text-ink">{figure.title}</span>
-        {onDelete && (
-          <button
-            type="button"
-            onClick={() => onDelete(figure.fid)}
-            title="Remove this figure"
-            className="shrink-0 rounded px-1 text-ink-faint transition-colors hover:text-err"
-          >
-            ✕
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-expanded={!collapsed}
+          title={collapsed ? "Expand this figure" : "Minimize this figure"}
+          className="shrink-0 rounded px-1 text-ink-faint transition-colors hover:text-ink"
+        >
+          {collapsed ? "▸" : "▾"}
+        </button>
+        {onDelete &&
+          (confirmingDelete ? (
+            <span className="inline-flex shrink-0 items-center gap-1 text-[11px]">
+              <span className="text-err">Remove?</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  onDelete(figure.fid);
+                }}
+                title="Confirm — remove this figure"
+                className="rounded px-1 text-ink-faint transition-colors hover:text-err"
+              >
+                ✓
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(false)}
+                title="Keep this figure"
+                className="rounded px-1 text-ink-faint transition-colors hover:text-ink"
+              >
+                ✕
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(true)}
+              title="Remove this figure"
+              className="shrink-0 rounded px-1 text-ink-faint transition-colors hover:text-err"
+            >
+              ✕
+            </button>
+          ))}
       </figcaption>
 
-      {isDiagram ? (
-        error ? (
-          <div className="rounded-md border border-err/40 bg-err/10 p-3 text-xs text-err">
-            Couldn&apos;t render this figure: {error}
-          </div>
-        ) : svg ? (
-          <SvgFrame svg={svg} title={figure.alt_text || figure.title} />
-        ) : (
-          <div className="rounded-md border border-edge bg-raised p-6 text-center text-xs text-ink-faint">
-            Rendering…
-          </div>
-        )
+      {collapsed ? (
+        <p className="text-xs text-ink-faint italic">
+          Minimized — click ▸ to expand.
+        </p>
       ) : (
-        <DataTable columns={figure.columns} rows={figure.rows} />
-      )}
+        <>
+          {isDiagram ? (
+            error ? (
+              <div className="rounded-md border border-err/40 bg-err/10 p-3 text-xs text-err">
+                Couldn&apos;t render this figure: {error}
+              </div>
+            ) : svg ? (
+              <SvgFrame svg={svg} title={figure.alt_text || figure.title} />
+            ) : (
+              <div className="rounded-md border border-edge bg-raised p-6 text-center text-xs text-ink-faint">
+                Rendering…
+              </div>
+            )
+          ) : (
+            <DataTable columns={figure.columns} rows={figure.rows} />
+          )}
 
-      {figure.caption && (
-        <p className="mt-2 text-xs leading-relaxed text-ink-faint">{figure.caption}</p>
-      )}
+          {figure.caption && (
+            <p className="mt-2 text-xs leading-relaxed text-ink-faint">
+              {figure.caption}
+            </p>
+          )}
 
-      <div className="mt-2 flex items-center gap-2 text-[11px]">
-        <span className="text-ink-faint">Download</span>
-        {isDiagram ? (
-          <>
-            <button
-              type="button"
-              className={dlBtn}
-              onClick={downloadSvg}
-              disabled={!svg}
-              title="Download as a vector SVG"
-            >
-              SVG
-            </button>
-            <button
-              type="button"
-              className={dlBtn}
-              onClick={downloadPng}
-              disabled={!svg || pngBusy}
-              title="Download as a PNG image"
-            >
-              {pngBusy ? "PNG…" : "PNG"}
-            </button>
-          </>
-        ) : (
-          <a
-            className={dlBtn}
-            href={figureCsvUrl(figure.fid)}
-            download={figureFilename(figure.title, "csv")}
-            title="Download the table as CSV"
-          >
-            CSV
-          </a>
-        )}
-      </div>
+          <div className="mt-2 flex items-center gap-2 text-[11px]">
+            <span className="text-ink-faint">Download</span>
+            {isDiagram ? (
+              <>
+                <button
+                  type="button"
+                  className={dlBtn}
+                  onClick={downloadSvg}
+                  disabled={!svg}
+                  title="Download as a vector SVG"
+                >
+                  SVG
+                </button>
+                <button
+                  type="button"
+                  className={dlBtn}
+                  onClick={downloadPng}
+                  disabled={!svg || pngBusy}
+                  title="Download as a PNG image"
+                >
+                  {pngBusy ? "PNG…" : "PNG"}
+                </button>
+              </>
+            ) : (
+              <a
+                className={dlBtn}
+                href={figureCsvUrl(figure.fid)}
+                download={figureFilename(figure.title, "csv")}
+                title="Download the table as CSV"
+              >
+                CSV
+              </a>
+            )}
+          </div>
+        </>
+      )}
     </figure>
   );
 }

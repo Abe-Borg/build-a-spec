@@ -153,7 +153,7 @@ def test_status_frames_never_persist_to_history(monkeypatch):
     assert '"status"' not in dumped
     assert "thinking_delta" not in dumped
 
-    project = json.loads(client.get("/api/project/save").content)
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     project_dump = json.dumps(project)
     assert "thinking_delta" not in project_dump
     # No bare {"type": "status"} UI frame leaked into the project payload.

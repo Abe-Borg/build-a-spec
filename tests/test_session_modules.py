@@ -188,7 +188,7 @@ def test_curated_module_context_has_no_discipline_line(monkeypatch):
 def test_project_round_trip_preserves_module_and_discipline(monkeypatch):
     client = _client()
     _reset_generic(client, discipline="Structural")
-    saved = client.get("/api/project/save").json()
+    saved = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert saved["module_id"] == "generic"
     assert saved["discipline"] == "Structural"
 
@@ -212,7 +212,7 @@ def test_project_round_trip_preserves_module_and_discipline(monkeypatch):
 
 def test_old_project_file_without_discipline_loads_empty():
     client = _client()
-    saved = client.get("/api/project/save").json()
+    saved = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     saved.pop("discipline", None)  # a pre-Batch-8 file
     session = sessions.get_session()
     load_project(saved, session)
@@ -224,7 +224,7 @@ def test_load_enforces_the_open_catalog_invariant():
     # A (hand-edited or future-build) file pairing a curated module with a
     # discipline loads with the discipline cleared, never kept silently.
     client = _client()
-    saved = client.get("/api/project/save").json()
+    saved = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     saved["module_id"] = "hyperscale_fire"
     saved["discipline"] = "Electrical"
     session = sessions.get_session()

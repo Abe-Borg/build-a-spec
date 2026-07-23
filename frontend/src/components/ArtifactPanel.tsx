@@ -40,6 +40,7 @@ interface Props {
   baselineIndex: number | null;
   importReport: ImportReport | null;
   sourceAvailable: boolean;
+  preservationReady: boolean;
   busy: boolean;
   onUndo: () => void;
   onRedo: () => void;
@@ -117,6 +118,7 @@ export default function ArtifactPanel({
   baselineIndex,
   importReport,
   sourceAvailable,
+  preservationReady,
   busy,
   onUndo,
   onRedo,
@@ -363,19 +365,47 @@ export default function ArtifactPanel({
                 className="absolute right-0 z-20 mt-1 w-72 rounded-md border border-edge bg-raised py-1 text-[11px] shadow-lg"
                 onMouseLeave={() => setExportMenuOpen(false)}
               >
-                <a
-                  className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
-                  href="/api/export/docx"
-                  download
-                  onClick={() => setExportMenuOpen(false)}
-                  title={
-                    importedMode
-                      ? "Newly generated DOCX from extracted content; source Word formatting and layout are not preserved"
-                      : "Plain .docx with the assumptions / open-items schedules"
-                  }
-                >
-                  {importedMode ? "Export normalized DOCX" : "Export clean"}
-                </a>
+                {importedMode ? (
+                  <>
+                    {preservationReady ? (
+                      <a
+                        className="block px-3 py-1.5 font-medium text-accent hover:bg-surface hover:text-accent-hover"
+                        href="/api/export/docx?mode=source"
+                        download
+                        onClick={() => setExportMenuOpen(false)}
+                        title="Clone the original DOCX and patch only verified, simple body-paragraph text edits"
+                      >
+                        Export preserved DOCX
+                      </a>
+                    ) : (
+                      <span
+                        className="block cursor-default px-3 py-1.5 text-ink-faint"
+                        title="This project has no usable source package, or its edits exceed the source-preserving boundary"
+                      >
+                        Export preserved DOCX unavailable
+                      </span>
+                    )}
+                    <a
+                      className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
+                      href="/api/export/docx?mode=normalized"
+                      download
+                      onClick={() => setExportMenuOpen(false)}
+                      title="Generate a new DOCX from extracted content; source Word formatting and layout are not preserved"
+                    >
+                      Export normalized DOCX
+                    </a>
+                  </>
+                ) : (
+                  <a
+                    className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
+                    href="/api/export/docx?mode=normalized"
+                    download
+                    onClick={() => setExportMenuOpen(false)}
+                    title="Generate a clean DOCX with the assumptions / open-items schedules"
+                  >
+                    Export clean
+                  </a>
+                )}
                 {baselineIndex !== null ? (
                   <a
                     className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
@@ -422,7 +452,7 @@ export default function ArtifactPanel({
             href={busy ? undefined : "/api/project/save"}
             aria-disabled={busy}
             download
-            title="Save the project (conversation + document) as JSON"
+            title="Save the project, including its exact source DOCX when available, as .baspec"
             data-tour="save"
           >
             Save
@@ -438,7 +468,7 @@ export default function ArtifactPanel({
           <input
             ref={fileRef}
             type="file"
-            accept=".json,application/json"
+            accept=".baspec,.json,application/json,application/zip"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -452,7 +482,7 @@ export default function ArtifactPanel({
                 ? "Import needs a blank document — start a new session first (New session)."
                 : busy
                   ? "Finish the current turn first."
-                  : "Import supported body content from an office DOCX. The current importer normalizes content and does not preserve Word layout or formatting."
+                  : "Import supported body content while retaining the exact source package for narrowly scoped, source-preserving export."
             }
           >
             <button
@@ -486,11 +516,19 @@ export default function ArtifactPanel({
           <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
             <div className="min-w-0 flex-1">
               <p className="font-semibold text-warn">
-                Imported DOCX — normalized-content mode
+                {preservationReady
+                  ? "Imported DOCX — source-preserving mode"
+                  : sourceAvailable
+                    ? "Imported DOCX — preservation currently blocked"
+                    : "Imported DOCX — normalized-content mode"}
               </p>
               <p className="mt-0.5">
-                {importReport?.fidelity_notice ||
-                  "Build-a-Spec extracted supported body content into its own document model. Exports are newly generated and do not preserve the source DOCX's Word formatting or layout."}
+                {sourceAvailable
+                  ? preservationReady
+                    ? importReport?.fidelity_notice ||
+                      "Build-a-Spec retained the exact source package. Preserved export patches only verified simple body-paragraph text; unsupported structural or complex-format edits are refused."
+                    : "The exact source is retained, but the current document state cannot be represented inside the source-preserving boundary. Restore a compatible version or choose normalized export explicitly."
+                  : "This source-less legacy project contains only the normalized semantic extraction. Preserved export is unavailable."}
               </p>
               {importReport ? (
                 <>
@@ -550,8 +588,9 @@ export default function ArtifactPanel({
                 </p>
               )}
               <p className="mt-0.5 max-w-56 text-ink-faint">
-                Original-file recovery is active-session only; it is not
-                carried by a saved project.
+                {sourceAvailable
+                  ? "The exact original is carried by native .baspec saves."
+                  : "Legacy source-less projects can only use normalized export."}
               </p>
             </div>
           </div>
@@ -561,28 +600,29 @@ export default function ArtifactPanel({
       <ConfirmDialog
         open={pendingImport !== null}
         danger
-        title="Import as normalized content?"
+        title="Import with a protected source copy?"
         body={
           <div className="space-y-2">
             <p>
               Build-a-Spec will extract supported body text from{" "}
               <b className="text-ink">{pendingImport?.name}</b> into its own
-              SectionFormat model. It does not edit the original DOCX in
-              place.
+              SectionFormat model and retain an exact, immutable source copy.
             </p>
             <p>
-              The current import/export path does not preserve headers,
-              footers, styles, tables, section layout, inline formatting, or
-              real Word numbering. Export will create a normalized DOCX.
+              Preserved export clones that source and can replace text only in
+              verified simple body paragraphs. Headers, footers, numbering,
+              styles, section layout, and all unrelated package parts remain
+              untouched. Unsupported edits are refused instead of flattening
+              the file.
             </p>
             <p className="text-ink-faint">
-              After a successful import, a recovery copy of the original is
-              available only during this active session. Keep your own source
-              copy.
+              A separate normalized export remains available when you
+              intentionally want a newly generated document. Native .baspec
+              saves carry the exact source copy with the project.
             </p>
           </div>
         }
-        confirmLabel="Import normalized content"
+        confirmLabel="Import DOCX"
         cancelLabel="Cancel"
         onConfirm={() => {
           const file = pendingImport;

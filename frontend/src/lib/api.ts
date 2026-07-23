@@ -179,14 +179,13 @@ export async function editDoc(ops: EditOp[]): Promise<DocPayload> {
   return data;
 }
 
-/** Restore a session from a parsed project file. */
-export async function loadProject(
-  project: unknown,
-): Promise<ProjectLoadResult> {
-  const resp = await fetch("/api/project/load", {
+/** Restore a session from a native .baspec package or legacy JSON project. */
+export async function loadProjectFile(file: File): Promise<ProjectLoadResult> {
+  const body = new FormData();
+  body.append("file", file);
+  const resp = await fetch("/api/project/load-file", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(project),
+    body,
   });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {

@@ -67,11 +67,14 @@ from ..spec_doc import (
     APPLY_SPEC_EDITS_TOOL,
     DocumentStore,
     SpecEditError,
+    SpecSection,
     lint_document,
     open_questions,
     outline,
 )
 from ..spec_doc.project import chat_transcript
+from ..spec_doc.source_mapping import SourceBodyMap, guard_source_edits
+from ..spec_doc.source_patch import source_patch_readiness
 from ..compliance import AuditRunner
 from ..qc import QCRunner
 from ..research import ResearchRunner, research_context_block
@@ -131,11 +134,15 @@ class SessionState:
 
     history: list[dict[str, Any]] = field(default_factory=list)
     doc: DocumentStore = field(default_factory=DocumentStore)
-    # Exact imported DOCX bytes are retained only for active-session recovery
-    # (GET /api/import/original).  P0 intentionally does not persist them in
-    # project JSON or use them as an export base yet.
+    # Exact imported DOCX bytes are immutable recovery/preservation input.
+    # Native .baspec persistence stores them as a separate bounded member;
+    # they never enter the semantic tree or model context.
     source_docx_bytes: bytes | None = None
     source_docx_filename: str = ""
+    # Immutable paragraph anchors into ``source_docx_bytes``.  This stays out
+    # of the semantic tree/LLM context; project-container persistence uses its
+    # strict ``to_dict`` / ``from_dict`` representation.
+    source_docx_map: SourceBodyMap | None = None
     # Sanitized, JSON-safe import diagnostics do ride the project file so a
     # resumed session still tells the truth about normalization and loss.
     import_report: dict[str, Any] | None = None
@@ -175,11 +182,56 @@ class SessionState:
     # Claude.ai's stop button) rather than rolling back like a failure.
     stop_requested: threading.Event = field(default_factory=threading.Event)
 
+    def apply_doc_edits(self, edits: Any) -> list[dict[str, Any]]:
+        """The single guarded entry point for model and manual edit batches.
+
+        A source map constrains P1a only while the imported baseline is still
+        on the active history branch.  Undoing before the import and starting
+        a fresh draft is allowed; ``DocumentStore.commit_turn`` then removes
+        the abandoned baseline in its established way.
+        """
+        baseline_index = self.doc.baseline_index
+        if (
+            self.source_docx_map is not None
+            and baseline_index is not None
+            and self.doc.index >= baseline_index
+        ):
+            guard_source_edits(self.doc.doc, edits, self.source_docx_map)
+        return self.doc.apply_edits(edits)
+
+    def source_export_readiness(self) -> dict[str, object]:
+        """Current source-patch capability for API/UI integration."""
+        baseline_index = self.doc.baseline_index
+        if (
+            baseline_index is None
+            or not 0 <= baseline_index < len(self.doc.versions)
+        ):
+            return {
+                "ready": False,
+                "no_op": False,
+                "changed_uids": [],
+                "blockers": [
+                    {
+                        "uid": "source",
+                        "blocker": "baseline_unavailable",
+                        "message": "the imported semantic baseline is unavailable",
+                    }
+                ],
+            }
+        baseline = SpecSection.from_dict(self.doc.versions[baseline_index])
+        return source_patch_readiness(
+            source_bytes=self.source_docx_bytes,
+            source_map=self.source_docx_map,
+            baseline=baseline,
+            current=self.doc.doc,
+        ).to_dict()
+
     def reset(self) -> None:
         self.history.clear()
         self.doc.reset()
         self.source_docx_bytes = None
         self.source_docx_filename = ""
+        self.source_docx_map = None
         self.import_report = None
         # Fresh runners: work still running against the old session
         # finishes into the abandoned objects (the zombie-turn pattern).
@@ -260,6 +312,50 @@ def _profile_status_block(project_profile: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def _source_editing_boundary_block(session: SessionState) -> str | None:
+    """Describe the imported-DOCX trust boundary to the model when active.
+
+    This is deliberately a dynamic PROJECT CONTEXT block, never part of the
+    stable prompt: fresh sessions must retain their existing request bytes.
+    The active-branch check mirrors :meth:`SessionState.apply_doc_edits` so an
+    import that was undone and abandoned does not constrain a new draft.
+    """
+    source_map = session.source_docx_map
+    baseline_index = session.doc.baseline_index
+    if (
+        source_map is None
+        or baseline_index is None
+        or session.doc.index < baseline_index
+    ):
+        return None
+
+    lines = [
+        "IMPORTED DOCX EDITING BOUNDARY (hard constraint):",
+        "- The original DOCX package is immutable. Never claim or attempt to "
+        "edit, create, remove, or reformat its headers or footers.",
+        "- Allowed document-tool changes are limited to metadata/status "
+        "updates and text replacement in an existing, simple mapped body "
+        "paragraph. Keep its element id, parent, and position unchanged.",
+        "- Never add, delete, move, reorder, or reparent body content, and "
+        "never change section, part, or article headings/numbers.",
+        "- A mapped paragraph can still be rejected when its source OOXML is "
+        "complex or unsafe. Treat a tool rejection as authoritative; do not "
+        "retry it as a different structural edit.",
+    ]
+    if source_map.global_blockers:
+        blockers = ", ".join(source_map.global_blockers)
+        lines.extend(
+            [
+                "- SOURCE EXPORT IS PASS-THROUGH-ONLY because the package "
+                f"has global blocker(s): {blockers}.",
+                "- The source DOCX may only be returned byte-for-byte "
+                "unchanged. Do not make or claim any source body-text change; "
+                "metadata/status updates remain semantic workspace data only.",
+            ]
+        )
+    return "\n".join(lines)
+
+
 def _turn_context_text(session: SessionState) -> str:
     """The PROJECT CONTEXT block: everything live, rendered at turn start.
 
@@ -293,6 +389,9 @@ def _turn_context_text(session: SessionState) -> str:
         ),
         _profile_status_block(doc.project_profile),
     ]
+    source_boundary = _source_editing_boundary_block(session)
+    if source_boundary is not None:
+        parts.append(source_boundary)
     research_profile = getattr(session.research, "profile_result", None)
     if research_profile is not None:
         block, _dropped = research_context_block(research_profile)
@@ -762,7 +861,7 @@ def _run_tool(
         )
     edits = (block.get("input") or {}).get("edits")
     try:
-        applied = session.doc.apply_edits(edits)
+        applied = session.apply_doc_edits(edits)
     except SpecEditError as exc:
         _trace.tool_dispatch(
             trace_handle,

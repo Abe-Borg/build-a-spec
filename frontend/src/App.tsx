@@ -33,7 +33,7 @@ import {
   getUsage,
   importMaster,
   installUpdate,
-  loadProject,
+  loadProjectFile,
   redoDoc,
   resetSession,
   startQc,
@@ -83,6 +83,7 @@ export default function App() {
   const [baselineIndex, setBaselineIndex] = useState<number | null>(null);
   const [importReport, setImportReport] = useState<ImportReport | null>(null);
   const [sourceAvailable, setSourceAvailable] = useState(false);
+  const [preservationReady, setPreservationReady] = useState(false);
   // Chat-authored figures (diagrams/schematics/tables), keyed for the bubbles.
   const [figures, setFigures] = useState<Figure[]>([]);
   const figuresById = useMemo(
@@ -134,6 +135,7 @@ export default function App() {
         setBaselineIndex(payload.baseline_index ?? null);
         setImportReport(payload.import_report ?? null);
         setSourceAvailable(payload.source_available ?? false);
+        setPreservationReady(payload.preservation_ready ?? false);
         setFigures(payload.figures ?? []);
         setSuggestions(payload.suggested_prompts ?? []);
       })
@@ -656,6 +658,7 @@ export default function App() {
     setSuggestions([]);
     setImportReport(null);
     setSourceAvailable(false);
+    setPreservationReady(false);
     refreshDoc();
     refreshResearch();
     refreshQc();
@@ -703,6 +706,7 @@ export default function App() {
     suggested_prompts?: string[];
     import_report?: ImportReport | null;
     source_available?: boolean;
+    preservation_ready?: boolean;
   }) => {
     setDoc(payload.doc);
     setOpenItems(payload.open_questions);
@@ -712,6 +716,7 @@ export default function App() {
     setBaselineIndex(payload.baseline_index ?? null);
     setImportReport(payload.import_report ?? null);
     setSourceAvailable(payload.source_available ?? false);
+    setPreservationReady(payload.preservation_ready ?? false);
     setFigures(payload.figures ?? []);
     setSuggestions(payload.suggested_prompts ?? []);
     setChangedIds(new Set());
@@ -763,8 +768,7 @@ export default function App() {
     // the tour (the runId guard keeps any in-flight step from advancing).
     onboarding.abort();
     try {
-      const parsed: unknown = JSON.parse(await file.text());
-      const result = await loadProject(parsed);
+      const result = await loadProjectFile(file);
       applyDocPayload(result);
       // A loaded project can switch the module + discipline (project.py
       // resolves both from the file); the Header label and the picker's
@@ -943,6 +947,7 @@ export default function App() {
           baselineIndex={baselineIndex}
           importReport={importReport}
           sourceAvailable={sourceAvailable}
+          preservationReady={preservationReady}
           busy={busy}
           onUndo={onUndo}
           onRedo={onRedo}

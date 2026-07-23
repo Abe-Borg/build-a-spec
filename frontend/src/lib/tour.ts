@@ -345,8 +345,9 @@ export const TOUR: readonly TourChunk[] = [
           "Instead of drafting from scratch, extract supported body " +
           "content from an office .docx into a blank session: every " +
           "block lands stamped imported and the interview pivots to " +
-          "adapting it. Import normalizes content; it does not preserve " +
-          "the source Word formatting or layout. It's disabled now " +
+          "adapting it. The exact source package is retained, and only " +
+          "verified simple body-text edits are allowed through the " +
+          "source-preserving path. It's disabled now " +
           "because this session has content.",
       },
     ],
@@ -395,9 +396,9 @@ export const TOUR: readonly TourChunk[] = [
         title: "Export",
         body:
           "A clean .docx with the assumptions and open-items schedules — " +
-          "or, after import, a normalized DOCX and Word tracked-changes " +
-          "redline of the extracted provisions. Neither is a " +
-          "formatting-preserving edit or comparison of the original DOCX.",
+          "or, after import, a preserved DOCX that clones the master and " +
+          "patches only verified simple body text. Normalized DOCX and the " +
+          "extracted-provision redline remain explicit separate choices.",
       },
       {
         id: "save-open",
@@ -406,8 +407,9 @@ export const TOUR: readonly TourChunk[] = [
         title: "Projects are one file",
         body:
           "Save writes the whole session — conversation, every version, " +
-          "research, QC — to a single JSON file. Open resumes it " +
-          "exactly, undo history included.",
+          "research, QC, and the exact imported source when present — to " +
+          "one .baspec file. Open resumes it exactly, undo and source-export " +
+          "state included.",
       },
       {
         id: "settings",

@@ -1,18 +1,179 @@
-"""JSON project files: save/resume for one interview session.
+"""Semantic project payloads and legacy JSON save/resume compatibility.
 
 A project file bundles the conversation history (including tool-use and
 tool-result blocks, so the model resumes with full drafting context) and
 the document store's complete version history (so undo still works after
-a resume). The chat transcript the UI shows is re-derived from history on
-load — only text blocks, in order.
+a resume). Native ``.baspec`` packaging lives in ``project_package.py``; the
+chat transcript the UI shows is re-derived from history on load—only text
+blocks, in order.
 """
 from __future__ import annotations
 
+import json
+import math
+import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 PROJECT_KIND = "buildaspec-project"
 PROJECT_FORMAT = 1
+
+MAX_SOURCE_DOCX_MAP_BYTES = 8 * 1024 * 1024
+MAX_SOURCE_DOCX_MAP_DEPTH = 20
+MAX_SOURCE_DOCX_MAP_NODES = 250_000
+MAX_SOURCE_DOCX_MAP_KEY_CHARS = 256
+MAX_SOURCE_DOCX_MAP_STRING_CHARS = 65_536
+
+_EMBEDDED_SOURCE_KEYS = frozenset(
+    {
+        "sourcebytes",
+        "sourcedocxbytes",
+        "originalbytes",
+        "sourcebase64",
+        "sourcedocxbase64",
+        "originalbase64",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ValidatedProjectData:
+    """Load-bearing project state validated without mutating a session."""
+
+    project: dict[str, Any]
+    history: list[dict[str, Any]]
+    doc_data: dict[str, Any]
+    import_report: dict[str, Any] | None
+    source_map: dict[str, Any] | None
+
+
+def sanitize_source_map(value: Any) -> dict[str, Any] | None:
+    """Bound and clone optional source-to-OOXML locator metadata.
+
+    Source-map details evolve independently from the format-1 semantic tree,
+    so persistence deliberately validates JSON safety rather than interpreting
+    locators.  Mapping-specific code must still validate source hashes,
+    baseline digests, UID references, and locators before enabling a
+    preservation export. Raw or base64 source bytes are forbidden here; they
+    belong only in the fixed binary member of a ``.baspec`` package.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Malformed source map.")
+
+    nodes = 0
+    active: set[int] = set()
+
+    def clone(item: Any, depth: int) -> Any:
+        nonlocal nodes
+        nodes += 1
+        if (
+            nodes > MAX_SOURCE_DOCX_MAP_NODES
+            or depth > MAX_SOURCE_DOCX_MAP_DEPTH
+        ):
+            raise ValueError("Source map exceeds its structural limits.")
+        if item is None or isinstance(item, (str, bool, int)):
+            if (
+                isinstance(item, str)
+                and len(item) > MAX_SOURCE_DOCX_MAP_STRING_CHARS
+            ):
+                raise ValueError("Source map contains an oversized string.")
+            return item
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                raise ValueError("Source map contains a non-finite number.")
+            return item
+        if isinstance(item, bytes):
+            raise ValueError("Source bytes cannot be embedded in project JSON.")
+        if isinstance(item, (list, dict)):
+            identity = id(item)
+            if identity in active:
+                raise ValueError("Source map contains a reference cycle.")
+            active.add(identity)
+            try:
+                if isinstance(item, list):
+                    return [clone(child, depth + 1) for child in item]
+                result: dict[str, Any] = {}
+                for key, child in item.items():
+                    if (
+                        not isinstance(key, str)
+                        or not key
+                        or len(key) > MAX_SOURCE_DOCX_MAP_KEY_CHARS
+                        or any(ord(ch) < 32 or ord(ch) == 127 for ch in key)
+                    ):
+                        raise ValueError("Source map contains an invalid key.")
+                    folded = re.sub(r"[^a-z0-9]", "", key.casefold())
+                    if folded in _EMBEDDED_SOURCE_KEYS:
+                        raise ValueError(
+                            "Source bytes cannot be embedded in project JSON."
+                        )
+                    result[key] = clone(child, depth + 1)
+                return result
+            finally:
+                active.remove(identity)
+        raise ValueError("Source map contains unsupported data.")
+
+    cloned = clone(value, 0)
+    try:
+        encoded = json.dumps(
+            cloned, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:  # defensive
+        raise ValueError("Malformed source map.") from exc
+    if len(encoded) > MAX_SOURCE_DOCX_MAP_BYTES:
+        raise ValueError("Source map exceeds its size limit.")
+    # Mapping-specific validation is strict and canonicalizes away unknown
+    # fields. Keeping this lazy avoids loading OOXML machinery for projects
+    # that were authored from scratch and have no source map.
+    from .source_mapping import SourceBodyMap
+
+    try:
+        return SourceBodyMap.from_dict(cloned).to_dict()
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError("Malformed source map.") from exc
+
+
+def validate_project_data(data: Any) -> ValidatedProjectData:
+    """Validate core project state and optional persistence metadata.
+
+    This is the side-effect-free half of :func:`load_project`. Package code
+    uses it before considering a source attachment, allowing callers to stage
+    every check before committing a replacement session.
+    """
+    if not isinstance(data, dict) or data.get("kind") != PROJECT_KIND:
+        raise ValueError("Not a Build-a-Spec project file.")
+    if data.get("format") != PROJECT_FORMAT:
+        raise ValueError(
+            f"Unsupported project format {data.get('format')!r} "
+            f"(this build reads format {PROJECT_FORMAT})."
+        )
+    history = data.get("history")
+    if not isinstance(history, list) or not all(
+        isinstance(message, dict)
+        and message.get("role") in ("user", "assistant")
+        and isinstance(message.get("content"), list)
+        and all(isinstance(block, dict) for block in message["content"])
+        for message in history
+    ):
+        raise ValueError("Malformed conversation history.")
+    doc_data = data.get("doc")
+    if not isinstance(doc_data, dict):
+        raise ValueError("Malformed document history.")
+
+    from .model import DocumentStore
+    from .source_package import sanitize_import_report
+
+    staging = DocumentStore()
+    staging.load(doc_data)
+    return ValidatedProjectData(
+        project=data,
+        history=history,
+        doc_data=doc_data,
+        import_report=sanitize_import_report(data.get("import_report")),
+        source_map=sanitize_source_map(data.get("source_map")),
+    )
 
 
 def save_project(
@@ -26,6 +187,7 @@ def save_project(
     figures: dict[str, Any] | None = None,
     suggested_prompts: list[str] | None = None,
     import_report: dict[str, Any] | None = None,
+    source_map: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -50,14 +212,18 @@ def save_project(
     # empty, which is the common case once a section is finished).
     if suggested_prompts:
         payload["suggested_prompts"] = list(suggested_prompts)
-    # P0 persists only the small, sanitized honesty trail.  The uploaded DOCX
-    # bytes remain active-session-only until the preservation container lands.
+    # The small, sanitized honesty trail stays in semantic JSON. Exact source
+    # bytes live only in the separate binary member of a .baspec container.
     if import_report:
         from .source_package import sanitize_import_report
 
         safe_report = sanitize_import_report(import_report)
         if safe_report is not None:
             payload["import_report"] = safe_report
+    if source_map is not None:
+        safe_source_map = sanitize_source_map(source_map)
+        if safe_source_map is not None:
+            payload["source_map"] = safe_source_map
     return payload
 
 
@@ -96,38 +262,15 @@ def load_project(data: Any, session) -> None:
     Raises ``ValueError`` on anything malformed; the session is untouched
     unless the whole file validates.
     """
-    if not isinstance(data, dict) or data.get("kind") != PROJECT_KIND:
-        raise ValueError("Not a Build-a-Spec project file.")
-    if data.get("format") != PROJECT_FORMAT:
-        raise ValueError(
-            f"Unsupported project format {data.get('format')!r} "
-            f"(this build reads format {PROJECT_FORMAT})."
-        )
-    history = data.get("history")
-    if not isinstance(history, list) or not all(
-        isinstance(m, dict)
-        and m.get("role") in ("user", "assistant")
-        and isinstance(m.get("content"), list)
-        and all(isinstance(block, dict) for block in m["content"])
-        for m in history
-    ):
-        raise ValueError("Malformed conversation history.")
-    doc_data = data.get("doc")
-    if not isinstance(doc_data, dict):
-        raise ValueError("Malformed document history.")
+    staged = validate_project_data(data)
+    history = staged.history
+    doc_data = staged.doc_data
+    restored_import_report = staged.import_report
+    restored_source_docx_map = None
+    if staged.source_map is not None:
+        from .source_mapping import SourceBodyMap
 
-    # Validate the doc fully before mutating the session.
-    from .model import DocumentStore
-
-    staging = DocumentStore()
-    staging.load(doc_data)  # raises ValueError on bad snapshots
-
-    # Optional P0 import metadata is lenient like research/QC metadata: a
-    # malformed block must not prevent an otherwise valid format-1 project
-    # from opening.  Sanitize before mutating the live session.
-    from .source_package import sanitize_import_report
-
-    restored_import_report = sanitize_import_report(data.get("import_report"))
+        restored_source_docx_map = SourceBodyMap.from_dict(staged.source_map)
 
     session.history.clear()
     session.history.extend(history)
@@ -182,11 +325,15 @@ def load_project(data: Any, session) -> None:
     # The meter is per-session; a resumed project starts its own count (the
     # prior session's spend lives in that session's traces, not this file).
     session.usage.reset()
-    # Source bytes are deliberately absent from P0 project JSON.  Clear them
-    # only after the incoming project's load-bearing content validated, so a
-    # rejected load leaves the active source recovery download untouched.
+    # Semantic/legacy JSON never contains source bytes. Clear them only after
+    # the incoming project's load-bearing content validates. A .baspec caller
+    # attaches its separately validated bytes after this semantic commit.
     session.source_docx_bytes = None
     session.source_docx_filename = ""
     session.import_report = restored_import_report
+    # Keep the assignment conditional so format-1 compatibility callers with
+    # an older/lightweight session object continue to load unchanged.
+    if hasattr(session, "source_docx_map"):
+        session.source_docx_map = restored_source_docx_map
     # Invalidate any turn that was still streaming against the old state.
     session.generation += 1

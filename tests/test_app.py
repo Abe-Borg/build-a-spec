@@ -466,7 +466,10 @@ def test_project_save_and_resume_round_trip(monkeypatch):
     saved = client.get("/api/project/save")
     assert saved.status_code == 200
     assert "attachment" in saved.headers["content-disposition"]
-    project = json.loads(saved.content)
+    assert ".baspec" in saved.headers["content-disposition"].lower()
+    # Keep direct JSON-load coverage for legacy/P0 project files. The primary
+    # download above is now the source-capable binary .baspec container.
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert project["kind"] == "buildaspec-project"
 
     client.post("/api/session/reset")
@@ -613,7 +616,7 @@ def test_override_survives_project_round_trip(monkeypatch):
     client = _client()
     client.post("/api/chat", json={"message": "go"})
 
-    project = json.loads(client.get("/api/project/save").content)
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert project["module_id"] == "hyperscale_fire"
 
     client.post("/api/session/reset")

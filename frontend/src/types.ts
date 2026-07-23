@@ -258,8 +258,10 @@ export interface DocPayload {
   suggested_prompts: string[];
   /** Import fidelity/recovery state; null for a from-scratch document. */
   import_report: ImportReport | null;
-  /** True only while the server still holds the active-session source copy. */
+  /** True when this active session has an exact attached source DOCX. */
   source_available: boolean;
+  /** True when edits can be exported by cloning and narrowly patching the source. */
+  preservation_ready: boolean;
 }
 
 /* --- Version diff / redline (Batch 5, mirrors backend/spec_doc/diffing.py) --- */

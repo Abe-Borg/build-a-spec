@@ -6,34 +6,41 @@ First curated domain: **Division 21 fire suppression for hyperscale data centers
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## DOCX fidelity boundary (current P0 behavior)
+## DOCX fidelity boundary (P1 source-preserving foundation)
 
-> **Important:** importing a `.docx` is currently a **normalized-content
-> extraction**, not an in-place edit of the uploaded Word file.
+> **Important:** Build-a-Spec edits a deliberately narrow semantic view of an
+> imported `.docx`; it is not a general-purpose Word formatting editor.
 
-- The importer builds Build-a-Spec's semantic SectionFormat tree from
-  supported main-body paragraphs and limited table content. Headers, footers,
-  section/page layout, styles, run-level formatting, fields, drawings, and
-  other unsupported OOXML do not enter that tree. Tables are flattened and
-  whitespace/structure may be normalized; the persistent in-app import report
-  surfaces warnings and skipped-empty-block accounting.
-- The original upload is retained only as an **active-session recovery copy**
-  and can be downloaded from the import warning banner while available. It is
-  not embedded in saved project JSON. Keep the source master separately.
-- Export after import creates a **new normalized DOCX** from the semantic tree.
-  It does not preserve or pass through the source package's headers, footers,
-  styles, numbering definitions, tables, relationships, or layout.
-- Labels such as `1.1`, `A.`, `1.`, `a.`, and `1)` are **display numbering**:
-  Build-a-Spec computes them from tree position and writes them as visible text.
-  They are not Word `w:numPr` list bindings, so Word cannot automatically
-  continue or renumber them after export.
-- “Redline of extracted provisions” uses genuine Word tracked-change markup
-  over the normalized semantic baseline. It is not a comparison against the
-  original DOCX package, and Reject All does not recreate the uploaded master.
+- Import retains the exact validated DOCX as an immutable source artifact and
+  separately extracts supported main-body content into Build-a-Spec's
+  SectionFormat tree. Headers, footers, section/page layout, styles, fields,
+  drawings, and other unsupported OOXML never become editable claims.
+- **Export preserved DOCX** clones that source package and applies only edits
+  the preservation gate can prove safe. P1 accepts unambiguous text replacement
+  in a simple, directly mapped body paragraph. It preserves that paragraph's
+  existing paragraph/run properties—including real `w:numPr` numbering—and
+  leaves every other package member payload untouched.
+- Unsafe mutations fail closed. Structural changes (add/delete/reorder),
+  table-derived blocks, fields, hyperlinks, drawings, content controls,
+  tracked-revision targets, complex multi-run formatting, and ambiguous
+  mappings are refused in source-preserving mode. Signed, protected,
+  revision-bearing, and active-content packages are pass-through-only: exact
+  no-op export is allowed, but mutation is not. Build-a-Spec does not flatten
+  the source as a fallback.
+- A no-op source export—including status/profile/standards-only changes or an
+  undo back to the imported baseline—returns the exact original DOCX bytes.
+- Native `.baspec` project files carry the semantic project and the exact source
+  DOCX together, with manifest hashes and bounded package validation. Legacy
+  JSON projects still load, but are source-less and can only use normalized
+  export.
+- **Export normalized DOCX** remains an explicit separate choice. It generates a
+  new document from the semantic tree and still uses positional display labels,
+  not real Word automatic-numbering bindings. “Redline of extracted provisions”
+  likewise remains a semantic redline, not a source-package redline.
 
-The preservation-safe import/edit/export architecture is planned work. Until
-it lands, use Build-a-Spec for body-content adaptation and treat the formatted
-office master as a separate source artifact.
+This is the P1 foundation. Later preservation phases can expand the safe edit
+islands (for example bounded add/delete/reorder) without expanding the product
+into headers, footers, or general Word formatting.
 
 ## Current Status — v1.5.0 (Batch 10: Generic any-discipline module)
 
@@ -173,10 +180,11 @@ baseline is the extracted SectionFormat tree — not the uploaded Word package.
   spurious edit. The imported-extraction version is remembered as the redline
   baseline and survives save/resume; this baseline contains normalized
   provision data, not the original DOCX package.
-- **Export menu.** The single Export button becomes a small menu: *Export
-  normalized DOCX* after import (or *Export clean* for a fresh draft),
-  *Redline of extracted provisions* when an import baseline exists, and
-  *Redline vs version…* (uses the compare picker's selection).
+- **Export menu.** The single Export button becomes a small menu. P1 adds
+  *Export preserved DOCX* as the primary imported-document path when the
+  preservation gate is satisfied; *Export normalized DOCX*, *Redline of
+  extracted provisions*, and *Redline vs version…* remain explicit semantic
+  outputs. Fresh drafts use *Export clean*.
 
 This is the **1.0 release milestone**. Cut the first Windows build per
 `docs/RELEASE_WINDOWS.md` after this lands.
@@ -389,7 +397,10 @@ What worked before (Phase 2) and still does:
 - Defaults-first interview: every question carries a recommended answer; "I don't know" applies a defensible NFPA 13-2025 / hyperscale-norm default stamped `assumed`; guide-me mode turns open questions into concrete options with tradeoffs.
 - Version stepper: one snapshot per turn that changed the document; undo/redo from the panel header.
 - `.docx` export via python-docx — SectionFormat styling plus an **assumptions schedule** (every `assumed` block with its numbering, for one-pass senior review) and an open-items schedule.
-- Project save/resume: a JSON file bundling the conversation (with tool history) and the full document version history — undo still works after a resume.
+- Project save/resume: a native `.baspec` package bundling the conversation,
+  full document version history, import report, and exact source DOCX when one
+  exists—undo and source-preserving export still work after resume. Legacy JSON
+  projects remain load-compatible but do not contain source bytes.
 - API key management: `ANTHROPIC_API_KEY` env var → OS credential manager (via `keyring`) → key file fallback, same posture as Spec Critic. A banner in the UI stores your key if none is found.
 - Session reset, prompt-cached system prompt, hermetic test suite (no network, no key).
 
@@ -404,12 +415,12 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/draft/full, /api/onboarding/demo,
                          /api/doc (+ undo/redo/edit/diff),
                          /api/export/docx (+ ?redline=master|version),
-                         /api/import/master + /api/import/original (active-session recovery),
+                         /api/import/master + /api/import/original,
                          /api/research/start|status|stream,
                          /api/qc/start|status|stream|apply|dismiss|export,
                          /api/readiness, /api/audit/* (deprecated),
                          /api/update/check|install,
-                         /api/trace/viewer, /api/project/save + load
+                         /api/trace/viewer, /api/project/save + load/load-file
   qc/
     schema.py            QC lens definitions + submit_qc_findings/verdict strict
                          tools + finding/verdict normalization
@@ -468,10 +479,11 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          transactional edit ops (incl. set_standard_edition /
                          set_project_profile, source_item_id provenance),
                          per-turn version store (undo/redo), open-item extraction
-    importer.py          master-.docx normalized body extraction: Accept-All
-                         tracked-changes text, limited structure heuristics,
-                         fidelity accounting + warnings
+    importer.py          master-.docx semantic body extraction + immutable
+                         source mapping, fidelity accounting + warnings
                                                                   [ported from Spec Critic]
+    source_mapping.py    conservative semantic-block ↔ OOXML-body bindings
+    source_patch.py      fail-closed clone-and-patch preserved DOCX export
     linting.py           deterministic lint: stale editions, placeholders, structure
                                                                   [ported from Spec Critic]
     diffing.py           deterministic version diff (uid join, word-level runs,
@@ -480,8 +492,9 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          assumptions/imported/open-items
                          schedules + QC/compliance closing + the QC memo +
                          the tracked-changes (redline) body writer
-    project.py           JSON project files: save/resume, chat transcript, module id,
-                         requirements profile, audit result, QC result
+    project.py           semantic project payload + legacy JSON compatibility
+    project_package.py   bounded, hashed native .baspec container carrying the
+                         project payload and optional exact source DOCX
   llm/
     client.py            Anthropic client factory (monkeypatch seam for tests)
     prompts.py           engine prompt protocol + module-rendered system prompt

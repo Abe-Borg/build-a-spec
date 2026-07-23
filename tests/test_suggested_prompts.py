@@ -317,7 +317,7 @@ def test_suggestions_survive_project_save_and_load(monkeypatch):
     _patch_client(monkeypatch, _suggest_turn(_PROMPTS))
     client.post("/api/chat", json={"message": "What hazard class?"})
 
-    project = client.get("/api/project/save").json()
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert project["suggested_prompts"] == _PROMPTS
 
     sessions.reset_session()
@@ -332,7 +332,7 @@ def test_suggestions_survive_project_save_and_load(monkeypatch):
 
 def test_empty_suggestions_omitted_from_the_project_file():
     client = _client()
-    project = client.get("/api/project/save").json()
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert "suggested_prompts" not in project  # no key when there is nothing to save
 
 

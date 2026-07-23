@@ -153,8 +153,8 @@ function HowToUse() {
                 Optionally extract supported body content from an office master{" "}
                 <Tag>.docx</Tag> to adapt — every block lands stamped{" "}
                 <Tag>imported</Tag> until you review it — or draft the section
-                from scratch. Import is a normalized-content workflow, not a
-                formatting-preserving Word edit.
+                from scratch. Build-a-Spec keeps an immutable source copy and
+                only permits source-preserving edits it can prove are safe.
               </>
             ),
           },
@@ -182,7 +182,7 @@ function HowToUse() {
           },
           {
             t: "Export",
-            d: "From-scratch drafts export as a generated .docx. Imported drafts export as a normalized .docx, with an optional tracked-changes redline of the extracted provisions — not of the original Word package.",
+            d: "Imported drafts can clone the source DOCX and patch verified simple body text, leaving headers, footers, numbering, styles, and unrelated package parts alone. Normalized DOCX and extracted-provision redline exports remain separate, explicit choices.",
           },
         ]}
       />
@@ -214,14 +214,14 @@ function Workflows() {
       />
       <Recipe
         title="From an office master"
-        tagline="Adapt extracted body content; keep the formatted master separately."
+        tagline="Adapt body content inside a deliberately narrow preservation boundary."
         steps={[
-          "Import the master .docx after reviewing the normalization warning — every extracted block lands imported.",
-          "Download or retain the original upload separately; the in-app recovery copy lasts only for the active session.",
+          "Import the master .docx after reviewing the preservation boundary — every extracted block lands imported.",
+          "Save a native .baspec project; it carries the exact source DOCX with the semantic document and conversation.",
           "Tell Claude the project; it walks the extracted content article by article, adapting each block.",
-          "Clear the Review queue of imported and assumed blocks.",
+          "P1 source-preserving mode accepts verified simple body-paragraph text replacements and refuses unsafe structural or complex-format edits.",
           "Send to Final QC.",
-          "Export a normalized DOCX or a redline of extracted provisions. Neither preserves or compares the original Word formatting and layout.",
+          "Choose Export preserved DOCX to clone-and-patch the master, or intentionally choose normalized DOCX / extracted-provision redline for the semantic view.",
         ]}
       />
       <Recipe
@@ -286,11 +286,11 @@ function HowItWorks() {
           },
           {
             t: "Imported DOCX files have a narrow boundary",
-            d: "Build-a-Spec extracts supported main-body content into a semantic tree. It does not edit the uploaded package in place, and the current normalized export does not preserve headers, footers, styles, tables, section layout, inline formatting, or other unsupported Word structures.",
+            d: "Build-a-Spec retains an immutable source package and maps supported main-body content into a semantic tree. Source-preserving export clones the package and replaces text only in unambiguous, simple body paragraphs; unsafe edits are refused. Headers, footers, numbering, styles, relationships, and unrelated package parts are never regenerated in this mode.",
           },
           {
-            t: "Numbering is display numbering",
-            d: "Labels such as A., 1., a., and 1) are calculated from the tree and written as visible text on export. They are not real Word list bindings, so Word will not automatically continue or renumber them after you edit the exported file.",
+            t: "Numbering depends on export mode",
+            d: "Fresh and normalized exports still write calculated labels such as A., 1., a., and 1) as visible text, not real Word list bindings. A source-preserved export leaves the imported paragraph's existing Word numbering properties untouched, so it does not break numbering that was already present.",
           },
         ]}
       />

@@ -499,7 +499,7 @@ def test_qc_dismiss_and_project_round_trip_and_staleness(monkeypatch):
     assert dm["qc"]["result"]["dismissed_ids"] == [fid]
 
     # Project round-trips the QC result.
-    project = json.loads(client.get("/api/project/save").content)
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert project["qc_result"]["findings"]
     client.post("/api/session/reset")
     assert client.get("/api/qc/status").json()["status"] == "idle"
@@ -660,7 +660,7 @@ def test_qc_result_from_dict_degrades_on_malformed_data():
 def test_project_load_survives_malformed_qc_result(monkeypatch):
     client = _client()
     _seed_doc(client, monkeypatch)
-    project = json.loads(client.get("/api/project/save").content)
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     # A malformed QC result (non-numeric version_index) would raise in a naive
     # from_dict — the load must still succeed and the doc must still restore.
     project["qc_result"] = {

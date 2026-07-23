@@ -25,6 +25,12 @@ from io import BytesIO
 from lxml import etree
 
 from .model import SpecSection
+from .raw_zip import (
+    RawZipError,
+    audit_raw_zip_replacement,
+    parse_raw_zip_archive,
+    replace_document_xml_raw,
+)
 from .source_mapping import (
     SourceBodyMap,
     SourceParagraphBinding,
@@ -462,6 +468,17 @@ def _source_xml_mutation_issue(
     try:
         detect_xml_encoding(document_xml)
     except XmlLexicalError as exc:
+        return SourcePatchIssue("source", exc.blocker, exc.detail)
+    return None
+
+
+def _source_raw_zip_mutation_issue(
+    source_bytes: bytes,
+) -> SourcePatchIssue | None:
+    """Return a runtime-only raw-archive blocker without changing source maps."""
+    try:
+        parse_raw_zip_archive(source_bytes, mutable_member=_DOCUMENT_PART)
+    except RawZipError as exc:
         return SourcePatchIssue("source", exc.blocker, exc.detail)
     return None
 
@@ -1557,7 +1574,8 @@ def _validate_source_and_plan(
     object,
     object,
     bytes | None,
-    SourcePatchIssue | None,
+    bytes | None,
+    tuple[SourcePatchIssue, ...],
 ]:
     document_xml, tree, body = _validated_source_identity(
         source_bytes=source_bytes,
@@ -1565,6 +1583,12 @@ def _validate_source_and_plan(
         baseline=baseline,
     )
     xml_mutation_issue = _source_xml_mutation_issue(document_xml)
+    raw_zip_mutation_issue = _source_raw_zip_mutation_issue(source_bytes)
+    runtime_mutation_issues = tuple(
+        issue
+        for issue in (xml_mutation_issue, raw_zip_mutation_issue)
+        if issue is not None
+    )
 
     baseline_projection = semantic_body_projection(baseline)
     current_projection = semantic_body_projection(current)
@@ -1572,8 +1596,8 @@ def _validate_source_and_plan(
         source_map.global_blockers[0]
         if source_map.global_blockers
         else (
-            xml_mutation_issue.blocker
-            if xml_mutation_issue is not None
+            runtime_mutation_issues[0].blocker
+            if runtime_mutation_issues
             else None
         )
     )
@@ -1593,13 +1617,13 @@ def _validate_source_and_plan(
             if before != after:
                 changed_uid = (after or before or ("", "source"))[1]
                 break
-        detail = (
-            xml_mutation_issue.message
-            if (
-                xml_mutation_issue is not None
-                and mutation_blocker == xml_mutation_issue.blocker
-            )
-            else None
+        detail = next(
+            (
+                issue.message
+                for issue in runtime_mutation_issues
+                if issue.blocker == mutation_blocker
+            ),
+            None,
         )
         raise SourcePatchError(changed_uid, mutation_blocker, detail)
 
@@ -1628,14 +1652,16 @@ def _validate_source_and_plan(
                 plan.changed_uids[0] if plan.changed_uids else "source",
                 actual_global_blockers[0],
             )
-        if xml_mutation_issue is not None:
+        if runtime_mutation_issues:
+            issue = runtime_mutation_issues[0]
             raise SourcePatchError(
                 plan.changed_uids[0] if plan.changed_uids else "source",
-                xml_mutation_issue.blocker,
-                xml_mutation_issue.message,
+                issue.blocker,
+                issue.message,
             )
 
     lexically_patched_xml: bytes | None = None
+    prepared_output: bytes | None = None
     if not plan.no_op:
         # Lexical synthesis is part of the final-state gate, not merely an
         # export implementation detail.  A namespace or raw-template ambiguity
@@ -1646,6 +1672,22 @@ def _validate_source_and_plan(
             tree=tree,
             plan=plan,
         )
+        # The raw package rebuild is also part of the final-state gate.  This
+        # proves the candidate still fits the deliberately narrow ZIP32 layout
+        # before a manual, model, QC, or restored-history change is committed.
+        # Reuse the audited bytes during export so validation and export cannot
+        # diverge or perform the rebuild twice.
+        try:
+            prepared_output = replace_document_xml_raw(
+                source_bytes,
+                lexically_patched_xml,
+            )
+        except RawZipError as exc:
+            raise SourcePatchError(
+                plan.changed_uids[0] if plan.changed_uids else "source",
+                "output_validation_failed",
+                f"the raw ZIP rebuild preflight failed: {exc.detail}",
+            ) from exc
 
     return (
         plan,
@@ -1653,7 +1695,8 @@ def _validate_source_and_plan(
         tree,
         body,
         lexically_patched_xml,
-        xml_mutation_issue,
+        prepared_output,
+        runtime_mutation_issues,
     )
 
 
@@ -1697,7 +1740,8 @@ def source_patch_readiness(
             _tree,
             _body,
             _lexically_patched_xml,
-            xml_mutation_issue,
+            _prepared_output,
+            runtime_mutation_issues,
         ) = _validate_source_and_plan(
             source_bytes=source_bytes,
             source_map=source_map,
@@ -1711,33 +1755,8 @@ def source_patch_readiness(
         True,
         plan.no_op,
         changed_uids=plan.changed_uids,
-        mutation_blockers=(
-            (xml_mutation_issue,) if xml_mutation_issue is not None else ()
-        ),
+        mutation_blockers=runtime_mutation_issues,
     )
-
-
-def _clone_with_document_xml(source_bytes: bytes, document_xml: bytes) -> bytes:
-    output = BytesIO()
-    try:
-        with zipfile.ZipFile(BytesIO(source_bytes), "r") as source:
-            with zipfile.ZipFile(output, "w") as destination:
-                destination.comment = source.comment
-                for info in source.infolist():
-                    payload = (
-                        document_xml
-                        if info.filename == _DOCUMENT_PART
-                        else source.read(info)
-                    )
-                    destination.writestr(copy.copy(info), payload)
-    except (OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError) as exc:
-        raise SourcePatchError(
-            "source",
-            "package_clone_failed",
-            "the source DOCX could not be cloned safely",
-        ) from exc
-    return output.getvalue()
-
 
 def _serialize_tree(tree, original_xml: bytes) -> bytes:
     encoding = tree.docinfo.encoding or "UTF-8"
@@ -2607,6 +2626,20 @@ def _audit_package_preservation(
             "the cloned package does not contain the approved lexical XML result",
         )
 
+    try:
+        audit_raw_zip_replacement(
+            source_bytes,
+            output_bytes,
+            filename=_DOCUMENT_PART,
+            expected_payload=expected_document_xml,
+        )
+    except RawZipError as exc:
+        raise SourcePatchError(
+            "source",
+            "output_validation_failed",
+            f"the raw ZIP preservation audit failed: {exc.detail}",
+        ) from exc
+
     _audit_document_xml_preservation(
         source_parts[_DOCUMENT_PART],
         output_parts[_DOCUMENT_PART],
@@ -2628,7 +2661,8 @@ def build_source_preserving_docx(
         tree,
         body,
         lexically_patched_xml,
-        _xml_mutation_issue,
+        prepared_output,
+        _runtime_mutation_issues,
     ) = _validate_source_and_plan(
         source_bytes=source_bytes,
         source_map=source_map,
@@ -2644,7 +2678,13 @@ def build_source_preserving_docx(
             "output_validation_failed",
             "the source patch plan has no lexical XML result",
         )
-    output = _clone_with_document_xml(source_bytes, lexically_patched_xml)
+    if prepared_output is None:  # pragma: no cover - plan invariant
+        raise SourcePatchError(
+            "source",
+            "output_validation_failed",
+            "the source patch plan has no prepared raw ZIP result",
+        )
+    output = prepared_output
     _audit_package_preservation(
         source_bytes,
         output,

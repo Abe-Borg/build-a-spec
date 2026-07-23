@@ -1277,6 +1277,10 @@ _BLOCKER_MESSAGES = {
     "unsupported_source_xml_encoding": (
         "source-preserving mutation currently supports only UTF-8 Word XML"
     ),
+    "unsupported_raw_zip_layout": (
+        "the source ZIP layout cannot be rebuilt without changing unrelated "
+        "raw package records"
+    ),
 }
 
 

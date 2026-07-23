@@ -353,3 +353,112 @@ def test_confirming_removes_block_from_assumptions_schedule(monkeypatch):
         cell.text for t in doc2.tables for row in t.rows for cell in row.cells
     ]
     assert not any("wet-pipe systems" in c for c in rows_after)
+
+
+# ---------------------------------------------------------------------------
+# Standards manager: add / suppress / restore through /api/doc/edit
+# ---------------------------------------------------------------------------
+
+
+def test_set_standard_suppressed_in_tool_schema_enum():
+    action = APPLY_SPEC_EDITS_TOOL["input_schema"]["properties"]["edits"][
+        "items"
+    ]["properties"]["action"]
+    assert "set_standard_suppressed" in action["enum"]
+
+
+def test_manual_add_standard_edit():
+    """The standards manager adds a standard the module does not pin, with a
+    title — same op the model's tool uses, through the same manual-edit
+    path (no restricted vocabulary)."""
+    client = _client()
+    resp = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_standard_edition",
+                    "target_id": "sec",
+                    "standard": "NFPA 30",
+                    "edition": "2024",
+                    "basis": "on-site flammable storage",
+                    "title": "Flammable and Combustible Liquids Code",
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    added = [s for s in data["standards"] if s["name"] == "NFPA 30"]
+    assert len(added) == 1
+    assert added[0]["is_added"] is True
+    assert added[0]["edition"] == "2024"
+    assert added[0]["title"] == "Flammable and Combustible Liquids Code"
+    assert added[0]["is_suppressed"] is False
+
+
+def test_manual_suppress_and_restore_standard():
+    client = _client()
+    # A module-pinned standard is present and not excluded by default.
+    before = client.get("/api/doc").json()["standards"]
+    assert any(
+        s["name"] == "NFPA 2001" and not s["is_suppressed"] for s in before
+    )
+
+    suppressed = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_standard_suppressed",
+                    "target_id": "sec",
+                    "standard": "NFPA 2001",
+                    "suppressed": True,
+                    "basis": "no clean-agent system in scope",
+                }
+            ]
+        },
+    ).json()
+    assert suppressed["ok"] is True
+    rows = [s for s in suppressed["standards"] if s["name"] == "NFPA 2001"]
+    # Exactly one row, now marked excluded (not doubled into the live list).
+    assert len(rows) == 1
+    assert rows[0]["is_suppressed"] is True
+    assert rows[0]["reason"] == "no clean-agent system in scope"
+
+    restored = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_standard_suppressed",
+                    "target_id": "sec",
+                    "standard": "NFPA 2001",
+                    "suppressed": False,
+                }
+            ]
+        },
+    ).json()
+    rows = [s for s in restored["standards"] if s["name"] == "NFPA 2001"]
+    assert len(rows) == 1 and rows[0]["is_suppressed"] is False
+
+
+def test_manual_suppress_is_undoable():
+    client = _client()
+    client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_standard_suppressed",
+                    "target_id": "sec",
+                    "standard": "NFPA 2001",
+                    "suppressed": True,
+                }
+            ]
+        },
+    )
+    undone = client.post("/api/doc/undo").json()
+    rows = [s for s in undone["standards"] if s["name"] == "NFPA 2001"]
+    assert len(rows) == 1 and rows[0]["is_suppressed"] is False

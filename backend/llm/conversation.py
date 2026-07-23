@@ -230,7 +230,11 @@ def _turn_context_text(session: SessionState) -> str:
     """
     doc = session.doc.doc
     parts = [
-        standards_context_block(session.module.basis, doc.edition_overrides),
+        standards_context_block(
+            session.module.basis,
+            doc.edition_overrides,
+            doc.suppressed_standards,
+        ),
         _profile_status_block(doc.project_profile),
     ]
     research_profile = getattr(session.research, "profile_result", None)
@@ -862,18 +866,44 @@ def stream_user_turn(
 
 
 def standards_payload(session: SessionState) -> list[dict[str, Any]]:
-    """UI-shaped list of the editions in effect (pins + overrides)."""
+    """UI-shaped list of the editions in effect (pins + overrides + adds).
+
+    Live rows carry ``is_override``/``is_added``; standards the project has
+    excluded are appended as ``is_suppressed`` rows (with the recorded
+    reason and the pin's display edition/title) so the panel can show them
+    struck-through with a Restore control.
+    """
     from ..standards import effective_editions
 
-    return [
+    doc = session.doc.doc
+    basis = session.module.basis
+    rows: list[dict[str, Any]] = [
         {
             "name": eff.name,
             "edition": eff.edition,
             "title": eff.title,
             "is_override": eff.is_override,
+            "is_added": eff.is_added,
             "basis": eff.basis,
+            "is_suppressed": False,
+            "reason": "",
         }
         for eff in effective_editions(
-            session.module.basis, session.doc.doc.edition_overrides
+            basis, doc.edition_overrides, doc.suppressed_standards
         )
     ]
+    for name, reason in sorted(doc.suppressed_standards.items()):
+        pin = basis.standard(name)
+        rows.append(
+            {
+                "name": pin.name if pin else name,
+                "edition": pin.edition if pin else "",
+                "title": pin.title if pin else "",
+                "is_override": False,
+                "is_added": False,
+                "basis": "",
+                "is_suppressed": True,
+                "reason": reason,
+            }
+        )
+    return rows

@@ -233,7 +233,8 @@ def lint_document(
     """
     if overrides is None:
         overrides = getattr(section, "edition_overrides", {}) or {}
-    editions = effective_editions(module.basis, overrides)
+    suppressed = getattr(section, "suppressed_standards", {}) or {}
+    editions = effective_editions(module.basis, overrides, suppressed)
     extra_markers = tuple(
         (src, "Template marker")
         for src in getattr(module, "lint_extra_marker_patterns", ())

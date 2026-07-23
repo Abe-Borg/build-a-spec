@@ -558,6 +558,13 @@ def test_chat_turn_emits_lint_event_and_payloads_carry_standards(monkeypatch):
     payload = client.get("/api/doc").json()
     assert [i["rule"] for i in payload["lint"]] == ["stale_edition"]
     assert any(s["is_override"] for s in payload["standards"])
+    # Every row carries the full flag set for the standards manager.
+    for s in payload["standards"]:
+        assert {"is_added", "is_suppressed", "reason"} <= s.keys()
+    # The 2019 override is an edition change, not a user-added standard, and
+    # is in effect (not excluded).
+    nfpa13 = next(s for s in payload["standards"] if s["name"] == "NFPA 13")
+    assert nfpa13["is_added"] is False and nfpa13["is_suppressed"] is False
 
 
 def test_override_missing_basis_is_tool_error_not_turn_failure(monkeypatch):

@@ -110,24 +110,30 @@ export interface DocOp {
     | "replace"
     | "delete"
     | "set_status"
-    | "set_standard_edition";
+    | "set_standard_edition"
+    | "set_standard_suppressed";
   id: string;
   target_id?: string;
   status?: BlockStatus;
   standard?: string;
   edition?: string;
   removed?: boolean;
+  suppressed?: boolean;
+  restored?: boolean;
 }
 
 /** A manual edit op sent to POST /api/doc/edit (WI2; set_project_profile added
- * for the panel's project-profile form and the tour's deterministic fill). */
+ * for the panel's project-profile form and the tour's deterministic fill;
+ * set_standard_edition / set_standard_suppressed for the standards manager). */
 export interface EditOp {
   action:
     | "replace"
     | "delete"
     | "set_status"
     | "add_paragraph"
-    | "set_project_profile";
+    | "set_project_profile"
+    | "set_standard_edition"
+    | "set_standard_suppressed";
   target_id: string;
   text?: string;
   status?: BlockStatus;
@@ -138,6 +144,16 @@ export interface EditOp {
   state?: string;
   country?: string;
   client?: string;
+  /** set_standard_edition / set_standard_suppressed fields (target_id "sec").
+   * standard = the designation; edition = "" removes an override/added
+   * standard; basis = the reason (required to add/change an edition,
+   * optional to exclude); title = full title for an added standard;
+   * suppressed = true to exclude, false to restore. */
+  standard?: string;
+  edition?: string;
+  basis?: string;
+  title?: string;
+  suppressed?: boolean;
 }
 
 export interface OpenItem {
@@ -159,13 +175,18 @@ export interface LintIssue {
   match: string;
 }
 
-/** One standard's edition in effect: module pin or jurisdiction override. */
+/** One standard's edition in effect: module pin, jurisdiction override, a
+ * user-added standard (is_added), or an excluded one (is_suppressed, appended
+ * so the panel can show it struck-through with a Restore control). */
 export interface StandardInfo {
   name: string;
   edition: string;
   title: string;
   is_override: boolean;
+  is_added: boolean;
   basis: string;
+  is_suppressed: boolean;
+  reason: string;
 }
 
 export interface DocPayload {

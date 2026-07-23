@@ -317,7 +317,9 @@ def _render_section(section: SpecSection) -> str:
 
 
 def _render_standards(module: SpecModule, section: SpecSection) -> str:
-    return standards_context_block(module.basis, section.edition_overrides)
+    return standards_context_block(
+        module.basis, section.edition_overrides, section.suppressed_standards
+    )
 
 
 def _render_profile(profile: RequirementsProfile | None) -> str:

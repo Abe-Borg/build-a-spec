@@ -56,10 +56,14 @@ backend/
                            a 400 research backstop (generic module, no discipline)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
-                           StandardsBasis; effective_editions (pins + overrides);
-                           standards_context_block; validate_overrides_shape;
-                           Batch 10 adds StandardsBasis.unpinned (sanctioned
-                           pinless basis + its own context-block posture)
+                           StandardsBasis; effective_editions (pins + overrides −
+                           per-doc suppressions; EffectiveEdition.is_added for
+                           user-added non-pins); standards_context_block (marks
+                           added + lists intentionally-excluded standards);
+                           validate_overrides_shape (+optional title) /
+                           validate_suppressed_shape; Batch 10 adds
+                           StandardsBasis.unpinned (sanctioned pinless basis +
+                           its own context-block posture)
   project_profile.py       [PORT: Spec Critic src/core/project_profile.py]
                            ProjectProfile: US/CA tables, country/state
                            normalization, web_search_user_location, fingerprint
@@ -178,7 +182,10 @@ backend/
   spec_doc/model.py        SectionFormat tree; stable ids (pt1.a2.p3); statuses
                            (confirmed/assumed/needs_input/imported);
                            transactional apply_edits; edition_overrides +
-                           project_profile on the tree; DocumentStore (per-turn
+                           project_profile + suppressed_standards on the tree
+                           (set_standard_edition gains optional title for adds;
+                           set_standard_suppressed excludes/restores a standard,
+                           reason optional); DocumentStore (per-turn
                            versions, undo/redo, adopt_imported; Batch 5 baseline_index
                            = redline master version, cleared on truncation, persisted);
                            open_questions; outline; APPLY_SPEC_EDITS_TOOL schema
@@ -294,7 +301,10 @@ frontend/src/
                            (stepper, Batch 5 Compare toggle + base picker + stat line
                            + export menu, save/open, ⚠ badge, "Draft full section"
                            button, open items) / ReviewDrawer (Batch 3 keyboard
-                           review walk) / IssuesDrawer (lint + StandardsStrip) /
+                           review walk) / IssuesDrawer (lint + StandardsStrip —
+                           editable: add a standard, edit an edition, or
+                           exclude/restore any standard per document, all via
+                           /api/doc/edit) /
                            ResearchDrawer (research only — audit UI retired in
                            Batch 4; also hosts the project-profile form for direct
                            upfront entry; Batch 7 adds a Stop button while running,
@@ -1454,6 +1464,63 @@ new REST route (`GET /api/modules`) + an optional body on the reset route.
   can't mismatch the PROJECT CONTEXT. (5) `App.onLoadProject` calls
   `refreshHealth()` so a project that switches module/discipline updates the
   Header label + picker preselect.
+
+## Standards management — implemented notes (per-document add / delete)
+
+The pinned-standards list is now user-curatable **per document**, never by
+mutating the module's frozen `StandardsBasis.standards` (curated in code with
+`docs/standards_provenance.md` receipts). Same posture as `edition_overrides`
+/ `project_profile`: metadata on `SpecSection`, transactional / undoable /
+persisted / fed to the model + lint + QC through the one `effective_editions`
+merge. No new SSE event, no new REST route, no new Python/npm deps.
+
+- **Add** rides the existing `set_standard_edition` op (an unpinned override
+  already appended to `effective_editions`). Two refinements: the op + the
+  override entry gain an optional `title` (so an added standard renders a real
+  REFERENCES line, not a bare designation), and `effective_editions` marks
+  appended non-pins `is_added=True` so `standards_context_block` labels them
+  "added for this project" rather than "jurisdiction-adopted override". Adding
+  a standard or changing an edition still **requires** a reason (`basis`) —
+  the "never silent" doctrine stands.
+- **Delete** is the genuinely new capability: `SpecSection.suppressed_standards`
+  (`{canonical name: reason}`) + the `set_standard_suppressed
+  {target_id:"sec", standard, suppressed, basis?}` op. `effective_editions`
+  skips a suppressed name **before** applying any override — suppression wins
+  and is **non-destructive** (a dormant override returns intact on restore).
+  This is the ONLY way to drop a module pin; removing an override just reverts
+  a pin to its default edition. Excluding a standard is a scope decision, so
+  the **reason is optional** (decided with the user); a suppressed standard is
+  absent from the editions in effect (lint stops checking it) and named in a
+  "do not reintroduce into REFERENCES" advisory line so the model won't re-add
+  it. Suppressed pins ride into `standards_payload` as `is_suppressed` rows
+  (with the pin's display edition/title) so the panel can strike them through
+  with a Restore control. On the generic **unpinned** module, suppression is
+  threaded through the same way (the unpinned context block honors it too).
+- **UI**: `StandardsStrip` (in `IssuesDrawer.tsx`) is now editable — a per-row
+  action matrix (default → Edit edition · Exclude; override → Edit edition ·
+  Revert to default; added → Edit edition · Remove; suppressed → Restore), an
+  Add-standard form, all posting through `onEditDoc` → `POST /api/doc/edit`
+  (one undo step), modeled on `ProjectProfileForm`. `StandardInfo` gains
+  `is_added` / `is_suppressed` / `reason`; `EditOp` / `DocOp` gain the two
+  standards actions + `standard`/`edition`/`basis`/`title`/`suppressed`.
+- **QC apply parity**: `qc/schema.py` `QC_OP_ACTIONS` + `_QC_OP_KEYS`
+  (+ `_QC_OP_SCHEMA`) mirror `set_standard_suppressed` and the new
+  `title`/`suppressed` fields, so a standards-scope fix a lens proposes
+  (e.g. exclude a standard that shouldn't reach REFERENCES) survives
+  `_clean_op` and Apply QC can enact it — the QC allow-list must track the
+  `apply_spec_edits` vocabulary the lens reasons from (`set_project_profile`
+  stays excluded).
+- **Serialization / no-change surfaces**: `suppressed_standards` rides
+  `SpecSection.to_dict`/`from_dict` (+ `validate_suppressed_shape`, reason
+  optional) and `is_empty()`; the diff/redline engine, `project.py`,
+  `app.py`, and module-import validation need no change (per-document tree
+  metadata is invisible to the diff and rides the store round-trip for free).
+- **Tests**: `test_standards.py` (suppression skip + non-destructive restore,
+  added-title carry-through, `validate_suppressed_shape`, optional override
+  title), `test_spec_doc.py` (op records/removes + undo/redo + serialization +
+  malformed-load), `test_manual_edit.py` (add / suppress / restore / undoable
+  through the endpoint), `test_app.py` (payload flag set), `test_qc.py`
+  (QC-proposed suppression survives cleaning).
 
 ## Commands
 

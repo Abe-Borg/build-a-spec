@@ -33,7 +33,11 @@ from ..project_profile import (
     normalize_country,
     normalize_state_or_province,
 )
-from ..standards import normalize_standard_name, validate_overrides_shape
+from ..standards import (
+    normalize_standard_name,
+    validate_overrides_shape,
+    validate_suppressed_shape,
+)
 
 STATUSES = ("confirmed", "assumed", "needs_input", "imported")
 # An op that omits status gets "assumed": over-flagging for the reviewer is
@@ -106,6 +110,12 @@ class SpecSection:
     # ProjectProfile dict shape. On the tree for the same reason as
     # edition_overrides: transactional, undoable, persisted for free.
     project_profile: dict[str, str] = field(default_factory=dict)
+    # Standards intentionally excluded from this project (a scope decision):
+    # {canonical name: reason}. A suppressed name drops out of the editions
+    # in effect — module pins included — so the model stops drafting it into
+    # REFERENCES and lint stops checking it (see standards.effective_editions).
+    # On the tree like edition_overrides: transactional, undoable, persisted.
+    suppressed_standards: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def empty(cls) -> "SpecSection":
@@ -122,6 +132,7 @@ class SpecSection:
             and not self.title
             and not self.edition_overrides
             and not self.project_profile
+            and not self.suppressed_standards
             and not any(part.articles for part in self.parts)
         )
 
@@ -133,6 +144,7 @@ class SpecSection:
             "parts": [_part_to_dict(part) for part in self.parts],
             "edition_overrides": copy.deepcopy(self.edition_overrides),
             "project_profile": dict(self.project_profile),
+            "suppressed_standards": dict(self.suppressed_standards),
         }
 
     @classmethod
@@ -146,12 +158,16 @@ class SpecSection:
                 data.get("edition_overrides")
             )
             profile = _validate_profile_shape(data.get("project_profile"))
+            suppressed = validate_suppressed_shape(
+                data.get("suppressed_standards")
+            )
             result = cls(
                 number=str(section.get("number", "")),
                 title=str(section.get("title", "")),
                 parts=parts,
                 edition_overrides=overrides,
                 project_profile=profile,
+                suppressed_standards=suppressed,
             )
         except (KeyError, TypeError, AttributeError) as exc:
             raise ValueError(f"Malformed document data: {exc}") from exc
@@ -490,6 +506,7 @@ _ACTIONS = (
     "delete",
     "set_status",
     "set_standard_edition",
+    "set_standard_suppressed",
     "set_project_profile",
 )
 
@@ -600,15 +617,62 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
                 "'2021 VCC per user, Loudoun County VA'). Never record an "
                 "edition override silently."
             )
-        section.edition_overrides[standard] = {
-            "edition": edition,
-            "basis": basis,
-        }
+        entry = {"edition": edition, "basis": basis}
+        # Optional full title, for adding a standard the module does not pin
+        # (pinned standards already carry their title). Stored only when set.
+        title = str(op.get("title") or "").strip()
+        if title:
+            entry["title"] = title
+        section.edition_overrides[standard] = entry
         return {
             "action": "set_standard_edition",
             "id": "sec",
             "standard": standard,
             "edition": edition,
+        }
+
+    # -- excluded standards: section-level scope metadata ------------------
+    if action == "set_standard_suppressed":
+        if target_id != "sec":
+            raise SpecEditError(
+                "set_standard_suppressed: target_id must be 'sec' "
+                "(exclusions are section-level metadata)."
+            )
+        standard = normalize_standard_name(str(op.get("standard") or ""))
+        if not standard:
+            raise SpecEditError(
+                "set_standard_suppressed: non-empty 'standard' (the "
+                "designation, e.g. 'NFPA 2001') is required."
+            )
+        suppressed = op.get("suppressed")
+        if not isinstance(suppressed, bool):
+            raise SpecEditError(
+                "set_standard_suppressed: 'suppressed' must be a boolean "
+                "(true to exclude the standard, false to restore it)."
+            )
+        if not suppressed:
+            # Restore a previously excluded standard.
+            if standard not in section.suppressed_standards:
+                raise SpecEditError(
+                    f"set_standard_suppressed: no exclusion recorded for "
+                    f"{standard!r} to restore."
+                )
+            del section.suppressed_standards[standard]
+            return {
+                "action": "set_standard_suppressed",
+                "id": "sec",
+                "standard": standard,
+                "restored": True,
+            }
+        # Exclude the standard from this project. The reason is optional —
+        # excluding a standard is a scope decision, not an edition change.
+        basis = str(op.get("basis") or "").strip()
+        section.suppressed_standards[standard] = basis
+        return {
+            "action": "set_standard_suppressed",
+            "id": "sec",
+            "standard": standard,
+            "suppressed": True,
         }
 
     # -- project profile: section-level metadata ---------------------------
@@ -996,9 +1060,20 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "ONLY when the user states the adoption or a grounded research "
         "item provides it (then cite the item id in the basis, e.g. "
         "'research r-1a2b3c4d5e6f: 2021 VCC') — never from your own "
-        "assumption. Omit 'edition' to remove a recorded override and "
-        "revert to the module default. The editions in effect are listed "
+        "assumption. The same op adds a standard the module does not pin: "
+        "pass standard, edition, basis (why it applies) and an optional "
+        "title (the full standard title for the REFERENCES article). Omit "
+        "'edition' to remove a recorded override — or a standard you added — "
+        "reverting to the module default. The editions in effect are listed "
         "in your context; linting checks the draft against them.\n"
+        "- set_standard_suppressed: target_id = 'sec'; standard = the "
+        "designation; suppressed = true to exclude a standard from this "
+        "project (it drops out of the editions in effect and the REFERENCES "
+        "article — use when a standard does not apply, e.g. no gaseous "
+        "clean-agent system), false to restore it; basis = an optional short "
+        "reason. This is the ONLY way to drop a module-pinned standard — "
+        "removing an override with set_standard_edition just reverts a pin "
+        "to its default edition, it does not exclude it.\n"
         "- set_project_profile: target_id = 'sec'; record the project "
         "identity as the user states it — city, state (name or 2-letter "
         "code), country ('USA'/'Canada'), client. Provide only the fields "
@@ -1038,6 +1113,8 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
                         "standard": {"type": "string"},
                         "edition": {"type": "string"},
                         "basis": {"type": "string"},
+                        "title": {"type": "string"},
+                        "suppressed": {"type": "boolean"},
                         "city": {"type": "string"},
                         "state": {"type": "string"},
                         "country": {"type": "string"},

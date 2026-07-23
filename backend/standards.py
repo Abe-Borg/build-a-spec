@@ -168,7 +168,9 @@ class EffectiveEdition:
     Either a module default (``is_override=False``, empty ``basis``) or a
     jurisdiction-adopted override recorded through ``set_standard_edition``
     (``basis`` carries the stated adoption, e.g. ``"2021 VCC / Loudoun
-    County amendments"``).
+    County amendments"``). ``is_added`` marks an override naming a standard
+    the module does not pin — a user-added standard, rendered as "added for
+    this project" rather than a jurisdiction adoption.
     """
 
     name: str
@@ -177,6 +179,7 @@ class EffectiveEdition:
     note: str = ""
     is_override: bool = False
     basis: str = ""
+    is_added: bool = False
 
     @property
     def reference_line(self) -> str:
@@ -186,23 +189,38 @@ class EffectiveEdition:
 
 
 def effective_editions(
-    basis: StandardsBasis, overrides: Mapping[str, Mapping[str, str]] | None
+    basis: StandardsBasis,
+    overrides: Mapping[str, Mapping[str, str]] | None,
+    suppressed: Mapping[str, str] | None = None,
 ) -> tuple[EffectiveEdition, ...]:
     """Merge module pins with recorded jurisdiction overrides.
 
     ``overrides`` maps a canonical standard name (see
     :func:`normalize_standard_name`) to ``{"edition": ..., "basis": ...}``
-    — the shape stored on ``SpecSection.edition_overrides``. An override
-    for a pinned standard replaces its edition; an override naming a
-    standard the module does not pin appends a new entry (jurisdictions can
-    invoke standards the module didn't anticipate). Pins keep declaration
-    order; unpinned overrides follow in sorted-name order.
+    (optionally ``"title"`` for a user-added standard) — the shape stored on
+    ``SpecSection.edition_overrides``. An override for a pinned standard
+    replaces its edition; an override naming a standard the module does not
+    pin appends a new entry marked ``is_added`` (jurisdictions — or the user
+    — can invoke standards the module didn't anticipate). Pins keep
+    declaration order; added standards follow in sorted-name order.
+
+    ``suppressed`` maps a canonical name to a reason; a suppressed name is
+    dropped entirely (a pinned standard the project excludes, or an added
+    one). Suppression is checked **before** the override, so it wins and is
+    non-destructive: a dormant override on a suppressed pin returns intact
+    when the suppression is removed. Everything returned is in effect —
+    suppressed entries are simply absent.
     """
     overrides = dict(overrides or {})
+    suppressed_set = {
+        normalize_standard_name(name) for name in (suppressed or {})
+    }
     result: list[EffectiveEdition] = []
     consumed: set[str] = set()
     for std in basis.standards:
         canonical = normalize_standard_name(std.name)
+        if canonical in suppressed_set:
+            continue
         override = overrides.get(canonical)
         if override:
             consumed.add(canonical)
@@ -225,28 +243,34 @@ def effective_editions(
                     note=std.note,
                 )
             )
-    for canonical in sorted(set(overrides) - consumed):
+    for canonical in sorted(set(overrides) - consumed - suppressed_set):
         override = overrides[canonical]
         result.append(
             EffectiveEdition(
                 name=canonical,
                 edition=str(override.get("edition", "")),
+                title=str(override.get("title", "")),
                 is_override=True,
                 basis=str(override.get("basis", "")),
+                is_added=True,
             )
         )
     return tuple(result)
 
 
 def standards_context_block(
-    basis: StandardsBasis, overrides: Mapping[str, Mapping[str, str]] | None
+    basis: StandardsBasis,
+    overrides: Mapping[str, Mapping[str, str]] | None,
+    suppressed: Mapping[str, str] | None = None,
 ) -> str:
     """The dynamic system-prompt block naming the editions in effect.
 
     Lives OUTSIDE the cached prompt prefix (overrides can change any turn).
     One line per standard; overrides carry their stated adoption basis so
     the model can cite it — a jurisdiction edition is never in effect
-    silently.
+    silently. A standard the user added for this project is labelled as
+    such; standards the project intentionally excludes are listed at the end
+    so the model does not reintroduce them into REFERENCES.
 
     An **unpinned** basis renders its own posture: the module pins no
     default editions, so the block lists only recorded overrides and states
@@ -260,7 +284,7 @@ def standards_context_block(
             "pins NO default editions — every edition is recorded "
             "per-project):"
         ]
-        editions = effective_editions(basis, overrides)
+        editions = effective_editions(basis, overrides, suppressed)
         if not editions:
             lines.append("- (none recorded yet)")
         for eff in editions:
@@ -282,11 +306,13 @@ def standards_context_block(
         )
         return "\n".join(lines)
     lines = ["Standards editions in effect for this project:"]
-    for eff in effective_editions(basis, overrides):
+    for eff in effective_editions(basis, overrides, suppressed):
         line = f"- {eff.name}: {eff.edition}"
         if eff.note:
             line += f" ({eff.note})"
-        if eff.is_override:
+        if eff.is_added:
+            line += f" — added for this project (basis: {eff.basis})"
+        elif eff.is_override:
             line += f" — jurisdiction-adopted override (basis: {eff.basis})"
         else:
             line += " — module default (current published edition)"
@@ -297,6 +323,16 @@ def standards_context_block(
         "with a set_standard_edition operation (adoption basis required) "
         "before drafting to it."
     )
+    suppressed_map = dict(suppressed or {})
+    if suppressed_map:
+        excluded = "; ".join(
+            f"{name}{f' — {reason}' if reason else ''}"
+            for name, reason in sorted(suppressed_map.items())
+        )
+        lines.append(
+            "Intentionally excluded from this project (do not reintroduce "
+            f"into REFERENCES): {excluded}."
+        )
     return "\n".join(lines)
 
 
@@ -304,14 +340,16 @@ def references_article_lines(
     basis: StandardsBasis,
     overrides: Mapping[str, Mapping[str, str]] | None,
     names: Iterable[str] | None = None,
+    suppressed: Mapping[str, str] | None = None,
 ) -> list[str]:
     """REFERENCES-article data: one rendered line per standard in effect.
 
     ``names`` optionally restricts (and orders) the output to specific
     designations — a wet-pipe section cites a narrower set than the module
-    pins. Unknown names are skipped rather than invented.
+    pins. Unknown names are skipped rather than invented. ``suppressed``
+    excludes standards the project has dropped.
     """
-    editions = effective_editions(basis, overrides)
+    editions = effective_editions(basis, overrides, suppressed)
     if names is None:
         return [eff.reference_line for eff in editions]
     by_name: dict[str, EffectiveEdition] = {
@@ -350,5 +388,40 @@ def validate_overrides_shape(overrides: Any) -> dict[str, dict[str, str]]:
                 f"edition_overrides[{name!r}] needs a non-empty edition and "
                 "basis (adoptions are never recorded silently)"
             )
-        clean[canonical] = {"edition": edition, "basis": basis}
+        entry = {"edition": edition, "basis": basis}
+        # Optional full title for a user-added standard (pins carry their own
+        # title; overrides on pins inherit it, so it is stored only when set).
+        title = str(value.get("title", "")).strip()
+        if title:
+            entry["title"] = title
+        clean[canonical] = entry
+    return clean
+
+
+def validate_suppressed_shape(suppressed: Any) -> dict[str, str]:
+    """Validate/normalize a persisted ``suppressed_standards`` mapping.
+
+    Maps a canonical standard name (see :func:`normalize_standard_name`) to
+    a reason. Suppressing a standard is a scope decision — it does not apply
+    to this project, so it drops out of the editions in effect (module pins
+    included). Unlike an edition override, the reason is **optional**:
+    excluding a standard is a one-click call, so an empty reason is allowed.
+    Used by document deserialization (project files are untrusted); raises
+    ``ValueError`` on anything malformed; returns a clean
+    ``{canonical_name: reason}`` dict.
+    """
+    if suppressed in (None, {}):
+        return {}
+    if not isinstance(suppressed, dict):
+        raise ValueError("suppressed_standards must be an object")
+    clean: dict[str, str] = {}
+    for name, value in suppressed.items():
+        canonical = normalize_standard_name(str(name))
+        if not canonical:
+            raise ValueError("suppressed_standards key must be a standard name")
+        if not isinstance(value, str):
+            raise ValueError(
+                f"suppressed_standards[{name!r}] reason must be a string"
+            )
+        clean[canonical] = value.strip()
     return clean

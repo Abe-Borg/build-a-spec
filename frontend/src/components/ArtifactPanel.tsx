@@ -606,7 +606,7 @@ export default function ArtifactPanel({
         </div>
       )}
 
-      <StandardsStrip standards={standards} />
+      <StandardsStrip standards={standards} onEditDoc={onEditDoc} busy={busy} />
     </aside>
   );
 }

@@ -457,6 +457,121 @@ def test_load_rejects_malformed_overrides():
 
 
 # ---------------------------------------------------------------------------
+# User-managed standards: added standards (title) + suppression
+# ---------------------------------------------------------------------------
+
+
+def test_add_standard_with_title_records_override():
+    store = DocumentStore()
+    store.begin_turn()
+    store.apply_edits(
+        [
+            {
+                "action": "set_standard_edition",
+                "target_id": "sec",
+                "standard": "nfpa 30",
+                "edition": "2024",
+                "basis": "on-site flammable storage",
+                "title": "Flammable and Combustible Liquids Code",
+            }
+        ]
+    )
+    store.commit_turn()
+    assert store.doc.edition_overrides["NFPA 30"] == {
+        "edition": "2024",
+        "basis": "on-site flammable storage",
+        "title": "Flammable and Combustible Liquids Code",
+    }
+
+
+def _suppress_op(standard="NFPA 2001", suppressed=True, basis=None):
+    op = {
+        "action": "set_standard_suppressed",
+        "target_id": "sec",
+        "standard": standard,
+        "suppressed": suppressed,
+    }
+    if basis is not None:
+        op["basis"] = basis
+    return op
+
+
+def test_set_standard_suppressed_records_and_restores():
+    store = DocumentStore()
+    store.begin_turn()
+    applied = store.apply_edits(
+        [_suppress_op(standard="nfpa  2001", basis="no clean-agent system")]
+    )
+    assert applied == [
+        {
+            "action": "set_standard_suppressed",
+            "id": "sec",
+            "standard": "NFPA 2001",
+            "suppressed": True,
+        }
+    ]
+    assert store.doc.suppressed_standards == {"NFPA 2001": "no clean-agent system"}
+    # An exclusion counts as document content.
+    assert not store.doc.is_empty()
+
+    restored = store.apply_edits([_suppress_op(suppressed=False)])
+    assert restored[0]["restored"] is True
+    assert store.doc.suppressed_standards == {}
+    with pytest.raises(SpecEditError, match="no exclusion recorded"):
+        store.apply_edits([_suppress_op(standard="NFPA 75", suppressed=False)])
+
+
+def test_set_standard_suppressed_optional_reason_and_sec_target():
+    store = DocumentStore()
+    store.begin_turn()
+    # Reason is optional — excluding a standard is a scope call, not an
+    # edition change, so no basis is required.
+    store.apply_edits([_suppress_op(basis=None)])
+    assert store.doc.suppressed_standards == {"NFPA 2001": ""}
+    with pytest.raises(SpecEditError, match="'sec'"):
+        store.apply_edits([dict(_suppress_op(), target_id="pt1")])
+    with pytest.raises(SpecEditError, match="standard"):
+        store.apply_edits([_suppress_op(standard="  ")])
+    with pytest.raises(SpecEditError, match="boolean"):
+        store.apply_edits(
+            [
+                {
+                    "action": "set_standard_suppressed",
+                    "target_id": "sec",
+                    "standard": "NFPA 20",
+                    "suppressed": "yes",
+                }
+            ]
+        )
+
+
+def test_suppressed_ride_undo_redo_and_serialization():
+    store = DocumentStore()
+    store.begin_turn()
+    store.apply_edits([_suppress_op(basis="no clean-agent system")])
+    store.commit_turn()
+
+    assert store.undo()
+    assert store.doc.suppressed_standards == {}
+    assert store.redo()
+    assert store.doc.suppressed_standards == {"NFPA 2001": "no clean-agent system"}
+
+    # Round-trip through the persisted store shape.
+    restored = DocumentStore()
+    restored.load(store.to_dict())
+    assert restored.doc.suppressed_standards == store.doc.suppressed_standards
+
+
+def test_load_rejects_malformed_suppressed():
+    store = DocumentStore()
+    snapshot = SpecSection.empty().to_dict()
+    snapshot["suppressed_standards"] = {"NFPA 2001": 3}  # non-string reason
+    with pytest.raises(ValueError, match="Malformed document data"):
+        store.load({"versions": [snapshot], "index": 0})
+    assert store.doc.is_empty()
+
+
+# ---------------------------------------------------------------------------
 # Redline baseline bookkeeping (Batch 5)
 # ---------------------------------------------------------------------------
 

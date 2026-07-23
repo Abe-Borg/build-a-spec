@@ -37,6 +37,15 @@ from .source_mapping import (
     source_replacement_text_blocker,
 )
 from .source_package import SourcePackageError, inspect_docx_package
+from .xml_lexical import (
+    XmlLexicalError,
+    XmlPatch,
+    apply_xml_patches,
+    build_source_xml_index,
+    decoded_slice_byte_span,
+    detect_xml_encoding,
+    encode_word_text,
+)
 
 _DOCUMENT_PART = "word/document.xml"
 _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -128,6 +137,7 @@ class SourcePatchReadiness:
     no_op: bool
     changed_uids: tuple[str, ...] = ()
     blockers: tuple[SourcePatchIssue, ...] = ()
+    mutation_blockers: tuple[SourcePatchIssue, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -135,6 +145,9 @@ class SourcePatchReadiness:
             "no_op": self.no_op,
             "changed_uids": list(self.changed_uids),
             "blockers": [blocker.to_dict() for blocker in self.blockers],
+            "mutation_blockers": [
+                blocker.to_dict() for blocker in self.mutation_blockers
+            ],
         }
 
 
@@ -268,6 +281,22 @@ def _parse_document_xml(document_xml: bytes):
             "the package does not contain exactly one supported Word body",
         )
     return tree, bodies[0]
+
+
+def _source_xml_mutation_issue(
+    document_xml: bytes,
+) -> SourcePatchIssue | None:
+    """Return a runtime-only lexical blocker without changing source maps.
+
+    Encoding support is intentionally recomputed from the immutable source.
+    Persisting this derived result would make older ``.baspec`` source maps
+    fail their exact blocker-tuple identity check after an application update.
+    """
+    try:
+        detect_xml_encoding(document_xml)
+    except XmlLexicalError as exc:
+        return SourcePatchIssue("source", exc.blocker, exc.detail)
+    return None
 
 
 def _projection_paragraphs(
@@ -1359,16 +1388,33 @@ def _validate_source_and_plan(
     source_map: SourceBodyMap,
     baseline: SpecSection,
     current: SpecSection,
-) -> tuple[_PatchPlan, bytes, object, object]:
+) -> tuple[
+    _PatchPlan,
+    bytes,
+    object,
+    object,
+    bytes | None,
+    SourcePatchIssue | None,
+]:
     document_xml, tree, body = _validated_source_identity(
         source_bytes=source_bytes,
         source_map=source_map,
         baseline=baseline,
     )
+    xml_mutation_issue = _source_xml_mutation_issue(document_xml)
 
     baseline_projection = semantic_body_projection(baseline)
     current_projection = semantic_body_projection(current)
-    if baseline_projection != current_projection and source_map.global_blockers:
+    mutation_blocker = (
+        source_map.global_blockers[0]
+        if source_map.global_blockers
+        else (
+            xml_mutation_issue.blocker
+            if xml_mutation_issue is not None
+            else None
+        )
+    )
+    if baseline_projection != current_projection and mutation_blocker is not None:
         changed_uid = "source"
         for index in range(max(len(baseline_projection), len(current_projection))):
             before = (
@@ -1384,7 +1430,15 @@ def _validate_source_and_plan(
             if before != after:
                 changed_uid = (after or before or ("", "source"))[1]
                 break
-        raise SourcePatchError(changed_uid, source_map.global_blockers[0])
+        detail = (
+            xml_mutation_issue.message
+            if (
+                xml_mutation_issue is not None
+                and mutation_blocker == xml_mutation_issue.blocker
+            )
+            else None
+        )
+        raise SourcePatchError(changed_uid, mutation_blocker, detail)
 
     plan = _plan_projection_changes(
         source_bytes=source_bytes,
@@ -1411,8 +1465,29 @@ def _validate_source_and_plan(
                 plan.changed_uids[0] if plan.changed_uids else "source",
                 actual_global_blockers[0],
             )
+        if xml_mutation_issue is not None:
+            raise SourcePatchError(
+                plan.changed_uids[0] if plan.changed_uids else "source",
+                xml_mutation_issue.blocker,
+                xml_mutation_issue.message,
+            )
 
-    return plan, document_xml, tree, body
+    lexically_patched_xml: bytes | None = None
+    if plan.text_patches and not plan.island_patches:
+        lexically_patched_xml = _lexically_patch_text_only_document(
+            document_xml=document_xml,
+            tree=tree,
+            plan=plan,
+        )
+
+    return (
+        plan,
+        document_xml,
+        tree,
+        body,
+        lexically_patched_xml,
+        xml_mutation_issue,
+    )
 
 
 def validate_source_transition(
@@ -1449,7 +1524,14 @@ def source_patch_readiness(
         issue = SourcePatchIssue("source", "source_unavailable", message)
         return SourcePatchReadiness(False, False, blockers=(issue,))
     try:
-        plan, _xml, _tree, _body = _validate_source_and_plan(
+        (
+            plan,
+            _xml,
+            _tree,
+            _body,
+            _lexically_patched_xml,
+            xml_mutation_issue,
+        ) = _validate_source_and_plan(
             source_bytes=source_bytes,
             source_map=source_map,
             baseline=baseline,
@@ -1462,6 +1544,9 @@ def source_patch_readiness(
         True,
         plan.no_op,
         changed_uids=plan.changed_uids,
+        mutation_blockers=(
+            (xml_mutation_issue,) if xml_mutation_issue is not None else ()
+        ),
     )
 
 
@@ -1520,6 +1605,87 @@ def _element_with_text_patch(
         raise SourcePatchError(binding.uid, "text_anchor_mismatch")
     text_node.text = span.prefix + new_text + span.suffix
     return element
+
+
+def _lexically_patch_text_only_document(
+    *,
+    document_xml: bytes,
+    tree,
+    plan: _PatchPlan,
+) -> bytes:
+    """Build a text-only document from immutable bytes plus a patch manifest."""
+    if plan.island_patches or not plan.text_patches:
+        raise ValueError("lexical text patching requires a non-empty text-only plan")
+    first_uid = plan.text_patches[0].binding.uid
+    try:
+        index = build_source_xml_index(document_xml, validated_tree=tree)
+    except XmlLexicalError as exc:
+        raise SourcePatchError(first_uid, exc.blocker, exc.detail) from exc
+
+    manifest: list[XmlPatch] = []
+    for patch in plan.text_patches:
+        binding = patch.binding
+        span = binding.text_span
+        if span is None:
+            raise SourcePatchError(binding.uid, "text_anchor_mismatch")
+        try:
+            body_child = index.body_child(binding.body_child_index)
+            if body_child.expanded_name != _W_P:
+                raise XmlLexicalError(
+                    "body_anchor_mismatch",
+                    "the mapped lexical body child is not a Word paragraph",
+                )
+            text_node = index.word_text(
+                binding.body_child_index, span.text_node_ordinal
+            )
+            if not text_node.mutable_content:
+                raise XmlLexicalError(
+                    text_node.blocker
+                    or "unsupported_source_text_lexical_form",
+                    "the mapped Word text uses CDATA or embedded lexical markup",
+                )
+            if (
+                text_node.decoded_text != span.source_node_text
+                or span.source_node_text[span.start : span.end]
+                != binding.baseline_text
+            ):
+                raise XmlLexicalError(
+                    "text_anchor_mismatch",
+                    "the mapped decoded Word text no longer matches its source anchor",
+                )
+            raw_span = decoded_slice_byte_span(
+                document_xml, text_node, span.start, span.end
+            )
+            replacement = encode_word_text(
+                patch.new_text,
+                raw_prefix=document_xml[
+                    text_node.content_span.start : raw_span.start
+                ],
+                raw_suffix=document_xml[
+                    raw_span.end : text_node.content_span.end
+                ],
+            )
+        except XmlLexicalError as exc:
+            raise SourcePatchError(binding.uid, exc.blocker, exc.detail) from exc
+        manifest.append(
+            XmlPatch(
+                start=raw_span.start,
+                end=raw_span.end,
+                replacement=replacement,
+                uid=binding.uid,
+                reason="replace_text",
+            )
+        )
+
+    try:
+        patched_xml = apply_xml_patches(document_xml, manifest)
+    except XmlLexicalError as exc:
+        raise SourcePatchError(first_uid, exc.blocker, exc.detail) from exc
+    # Byte locality is necessary but not sufficient.  Reparse the composed
+    # document before it is placed into a package; the package audit later
+    # independently proves its semantic body against the same final-state plan.
+    _parse_document_xml(patched_xml)
+    return patched_xml
 
 
 def _minimal_numbered_paragraph(template_element, uid: str, text: str):
@@ -1705,7 +1871,14 @@ def build_source_preserving_docx(
     current: SpecSection,
 ) -> bytes:
     """Return an exact no-op or a source clone containing only the safe plan."""
-    plan, document_xml, tree, body = _validate_source_and_plan(
+    (
+        plan,
+        document_xml,
+        tree,
+        body,
+        lexically_patched_xml,
+        _xml_mutation_issue,
+    ) = _validate_source_and_plan(
         source_bytes=source_bytes,
         source_map=source_map,
         baseline=baseline,
@@ -1713,6 +1886,21 @@ def build_source_preserving_docx(
     )
     if plan.no_op:
         return source_bytes
+
+    # Chunk 1's byte-exact path is intentionally limited to pure text plans.
+    # P1b structural islands retain their existing semantic serializer until
+    # body-element byte splicing is implemented as its own independently
+    # verified change.
+    if not plan.island_patches:
+        if lexically_patched_xml is None:  # pragma: no cover - plan invariant
+            raise SourcePatchError(
+                "source",
+                "output_validation_failed",
+                "the text-only patch plan has no lexical XML result",
+            )
+        output = _clone_with_document_xml(source_bytes, lexically_patched_xml)
+        _audit_package_preservation(source_bytes, output, plan)
+        return output
 
     source_children = _meaningful_children(body)
     for patch in plan.text_patches:

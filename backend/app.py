@@ -282,9 +282,16 @@ def _source_preservation_payload(
         if isinstance(source_map, SourceBodyMap)
         else ()
     )
+    runtime_mutation_blockers = (
+        tuple(preservation.mutation_blockers)
+        if preservation is not None
+        else ()
+    )
 
     if preservation is not None and preservation.ready:
-        if preservation.no_op and global_blockers:
+        if preservation.no_op and (
+            global_blockers or runtime_mutation_blockers
+        ):
             status = "pass_through_only"
             blockers = [
                 {
@@ -294,6 +301,9 @@ def _source_preservation_payload(
                 }
                 for blocker in global_blockers
             ]
+            blockers.extend(
+                issue.to_dict() for issue in runtime_mutation_blockers
+            )
         else:
             status = "ready"
             blockers = []

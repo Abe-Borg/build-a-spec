@@ -1270,6 +1270,13 @@ _BLOCKER_MESSAGES = {
     "unsupported_text_control": "tabs and line breaks require unsupported Word run markup",
     "unsafe_document_xml": "the main Word document XML is unsafe or malformed",
     "unsafe_settings_xml": "the Word settings XML is unsafe or malformed",
+    "unsupported_source_text_lexical_form": (
+        "the source text uses CDATA or embedded lexical markup that cannot be "
+        "patched byte-for-byte"
+    ),
+    "unsupported_source_xml_encoding": (
+        "source-preserving mutation currently supports only UTF-8 Word XML"
+    ),
 }
 
 

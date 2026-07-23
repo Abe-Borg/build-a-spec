@@ -381,8 +381,17 @@ def _source_editing_boundary_block(session: SessionState) -> str | None:
         "complex or unsafe. Treat a tool rejection as authoritative; do not "
         "retry it as a different structural edit.",
     ]
-    if source_map.global_blockers:
-        blockers = ", ".join(source_map.global_blockers)
+    readiness = session.source_export_readiness()
+    runtime_blockers = tuple(
+        issue.get("blocker", "")
+        for issue in readiness.get("mutation_blockers", [])
+        if isinstance(issue, dict) and isinstance(issue.get("blocker"), str)
+    )
+    mutation_blockers = tuple(
+        dict.fromkeys((*source_map.global_blockers, *runtime_blockers))
+    )
+    if mutation_blockers:
+        blockers = ", ".join(mutation_blockers)
         lines.extend(
             [
                 "- SOURCE EXPORT IS PASS-THROUGH-ONLY because the package "

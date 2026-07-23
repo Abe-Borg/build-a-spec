@@ -218,7 +218,11 @@ frontend/src/
                            anchorSelector (data-tour / el-* / doc-snapshot resolvers)
   lib/useOnboarding.ts     [Batch 6] tour phase machine: runId zombie guard on
                            every await, key-gate auto-advance, do-this-for-me +
-                           run-it dispatch, fresh-vs-keep resolution
+                           run-it dispatch, fresh-vs-keep resolution; endConfirm
+                           flag (requestEnd/cancelEnd) gates every popup close (✕ /
+                           backdrop) behind an end-or-continue confirmation —
+                           orthogonal to phase, so "Continue" restores the popup
+                           untouched and abort/start clear it
   lib/onboardingStorage.ts [Batch 6] "tour completed" flag — the codebase's first
                            localStorage use; try/caught, cosmetic only
   lib/figures.ts           [Batch 8] figure render + security helpers: DOMPurify
@@ -259,10 +263,14 @@ frontend/src/
                            / OnboardingOverlay (Batch 6: spotlight cutout + step
                            bubbles + discipline/entry/work-choice dialogs + resume
                            pill; drawers gain an openNonce prop, controls gain
-                           data-tour anchors) / ConfirmDialog (Batch 7: generic
+                           data-tour anchors; every popup close (✕ / backdrop) now
+                           routes to ob.requestEnd, and Escape yields to the confirm
+                           while it's open) / ConfirmDialog (Batch 7: generic
                            title/body/confirm/cancel modal — the lose-progress
                            warnings for stopping research/QC; the Final-QC launch
-                           confirmation stays its own purpose-built modal) /
+                           confirmation stays its own purpose-built modal; an
+                           `elevated` prop (z-80) lets App host the tour's
+                           end-or-continue confirm above the overlay's own modals) /
                            FigureCard (Batch 8: inline figure render — sanitized
                            SVG/mermaid in a sandbox="" iframe, escaped data table,
                            SVG/PNG/CSV downloads + a ✕ to remove)

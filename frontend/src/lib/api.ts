@@ -229,7 +229,11 @@ export async function downloadProjectFile(): Promise<void> {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // Defer revocation: some browsers consume the object URL asynchronously, so
+  // revoking synchronously after click() can cancel the download — which would
+  // let the caller reset/load and lose the session with no saved file. Mirrors
+  // downloadBlob() in lib/figures.ts.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** Read SSE frames off a fetch Response body and yield parsed JSON. */

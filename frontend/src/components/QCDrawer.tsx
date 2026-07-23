@@ -25,9 +25,15 @@ import type {
   QcSnapshot,
   ReadinessPayload,
   Severity,
+  SourceCapabilitiesState,
+  SourceOperationCapability,
   SpecDoc,
   UsageSummary,
 } from "../types";
+import {
+  qcBatchDecision,
+  sourceCapabilityTitle,
+} from "../lib/sourceCapabilities";
 import ConfirmDialog from "./ConfirmDialog";
 
 interface Props {
@@ -35,7 +41,8 @@ interface Props {
   readiness: ReadinessPayload | null;
   doc: SpecDoc | null;
   busy: boolean;
-  applyDisabled: boolean;
+  sourceExpected: boolean;
+  sourceCapabilities: SourceCapabilitiesState | null;
   usage: UsageSummary | null;
   onStart: () => void;
   onStop: () => void;
@@ -48,6 +55,7 @@ interface Props {
 
 const HOLD_MS = 800;
 const SEVERITY_ORDER: Severity[] = ["critical", "high", "medium", "low"];
+const QC_BUSY_MESSAGE = "Wait for the current action to finish.";
 
 const sevChip: Record<Severity, string> = {
   critical: "border-err/70 bg-err/25 text-err",
@@ -83,7 +91,8 @@ export default function QCDrawer({
   readiness,
   doc,
   busy,
-  applyDisabled,
+  sourceExpected,
+  sourceCapabilities,
   usage,
   onStart,
   onStop,
@@ -104,6 +113,12 @@ export default function QCDrawer({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const holdTimer = useRef<number | undefined>(undefined);
+  const latestApplyAll = useRef({
+    busy: true,
+    findingIds: [] as string[],
+    onApply,
+  });
+  useEffect(() => () => window.clearTimeout(holdTimer.current), []);
 
   const status = qc?.status ?? "idle";
   const running = status === "running";
@@ -113,6 +128,29 @@ export default function QCDrawer({
   const openCriticals = openFindings.filter((f) => f.severity === "critical");
   const stale =
     result != null && doc != null && result.version_index !== doc.version.index;
+  const applyStateStale = result != null && (doc == null || stale);
+  const findingDecisions = new Map(
+    findings.map((finding) => [
+      finding.finding_id,
+      qcBatchDecision({
+        finding,
+        sourceCapabilities,
+        sourceExpected,
+        stale: applyStateStale,
+      }),
+    ]),
+  );
+  const applicableCriticals = openCriticals.filter(
+    (finding) => findingDecisions.get(finding.finding_id)?.allowed,
+  );
+  const firstCriticalDenial = openCriticals
+    .map((finding) => findingDecisions.get(finding.finding_id))
+    .find((decision) => decision && !decision.allowed);
+  latestApplyAll.current = {
+    busy,
+    findingIds: applicableCriticals.map((finding) => finding.finding_id),
+    onApply,
+  };
 
   // Live lens + verify progress from the SSE event log.
   const { lensState, verify } = useMemo(() => {
@@ -129,11 +167,13 @@ export default function QCDrawer({
   }, [qc?.events]);
 
   const startHoldApplyCriticals = () => {
-    if (busy || applyDisabled || openCriticals.length === 0) return;
+    if (busy || applicableCriticals.length === 0) return;
     setHolding(true);
     holdTimer.current = window.setTimeout(() => {
       setHolding(false);
-      onApply(openCriticals.filter((f) => f.ops_valid).map((f) => f.finding_id));
+      const latest = latestApplyAll.current;
+      if (latest.busy || latest.findingIds.length === 0) return;
+      latest.onApply([...latest.findingIds]);
     }, HOLD_MS);
   };
   const cancelHold = () => {
@@ -159,6 +199,17 @@ export default function QCDrawer({
     : result
       ? "Re-run Final QC"
       : "Send to Final QC";
+
+  const applyAllDisabled = busy || applicableCriticals.length === 0;
+  const applyAllTitle =
+    applicableCriticals.length === 0 && firstCriticalDenial
+      ? sourceCapabilityTitle(
+          firstCriticalDenial,
+          "Apply currently applicable critical findings",
+        )
+      : busy
+        ? QC_BUSY_MESSAGE
+        : "Press and hold to apply only the critical findings that are currently applicable; the server validates the combined batch again.";
 
   // The start button opens the confirmation dialog; the run only fires once
   // the user confirms in it (Fable 5 is expensive and a pass takes minutes).
@@ -351,34 +402,35 @@ export default function QCDrawer({
               )}
 
               {openCriticals.length >= 2 && (
-                <button
-                  className="relative w-full overflow-hidden rounded-md border border-err/50 bg-err/10 px-2 py-1 text-[11px] text-err transition-colors hover:border-err disabled:pointer-events-none disabled:opacity-40"
-                  onPointerDown={startHoldApplyCriticals}
-                  onPointerUp={cancelHold}
-                  onPointerLeave={cancelHold}
-                  onPointerCancel={cancelHold}
-                  disabled={busy || applyDisabled}
-                  title={
-                    applyDisabled
-                      ? "Fix application is disabled because this DOCX is pass-through only"
-                      : "Press and hold to apply every critical finding with a valid fix — one undo step"
-                  }
+                <span
+                  className="block w-full"
+                  title={applyAllDisabled ? applyAllTitle : undefined}
                 >
-                  <span
-                    className="absolute inset-y-0 left-0 bg-err/25"
-                    style={{
-                      width: holding ? "100%" : "0%",
-                      transition: holding
-                        ? `width ${HOLD_MS}ms linear`
-                        : "width 120ms ease-out",
-                    }}
-                  />
-                  <span className="relative">
-                    {holding
-                      ? "Keep holding…"
-                      : `Hold to apply all ${openCriticals.length} criticals`}
-                  </span>
-                </button>
+                  <button
+                    className="relative w-full overflow-hidden rounded-md border border-err/50 bg-err/10 px-2 py-1 text-[11px] text-err transition-colors hover:border-err disabled:pointer-events-none disabled:opacity-40"
+                    onPointerDown={startHoldApplyCriticals}
+                    onPointerUp={cancelHold}
+                    onPointerLeave={cancelHold}
+                    onPointerCancel={cancelHold}
+                    disabled={applyAllDisabled}
+                    title={applyAllDisabled ? undefined : applyAllTitle}
+                  >
+                    <span
+                      className="absolute inset-y-0 left-0 bg-err/25"
+                      style={{
+                        width: holding ? "100%" : "0%",
+                        transition: holding
+                          ? `width ${HOLD_MS}ms linear`
+                          : "width 120ms ease-out",
+                      }}
+                    />
+                    <span className="relative">
+                      {holding
+                        ? "Keep holding…"
+                        : `Hold to apply ${applicableCriticals.length} currently applicable critical${applicableCriticals.length === 1 ? "" : "s"}`}
+                    </span>
+                  </button>
+                </span>
               )}
 
               {openFindings.length === 0 && (
@@ -400,7 +452,7 @@ export default function QCDrawer({
                         key={f.finding_id}
                         finding={f}
                         busy={busy}
-                        applyDisabled={applyDisabled}
+                        decision={findingDecisions.get(f.finding_id)!}
                         open={!!openRationale[f.finding_id]}
                         onToggle={() =>
                           setOpenRationale((m) => ({
@@ -408,7 +460,16 @@ export default function QCDrawer({
                             [f.finding_id]: !m[f.finding_id],
                           }))
                         }
-                        onApply={() => onApply([f.finding_id])}
+                        onApply={() => {
+                          const decision = qcBatchDecision({
+                            finding: f,
+                            sourceCapabilities,
+                            sourceExpected,
+                            stale: applyStateStale,
+                          });
+                          if (busy || !decision.allowed) return;
+                          onApply([f.finding_id]);
+                        }}
                         onDismiss={() => onDismiss(f.finding_id)}
                         onJump={onJump}
                       />
@@ -587,7 +648,7 @@ function ConfirmQCModal({
 function FindingCard({
   finding,
   busy,
-  applyDisabled,
+  decision,
   open,
   onToggle,
   onApply,
@@ -596,7 +657,7 @@ function FindingCard({
 }: {
   finding: QcFinding;
   busy: boolean;
-  applyDisabled: boolean;
+  decision: SourceOperationCapability;
   open: boolean;
   onToggle: () => void;
   onApply: () => void;
@@ -606,6 +667,12 @@ function FindingCard({
   const dimmed = finding.status !== "open";
   const cardBtn =
     "rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
+  const applyLocked = busy || !decision.allowed;
+  const applyTitle = !decision.allowed
+    ? sourceCapabilityTitle(decision, "Apply this fix")
+    : busy
+      ? QC_BUSY_MESSAGE
+      : "Apply this fix to the document (one undo step)";
   return (
     <div
       className={`rounded-lg border border-edge bg-surface/40 p-2 ${
@@ -698,25 +765,19 @@ function FindingCard({
 
       {finding.status === "open" && (
         <div className="mt-1.5 flex items-center gap-1.5">
-          <button
-            className={cardBtn}
-            onClick={onApply}
-            disabled={
-              busy ||
-              applyDisabled ||
-              !finding.ops_valid ||
-              finding.proposed_ops.length === 0
-            }
-            title={
-              applyDisabled
-                ? "Fix application is disabled because this DOCX is pass-through only"
-                : finding.ops_valid && finding.proposed_ops.length > 0
-                ? "Apply this fix to the document (one undo step)"
-                : finding.ops_invalid_reason || "No mechanical fix — advisory only"
-            }
-          >
-            Apply fix
-          </button>
+          <span title={applyLocked ? applyTitle : undefined}>
+            <button
+              className={cardBtn}
+              onClick={() => {
+                if (applyLocked) return;
+                onApply();
+              }}
+              disabled={applyLocked}
+              title={applyLocked ? undefined : applyTitle}
+            >
+              Apply fix
+            </button>
+          </span>
           <button className={cardBtn} onClick={onDismiss} disabled={busy}>
             Dismiss
           </button>

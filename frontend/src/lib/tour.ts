@@ -305,9 +305,10 @@ export const TOUR: readonly TourChunk[] = [
         placement: "left",
         title: "Edit directly on the paper",
         body:
-          "Hover an editable block: ✏️ rewrites it (stamped confirmed), ✓ " +
-          "confirms it as-is, 🗑 deletes it. Imported DOCX safety rules can " +
-          "restrict these body actions. No chat round-trip — the " +
+          "Hover a block: ✏️ rewrites it, ✓ confirms its review status, and " +
+          "🗑 deletes it. On an imported DOCX the server enables each action " +
+          "separately; disabled controls explain why, while status can remain " +
+          "available on read-only text. No chat round-trip — the " +
           "model simply sees the result next turn. Try confirming this one.",
       },
       {
@@ -360,9 +361,11 @@ export const TOUR: readonly TourChunk[] = [
           "content from an office .docx into a blank session: every " +
           "block lands stamped imported and the interview pivots to " +
           "adapting it. The exact source package is retained, and only " +
-          "verified simple body-text edits are allowed through the " +
-          "source-preserving path. Bounded structural edits require a " +
-          "proven flat island with isolated direct Word list bindings. It's disabled now " +
+          "server-proven operations are enabled through the source-preserving " +
+          "path. Disabled controls show the exact reason, metadata/status can " +
+          "remain editable, and exact-original download stays available. " +
+          "Bounded structural edits require a proven flat island with isolated " +
+          "direct Word list bindings. It's disabled now " +
           "because this session has content.",
       },
     ],
@@ -413,7 +416,8 @@ export const TOUR: readonly TourChunk[] = [
           "A clean .docx with the assumptions and open-items schedules — " +
           "or, after import, a preserved DOCX that clones the master and " +
           "patches verified simple body text, with bounded add, delete, or " +
-          "reorder only in proven isolated Word-list body islands. Normalized " +
+          "reorder only in proven isolated Word-list body islands. The exact " +
+          "original remains a separate recovery download. Normalized " +
           "DOCX and the " +
           "extracted-provision redline remain explicit separate choices.",
       },

@@ -74,11 +74,15 @@ from ..spec_doc import (
 )
 from ..spec_doc.model import apply_edits
 from ..spec_doc.project import chat_transcript
-from ..spec_doc.source_mapping import SourceBodyMap
+from ..spec_doc.source_mapping import SourceBodyMap, semantic_body_projection
 from ..spec_doc.source_patch import (
+    SourceCapabilityReport,
     SourcePatchContext,
     SourcePatchError,
+    blocked_source_edit_capabilities,
+    source_capability_summary,
     source_patch_readiness,
+    validate_source_map_identity,
     validate_source_transition,
 )
 from ..compliance import AuditRunner
@@ -250,18 +254,13 @@ class SessionState:
     def apply_doc_edits(self, edits: Any) -> list[dict[str, Any]]:
         """The single guarded entry point for model and manual edit batches.
 
-        A source map constrains source-backed edits only while the imported
+        Retained source artifacts constrain body edits only while the imported
         baseline is still on the active history branch. Undoing before the
         import and starting a fresh draft is allowed;
         ``DocumentStore.commit_turn`` then removes the abandoned baseline in
         its established way.
         """
-        baseline_index = self.doc.baseline_index
-        if (
-            self.source_docx_map is not None
-            and baseline_index is not None
-            and self.doc.index >= baseline_index
-        ):
+        if self._active_source_scope():
             # P1b safety is a property of the complete proposed document, not
             # of an operation name in isolation. Build the batch on a deep
             # copy first, then prove that final state against the immutable
@@ -269,23 +268,189 @@ class SessionState:
             # untouched until both the ordinary edit validator and the DOCX
             # preservation gate have accepted the whole transaction.
             candidate, _candidate_ops = apply_edits(self.doc.doc, edits)
-            baseline = SpecSection.from_dict(self.doc.versions[baseline_index])
-            try:
-                context = self.ensure_source_patch_context(baseline=baseline)
-                validate_source_transition(
-                    source_bytes=self.source_docx_bytes,
-                    source_map=self.source_docx_map,
-                    baseline=baseline,
-                    current=candidate,
-                    context=context,
-                )
-            except SourcePatchError as exc:
-                detail = exc.detail.rstrip(".")
-                raise SpecEditError(
-                    f"Source-backed edit rejected for {exc.uid!r} "
-                    f"[{exc.blocker}]: {detail}. Nothing was applied."
-                ) from exc
+            # Metadata is workspace state, not source-body XML. Decide that
+            # exemption from the complete before/after semantic projections,
+            # never from action names, so a mixed batch still enters the full
+            # source gate whenever its final body would differ.
+            body_changed = semantic_body_projection(
+                candidate
+            ) != semantic_body_projection(self.doc.doc)
+            if body_changed:
+                baseline_index = self.doc.baseline_index
+                try:
+                    if (
+                        isinstance(baseline_index, bool)
+                        or not isinstance(baseline_index, int)
+                        or not 0 <= baseline_index < len(self.doc.versions)
+                    ):
+                        raise SourcePatchError(
+                            "source",
+                            "baseline_unavailable",
+                            "the imported semantic baseline is unavailable",
+                        )
+                    try:
+                        baseline = SpecSection.from_dict(
+                            self.doc.versions[baseline_index]
+                        )
+                    except (TypeError, ValueError) as baseline_exc:
+                        raise SourcePatchError(
+                            "source",
+                            "baseline_unavailable",
+                            "the imported semantic baseline is unavailable",
+                        ) from baseline_exc
+                    if (
+                        not isinstance(self.source_docx_bytes, bytes)
+                        or not isinstance(self.source_docx_map, SourceBodyMap)
+                    ):
+                        raise SourcePatchError(
+                            "source",
+                            "source_unavailable",
+                            "the exact imported DOCX and source map are unavailable",
+                        )
+                    context = self.ensure_source_patch_context(baseline=baseline)
+                    if context is None:
+                        raise SourcePatchError(
+                            "source",
+                            "source_unavailable",
+                            "the exact imported DOCX and source map are unavailable",
+                        )
+                    validate_source_transition(
+                        source_bytes=self.source_docx_bytes,
+                        source_map=self.source_docx_map,
+                        baseline=baseline,
+                        current=candidate,
+                        context=context,
+                    )
+                except SourcePatchError as exc:
+                    detail = exc.detail.rstrip(".")
+                    raise SpecEditError(
+                        f"Source-backed edit rejected for {exc.uid!r} "
+                        f"[{exc.blocker}]: {detail}. Nothing was applied."
+                    ) from exc
         return self.doc.apply_edits(edits)
+
+    def _active_source_scope(self) -> bool:
+        """Whether current body mutations require source preservation.
+
+        A native source with either required artifact present remains active
+        when its companion artifact is missing; that missing artifact must
+        fail closed. A legacy JSON project intentionally has neither artifact
+        and remains an ordinary semantic document. Undoing before a valid
+        imported baseline also leaves the retained source only in the redo
+        tail, where it does not constrain a fresh branch.
+        """
+        if self.source_docx_bytes is None and self.source_docx_map is None:
+            return False
+        baseline_index = self.doc.baseline_index
+        # Committing a new branch from before the import intentionally clears
+        # the baseline while retaining the original bytes for recovery. That
+        # abandoned source must not constrain subsequent fresh-branch edits.
+        if baseline_index is None:
+            return False
+        if (
+            not isinstance(baseline_index, bool)
+            and isinstance(baseline_index, int)
+            and 0 <= baseline_index < len(self.doc.versions)
+            and self.doc.index < baseline_index
+        ):
+            return False
+        return True
+
+    def source_edit_capabilities(self) -> SourceCapabilityReport | None:
+        """Return current per-operation source permissions, or ``None``.
+
+        ``None`` means the active branch is not source-backed: this is a fresh
+        or legacy source-less document, or the imported baseline currently
+        lives only in an undone redo tail. Once any retained source artifact
+        and its imported baseline are active, every missing or mismatched
+        companion artifact becomes an explicit all-body-operations denied
+        report instead of silently restoring ordinary editing.
+
+        The report is transient derived state. It is recomputed from the
+        current semantic document so undo, redo, model edits, manual edits,
+        and QC applications all receive current decisions, while the costly
+        immutable package index is reused through ``source_patch_context``.
+        """
+        if not self._active_source_scope():
+            return None
+
+        baseline_index = self.doc.baseline_index
+        if baseline_index is None:
+            return None
+        if (
+            isinstance(baseline_index, bool)
+            or not isinstance(baseline_index, int)
+            or not 0 <= baseline_index < len(self.doc.versions)
+        ):
+            return blocked_source_edit_capabilities(
+                self.doc.doc,
+                blocker="baseline_unavailable",
+                message="the imported semantic baseline is unavailable",
+            )
+        try:
+            baseline = SpecSection.from_dict(self.doc.versions[baseline_index])
+        except (TypeError, ValueError):
+            return blocked_source_edit_capabilities(
+                self.doc.doc,
+                blocker="baseline_unavailable",
+                message="the imported semantic baseline is unavailable",
+            )
+
+        if (
+            not isinstance(self.source_docx_bytes, bytes)
+            or not isinstance(self.source_docx_map, SourceBodyMap)
+        ):
+            return blocked_source_edit_capabilities(
+                self.doc.doc,
+                blocker="source_unavailable",
+                message=(
+                    "the exact imported DOCX and source map are unavailable"
+                ),
+            )
+
+        try:
+            context = self.ensure_source_patch_context(baseline=baseline)
+            if context is None:
+                return blocked_source_edit_capabilities(
+                    self.doc.doc,
+                    blocker="source_unavailable",
+                    message=(
+                        "the exact imported DOCX and source map are unavailable"
+                    ),
+                )
+            # The capability API consumes the source bytes retained inside the
+            # immutable context. Bind that context to the session's *current*
+            # source bytes first so stale cache state cannot grant permission.
+            validate_source_map_identity(
+                source_bytes=self.source_docx_bytes,
+                source_map=self.source_docx_map,
+                baseline=baseline,
+                context=context,
+            )
+            from ..spec_doc import source_patch as source_patch_module
+
+            return source_patch_module.source_edit_capabilities(
+                context=context,
+                source_map=self.source_docx_map,
+                baseline=baseline,
+                current=self.doc.doc,
+            )
+        except SourcePatchError as exc:
+            return blocked_source_edit_capabilities(
+                self.doc.doc,
+                blocker=exc.blocker,
+                message=exc.detail,
+            )
+        except Exception:  # noqa: BLE001 - capability analysis must fail closed
+            # Capability reporting is advisory and runs on ordinary response
+            # refresh paths. An unexpected probe/preflight failure must deny
+            # body actions without taking down document recovery or bypassing
+            # the real edit gate, which will still report its precise error
+            # if a forged request is submitted.
+            return blocked_source_edit_capabilities(
+                self.doc.doc,
+                blocker="output_validation_failed",
+            )
 
     def source_export_readiness(self) -> dict[str, object]:
         """Current source-patch capability for API/UI integration."""
@@ -422,60 +587,19 @@ def _profile_status_block(project_profile: dict[str, str]) -> str:
 
 
 def _source_editing_boundary_block(session: SessionState) -> str | None:
-    """Describe the imported-DOCX trust boundary to the model when active.
+    """Render compact, server-derived source permissions for the model.
 
-    This is deliberately a dynamic PROJECT CONTEXT block, never part of the
-    stable prompt: fresh sessions must retain their existing request bytes.
-    The active-branch check mirrors :meth:`SessionState.apply_doc_edits` so an
-    import that was undone and abandoned does not constrain a new draft.
+    This remains dynamic PROJECT CONTEXT rather than cached system-prompt
+    content. The summary is advisory guidance; ``apply_doc_edits`` still
+    validates every complete proposed final state through the source gate.
     """
-    source_map = session.source_docx_map
-    baseline_index = session.doc.baseline_index
-    if (
-        source_map is None
-        or baseline_index is None
-        or session.doc.index < baseline_index
-    ):
+    report = session.source_edit_capabilities()
+    if report is None:
         return None
-
-    lines = [
-        "IMPORTED DOCX EDITING BOUNDARY (hard constraint):",
-        "- The original DOCX package is immutable. Never claim or attempt to "
-        "edit, create, remove, or reformat its headers or footers.",
-        "- Allowed document-tool changes are limited to metadata/status "
-        "updates, text replacement in an existing simple mapped body "
-        "paragraph, and bounded add/delete/move operations only when the "
-        "preservation gate proves a flat body island has isolated direct "
-        "Word list bindings.",
-        "- A move can only change a paragraph's position among its existing "
-        "siblings. Never reparent content, structurally edit an unnumbered "
-        "or manually labeled island, or change section, part, or article "
-        "headings/numbers.",
-        "- A mapped paragraph can still be rejected when its source OOXML is "
-        "complex or unsafe. Treat a tool rejection as authoritative; do not "
-        "retry it as a different structural edit.",
-    ]
-    readiness = session.source_export_readiness()
-    runtime_blockers = tuple(
-        issue.get("blocker", "")
-        for issue in readiness.get("mutation_blockers", [])
-        if isinstance(issue, dict) and isinstance(issue.get("blocker"), str)
+    return (
+        "IMPORTED DOCX EDITING BOUNDARY (hard constraint):\n"
+        + source_capability_summary(report, session.doc.doc)
     )
-    mutation_blockers = tuple(
-        dict.fromkeys((*source_map.global_blockers, *runtime_blockers))
-    )
-    if mutation_blockers:
-        blockers = ", ".join(mutation_blockers)
-        lines.extend(
-            [
-                "- SOURCE EXPORT IS PASS-THROUGH-ONLY because the package "
-                f"has global blocker(s): {blockers}.",
-                "- The source DOCX may only be returned byte-for-byte "
-                "unchanged. Do not make or claim any source body-text change; "
-                "metadata/status updates remain semantic workspace data only.",
-            ]
-        )
-    return "\n".join(lines)
 
 
 def _turn_context_text(session: SessionState) -> str:

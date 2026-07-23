@@ -14,6 +14,7 @@ import type {
   ResearchSnapshot,
   SectionDiff,
   SectionDiffPayload,
+  SourceCapabilitiesState,
   SourcePreservationState,
   SpecDoc,
   StandardInfo,
@@ -24,6 +25,7 @@ import QCDrawer from "./QCDrawer";
 import ResearchDrawer from "./ResearchDrawer";
 import ReviewDrawer from "./ReviewDrawer";
 import SpecDocument from "./SpecDocument";
+import { sourceCapabilitiesExpected } from "../lib/sourceCapabilities";
 import Tip from "./Tip";
 import ConfirmDialog from "./ConfirmDialog";
 
@@ -43,6 +45,7 @@ interface Props {
   sourceAvailable: boolean;
   preservationReady: boolean;
   sourcePreservation: SourcePreservationState | null;
+  sourceCapabilities: SourceCapabilitiesState | null;
   busy: boolean;
   onUndo: () => void;
   onRedo: () => void;
@@ -122,6 +125,7 @@ export default function ArtifactPanel({
   sourceAvailable,
   preservationReady,
   sourcePreservation,
+  sourceCapabilities,
   busy,
   onUndo,
   onRedo,
@@ -170,7 +174,18 @@ export default function ArtifactPanel({
   const importedMode = importReport !== null || baselineIndex !== null;
   const passThroughOnly =
     sourcePreservation?.status === "pass_through_only";
-  const bodyEditingDisabled = passThroughOnly;
+  // Retained source bytes may live only in an undone redo tail. Match the
+  // backend's active-branch boundary so that pre-import history remains an
+  // ordinary source-less document while an active imported branch fails
+  // closed if its transient report is unavailable.
+  const activeSourceExpected = sourceCapabilitiesExpected(
+    sourceCapabilities,
+    sourceAvailable,
+    baselineIndex,
+    version.index,
+  );
+  const bodyEditingDisabled =
+    activeSourceExpected && sourceCapabilities?.status !== "ready";
 
   // Full-draft affordance (WI1): offered while the document is empty-or-sparse
   // (fewer than 3 articles) — past that, a wholesale draft is the wrong tool.
@@ -182,8 +197,12 @@ export default function ArtifactPanel({
   // Kept visible (never hidden) so the feature is discoverable, but a wholesale
   // draft is the wrong tool once the section has real content.
   const draftDisabled = busy || !isSparse || bodyEditingDisabled;
+  const draftSourceReason =
+    sourceCapabilities?.elements.sec?.replace_text?.message;
   const draftTip = bodyEditingDisabled
-    ? "Body drafting is disabled because this imported DOCX is pass-through only."
+    ? draftSourceReason
+      ? `Body drafting is disabled: ${draftSourceReason}`
+      : "Body drafting is disabled because imported-source permissions are unavailable."
     : !isSparse
       ? `The section already has ${articleCount} article${
         articleCount === 1 ? "" : "s"
@@ -709,7 +728,8 @@ export default function ArtifactPanel({
             changedIds={changedIds}
             sourceLookup={sourceLookup}
             busy={busy}
-            bodyEditingDisabled={bodyEditingDisabled}
+            sourceExpected={activeSourceExpected}
+            sourceCapabilities={sourceCapabilities}
             onEdit={onEditDoc}
           />
         ) : (
@@ -721,7 +741,8 @@ export default function ArtifactPanel({
         doc={doc}
         sourceLookup={sourceLookup}
         busy={busy}
-        bodyEditingDisabled={bodyEditingDisabled}
+        sourceExpected={activeSourceExpected}
+        sourceCapabilities={sourceCapabilities}
         onEditDoc={onEditDoc}
         onAskModel={onAskModel}
         onJump={scrollToElement}
@@ -744,7 +765,8 @@ export default function ArtifactPanel({
         readiness={readiness}
         doc={doc}
         busy={busy}
-        applyDisabled={bodyEditingDisabled}
+        sourceExpected={activeSourceExpected}
+        sourceCapabilities={sourceCapabilities}
         usage={usage}
         onStart={onStartQc}
         onStop={onStopQc}

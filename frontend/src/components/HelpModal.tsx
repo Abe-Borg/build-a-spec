@@ -154,7 +154,10 @@ function HowToUse() {
                 <Tag>.docx</Tag> to adapt — every block lands stamped{" "}
                 <Tag>imported</Tag> until you review it — or draft the section
                 from scratch. Build-a-Spec keeps an immutable source copy and
-                only permits source-preserving edits it can prove are safe.
+                enables each imported-body action only when the server can
+                prove that exact operation is safe. A disabled control shows
+                the reason; review status and project metadata can remain
+                editable even when body text is read-only.
               </>
             ),
           },
@@ -182,7 +185,7 @@ function HowToUse() {
           },
           {
             t: "Export",
-            d: "Imported drafts can clone the source DOCX and patch verified simple body text. Bounded add, delete, and reorder work only in proven flat body islands with isolated direct Word list bindings; headers, footers, numbering definitions, styles, and unrelated package parts remain outside the edit surface. Normalized DOCX and extracted-provision redline exports remain separate, explicit choices.",
+            d: "Imported drafts can clone the source DOCX and patch verified simple body text. Bounded add, delete, and reorder work only in proven flat body islands with isolated direct Word list bindings; controls are enabled per operation and disabled controls show the server's exact reason. The retained exact original remains downloadable, while normalized DOCX and extracted-provision redline exports remain separate, explicit choices.",
           },
         ]}
       />
@@ -219,7 +222,8 @@ function Workflows() {
           "Import the master .docx after reviewing the preservation boundary — every extracted block lands imported.",
           "Save a native .baspec project; it carries the exact source DOCX with the semantic document and conversation.",
           "Tell Claude the project; it walks the extracted content article by article, adapting each block.",
-          "Source-preserving mode accepts verified simple body-paragraph text replacements. It permits bounded add, delete, and reorder only in proven flat body islands with isolated direct Word list bindings, and refuses every other structural or complex-format edit.",
+          "Source-preserving controls are enabled per block and operation. Verified simple text edits and bounded numbered-island structure can remain available while headings, tables, fields, hyperlinks, content controls, and complex runs stay read-only; hover a disabled action for the server's reason.",
+          "Review status, research provenance, standards, and project metadata remain editable when the imported Word body is pass-through-only.",
           "Send to Final QC.",
           "Choose Export preserved DOCX to clone-and-patch the master, or intentionally choose normalized DOCX / extracted-provision redline for the semantic view.",
         ]}
@@ -237,7 +241,7 @@ function Workflows() {
         tagline="You don’t have to draft the whole section."
         steps={[
           "Ask about a single provision, a code citation, or an edition — Claude answers in chat and can edit just that block.",
-          "Use the inline ✏️ / ✓ / 🗑 affordances on eligible blocks to edit, confirm, or delete without going through chat. Imported DOCX sources may restrict individual blocks or disable body edits entirely when only exact pass-through is safe.",
+          "Use the inline ✏️ / ✓ / 🗑 affordances on eligible blocks to edit, confirm, or delete without going through chat. For an imported DOCX, each action follows the current server capability; disabled actions show why, while ✓ status confirmation can remain available on read-only text.",
         ]}
       />
     </div>
@@ -286,7 +290,7 @@ function HowItWorks() {
           },
           {
             t: "Imported DOCX files have a narrow boundary",
-            d: "Build-a-Spec retains an immutable source package and maps supported main-body content into a semantic tree. Source-preserving export clones the package, replaces text only in unambiguous simple body paragraphs, and permits bounded structural edits only in proven flat body islands with isolated direct Word list bindings. Unsafe edits are refused. Headers, footers, numbering definitions, styles, relationships, and unrelated package parts are never regenerated in this mode.",
+            d: "Build-a-Spec retains an immutable source package and maps supported main-body content into a semantic tree. The server reports permissions per element and operation: safe simple text and proven numbered-island actions stay enabled, while headings, tables, fields, hyperlinks, content controls, and complex paragraphs stay visibly read-only with the exact reason. Status and project metadata remain independent. The final-state validator still checks every submitted edit, and the exact original remains available even when all Word-body mutations are disabled.",
           },
           {
             t: "Numbering depends on export mode",

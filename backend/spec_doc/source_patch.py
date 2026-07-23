@@ -26,7 +26,7 @@ from typing import Mapping
 
 from lxml import etree
 
-from .model import SpecSection
+from .model import Paragraph, STATUSES, SpecEditError, SpecSection, apply_edits
 from .raw_zip import (
     RawZipArchive,
     RawZipError,
@@ -300,6 +300,113 @@ class SourcePatchReadiness:
             "mutation_blockers": [
                 blocker.to_dict() for blocker in self.mutation_blockers
             ],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCapabilityPlacement:
+    """One unambiguous insertion island and its exact sibling positions."""
+
+    island_key: str
+    allowed_positions: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "allowed_positions", tuple(self.allowed_positions))
+
+    def to_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "island_key": self.island_key,
+            "allowed_positions": list(self.allowed_positions),
+        }
+        if self.allowed_positions:
+            minimum = min(self.allowed_positions)
+            maximum = max(self.allowed_positions)
+            if self.allowed_positions == tuple(range(minimum, maximum + 1)):
+                result["minimum_position"] = minimum
+                result["maximum_position"] = maximum
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class SourceOperationCapability:
+    """Server-derived permission for one semantic operation on one element."""
+
+    allowed: bool
+    blocker: str | None = None
+    message: str | None = None
+    island_key: str | None = None
+    current_position: int | None = None
+    minimum_position: int | None = None
+    maximum_position: int | None = None
+    allowed_positions: tuple[int, ...] = ()
+    placements: tuple[SourceCapabilityPlacement, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "allowed_positions", tuple(self.allowed_positions))
+        object.__setattr__(self, "placements", tuple(self.placements))
+
+    def to_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {"allowed": self.allowed}
+        if self.blocker is not None:
+            result["blocker"] = self.blocker
+        if self.message is not None:
+            result["message"] = self.message
+        if self.island_key is not None:
+            result["island_key"] = self.island_key
+        if self.current_position is not None:
+            result["current_position"] = self.current_position
+        if self.minimum_position is not None:
+            result["minimum_position"] = self.minimum_position
+        if self.maximum_position is not None:
+            result["maximum_position"] = self.maximum_position
+        if self.allowed_positions:
+            result["allowed_positions"] = list(self.allowed_positions)
+        if self.placements:
+            result["placements"] = [item.to_dict() for item in self.placements]
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class SourceElementCapabilities:
+    """Deeply immutable operation map for one current semantic element."""
+
+    operations: Mapping[str, SourceOperationCapability]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "operations",
+            MappingProxyType(dict(self.operations)),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            operation: self.operations[operation].to_dict()
+            for operation in sorted(self.operations)
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCapabilityReport:
+    """Immutable per-element source-preservation capability contract."""
+
+    status: str
+    elements: Mapping[str, SourceElementCapabilities]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "elements",
+            MappingProxyType(dict(self.elements)),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "elements": {
+                uid: self.elements[uid].to_dict()
+                for uid in sorted(self.elements)
+            },
         }
 
 
@@ -1998,6 +2105,634 @@ def source_patch_readiness(
         mutation_blockers=validated.context.runtime_mutation_issues,
     )
 
+def _allowed_capability(
+    *,
+    island_key: str | None = None,
+    current_position: int | None = None,
+    allowed_positions: tuple[int, ...] = (),
+    placements: tuple[SourceCapabilityPlacement, ...] = (),
+) -> SourceOperationCapability:
+    minimum: int | None = None
+    maximum: int | None = None
+    if allowed_positions:
+        candidate_minimum = min(allowed_positions)
+        candidate_maximum = max(allowed_positions)
+        if allowed_positions == tuple(
+            range(candidate_minimum, candidate_maximum + 1)
+        ):
+            minimum = candidate_minimum
+            maximum = candidate_maximum
+    return SourceOperationCapability(
+        True,
+        island_key=island_key,
+        current_position=current_position,
+        minimum_position=minimum,
+        maximum_position=maximum,
+        allowed_positions=allowed_positions,
+        placements=placements,
+    )
+
+
+def _denied_capability(
+    blocker: str,
+    message: str | None = None,
+) -> SourceOperationCapability:
+    return SourceOperationCapability(
+        False,
+        blocker=blocker,
+        message=message or source_blocker_message(blocker),
+    )
+
+
+def _capability_from_error(error: SourcePatchError) -> SourceOperationCapability:
+    return _denied_capability(error.blocker, error.detail)
+
+
+def _semantic_elements(section: SpecSection) -> tuple[tuple[str, str], ...]:
+    """Return every current semantic element in stable document order."""
+    elements: list[tuple[str, str]] = [("sec", "section")]
+    for part in section.parts:
+        elements.append((part.uid, "part"))
+        for article in part.articles:
+            elements.append((article.uid, "article"))
+
+            def walk(paragraphs) -> None:
+                for paragraph in paragraphs:
+                    elements.append((paragraph.uid, "paragraph"))
+                    walk(paragraph.children)
+
+            walk(article.paragraphs)
+    return tuple(elements)
+
+
+def _blocked_element_operations(
+    kind: str,
+    *,
+    blocker: str,
+    message: str,
+) -> SourceElementCapabilities:
+    denied = _denied_capability(blocker, message)
+    if kind == "section":
+        operations = {
+            "replace_text": denied,
+            "set_project_profile": _allowed_capability(),
+            "set_standard_edition": _allowed_capability(),
+            "set_standard_suppressed": _allowed_capability(),
+        }
+    elif kind == "part":
+        operations = {"replace_text": denied}
+    elif kind == "article":
+        operations = {
+            "replace_text": denied,
+            "add_paragraph": denied,
+            "delete": denied,
+        }
+    else:
+        operations = {
+            "replace_text": denied,
+            "delete": denied,
+            "move": denied,
+            "add_paragraph": denied,
+            "set_status": _allowed_capability(),
+            "set_provenance": _allowed_capability(),
+        }
+    return SourceElementCapabilities(operations)
+
+
+def blocked_source_edit_capabilities(
+    current: SpecSection,
+    *,
+    blocker: str,
+    message: str | None = None,
+    status: str = "blocked",
+) -> SourceCapabilityReport:
+    """Build a fail-closed report when required source analysis is unavailable.
+
+    Body operations carry the exact server issue. Workspace-only metadata stays
+    available because it does not alter the retained Word body.
+    """
+    detail = message or source_blocker_message(blocker)
+    return SourceCapabilityReport(
+        status,
+        {
+            uid: _blocked_element_operations(
+                kind,
+                blocker=blocker,
+                message=detail,
+            )
+            for uid, kind in _semantic_elements(current)
+        },
+    )
+
+
+def _run_capability_probe(
+    *,
+    context: SourcePatchContext,
+    source_map: SourceBodyMap,
+    baseline: SpecSection,
+    candidate: SpecSection,
+) -> tuple[_ValidatedPatch | None, SourcePatchError | None]:
+    try:
+        validated = _validate_source_and_plan(
+            source_bytes=context.source_bytes,
+            source_map=source_map,
+            baseline=baseline,
+            current=candidate,
+            context=context,
+        )
+    except SourcePatchError as exc:
+        return None, exc
+    return validated, None
+
+
+def _safe_probe_text(current: str) -> str:
+    probe = "Source capability probe"
+    return "Source capability probe alternate" if current == probe else probe
+
+
+def _heading_probe_candidate(current: SpecSection, uid: str) -> SpecSection:
+    candidate = copy.deepcopy(current)
+    if uid == "sec":
+        candidate.title = _safe_probe_text(candidate.title)
+        return candidate
+    for part in candidate.parts:
+        if part.uid == uid:
+            part.title = _safe_probe_text(part.title)
+            return candidate
+        for article in part.articles:
+            if article.uid == uid:
+                article.title = _safe_probe_text(article.title)
+                return candidate
+    raise AssertionError(f"capability heading {uid!r} is not in the document")
+
+
+def _probe_heading_capability(
+    *,
+    uid: str,
+    context: SourcePatchContext,
+    source_map: SourceBodyMap,
+    baseline: SpecSection,
+    current: SpecSection,
+) -> SourceOperationCapability:
+    _validated, error = _run_capability_probe(
+        context=context,
+        source_map=source_map,
+        baseline=baseline,
+        candidate=_heading_probe_candidate(current, uid),
+    )
+    return _capability_from_error(error) if error else _allowed_capability()
+
+
+def _probe_edit_capability(
+    *,
+    operation: dict[str, object],
+    context: SourcePatchContext,
+    source_map: SourceBodyMap,
+    baseline: SpecSection,
+    current: SpecSection,
+) -> SourceOperationCapability:
+    candidate, _applied = apply_edits(current, [operation])
+    _validated, error = _run_capability_probe(
+        context=context,
+        source_map=source_map,
+        baseline=baseline,
+        candidate=candidate,
+    )
+    return _capability_from_error(error) if error else _allowed_capability()
+
+
+def _island_key_for_uid(
+    validated: _ValidatedPatch,
+    uid: str,
+) -> str | None:
+    for patch in validated.plan.island_patches:
+        original_uids = {member.binding.uid for member in patch.island.members}
+        desired_uids = {item.uid for item in patch.desired}
+        if uid in original_uids or uid in desired_uids:
+            return patch.island.key
+    return None
+
+
+def _probe_add_capability(
+    *,
+    target_uid: str,
+    position_count: int,
+    context: SourcePatchContext,
+    source_map: SourceBodyMap,
+    baseline: SpecSection,
+    current: SpecSection,
+) -> SourceOperationCapability:
+    positions_by_island: dict[str, list[int]] = {}
+    first_error: SourcePatchError | None = None
+    for position in range(position_count + 1):
+        try:
+            candidate, applied = apply_edits(
+                current,
+                [
+                    {
+                        "action": "add_paragraph",
+                        "target_id": target_uid,
+                        "position": position,
+                        "text": "Source capability probe",
+                        "status": "assumed",
+                    }
+                ],
+            )
+        except SpecEditError:
+            if first_error is None:
+                first_error = SourcePatchError(
+                    target_uid,
+                    "nested_structural_change",
+                )
+            continue
+        new_uid = str(applied[0]["id"])
+        validated, error = _run_capability_probe(
+            context=context,
+            source_map=source_map,
+            baseline=baseline,
+            candidate=candidate,
+        )
+        if error is not None:
+            if first_error is None:
+                first_error = error
+            continue
+        assert validated is not None
+        island_key = _island_key_for_uid(validated, new_uid)
+        if island_key is None:  # pragma: no cover - successful-plan invariant
+            raise AssertionError("a safe addition has no structural island")
+        positions_by_island.setdefault(island_key, []).append(position)
+
+    if not positions_by_island:
+        if first_error is None:  # pragma: no cover - every probe has an outcome
+            first_error = SourcePatchError(target_uid, "unsafe_structural_island")
+        return _capability_from_error(first_error)
+
+    placements = tuple(
+        SourceCapabilityPlacement(key, tuple(positions))
+        for key, positions in sorted(
+            positions_by_island.items(),
+            key=lambda item: (item[1][0], item[0]),
+        )
+    )
+    if len(placements) == 1:
+        placement = placements[0]
+        return _allowed_capability(
+            island_key=placement.island_key,
+            allowed_positions=placement.allowed_positions,
+            placements=placements,
+        )
+    return _allowed_capability(placements=placements)
+
+
+def _probe_move_capability(
+    *,
+    uid: str,
+    current_position: int,
+    sibling_count: int,
+    current_island_key: str | None,
+    fallback_blocker: str,
+    fallback_message: str | None,
+    context: SourcePatchContext,
+    source_map: SourceBodyMap,
+    baseline: SpecSection,
+    current: SpecSection,
+) -> SourceOperationCapability:
+    allowed_positions: list[int] = []
+    island_keys: set[str] = set()
+    first_error: SourcePatchError | None = None
+    for position in range(sibling_count):
+        if position == current_position:
+            continue
+        candidate, _applied = apply_edits(
+            current,
+            [{"action": "move", "target_id": uid, "position": position}],
+        )
+        validated, error = _run_capability_probe(
+            context=context,
+            source_map=source_map,
+            baseline=baseline,
+            candidate=candidate,
+        )
+        if error is not None:
+            if first_error is None:
+                first_error = error
+            continue
+        assert validated is not None
+        allowed_positions.append(position)
+        island_key = _island_key_for_uid(validated, uid) or current_island_key
+        if island_key is not None:
+            island_keys.add(island_key)
+
+    if not allowed_positions:
+        if first_error is not None:
+            return _capability_from_error(first_error)
+        return _denied_capability(fallback_blocker, fallback_message)
+    if len(island_keys) > 1:  # pragma: no cover - planner forbids this
+        raise AssertionError("one move capability crossed structural islands")
+    island_key = next(iter(island_keys), current_island_key)
+    return _allowed_capability(
+        island_key=island_key,
+        current_position=current_position,
+        allowed_positions=tuple(allowed_positions),
+    )
+
+
+def _paragraph_nodes(section: SpecSection) -> dict[str, Paragraph]:
+    nodes: dict[str, Paragraph] = {}
+    for part in section.parts:
+        for article in part.articles:
+            stack = list(reversed(article.paragraphs))
+            while stack:
+                paragraph = stack.pop()
+                nodes[paragraph.uid] = paragraph
+                stack.extend(reversed(paragraph.children))
+    return nodes
+
+
+def source_edit_capabilities(
+    *,
+    context: SourcePatchContext,
+    source_map: SourceBodyMap,
+    baseline: SpecSection,
+    current: SpecSection,
+) -> SourceCapabilityReport:
+    """Derive per-element permissions by probing the authoritative final gate.
+
+    Every probe is transactionally built on a deep copy by ``apply_edits`` (or
+    an equivalent heading-only copy), and every body candidate completes the
+    same lexical XML and raw-ZIP preflight as a real request. The supplied
+    immutable context is identity-bound once and reused for every probe.
+    """
+    bound_context = _context_for_inputs(
+        source_bytes=context.source_bytes,
+        source_map=source_map,
+        baseline=baseline,
+        context=context,
+    )
+    current_validated = _validate_source_and_plan(
+        source_bytes=bound_context.source_bytes,
+        source_map=source_map,
+        baseline=baseline,
+        current=current,
+        context=bound_context,
+    )
+    status = (
+        "pass_through_only"
+        if bound_context.global_blockers
+        or bound_context.runtime_mutation_issues
+        else "ready"
+    )
+
+    baseline_paragraphs, baseline_children, _base_headings = (
+        _projection_paragraphs(baseline)
+    )
+    current_paragraphs, current_children, _current_headings = (
+        _projection_paragraphs(current)
+    )
+    current_nodes = _paragraph_nodes(current)
+    _by_key, baseline_island_by_uid, _by_article, _diagnostics = (
+        _build_numbered_islands(
+            context=bound_context,
+            source_map=source_map,
+            baseline=baseline_paragraphs,
+            base_children=baseline_children,
+        )
+    )
+    current_island_by_uid = {
+        uid: island.key for uid, island in baseline_island_by_uid.items()
+    }
+    for patch in current_validated.plan.island_patches:
+        for item in patch.desired:
+            current_island_by_uid[item.uid] = patch.island.key
+
+    mutation_blocker: str | None = None
+    mutation_message: str | None = None
+    if bound_context.global_blockers:
+        mutation_blocker = bound_context.global_blockers[0]
+        mutation_message = source_blocker_message(mutation_blocker)
+    elif bound_context.runtime_mutation_issues:
+        runtime_issue = bound_context.runtime_mutation_issues[0]
+        mutation_blocker = runtime_issue.blocker
+        mutation_message = runtime_issue.message
+
+    elements: dict[str, SourceElementCapabilities] = {}
+    elements["sec"] = SourceElementCapabilities(
+        {
+            "replace_text": _probe_heading_capability(
+                uid="sec",
+                context=bound_context,
+                source_map=source_map,
+                baseline=baseline,
+                current=current,
+            ),
+            "set_project_profile": _allowed_capability(),
+            "set_standard_edition": _allowed_capability(),
+            "set_standard_suppressed": _allowed_capability(),
+        }
+    )
+
+    for part in current.parts:
+        elements[part.uid] = SourceElementCapabilities(
+            {
+                "replace_text": _probe_heading_capability(
+                    uid=part.uid,
+                    context=bound_context,
+                    source_map=source_map,
+                    baseline=baseline,
+                    current=current,
+                )
+            }
+        )
+        for article in part.articles:
+            elements[article.uid] = SourceElementCapabilities(
+                {
+                    "replace_text": _probe_heading_capability(
+                        uid=article.uid,
+                        context=bound_context,
+                        source_map=source_map,
+                        baseline=baseline,
+                        current=current,
+                    ),
+                    "add_paragraph": _probe_add_capability(
+                        target_uid=article.uid,
+                        position_count=len(article.paragraphs),
+                        context=bound_context,
+                        source_map=source_map,
+                        baseline=baseline,
+                        current=current,
+                    ),
+                    "delete": _probe_edit_capability(
+                        operation={"action": "delete", "target_id": article.uid},
+                        context=bound_context,
+                        source_map=source_map,
+                        baseline=baseline,
+                        current=current,
+                    ),
+                }
+            )
+
+    for uid, paragraph in current_paragraphs.items():
+        siblings = current_children.get(paragraph.parent_uid, ())
+        current_position = siblings.index(uid)
+        if mutation_blocker is not None:
+            fallback_blocker = mutation_blocker
+            fallback_message = mutation_message
+        elif uid in baseline_paragraphs:
+            fallback_blocker = _structural_member_blocker(
+                uid,
+                baseline_paragraphs,
+                source_map,
+            )
+            fallback_message = None
+        else:
+            fallback_blocker = "unsafe_structural_island"
+            fallback_message = None
+
+        paragraph_node = current_nodes[uid]
+        next_status = next(
+            status_name
+            for status_name in STATUSES
+            if status_name != paragraph_node.status
+        )
+        provenance_probe = (
+            "source-capability-probe-alternate"
+            if paragraph_node.source_item_id == "source-capability-probe"
+            else "source-capability-probe"
+        )
+        delete_capability = _probe_edit_capability(
+            operation={"action": "delete", "target_id": uid},
+            context=bound_context,
+            source_map=source_map,
+            baseline=baseline,
+            current=current,
+        )
+        if delete_capability.allowed:
+            delete_capability = _allowed_capability(
+                island_key=current_island_by_uid.get(uid)
+            )
+        elements[uid] = SourceElementCapabilities(
+            {
+                "replace_text": _probe_edit_capability(
+                    operation={
+                        "action": "replace",
+                        "target_id": uid,
+                        "text": _safe_probe_text(paragraph.text),
+                    },
+                    context=bound_context,
+                    source_map=source_map,
+                    baseline=baseline,
+                    current=current,
+                ),
+                "delete": delete_capability,
+                "move": _probe_move_capability(
+                    uid=uid,
+                    current_position=current_position,
+                    sibling_count=len(siblings),
+                    current_island_key=current_island_by_uid.get(uid),
+                    fallback_blocker=fallback_blocker,
+                    fallback_message=fallback_message,
+                    context=bound_context,
+                    source_map=source_map,
+                    baseline=baseline,
+                    current=current,
+                ),
+                "add_paragraph": _probe_add_capability(
+                    target_uid=uid,
+                    position_count=len(current_children.get(uid, ())),
+                    context=bound_context,
+                    source_map=source_map,
+                    baseline=baseline,
+                    current=current,
+                ),
+                "set_status": _probe_edit_capability(
+                    operation={
+                        "action": "set_status",
+                        "target_id": uid,
+                        "status": next_status,
+                    },
+                    context=bound_context,
+                    source_map=source_map,
+                    baseline=baseline,
+                    current=current,
+                ),
+                "set_provenance": _probe_edit_capability(
+                    operation={
+                        "action": "replace",
+                        "target_id": uid,
+                        "source_item_id": provenance_probe,
+                    },
+                    context=bound_context,
+                    source_map=source_map,
+                    baseline=baseline,
+                    current=current,
+                ),
+            }
+        )
+
+    return SourceCapabilityReport(status, elements)
+
+
+def source_capability_summary(
+    report: SourceCapabilityReport,
+    current: SpecSection,
+) -> str:
+    """Render compact model/QC guidance without OOXML or package internals."""
+    paragraph_order = [
+        row[1]
+        for row in semantic_body_projection(current)
+        if row[0] == "paragraph"
+    ]
+    text_editable = [
+        uid
+        for uid in paragraph_order
+        if report.elements.get(uid)
+        and report.elements[uid].operations.get("replace_text")
+        and report.elements[uid].operations["replace_text"].allowed
+    ]
+    islands: dict[str, list[str]] = {}
+    for uid in paragraph_order:
+        element = report.elements.get(uid)
+        if element is None:
+            continue
+        for operation_name in ("move", "delete"):
+            operation = element.operations.get(operation_name)
+            if operation and operation.allowed and operation.island_key:
+                members = islands.setdefault(operation.island_key, [])
+                if uid not in members:
+                    members.append(uid)
+
+    lines = ["Source-preserving body permissions:"]
+    lines.append(
+        "- Text-editable IDs: "
+        + (", ".join(text_editable) if text_editable else "none")
+    )
+    if islands:
+        for key, members in islands.items():
+            lines.append(f"- Structural island {key}: {', '.join(members)}")
+    else:
+        lines.append("- Structural islands: none")
+    for uid, element in report.elements.items():
+        add = element.operations.get("add_paragraph")
+        if add is None or not add.allowed:
+            continue
+        for placement in add.placements:
+            positions = ", ".join(str(item) for item in placement.allowed_positions)
+            lines.append(
+                f"- Add positions for {uid} in island {placement.island_key}: "
+                f"{positions}"
+            )
+    if report.status == "pass_through_only":
+        lines.append("- Imported body mutation is pass-through-only.")
+    lines.extend(
+        [
+            "- All other imported body IDs are read-only.",
+            "- Status, research provenance, and project metadata may still be changed.",
+            "- Every proposed final state is validated server-side.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _serialize_tree(tree, original_xml: bytes) -> bytes:
     encoding = tree.docinfo.encoding or "UTF-8"
     has_declaration = original_xml.lstrip().startswith(b"<?xml")
@@ -2968,14 +3703,21 @@ def build_source_preserving_docx(
 
 __all__ = [
     "SourceBodyInventoryItem",
+    "SourceCapabilityPlacement",
+    "SourceCapabilityReport",
+    "SourceElementCapabilities",
+    "SourceOperationCapability",
     "SourcePackageMemberInventory",
     "SourceParagraphTemplate",
     "SourcePatchContext",
     "SourcePatchError",
     "SourcePatchIssue",
     "SourcePatchReadiness",
+    "blocked_source_edit_capabilities",
     "build_source_patch_context",
     "build_source_preserving_docx",
+    "source_capability_summary",
+    "source_edit_capabilities",
     "source_patch_readiness",
     "validate_source_transition",
     "validate_source_map_identity",

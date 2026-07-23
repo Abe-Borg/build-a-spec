@@ -12,8 +12,24 @@
  * `onEditDoc`); "ask the model" goes through the normal chat channel
  * (`onAskModel`). Mirrors the busy lockout of the paper's inline editing.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { EditOp, SpecDoc } from "../types";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+} from "react";
+import type {
+  EditOp,
+  SourceCapabilitiesState,
+  SourceOperationCapability,
+  SpecDoc,
+} from "../types";
+import {
+  sourceCapabilityTitle,
+  sourceEditOpDecision,
+} from "../lib/sourceCapabilities";
 import {
   buildQueue,
   reviewCounts,
@@ -25,7 +41,8 @@ interface Props {
   doc: SpecDoc | null;
   sourceLookup: ReadonlyMap<string, string>;
   busy: boolean;
-  bodyEditingDisabled: boolean;
+  sourceExpected: boolean;
+  sourceCapabilities: SourceCapabilitiesState | null;
   // App's handler is async; the drawer awaits it for an in-flight lockout.
   onEditDoc: (ops: EditOp[]) => void | Promise<unknown>;
   onAskModel: (text: string) => void;
@@ -35,6 +52,36 @@ interface Props {
 }
 
 const HOLD_MS = 800;
+
+const BUSY_ACTION_MESSAGE = "Wait for the current action to finish.";
+
+/** Keep denial titles hoverable even though the native button is disabled. */
+function ActionButton({
+  disabled,
+  title,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <span className="inline-flex" title={disabled ? title : undefined}>
+      <button
+        {...props}
+        disabled={disabled}
+        title={disabled ? undefined : title}
+      />
+    </span>
+  );
+}
+
+function capabilityReason(
+  capability: SourceOperationCapability | null,
+  locked: boolean,
+  allowedTitle: string,
+): string {
+  if (capability && !capability.allowed) {
+    return sourceCapabilityTitle(capability, allowedTitle);
+  }
+  return locked ? BUSY_ACTION_MESSAGE : allowedTitle;
+}
 
 const badgeStyle: Record<string, string> = {
   assumed: "border-warn/50 bg-warn/15 text-warn",
@@ -51,7 +98,8 @@ export default function ReviewDrawer({
   doc,
   sourceLookup,
   busy,
-  bodyEditingDisabled,
+  sourceExpected,
+  sourceCapabilities,
   onEditDoc,
   onAskModel,
   onJump,
@@ -90,7 +138,37 @@ export default function ReviewDrawer({
   // Locked out from mutating while a model turn streams OR a manual edit is
   // still resolving. Navigation (skip/back) stays live.
   const locked = busy || pending;
-  const bodyMutationLocked = locked || bodyEditingDisabled;
+  const statusCapability = current
+    ? sourceEditOpDecision(sourceCapabilities, sourceExpected, {
+        action: "set_status",
+        target_id: current.elementId,
+        status: "confirmed",
+      })
+    : null;
+  const editCapability = current
+    ? sourceEditOpDecision(sourceCapabilities, sourceExpected, {
+        action: "replace",
+        target_id: current.elementId,
+        text: current.text,
+        status: "confirmed",
+        source_item_id: current.sourceItemId,
+      })
+    : null;
+  const deleteCapability = current
+    ? sourceEditOpDecision(sourceCapabilities, sourceExpected, {
+        action: "delete",
+        target_id: current.elementId,
+      })
+    : null;
+  const saveCapability = editTarget
+    ? sourceEditOpDecision(sourceCapabilities, sourceExpected, {
+        action: "replace",
+        target_id: editTarget.elementId,
+        text: draft,
+        status: "confirmed",
+        source_item_id: editTarget.sourceItemId,
+      })
+    : null;
 
   const focusWalker = useCallback(() => {
     requestAnimationFrame(() => walkerRef.current?.focus());
@@ -150,53 +228,92 @@ export default function ReviewDrawer({
 
   const confirm = useCallback(() => {
     if (locked || !current) return;
-    runEdit([
-      { action: "set_status", target_id: current.elementId, status: "confirmed" },
-    ]);
+    const op = {
+      action: "set_status" as const,
+      target_id: current.elementId,
+      status: "confirmed" as const,
+    };
+    if (!sourceEditOpDecision(sourceCapabilities, sourceExpected, op).allowed) {
+      return;
+    }
+    runEdit([op]);
     setTally((t) => ({ ...t, confirmed: t.confirmed + 1 }));
     setEditing(false);
     focusWalker();
-  }, [locked, current, runEdit, focusWalker]);
+  }, [
+    locked,
+    current,
+    sourceCapabilities,
+    sourceExpected,
+    runEdit,
+    focusWalker,
+  ]);
 
   const remove = useCallback(() => {
-    if (bodyMutationLocked || !current) return;
-    runEdit([{ action: "delete", target_id: current.elementId }]);
+    if (locked || !current) return;
+    const op = { action: "delete" as const, target_id: current.elementId };
+    if (!sourceEditOpDecision(sourceCapabilities, sourceExpected, op).allowed) {
+      return;
+    }
+    runEdit([op]);
     setTally((t) => ({ ...t, deleted: t.deleted + 1 }));
     setEditing(false);
     focusWalker();
-  }, [bodyMutationLocked, current, runEdit, focusWalker]);
+  }, [
+    locked,
+    current,
+    sourceCapabilities,
+    sourceExpected,
+    runEdit,
+    focusWalker,
+  ]);
 
   const startEdit = useCallback(() => {
-    if (bodyMutationLocked || !current) return;
+    if (locked || !current) return;
+    const op = {
+      action: "replace" as const,
+      target_id: current.elementId,
+      text: current.text,
+      status: "confirmed" as const,
+      source_item_id: current.sourceItemId,
+    };
+    if (!sourceEditOpDecision(sourceCapabilities, sourceExpected, op).allowed) {
+      return;
+    }
     setDraft(current.text);
     setEditTarget(current); // snapshot the target — save writes to THIS block
     setEditing(true);
-  }, [bodyMutationLocked, current]);
+  }, [locked, current, sourceCapabilities, sourceExpected]);
 
   const saveEdit = () => {
     // A model turn owns the tree (busy) or an edit is resolving (pending):
     // keep the draft open so nothing is lost — the user saves after it clears.
-    if (bodyMutationLocked) return;
+    if (locked) return;
     const target = editTarget;
     const text = draft.trim();
-    setEditing(false);
-    setEditTarget(null);
     if (!target || !text) {
+      setEditing(false);
+      setEditTarget(null);
       focusWalker();
       return;
     }
+    const op = {
+      action: "replace" as const,
+      target_id: target.elementId,
+      text,
+      status: "confirmed" as const,
+      source_item_id: target.sourceItemId,
+    };
+    // The target is snapshotted, but its permission is deliberately live.
+    if (!sourceEditOpDecision(sourceCapabilities, sourceExpected, op).allowed) {
+      return;
+    }
+    setEditing(false);
+    setEditTarget(null);
     // Compare against the SNAPSHOTTED original, and write to the snapshotted
     // id — never to whatever `current` happens to be now.
     if (text !== target.text) {
-      runEdit([
-        {
-          action: "replace",
-          target_id: target.elementId,
-          text,
-          status: "confirmed",
-          source_item_id: target.sourceItemId,
-        },
-      ]);
+      runEdit([op]);
       setTally((t) => ({ ...t, edited: t.edited + 1 }));
     }
     focusWalker();
@@ -225,30 +342,58 @@ export default function ReviewDrawer({
   }, [focusWalker]);
 
   // Outstanding blocks in the current entry's article (this mode).
-  const articleGroup = current
-    ? queue.filter((e) => e.articleId === current.articleId)
-    : [];
-
-  const confirmArticle = () => {
-    if (locked || articleGroup.length === 0) return;
-    runEdit(
-      articleGroup.map((e) => ({
+  const articleGroup = useMemo(
+    () =>
+      current
+        ? queue.filter((entry) => entry.articleId === current.articleId)
+        : [],
+    [current, queue],
+  );
+  const articleStatusOps = useMemo(
+    () =>
+      articleGroup.map((entry) => ({
         action: "set_status" as const,
-        target_id: e.elementId,
+        target_id: entry.elementId,
         status: "confirmed" as const,
       })),
-    );
+    [articleGroup],
+  );
+  const articleStatusDenial = articleStatusOps
+    .map((op) => sourceEditOpDecision(sourceCapabilities, sourceExpected, op))
+    .find((capability) => !capability.allowed);
+
+  const confirmArticle = useCallback(() => {
+    if (locked || articleStatusOps.length === 0) return;
+    if (
+      articleStatusOps.some(
+        (op) =>
+          !sourceEditOpDecision(sourceCapabilities, sourceExpected, op).allowed,
+      )
+    ) {
+      return;
+    }
+    runEdit(articleStatusOps);
     setTally((t) => ({ ...t, confirmed: t.confirmed + articleGroup.length }));
     setEditing(false);
     focusWalker();
-  };
+  }, [
+    locked,
+    articleStatusOps,
+    articleGroup.length,
+    sourceCapabilities,
+    sourceExpected,
+    runEdit,
+    focusWalker,
+  ]);
+  const confirmArticleRef = useRef(confirmArticle);
+  confirmArticleRef.current = confirmArticle;
 
   const startHold = () => {
-    if (locked || articleGroup.length < 2) return;
+    if (locked || articleStatusDenial || articleGroup.length < 2) return;
     setHolding(true);
     holdTimer.current = window.setTimeout(() => {
       setHolding(false);
-      confirmArticle();
+      confirmArticleRef.current();
     }, HOLD_MS);
   };
   const cancelHold = () => {
@@ -418,20 +563,20 @@ export default function ReviewDrawer({
                     className="w-full resize-y rounded border border-edge bg-bg px-2 py-1.5 text-[12px] leading-relaxed text-ink outline-none focus:border-accent/60"
                   />
                   <div className="mt-1.5 flex items-center gap-2 text-[11px]">
-                    <button
+                    <ActionButton
                       className={actionKey}
                       onClick={saveEdit}
-                      disabled={bodyMutationLocked}
+                      disabled={locked || !saveCapability?.allowed}
                       title={
-                        bodyEditingDisabled
-                          ? "Body edits are disabled for this pass-through-only DOCX"
+                        !saveCapability?.allowed
+                          ? capabilityReason(saveCapability, false, "Save")
                           : locked
                           ? "Busy — save once the current action finishes"
                           : "Save (⌘/Ctrl+Enter)"
                       }
                     >
                       Save (⌘/Ctrl+Enter)
-                    </button>
+                    </ActionButton>
                     <button
                       className={actionKey}
                       onClick={() => {
@@ -452,33 +597,42 @@ export default function ReviewDrawer({
               {!editing && (
                 <>
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                    <button className={actionKey} onClick={confirm} disabled={locked}>
+                    <ActionButton
+                      className={actionKey}
+                      onClick={confirm}
+                      disabled={locked || !statusCapability?.allowed}
+                      title={capabilityReason(
+                        statusCapability,
+                        locked,
+                        "Keep this provision (mark reviewed)",
+                      )}
+                    >
                       <b>K</b>eep
-                    </button>
-                    <button
+                    </ActionButton>
+                    <ActionButton
                       className={actionKey}
                       onClick={startEdit}
-                      disabled={bodyMutationLocked}
-                      title={
-                        bodyEditingDisabled
-                          ? "Body edits are disabled for this pass-through-only DOCX"
-                          : undefined
-                      }
+                      disabled={locked || !editCapability?.allowed}
+                      title={capabilityReason(
+                        editCapability,
+                        locked,
+                        "Edit this provision",
+                      )}
                     >
                       <b>E</b>dit
-                    </button>
-                    <button
+                    </ActionButton>
+                    <ActionButton
                       className={actionKey}
                       onClick={remove}
-                      disabled={bodyMutationLocked}
-                      title={
-                        bodyEditingDisabled
-                          ? "Body edits are disabled for this pass-through-only DOCX"
-                          : undefined
-                      }
+                      disabled={locked || !deleteCapability?.allowed}
+                      title={capabilityReason(
+                        deleteCapability,
+                        locked,
+                        "Delete this provision",
+                      )}
                     >
                       <b>D</b>elete
-                    </button>
+                    </ActionButton>
                     <button className={actionKey} onClick={ask} disabled={locked}>
                       <b>A</b>sk model
                     </button>
@@ -488,36 +642,55 @@ export default function ReviewDrawer({
                   </div>
 
                   {articleGroup.length >= 2 && (
-                    <button
-                      className="relative mt-2 w-full overflow-hidden rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent/60 disabled:pointer-events-none disabled:opacity-40"
-                      onPointerDown={startHold}
-                      onPointerUp={cancelHold}
-                      onPointerLeave={cancelHold}
-                      onPointerCancel={cancelHold}
-                      disabled={locked}
-                      title="Press and hold to confirm every outstanding block in this article — one undo step"
+                    <span
+                      className="block w-full"
+                      title={
+                        locked || articleStatusDenial
+                          ? capabilityReason(
+                              articleStatusDenial ?? null,
+                              locked,
+                              "Confirm every outstanding block in this article",
+                            )
+                          : undefined
+                      }
                     >
-                      <span
-                        className="absolute inset-y-0 left-0 bg-accent/25"
-                        style={{
-                          width: holding ? "100%" : "0%",
-                          transition: holding
-                            ? `width ${HOLD_MS}ms linear`
-                            : "width 120ms ease-out",
-                        }}
-                      />
-                      <span className="relative">
-                        {holding
-                          ? "Keep holding…"
-                          : `Hold to confirm remaining ${articleGroup.length} in “${current.articleTitle}”`}
-                      </span>
-                    </button>
+                      <button
+                        className="relative mt-2 w-full overflow-hidden rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent/60 disabled:pointer-events-none disabled:opacity-40"
+                        onPointerDown={startHold}
+                        onPointerUp={cancelHold}
+                        onPointerLeave={cancelHold}
+                        onPointerCancel={cancelHold}
+                        disabled={locked || !!articleStatusDenial}
+                        title={
+                          locked || articleStatusDenial
+                            ? undefined
+                            : "Press and hold to confirm every outstanding block in this article — one undo step"
+                        }
+                      >
+                        <span
+                          className="absolute inset-y-0 left-0 bg-accent/25"
+                          style={{
+                            width: holding ? "100%" : "0%",
+                            transition: holding
+                              ? `width ${HOLD_MS}ms linear`
+                              : "width 120ms ease-out",
+                          }}
+                        />
+                        <span className="relative">
+                          {holding
+                            ? "Keep holding…"
+                            : `Hold to confirm remaining ${articleGroup.length} in “${current.articleTitle}”`}
+                        </span>
+                      </button>
+                    </span>
                   )}
 
                   <p className="mt-2 text-[10px] text-ink-faint">
-                    {bodyEditingDisabled ? (
+                    {editCapability?.allowed === false &&
+                    deleteCapability?.allowed === false ? (
                       <>
-                        Pass-through-only source: body edit/delete are disabled.{" "}
+                        Source permissions make edit/delete unavailable; hover
+                        either control for the exact reason. <br />
                         <b>K</b> keep · <b>A</b> ask · <b>S</b>/→ skip · ← back
                       </>
                     ) : (

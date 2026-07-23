@@ -64,7 +64,7 @@ from ..research.schema import (
     extract_tool_use_block,
 )
 from ..spec_doc.model import SpecSection, apply_edits, outline, SpecEditError
-from ..spec_doc.source_mapping import SourceBodyMap
+from ..spec_doc.source_mapping import SourceBodyMap, semantic_body_projection
 from ..spec_doc.source_patch import (
     SourcePatchContext,
     SourcePatchError,
@@ -363,6 +363,10 @@ def _lens_system_prompt(module: SpecModule) -> str:
         "- proposed_ops must use the exact op vocabulary above and target "
         "ids that EXIST in the specification; set proposed_ops to null when "
         "there is no clean mechanical fix (the finding stays advisory).\n"
+        "- When <source_preserving_body_permissions> is present, do not "
+        "propose body operations it identifies as unavailable. Keep the "
+        "finding advisory with proposed_ops null when no permitted mechanical "
+        "fix exists; the server will still validate every final state.\n"
         "- Never propose mass status upgrades (do not 'confirm everything').\n"
         "- Cite in source_urls only URLs you actually retrieved this turn.\n"
         "If you cannot call the tool, emit the same payload as JSON wrapped "
@@ -377,12 +381,20 @@ def _lens_user_message(
     module: SpecModule,
     profile: RequirementsProfile | None,
     discipline: str = "",
+    source_capability_summary: str = "",
 ) -> str:
     # The session discipline (Batch 10, open-catalog modules) renders only
     # when non-empty — curated-module QC requests are byte-identical.
     discipline_block = (
         f"<project_discipline>\n{discipline}\n</project_discipline>\n\n"
         if discipline
+        else ""
+    )
+    source_capability_block = (
+        "<source_preserving_body_permissions>\n"
+        f"{source_capability_summary}\n"
+        "</source_preserving_body_permissions>\n\n"
+        if source_capability_summary
         else ""
     )
     return (
@@ -397,6 +409,7 @@ def _lens_user_message(
         "<project_requirements_profile>\n"
         f"{_render_profile(profile)}\n"
         "</project_requirements_profile>\n\n"
+        f"{source_capability_block}"
         "<specification>\n"
         f"{_render_section(section)}\n"
         "</specification>"
@@ -692,6 +705,7 @@ def _run_lens(
     model: str,
     max_tokens: int,
     discipline: str = "",
+    source_capability_summary: str = "",
     should_stop: Callable[[], bool] = lambda: False,
 ) -> _LensOutcome:
     """One lens's full lifecycle. Never raises (KeyboardInterrupt aside)."""
@@ -709,7 +723,12 @@ def _run_lens(
         client,
         system_prompt=_lens_system_prompt(module),
         user_message=_lens_user_message(
-            lens, section, module, profile, discipline
+            lens,
+            section,
+            module,
+            profile,
+            discipline,
+            source_capability_summary,
         ),
         tools=_lens_tools(lens, model),
         tool_name=QC_FINDINGS_TOOL_NAME,
@@ -825,6 +844,9 @@ class QCSourceGuard:
     source_map: SourceBodyMap | None = None
     baseline: SpecSection | None = None
     context: SourcePatchContext | None = None
+    # Compact advisory prompt context derived from the same server policy.
+    # This never replaces the authoritative validation inputs above.
+    capability_summary: str = ""
 
 
 def _validate_ops(
@@ -835,10 +857,11 @@ def _validate_ops(
     """Dry-run the finding's proposed_ops against a fresh snapshot copy.
 
     Each finding is validated independently — copy per finding so they never
-    see each other's effects. For an imported DOCX, the resulting complete
-    document must also pass the same final-state preservation guard as a real
-    session edit. Invalid ops keep the finding as advisory and record why;
-    they are never trusted raw.
+    see each other's effects. For an imported DOCX, any resulting body change
+    must also pass the same final-state preservation guard as a real session
+    edit; projection-preserving metadata remains independent of source XML.
+    Invalid ops keep the finding advisory and record why; they are never
+    trusted raw.
     """
     if not finding.proposed_ops:
         finding.ops_valid = False
@@ -856,7 +879,10 @@ def _validate_ops(
         finding.ops_invalid_reason = f"{type(exc).__name__}: {exc}"
         return
 
-    if source_guard is not None and source_guard.required:
+    body_changed = semantic_body_projection(candidate) != semantic_body_projection(
+        snapshot
+    )
+    if source_guard is not None and source_guard.required and body_changed:
         try:
             # An incomplete context is an invariant failure, not permission
             # to bypass source preservation.
@@ -933,6 +959,9 @@ def run_final_qc(
     """
     remembered = set(remembered_dismissed or ())
     usage_totals: dict[str, int] = {}
+    source_capability_summary = (
+        source_guard.capability_summary if source_guard is not None else ""
+    )
 
     event_sink(
         {
@@ -958,6 +987,7 @@ def run_final_qc(
                 model=model,
                 max_tokens=max_tokens,
                 discipline=discipline,
+                source_capability_summary=source_capability_summary,
                 should_stop=should_stop,
             ): lens
             for lens in QC_LENSES

@@ -11,6 +11,7 @@ import type {
   QcSnapshot,
   ReadinessPayload,
   ResearchSnapshot,
+  SourceCapabilitiesState,
   SourcePreservationState,
   SpecDoc,
   StandardInfo,
@@ -89,6 +90,8 @@ export default function App() {
   const [preservationReady, setPreservationReady] = useState(false);
   const [sourcePreservation, setSourcePreservation] =
     useState<SourcePreservationState | null>(null);
+  const [sourceCapabilities, setSourceCapabilities] =
+    useState<SourceCapabilitiesState | null>(null);
   // Chat-authored figures (diagrams/schematics/tables), keyed for the bubbles.
   const [figures, setFigures] = useState<Figure[]>([]);
   const figuresById = useMemo(
@@ -149,6 +152,7 @@ export default function App() {
         setSourceAvailable(payload.source_available ?? false);
         setPreservationReady(payload.preservation_ready ?? false);
         setSourcePreservation(payload.source_preservation ?? null);
+        setSourceCapabilities(payload.source_capabilities ?? null);
         setFigures(payload.figures ?? []);
         setSuggestions(payload.suggested_prompts ?? []);
       })
@@ -673,6 +677,7 @@ export default function App() {
     setSourceAvailable(false);
     setPreservationReady(false);
     setSourcePreservation(null);
+    setSourceCapabilities(null);
     refreshDoc();
     refreshResearch();
     refreshQc();
@@ -730,6 +735,7 @@ export default function App() {
     source_available?: boolean;
     preservation_ready?: boolean;
     source_preservation?: SourcePreservationState | null;
+    source_capabilities?: SourceCapabilitiesState | null;
   }) => {
     setDoc(payload.doc);
     setOpenItems(payload.open_questions);
@@ -741,6 +747,7 @@ export default function App() {
     setSourceAvailable(payload.source_available ?? false);
     setPreservationReady(payload.preservation_ready ?? false);
     setSourcePreservation(payload.source_preservation ?? null);
+    setSourceCapabilities(payload.source_capabilities ?? null);
     setFigures(payload.figures ?? []);
     setSuggestions(payload.suggested_prompts ?? []);
     setChangedIds(new Set());
@@ -1068,6 +1075,7 @@ export default function App() {
           sourceAvailable={sourceAvailable}
           preservationReady={preservationReady}
           sourcePreservation={sourcePreservation}
+          sourceCapabilities={sourceCapabilities}
           busy={busy}
           onUndo={onUndo}
           onRedo={onRedo}

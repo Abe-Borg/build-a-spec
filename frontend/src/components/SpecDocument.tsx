@@ -8,14 +8,23 @@
  * reveal ✏️ (inline edit), ✓ (confirm an assumed/imported block), and 🗑
  * (delete). All affordances are disabled while a model turn streams.
  */
-import { useState } from "react";
+import { Fragment, useState, type ButtonHTMLAttributes } from "react";
+import {
+  sourceAllowedPositions,
+  sourceCapability,
+  sourceCapabilityTitle,
+  sourceEditOpDecision,
+} from "../lib/sourceCapabilities";
 import type {
   DiffRun,
+  DocArticle,
   DocParagraph,
   DocPart,
   EditOp,
   ElementDiff,
   SectionDiff,
+  SourceCapabilitiesState,
+  SourceOperationCapability,
   SpecDoc,
 } from "../types";
 
@@ -92,44 +101,105 @@ function SourceChip({
 }
 
 const actionBtn =
-  "rounded px-1 text-[12px] leading-none text-paper-dim transition-colors hover:text-paper-ink disabled:pointer-events-none disabled:opacity-30";
+  "rounded px-1 text-[12px] leading-none text-paper-dim transition-colors hover:text-paper-ink disabled:opacity-30";
+
+/** Keep exact server denial titles hoverable on natively disabled buttons. */
+function CapabilityButton({
+  disabled,
+  title,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <span className="inline-flex" title={disabled ? title : undefined}>
+      <button
+        {...props}
+        disabled={disabled}
+        title={disabled ? undefined : title}
+      />
+    </span>
+  );
+}
+
+function ReadOnlyBadge({
+  capability,
+  sourceExpected,
+}: {
+  capability: SourceOperationCapability;
+  sourceExpected: boolean;
+}) {
+  if (!sourceExpected || capability.allowed) return null;
+  return (
+    <span
+      className="ml-2 inline-block rounded border border-paper-edge bg-paper-edge/35 px-1 py-px align-middle text-[9px] font-semibold tracking-wide text-paper-dim uppercase"
+      title={sourceCapabilityTitle(capability, "")}
+    >
+      read-only
+    </span>
+  );
+}
+
+function moveTarget(
+  capability: SourceOperationCapability,
+  direction: "up" | "down",
+): number | null {
+  const current = capability.current_position;
+  if (typeof current !== "number" || !Number.isInteger(current)) return null;
+  const positions = sourceAllowedPositions(capability);
+  if (direction === "up") {
+    const candidates = positions.filter((position) => position < current);
+    return candidates.length ? candidates[candidates.length - 1] : null;
+  }
+  return positions.find((position) => position > current) ?? null;
+}
 
 /** Hover toolbar for a paragraph: confirm / edit / delete. */
 function RowActions({
   canConfirm,
   busy,
-  bodyEditingDisabled,
+  sourceExpected,
+  replaceCapability,
+  deleteCapability,
+  moveCapability,
+  statusCapability,
   confirming,
   onConfirm,
   onEdit,
   onDelete,
+  onMove,
   onCancelDelete,
 }: {
   canConfirm: boolean;
   busy: boolean;
-  bodyEditingDisabled: boolean;
+  sourceExpected: boolean;
+  replaceCapability: SourceOperationCapability;
+  deleteCapability: SourceOperationCapability;
+  moveCapability: SourceOperationCapability;
+  statusCapability: SourceOperationCapability;
   confirming: boolean;
   onConfirm: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onMove: (position: number) => void;
   onCancelDelete: () => void;
 }) {
+  const moveUpPosition = moveTarget(moveCapability, "up");
+  const moveDownPosition = moveTarget(moveCapability, "down");
+  const moveTitle = sourceCapabilityTitle(
+    moveCapability,
+    "Move this provision",
+  );
   if (confirming) {
     return (
       <span className="ml-1 inline-flex shrink-0 items-center gap-1 text-[11px]">
         <span className="text-[#a03d31]">Delete?</span>
-        <button
+        <CapabilityButton
           className={actionBtn}
           onClick={onDelete}
-          disabled={busy || bodyEditingDisabled}
-          title={
-            bodyEditingDisabled
-              ? "Body edits are disabled for this pass-through-only DOCX"
-              : "Confirm delete"
-          }
+          disabled={busy || !deleteCapability.allowed}
+          title={sourceCapabilityTitle(deleteCapability, "Confirm delete")}
         >
           ✓
-        </button>
+        </CapabilityButton>
         <button className={actionBtn} onClick={onCancelDelete} title="Keep">
           ✕
         </button>
@@ -139,39 +209,80 @@ function RowActions({
   return (
     <span className="ml-1 hidden shrink-0 items-center gap-0.5 group-hover:inline-flex">
       {canConfirm && (
-        <button
+        <CapabilityButton
           className={actionBtn}
           onClick={onConfirm}
-          disabled={busy}
-          title="Confirm this block (mark reviewed)"
+          disabled={busy || !statusCapability.allowed}
+          title={sourceCapabilityTitle(
+            statusCapability,
+            "Confirm this block (mark reviewed)",
+          )}
         >
           ✓
-        </button>
+        </CapabilityButton>
       )}
-      <button
+      <CapabilityButton
         className={actionBtn}
         onClick={onEdit}
-        disabled={busy || bodyEditingDisabled}
-        title={
-          bodyEditingDisabled
-            ? "Body edits are disabled for this pass-through-only DOCX"
-            : "Edit this provision"
-        }
+        disabled={busy || !replaceCapability.allowed}
+        title={sourceCapabilityTitle(replaceCapability, "Edit this provision")}
       >
         ✏️
-      </button>
-      <button
+      </CapabilityButton>
+      <CapabilityButton
         className={actionBtn}
         onClick={onDelete}
-        disabled={busy || bodyEditingDisabled}
-        title={
-          bodyEditingDisabled
-            ? "Body edits are disabled for this pass-through-only DOCX"
-            : "Delete this provision"
-        }
+        disabled={busy || !deleteCapability.allowed}
+        title={sourceCapabilityTitle(deleteCapability, "Delete this provision")}
       >
         🗑
-      </button>
+      </CapabilityButton>
+      {sourceExpected && (
+        <>
+          <CapabilityButton
+            className={actionBtn}
+            onClick={() => {
+              if (moveCapability.allowed && moveUpPosition !== null) {
+                onMove(moveUpPosition);
+              }
+            }}
+            disabled={
+              busy || !moveCapability.allowed || moveUpPosition === null
+            }
+            title={
+              !moveCapability.allowed
+                ? moveTitle
+                : moveUpPosition === null
+                  ? "No server-authorized position exists above this provision."
+                  : `Move to sibling position ${moveUpPosition + 1}`
+            }
+            aria-label="Move provision up"
+          >
+            ↑
+          </CapabilityButton>
+          <CapabilityButton
+            className={actionBtn}
+            onClick={() => {
+              if (moveCapability.allowed && moveDownPosition !== null) {
+                onMove(moveDownPosition);
+              }
+            }}
+            disabled={
+              busy || !moveCapability.allowed || moveDownPosition === null
+            }
+            title={
+              !moveCapability.allowed
+                ? moveTitle
+                : moveDownPosition === null
+                  ? "No server-authorized position exists below this provision."
+                  : `Move to sibling position ${moveDownPosition + 1}`
+            }
+            aria-label="Move provision down"
+          >
+            ↓
+          </CapabilityButton>
+        </>
+      )}
     </span>
   );
 }
@@ -182,7 +293,8 @@ function ParagraphNode({
   changedIds,
   sourceLookup,
   busy,
-  bodyEditingDisabled,
+  sourceExpected,
+  sourceCapabilities,
   onEdit,
 }: {
   p: DocParagraph;
@@ -190,31 +302,81 @@ function ParagraphNode({
   changedIds: ReadonlySet<string>;
   sourceLookup: ReadonlyMap<string, string>;
   busy: boolean;
-  bodyEditingDisabled: boolean;
+  sourceExpected: boolean;
+  sourceCapabilities: SourceCapabilitiesState | null;
   onEdit: (ops: EditOp[]) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(p.text);
   const [confirming, setConfirming] = useState(false);
 
+  const replaceOp: EditOp = {
+    action: "replace",
+    target_id: p.id,
+    text: p.text,
+    status: "confirmed",
+    source_item_id: p.source_item_id,
+  };
+  const replaceCapability = sourceEditOpDecision(
+    sourceCapabilities,
+    sourceExpected,
+    { ...replaceOp },
+  );
+  const deleteCapability = sourceCapability(
+    sourceCapabilities,
+    sourceExpected,
+    p.id,
+    "delete",
+  );
+  const moveCapability = sourceCapability(
+    sourceCapabilities,
+    sourceExpected,
+    p.id,
+    "move",
+  );
+  const statusCapability = sourceCapability(
+    sourceCapabilities,
+    sourceExpected,
+    p.id,
+    "set_status",
+  );
+
+  const submit = (ops: EditOp[]): boolean => {
+    if (busy) return false;
+    for (const op of ops) {
+      const decision = sourceEditOpDecision(
+        sourceCapabilities,
+        sourceExpected,
+        { ...op },
+      );
+      if (!decision.allowed) return false;
+    }
+    onEdit(ops);
+    return true;
+  };
+
   const startEdit = () => {
+    if (busy || !replaceCapability.allowed) return;
     setDraft(p.text);
     setEditing(true);
   };
   const save = () => {
     const text = draft.trim();
-    setEditing(false);
-    if (!text || text === p.text) return;
+    if (!text || text === p.text) {
+      setEditing(false);
+      return;
+    }
     // User-authored text is confirmed; preserve the research provenance.
-    onEdit([
-      {
-        action: "replace",
-        target_id: p.id,
-        text,
-        status: "confirmed",
-        source_item_id: p.source_item_id,
-      },
-    ]);
+    if (
+      submit([
+        {
+          ...replaceOp,
+          text,
+        },
+      ])
+    ) {
+      setEditing(false);
+    }
   };
 
   return (
@@ -223,6 +385,10 @@ function ParagraphNode({
         id={`el-${p.id}`}
         className={`group flex gap-2 rounded px-1 py-0.5 ${
           changedIds.has(p.id) ? "changed-block" : ""
+        } ${
+          sourceExpected && !replaceCapability.allowed
+            ? "border-l-2 border-paper-edge bg-paper-edge/15"
+            : ""
         }`}
         style={{ marginLeft: `${depth * 1.4}rem` }}
       >
@@ -232,18 +398,30 @@ function ParagraphNode({
             <textarea
               autoFocus
               value={draft}
+              disabled={busy || !replaceCapability.allowed}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Escape") setEditing(false);
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save();
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  save();
+                }
               }}
               rows={Math.min(6, draft.split("\n").length + 1)}
               className="w-full resize-y rounded border border-paper-edge bg-white/70 px-1.5 py-1 text-[13px] leading-relaxed text-paper-ink outline-none focus:border-[#c08457]"
             />
             <span className="mt-1 flex items-center gap-2 text-[11px] text-paper-dim">
-              <button className={actionBtn} onClick={save} title="Save (Ctrl/Cmd+Enter)">
+              <CapabilityButton
+                className={actionBtn}
+                onClick={save}
+                disabled={busy || !replaceCapability.allowed}
+                title={sourceCapabilityTitle(
+                  replaceCapability,
+                  "Save (Ctrl/Cmd+Enter)",
+                )}
+              >
                 Save
-              </button>
+              </CapabilityButton>
               <button
                 className={actionBtn}
                 onClick={() => setEditing(false)}
@@ -259,24 +437,37 @@ function ParagraphNode({
             <TbdText text={p.text} />
             <StatusBadge status={p.status} />
             <SourceChip itemId={p.source_item_id} lookup={sourceLookup} />
+            <ReadOnlyBadge
+              capability={replaceCapability}
+              sourceExpected={sourceExpected}
+            />
             <RowActions
               canConfirm={p.status === "assumed" || p.status === "imported"}
               busy={busy}
-              bodyEditingDisabled={bodyEditingDisabled}
+              sourceExpected={sourceExpected}
+              replaceCapability={replaceCapability}
+              deleteCapability={deleteCapability}
+              moveCapability={moveCapability}
+              statusCapability={statusCapability}
               confirming={confirming}
-              onConfirm={() =>
-                onEdit([
+              onConfirm={() => {
+                submit([
                   { action: "set_status", target_id: p.id, status: "confirmed" },
-                ])
-              }
+                ]);
+              }}
               onEdit={startEdit}
               onDelete={() => {
+                if (busy || !deleteCapability.allowed) return;
                 if (confirming) {
-                  setConfirming(false);
-                  onEdit([{ action: "delete", target_id: p.id }]);
+                  if (submit([{ action: "delete", target_id: p.id }])) {
+                    setConfirming(false);
+                  }
                 } else {
                   setConfirming(true);
                 }
+              }}
+              onMove={(position) => {
+                submit([{ action: "move", target_id: p.id, position }]);
               }}
               onCancelDelete={() => setConfirming(false)}
             />
@@ -291,7 +482,8 @@ function ParagraphNode({
           changedIds={changedIds}
           sourceLookup={sourceLookup}
           busy={busy}
-          bodyEditingDisabled={bodyEditingDisabled}
+          sourceExpected={sourceExpected}
+          sourceCapabilities={sourceCapabilities}
           onEdit={onEdit}
         />
       ))}
@@ -305,7 +497,8 @@ function ArticleTitle({
   title,
   changed,
   busy,
-  bodyEditingDisabled,
+  sourceExpected,
+  sourceCapabilities,
   onEdit,
 }: {
   id: string;
@@ -313,17 +506,38 @@ function ArticleTitle({
   title: string;
   changed: boolean;
   busy: boolean;
-  bodyEditingDisabled: boolean;
+  sourceExpected: boolean;
+  sourceCapabilities: SourceCapabilitiesState | null;
   onEdit: (ops: EditOp[]) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
+  const replaceCapability = sourceCapability(
+    sourceCapabilities,
+    sourceExpected,
+    id,
+    "replace_text",
+  );
   if (editing) {
     const save = () => {
       const next = draft.trim();
-      setEditing(false);
-      if (next && next !== title) {
-        onEdit([{ action: "replace", target_id: id, text: next }]);
+      if (!next || next === title) {
+        setEditing(false);
+        return;
+      }
+      const op: EditOp = {
+        action: "replace",
+        target_id: id,
+        text: next,
+      };
+      const decision = sourceEditOpDecision(
+        sourceCapabilities,
+        sourceExpected,
+        { ...op },
+      );
+      if (!busy && decision.allowed) {
+        onEdit([op]);
+        setEditing(false);
       }
     };
     return (
@@ -332,16 +546,25 @@ function ArticleTitle({
         <input
           autoFocus
           value={draft}
+          disabled={busy || !replaceCapability.allowed}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Escape") setEditing(false);
-            if (e.key === "Enter") save();
+            if (e.key === "Enter") {
+              e.preventDefault();
+              save();
+            }
           }}
           className="flex-1 rounded border border-paper-edge bg-white/70 px-1.5 py-0.5 text-[13px] font-semibold uppercase text-paper-ink outline-none focus:border-[#c08457]"
         />
-        <button className={actionBtn} onClick={save} title="Save (Enter)">
+        <CapabilityButton
+          className={actionBtn}
+          onClick={save}
+          disabled={busy || !replaceCapability.allowed}
+          title={sourceCapabilityTitle(replaceCapability, "Save (Enter)")}
+        >
           Save
-        </button>
+        </CapabilityButton>
       </p>
     );
   }
@@ -349,26 +572,227 @@ function ArticleTitle({
     <p
       className={`group flex items-center rounded px-1 text-[13px] font-semibold ${
         changed ? "changed-block" : ""
+      } ${
+        sourceExpected && !replaceCapability.allowed
+          ? "border-l-2 border-paper-edge bg-paper-edge/15"
+          : ""
       }`}
     >
       {number}&nbsp;&nbsp;
       <span className="uppercase">{title}</span>
-      <button
+      <ReadOnlyBadge
+        capability={replaceCapability}
+        sourceExpected={sourceExpected}
+      />
+      <CapabilityButton
         className={`${actionBtn} ml-1 hidden group-hover:inline-block`}
         onClick={() => {
+          if (busy || !replaceCapability.allowed) return;
           setDraft(title);
           setEditing(true);
         }}
-        disabled={busy || bodyEditingDisabled}
-        title={
-          bodyEditingDisabled
-            ? "Body edits are disabled for this pass-through-only DOCX"
-            : "Edit article title"
-        }
+        disabled={busy || !replaceCapability.allowed}
+        title={sourceCapabilityTitle(
+          replaceCapability,
+          "Edit article title",
+        )}
       >
         ✏️
-      </button>
+      </CapabilityButton>
     </p>
+  );
+}
+
+function AddParagraphControl({
+  articleId,
+  position,
+  busy,
+  sourceExpected,
+  sourceCapabilities,
+  onEdit,
+}: {
+  articleId: string;
+  position: number;
+  busy: boolean;
+  sourceExpected: boolean;
+  sourceCapabilities: SourceCapabilitiesState | null;
+  onEdit: (ops: EditOp[]) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const decision = sourceEditOpDecision(
+    sourceCapabilities,
+    sourceExpected,
+    {
+      action: "add_paragraph",
+      target_id: articleId,
+      position,
+      text: "New provision",
+    },
+  );
+  const title = sourceCapabilityTitle(
+    decision,
+    `Add a top-level provision at sibling position ${position + 1}`,
+  );
+
+  const start = () => {
+    if (busy || !decision.allowed) return;
+    setDraft("");
+    setEditing(true);
+  };
+  const save = () => {
+    const text = draft.trim();
+    if (!text) return;
+    const op: EditOp = {
+      action: "add_paragraph",
+      target_id: articleId,
+      position,
+      text,
+      status: "confirmed",
+    };
+    const currentDecision = sourceEditOpDecision(
+      sourceCapabilities,
+      sourceExpected,
+      { ...op },
+    );
+    if (busy || !currentDecision.allowed) return;
+    onEdit([op]);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="my-1 ml-8 rounded border border-dashed border-paper-edge bg-white/35 px-2 py-1">
+        <input
+          autoFocus
+          value={draft}
+          disabled={busy || !decision.allowed}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setEditing(false);
+            if (event.key === "Enter") {
+              event.preventDefault();
+              save();
+            }
+          }}
+          placeholder="New top-level provision"
+          className="w-full rounded border border-paper-edge bg-white/70 px-1.5 py-0.5 text-[12px] text-paper-ink outline-none focus:border-[#c08457]"
+        />
+        <span className="mt-1 flex items-center gap-2 text-[11px] text-paper-dim">
+          <CapabilityButton
+            className={actionBtn}
+            onClick={save}
+            disabled={busy || !decision.allowed || !draft.trim()}
+            title={sourceCapabilityTitle(decision, "Add provision (Enter)")}
+          >
+            Add
+          </CapabilityButton>
+          <button
+            className={actionBtn}
+            onClick={() => setEditing(false)}
+            title="Cancel (Esc)"
+          >
+            Cancel
+          </button>
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-0.5 ml-8 flex items-center gap-1 text-[10px] text-paper-dim/80">
+      <span className="h-px min-w-4 flex-1 bg-paper-edge/50" />
+      <CapabilityButton
+        className={`${actionBtn} whitespace-nowrap`}
+        onClick={start}
+        disabled={busy || !decision.allowed}
+        title={title}
+      >
+        + Add provision here
+      </CapabilityButton>
+      <span className="h-px min-w-4 flex-1 bg-paper-edge/50" />
+    </div>
+  );
+}
+
+function ArticleBlock({
+  article,
+  changedIds,
+  sourceLookup,
+  busy,
+  sourceExpected,
+  sourceCapabilities,
+  onEdit,
+}: {
+  article: DocArticle;
+  changedIds: ReadonlySet<string>;
+  sourceLookup: ReadonlyMap<string, string>;
+  busy: boolean;
+  sourceExpected: boolean;
+  sourceCapabilities: SourceCapabilitiesState | null;
+  onEdit: (ops: EditOp[]) => void;
+}) {
+  const addCapability = sourceCapability(
+    sourceCapabilities,
+    sourceExpected,
+    article.id,
+    "add_paragraph",
+  );
+  const allowedPositions = new Set(sourceAllowedPositions(addCapability));
+  const addAt = (position: number) =>
+    allowedPositions.has(position) ? (
+      <AddParagraphControl
+        articleId={article.id}
+        position={position}
+        busy={busy}
+        sourceExpected={sourceExpected}
+        sourceCapabilities={sourceCapabilities}
+        onEdit={onEdit}
+      />
+    ) : null;
+
+  return (
+    <div id={`el-${article.id}`}>
+      <ArticleTitle
+        id={article.id}
+        number={article.number}
+        title={article.title}
+        changed={changedIds.has(article.id)}
+        busy={busy}
+        sourceExpected={sourceExpected}
+        sourceCapabilities={sourceCapabilities}
+        onEdit={onEdit}
+      />
+      <div className="mt-1.5 space-y-1">
+        {article.paragraphs.map((paragraph, position) => (
+          <Fragment key={paragraph.id}>
+            {addAt(position)}
+            <ParagraphNode
+              p={paragraph}
+              depth={0}
+              changedIds={changedIds}
+              sourceLookup={sourceLookup}
+              busy={busy}
+              sourceExpected={sourceExpected}
+              sourceCapabilities={sourceCapabilities}
+              onEdit={onEdit}
+            />
+          </Fragment>
+        ))}
+        {addAt(article.paragraphs.length)}
+        {sourceExpected && !addCapability.allowed && (
+          <div className="ml-8 mt-1">
+            <CapabilityButton
+              className={actionBtn}
+              disabled
+              title={sourceCapabilityTitle(addCapability, "")}
+            >
+              + Add top-level provision (read-only)
+            </CapabilityButton>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -377,49 +801,54 @@ function PartBlock({
   changedIds,
   sourceLookup,
   busy,
-  bodyEditingDisabled,
+  sourceExpected,
+  sourceCapabilities,
   onEdit,
 }: {
   part: DocPart;
   changedIds: ReadonlySet<string>;
   sourceLookup: ReadonlyMap<string, string>;
   busy: boolean;
-  bodyEditingDisabled: boolean;
+  sourceExpected: boolean;
+  sourceCapabilities: SourceCapabilitiesState | null;
   onEdit: (ops: EditOp[]) => void;
 }) {
+  const replaceCapability = sourceCapability(
+    sourceCapabilities,
+    sourceExpected,
+    part.id,
+    "replace_text",
+  );
   return (
     <div>
-      <p className="text-[13px] font-semibold">{part.title}</p>
+      <p
+        className={`text-[13px] font-semibold ${
+          sourceExpected && !replaceCapability.allowed
+            ? "border-l-2 border-paper-edge bg-paper-edge/15 pl-1"
+            : ""
+        }`}
+      >
+        {part.title}
+        <ReadOnlyBadge
+          capability={replaceCapability}
+          sourceExpected={sourceExpected}
+        />
+      </p>
       {part.articles.length === 0 ? (
         <p className="mt-2 text-xs text-paper-dim italic">(No articles yet.)</p>
       ) : (
         <div className="mt-3 space-y-4">
           {part.articles.map((article) => (
-            <div key={article.id} id={`el-${article.id}`}>
-              <ArticleTitle
-                id={article.id}
-                number={article.number}
-                title={article.title}
-                changed={changedIds.has(article.id)}
-                busy={busy}
-                bodyEditingDisabled={bodyEditingDisabled}
-                onEdit={onEdit}
-              />
-              <div className="mt-1.5 space-y-1">
-                {article.paragraphs.map((p) => (
-                  <ParagraphNode
-                    key={p.id}
-                    p={p}
-                    depth={0}
-                    changedIds={changedIds}
-                    sourceLookup={sourceLookup}
-                    busy={busy}
-                    bodyEditingDisabled={bodyEditingDisabled}
-                    onEdit={onEdit}
-                  />
-                ))}
-              </div>
-            </div>
+            <ArticleBlock
+              key={article.id}
+              article={article}
+              changedIds={changedIds}
+              sourceLookup={sourceLookup}
+              busy={busy}
+              sourceExpected={sourceExpected}
+              sourceCapabilities={sourceCapabilities}
+              onEdit={onEdit}
+            />
           ))}
         </div>
       )}
@@ -601,7 +1030,8 @@ export default function SpecDocument({
   changedIds,
   sourceLookup = new Map(),
   busy = false,
-  bodyEditingDisabled = false,
+  sourceExpected = false,
+  sourceCapabilities = null,
   onEdit = () => {},
   diff = null,
 }: {
@@ -609,16 +1039,30 @@ export default function SpecDocument({
   changedIds: ReadonlySet<string>;
   sourceLookup?: ReadonlyMap<string, string>;
   busy?: boolean;
-  bodyEditingDisabled?: boolean;
+  sourceExpected?: boolean;
+  sourceCapabilities?: SourceCapabilitiesState | null;
   onEdit?: (ops: EditOp[]) => void;
   diff?: SectionDiff | null;
 }) {
   if (diff) {
     return <DiffDocument diff={diff} />;
   }
+  const sectionReplaceCapability = sourceCapability(
+    sourceCapabilities,
+    sourceExpected,
+    "sec",
+    "replace_text",
+  );
   return (
     <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
-      <div id="el-sec" className="text-center">
+      <div
+        id="el-sec"
+        className={`text-center ${
+          sourceExpected && !sectionReplaceCapability.allowed
+            ? "rounded border-l-2 border-paper-edge bg-paper-edge/15 py-1"
+            : ""
+        }`}
+      >
         <p
           className={`rounded text-[13px] font-semibold tracking-wide ${
             changedIds.has("sec") ? "changed-block" : ""
@@ -632,6 +1076,10 @@ export default function SpecDocument({
           }`}
         >
           {doc.section.title || "[TBD: section title]"}
+          <ReadOnlyBadge
+            capability={sectionReplaceCapability}
+            sourceExpected={sourceExpected}
+          />
         </p>
       </div>
 
@@ -643,7 +1091,8 @@ export default function SpecDocument({
             changedIds={changedIds}
             sourceLookup={sourceLookup}
             busy={busy}
-            bodyEditingDisabled={bodyEditingDisabled}
+            sourceExpected={sourceExpected}
+            sourceCapabilities={sourceCapabilities}
             onEdit={onEdit}
           />
         ))}

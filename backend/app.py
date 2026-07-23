@@ -122,6 +122,7 @@ from .spec_doc.source_patch import (
     SourcePatchReadiness,
     SourcePatchError,
     build_source_preserving_docx,
+    source_capability_summary,
     source_patch_readiness,
 )
 from .spec_doc.source_package import (
@@ -243,10 +244,16 @@ def _qc_source_guard(session) -> QCSourceGuard | None:
     source-backed session with malformed or missing context still returns a
     required, incomplete guard so proposal validation fails closed.
     """
+    # Use the same active-branch/source-less boundary as manual/model edits
+    # and the capability payload. In particular, a legacy JSON project may
+    # retain an import baseline while intentionally carrying neither source
+    # bytes nor a source map; QC for that project remains semantic-only.
+    capability_report = session.source_edit_capabilities()
+    if capability_report is None:
+        return None
+
     source_map = getattr(session, "source_docx_map", None)
     baseline_index = session.doc.baseline_index
-    if baseline_index is None:
-        return None
     baseline_valid = (
         not isinstance(baseline_index, bool)
         and isinstance(baseline_index, int)
@@ -264,6 +271,10 @@ def _qc_source_guard(session) -> QCSourceGuard | None:
         except SourcePatchError:
             # A required guard with no context fails closed in the QC engine.
             pass
+    capability_summary = source_capability_summary(
+        capability_report,
+        session.doc.doc,
+    )
     return QCSourceGuard(
         required=True,
         source_bytes=(
@@ -276,6 +287,7 @@ def _qc_source_guard(session) -> QCSourceGuard | None:
         ),
         baseline=baseline,
         context=context,
+        capability_summary=capability_summary,
     )
 
 
@@ -360,8 +372,8 @@ def _source_preservation_payload(
         "status": status,
         "source_export_ready": bool(preservation and preservation.ready),
         "exact_original_available": source_available,
-        # This is deliberately document-level and bounded. Per-UID edit
-        # eligibility is a separate future contract.
+        # This compatibility field remains document-level; exact per-UID and
+        # per-operation decisions live in the sibling source_capabilities.
         "body_editing": "bounded" if status == "ready" else "disabled",
         "no_op": bool(preservation and preservation.no_op),
         "changed_uids": list(preservation.changed_uids) if preservation else [],
@@ -372,6 +384,7 @@ def _source_preservation_payload(
 def _doc_payload(session) -> dict[str, Any]:
     profile = ProjectProfile.from_dict(session.doc.doc.project_profile)
     preservation = _source_readiness(session)
+    capabilities = session.source_edit_capabilities()
     return {
         "doc": session.doc.snapshot(),
         "open_questions": open_questions(session.doc.doc),
@@ -397,6 +410,9 @@ def _doc_payload(session) -> dict[str, Any]:
         "preservation_ready": bool(preservation and preservation.ready),
         "source_preservation": _source_preservation_payload(
             session, preservation
+        ),
+        "source_capabilities": (
+            capabilities.to_dict() if capabilities is not None else None
         ),
     }
 

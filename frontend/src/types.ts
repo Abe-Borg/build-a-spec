@@ -276,6 +276,54 @@ export interface SourcePreservationState {
   blockers: SourcePreservationBlocker[];
 }
 
+/** Operations whose imported-DOCX safety is decided by the server. */
+export type SourceCapabilityOperation =
+  | "replace_text"
+  | "delete"
+  | "move"
+  | "add_paragraph"
+  | "set_status"
+  | "set_provenance"
+  | "set_project_profile"
+  | "set_standard_edition"
+  | "set_standard_suppressed";
+
+/** One independently safe insertion island and its exact sibling positions. */
+export interface SourceCapabilityPlacement {
+  island_key: string;
+  allowed_positions: number[];
+  /** Present only when every position in the inclusive range is allowed. */
+  minimum_position?: number;
+  /** Present only when every position in the inclusive range is allowed. */
+  maximum_position?: number;
+}
+
+/** A server-derived decision for one operation on one semantic element. */
+export interface SourceOperationCapability {
+  allowed: boolean;
+  blocker?: string;
+  message?: string;
+  island_key?: string;
+  current_position?: number;
+  /** Informational only; clients must use allowed_positions, not infer a range. */
+  minimum_position?: number;
+  /** Informational only; clients must use allowed_positions, not infer a range. */
+  maximum_position?: number;
+  allowed_positions?: number[];
+  placements?: SourceCapabilityPlacement[];
+}
+
+/** The wire payload is a direct operation map, not an `operations` wrapper. */
+export interface SourceElementCapabilities {
+  [operation: string]: SourceOperationCapability | undefined;
+}
+
+/** Per-element imported-source permissions, recomputed for each document state. */
+export interface SourceCapabilitiesState {
+  status: SourcePreservationStatus;
+  elements: Record<string, SourceElementCapabilities>;
+}
+
 export interface DocPayload {
   doc: SpecDoc;
   open_questions: OpenItem[];
@@ -297,6 +345,8 @@ export interface DocPayload {
   preservation_ready: boolean;
   /** Detailed imported-source capability state; null for from-scratch documents. */
   source_preservation: SourcePreservationState | null;
+  /** Per-operation source-edit permissions; null when no source package exists. */
+  source_capabilities: SourceCapabilitiesState | null;
 }
 
 /* --- Version diff / redline (Batch 5, mirrors backend/spec_doc/diffing.py) --- */

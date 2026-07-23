@@ -175,6 +175,10 @@ Draft the COMPLETE section now — the full first pass, top to bottom.
 # prompt.
 _DEFAULT_DEMO_DISCIPLINE = "Fire Protection & Suppression"
 _MAX_DISCIPLINE_LEN = 80
+# Room for a sentence or two of project-priming context (the picker's
+# "describe this project" field) — longer than a discipline, still bounded so
+# a pasted paragraph can't bloat every turn.
+_MAX_PROJECT_CONTEXT_LEN = 400
 
 _ONBOARDING_DEMO_DIRECTIVE = """\
 This is the guided-tour DEMO pass — I'm brand new here, and the tour is about to teach me the app on whatever you draft. Draft a deliberately SMALL demonstration section for my discipline: {discipline}.
@@ -197,6 +201,17 @@ def sanitize_discipline(discipline: str) -> str:
     endpoint and project load) and the onboarding demo directive below.
     """
     return " ".join((discipline or "").split())[:_MAX_DISCIPLINE_LEN].strip()
+
+
+def sanitize_project_context(text: str) -> str:
+    """Collapse the free-text project description to one bounded line.
+
+    Same newline-injection guard as :func:`sanitize_discipline` (folds all
+    whitespace so the primer can't forge prompt structure), with a larger cap
+    since it holds a sentence or two rather than a single label. Empty stays
+    empty. Shared by the reset endpoint and project load.
+    """
+    return " ".join((text or "").split())[:_MAX_PROJECT_CONTEXT_LEN].strip()
 
 
 def _sanitize_discipline(discipline: str) -> str:

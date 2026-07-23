@@ -164,12 +164,14 @@ def test_session_reset_clears_history_and_document(monkeypatch):
     assert not sessions.get_session().doc.doc.is_empty()
 
     resp = client.post("/api/session/reset")
-    # Batch 10: the reset response reports the (kept) module + discipline.
+    # Batch 10: the reset response reports the (kept) module + discipline. The
+    # neutral default is now the generic module; project_context is echoed too.
     assert resp.json() == {
         "ok": True,
-        "module_id": "hyperscale_fire",
+        "module_id": "generic",
         "module": sessions.get_session().module.display_name,
         "discipline": "",
+        "project_context": "",
     }
     assert sessions.get_session().history == []
     assert sessions.get_session().doc.doc.is_empty()
@@ -533,7 +535,11 @@ _OVERRIDE_EDITS = {
 
 
 def test_health_reports_module(monkeypatch):
-    data = _client().get("/api/health").json()
+    client = _client()
+    # The neutral default is the generic module; select fire to assert the
+    # curated module's health fields.
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
+    data = client.get("/api/health").json()
     assert data["module_id"] == "hyperscale_fire"
     assert "Fire Suppression" in data["module"]
 
@@ -544,6 +550,9 @@ def test_chat_turn_emits_lint_event_and_payloads_carry_standards(monkeypatch):
     )
     _patch_client(monkeypatch, fake)
     client = _client()
+    # NFPA 13 is a fire-module PIN, so the override records as is_override; the
+    # neutral default is the unpinned generic module, so select fire first.
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
 
     resp = client.post("/api/chat", json={"message": "The AHJ is on 2021 VCC"})
     events = _parse_sse(resp.text)
@@ -614,6 +623,9 @@ def test_override_survives_project_round_trip(monkeypatch):
     )
     _patch_client(monkeypatch, fake)
     client = _client()
+    # NFPA 13 is a fire-module PIN (so the override is is_override, not
+    # is_added); the neutral default is the unpinned generic module.
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
     client.post("/api/chat", json={"message": "go"})
 
     project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
@@ -652,7 +664,11 @@ def test_undo_rolls_back_override_and_lint(monkeypatch):
 def test_stable_system_prompt_is_cached_and_module_rendered(monkeypatch):
     fake = FakeClient([text_turn(["ok"])])
     _patch_client(monkeypatch, fake)
-    _client().post("/api/chat", json={"message": "hello"})
+    client = _client()
+    # This pins the CURATED module's rendered content (its catalog + NFPA
+    # pins); the neutral default is now the generic module.
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
+    client.post("/api/chat", json={"message": "hello"})
     request = fake.messages.last_request
     # The system prompt is ONLY the stable module block — everything
     # session-varying rides the PROJECT CONTEXT block in the user message.

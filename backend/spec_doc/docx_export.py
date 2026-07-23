@@ -125,9 +125,10 @@ def build_docx(
     document.add_page_break()
     _centered(document, "ASSUMPTIONS SCHEDULE")
     document.add_paragraph(
-        "The following provisions were drafted from defaults (NFPA 13-2025 "
-        "/ hyperscale data-center norms) without explicit confirmation. "
-        "Each requires review by the design professional of record."
+        "The following provisions were drafted from defaults (the applicable "
+        "codes, standards, and disciplinary norms in effect) without explicit "
+        "confirmation. Each requires review by the design professional of "
+        "record."
     )
     assumed = [
         (ref, p.text)

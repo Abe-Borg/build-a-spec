@@ -160,6 +160,12 @@ class SessionState:
     # picker always sends explicit values). Rendered into PROJECT CONTEXT
     # each turn, never the cached stable prompt.
     discipline: str = ""
+    # Optional one-or-two-sentence project description from the session-start
+    # picker (free text, sanitized). Purely primes the model — rendered into
+    # PROJECT CONTEXT each turn, never the cached stable prompt. Unlike
+    # ``discipline`` this is CLEARED on reset: it describes one specific
+    # project, so it must not bleed into the next session.
+    project_context: str = ""
     research: ResearchRunner = field(default_factory=ResearchRunner)
     audit: AuditRunner = field(default_factory=AuditRunner)
     # Final QC on Fable 5 (Batch 4). Replaced on reset/load like the other
@@ -259,6 +265,9 @@ class SessionState:
         self.source_docx_filename = ""
         self.source_docx_map = None
         self.import_report = None
+        # Per-project priming text does not survive a reset (see the field
+        # comment). Module and discipline are kept; this is not.
+        self.project_context = ""
         # Fresh runners: work still running against the old session
         # finishes into the abandoned objects (the zombie-turn pattern).
         self.research = ResearchRunner()
@@ -410,6 +419,13 @@ def _turn_context_text(session: SessionState) -> str:
         parts.append(
             "PROJECT DISCIPLINE: [not yet stated] — ask the user what "
             "discipline this section is for before drafting domain content."
+        )
+    # Optional project-description primer (any module — not gated by
+    # open_catalog); renders only when the user provided one at session start.
+    if session.project_context:
+        parts.append(
+            "PROJECT DESCRIPTION (stated by the user at session start): "
+            + session.project_context
         )
     parts += [
         standards_context_block(

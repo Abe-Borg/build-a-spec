@@ -150,6 +150,10 @@ def test_research_run_rolls_up_into_ledger(monkeypatch):
     import time as _time
 
     client = _client()
+    # Research routes by the fire module's dimension messages (and requires a
+    # curated module's discipline gate to pass); the neutral default is now
+    # the generic module, so select fire first.
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
     # Record a complete profile via chat so research can start.
     profile_edits = {
         "edits": [

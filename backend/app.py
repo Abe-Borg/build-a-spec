@@ -93,6 +93,7 @@ from .llm.prompts import (
     FULL_DRAFT_DIRECTIVE,
     onboarding_demo_directive,
     sanitize_discipline,
+    sanitize_project_context,
 )
 from .project_profile import ProjectProfile
 from .qc.engine import QCSourceGuard
@@ -158,10 +159,12 @@ class SessionResetRequest(BaseModel):
     module and discipline). ``module_id`` blank keeps the current module;
     unknown ids degrade to the default (the registry posture). Discipline
     only sticks when the resulting module is open-catalog (the invariant).
+    ``project_context`` is optional priming text; it applies to any module.
     """
 
     module_id: str = ""
     discipline: str = ""
+    project_context: str = ""
 
 
 class QcApplyRequest(BaseModel):
@@ -489,6 +492,7 @@ def create_app() -> FastAPI:
             "module": session.module.display_name,
             "module_id": session.module.module_id,
             "discipline": session.discipline,
+            "project_context": session.project_context,
         }
 
     @app.post("/api/key")
@@ -570,11 +574,17 @@ def create_app() -> FastAPI:
                 session.discipline = sanitize_discipline(body.discipline)
             else:
                 session.discipline = ""
+            # Priming text applies to any module (not gated by open_catalog);
+            # reset() already cleared it, so a bodyless reset leaves it "".
+            session.project_context = sanitize_project_context(
+                body.project_context
+            )
         return {
             "ok": True,
             "module_id": session.module.module_id,
             "module": session.module.display_name,
             "discipline": session.discipline,
+            "project_context": session.project_context,
         }
 
     @app.get("/api/session/unsaved")

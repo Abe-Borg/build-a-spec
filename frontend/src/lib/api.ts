@@ -45,6 +45,7 @@ export async function saveApiKey(apiKey: string): Promise<void> {
 export async function resetSession(opts?: {
   module_id?: string;
   discipline?: string;
+  project_context?: string;
 }): Promise<void> {
   if (opts) {
     await fetch("/api/session/reset", {

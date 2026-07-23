@@ -141,7 +141,7 @@ function HowToUse() {
               <>
                 Section, building location, client, hazard basics. Not sure
                 about a detail? Say “I don’t know” — Claude applies a defensible
-                NFPA&nbsp;13-2025 default and stamps the block{" "}
+                code-based default and stamps the block{" "}
                 <Tag>assumed</Tag> for later review.
               </>
             ),
@@ -263,7 +263,7 @@ function HowItWorks() {
           },
           {
             t: "Domain knowledge lives in spec modules",
-            d: "Discipline expertise — catalog, playbook, standards pins, research dimensions — is packaged in registry-validated modules. The first is Division 21 hyperscale fire suppression; the engine itself is domain-neutral.",
+            d: "Discipline expertise — catalog, playbook, standards pins, research dimensions — is packaged in registry-validated modules. One works across any discipline in the USA and Canada; others are deeply curated for a single domain. The engine itself is domain-neutral.",
           },
           {
             t: "Grounded research, not guesswork",
@@ -271,7 +271,7 @@ function HowItWorks() {
           },
           {
             t: "Pinned standards editions",
-            d: "NFPA 13-2025 (current) is the drafting default; a jurisdiction’s adopted earlier edition overrides only with the adoption basis stated — never silently.",
+            d: "Current published editions are the drafting default; a jurisdiction’s adopted earlier edition overrides only with the adoption basis stated — never silently.",
           },
           {
             t: "Honest provenance on every provision",
@@ -397,9 +397,9 @@ function About({ health }: { health: Health | null }) {
           <dd className="text-ink">Claude Fable 5</dd>
         </div>
         <div className="flex gap-3">
-          <dt className="w-28 flex-none text-ink-faint">First domain</dt>
+          <dt className="w-28 flex-none text-ink-faint">Scope</dt>
           <dd className="text-ink">
-            Division 21 fire suppression for hyperscale data centers (USA)
+            Any discipline, USA &amp; Canada
           </dd>
         </div>
       </dl>

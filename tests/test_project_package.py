@@ -24,6 +24,7 @@ from tests.docx_fidelity_helpers import (
     assert_untouched_parts_identical,
     assert_valid_docx_package,
     make_fidelity_master,
+    make_numbered_island_master,
     mark_zip_members_encrypted,
     package_manifest,
     rewrite_zip_members,
@@ -229,6 +230,67 @@ def test_project_resume_restores_source_patch_state_and_undo(tmp_path):
     assert client.get(
         "/api/export/docx", params={"mode": "source"}
     ).content == source
+
+
+def test_project_resume_restores_pending_structural_patch_plan(tmp_path):
+    """A .baspec keeps semantic structure edits, never a rewritten source."""
+
+    client = _client()
+    source = make_numbered_island_master(tmp_path)
+    _import_master(client, source)
+
+    edited = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "add_paragraph",
+                    "target_id": "pt1.a1",
+                    "position": 1,
+                    "text": "Provide tamper switches at all supervised valves.",
+                    "status": "confirmed",
+                },
+                {
+                    "action": "move",
+                    "target_id": "pt1.a1.p3",
+                    "position": 0,
+                },
+            ]
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    expected_docx = client.get(
+        "/api/export/docx", params={"mode": "source"}
+    ).content
+    assert expected_docx != source
+    assert_untouched_parts_identical(source, expected_docx)
+    assert_valid_docx_package(expected_docx)
+
+    package = client.get("/api/project/save")
+    assert package.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(package.content), "r") as archive:
+        # Persistence always retains the immutable source, not the generated
+        # structural export; the edit plan lives in semantic history.
+        assert archive.read(SOURCE_ENTRY) == source
+
+    assert client.post("/api/session/reset").status_code == 200
+    loaded = _load_file(client, package.content)
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["source_available"] is True
+    assert loaded.json()["preservation_ready"] is True
+    assert client.get("/api/import/original").content == source
+    assert client.get(
+        "/api/export/docx", params={"mode": "source"}
+    ).content == expected_docx
+
+    assert client.post("/api/doc/undo").status_code == 200
+    assert client.get(
+        "/api/export/docx", params={"mode": "source"}
+    ).content == source
+    assert client.post("/api/doc/redo").status_code == 200
+    assert client.get(
+        "/api/export/docx", params={"mode": "source"}
+    ).content == expected_docx
 
 
 def test_save_before_import_baseline_retains_source_for_redo(tmp_path):

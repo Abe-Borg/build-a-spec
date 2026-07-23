@@ -292,8 +292,9 @@ export const TOUR: readonly TourChunk[] = [
         placement: "left",
         title: "Edit directly on the paper",
         body:
-          "Hover any block: ✏️ rewrites it (stamped confirmed), ✓ " +
-          "confirms it as-is, 🗑 deletes it. No chat round-trip — the " +
+          "Hover an editable block: ✏️ rewrites it (stamped confirmed), ✓ " +
+          "confirms it as-is, 🗑 deletes it. Imported DOCX safety rules can " +
+          "restrict these body actions. No chat round-trip — the " +
           "model simply sees the result next turn. Try confirming this one.",
       },
       {
@@ -347,7 +348,8 @@ export const TOUR: readonly TourChunk[] = [
           "block lands stamped imported and the interview pivots to " +
           "adapting it. The exact source package is retained, and only " +
           "verified simple body-text edits are allowed through the " +
-          "source-preserving path. It's disabled now " +
+          "source-preserving path. Bounded structural edits require a " +
+          "proven flat island with isolated direct Word list bindings. It's disabled now " +
           "because this session has content.",
       },
     ],
@@ -397,7 +399,9 @@ export const TOUR: readonly TourChunk[] = [
         body:
           "A clean .docx with the assumptions and open-items schedules — " +
           "or, after import, a preserved DOCX that clones the master and " +
-          "patches only verified simple body text. Normalized DOCX and the " +
+          "patches verified simple body text, with bounded add, delete, or " +
+          "reorder only in proven isolated Word-list body islands. Normalized " +
+          "DOCX and the " +
           "extracted-provision redline remain explicit separate choices.",
       },
       {

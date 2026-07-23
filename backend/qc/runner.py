@@ -19,7 +19,7 @@ import time
 from typing import Any, Callable
 
 from ..tracing import capture as _trace
-from .engine import QCFanoutError, QCResult, run_final_qc
+from .engine import QCSourceGuard, QCFanoutError, QCResult, run_final_qc
 from .schema import QC_LENSES
 
 STATUS_IDLE = "idle"
@@ -68,6 +68,7 @@ class QCRunner:
         max_tokens: int,
         version_index: int,
         discipline: str = "",
+        source_guard: QCSourceGuard | None = None,
         remembered_dismissed: set[str] | None = None,
         on_settled: Callable[[], None] | None = None,
         usage_sink: Callable[[dict], None] | None = None,
@@ -104,6 +105,7 @@ class QCRunner:
                     started_at=started_at,
                     finished_at=time.strftime("%Y-%m-%d %H:%M"),
                     discipline=discipline,
+                    source_guard=source_guard,
                     remembered_dismissed=remembered_dismissed,
                     event_sink=_sink,
                     should_stop=cancel_event.is_set,

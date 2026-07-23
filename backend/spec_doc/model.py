@@ -307,6 +307,14 @@ def _check_integrity(section: SpecSection) -> None:
     nesting — would let future edits mint colliding ids or target the
     wrong element.
     """
+    expected_parts = [("pt1", 1), ("pt2", 2), ("pt3", 3)]
+    actual_parts = [(part.uid, part.number) for part in section.parts]
+    if actual_parts != expected_parts:
+        raise ValueError(
+            "Malformed document data: expected fixed parts "
+            "pt1/pt2/pt3 numbered 1/2/3"
+        )
+
     seen: set[str] = set()
 
     def claim(uid: str) -> None:
@@ -502,6 +510,7 @@ def outline(section: SpecSection, *, max_text: int | None = 160) -> str:
 _ACTIONS = (
     "add_article",
     "add_paragraph",
+    "move",
     "replace",
     "delete",
     "set_status",
@@ -795,6 +804,49 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             "status": status,
         }
 
+    if action == "move":
+        if not isinstance(node, Paragraph):
+            raise SpecEditError(
+                "move: target must be a paragraph id. Sections, parts, and "
+                "articles cannot be moved."
+            )
+        extra_keys = set(op) - {"action", "target_id", "position"}
+        if extra_keys:
+            fields = ", ".join(sorted(extra_keys))
+            raise SpecEditError(
+                f"move: unsupported field(s): {fields}. Only 'target_id' "
+                "and 'position' are accepted; moving to a different parent "
+                "is not supported."
+            )
+        position = op.get("position")
+        if not isinstance(position, int) or isinstance(position, bool):
+            raise SpecEditError(
+                "move: 'position' is required and must be a 0-based integer "
+                "index among the paragraph's current siblings."
+            )
+        ctx = _find_paragraph_context(section, node.uid)
+        assert ctx is not None
+        siblings = ctx[0]
+        if not 0 <= position < len(siblings):
+            raise SpecEditError(
+                "move: 'position' is outside the current sibling list "
+                f"(expected 0 through {len(siblings) - 1})."
+            )
+        previous_position = siblings.index(node)
+        if position == previous_position:
+            raise SpecEditError(
+                f"move: paragraph {node.uid!r} is already at position "
+                f"{position}; no change was requested."
+            )
+        siblings.pop(previous_position)
+        siblings.insert(position, node)
+        return {
+            "action": "move",
+            "id": node.uid,
+            "position": position,
+            "previous_position": previous_position,
+        }
+
     if action == "replace":
         if isinstance(node, Article):
             node.title = _require_text(op, "article title")
@@ -1045,6 +1097,10 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "or a paragraph id (nested subparagraph, max 4 levels); text = the "
         "provision text; status = confirmed | assumed | needs_input "
         "(defaults to assumed).\n"
+        "- move: target_id = a paragraph id; position = its required final "
+        "0-based index among its existing siblings. This reorders only "
+        "within the same semantic parent; it cannot move sections, parts, "
+        "articles, or reparent a paragraph.\n"
         "- replace: target_id = an article (text = new title), a paragraph "
         "(text and/or status), or 'sec' to set the section header (text = "
         "section title, numbering = section number like '21 13 13').\n"
@@ -1079,8 +1135,8 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "code), country ('USA'/'Canada'), client. Provide only the fields "
         "stated; an explicit empty string clears a field. A complete "
         "profile (all four) enables the requirements-research phase.\n"
-        "- position (optional, add ops): 0-based insertion index among the "
-        "target's children; omit to append.\n"
+        "- position: optional 0-based insertion index for add ops (omit to "
+        "append); required final sibling index for move.\n"
         "- source_item_id (optional, add_paragraph/replace): when a "
         "research profile item motivates the provision, its item id "
         "(r-...) — the panel then shows the citation. Empty string on "

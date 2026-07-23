@@ -5,39 +5,168 @@ P1's preservation path deliberately keeps these anchors *outside* the
 not content the model is allowed to author, and therefore must not ride the
 LLM context or ordinary semantic version snapshots.
 
-Only direct body paragraphs receive bindings.  A binding is editable in P1a
-when its complete visible text lives in one ordinary ``w:t`` inside one
-ordinary ``w:r``.  Paragraph/run properties may be present or absent, but no
-other inline or range markup is accepted.  Everything else remains mapped so
-the exporter can name the unsupported element precisely and fail closed.
+Only direct body paragraphs receive bindings. A binding is text-editable when
+its complete visible text lives in one ordinary ``w:t`` inside one ordinary
+``w:r``. Paragraph/run properties may be present or absent, but no other
+inline or range markup is accepted. Everything else remains mapped so the
+exporter can name the unsupported element precisely and fail closed.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
 import re
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
+from urllib.parse import unquote, urlsplit
 
 from lxml import etree
 
-from .model import Article, Paragraph, SpecEditError, SpecSection
+from .model import Paragraph, SpecSection
 
 _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_STRICT_W_NS = "http://purl.oclc.org/ooxml/wordprocessingml/main"
 _W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
+_WML_NAMESPACES = frozenset(
+    {
+        _W_NS,
+        _STRICT_W_NS,
+    }
+)
 _W_P = f"{{{_W_NS}}}p"
 _W_PPR = f"{{{_W_NS}}}pPr"
 _W_R = f"{{{_W_NS}}}r"
 _W_RPR = f"{{{_W_NS}}}rPr"
 _W_T = f"{{{_W_NS}}}t"
 _W_SECTPR = f"{{{_W_NS}}}sectPr"
-_W_DOCUMENT_PROTECTION = f"{{{_W_NS}}}documentProtection"
 _W14_PARA_ID = f"{{{_W14_NS}}}paraId"
 
-_REVISION_LOCAL_NAMES = frozenset({"ins", "del", "moveFrom", "moveTo"})
+_OPC_RELATIONSHIP_NAMESPACES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/package/2006/relationships",
+        "http://purl.oclc.org/ooxml/package/relationships",
+    }
+)
+_OPC_CONTENT_TYPE_NAMESPACES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/package/2006/content-types",
+        "http://purl.oclc.org/ooxml/package/content-types",
+    }
+)
+_SETTINGS_RELATIONSHIP_TYPES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/settings",
+    }
+)
+_SIGNATURE_RELATIONSHIP_TYPES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/package/2006/relationships/digital-signature/origin",
+        "http://schemas.openxmlformats.org/package/2006/relationships/digital-signature/signature",
+        "http://schemas.openxmlformats.org/package/2006/relationships/digital-signature/certificate",
+    }
+)
+_ACTIVE_RELATIONSHIP_TYPES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/control",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/control",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/oleObject",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/package",
+        "http://schemas.microsoft.com/office/2006/relationships/activeXControl",
+        "http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary",
+        "http://schemas.microsoft.com/office/2006/relationships/vbaProject",
+        "http://schemas.microsoft.com/office/2006/relationships/wordVbaData",
+    }
+)
+_SIGNATURE_CONTENT_TYPES = frozenset(
+    {
+        "application/vnd.openxmlformats-package.digital-signature-certificate",
+        "application/vnd.openxmlformats-package.digital-signature-origin",
+        "application/vnd.openxmlformats-package.digital-signature-xmlsignature+xml",
+    }
+)
+_ACTIVE_CONTENT_TYPES = frozenset(
+    {
+        "application/vnd.ms-office.activex",
+        "application/vnd.ms-office.activex+xml",
+        "application/vnd.ms-office.vbaproject",
+        "application/vnd.ms-office.vbaprojectsignature",
+        "application/vnd.ms-word.document.macroenabled.main+xml",
+        "application/vnd.ms-word.template.macroenabledtemplate.main+xml",
+        "application/vnd.ms-word.vbadata+xml",
+        "application/vnd.openxmlformats-officedocument.oleobject",
+        "application/vnd.openxmlformats-officedocument.package",
+    }
+)
+_SETTINGS_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"
+)
+
+_REVISION_LOCAL_NAMES = frozenset(
+    {
+        "ins",
+        "del",
+        "moveFrom",
+        "moveTo",
+        "moveFromRangeStart",
+        "moveFromRangeEnd",
+        "moveToRangeStart",
+        "moveToRangeEnd",
+        "customXmlInsRangeStart",
+        "customXmlInsRangeEnd",
+        "customXmlDelRangeStart",
+        "customXmlDelRangeEnd",
+        "customXmlMoveFromRangeStart",
+        "customXmlMoveFromRangeEnd",
+        "customXmlMoveToRangeStart",
+        "customXmlMoveToRangeEnd",
+        "customXmlPrChange",
+        "pPrChange",
+        "rPrChange",
+        "sectPrChange",
+        "tblPrChange",
+        "tblPrExChange",
+        "tblGridChange",
+        "trPrChange",
+        "tcPrChange",
+        "numberingChange",
+        "cellIns",
+        "cellDel",
+        "cellMerge",
+    }
+)
+_OFFICE_2010_REVISION_LOCAL_NAMES = frozenset(
+    {
+        "conflictIns",
+        "conflictDel",
+        "customXmlConflictInsRangeStart",
+        "customXmlConflictInsRangeEnd",
+        "customXmlConflictDelRangeStart",
+        "customXmlConflictDelRangeEnd",
+    }
+)
+_REVISION_BEARING_RELATIONSHIP_SUFFIXES = frozenset(
+    {
+        "/officedocument",
+        "/glossarydocument",
+        "/header",
+        "/footer",
+        "/footnotes",
+        "/endnotes",
+        "/comments",
+        "/styles",
+        "/numbering",
+        "/settings",
+    }
+)
+_MAX_REVISION_SCAN_BYTES = 64 * 1024 * 1024
+_MAX_OPC_DISCOVERY_BYTES = 64 * 1024 * 1024
 _ACTIVE_MEMBER_MARKERS = (
     "/activex/",
     "/embeddings/",
@@ -71,7 +200,7 @@ def canonical_element_sha256(element) -> str:
 
 @dataclass(frozen=True)
 class SourceTextSpan:
-    """The only ``w:t`` slice P1a may replace.
+    """The only ``w:t`` slice source-preserving mode may replace.
 
     ``source_node_text`` is the complete original text node.  ``start`` and
     ``end`` select the semantic provision text while leaving a literal manual
@@ -420,7 +549,7 @@ def semantic_body_projection_sha256(section: SpecSection) -> str:
 def _unique_semantic_span(source_text: str, semantic_text: str) -> SourceTextSpan | None:
     """Return a unique exact substring span, or ``None`` after normalization.
 
-    The existing importer deliberately normalizes whitespace.  P1a edits only
+    The existing importer deliberately normalizes whitespace. Text edits only
     when the normalized semantic value still corresponds to one exact source
     slice; guessing an offset would risk changing a literal label or formatted
     content outside the provision.
@@ -528,7 +657,372 @@ def _parse_xml(data: bytes):
         remove_blank_text=False,
         recover=False,
     )
-    return etree.fromstring(data, parser=parser)
+    root = etree.fromstring(data, parser=parser)
+    if root.getroottree().docinfo.doctype:
+        raise ValueError("DTD-bearing OPC XML is not accepted.")
+    return root
+
+
+def _namespace_name(tag: Any) -> str:
+    if not isinstance(tag, str) or not tag.startswith("{") or "}" not in tag:
+        return ""
+    return tag[1:].split("}", 1)[0]
+
+
+@dataclass(frozen=True)
+class _OpcRelationship:
+    source_part: str
+    rel_type: str
+    target: str
+    external: bool
+
+
+@dataclass(frozen=True)
+class _OpcDiscovery:
+    relationships: tuple[_OpcRelationship, ...]
+    content_type_overrides: Mapping[str, str]
+    content_type_defaults: Mapping[str, str]
+    declared_content_types: frozenset[str]
+
+    def content_type_for(self, part_name: str) -> str | None:
+        override = self.content_type_overrides.get(part_name)
+        if override is not None:
+            return override
+        leaf = part_name.rsplit("/", 1)[-1]
+        if "." not in leaf:
+            return None
+        return self.content_type_defaults.get(leaf.rsplit(".", 1)[-1].casefold())
+
+
+def _relationship_source_part(member_name: str) -> str | None:
+    """Return the OPC source part represented by one ``.rels`` member."""
+    if member_name == "_rels/.rels":
+        return ""
+    directory, filename = posixpath.split(member_name)
+    parent, rels_dir = posixpath.split(directory)
+    if rels_dir != "_rels" or not filename.endswith(".rels"):
+        return None
+    source_leaf = filename[: -len(".rels")]
+    if not source_leaf:
+        return None
+    return posixpath.join(parent, source_leaf) if parent else source_leaf
+
+
+def _resolve_internal_target(source_part: str, target: str) -> str:
+    """Resolve an internal OPC relationship target to a safe ZIP member."""
+    if not isinstance(target, str) or not target.strip() or "\\" in target:
+        raise ValueError("Malformed internal OPC relationship target.")
+    parsed = urlsplit(target.strip())
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("Malformed internal OPC relationship target.")
+    try:
+        target_path = unquote(parsed.path, errors="strict")
+    except UnicodeError as exc:
+        raise ValueError("Malformed internal OPC relationship target.") from exc
+    if "\\" in target_path or "\x00" in target_path:
+        raise ValueError("Malformed internal OPC relationship target.")
+    if target_path.startswith("/"):
+        candidate = target_path.lstrip("/")
+    else:
+        candidate = posixpath.join(posixpath.dirname(source_part), target_path)
+    normalized = posixpath.normpath(candidate)
+    if (
+        normalized in {"", ".", ".."}
+        or normalized.startswith("../")
+        or normalized.startswith("/")
+        or any(part in {"", ".", ".."} for part in normalized.split("/"))
+    ):
+        raise ValueError("Malformed internal OPC relationship target.")
+    return normalized
+
+
+def _content_type_part_name(value: str) -> str:
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise ValueError("Malformed OPC content-type part name.")
+    return _resolve_internal_target("", value)
+
+
+def _parse_content_types(archive: zipfile.ZipFile) -> tuple[
+    Mapping[str, str], Mapping[str, str], frozenset[str]
+]:
+    root = _parse_xml(archive.read("[Content_Types].xml"))
+    if (
+        _local_name(root.tag) != "Types"
+        or _namespace_name(root.tag) not in _OPC_CONTENT_TYPE_NAMESPACES
+    ):
+        raise ValueError("Malformed OPC content-types part.")
+    overrides: dict[str, str] = {}
+    defaults: dict[str, str] = {}
+    declared: set[str] = set()
+    for child in root:
+        if not isinstance(child.tag, str):
+            continue
+        local = _local_name(child.tag)
+        if _namespace_name(child.tag) not in _OPC_CONTENT_TYPE_NAMESPACES:
+            # Markup from another namespace cannot declare an OPC part type.
+            continue
+        content_type = child.get("ContentType")
+        if not isinstance(content_type, str) or not content_type.strip():
+            raise ValueError("Malformed OPC content-type declaration.")
+        normalized_type = content_type.strip().casefold()
+        if local == "Override":
+            part_name = _content_type_part_name(child.get("PartName"))
+            if part_name in overrides:
+                raise ValueError("Duplicate OPC content-type override.")
+            overrides[part_name] = normalized_type
+        elif local == "Default":
+            extension = child.get("Extension")
+            if (
+                not isinstance(extension, str)
+                or not extension.strip()
+                or any(character in extension for character in "/\\.")
+            ):
+                raise ValueError("Malformed OPC content-type default.")
+            extension = extension.strip().casefold()
+            if extension in defaults:
+                raise ValueError("Duplicate OPC content-type default.")
+            defaults[extension] = normalized_type
+        else:
+            raise ValueError("Malformed OPC content-types part.")
+        declared.add(normalized_type)
+    return MappingProxyType(overrides), MappingProxyType(defaults), frozenset(declared)
+
+
+def _parse_relationship_part(
+    archive: zipfile.ZipFile,
+    member_name: str,
+    source_part: str,
+) -> tuple[_OpcRelationship, ...]:
+    root = _parse_xml(archive.read(member_name))
+    if (
+        _local_name(root.tag) != "Relationships"
+        or _namespace_name(root.tag) not in _OPC_RELATIONSHIP_NAMESPACES
+    ):
+        raise ValueError("Malformed OPC relationships part.")
+    relationships: list[_OpcRelationship] = []
+    seen_ids: set[str] = set()
+    for child in root:
+        if not isinstance(child.tag, str):
+            continue
+        if _namespace_name(child.tag) not in _OPC_RELATIONSHIP_NAMESPACES:
+            # Foreign extension markup is not an OPC relationship.
+            continue
+        if _local_name(child.tag) != "Relationship":
+            raise ValueError("Malformed OPC relationships part.")
+        rel_id = child.get("Id")
+        rel_type = child.get("Type")
+        target = child.get("Target")
+        target_mode = child.get("TargetMode", "Internal")
+        if (
+            not isinstance(rel_id, str)
+            or not rel_id.strip()
+            or rel_id in seen_ids
+            or not isinstance(rel_type, str)
+            or not rel_type.strip()
+            or not isinstance(target, str)
+            or not target.strip()
+            or not isinstance(target_mode, str)
+            or target_mode.casefold() not in {"internal", "external"}
+        ):
+            raise ValueError("Malformed OPC relationship.")
+        seen_ids.add(rel_id)
+        external = target_mode.casefold() == "external"
+        if not external:
+            # Prove every internal target is a safe package path even when the
+            # relationship type is not one Build-a-Spec otherwise interprets.
+            _resolve_internal_target(source_part, target)
+        relationships.append(
+            _OpcRelationship(
+                source_part=source_part,
+                rel_type=rel_type.strip(),
+                target=target.strip(),
+                external=external,
+            )
+        )
+    return tuple(relationships)
+
+
+def _discover_opc(archive: zipfile.ZipFile) -> _OpcDiscovery:
+    relationship_parts = [
+        (info, source_part)
+        for info in archive.infolist()
+        if (source_part := _relationship_source_part(info.filename)) is not None
+    ]
+    discovery_bytes = sum(info.file_size for info, _source in relationship_parts)
+    try:
+        content_types_info = archive.getinfo("[Content_Types].xml")
+    except KeyError as exc:
+        raise ValueError("The OPC content-types part is unavailable.") from exc
+    discovery_bytes += content_types_info.file_size
+    if discovery_bytes > _MAX_OPC_DISCOVERY_BYTES:
+        raise ValueError("OPC relationship discovery exceeds its safety limit.")
+
+    overrides, defaults, declared = _parse_content_types(archive)
+    relationships: list[_OpcRelationship] = []
+    for info, source_part in relationship_parts:
+        relationships.extend(
+            _parse_relationship_part(archive, info.filename, source_part)
+        )
+    return _OpcDiscovery(
+        relationships=tuple(relationships),
+        content_type_overrides=overrides,
+        content_type_defaults=defaults,
+        declared_content_types=declared,
+    )
+
+
+def _on_off_value(element) -> bool | None:
+    values = [
+        value
+        for name, value in element.attrib.items()
+        if _local_name(name) == "val"
+    ]
+    if not values:
+        return True
+    if len(values) != 1:
+        return None
+    normalized = values[0].strip().casefold()
+    if normalized in {"1", "on", "true"}:
+        return True
+    if normalized in {"0", "off", "false"}:
+        return False
+    return None
+
+
+def _settings_blockers(
+    archive: zipfile.ZipFile,
+    discovery: _OpcDiscovery,
+) -> tuple[str, ...]:
+    relationships = [
+        relationship
+        for relationship in discovery.relationships
+        if relationship.source_part == "word/document.xml"
+        and relationship.rel_type in _SETTINGS_RELATIONSHIP_TYPES
+    ]
+    if not relationships:
+        return ()
+    if len(relationships) != 1 or relationships[0].external:
+        return ("unsafe_settings_xml",)
+    relationship = relationships[0]
+    try:
+        target = _resolve_internal_target(
+            relationship.source_part,
+            relationship.target,
+        )
+        if target not in archive.namelist():
+            raise ValueError("The related settings part is unavailable.")
+        if discovery.content_type_for(target) != _SETTINGS_CONTENT_TYPE.casefold():
+            raise ValueError("The related settings part has the wrong content type.")
+        settings_root = _parse_xml(archive.read(target))
+        if _local_name(settings_root.tag) != "settings":
+            raise ValueError("The related settings part has the wrong root.")
+    except (
+        KeyError,
+        RuntimeError,
+        zipfile.BadZipFile,
+        etree.XMLSyntaxError,
+        ValueError,
+    ):
+        return ("unsafe_settings_xml",)
+
+    blockers: list[str] = []
+    settings_elements = [
+        element for element in settings_root.iter() if isinstance(element.tag, str)
+    ]
+    if any(
+        _local_name(element.tag) in {"documentProtection", "writeProtection"}
+        for element in settings_elements
+    ):
+        blockers.append("document_protection")
+    track_revisions = [
+        element
+        for element in settings_elements
+        if _local_name(element.tag) == "trackRevisions"
+    ]
+    if len(track_revisions) > 1:
+        blockers.append("unsafe_settings_xml")
+    elif track_revisions:
+        enabled = _on_off_value(track_revisions[0])
+        if enabled is None:
+            blockers.append("unsafe_settings_xml")
+        elif enabled:
+            blockers.append("tracked_changes")
+    return tuple(blockers)
+
+
+def _is_wordprocessing_xml_content_type(content_type: str | None) -> bool:
+    if content_type is None or not content_type.endswith("+xml"):
+        return False
+    return content_type.startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml."
+    ) or content_type.startswith("application/vnd.ms-word.")
+
+
+def _is_revision_element(element) -> bool:
+    namespace = _namespace_name(element.tag)
+    local_name = _local_name(element.tag)
+    if namespace in _WML_NAMESPACES:
+        return local_name in _REVISION_LOCAL_NAMES
+    if namespace == _W14_NS:
+        return local_name in _OFFICE_2010_REVISION_LOCAL_NAMES
+    return False
+
+
+def _revision_related_parts(
+    archive: zipfile.ZipFile,
+    discovery: _OpcDiscovery,
+) -> tuple[set[str], bool]:
+    """Return relationship-proven Word XML candidates and typing failures.
+
+    OPC part names are opaque URI paths: a header can legally be named
+    ``review-header.dat``. Relationship type and effective content type, not
+    a filename suffix, establish whether it can carry Word revisions.
+    """
+    members = set(archive.namelist())
+    related = {"word/document.xml"}
+    malformed = False
+    for relationship in discovery.relationships:
+        is_revision_bearing = any(
+            relationship.rel_type.casefold().endswith(suffix)
+            for suffix in _REVISION_BEARING_RELATIONSHIP_SUFFIXES
+        )
+        if not is_revision_bearing:
+            continue
+        if relationship.external:
+            malformed = True
+            continue
+        try:
+            target = _resolve_internal_target(
+                relationship.source_part,
+                relationship.target,
+            )
+        except ValueError:
+            malformed = True
+            continue
+        if target not in members:
+            malformed = True
+            continue
+        related.add(target)
+        if not _is_wordprocessing_xml_content_type(
+            discovery.content_type_for(target)
+        ):
+            malformed = True
+    return related, malformed
+
+
+def _body_has_non_whitespace_character_data(root) -> bool:
+    bodies = [
+        element
+        for element in root.iter()
+        if _namespace_name(element.tag) in _WML_NAMESPACES
+        and _local_name(element.tag) == "body"
+    ]
+    if len(bodies) != 1:
+        return False
+    body = bodies[0]
+    if (body.text or "").strip():
+        return True
+    return any((child.tail or "").strip() for child in body)
 
 
 def _global_source_blockers(
@@ -549,26 +1043,94 @@ def _global_source_blockers(
     ):
         blockers.append("active_content")
 
+    # OPC semantics come from relationships and content types, not customary
+    # filenames.  A valid package may place settings, signatures, controls, or
+    # embedded objects at another safe part name.  Conversely, an orphan file
+    # at a familiar name is not authoritative.  Discovery failure makes the
+    # package pass-through-only rather than guessing that mutation is safe.
+    discovery: _OpcDiscovery | None = None
     try:
-        root = _parse_xml(document_xml)
-        if any(_local_name(el.tag) in _REVISION_LOCAL_NAMES for el in root.iter()):
-            blockers.append("tracked_changes")
-    except (etree.XMLSyntaxError, ValueError):
-        blockers.append("unsafe_document_xml")
+        discovery = _discover_opc(archive)
+    except (
+        KeyError,
+        RuntimeError,
+        NotImplementedError,
+        zipfile.BadZipFile,
+        etree.XMLSyntaxError,
+        UnicodeError,
+        ValueError,
+    ):
+        blockers.append("unsafe_relationship_scan")
+    if discovery is not None:
+        relationship_types = {
+            relationship.rel_type for relationship in discovery.relationships
+        }
+        if relationship_types & _SIGNATURE_RELATIONSHIP_TYPES or (
+            discovery.declared_content_types & _SIGNATURE_CONTENT_TYPES
+        ):
+            blockers.append("signed_package")
+        if relationship_types & _ACTIVE_RELATIONSHIP_TYPES or (
+            discovery.declared_content_types & _ACTIVE_CONTENT_TYPES
+        ):
+            blockers.append("active_content")
+        blockers.extend(_settings_blockers(archive, discovery))
 
-    if "word/settings.xml" in archive.namelist():
-        try:
-            settings_root = _parse_xml(archive.read("word/settings.xml"))
-            if (
-                settings_root.find(f".//{_W_DOCUMENT_PROTECTION}") is not None
-                or any(
-                    _local_name(el.tag) == "documentProtection"
-                    for el in settings_root.iter()
+    # Pending revisions can live in headers, footers, notes, styles, or
+    # numbering as well as document.xml. Part names are not authoritative in
+    # OPC, so use each part's effective WordprocessingML content type. If OPC
+    # discovery itself failed, the package is already pass-through-only; the
+    # conventional-path fallback still supplies the most useful diagnostic.
+    if discovery is not None:
+        relationship_parts, malformed_relationship_part = (
+            _revision_related_parts(archive, discovery)
+        )
+        if malformed_relationship_part:
+            blockers.append("unsafe_revision_scan")
+        revision_parts = [
+            info
+            for info in archive.infolist()
+            if not info.is_dir()
+            and (
+                info.filename in relationship_parts
+                or _is_wordprocessing_xml_content_type(
+                    discovery.content_type_for(info.filename)
                 )
+            )
+        ]
+    else:
+        revision_parts = [
+            info
+            for info in archive.infolist()
+            if not info.is_dir()
+            and info.filename.casefold().startswith("word/")
+            and info.filename.casefold().endswith(".xml")
+        ]
+    if sum(info.file_size for info in revision_parts) > _MAX_REVISION_SCAN_BYTES:
+        blockers.append("unsafe_revision_scan")
+    else:
+        for info in revision_parts:
+            try:
+                payload = (
+                    document_xml
+                    if info.filename == "word/document.xml"
+                    else archive.read(info)
+                )
+                root = _parse_xml(payload)
+            except (etree.XMLSyntaxError, ValueError, RuntimeError, zipfile.BadZipFile):
+                blockers.append(
+                    "unsafe_document_xml"
+                    if info.filename == "word/document.xml"
+                    else "unsafe_revision_scan"
+                )
+                continue
+            if (
+                info.filename == "word/document.xml"
+                and _body_has_non_whitespace_character_data(root)
             ):
-                blockers.append("document_protection")
-        except (etree.XMLSyntaxError, ValueError, zipfile.BadZipFile):
-            blockers.append("unsafe_settings_xml")
+                blockers.append("unsafe_document_xml")
+            if any(_is_revision_element(element) for element in root.iter()):
+                blockers.append("tracked_changes")
+                break
 
     # Preserve first-seen order while avoiding duplicated diagnostics.
     return tuple(dict.fromkeys(blockers))
@@ -650,19 +1212,61 @@ def build_source_body_map(
 
 _BLOCKER_MESSAGES = {
     "active_content": "the source package contains macros, ActiveX, or embedded active content",
+    "ambiguous_structural_insert": (
+        "the new provision is not unambiguously inside one surviving "
+        "numbered source island"
+    ),
+    "ambiguous_structural_template": (
+        "the numbered island has inconsistent paragraph or run formatting, "
+        "so there is no unambiguous template for a new provision"
+    ),
+    "automatic_numbering_required": (
+        "structural edits require a genuine direct Word-numbered source provision"
+    ),
     "complex_paragraph_markup": "the source paragraph contains unsupported paragraph-level markup",
     "complex_run_markup": "the source paragraph contains multiple or unsupported inline runs",
+    "cross_island_move": (
+        "provisions cannot move across numbered-island, parent, or opaque-body "
+        "boundaries"
+    ),
+    "cross_parent_structural_change": "provisions cannot be reparented or moved between articles",
     "document_protection": "the source document is protected",
-    "heading_change": "P1a does not patch section or article headings",
+    "heading_change": "source-preserving mode does not patch section, part, or article headings",
     "invalid_xml_character": "the replacement contains a character XML cannot represent",
+    "manual_label_structural_change": (
+        "literal source labels cannot be safely renumbered after a structural edit"
+    ),
+    "mixed_numbering_island": "the candidate island mixes Word numbering definitions or levels",
+    "nested_structural_change": (
+        "P1b does not add, remove, move, or reparent nested provision subtrees"
+    ),
+    "noncontiguous_structural_island": (
+        "the candidate provisions are not contiguous direct Word body siblings"
+    ),
+    "numbering_instance_not_isolated": (
+        "the Word numbering instance is also referenced outside the candidate "
+        "island, so a local edit could renumber preserved content"
+    ),
     "not_direct_body_paragraph": "the provision is not a direct body paragraph",
     "noncontiguous_visible_text": "the provision text is not one contiguous Word text node",
-    "normalized_text_not_exact_slice": "the normalized provision is not one exact source-text slice",
+    "normalized_text_not_exact_slice": (
+        "the normalized provision is not one exact source-text slice"
+    ),
     "section_break_paragraph": "the paragraph carries section layout properties",
     "signed_package": "editing would invalidate the source package's digital signature",
-    "structural_change": "P1a does not add, delete, move, or reparent source content",
+    "structural_change": (
+        "the requested body structure is outside a proven-safe Word-numbered island"
+    ),
     "table_projection": "the provision is a read-only projection of a preserved table",
     "tracked_changes": "the source contains pending tracked changes",
+    "unsafe_relationship_scan": (
+        "OPC relationships or content types could not be inspected safely"
+    ),
+    "unsafe_revision_scan": "Word revision-bearing XML parts could not be inspected safely",
+    "unsafe_structural_island": (
+        "the structural edit crosses content outside one proven-safe numbered "
+        "body island"
+    ),
     "unsupported_text_control": "tabs and line breaks require unsupported Word run markup",
     "unsafe_document_xml": "the main Word document XML is unsafe or malformed",
     "unsafe_settings_xml": "the Word settings XML is unsafe or malformed",
@@ -674,7 +1278,7 @@ def source_blocker_message(blocker: str) -> str:
 
 
 def source_replacement_text_blocker(text: str) -> str | None:
-    """Return the P1a blocker for text that cannot live in one ``w:t``."""
+    """Return the blocker for text that cannot live in one ordinary ``w:t``."""
     if any(character in text for character in "\t\r\n"):
         return "unsupported_text_control"
     for character in text:
@@ -688,115 +1292,6 @@ def source_replacement_text_blocker(text: str) -> str | None:
     return None
 
 
-def _paragraphs_by_uid(section: SpecSection) -> dict[str, Paragraph]:
-    found: dict[str, Paragraph] = {}
-    for part in section.parts:
-        for article in part.articles:
-            stack = list(article.paragraphs)
-            while stack:
-                paragraph = stack.pop()
-                found[paragraph.uid] = paragraph
-                stack.extend(paragraph.children)
-    return found
-
-
-def _articles_by_uid(section: SpecSection) -> dict[str, Article]:
-    return {
-        article.uid: article
-        for part in section.parts
-        for article in part.articles
-    }
-
-
-def _reject_source_edit(uid: str, blocker: str) -> None:
-    raise SpecEditError(
-        f"Source-backed edit rejected for {uid!r} [{blocker}]: "
-        f"{source_blocker_message(blocker)}. Nothing was applied."
-    )
-
-
-def guard_source_edits(
-    section: SpecSection,
-    edits: Any,
-    source_map: SourceBodyMap,
-) -> None:
-    """Fail closed before a P1a-incompatible edit reaches ``DocumentStore``.
-
-    Malformed/unknown operations are left for the existing model validator so
-    its established error contract remains authoritative.  This guard only
-    rejects otherwise meaningful operations that would make a source-backed
-    export impossible.
-    """
-    if not isinstance(edits, list):
-        return
-    paragraphs = _paragraphs_by_uid(section)
-    articles = _articles_by_uid(section)
-
-    for op in edits:
-        if not isinstance(op, dict):
-            continue
-        action = op.get("action")
-        target = op.get("target_id")
-        uid = target if isinstance(target, str) and target else "unknown"
-
-        # Metadata/provenance-only operations never touch the Word body.
-        if action in {
-            "set_status",
-            "set_standard_edition",
-            "set_standard_suppressed",
-            "set_project_profile",
-        }:
-            continue
-
-        if action in {"add_article", "add_paragraph", "delete", "move"}:
-            _reject_source_edit(uid, "structural_change")
-
-        if action != "replace":
-            continue
-
-        if uid == "sec":
-            title_changes = "text" in op and str(op.get("text", "")).strip() != section.title
-            number_changes = (
-                "numbering" in op
-                and str(op.get("numbering", "")).strip() != section.number
-            )
-            if title_changes or number_changes:
-                _reject_source_edit(uid, "heading_change")
-            continue
-
-        article = articles.get(uid)
-        if article is not None:
-            if "text" in op and str(op.get("text", "")).strip() != article.title:
-                _reject_source_edit(uid, "heading_change")
-            continue
-
-        paragraph = paragraphs.get(uid)
-        if paragraph is None or "text" not in op:
-            # Let model.py report nonexistent/wrong-kind targets and validate
-            # status/source_item_id-only replacements.
-            continue
-        raw_text = op.get("text")
-        if not isinstance(raw_text, str):
-            continue
-        if raw_text.strip() == paragraph.text:
-            continue
-
-        text_blocker = source_replacement_text_blocker(raw_text.strip())
-        if text_blocker is not None:
-            _reject_source_edit(uid, text_blocker)
-
-        for blocker in source_map.global_blockers:
-            _reject_source_edit(uid, blocker)
-        binding = source_map.bindings.get(uid)
-        if binding is None:
-            _reject_source_edit(uid, "unmapped_paragraph")
-        if not binding.editable:
-            _reject_source_edit(
-                uid,
-                binding.blockers[0] if binding.blockers else "unmapped_paragraph",
-            )
-
-
 __all__ = [
     "SourceBodyBlock",
     "SourceBodyMap",
@@ -808,7 +1303,6 @@ __all__ = [
     "canonical_element_bytes",
     "canonical_element_sha256",
     "detect_global_source_blockers",
-    "guard_source_edits",
     "semantic_body_projection",
     "semantic_body_projection_sha256",
     "source_blocker_message",

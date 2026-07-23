@@ -72,9 +72,14 @@ from ..spec_doc import (
     open_questions,
     outline,
 )
+from ..spec_doc.model import apply_edits
 from ..spec_doc.project import chat_transcript
-from ..spec_doc.source_mapping import SourceBodyMap, guard_source_edits
-from ..spec_doc.source_patch import source_patch_readiness
+from ..spec_doc.source_mapping import SourceBodyMap
+from ..spec_doc.source_patch import (
+    SourcePatchError,
+    source_patch_readiness,
+    validate_source_transition,
+)
 from ..compliance import AuditRunner
 from ..qc import QCRunner
 from ..research import ResearchRunner, research_context_block
@@ -185,10 +190,11 @@ class SessionState:
     def apply_doc_edits(self, edits: Any) -> list[dict[str, Any]]:
         """The single guarded entry point for model and manual edit batches.
 
-        A source map constrains P1a only while the imported baseline is still
-        on the active history branch.  Undoing before the import and starting
-        a fresh draft is allowed; ``DocumentStore.commit_turn`` then removes
-        the abandoned baseline in its established way.
+        A source map constrains source-backed edits only while the imported
+        baseline is still on the active history branch. Undoing before the
+        import and starting a fresh draft is allowed;
+        ``DocumentStore.commit_turn`` then removes the abandoned baseline in
+        its established way.
         """
         baseline_index = self.doc.baseline_index
         if (
@@ -196,7 +202,27 @@ class SessionState:
             and baseline_index is not None
             and self.doc.index >= baseline_index
         ):
-            guard_source_edits(self.doc.doc, edits, self.source_docx_map)
+            # P1b safety is a property of the complete proposed document, not
+            # of an operation name in isolation. Build the batch on a deep
+            # copy first, then prove that final state against the immutable
+            # source package and imported baseline. The real store remains
+            # untouched until both the ordinary edit validator and the DOCX
+            # preservation gate have accepted the whole transaction.
+            candidate, _candidate_ops = apply_edits(self.doc.doc, edits)
+            baseline = SpecSection.from_dict(self.doc.versions[baseline_index])
+            try:
+                validate_source_transition(
+                    source_bytes=self.source_docx_bytes,
+                    source_map=self.source_docx_map,
+                    baseline=baseline,
+                    current=candidate,
+                )
+            except SourcePatchError as exc:
+                detail = exc.detail.rstrip(".")
+                raise SpecEditError(
+                    f"Source-backed edit rejected for {exc.uid!r} "
+                    f"[{exc.blocker}]: {detail}. Nothing was applied."
+                ) from exc
         return self.doc.apply_edits(edits)
 
     def source_export_readiness(self) -> dict[str, object]:
@@ -334,10 +360,14 @@ def _source_editing_boundary_block(session: SessionState) -> str | None:
         "- The original DOCX package is immutable. Never claim or attempt to "
         "edit, create, remove, or reformat its headers or footers.",
         "- Allowed document-tool changes are limited to metadata/status "
-        "updates and text replacement in an existing, simple mapped body "
-        "paragraph. Keep its element id, parent, and position unchanged.",
-        "- Never add, delete, move, reorder, or reparent body content, and "
-        "never change section, part, or article headings/numbers.",
+        "updates, text replacement in an existing simple mapped body "
+        "paragraph, and bounded add/delete/move operations only when the "
+        "preservation gate proves a flat body island has isolated direct "
+        "Word list bindings.",
+        "- A move can only change a paragraph's position among its existing "
+        "siblings. Never reparent content, structurally edit an unnumbered "
+        "or manually labeled island, or change section, part, or article "
+        "headings/numbers.",
         "- A mapped paragraph can still be rejected when its source OOXML is "
         "complex or unsafe. Treat a tool rejection as authoritative; do not "
         "retry it as a different structural edit.",

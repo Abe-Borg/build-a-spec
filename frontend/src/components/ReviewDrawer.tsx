@@ -25,6 +25,7 @@ interface Props {
   doc: SpecDoc | null;
   sourceLookup: ReadonlyMap<string, string>;
   busy: boolean;
+  bodyEditingDisabled: boolean;
   // App's handler is async; the drawer awaits it for an in-flight lockout.
   onEditDoc: (ops: EditOp[]) => void | Promise<unknown>;
   onAskModel: (text: string) => void;
@@ -50,6 +51,7 @@ export default function ReviewDrawer({
   doc,
   sourceLookup,
   busy,
+  bodyEditingDisabled,
   onEditDoc,
   onAskModel,
   onJump,
@@ -88,6 +90,7 @@ export default function ReviewDrawer({
   // Locked out from mutating while a model turn streams OR a manual edit is
   // still resolving. Navigation (skip/back) stays live.
   const locked = busy || pending;
+  const bodyMutationLocked = locked || bodyEditingDisabled;
 
   const focusWalker = useCallback(() => {
     requestAnimationFrame(() => walkerRef.current?.focus());
@@ -156,24 +159,24 @@ export default function ReviewDrawer({
   }, [locked, current, runEdit, focusWalker]);
 
   const remove = useCallback(() => {
-    if (locked || !current) return;
+    if (bodyMutationLocked || !current) return;
     runEdit([{ action: "delete", target_id: current.elementId }]);
     setTally((t) => ({ ...t, deleted: t.deleted + 1 }));
     setEditing(false);
     focusWalker();
-  }, [locked, current, runEdit, focusWalker]);
+  }, [bodyMutationLocked, current, runEdit, focusWalker]);
 
   const startEdit = useCallback(() => {
-    if (locked || !current) return;
+    if (bodyMutationLocked || !current) return;
     setDraft(current.text);
     setEditTarget(current); // snapshot the target — save writes to THIS block
     setEditing(true);
-  }, [locked, current]);
+  }, [bodyMutationLocked, current]);
 
   const saveEdit = () => {
     // A model turn owns the tree (busy) or an edit is resolving (pending):
     // keep the draft open so nothing is lost — the user saves after it clears.
-    if (locked) return;
+    if (bodyMutationLocked) return;
     const target = editTarget;
     const text = draft.trim();
     setEditing(false);
@@ -418,9 +421,11 @@ export default function ReviewDrawer({
                     <button
                       className={actionKey}
                       onClick={saveEdit}
-                      disabled={locked}
+                      disabled={bodyMutationLocked}
                       title={
-                        locked
+                        bodyEditingDisabled
+                          ? "Body edits are disabled for this pass-through-only DOCX"
+                          : locked
                           ? "Busy — save once the current action finishes"
                           : "Save (⌘/Ctrl+Enter)"
                       }
@@ -450,10 +455,28 @@ export default function ReviewDrawer({
                     <button className={actionKey} onClick={confirm} disabled={locked}>
                       <b>K</b>eep
                     </button>
-                    <button className={actionKey} onClick={startEdit} disabled={locked}>
+                    <button
+                      className={actionKey}
+                      onClick={startEdit}
+                      disabled={bodyMutationLocked}
+                      title={
+                        bodyEditingDisabled
+                          ? "Body edits are disabled for this pass-through-only DOCX"
+                          : undefined
+                      }
+                    >
                       <b>E</b>dit
                     </button>
-                    <button className={actionKey} onClick={remove} disabled={locked}>
+                    <button
+                      className={actionKey}
+                      onClick={remove}
+                      disabled={bodyMutationLocked}
+                      title={
+                        bodyEditingDisabled
+                          ? "Body edits are disabled for this pass-through-only DOCX"
+                          : undefined
+                      }
+                    >
                       <b>D</b>elete
                     </button>
                     <button className={actionKey} onClick={ask} disabled={locked}>
@@ -492,8 +515,17 @@ export default function ReviewDrawer({
                   )}
 
                   <p className="mt-2 text-[10px] text-ink-faint">
-                    Keys: <b>K</b> keep · <b>E</b> edit · <b>D</b> delete ·{" "}
-                    <b>A</b> ask · <b>S</b>/→ skip · ← back
+                    {bodyEditingDisabled ? (
+                      <>
+                        Pass-through-only source: body edit/delete are disabled.{" "}
+                        <b>K</b> keep · <b>A</b> ask · <b>S</b>/→ skip · ← back
+                      </>
+                    ) : (
+                      <>
+                        Keys: <b>K</b> keep · <b>E</b> edit · <b>D</b> delete ·{" "}
+                        <b>A</b> ask · <b>S</b>/→ skip · ← back
+                      </>
+                    )}
                   </p>
                 </>
               )}

@@ -14,6 +14,7 @@ import type {
   ResearchSnapshot,
   SectionDiff,
   SectionDiffPayload,
+  SourcePreservationState,
   SpecDoc,
   StandardInfo,
   UsageSummary,
@@ -41,6 +42,7 @@ interface Props {
   importReport: ImportReport | null;
   sourceAvailable: boolean;
   preservationReady: boolean;
+  sourcePreservation: SourcePreservationState | null;
   busy: boolean;
   onUndo: () => void;
   onRedo: () => void;
@@ -119,6 +121,7 @@ export default function ArtifactPanel({
   importReport,
   sourceAvailable,
   preservationReady,
+  sourcePreservation,
   busy,
   onUndo,
   onRedo,
@@ -165,6 +168,9 @@ export default function ArtifactPanel({
       doc.section.title !== "" ||
       doc.parts.some((p) => p.articles.length > 0));
   const importedMode = importReport !== null || baselineIndex !== null;
+  const passThroughOnly =
+    sourcePreservation?.status === "pass_through_only";
+  const bodyEditingDisabled = passThroughOnly;
 
   // Full-draft affordance (WI1): offered while the document is empty-or-sparse
   // (fewer than 3 articles) — past that, a wholesale draft is the wrong tool.
@@ -175,14 +181,16 @@ export default function ArtifactPanel({
   const draftPulse = isSparse && research?.status === "complete";
   // Kept visible (never hidden) so the feature is discoverable, but a wholesale
   // draft is the wrong tool once the section has real content.
-  const draftDisabled = busy || !isSparse;
-  const draftTip = !isSparse
-    ? `The section already has ${articleCount} article${
+  const draftDisabled = busy || !isSparse || bodyEditingDisabled;
+  const draftTip = bodyEditingDisabled
+    ? "Body drafting is disabled because this imported DOCX is pass-through only."
+    : !isSparse
+      ? `The section already has ${articleCount} article${
         articleCount === 1 ? "" : "s"
       } — a one-pass full draft is for starting from an empty or sparse section. Edit inline or ask the model to extend it.`
-    : busy
-      ? "Finish the current turn first."
-      : "Draft the complete section in one pass — every PART and article, stamped from what's known so far. One click to undo.";
+      : busy
+        ? "Finish the current turn first."
+        : "Draft the complete section in one pass — every PART and article, stamped from what's known so far. One click to undo.";
 
   // --- Compare (diff) mode (Batch 5) ---
   const curIndex = version.index;
@@ -373,9 +381,15 @@ export default function ArtifactPanel({
                         href="/api/export/docx?mode=source"
                         download
                         onClick={() => setExportMenuOpen(false)}
-                        title="Clone the original DOCX and patch only verified, simple body-paragraph text edits"
+                        title={
+                          passThroughOnly
+                            ? "Return the retained source DOCX exactly; body edits are disabled for this package"
+                            : "Clone the original DOCX and apply only verified body edits, including bounded structural edits in eligible isolated Word-list islands"
+                        }
                       >
-                        Export preserved DOCX
+                        {passThroughOnly
+                          ? "Export exact original DOCX"
+                          : "Export preserved DOCX"}
                       </a>
                     ) : (
                       <span
@@ -516,20 +530,33 @@ export default function ArtifactPanel({
           <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
             <div className="min-w-0 flex-1">
               <p className="font-semibold text-warn">
-                {preservationReady
-                  ? "Imported DOCX — source-preserving mode"
-                  : sourceAvailable
-                    ? "Imported DOCX — preservation currently blocked"
-                    : "Imported DOCX — normalized-content mode"}
+                {passThroughOnly
+                  ? "Imported DOCX — pass-through only"
+                  : preservationReady
+                    ? "Imported DOCX — source-preserving mode"
+                    : sourceAvailable
+                      ? "Imported DOCX — preservation currently blocked"
+                      : "Imported DOCX — normalized-content mode"}
               </p>
               <p className="mt-0.5">
                 {sourceAvailable
-                  ? preservationReady
+                  ? passThroughOnly
+                    ? "The exact original is retained and remains available byte-for-byte. This package contains features that make any DOCX body mutation unsafe, so body edit and fix controls are disabled. Use normalized export only when you intentionally want a newly generated document."
+                    : preservationReady
                     ? importReport?.fidelity_notice ||
-                      "Build-a-Spec retained the exact source package. Preserved export patches only verified simple body-paragraph text; unsupported structural or complex-format edits are refused."
+                      "Build-a-Spec retained the exact source package. Preserved export patches verified simple body text and permits bounded add, delete, or reorder only in eligible flat body islands with isolated direct Word list bindings. Other structural or complex-format edits are refused."
                     : "The exact source is retained, but the current document state cannot be represented inside the source-preserving boundary. Restore a compatible version or choose normalized export explicitly."
                   : "This source-less legacy project contains only the normalized semantic extraction. Preserved export is unavailable."}
               </p>
+              {passThroughOnly && sourcePreservation.blockers.length > 0 && (
+                <p className="mt-1 text-ink-faint">
+                  Mutation blocked because:{" "}
+                  {sourcePreservation.blockers
+                    .map((blocker) => blocker.message)
+                    .join("; ")}
+                  .
+                </p>
+              )}
               {importReport ? (
                 <>
                   <p className="mt-1 text-ink-faint">
@@ -609,11 +636,12 @@ export default function ArtifactPanel({
               SectionFormat model and retain an exact, immutable source copy.
             </p>
             <p>
-              Preserved export clones that source and can replace text only in
-              verified simple body paragraphs. Headers, footers, numbering,
-              styles, section layout, and all unrelated package parts remain
-              untouched. Unsupported edits are refused instead of flattening
-              the file.
+              Preserved export clones that source and can replace text in
+              verified simple body paragraphs. Add, delete, and reorder are
+              limited to proven flat body islands with isolated direct Word
+              list bindings. Headers, footers, numbering definitions, styles,
+              section layout, and unrelated package parts remain untouched.
+              Unsupported edits are refused instead of flattening the file.
             </p>
             <p className="text-ink-faint">
               A separate normalized export remains available when you
@@ -681,6 +709,7 @@ export default function ArtifactPanel({
             changedIds={changedIds}
             sourceLookup={sourceLookup}
             busy={busy}
+            bodyEditingDisabled={bodyEditingDisabled}
             onEdit={onEditDoc}
           />
         ) : (
@@ -692,6 +721,7 @@ export default function ArtifactPanel({
         doc={doc}
         sourceLookup={sourceLookup}
         busy={busy}
+        bodyEditingDisabled={bodyEditingDisabled}
         onEditDoc={onEditDoc}
         onAskModel={onAskModel}
         onJump={scrollToElement}
@@ -714,6 +744,7 @@ export default function ArtifactPanel({
         readiness={readiness}
         doc={doc}
         busy={busy}
+        applyDisabled={bodyEditingDisabled}
         usage={usage}
         onStart={onStartQc}
         onStop={onStopQc}

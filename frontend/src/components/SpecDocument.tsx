@@ -98,6 +98,7 @@ const actionBtn =
 function RowActions({
   canConfirm,
   busy,
+  bodyEditingDisabled,
   confirming,
   onConfirm,
   onEdit,
@@ -106,6 +107,7 @@ function RowActions({
 }: {
   canConfirm: boolean;
   busy: boolean;
+  bodyEditingDisabled: boolean;
   confirming: boolean;
   onConfirm: () => void;
   onEdit: () => void;
@@ -116,7 +118,16 @@ function RowActions({
     return (
       <span className="ml-1 inline-flex shrink-0 items-center gap-1 text-[11px]">
         <span className="text-[#a03d31]">Delete?</span>
-        <button className={actionBtn} onClick={onDelete} title="Confirm delete">
+        <button
+          className={actionBtn}
+          onClick={onDelete}
+          disabled={busy || bodyEditingDisabled}
+          title={
+            bodyEditingDisabled
+              ? "Body edits are disabled for this pass-through-only DOCX"
+              : "Confirm delete"
+          }
+        >
           ✓
         </button>
         <button className={actionBtn} onClick={onCancelDelete} title="Keep">
@@ -140,16 +151,24 @@ function RowActions({
       <button
         className={actionBtn}
         onClick={onEdit}
-        disabled={busy}
-        title="Edit this provision"
+        disabled={busy || bodyEditingDisabled}
+        title={
+          bodyEditingDisabled
+            ? "Body edits are disabled for this pass-through-only DOCX"
+            : "Edit this provision"
+        }
       >
         ✏️
       </button>
       <button
         className={actionBtn}
         onClick={onDelete}
-        disabled={busy}
-        title="Delete this provision"
+        disabled={busy || bodyEditingDisabled}
+        title={
+          bodyEditingDisabled
+            ? "Body edits are disabled for this pass-through-only DOCX"
+            : "Delete this provision"
+        }
       >
         🗑
       </button>
@@ -163,6 +182,7 @@ function ParagraphNode({
   changedIds,
   sourceLookup,
   busy,
+  bodyEditingDisabled,
   onEdit,
 }: {
   p: DocParagraph;
@@ -170,6 +190,7 @@ function ParagraphNode({
   changedIds: ReadonlySet<string>;
   sourceLookup: ReadonlyMap<string, string>;
   busy: boolean;
+  bodyEditingDisabled: boolean;
   onEdit: (ops: EditOp[]) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -241,6 +262,7 @@ function ParagraphNode({
             <RowActions
               canConfirm={p.status === "assumed" || p.status === "imported"}
               busy={busy}
+              bodyEditingDisabled={bodyEditingDisabled}
               confirming={confirming}
               onConfirm={() =>
                 onEdit([
@@ -269,6 +291,7 @@ function ParagraphNode({
           changedIds={changedIds}
           sourceLookup={sourceLookup}
           busy={busy}
+          bodyEditingDisabled={bodyEditingDisabled}
           onEdit={onEdit}
         />
       ))}
@@ -282,6 +305,7 @@ function ArticleTitle({
   title,
   changed,
   busy,
+  bodyEditingDisabled,
   onEdit,
 }: {
   id: string;
@@ -289,6 +313,7 @@ function ArticleTitle({
   title: string;
   changed: boolean;
   busy: boolean;
+  bodyEditingDisabled: boolean;
   onEdit: (ops: EditOp[]) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -334,8 +359,12 @@ function ArticleTitle({
           setDraft(title);
           setEditing(true);
         }}
-        disabled={busy}
-        title="Edit article title"
+        disabled={busy || bodyEditingDisabled}
+        title={
+          bodyEditingDisabled
+            ? "Body edits are disabled for this pass-through-only DOCX"
+            : "Edit article title"
+        }
       >
         ✏️
       </button>
@@ -348,12 +377,14 @@ function PartBlock({
   changedIds,
   sourceLookup,
   busy,
+  bodyEditingDisabled,
   onEdit,
 }: {
   part: DocPart;
   changedIds: ReadonlySet<string>;
   sourceLookup: ReadonlyMap<string, string>;
   busy: boolean;
+  bodyEditingDisabled: boolean;
   onEdit: (ops: EditOp[]) => void;
 }) {
   return (
@@ -371,6 +402,7 @@ function PartBlock({
                 title={article.title}
                 changed={changedIds.has(article.id)}
                 busy={busy}
+                bodyEditingDisabled={bodyEditingDisabled}
                 onEdit={onEdit}
               />
               <div className="mt-1.5 space-y-1">
@@ -382,6 +414,7 @@ function PartBlock({
                     changedIds={changedIds}
                     sourceLookup={sourceLookup}
                     busy={busy}
+                    bodyEditingDisabled={bodyEditingDisabled}
                     onEdit={onEdit}
                   />
                 ))}
@@ -568,6 +601,7 @@ export default function SpecDocument({
   changedIds,
   sourceLookup = new Map(),
   busy = false,
+  bodyEditingDisabled = false,
   onEdit = () => {},
   diff = null,
 }: {
@@ -575,6 +609,7 @@ export default function SpecDocument({
   changedIds: ReadonlySet<string>;
   sourceLookup?: ReadonlyMap<string, string>;
   busy?: boolean;
+  bodyEditingDisabled?: boolean;
   onEdit?: (ops: EditOp[]) => void;
   diff?: SectionDiff | null;
 }) {
@@ -608,6 +643,7 @@ export default function SpecDocument({
             changedIds={changedIds}
             sourceLookup={sourceLookup}
             busy={busy}
+            bodyEditingDisabled={bodyEditingDisabled}
             onEdit={onEdit}
           />
         ))}

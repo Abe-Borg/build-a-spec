@@ -64,6 +64,8 @@ from ..research.schema import (
     extract_tool_use_block,
 )
 from ..spec_doc.model import SpecSection, apply_edits, outline, SpecEditError
+from ..spec_doc.source_mapping import SourceBodyMap
+from ..spec_doc.source_patch import SourcePatchError, validate_source_transition
 from ..spec_modules import SpecModule
 from ..standards import standards_context_block
 from ..usage_ledger import usage_to_dict
@@ -805,18 +807,41 @@ def _verify_one(
 # ---------------------------------------------------------------------------
 
 
-def _validate_ops(finding: QCFinding, snapshot: SpecSection) -> None:
+@dataclass(frozen=True)
+class QCSourceGuard:
+    """Immutable source-preservation context captured beside a QC snapshot.
+
+    ``required`` is explicit so an app-level source-backed run with missing
+    context fails closed. Direct engine callers omit this object and retain
+    the established semantic-only behavior.
+    """
+
+    required: bool = False
+    source_bytes: bytes | None = None
+    source_map: SourceBodyMap | None = None
+    baseline: SpecSection | None = None
+
+
+def _validate_ops(
+    finding: QCFinding,
+    snapshot: SpecSection,
+    source_guard: QCSourceGuard | None = None,
+) -> None:
     """Dry-run the finding's proposed_ops against a fresh snapshot copy.
 
     Each finding is validated independently — copy per finding so they never
-    see each other's effects. Invalid ops keep the finding as advisory and
-    record why; they are never trusted raw.
+    see each other's effects. For an imported DOCX, the resulting complete
+    document must also pass the same final-state preservation guard as a real
+    session edit. Invalid ops keep the finding as advisory and record why;
+    they are never trusted raw.
     """
     if not finding.proposed_ops:
         finding.ops_valid = False
         return
     try:
-        apply_edits(copy.deepcopy(snapshot), finding.proposed_ops)
+        candidate, _applied = apply_edits(
+            copy.deepcopy(snapshot), finding.proposed_ops
+        )
     except SpecEditError as exc:
         finding.ops_valid = False
         finding.ops_invalid_reason = str(exc)
@@ -825,6 +850,43 @@ def _validate_ops(finding: QCFinding, snapshot: SpecSection) -> None:
         finding.ops_valid = False
         finding.ops_invalid_reason = f"{type(exc).__name__}: {exc}"
         return
+
+    if source_guard is not None and source_guard.required:
+        try:
+            # An incomplete context is an invariant failure, not permission
+            # to bypass source preservation.
+            if (
+                source_guard.source_bytes is None
+                or source_guard.source_map is None
+                or source_guard.baseline is None
+            ):
+                finding.ops_valid = False
+                finding.ops_invalid_reason = (
+                    "Source-backed QC guard unavailable: incomplete "
+                    "source-preservation context."
+                )
+                return
+            validate_source_transition(
+                source_bytes=source_guard.source_bytes,
+                source_map=source_guard.source_map,
+                baseline=source_guard.baseline,
+                current=candidate,
+            )
+        except SourcePatchError as exc:
+            finding.ops_valid = False
+            detail = exc.detail.rstrip(".")
+            finding.ops_invalid_reason = (
+                f"Source-backed edit rejected for {exc.uid!r} "
+                f"[{exc.blocker}]: {detail}."
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 — guard failure must fail closed
+            finding.ops_valid = False
+            finding.ops_invalid_reason = (
+                "Source-backed QC guard failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return
     finding.ops_valid = True
 
 
@@ -845,6 +907,7 @@ def run_final_qc(
     started_at: str,
     finished_at: str,
     discipline: str = "",
+    source_guard: QCSourceGuard | None = None,
     remembered_dismissed: set[str] | None = None,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
@@ -854,11 +917,12 @@ def run_final_qc(
     ``section`` is a SNAPSHOT (deep-copied at start) so a streaming turn can't
     mutate it under the call. ``remembered_dismissed`` carries the prior
     result's dismissed finding ids so re-generated findings auto-mark
-    dismissed. Raises :exc:`QCFanoutError` only when EVERY lens fails (a
-    total cancellation via ``should_stop`` takes this same path — every lens
-    reports "Cancelled by user."). ``should_stop`` also reaches every
-    verifier in phase 2, so cancelling mid-verification stops new verifier
-    calls from starting too.
+    dismissed. ``source_guard`` is the immutable preservation context captured
+    beside that snapshot; direct non-source callers leave it unset. Raises
+    :exc:`QCFanoutError` only when EVERY lens fails (a total cancellation via
+    ``should_stop`` takes this same path — every lens reports "Cancelled by
+    user."). ``should_stop`` also reaches every verifier in phase 2, so
+    cancelling mid-verification stops new verifier calls from starting too.
     """
     remembered = set(remembered_dismissed or ())
     usage_totals: dict[str, int] = {}
@@ -1021,7 +1085,7 @@ def run_final_qc(
             verdicts=[v for v in panel if v is not None],
         )
         if survives:
-            _validate_ops(obj, section)
+            _validate_ops(obj, section, source_guard)
             if obj.finding_id in remembered:
                 obj.status = "dismissed"
             survivors.append(obj)

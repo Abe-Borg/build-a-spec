@@ -35,6 +35,7 @@ interface Props {
   readiness: ReadinessPayload | null;
   doc: SpecDoc | null;
   busy: boolean;
+  applyDisabled: boolean;
   usage: UsageSummary | null;
   onStart: () => void;
   onStop: () => void;
@@ -82,6 +83,7 @@ export default function QCDrawer({
   readiness,
   doc,
   busy,
+  applyDisabled,
   usage,
   onStart,
   onStop,
@@ -127,7 +129,7 @@ export default function QCDrawer({
   }, [qc?.events]);
 
   const startHoldApplyCriticals = () => {
-    if (busy || openCriticals.length === 0) return;
+    if (busy || applyDisabled || openCriticals.length === 0) return;
     setHolding(true);
     holdTimer.current = window.setTimeout(() => {
       setHolding(false);
@@ -355,8 +357,12 @@ export default function QCDrawer({
                   onPointerUp={cancelHold}
                   onPointerLeave={cancelHold}
                   onPointerCancel={cancelHold}
-                  disabled={busy}
-                  title="Press and hold to apply every critical finding with a valid fix — one undo step"
+                  disabled={busy || applyDisabled}
+                  title={
+                    applyDisabled
+                      ? "Fix application is disabled because this DOCX is pass-through only"
+                      : "Press and hold to apply every critical finding with a valid fix — one undo step"
+                  }
                 >
                   <span
                     className="absolute inset-y-0 left-0 bg-err/25"
@@ -394,6 +400,7 @@ export default function QCDrawer({
                         key={f.finding_id}
                         finding={f}
                         busy={busy}
+                        applyDisabled={applyDisabled}
                         open={!!openRationale[f.finding_id]}
                         onToggle={() =>
                           setOpenRationale((m) => ({
@@ -580,6 +587,7 @@ function ConfirmQCModal({
 function FindingCard({
   finding,
   busy,
+  applyDisabled,
   open,
   onToggle,
   onApply,
@@ -588,6 +596,7 @@ function FindingCard({
 }: {
   finding: QcFinding;
   busy: boolean;
+  applyDisabled: boolean;
   open: boolean;
   onToggle: () => void;
   onApply: () => void;
@@ -692,9 +701,16 @@ function FindingCard({
           <button
             className={cardBtn}
             onClick={onApply}
-            disabled={busy || !finding.ops_valid || finding.proposed_ops.length === 0}
+            disabled={
+              busy ||
+              applyDisabled ||
+              !finding.ops_valid ||
+              finding.proposed_ops.length === 0
+            }
             title={
-              finding.ops_valid && finding.proposed_ops.length > 0
+              applyDisabled
+                ? "Fix application is disabled because this DOCX is pass-through only"
+                : finding.ops_valid && finding.proposed_ops.length > 0
                 ? "Apply this fix to the document (one undo step)"
                 : finding.ops_invalid_reason || "No mechanical fix — advisory only"
             }

@@ -43,9 +43,11 @@ _OFFICE_DOCUMENT_REL_TYPES = frozenset(
 FIDELITY_NOTICE = (
     "Build-a-Spec retains the exact source package and extracts supported body "
     "content into its semantic model. Preserved export clones the source and "
-    "patches only verified simple body-paragraph text; unsupported structural "
-    "or complex-format edits are refused. Normalized DOCX remains a separate, "
-    "explicit export mode."
+    "patches verified simple body-paragraph text. Bounded add, delete, and "
+    "reorder are available only inside proven flat body islands with isolated "
+    "direct Word list bindings; all other structural or complex-format edits "
+    "are refused. Headers, footers, and general Word formatting remain outside "
+    "the edit surface. Normalized DOCX remains a separate, explicit export mode."
 )
 
 

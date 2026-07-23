@@ -42,11 +42,21 @@ TARGET_SOURCE_TEXT = "A. Install system per NFPA 13-2019."
 TARGET_MODEL_TEXT = "Install system per NFPA 13-2019."
 TARGET_EDITED_TEXT = "Install system per NFPA 13-2022."
 TARGET_EDITED_SOURCE_TEXT = "A. Install system per NFPA 13-2022."
+NUMBERED_ISLAND_PARA_IDS = ("A1B2C3D4", "B2C3D4E5", "C3D4E5F6")
+NUMBERED_ISLAND_TEXTS = (
+    "Provide monitored control valves.",
+    "Install seismic bracing at required intervals.",
+    "Label system components permanently.",
+)
 
 _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
 _REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+_NUMBERING_REL_TYPES = {
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/numbering",
+}
 _CP_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
 )
@@ -387,6 +397,270 @@ def make_fidelity_master(
     return payload
 
 
+def make_numbered_island_master(
+    tmp_path: Path,
+    *,
+    separator: str | None = None,
+    mixed_num_id: bool = False,
+    invalid_num_id: str | None = None,
+    inconsistent_format: bool = False,
+    ilvls: tuple[int, int, int] = (0, 0, 0),
+    complex_middle: str | None = None,
+    constant_level_text: str | None = None,
+    level_number_format: str | None = None,
+    filename: str = "client-numbered-island-master.docx",
+) -> bytes:
+    """Build a source master with a genuine Word-numbered safe island.
+
+    The three provisions are direct ``w:body/w:p`` siblings using the same
+    ``w:numPr`` by default.  Optional variants deliberately violate exactly
+    one structural-safety precondition for fail-closed tests.
+    """
+
+    if separator not in {None, "empty", "empty_after_second", "sdt"}:
+        raise ValueError(
+            "separator must be None, 'empty', 'empty_after_second', or 'sdt'"
+        )
+    if complex_middle not in {None, "field", "hyperlink"}:
+        raise ValueError("complex_middle must be None, 'field', or 'hyperlink'")
+    if invalid_num_id not in {None, "zero", "dangling"}:
+        raise ValueError("invalid_num_id must be None, 'zero', or 'dangling'")
+    if len(ilvls) != 3:
+        raise ValueError("ilvls must contain exactly three levels")
+
+    logo_path = tmp_path / "numbered-island-logo.png"
+    logo_path.write_bytes(_png_bytes(width=14, height=10))
+
+    document = Document()
+    section = document.sections[0]
+    section.top_margin = Inches(0.71)
+    section.bottom_margin = Inches(0.79)
+    section.left_margin = Inches(0.84)
+    section.right_margin = Inches(0.92)
+    section.header_distance = Inches(0.28)
+    section.footer_distance = Inches(0.32)
+    section.different_first_page_header_footer = True
+    document.settings.odd_and_even_pages_header_footer = True
+
+    normal = document.styles["Normal"]
+    normal.font.name = "Arial"
+    normal.font.size = Pt(10.5)
+    provision_style = document.styles.add_style(
+        "Client Auto Numbered Provision", WD_STYLE_TYPE.PARAGRAPH
+    )
+    provision_style.font.name = "Arial"
+    provision_style.font.size = Pt(10.5)
+    provision_style.font.color.rgb = RGBColor(31, 78, 121)
+    provision_style.paragraph_format.space_after = Pt(7)
+    provision_style.paragraph_format.left_indent = Inches(0.38)
+
+    header = section.header.paragraphs[0]
+    header.add_run("NUMBERED MASTER HEADER | KEEP EXACT | ")
+    header.add_run().add_picture(str(logo_path), width=Inches(0.14))
+    section.first_page_header.paragraphs[0].text = (
+        "NUMBERED FIRST-PAGE HEADER | KEEP EXACT"
+    )
+    section.even_page_header.paragraphs[0].text = (
+        "NUMBERED EVEN-PAGE HEADER | KEEP EXACT"
+    )
+    footer = section.footer.paragraphs[0]
+    footer.add_run("NUMBERED MASTER FOOTER | PAGE ")
+    _append_page_field(footer)
+    section.first_page_footer.paragraphs[0].text = (
+        "NUMBERED FIRST-PAGE FOOTER | KEEP EXACT"
+    )
+    section.even_page_footer.paragraphs[0].text = (
+        "NUMBERED EVEN-PAGE FOOTER | KEEP EXACT"
+    )
+
+    document.add_paragraph("SECTION 21 13 15")
+    document.add_paragraph("AUTOMATIC NUMBERING FIDELITY FIXTURE")
+    document.add_paragraph("PART 1 - GENERAL")
+    document.add_paragraph("1.1 NUMBERED REQUIREMENTS")
+
+    numbering_root = document.part.numbering_part.element
+    numbering_instances = numbering_root.findall(qn("w:num"))
+    num_ids = [int(item.get(qn("w:numId"))) for item in numbering_instances]
+    if not num_ids:  # pragma: no cover - the bundled template has lists
+        raise AssertionError("The default DOCX template has no numbering definitions")
+    # Mint dedicated numbering instances for the fixture. Reusing one of the
+    # bundled template's numIds would let unrelated list styles share the same
+    # document-wide counter, which is intentionally outside the safe-island
+    # contract under test.
+    primary_num_id = max(num_ids) + 1
+    primary_instance = deepcopy(numbering_instances[0])
+    primary_instance.set(qn("w:numId"), str(primary_num_id))
+    numbering_root.append(primary_instance)
+    definition_num_id = primary_num_id
+    secondary_num_id = primary_num_id + 1
+    secondary_template = (
+        numbering_instances[1]
+        if len(numbering_instances) > 1
+        else numbering_instances[0]
+    )
+    secondary_instance = deepcopy(secondary_template)
+    secondary_instance.set(qn("w:numId"), str(secondary_num_id))
+    numbering_root.append(secondary_instance)
+    num_ids.extend((primary_num_id, secondary_num_id))
+    if invalid_num_id == "zero":
+        primary_num_id = 0
+    elif invalid_num_id == "dangling":
+        primary_num_id = max(num_ids) + 999
+
+    if constant_level_text is not None or level_number_format is not None:
+        numbering = document.part.numbering_part.element
+        instances = [
+            item
+            for item in numbering.findall(qn("w:num"))
+            if int(item.get(qn("w:numId"))) == definition_num_id
+        ]
+        assert len(instances) == 1
+        abstract_ref = instances[0].find(qn("w:abstractNumId"))
+        assert abstract_ref is not None
+        abstract_id = abstract_ref.get(qn("w:val"))
+        abstracts = [
+            item
+            for item in numbering.findall(qn("w:abstractNum"))
+            if item.get(qn("w:abstractNumId")) == abstract_id
+        ]
+        assert len(abstracts) == 1
+        levels = [
+            item
+            for item in abstracts[0].findall(qn("w:lvl"))
+            if item.get(qn("w:ilvl")) == "0"
+        ]
+        assert len(levels) == 1
+        number_format = levels[0].find(qn("w:numFmt"))
+        level_text = levels[0].find(qn("w:lvlText"))
+        assert number_format is not None and level_text is not None
+        number_format.set(
+            qn("w:val"),
+            level_number_format or "upperLetter",
+        )
+        if constant_level_text is not None:
+            level_text.set(qn("w:val"), constant_level_text)
+
+    for index, (para_id, text, ilvl) in enumerate(
+        zip(NUMBERED_ISLAND_PARA_IDS, NUMBERED_ISLAND_TEXTS, ilvls)
+    ):
+        paragraph = document.add_paragraph(style=provision_style)
+        _set_para_id(paragraph, para_id)
+        # These volatile attributes prove that a newly synthesized paragraph
+        # does not clone source identity/revision-session metadata.
+        paragraph._p.set(qn("w:rsidR"), f"00ABC{index:03X}")
+        paragraph._p.set(qn("w:rsidRDefault"), f"00DEF{index:03X}")
+        num_id = secondary_num_id if mixed_num_id and index == 1 else primary_num_id
+        _set_direct_numbering(paragraph, num_id, ilvl=ilvl)
+        if complex_middle == "hyperlink" and index == 1:
+            paragraph.add_run("Install seismic bracing at ").bold = True
+            _append_hyperlink(
+                paragraph,
+                "required intervals.",
+                "https://example.invalid/numbered-island",
+            )
+        elif complex_middle == "field" and index == 1:
+            paragraph.add_run("Install seismic bracing at required interval ").bold = True
+            _append_page_field(paragraph)
+        else:
+            run = paragraph.add_run(text)
+            run.bold = True
+            if inconsistent_format and index == 1:
+                run.italic = True
+            run.font.color.rgb = RGBColor(31, 78, 121)
+            run._r.set(qn("w:rsidR"), f"00123{index:03X}")
+
+        if (
+            index == 0
+            and separator == "empty"
+            or index == 1
+            and separator == "empty_after_second"
+        ):
+            empty = document.add_paragraph()
+            empty._p.set(qn("w14:paraId"), "D4E5F607")
+        elif index == 0 and separator == "sdt":
+            sdt = OxmlElement("w:sdt")
+            sdt_pr = OxmlElement("w:sdtPr")
+            tag = OxmlElement("w:tag")
+            tag.set(qn("w:val"), "NUMBERED-ISLAND-BOUNDARY")
+            sdt_pr.append(tag)
+            content = OxmlElement("w:sdtContent")
+            opaque_p = OxmlElement("w:p")
+            opaque_r = OxmlElement("w:r")
+            opaque_t = OxmlElement("w:t")
+            opaque_t.text = "OPAQUE ISLAND BOUNDARY - KEEP EXACT"
+            opaque_r.append(opaque_t)
+            opaque_p.append(opaque_r)
+            content.append(opaque_p)
+            sdt.extend((sdt_pr, content))
+            document.element.body.insert(len(document.element.body) - 1, sdt)
+
+    document.add_paragraph("END OF SECTION 21 13 15")
+
+    # Opaque content after END OF SECTION still exercises package fidelity,
+    # but is never exposed as semantic content the app can mutate.
+    page_break = document.add_paragraph()
+    page_break.add_run().add_break(WD_BREAK.PAGE)
+    document.add_paragraph("NUMBERED OPAQUE APPENDIX - KEEP EXACT")
+    table = document.add_table(rows=2, cols=2)
+    table.style = "Table Grid"
+    table.cell(0, 0).text = "Client key"
+    table.cell(0, 1).text = "Client value"
+    table.cell(1, 0).text = "Hazard"
+    table.cell(1, 1).text = "Ordinary Group 1"
+    document.add_picture(str(logo_path), width=Inches(0.35))
+    _append_opaque_sdt(document)
+
+    raw = io.BytesIO()
+    document.save(raw)
+    payload = _inject_custom_parts(raw.getvalue())
+    inspect_docx_package(payload)
+    Document(io.BytesIO(payload))
+    (tmp_path / filename).write_bytes(payload)
+    return payload
+
+
+def remove_numbering_relationship(payload: bytes) -> bytes:
+    """Leave an orphan numbering part that Word no longer wires to the body."""
+    rels_name = "word/_rels/document.xml.rels"
+    with zipfile.ZipFile(io.BytesIO(payload), "r") as archive:
+        rels = etree.fromstring(archive.read(rels_name))
+    matches = [
+        relationship
+        for relationship in rels.findall(f"{{{_REL_NS}}}Relationship")
+        if relationship.get("Type") in _NUMBERING_REL_TYPES
+    ]
+    assert len(matches) == 1
+    rels.remove(matches[0])
+    orphaned = rewrite_zip_members(
+        payload,
+        replacements={rels_name: _serialize_xml(rels)},
+    )
+    # The baseline upload validator intentionally checks only the required OPC
+    # shell; the structural-numbering gate must reject this subtler orphan.
+    inspect_docx_package(orphaned)
+    return orphaned
+
+
+def replace_numbering_content_type(payload: bytes, content_type: str) -> bytes:
+    """Return a package whose numbering target has the wrong effective type."""
+    part_name = "[Content_Types].xml"
+    with zipfile.ZipFile(io.BytesIO(payload), "r") as archive:
+        content_types = etree.fromstring(archive.read(part_name))
+    matches = [
+        override
+        for override in content_types.findall(f"{{{_CT_NS}}}Override")
+        if override.get("PartName", "").lstrip("/") == "word/numbering.xml"
+    ]
+    assert len(matches) == 1
+    matches[0].set("ContentType", content_type)
+    changed = rewrite_zip_members(
+        payload,
+        replacements={part_name: _serialize_xml(content_types)},
+    )
+    inspect_docx_package(changed)
+    return changed
+
+
 def add_document_protection(payload: bytes) -> bytes:
     """Return the fixture with enforced read-only Word protection."""
     with zipfile.ZipFile(io.BytesIO(payload), "r") as archive:
@@ -422,6 +696,38 @@ def add_tracked_change(payload: bytes) -> bytes:
     insertion.set(f"{{{_W_NS}}}date", "2026-01-01T00:00:00Z")
     insertion.append(run)
     target.insert(index, insertion)
+    tracked = rewrite_zip_members(
+        payload,
+        replacements={"word/document.xml": _serialize_xml(root)},
+    )
+    inspect_docx_package(tracked)
+    Document(io.BytesIO(tracked))
+    return tracked
+
+
+def add_paragraph_property_change(payload: bytes) -> bytes:
+    """Add a pending ``w:pPrChange`` revision without wrapping body text.
+
+    Property-change revisions are easy to miss when a detector only searches
+    for ``w:ins``/``w:del``. They still make a source package pass-through-only.
+    """
+
+    root = etree.fromstring(document_xml(payload))
+    targets = root.xpath(
+        f'.//w:p[@w14:paraId="{TARGET_PARA_ID}"]', namespaces=_NS
+    )
+    assert len(targets) == 1
+    target = targets[0]
+    p_pr = target.find(f"{{{_W_NS}}}pPr")
+    assert p_pr is not None
+    change = etree.Element(f"{{{_W_NS}}}pPrChange")
+    change.set(f"{{{_W_NS}}}id", "78")
+    change.set(f"{{{_W_NS}}}author", "Fixture Reviewer")
+    change.set(f"{{{_W_NS}}}date", "2026-01-02T00:00:00Z")
+    prior = etree.SubElement(change, f"{{{_W_NS}}}pPr")
+    prior_style = etree.SubElement(prior, f"{{{_W_NS}}}pStyle")
+    prior_style.set(f"{{{_W_NS}}}val", "Normal")
+    p_pr.append(change)
     tracked = rewrite_zip_members(
         payload,
         replacements={"word/document.xml": _serialize_xml(root)},

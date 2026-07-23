@@ -149,6 +149,220 @@ def test_position_inserts_before_siblings():
     assert [a["number"] for a in part["articles"]] == ["1.1", "1.2"]
 
 
+def _store_with_move_fixture() -> DocumentStore:
+    return _store_with(
+        [
+            {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Top A",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Top B",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Top C",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1.p1",
+                "text": "Nested 1",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1.p1",
+                "text": "Nested 2",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1.p1",
+                "text": "Nested 3",
+            },
+        ]
+    )
+
+
+def test_move_top_level_uses_final_index_in_both_directions_and_keeps_ids():
+    store = _store_with_move_fixture()
+    original_article = store.doc.parts[0].articles[0]
+    original_ids = [paragraph.uid for paragraph in original_article.paragraphs]
+    original_next_seq = original_article.next_seq
+
+    store.begin_turn()
+    moved_down = store.apply_edits(
+        [{"action": "move", "target_id": "pt1.a1.p1", "position": 2}]
+    )
+    assert moved_down == [
+        {
+            "action": "move",
+            "id": "pt1.a1.p1",
+            "position": 2,
+            "previous_position": 0,
+        }
+    ]
+    article = store.doc.parts[0].articles[0]
+    assert [paragraph.uid for paragraph in article.paragraphs] == [
+        "pt1.a1.p2",
+        "pt1.a1.p3",
+        "pt1.a1.p1",
+    ]
+
+    moved_up = store.apply_edits(
+        [{"action": "move", "target_id": "pt1.a1.p1", "position": 0}]
+    )
+    assert moved_up[0]["previous_position"] == 2
+    article = store.doc.parts[0].articles[0]
+    assert [paragraph.uid for paragraph in article.paragraphs] == original_ids
+    assert article.next_seq == original_next_seq == 4
+
+    added = store.apply_edits(
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Top D",
+            }
+        ]
+    )
+    assert added[0]["id"] == "pt1.a1.p4"
+    article = store.doc.parts[0].articles[0]
+    assert article.next_seq == 5
+
+
+def test_move_nested_siblings_keeps_parent_depth_ids_and_counter():
+    store = _store_with_move_fixture()
+    original_parent = store.doc.parts[0].articles[0].paragraphs[0]
+    original_next_seq = original_parent.next_seq
+
+    store.begin_turn()
+    applied = store.apply_edits(
+        [{"action": "move", "target_id": "pt1.a1.p1.p3", "position": 0}]
+    )
+    assert applied[0] == {
+        "action": "move",
+        "id": "pt1.a1.p1.p3",
+        "position": 0,
+        "previous_position": 2,
+    }
+    parent = store.doc.parts[0].articles[0].paragraphs[0]
+    assert [child.uid for child in parent.children] == [
+        "pt1.a1.p1.p3",
+        "pt1.a1.p1.p1",
+        "pt1.a1.p1.p2",
+    ]
+    assert parent.next_seq == original_next_seq == 4
+
+
+def test_move_is_one_undoable_version_and_redo_restores_order():
+    store = _store_with_move_fixture()
+    original = [
+        paragraph.uid for paragraph in store.doc.parts[0].articles[0].paragraphs
+    ]
+
+    store.begin_turn()
+    store.apply_edits(
+        [{"action": "move", "target_id": "pt1.a1.p3", "position": 0}]
+    )
+    assert store.commit_turn() is True
+    moved = [
+        paragraph.uid for paragraph in store.doc.parts[0].articles[0].paragraphs
+    ]
+    assert moved == ["pt1.a1.p3", "pt1.a1.p1", "pt1.a1.p2"]
+
+    assert store.undo()
+    assert [
+        paragraph.uid for paragraph in store.doc.parts[0].articles[0].paragraphs
+    ] == original
+    assert store.redo()
+    assert [
+        paragraph.uid for paragraph in store.doc.parts[0].articles[0].paragraphs
+    ] == moved
+
+
+def test_invalid_move_rolls_back_the_whole_mixed_batch():
+    store = _store_with_move_fixture()
+    before = store.doc.to_dict()
+    version_count = len(store.versions)
+
+    store.begin_turn()
+    with pytest.raises(SpecEditError, match="outside"):
+        store.apply_edits(
+            [
+                {"action": "move", "target_id": "pt1.a1.p3", "position": 0},
+                {"action": "move", "target_id": "pt1.a1.p1", "position": 9},
+            ]
+        )
+    assert store.doc.to_dict() == before
+    assert store.commit_turn() is False
+    assert len(store.versions) == version_count
+
+
+@pytest.mark.parametrize(
+    ("op", "message"),
+    [
+        pytest.param(
+            {"action": "move", "target_id": "pt1.a1.p1", "position": 0},
+            "already at position",
+            id="no-op",
+        ),
+        pytest.param(
+            {"action": "move", "target_id": "pt1.a1.p1", "position": -1},
+            "outside",
+            id="negative-position",
+        ),
+        pytest.param(
+            {"action": "move", "target_id": "pt1.a1.p1", "position": 3},
+            "outside",
+            id="position-equals-length",
+        ),
+        pytest.param(
+            {"action": "move", "target_id": "pt1.a1.p1", "position": True},
+            "integer",
+            id="bool-position",
+        ),
+        pytest.param(
+            {
+                "action": "move",
+                "target_id": "pt1.a1.p1",
+                "position": 1,
+                "parent_id": "pt2.a1",
+            },
+            "unsupported field",
+            id="cross-parent-field",
+        ),
+        pytest.param(
+            {"action": "move", "target_id": "pt1.a1", "position": 0},
+            "paragraph id",
+            id="article",
+        ),
+        pytest.param(
+            {"action": "move", "target_id": "pt1", "position": 0},
+            "paragraph id",
+            id="part",
+        ),
+        pytest.param(
+            {"action": "move", "target_id": "sec", "position": 0},
+            "only supports 'replace'",
+            id="section",
+        ),
+    ],
+)
+def test_move_rejects_invalid_or_non_paragraph_requests(op, message):
+    store = _store_with_move_fixture()
+    before = store.doc.to_dict()
+
+    store.begin_turn()
+    with pytest.raises(SpecEditError, match=message):
+        store.apply_edits([op])
+    assert store.doc.to_dict() == before
+    assert store.commit_turn() is False
+
+
 def test_open_questions_tracks_tbd_and_needs_input():
     store = _store_with(
         [

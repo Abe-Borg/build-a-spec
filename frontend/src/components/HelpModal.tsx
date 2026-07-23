@@ -182,7 +182,7 @@ function HowToUse() {
           },
           {
             t: "Export",
-            d: "Imported drafts can clone the source DOCX and patch verified simple body text, leaving headers, footers, numbering, styles, and unrelated package parts alone. Normalized DOCX and extracted-provision redline exports remain separate, explicit choices.",
+            d: "Imported drafts can clone the source DOCX and patch verified simple body text. Bounded add, delete, and reorder work only in proven flat body islands with isolated direct Word list bindings; headers, footers, numbering definitions, styles, and unrelated package parts remain outside the edit surface. Normalized DOCX and extracted-provision redline exports remain separate, explicit choices.",
           },
         ]}
       />
@@ -219,7 +219,7 @@ function Workflows() {
           "Import the master .docx after reviewing the preservation boundary — every extracted block lands imported.",
           "Save a native .baspec project; it carries the exact source DOCX with the semantic document and conversation.",
           "Tell Claude the project; it walks the extracted content article by article, adapting each block.",
-          "P1 source-preserving mode accepts verified simple body-paragraph text replacements and refuses unsafe structural or complex-format edits.",
+          "Source-preserving mode accepts verified simple body-paragraph text replacements. It permits bounded add, delete, and reorder only in proven flat body islands with isolated direct Word list bindings, and refuses every other structural or complex-format edit.",
           "Send to Final QC.",
           "Choose Export preserved DOCX to clone-and-patch the master, or intentionally choose normalized DOCX / extracted-provision redline for the semantic view.",
         ]}
@@ -237,7 +237,7 @@ function Workflows() {
         tagline="You don’t have to draft the whole section."
         steps={[
           "Ask about a single provision, a code citation, or an edition — Claude answers in chat and can edit just that block.",
-          "Use the inline ✏️ / ✓ / 🗑 affordances on any block to edit, confirm, or delete it without going through chat.",
+          "Use the inline ✏️ / ✓ / 🗑 affordances on eligible blocks to edit, confirm, or delete without going through chat. Imported DOCX sources may restrict individual blocks or disable body edits entirely when only exact pass-through is safe.",
         ]}
       />
     </div>
@@ -286,11 +286,11 @@ function HowItWorks() {
           },
           {
             t: "Imported DOCX files have a narrow boundary",
-            d: "Build-a-Spec retains an immutable source package and maps supported main-body content into a semantic tree. Source-preserving export clones the package and replaces text only in unambiguous, simple body paragraphs; unsafe edits are refused. Headers, footers, numbering, styles, relationships, and unrelated package parts are never regenerated in this mode.",
+            d: "Build-a-Spec retains an immutable source package and maps supported main-body content into a semantic tree. Source-preserving export clones the package, replaces text only in unambiguous simple body paragraphs, and permits bounded structural edits only in proven flat body islands with isolated direct Word list bindings. Unsafe edits are refused. Headers, footers, numbering definitions, styles, relationships, and unrelated package parts are never regenerated in this mode.",
           },
           {
             t: "Numbering depends on export mode",
-            d: "Fresh and normalized exports still write calculated labels such as A., 1., a., and 1) as visible text, not real Word list bindings. A source-preserved export leaves the imported paragraph's existing Word numbering properties untouched, so it does not break numbering that was already present.",
+            d: "Fresh and normalized exports still write calculated labels such as A., 1., a., and 1) as visible text, not real Word list bindings. A source-preserved export retains existing Word numbering definitions and bindings; when a proven numbered island is edited structurally, Word's real list numbering handles the new order.",
           },
         ]}
       />

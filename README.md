@@ -6,7 +6,7 @@ First curated domain: **Division 21 fire suppression for hyperscale data centers
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## DOCX fidelity boundary (P1 source-preserving foundation)
+## DOCX fidelity boundary (P1 source-preserving editing)
 
 > **Important:** Build-a-Spec edits a deliberately narrow semantic view of an
 > imported `.docx`; it is not a general-purpose Word formatting editor.
@@ -16,17 +16,23 @@ Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writ
   SectionFormat tree. Headers, footers, section/page layout, styles, fields,
   drawings, and other unsupported OOXML never become editable claims.
 - **Export preserved DOCX** clones that source package and applies only edits
-  the preservation gate can prove safe. P1 accepts unambiguous text replacement
-  in a simple, directly mapped body paragraph. It preserves that paragraph's
-  existing paragraph/run properties—including real `w:numPr` numbering—and
-  leaves every other package member payload untouched.
-- Unsafe mutations fail closed. Structural changes (add/delete/reorder),
-  table-derived blocks, fields, hyperlinks, drawings, content controls,
-  tracked-revision targets, complex multi-run formatting, and ambiguous
-  mappings are refused in source-preserving mode. Signed, protected,
-  revision-bearing, and active-content packages are pass-through-only: exact
-  no-op export is allowed, but mutation is not. Build-a-Spec does not flatten
-  the source as a fallback.
+  the preservation gate can prove safe. It accepts unambiguous text replacement
+  in a simple, directly mapped body paragraph. Bounded add/delete/reorder is
+  allowed only in a source run of at least two contiguous, flat, leaf body
+  paragraphs with the same direct `w:numPr` binding. That binding must be
+  wired through the document's internal relationship and content type to a
+  supported automatic-numbering definition, and its `numId` cannot be used
+  outside the island. Existing paragraph/run properties and numbering
+  definitions are retained. An addition is allowed only while a source item
+  survives to anchor the insertion and every source item offers the same
+  unambiguous `pPr`/`rPr` formatting template.
+- Unsafe mutations fail closed. Cross-parent moves, nested or manually labeled
+  structural changes, table-derived blocks, fields, hyperlinks, drawings,
+  content controls, tracked-revision targets, complex multi-run formatting,
+  and ambiguous mappings are refused in source-preserving mode. Signed,
+  protected, revision-bearing, and active-content packages are
+  pass-through-only: exact no-op export is allowed, but mutation is not.
+  Build-a-Spec does not flatten the source as a fallback.
 - A no-op source export—including status/profile/standards-only changes or an
   undo back to the imported baseline—returns the exact original DOCX bytes.
 - Native `.baspec` project files carry the semantic project and the exact source
@@ -38,9 +44,9 @@ Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writ
   not real Word automatic-numbering bindings. “Redline of extracted provisions”
   likewise remains a semantic redline, not a source-package redline.
 
-This is the P1 foundation. Later preservation phases can expand the safe edit
-islands (for example bounded add/delete/reorder) without expanding the product
-into headers, footers, or general Word formatting.
+This remains deliberately smaller than a Word editor. Future preservation work
+can expand proven-safe islands without expanding the product into headers,
+footers, or general Word formatting.
 
 ## Current Status — v1.5.0 (Batch 10: Generic any-discipline module)
 

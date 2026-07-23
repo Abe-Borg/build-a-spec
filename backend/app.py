@@ -26,7 +26,8 @@ Endpoints (all JSON unless noted):
 - ``GET  /api/doc/diff``      → serialized version diff (``?base=N[&cur=M]``)
   for the in-app compare view (Batch 5).
 - ``GET  /api/export/docx``   → explicit ``?mode=source|normalized`` DOCX
-  export. Imported source mode clones-and-patches only verified body text;
+  export. Imported source mode applies only verified body edits (structural
+  edits require a proven flat island with isolated direct Word list bindings);
   ``?redline=master`` or ``?redline=version&base=N`` remains a normalized
   semantic tracked-changes export.
 - ``POST /api/research/start``  → launch the requirements-research fan-out
@@ -94,6 +95,7 @@ from .llm.prompts import (
     sanitize_discipline,
 )
 from .project_profile import ProjectProfile
+from .qc.engine import QCSourceGuard
 from .spec_modules import AVAILABLE_MODULES, DEFAULT_MODULE, get_module
 from .spec_doc import SpecEditError, diff_sections, lint_document, open_questions
 from .spec_doc.docx_export import (
@@ -112,7 +114,7 @@ from .spec_doc.project_package import (
     parse_project_file,
     read_project_upload_bounded,
 )
-from .spec_doc.source_mapping import SourceBodyMap
+from .spec_doc.source_mapping import SourceBodyMap, source_blocker_message
 from .spec_doc.source_patch import (
     SourcePatchError,
     build_source_preserving_docx,
@@ -218,6 +220,120 @@ def _source_readiness(session):
     )
 
 
+def _qc_source_guard(session) -> QCSourceGuard | None:
+    """Capture immutable source inputs for the exact QC document snapshot.
+
+    Presence means the runner must enforce source preservation. An active
+    source-backed session with malformed or missing context still returns a
+    required, incomplete guard so proposal validation fails closed.
+    """
+    source_map = getattr(session, "source_docx_map", None)
+    baseline_index = session.doc.baseline_index
+    if baseline_index is None:
+        return None
+    baseline_valid = (
+        not isinstance(baseline_index, bool)
+        and isinstance(baseline_index, int)
+        and 0 <= baseline_index < len(session.doc.versions)
+    )
+    if baseline_valid and session.doc.index < baseline_index:
+        # The import was undone. Match SessionState.apply_doc_edits: a new
+        # pre-import branch is not constrained by the abandoned source.
+        return None
+    return QCSourceGuard(
+        required=True,
+        source_bytes=(
+            session.source_docx_bytes
+            if isinstance(session.source_docx_bytes, bytes)
+            else None
+        ),
+        source_map=(
+            source_map if isinstance(source_map, SourceBodyMap) else None
+        ),
+        baseline=_source_baseline(session) if baseline_valid else None,
+    )
+
+
+def _source_preservation_payload(
+    session, preservation
+) -> dict[str, Any] | None:
+    """Describe source export and mutation as separate capabilities.
+
+    ``preservation_ready`` predates package-wide mutation blockers and means
+    only that the *current* state can be exported through source mode.  A
+    signed, protected, revision-bearing, or active-content source is therefore
+    ready when it is an exact no-op, even though no body mutation is allowed.
+    Keep that boolean for compatibility and expose the distinction here.
+    """
+    imported_scope = (
+        session.import_report is not None
+        or session.doc.baseline_index is not None
+    )
+    if not imported_scope:
+        return None
+
+    source_available = session.source_docx_bytes is not None
+    source_map = getattr(session, "source_docx_map", None)
+    global_blockers = (
+        tuple(source_map.global_blockers)
+        if isinstance(source_map, SourceBodyMap)
+        else ()
+    )
+
+    if preservation is not None and preservation.ready:
+        if preservation.no_op and global_blockers:
+            status = "pass_through_only"
+            blockers = [
+                {
+                    "uid": "source",
+                    "blocker": blocker,
+                    "message": source_blocker_message(blocker),
+                }
+                for blocker in global_blockers
+            ]
+        else:
+            status = "ready"
+            blockers = []
+    elif source_available:
+        status = "blocked"
+        blockers = (
+            [issue.to_dict() for issue in preservation.blockers]
+            if preservation is not None
+            else [
+                {
+                    "uid": "source",
+                    "blocker": "baseline_unavailable",
+                    "message": "the imported semantic baseline is unavailable",
+                }
+            ]
+        )
+    else:
+        status = "unavailable"
+        blockers = (
+            [issue.to_dict() for issue in preservation.blockers]
+            if preservation is not None
+            else [
+                {
+                    "uid": "source",
+                    "blocker": "source_unavailable",
+                    "message": "the exact imported DOCX is unavailable",
+                }
+            ]
+        )
+
+    return {
+        "status": status,
+        "source_export_ready": bool(preservation and preservation.ready),
+        "exact_original_available": source_available,
+        # This is deliberately document-level and bounded. Per-UID edit
+        # eligibility is a separate future contract.
+        "body_editing": "bounded" if status == "ready" else "disabled",
+        "no_op": bool(preservation and preservation.no_op),
+        "changed_uids": list(preservation.changed_uids) if preservation else [],
+        "blockers": blockers,
+    }
+
+
 def _doc_payload(session) -> dict[str, Any]:
     profile = ProjectProfile.from_dict(session.doc.doc.project_profile)
     preservation = _source_readiness(session)
@@ -244,6 +360,9 @@ def _doc_payload(session) -> dict[str, Any]:
         "import_report": session.import_report,
         "source_available": session.source_docx_bytes is not None,
         "preservation_ready": bool(preservation and preservation.ready),
+        "source_preservation": _source_preservation_payload(
+            session, preservation
+        ),
     }
 
 
@@ -601,6 +720,15 @@ def create_app() -> FastAPI:
     @app.post("/api/doc/undo")
     def undo_doc() -> JSONResponse:
         session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is streaming — try undo again "
+                    "once it finishes.",
+                },
+                status_code=409,
+            )
         if not session.doc.undo():
             return JSONResponse(
                 {"ok": False, "error": "Nothing to undo."}, status_code=409
@@ -610,6 +738,15 @@ def create_app() -> FastAPI:
     @app.post("/api/doc/redo")
     def redo_doc() -> JSONResponse:
         session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is streaming — try redo again "
+                    "once it finishes.",
+                },
+                status_code=409,
+            )
         if not session.doc.redo():
             return JSONResponse(
                 {"ok": False, "error": "Nothing to redo."}, status_code=409
@@ -1199,6 +1336,7 @@ def create_app() -> FastAPI:
         # Snapshot the tree so a turn streaming mid-QC can't mutate it under
         # the call; capture dismiss memory before start() clears the result.
         snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
+        source_guard = _qc_source_guard(session)
         remembered = session.qc.remembered_dismissed()
         started = session.qc.start(
             section=snapshot,
@@ -1209,6 +1347,7 @@ def create_app() -> FastAPI:
             max_tokens=settings.QC_MAX_TOKENS,
             version_index=session.doc.index,
             discipline=session.discipline,
+            source_guard=source_guard,
             remembered_dismissed=remembered,
             usage_sink=lambda u: session.usage.add("qc", u),
         )
@@ -1478,27 +1617,24 @@ def create_app() -> FastAPI:
                     raise ProjectPackageError(
                         "The project source has no imported semantic baseline."
                     )
-                identity = source_patch_readiness(
-                    source_bytes=staged.source_docx_bytes,
-                    source_map=typed_map,
-                    baseline=baseline,
-                    current=baseline,
-                )
-                if not identity.ready:
-                    detail = (
-                        identity.blockers[0].message
-                        if identity.blockers
-                        else "the source-to-document binding is incomplete"
+                # Every retained state on the source-backed side of history
+                # must fit the preservation boundary. Checking only the
+                # active index would let an unsafe forged redo/undo version
+                # enter the session and become active later without another
+                # package validation pass.
+                baseline_index = staged.doc.baseline_index
+                for version_index in range(
+                    baseline_index, len(staged.doc.versions)
+                ):
+                    retained = SpecSection.from_dict(
+                        staged.doc.versions[version_index]
                     )
-                    raise ProjectPackageError(
-                        "The project source cannot be restored safely: " + detail
+                    preservation = source_patch_readiness(
+                        source_bytes=staged.source_docx_bytes,
+                        source_map=typed_map,
+                        baseline=baseline,
+                        current=retained,
                     )
-                # A saved undo position may legitimately sit before the
-                # imported baseline (with the baseline still in its redo
-                # tail). At or after the baseline, however, the current tree
-                # itself must still have a valid patch plan.
-                if staged.doc.index >= staged.doc.baseline_index:
-                    preservation = _source_readiness(staged)
                     if preservation is None or not preservation.ready:
                         detail = (
                             preservation.blockers[0].message
@@ -1506,8 +1642,8 @@ def create_app() -> FastAPI:
                             else "the current body exceeds the preservation boundary"
                         )
                         raise ProjectPackageError(
-                            "The project source cannot be restored safely: "
-                            + detail
+                            "The project source cannot restore retained "
+                            f"version {version_index} safely: {detail}"
                         )
             elif parsed.source_map is not None and not parsed.legacy_json:
                 raise ProjectPackageError(

@@ -65,7 +65,11 @@ from ..research.schema import (
 )
 from ..spec_doc.model import SpecSection, apply_edits, outline, SpecEditError
 from ..spec_doc.source_mapping import SourceBodyMap
-from ..spec_doc.source_patch import SourcePatchError, validate_source_transition
+from ..spec_doc.source_patch import (
+    SourcePatchContext,
+    SourcePatchError,
+    validate_source_transition,
+)
 from ..spec_modules import SpecModule
 from ..standards import standards_context_block
 from ..usage_ledger import usage_to_dict
@@ -820,6 +824,7 @@ class QCSourceGuard:
     source_bytes: bytes | None = None
     source_map: SourceBodyMap | None = None
     baseline: SpecSection | None = None
+    context: SourcePatchContext | None = None
 
 
 def _validate_ops(
@@ -859,6 +864,7 @@ def _validate_ops(
                 source_guard.source_bytes is None
                 or source_guard.source_map is None
                 or source_guard.baseline is None
+                or source_guard.context is None
             ):
                 finding.ops_valid = False
                 finding.ops_invalid_reason = (
@@ -871,6 +877,7 @@ def _validate_ops(
                 source_map=source_guard.source_map,
                 baseline=source_guard.baseline,
                 current=candidate,
+                context=source_guard.context,
             )
         except SourcePatchError as exc:
             finding.ops_valid = False

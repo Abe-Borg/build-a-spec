@@ -51,6 +51,7 @@ _SUPPORTED_DOCUMENT_FLAGS = (
     _DATA_DESCRIPTOR_FLAG | _UTF8_NAME_FLAG | _DEFLATE_OPTION_FLAGS
 )
 _DOCUMENT_PART = "word/document.xml"
+_RAW_COMPARE_CHUNK_BYTES = 1024 * 1024
 _STRUCTURAL_SIGNATURES = (
     _LOCAL_SIGNATURE,
     _CENTRAL_SIGNATURE,
@@ -730,7 +731,16 @@ def parse_raw_zip_archive(
         archive_comment=comment,
         trailing_bytes=trailing,
     )
-    target = result.entry(mutable_member)
+    _validate_mutable_member(result, mutable_member)
+    return result
+
+
+def _validate_mutable_member(
+    archive: RawZipArchive,
+    mutable_member: str,
+) -> RawZipEntry:
+    """Return a member only when its cached mutation facts remain supported."""
+    target = archive.entry(mutable_member)
     if target.compression_method not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}:
         raise _unsupported(
             f"{mutable_member} uses an unsupported ZIP compression method"
@@ -744,7 +754,40 @@ def parse_raw_zip_archive(
         raise _unsupported(f"a stored {mutable_member} has deflate-only flags")
     if target.version_needed > 20:
         raise _unsupported(f"{mutable_member} requires unsupported ZIP features")
-    return result
+    return target
+
+
+def _source_archive_for_mutation(
+    source_bytes: bytes,
+    *,
+    mutable_member: str,
+    source_archive: RawZipArchive | None,
+) -> RawZipArchive:
+    """Resolve and bind an optional immutable source index without reparsing.
+
+    ``RawZipArchive`` instances retain the exact bytes from which every span
+    was derived.  Exact byte equality therefore prevents a stale index from
+    being paired with a different package, while the member-specific check
+    below preserves the same narrow compression/flag policy as a fresh parse.
+    """
+    if not isinstance(source_bytes, bytes):
+        raise TypeError("source_bytes must be bytes")
+    if source_archive is None:
+        return parse_raw_zip_archive(
+            source_bytes,
+            mutable_member=mutable_member,
+        )
+    if not isinstance(source_archive, RawZipArchive):
+        raise TypeError("source_archive must be a RawZipArchive or None")
+    if (
+        source_archive.source_bytes is not source_bytes
+        and source_archive.source_bytes != source_bytes
+    ):
+        raise _unsupported(
+            "the cached raw ZIP archive does not match the source bytes"
+        )
+    _validate_mutable_member(source_archive, mutable_member)
+    return source_archive
 
 
 def _compressed_replacement(entry: RawZipEntry, payload: bytes) -> bytes:
@@ -799,6 +842,56 @@ def _masked_record(record: bytes, spans: tuple[tuple[int, int], ...]) -> bytes:
     return bytes(result)
 
 
+def _byte_spans_equal(
+    left: bytes,
+    left_span: ByteSpan,
+    right: bytes,
+    right_span: ByteSpan,
+    *,
+    chunk_size: int = _RAW_COMPARE_CHUNK_BYTES,
+) -> bool:
+    """Compare raw archive regions without materializing either region."""
+    left_size = left_span.end - left_span.start
+    right_size = right_span.end - right_span.start
+    if left_size != right_size:
+        return False
+    left_view = memoryview(left)
+    right_view = memoryview(right)
+    for offset in range(0, left_size, chunk_size):
+        window = min(chunk_size, left_size - offset)
+        if (
+            left_view[
+                left_span.start + offset : left_span.start + offset + window
+            ]
+            != right_view[
+                right_span.start + offset : right_span.start + offset + window
+            ]
+        ):
+            return False
+    return True
+
+
+def _stream_matches_bytes(
+    stream,
+    expected: bytes,
+    *,
+    chunk_size: int = _RAW_COMPARE_CHUNK_BYTES,
+) -> bool:
+    """Compare a decompressed member using only explicitly bounded reads."""
+    expected_view = memoryview(expected)
+    offset = 0
+    while True:
+        chunk = stream.read(chunk_size)
+        if not isinstance(chunk, (bytes, bytearray, memoryview)):
+            return False
+        if not chunk:
+            return offset == len(expected)
+        end = offset + len(chunk)
+        if end > len(expected) or memoryview(chunk) != expected_view[offset:end]:
+            return False
+        offset = end
+
+
 def _audit_raw_rebuild(
     source: RawZipArchive,
     output_bytes: bytes,
@@ -823,20 +916,20 @@ def _audit_raw_rebuild(
     output_by_name = {entry.filename: entry for entry in output.entries}
     for before in source.entries:
         after = output_by_name[before.filename]
-        before_gap = source.source_bytes[
-            before.gap_after_span.start : before.gap_after_span.end
-        ]
-        after_gap = output_bytes[after.gap_after_span.start : after.gap_after_span.end]
-        if before_gap != after_gap:
+        if not _byte_spans_equal(
+            source.source_bytes,
+            before.gap_after_span,
+            output_bytes,
+            after.gap_after_span,
+        ):
             raise _unsupported("an inter-member ZIP gap changed")
         if before.filename != mutable_member:
-            before_local = source.source_bytes[
-                before.local_record_span.start : before.local_record_span.end
-            ]
-            after_local = output_bytes[
-                after.local_record_span.start : after.local_record_span.end
-            ]
-            if before_local != after_local:
+            if not _byte_spans_equal(
+                source.source_bytes,
+                before.local_record_span,
+                output_bytes,
+                after.local_record_span,
+            ):
                 raise _unsupported("an unchanged ZIP local record changed")
             central_mask = ((42, 46),)
         else:
@@ -862,8 +955,11 @@ def _audit_raw_rebuild(
             raise _unsupported("ZIP central-directory metadata changed unexpectedly")
     try:
         with zipfile.ZipFile(BytesIO(output_bytes), "r") as archive:
-            if archive.read(mutable_member) != expected_payload:
-                raise _unsupported("the rebuilt ZIP member payload is incorrect")
+            with archive.open(mutable_member, "r") as member:
+                if not _stream_matches_bytes(member, expected_payload):
+                    raise _unsupported(
+                        "the rebuilt ZIP member payload is incorrect"
+                    )
     except (KeyError, RuntimeError, zipfile.BadZipFile, NotImplementedError) as exc:
         raise _unsupported("the rebuilt ZIP archive failed validation") from exc
 
@@ -873,11 +969,16 @@ def replace_raw_zip_member(
     *,
     filename: str,
     payload: bytes,
+    source_archive: RawZipArchive | None = None,
 ) -> bytes:
     """Replace one supported member while preserving every other raw record."""
     if not isinstance(payload, bytes):
         raise TypeError("payload must be bytes")
-    source = parse_raw_zip_archive(source_bytes, mutable_member=filename)
+    source = _source_archive_for_mutation(
+        source_bytes,
+        mutable_member=filename,
+        source_archive=source_archive,
+    )
     target = source.entry(filename)
     rebuilt_target, target_crc, target_compressed_size = _rebuilt_local_record(
         source_bytes, target, payload
@@ -944,9 +1045,14 @@ def audit_raw_zip_replacement(
     *,
     filename: str,
     expected_payload: bytes,
+    source_archive: RawZipArchive | None = None,
 ) -> None:
     """Independently prove one rebuilt member is the only raw ZIP change."""
-    source = parse_raw_zip_archive(source_bytes, mutable_member=filename)
+    source = _source_archive_for_mutation(
+        source_bytes,
+        mutable_member=filename,
+        source_archive=source_archive,
+    )
     _audit_raw_rebuild(
         source,
         output_bytes,
@@ -955,11 +1061,17 @@ def audit_raw_zip_replacement(
     )
 
 
-def replace_document_xml_raw(source_bytes: bytes, document_xml: bytes) -> bytes:
+def replace_document_xml_raw(
+    source_bytes: bytes,
+    document_xml: bytes,
+    *,
+    source_archive: RawZipArchive | None = None,
+) -> bytes:
     return replace_raw_zip_member(
         source_bytes,
         filename=_DOCUMENT_PART,
         payload=document_xml,
+        source_archive=source_archive,
     )
 
 

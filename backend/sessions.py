@@ -11,7 +11,7 @@ from typing import Any
 
 from .llm.conversation import SessionState
 from .spec_doc.project import save_project
-from .spec_doc.project_package import build_project_package
+from .spec_doc.project_package import ProjectPackageError, build_project_package
 
 _session = SessionState()
 
@@ -115,10 +115,21 @@ def project_package_bytes(session: SessionState) -> bytes:
     source_bytes, source_filename, _source_docx_map = (
         _portable_source_attachment(session)
     )
+    try:
+        source_patch_context = (
+            session.ensure_source_patch_context()
+            if source_bytes is not None
+            else None
+        )
+    except (TypeError, ValueError) as exc:
+        raise ProjectPackageError(
+            f"The retained source context could not be validated: {exc}"
+        ) from exc
     return build_project_package(
         project_payload(session),
         source_docx_bytes=source_bytes,
         source_docx_filename=source_filename,
+        source_patch_context=source_patch_context,
     )
 
 

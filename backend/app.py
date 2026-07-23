@@ -116,7 +116,10 @@ from .spec_doc.project_package import (
     read_project_upload_bounded,
 )
 from .spec_doc.source_mapping import SourceBodyMap, source_blocker_message
+from .spec_doc import source_patch as source_patch_module
 from .spec_doc.source_patch import (
+    SourcePatchIssue,
+    SourcePatchReadiness,
     SourcePatchError,
     build_source_preserving_docx,
     source_patch_readiness,
@@ -215,11 +218,21 @@ def _source_readiness(session):
     baseline = _source_baseline(session)
     if baseline is None:
         return None
+    context = None
+    try:
+        context = session.ensure_source_patch_context(baseline=baseline)
+    except SourcePatchError as exc:
+        return SourcePatchReadiness(
+            False,
+            False,
+            blockers=(SourcePatchIssue(exc.uid, exc.blocker, exc.detail),),
+        )
     return source_patch_readiness(
         source_bytes=session.source_docx_bytes,
         source_map=getattr(session, "source_docx_map", None),
         baseline=baseline,
         current=session.doc.doc,
+        context=context,
     )
 
 
@@ -243,6 +256,14 @@ def _qc_source_guard(session) -> QCSourceGuard | None:
         # The import was undone. Match SessionState.apply_doc_edits: a new
         # pre-import branch is not constrained by the abandoned source.
         return None
+    baseline = _source_baseline(session) if baseline_valid else None
+    context = None
+    if baseline is not None:
+        try:
+            context = session.ensure_source_patch_context(baseline=baseline)
+        except SourcePatchError:
+            # A required guard with no context fails closed in the QC engine.
+            pass
     return QCSourceGuard(
         required=True,
         source_bytes=(
@@ -253,7 +274,8 @@ def _qc_source_guard(session) -> QCSourceGuard | None:
         source_map=(
             source_map if isinstance(source_map, SourceBodyMap) else None
         ),
-        baseline=_source_baseline(session) if baseline_valid else None,
+        baseline=baseline,
+        context=context,
     )
 
 
@@ -927,11 +949,15 @@ def create_app() -> FastAPI:
                     status_code=409,
                 )
             try:
+                context = session.ensure_source_patch_context(
+                    baseline=baseline
+                )
                 payload = build_source_preserving_docx(
                     source_bytes=session.source_docx_bytes,
                     source_map=source_map,
                     baseline=baseline,
                     current=store.doc,
+                    context=context,
                 )
             except SourcePatchError as exc:
                 return JSONResponse(
@@ -1110,8 +1136,13 @@ def create_app() -> FastAPI:
                     "The source document could not be mapped safely for "
                     "preserving export."
                 )
+            source_context = source_patch_module.build_source_patch_context(
+                source_bytes=source_bytes,
+                source_map=result.source_map,
+                baseline=result.section,
+            )
             session.doc.adopt_imported(result.section)
-        except (MasterImportError, ValueError) as exc:
+        except (MasterImportError, SourcePatchError, ValueError) as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
@@ -1123,6 +1154,7 @@ def create_app() -> FastAPI:
         session.source_docx_bytes = source_bytes
         session.source_docx_filename = safe_filename
         session.source_docx_map = result.source_map
+        session.source_patch_context = source_context
         session.import_report = report
         # The import counts as session-changing work: invalidate any turn
         # that was streaming against the empty document.
@@ -1579,6 +1611,7 @@ def create_app() -> FastAPI:
             # JSON has no binary source member. Never retain or claim a map
             # that cannot be checked against exact source bytes.
             session.source_docx_map = None
+            session.source_patch_context = None
         except ValueError as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
@@ -1651,6 +1684,14 @@ def create_app() -> FastAPI:
                     raise ProjectPackageError(
                         "The project source has no imported semantic baseline."
                     )
+                source_context = parsed.source_patch_context
+                if source_context is None:
+                    source_context = source_patch_module.build_source_patch_context(
+                        source_bytes=parsed.source_docx_bytes,
+                        source_map=typed_map,
+                        baseline=baseline,
+                    )
+                staged.source_patch_context = source_context
                 # Every retained state on the source-backed side of history
                 # must fit the preservation boundary. Checking only the
                 # active index would let an unsafe forged redo/undo version
@@ -1668,6 +1709,7 @@ def create_app() -> FastAPI:
                         source_map=typed_map,
                         baseline=baseline,
                         current=retained,
+                        context=source_context,
                     )
                     if preservation is None or not preservation.ready:
                         detail = (
@@ -1701,6 +1743,9 @@ def create_app() -> FastAPI:
             parsed.source_docx_filename if parsed.source_docx_bytes else ""
         )
         session.source_docx_map = typed_map
+        session.source_patch_context = (
+            source_context if parsed.source_docx_bytes is not None else None
+        )
         return JSONResponse(
             {
                 "ok": True,

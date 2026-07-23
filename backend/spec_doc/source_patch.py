@@ -19,13 +19,16 @@ import posixpath
 import re
 import urllib.parse
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BytesIO
+from types import MappingProxyType
+from typing import Mapping
 
 from lxml import etree
 
 from .model import SpecSection
 from .raw_zip import (
+    RawZipArchive,
     RawZipError,
     audit_raw_zip_replacement,
     parse_raw_zip_archive,
@@ -35,12 +38,17 @@ from .source_mapping import (
     SourceBodyMap,
     SourceParagraphBinding,
     bind_source_paragraph,
+    canonical_element_bytes,
     canonical_element_sha256,
     detect_global_source_blockers,
     semantic_body_projection,
     semantic_body_projection_sha256,
     source_blocker_message,
     source_replacement_text_blocker,
+)
+from .source_audit import (
+    SourceAuditError,
+    audit_package_preservation_streaming,
 )
 from .source_package import SourcePackageError, inspect_docx_package
 from .xml_lexical import (
@@ -52,7 +60,6 @@ from .xml_lexical import (
     apply_xml_patches,
     build_source_xml_index,
     decoded_slice_byte_span,
-    detect_xml_encoding,
     encode_word_text,
     xml_gap_is_whitespace,
 )
@@ -296,6 +303,88 @@ class SourcePatchReadiness:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class SourcePackageMemberInventory:
+    """Immutable ZIP metadata captured while the source is indexed once."""
+
+    filename: str
+    file_size: int
+    compress_size: int
+    crc32: int
+    compression_method: int
+    flags: int
+
+
+@dataclass(frozen=True, slots=True)
+class SourceParagraphTemplate:
+    """Proven immutable fragments needed to synthesize one minimal paragraph."""
+
+    body_child_index: int
+    word_prefix: bytes
+    namespace_declarations: bytes
+    p_pr_bytes: bytes
+    r_pr_bytes: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class SourceBodyInventoryItem:
+    """Source-only semantic facts retained without keeping an lxml node."""
+
+    body_child_index: int
+    expanded_name: str
+    element_c14n_sha256: str
+    element_c14n: bytes = field(repr=False)
+    immediately_follows_previous: bool = False
+    direct_numbering: tuple[str, str, str] | None = None
+    ppr_signature: str = ""
+    rpr_signature: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SourcePatchContext:
+    """Deeply immutable indexes and identity facts for one retained source.
+
+    The context is process-local derived state. It is never serialized into a
+    ``.baspec`` file and never retains a mutable lxml tree. Callers must still
+    pass source bytes, source map, and baseline to every public gate; those
+    inputs are checked against this context before any cached fact is trusted.
+    """
+
+    source_sha256: str
+    source_bytes: bytes = field(repr=False)
+    source_map: SourceBodyMap = field(repr=False)
+    baseline_projection_sha256: str
+    document_xml: bytes = field(repr=False)
+    document_xml_sha256: str
+    xml_index: SourceXmlIndex | None = field(repr=False)
+    global_blockers: tuple[str, ...]
+    runtime_mutation_issues: tuple[SourcePatchIssue, ...]
+    numbering_levels: frozenset[tuple[str, str]]
+    numbering_usage_counts: Mapping[str, int]
+    body_inventory: tuple[SourceBodyInventoryItem, ...]
+    paragraph_templates: Mapping[int, SourceParagraphTemplate]
+    package_inventory: tuple[SourcePackageMemberInventory, ...]
+    document_tag: str
+    document_attributes: tuple[tuple[str, str], ...]
+    document_namespace_bindings: tuple[tuple[str, str], ...]
+    body_attributes: tuple[tuple[str, str], ...]
+    body_has_non_whitespace_direct_character_data: bool
+    non_body_c14n_sha256: tuple[str, ...]
+    raw_zip_archive: RawZipArchive | None = field(repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "numbering_usage_counts",
+            MappingProxyType(dict(self.numbering_usage_counts)),
+        )
+        object.__setattr__(
+            self,
+            "paragraph_templates",
+            MappingProxyType(dict(self.paragraph_templates)),
+        )
+
+
 @dataclass(frozen=True)
 class _TextPatch:
     binding: SourceParagraphBinding
@@ -399,6 +488,14 @@ class _PatchPlan:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _ValidatedPatch:
+    plan: _PatchPlan
+    context: SourcePatchContext
+    lexically_patched_xml: bytes | None = None
+    prepared_output: bytes | None = None
+
+
 def _xml_parser() -> etree.XMLParser:
     return etree.XMLParser(
         resolve_entities=False,
@@ -430,6 +527,33 @@ def _read_document_xml(source_bytes: bytes) -> bytes:
         ) from exc
 
 
+def _read_document_xml_and_inventory(
+    source_bytes: bytes,
+) -> tuple[bytes, tuple[SourcePackageMemberInventory, ...]]:
+    try:
+        with zipfile.ZipFile(BytesIO(source_bytes), "r") as archive:
+            infos = archive.infolist()
+            document_xml = archive.read(_DOCUMENT_PART)
+            inventory = tuple(
+                SourcePackageMemberInventory(
+                    filename=info.filename,
+                    file_size=info.file_size,
+                    compress_size=info.compress_size,
+                    crc32=info.CRC,
+                    compression_method=info.compress_type,
+                    flags=info.flag_bits,
+                )
+                for info in infos
+            )
+    except (KeyError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise SourcePatchError(
+            "source",
+            "unsafe_package",
+            "the source DOCX package inventory could not be indexed",
+        ) from exc
+    return document_xml, inventory
+
+
 def _parse_document_xml(document_xml: bytes):
     try:
         tree = etree.parse(BytesIO(document_xml), parser=_xml_parser())
@@ -454,33 +578,6 @@ def _parse_document_xml(document_xml: bytes):
             "the package does not contain exactly one supported Word body",
         )
     return tree, bodies[0]
-
-
-def _source_xml_mutation_issue(
-    document_xml: bytes,
-) -> SourcePatchIssue | None:
-    """Return a runtime-only lexical blocker without changing source maps.
-
-    Encoding support is intentionally recomputed from the immutable source.
-    Persisting this derived result would make older ``.baspec`` source maps
-    fail their exact blocker-tuple identity check after an application update.
-    """
-    try:
-        detect_xml_encoding(document_xml)
-    except XmlLexicalError as exc:
-        return SourcePatchIssue("source", exc.blocker, exc.detail)
-    return None
-
-
-def _source_raw_zip_mutation_issue(
-    source_bytes: bytes,
-) -> SourcePatchIssue | None:
-    """Return a runtime-only raw-archive blocker without changing source maps."""
-    try:
-        parse_raw_zip_archive(source_bytes, mutable_member=_DOCUMENT_PART)
-    except RawZipError as exc:
-        return SourcePatchIssue("source", exc.blocker, exc.detail)
-    return None
 
 
 def _projection_paragraphs(
@@ -992,8 +1089,7 @@ def _property_signatures(element) -> tuple[str, str]:
 def _eligible_numbered_member(
     paragraph: _ProjectedParagraph,
     binding: SourceParagraphBinding | None,
-    children: list,
-    defined_levels: frozenset[tuple[str, str]],
+    body_inventory: tuple[SourceBodyInventoryItem, ...],
 ) -> _NumberedMember | None:
     if (
         paragraph.depth != 0
@@ -1003,34 +1099,30 @@ def _eligible_numbered_member(
         or binding.text_span is None
         or binding.text_span.prefix
         or binding.text_span.suffix
-        or not 0 <= binding.body_child_index < len(children)
+        or not 0 <= binding.body_child_index < len(body_inventory)
     ):
         return None
-    element = children[binding.body_child_index]
-    if element.tag != _W_P:
+    item = body_inventory[binding.body_child_index]
+    if item.expanded_name != _W_P or item.direct_numbering is None:
         return None
-    numbering = _direct_numbering_signature(element, defined_levels)
-    if numbering is None:
-        return None
-    num_id, ilvl, signature = numbering
-    ppr_signature, rpr_signature = _property_signatures(element)
+    num_id, ilvl, signature = item.direct_numbering
     return _NumberedMember(
         binding=binding,
         num_id=num_id,
         ilvl=ilvl,
         signature=signature,
-        ppr_signature=ppr_signature,
-        rpr_signature=rpr_signature,
+        ppr_signature=item.ppr_signature,
+        rpr_signature=item.rpr_signature,
     )
 
 
-def _validated_source_identity(
+def build_source_patch_context(
     *,
     source_bytes: bytes,
     source_map: SourceBodyMap,
     baseline: SpecSection,
-) -> tuple[bytes, object, object]:
-    """Validate source/map/baseline identity without applying edit policy."""
+) -> SourcePatchContext:
+    """Index and bind one immutable source package exactly once."""
     if not isinstance(source_bytes, bytes):
         raise SourcePatchError(
             "source",
@@ -1057,7 +1149,9 @@ def _validated_source_identity(
             "the semantic master baseline no longer matches the source map",
         )
 
-    document_xml = _read_document_xml(source_bytes)
+    document_xml, package_inventory = _read_document_xml_and_inventory(
+        source_bytes
+    )
     if hashlib.sha256(document_xml).hexdigest() != source_map.document_xml_sha256:
         raise SourcePatchError(
             "source",
@@ -1149,7 +1243,184 @@ def _validated_source_identity(
             "source_map_mismatch",
             "persisted mutation blockers do not match the source package",
         )
-    return document_xml, tree, body
+
+    numbering_levels, numbering_usage_counts = _numbering_context(source_bytes)
+    body_inventory: list[SourceBodyInventoryItem] = []
+    previous = None
+    for body_child_index, element in enumerate(children):
+        canonical = canonical_element_bytes(element)
+        numbering = _direct_numbering_signature(element, numbering_levels)
+        ppr_signature, rpr_signature = _property_signatures(element)
+        body_inventory.append(
+            SourceBodyInventoryItem(
+                body_child_index=body_child_index,
+                expanded_name=element.tag,
+                element_c14n_sha256=hashlib.sha256(canonical).hexdigest(),
+                element_c14n=canonical,
+                immediately_follows_previous=(
+                    previous is not None and previous.getnext() is element
+                ),
+                direct_numbering=numbering,
+                ppr_signature=ppr_signature,
+                rpr_signature=rpr_signature,
+            )
+        )
+        previous = element
+
+    runtime_mutation_issues: list[SourcePatchIssue] = []
+    xml_index: SourceXmlIndex | None
+    try:
+        xml_index = build_source_xml_index(document_xml, validated_tree=tree)
+    except XmlLexicalError as exc:
+        xml_index = None
+        runtime_mutation_issues.append(
+            SourcePatchIssue("source", exc.blocker, exc.detail)
+        )
+
+    raw_zip_archive: RawZipArchive | None
+    try:
+        raw_zip_archive = parse_raw_zip_archive(
+            source_bytes,
+            mutable_member=_DOCUMENT_PART,
+        )
+    except RawZipError as exc:
+        raw_zip_archive = None
+        runtime_mutation_issues.append(
+            SourcePatchIssue("source", exc.blocker, exc.detail)
+        )
+
+    paragraph_templates: dict[int, SourceParagraphTemplate] = {}
+    if xml_index is not None:
+        for body_child_index, element in enumerate(children):
+            if element.tag != _W_P:
+                continue
+            try:
+                paragraph_templates[body_child_index] = (
+                    _extract_paragraph_template(
+                        document_xml=document_xml,
+                        index=xml_index,
+                        body_child_index=body_child_index,
+                        template_element=element,
+                        uid="source",
+                    )
+                )
+            except SourcePatchError:
+                # A paragraph can remain movable verbatim even when its local
+                # formatting is too complex to stamp onto a new paragraph.
+                continue
+
+    root = tree.getroot()
+    non_body = [
+        child
+        for child in _meaningful_children(root)
+        if child is not body
+    ]
+    return SourcePatchContext(
+        source_sha256=source_map.source_sha256,
+        source_bytes=source_bytes,
+        source_map=source_map,
+        baseline_projection_sha256=source_map.baseline_projection_sha256,
+        document_xml=document_xml,
+        document_xml_sha256=source_map.document_xml_sha256,
+        xml_index=xml_index,
+        global_blockers=actual_global_blockers,
+        runtime_mutation_issues=tuple(runtime_mutation_issues),
+        numbering_levels=numbering_levels,
+        numbering_usage_counts=numbering_usage_counts,
+        body_inventory=tuple(body_inventory),
+        paragraph_templates=paragraph_templates,
+        package_inventory=package_inventory,
+        document_tag=root.tag,
+        document_attributes=tuple(sorted(root.attrib.items())),
+        document_namespace_bindings=tuple(
+            sorted(
+                ((prefix or "", uri) for prefix, uri in root.nsmap.items()),
+                key=lambda item: item[0],
+            )
+        ),
+        body_attributes=tuple(sorted(body.attrib.items())),
+        body_has_non_whitespace_direct_character_data=(
+            _has_non_whitespace_direct_character_data(body)
+        ),
+        non_body_c14n_sha256=tuple(
+            canonical_element_sha256(child) for child in non_body
+        ),
+        raw_zip_archive=raw_zip_archive,
+    )
+
+
+def _context_for_inputs(
+    *,
+    source_bytes: bytes,
+    source_map: SourceBodyMap,
+    baseline: SpecSection,
+    context: SourcePatchContext | None,
+) -> SourcePatchContext:
+    """Return a bound context, rejecting stale supplied cache state."""
+    if context is None:
+        return build_source_patch_context(
+            source_bytes=source_bytes,
+            source_map=source_map,
+            baseline=baseline,
+        )
+    if not isinstance(context, SourcePatchContext):
+        raise SourcePatchError(
+            "source",
+            "source_map_mismatch",
+            "the supplied source context has an invalid type",
+        )
+    actual_source_sha256 = (
+        context.source_sha256
+        if source_bytes is context.source_bytes
+        else hashlib.sha256(source_bytes).hexdigest()
+    )
+    if (
+        actual_source_sha256 != source_map.source_sha256
+        or context.source_sha256 != actual_source_sha256
+    ):
+        raise SourcePatchError(
+            "source",
+            "source_hash_mismatch",
+            "the retained bytes do not match the cached source context",
+        )
+    if source_map != context.source_map:
+        raise SourcePatchError(
+            "source",
+            "source_map_mismatch",
+            "the source map does not match the cached source context",
+        )
+    baseline_sha256 = semantic_body_projection_sha256(baseline)
+    if (
+        baseline_sha256 != source_map.baseline_projection_sha256
+        or context.baseline_projection_sha256 != baseline_sha256
+    ):
+        raise SourcePatchError(
+            "source",
+            "baseline_mismatch",
+            "the semantic master baseline does not match the cached source context",
+        )
+    if context.document_xml_sha256 != source_map.document_xml_sha256:
+        raise SourcePatchError(
+            "source",
+            "document_hash_mismatch",
+            "word/document.xml does not match the cached source context",
+        )
+    if context.global_blockers != source_map.global_blockers:
+        raise SourcePatchError(
+            "source",
+            "source_map_mismatch",
+            "cached mutation blockers do not match the source map",
+        )
+    if len(context.body_inventory) != source_map.body_child_count:
+        raise SourcePatchError("source", "body_anchor_mismatch")
+    for block, item in zip(source_map.body_blocks, context.body_inventory):
+        if (
+            block.body_child_index != item.body_child_index
+            or block.tag != item.expanded_name.rsplit("}", 1)[-1]
+            or block.element_c14n_sha256 != item.element_c14n_sha256
+        ):
+            raise SourcePatchError("source", "body_anchor_mismatch")
+    return context
 
 
 def validate_source_map_identity(
@@ -1157,6 +1428,7 @@ def validate_source_map_identity(
     source_bytes: bytes,
     source_map: SourceBodyMap,
     baseline: SpecSection,
+    context: SourcePatchContext | None = None,
 ) -> None:
     """Public read-only identity gate for project-container restoration.
 
@@ -1164,10 +1436,11 @@ def validate_source_map_identity(
     are intentionally not errors here: a valid project may retain and return
     such a document byte-for-byte even though mutation remains blocked.
     """
-    _validated_source_identity(
+    _context_for_inputs(
         source_bytes=source_bytes,
         source_map=source_map,
         baseline=baseline,
+        context=context,
     )
 
 
@@ -1193,18 +1466,16 @@ def _structural_member_blocker(
 
 def _build_numbered_islands(
     *,
-    source_bytes: bytes,
+    context: SourcePatchContext,
     source_map: SourceBodyMap,
     baseline: dict[str, _ProjectedParagraph],
     base_children: dict[str, tuple[str, ...]],
-    body_children: list,
 ) -> tuple[
     dict[str, _NumberedIsland],
     dict[str, _NumberedIsland],
     dict[str, tuple[_NumberedIsland, ...]],
     dict[str, str],
 ]:
-    defined_levels, usage_counts = _numbering_context(source_bytes)
     eligible = {
         uid: member
         for uid, paragraph in baseline.items()
@@ -1212,8 +1483,7 @@ def _build_numbered_islands(
             member := _eligible_numbered_member(
                 paragraph,
                 source_map.bindings.get(uid),
-                body_children,
-                defined_levels,
+                context.body_inventory,
             )
         )
         is not None
@@ -1253,14 +1523,13 @@ def _build_numbered_islands(
                 continue
             if pending:
                 previous = pending[-1]
-                previous_element = body_children[
-                    previous.binding.body_child_index
+                current_item = context.body_inventory[
+                    member.binding.body_child_index
                 ]
-                current_element = body_children[member.binding.body_child_index]
                 contiguous = (
                     previous.binding.body_child_index + 1
                     == member.binding.body_child_index
-                    and previous_element.getnext() is current_element
+                    and current_item.immediately_follows_previous
                 )
                 if not contiguous or previous.signature != member.signature:
                     blocker = (
@@ -1277,7 +1546,7 @@ def _build_numbered_islands(
         isolated_islands: list[tuple[_NumberedMember, ...]] = []
         for raw_island in raw_islands:
             num_id = raw_island[0].num_id
-            if usage_counts.get(num_id, 0) != len(raw_island):
+            if context.numbering_usage_counts.get(num_id, 0) != len(raw_island):
                 for numbered_member in raw_island:
                     diagnostics.setdefault(
                         numbered_member.binding.uid,
@@ -1323,22 +1592,19 @@ def _build_numbered_islands(
 
 def _plan_projection_changes(
     *,
-    source_bytes: bytes,
+    context: SourcePatchContext,
     source_map: SourceBodyMap,
     baseline_section: SpecSection,
     current_section: SpecSection,
-    body,
 ) -> _PatchPlan:
     baseline, base_children, current, current_children = _validate_fixed_projection(
         baseline_section, current_section
     )
-    body_children = _meaningful_children(body)
     _islands_by_key, island_by_uid, islands_by_article, diagnostics = _build_numbered_islands(
-        source_bytes=source_bytes,
+        context=context,
         source_map=source_map,
         baseline=baseline,
         base_children=base_children,
-        body_children=body_children,
     )
 
     desired_by_island: dict[str, list[_DesiredParagraph]] = {
@@ -1526,7 +1792,10 @@ def _plan_projection_changes(
     if unassigned:
         raise SourcePatchError(unassigned[0], "unsafe_structural_island")
 
-    if island_patches and _has_non_whitespace_direct_character_data(body):
+    if (
+        island_patches
+        and context.body_has_non_whitespace_direct_character_data
+    ):
         raise SourcePatchError(
             island_patches[0].island.key,
             "unsafe_structural_island",
@@ -1568,36 +1837,23 @@ def _validate_source_and_plan(
     source_map: SourceBodyMap,
     baseline: SpecSection,
     current: SpecSection,
-) -> tuple[
-    _PatchPlan,
-    bytes,
-    object,
-    object,
-    bytes | None,
-    bytes | None,
-    tuple[SourcePatchIssue, ...],
-]:
-    document_xml, tree, body = _validated_source_identity(
+    context: SourcePatchContext | None = None,
+) -> _ValidatedPatch:
+    bound_context = _context_for_inputs(
         source_bytes=source_bytes,
         source_map=source_map,
         baseline=baseline,
-    )
-    xml_mutation_issue = _source_xml_mutation_issue(document_xml)
-    raw_zip_mutation_issue = _source_raw_zip_mutation_issue(source_bytes)
-    runtime_mutation_issues = tuple(
-        issue
-        for issue in (xml_mutation_issue, raw_zip_mutation_issue)
-        if issue is not None
+        context=context,
     )
 
     baseline_projection = semantic_body_projection(baseline)
     current_projection = semantic_body_projection(current)
     mutation_blocker = (
-        source_map.global_blockers[0]
-        if source_map.global_blockers
+        bound_context.global_blockers[0]
+        if bound_context.global_blockers
         else (
-            runtime_mutation_issues[0].blocker
-            if runtime_mutation_issues
+            bound_context.runtime_mutation_issues[0].blocker
+            if bound_context.runtime_mutation_issues
             else None
         )
     )
@@ -1620,7 +1876,7 @@ def _validate_source_and_plan(
         detail = next(
             (
                 issue.message
-                for issue in runtime_mutation_issues
+                for issue in bound_context.runtime_mutation_issues
                 if issue.blocker == mutation_blocker
             ),
             None,
@@ -1628,32 +1884,23 @@ def _validate_source_and_plan(
         raise SourcePatchError(changed_uid, mutation_blocker, detail)
 
     plan = _plan_projection_changes(
-        source_bytes=source_bytes,
+        context=bound_context,
         source_map=source_map,
         baseline_section=baseline,
         current_section=current,
-        body=body,
     )
 
     # Exact semantic no-ops return the original bytes even for signed,
     # protected, or revision-bearing sources.  Those features only block an
     # actual mutation; pass-through cannot invalidate or reinterpret them.
     if not plan.no_op:
-        try:
-            actual_global_blockers = detect_global_source_blockers(source_bytes)
-        except (TypeError, ValueError) as exc:
-            raise SourcePatchError(
-                "source",
-                "unsafe_package",
-                "source mutation blockers could not be verified",
-            ) from exc
-        if actual_global_blockers:
+        if bound_context.global_blockers:
             raise SourcePatchError(
                 plan.changed_uids[0] if plan.changed_uids else "source",
-                actual_global_blockers[0],
+                bound_context.global_blockers[0],
             )
-        if runtime_mutation_issues:
-            issue = runtime_mutation_issues[0]
+        if bound_context.runtime_mutation_issues:
+            issue = bound_context.runtime_mutation_issues[0]
             raise SourcePatchError(
                 plan.changed_uids[0] if plan.changed_uids else "source",
                 issue.blocker,
@@ -1668,8 +1915,7 @@ def _validate_source_and_plan(
         # therefore rejects model, manual, QC, and restored-history candidates
         # before any session state can be committed.
         lexically_patched_xml = _lexically_patch_document(
-            document_xml=document_xml,
-            tree=tree,
+            context=bound_context,
             plan=plan,
         )
         # The raw package rebuild is also part of the final-state gate.  This
@@ -1681,6 +1927,7 @@ def _validate_source_and_plan(
             prepared_output = replace_document_xml_raw(
                 source_bytes,
                 lexically_patched_xml,
+                source_archive=bound_context.raw_zip_archive,
             )
         except RawZipError as exc:
             raise SourcePatchError(
@@ -1689,14 +1936,11 @@ def _validate_source_and_plan(
                 f"the raw ZIP rebuild preflight failed: {exc.detail}",
             ) from exc
 
-    return (
-        plan,
-        document_xml,
-        tree,
-        body,
-        lexically_patched_xml,
-        prepared_output,
-        runtime_mutation_issues,
+    return _ValidatedPatch(
+        plan=plan,
+        context=bound_context,
+        lexically_patched_xml=lexically_patched_xml,
+        prepared_output=prepared_output,
     )
 
 
@@ -1706,6 +1950,7 @@ def validate_source_transition(
     source_map: SourceBodyMap,
     baseline: SpecSection,
     current: SpecSection,
+    context: SourcePatchContext | None = None,
 ) -> None:
     """Raise the exact fail-closed blocker for a proposed final document.
 
@@ -1718,6 +1963,7 @@ def validate_source_transition(
         source_map=source_map,
         baseline=baseline,
         current=current,
+        context=context,
     )
 
 
@@ -1727,6 +1973,7 @@ def source_patch_readiness(
     source_map: SourceBodyMap | None,
     baseline: SpecSection,
     current: SpecSection,
+    context: SourcePatchContext | None = None,
 ) -> SourcePatchReadiness:
     """Non-throwing readiness report for API/UI integration."""
     if source_bytes is None or source_map is None:
@@ -1734,28 +1981,21 @@ def source_patch_readiness(
         issue = SourcePatchIssue("source", "source_unavailable", message)
         return SourcePatchReadiness(False, False, blockers=(issue,))
     try:
-        (
-            plan,
-            _xml,
-            _tree,
-            _body,
-            _lexically_patched_xml,
-            _prepared_output,
-            runtime_mutation_issues,
-        ) = _validate_source_and_plan(
+        validated = _validate_source_and_plan(
             source_bytes=source_bytes,
             source_map=source_map,
             baseline=baseline,
             current=current,
+            context=context,
         )
     except SourcePatchError as exc:
         issue = SourcePatchIssue(exc.uid, exc.blocker, exc.detail)
         return SourcePatchReadiness(False, False, blockers=(issue,))
     return SourcePatchReadiness(
         True,
-        plan.no_op,
-        changed_uids=plan.changed_uids,
-        mutation_blockers=runtime_mutation_issues,
+        validated.plan.no_op,
+        changed_uids=validated.plan.changed_uids,
+        mutation_blockers=validated.context.runtime_mutation_issues,
     )
 
 def _serialize_tree(tree, original_xml: bytes) -> bytes:
@@ -2123,18 +2363,16 @@ def _validate_synthesis_template_shape(
         _validate_synthesis_property(r_pr_element, r_pr_record, uid=uid)
 
 
-def _minimal_numbered_paragraph_bytes(
+def _extract_paragraph_template(
     *,
     document_xml: bytes,
     index: SourceXmlIndex,
-    template: SourceParagraphBinding,
+    body_child_index: int,
     template_element,
     uid: str,
-    text: str,
-) -> bytes:
-    _validate_text_for_single_word_node(uid, text)
+) -> SourceParagraphTemplate:
     paragraph = _element_record_for_body_child(
-        index, template.body_child_index
+        index, body_child_index
     )
     if paragraph.expanded_name != _W_P:
         raise SourcePatchError(uid, "ambiguous_structural_template")
@@ -2191,7 +2429,6 @@ def _minimal_numbered_paragraph_bytes(
             word_prefix=word_prefix,
             uid=uid,
         )
-        encoded_text = encode_word_text(text)
     except XmlLexicalError as exc:
         raise SourcePatchError(uid, exc.blocker, exc.detail) from exc
 
@@ -2201,6 +2438,27 @@ def _minimal_numbered_paragraph_bytes(
         if r_pr is not None
         else b""
     )
+    return SourceParagraphTemplate(
+        body_child_index=body_child_index,
+        word_prefix=word_prefix,
+        namespace_declarations=declarations,
+        p_pr_bytes=p_pr_bytes,
+        r_pr_bytes=r_pr_bytes,
+    )
+
+
+def _minimal_numbered_paragraph_bytes(
+    *,
+    template: SourceParagraphTemplate,
+    uid: str,
+    text: str,
+) -> bytes:
+    _validate_text_for_single_word_node(uid, text)
+    try:
+        encoded_text = encode_word_text(text)
+    except XmlLexicalError as exc:
+        raise SourcePatchError(uid, exc.blocker, exc.detail) from exc
+    word_prefix = template.word_prefix
     p_name = _prefixed_name(word_prefix, b"p")
     r_name = _prefixed_name(word_prefix, b"r")
     t_name = _prefixed_name(word_prefix, b"t")
@@ -2208,13 +2466,13 @@ def _minimal_numbered_paragraph_bytes(
         (
             b"<",
             p_name,
-            declarations,
+            template.namespace_declarations,
             b">",
-            p_pr_bytes,
+            template.p_pr_bytes,
             b"<",
             r_name,
             b">",
-            r_pr_bytes,
+            template.r_pr_bytes,
             b"<",
             t_name,
             b">",
@@ -2265,7 +2523,7 @@ def _build_island_byte_patch(
     index: SourceXmlIndex,
     island_patch: _IslandPatch,
     text_by_uid: dict[str, XmlPatch],
-    source_body_children: list,
+    paragraph_templates: Mapping[int, SourceParagraphTemplate],
 ) -> _IslandBytePatch:
     island = island_patch.island
     expected_indices = list(range(island.start_index, island.end_index + 1))
@@ -2317,14 +2575,16 @@ def _build_island_byte_patch(
                 raise SourcePatchError(
                     desired.uid, "ambiguous_structural_template"
                 )
+            template = paragraph_templates.get(
+                desired.template.body_child_index
+            )
+            if template is None:
+                raise SourcePatchError(
+                    desired.uid, "ambiguous_structural_template"
+                )
             desired_bytes.append(
                 _minimal_numbered_paragraph_bytes(
-                    document_xml=document_xml,
-                    index=index,
-                    template=desired.template,
-                    template_element=source_body_children[
-                        desired.template.body_child_index
-                    ],
+                    template=template,
                     uid=desired.uid,
                     text=desired.text,
                 )
@@ -2349,20 +2609,30 @@ def _build_island_byte_patch(
 
 def _lexically_patch_document(
     *,
-    document_xml: bytes,
-    tree,
+    context: SourcePatchContext,
     plan: _PatchPlan,
 ) -> bytes:
     """Compose text and structural changes from immutable source bytes."""
     if plan.no_op:
         raise ValueError("lexical patching requires a non-empty plan")
     first_uid = plan.changed_uids[0] if plan.changed_uids else "source"
+    document_xml = context.document_xml
     try:
-        index = build_source_xml_index(document_xml, validated_tree=tree)
-        source_body = tree.getroot().find(f".//{_W_BODY}")
-        if source_body is None:  # pragma: no cover - identity gate proves it
-            raise SourcePatchError(first_uid, "unsafe_document_xml")
-        source_body_children = _meaningful_children(source_body)
+        index = context.xml_index
+        if index is None:
+            issue = next(
+                (
+                    item
+                    for item in context.runtime_mutation_issues
+                    if item.blocker != "unsupported_raw_zip_layout"
+                ),
+                None,
+            )
+            raise SourcePatchError(
+                first_uid,
+                issue.blocker if issue is not None else "unsafe_document_xml",
+                issue.message if issue is not None else None,
+            )
         text_manifest = _lexical_text_patch_manifest(
             document_xml=document_xml,
             index=index,
@@ -2386,7 +2656,7 @@ def _lexically_patch_document(
             index=index,
             island_patch=island_patch,
             text_by_uid=text_by_uid,
-            source_body_children=source_body_children,
+            paragraph_templates=context.paragraph_templates,
         )
         nested_text_uids.update(
             desired.uid
@@ -2422,7 +2692,7 @@ def _lexically_patch_document(
             "output_validation_failed",
             "the composed Word XML did not pass the independent lexical index",
         ) from exc
-    _audit_document_xml_preservation(document_xml, patched_xml, plan)
+    _audit_document_xml_preservation(context, patched_xml, plan)
     return patched_xml
 
 
@@ -2450,10 +2720,21 @@ def _minimal_numbered_paragraph(template_element, uid: str, text: str):
     return paragraph
 
 
-def _expected_body_elements(
-    source_children: list,
+def _inventory_element(item: SourceBodyInventoryItem):
+    try:
+        return etree.fromstring(item.element_c14n, parser=_xml_parser())
+    except (etree.XMLSyntaxError, ValueError) as exc:  # pragma: no cover - builder proof
+        raise SourcePatchError(
+            "source",
+            "output_validation_failed",
+            "a cached source body fingerprint could not be reconstructed",
+        ) from exc
+
+
+def _expected_body_element_hashes(
+    context: SourcePatchContext,
     plan: _PatchPlan,
-) -> list:
+) -> list[str]:
     """Independently materialize the only body sequence the plan permits."""
     text_by_uid = {
         patch.binding.uid: patch.new_text for patch in plan.text_patches
@@ -2465,48 +2746,57 @@ def _expected_body_elements(
     islands_by_start = {
         patch.island.start_index: patch for patch in plan.island_patches
     }
-    expected: list = []
+    expected: list[str] = []
     index = 0
-    while index < len(source_children):
+    while index < len(context.body_inventory):
         island_patch = islands_by_start.get(index)
         if island_patch is not None:
             for desired in island_patch.desired:
                 if desired.binding is not None:
-                    source_element = source_children[desired.binding.body_child_index]
+                    item = context.body_inventory[
+                        desired.binding.body_child_index
+                    ]
                     if desired.uid in text_by_uid:
-                        expected.append(
-                            _element_with_text_patch(
-                                source_element,
-                                desired.binding,
-                                text_by_uid[desired.uid],
-                            )
+                        element = _element_with_text_patch(
+                            _inventory_element(item),
+                            desired.binding,
+                            text_by_uid[desired.uid],
                         )
+                        expected.append(canonical_element_sha256(element))
                     else:
-                        expected.append(copy.deepcopy(source_element))
+                        expected.append(item.element_c14n_sha256)
                 else:
                     if desired.template is None:
                         raise SourcePatchError(desired.uid, "ambiguous_structural_template")
-                    template = source_children[desired.template.body_child_index]
-                    expected.append(
-                        _minimal_numbered_paragraph(template, desired.uid, desired.text)
+                    template_item = context.body_inventory[
+                        desired.template.body_child_index
+                    ]
+                    expected_element = _minimal_numbered_paragraph(
+                        _inventory_element(template_item),
+                        desired.uid,
+                        desired.text,
                     )
+                    expected.append(canonical_element_sha256(expected_element))
             index = island_patch.island.end_index + 1
             continue
         binding = text_binding_by_index.get(index)
         if binding is not None:
-            expected.append(
-                _element_with_text_patch(
-                    source_children[index], binding, text_by_uid[binding.uid]
-                )
+            expected_element = _element_with_text_patch(
+                _inventory_element(context.body_inventory[index]),
+                binding,
+                text_by_uid[binding.uid],
             )
+            expected.append(canonical_element_sha256(expected_element))
         else:
-            expected.append(copy.deepcopy(source_children[index]))
+            expected.append(
+                context.body_inventory[index].element_c14n_sha256
+            )
         index += 1
     return expected
 
 
 def _audit_document_xml_preservation(
-    source_document_xml: bytes,
+    context: SourcePatchContext,
     output_document_xml: bytes,
     plan: _PatchPlan,
 ) -> None:
@@ -2516,34 +2806,35 @@ def _audit_document_xml_preservation(
     manual, model, QC, history-restoration, and download paths share the same
     final-state gate.
     """
-    source_tree, source_body = _parse_document_xml(source_document_xml)
     output_tree, output_body = _parse_document_xml(output_document_xml)
-    source_root = source_tree.getroot()
     output_root = output_tree.getroot()
     if (
-        source_root.tag != output_root.tag
-        or source_root.attrib != output_root.attrib
-        or source_root.nsmap != output_root.nsmap
-        or source_body.attrib != output_body.attrib
+        context.document_tag != output_root.tag
+        or context.document_attributes != tuple(sorted(output_root.attrib.items()))
+        or context.document_namespace_bindings
+        != tuple(
+            sorted(
+                (
+                    (prefix or "", uri)
+                    for prefix, uri in output_root.nsmap.items()
+                ),
+                key=lambda item: item[0],
+            )
+        )
+        or context.body_attributes != tuple(sorted(output_body.attrib.items()))
     ):
         raise SourcePatchError(
             "source",
             "out_of_scope_document_xml_changed",
             "document or body metadata outside the edit surface changed",
         )
-    source_non_body = [
-        child
-        for child in _meaningful_children(source_root)
-        if child is not source_body
-    ]
     output_non_body = [
         child
         for child in _meaningful_children(output_root)
         if child is not output_body
     ]
-    if len(source_non_body) != len(output_non_body) or any(
-        canonical_element_sha256(before) != canonical_element_sha256(after)
-        for before, after in zip(source_non_body, output_non_body)
+    if context.non_body_c14n_sha256 != tuple(
+        canonical_element_sha256(child) for child in output_non_body
     ):
         raise SourcePatchError(
             "source",
@@ -2551,17 +2842,18 @@ def _audit_document_xml_preservation(
             "XML outside the Word body changed",
         )
 
-    source_children = _meaningful_children(source_body)
     output_children = _meaningful_children(output_body)
-    expected_children = _expected_body_elements(source_children, plan)
-    if len(expected_children) != len(output_children):
+    expected_hashes = _expected_body_element_hashes(context, plan)
+    if len(expected_hashes) != len(output_children):
         raise SourcePatchError(
             "source",
             "body_structure_changed",
             "the patched Word body does not have the planned block count",
         )
-    for index, (expected, actual) in enumerate(zip(expected_children, output_children)):
-        if canonical_element_sha256(expected) != canonical_element_sha256(actual):
+    for index, (expected_hash, actual) in enumerate(
+        zip(expected_hashes, output_children)
+    ):
+        if expected_hash != canonical_element_sha256(actual):
             raise SourcePatchError(
                 "source",
                 "unexpected_body_change",
@@ -2585,7 +2877,7 @@ def _audit_document_xml_preservation(
 
 
 def _audit_package_preservation(
-    source_bytes: bytes,
+    context: SourcePatchContext,
     output_bytes: bytes,
     plan: _PatchPlan,
     *,
@@ -2593,45 +2885,28 @@ def _audit_package_preservation(
 ) -> None:
     try:
         inspect_docx_package(output_bytes)
-        with zipfile.ZipFile(BytesIO(source_bytes), "r") as source:
-            source_names = source.namelist()
-            source_parts = {name: source.read(name) for name in source_names}
-        with zipfile.ZipFile(BytesIO(output_bytes), "r") as output:
-            output_names = output.namelist()
-            output_parts = {name: output.read(name) for name in output_names}
-    except (SourcePackageError, KeyError, RuntimeError, zipfile.BadZipFile) as exc:
+        audit_package_preservation_streaming(
+            context.source_bytes,
+            output_bytes,
+            expected_document_xml=expected_document_xml,
+            document_part=_DOCUMENT_PART,
+        )
+    except SourceAuditError as exc:
+        raise SourcePatchError("source", exc.blocker, exc.detail) from exc
+    except (SourcePackageError, TypeError, ValueError) as exc:
         raise SourcePatchError(
             "source",
             "output_validation_failed",
             "the patched DOCX failed package validation",
         ) from exc
-    if source_names != output_names:
-        raise SourcePatchError(
-            "source",
-            "part_inventory_changed",
-            "the patched package member inventory changed",
-        )
-    for name in source_names:
-        if name != _DOCUMENT_PART and source_parts[name] != output_parts[name]:
-            raise SourcePatchError(
-                "source",
-                "out_of_scope_part_changed",
-                f"out-of-scope part {name!r} changed",
-            )
-
-    if output_parts[_DOCUMENT_PART] != expected_document_xml:
-        raise SourcePatchError(
-            "source",
-            "unexpected_document_xml",
-            "the cloned package does not contain the approved lexical XML result",
-        )
 
     try:
         audit_raw_zip_replacement(
-            source_bytes,
+            context.source_bytes,
             output_bytes,
             filename=_DOCUMENT_PART,
             expected_payload=expected_document_xml,
+            source_archive=context.raw_zip_archive,
         )
     except RawZipError as exc:
         raise SourcePatchError(
@@ -2641,8 +2916,8 @@ def _audit_package_preservation(
         ) from exc
 
     _audit_document_xml_preservation(
-        source_parts[_DOCUMENT_PART],
-        output_parts[_DOCUMENT_PART],
+        context,
+        expected_document_xml,
         plan,
     )
 
@@ -2653,25 +2928,22 @@ def build_source_preserving_docx(
     source_map: SourceBodyMap,
     baseline: SpecSection,
     current: SpecSection,
+    context: SourcePatchContext | None = None,
 ) -> bytes:
     """Return an exact no-op or a source clone containing only the safe plan."""
-    (
-        plan,
-        document_xml,
-        tree,
-        body,
-        lexically_patched_xml,
-        prepared_output,
-        _runtime_mutation_issues,
-    ) = _validate_source_and_plan(
+    validated = _validate_source_and_plan(
         source_bytes=source_bytes,
         source_map=source_map,
         baseline=baseline,
         current=current,
+        context=context,
     )
+    plan = validated.plan
     if plan.no_op:
         return source_bytes
 
+    lexically_patched_xml = validated.lexically_patched_xml
+    prepared_output = validated.prepared_output
     if lexically_patched_xml is None:  # pragma: no cover - plan invariant
         raise SourcePatchError(
             "source",
@@ -2686,7 +2958,7 @@ def build_source_preserving_docx(
         )
     output = prepared_output
     _audit_package_preservation(
-        source_bytes,
+        validated.context,
         output,
         plan,
         expected_document_xml=lexically_patched_xml,
@@ -2695,9 +2967,14 @@ def build_source_preserving_docx(
 
 
 __all__ = [
+    "SourceBodyInventoryItem",
+    "SourcePackageMemberInventory",
+    "SourceParagraphTemplate",
+    "SourcePatchContext",
     "SourcePatchError",
     "SourcePatchIssue",
     "SourcePatchReadiness",
+    "build_source_patch_context",
     "build_source_preserving_docx",
     "source_patch_readiness",
     "validate_source_transition",

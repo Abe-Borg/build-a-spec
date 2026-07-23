@@ -202,6 +202,26 @@ def test_package_inspection_reports_size_and_has_configurable_limits():
         )
 
 
+def test_package_inspection_uses_only_bounded_zip_member_reads(monkeypatch):
+    payload = _master_docx_bytes()
+    real_read = zipfile.ZipExtFile.read
+    requested_sizes: list[int] = []
+
+    def strict_read(member, size=-1):
+        if size < 0:
+            raise AssertionError("inspect_docx_package used an unbounded read")
+        requested_sizes.append(size)
+        return real_read(member, size)
+
+    monkeypatch.setattr(zipfile.ZipExtFile, "read", strict_read)
+
+    info = inspect_docx_package(payload)
+
+    assert info.member_count > 0
+    assert requested_sizes
+    assert max(requested_sizes) <= 1024 * 1024
+
+
 @pytest.mark.parametrize("required_member", REQUIRED_DOCX_MEMBERS)
 def test_package_inspection_rejects_each_missing_required_part(required_member):
     payload = _rewrite_package(

@@ -615,6 +615,87 @@ def test_raw_clone_is_deterministic_and_does_not_shadow_document_member():
         assert archive.read(_DOCUMENT_PART) == replacement
 
 
+def test_cached_source_archive_skips_source_reparse_but_still_audits_output(
+    monkeypatch,
+):
+    source = _write_zip(
+        _rich_specs(zipfile.ZIP_DEFLATED),
+        archive_comment=b"cached source index",
+    )
+    replacement = b"<document><body>cached archive edit</body></document>"
+    real_parse = raw_zip.parse_raw_zip_archive
+    parsed_payloads: list[bytes] = []
+
+    def tracked_parse(data: bytes, *, mutable_member: str = _DOCUMENT_PART):
+        parsed_payloads.append(data)
+        return real_parse(data, mutable_member=mutable_member)
+
+    monkeypatch.setattr(raw_zip, "parse_raw_zip_archive", tracked_parse)
+
+    source_archive = raw_zip.parse_raw_zip_archive(source)
+    output = raw_zip.replace_document_xml_raw(
+        source,
+        replacement,
+        source_archive=source_archive,
+    )
+    assert parsed_payloads == [source, output]
+
+    raw_zip.audit_raw_zip_replacement(
+        source,
+        output,
+        filename=_DOCUMENT_PART,
+        expected_payload=replacement,
+        source_archive=source_archive,
+    )
+    assert parsed_payloads == [source, output, output]
+
+
+def test_cached_source_archive_must_match_exact_source_bytes():
+    source = _write_zip(
+        _rich_specs(zipfile.ZIP_DEFLATED),
+        archive_comment=b"original source",
+    )
+    stale_archive = parse_raw_zip_archive(source)
+    different_source = _write_zip(
+        _rich_specs(zipfile.ZIP_DEFLATED),
+        archive_comment=b"different source",
+    )
+
+    with pytest.raises(RawZipError, match="does not match the source bytes"):
+        replace_document_xml_raw(
+            different_source,
+            b"<document><body>must not apply</body></document>",
+            source_archive=stale_archive,
+        )
+
+
+def test_cached_source_archive_rechecks_the_selected_mutable_member():
+    source = _write_zip(
+        (
+            _EntrySpec(
+                _DOCUMENT_PART,
+                b"<document><body>source</body></document>",
+                method=zipfile.ZIP_DEFLATED,
+            ),
+            _EntrySpec(
+                "assets/unsupported.bin",
+                b"unrelated bzip payload",
+                method=zipfile.ZIP_BZIP2,
+                level=9,
+            ),
+        )
+    )
+    source_archive = parse_raw_zip_archive(source)
+
+    with pytest.raises(RawZipError, match="unsupported ZIP compression method"):
+        replace_raw_zip_member(
+            source,
+            filename="assets/unsupported.bin",
+            payload=b"must not apply",
+            source_archive=source_archive,
+        )
+
+
 def test_malformed_local_extra_field_is_rejected():
     source = _write_zip(_rich_specs(zipfile.ZIP_DEFLATED))
     oracle = _oracle(source)
@@ -942,8 +1023,14 @@ def test_rebuild_preflight_failure_rejects_edit_but_keeps_exact_original(
     # A no-op source download must bypass mutation/rebuild work entirely.
     calls: list[bytes] = []
 
-    def fail_rebuild(source_bytes: bytes, document_xml: bytes) -> bytes:
+    def fail_rebuild(
+        source_bytes: bytes,
+        document_xml: bytes,
+        *,
+        source_archive=None,
+    ) -> bytes:
         assert source_bytes == source
+        assert source_archive is not None
         assert b"Transactional raw ZIP preflight failure." in document_xml
         calls.append(document_xml)
         raise RawZipError("synthetic rebuilt-output audit failure")

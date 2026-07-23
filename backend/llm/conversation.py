@@ -76,6 +76,7 @@ from ..spec_doc.model import apply_edits
 from ..spec_doc.project import chat_transcript
 from ..spec_doc.source_mapping import SourceBodyMap
 from ..spec_doc.source_patch import (
+    SourcePatchContext,
     SourcePatchError,
     source_patch_readiness,
     validate_source_transition,
@@ -148,6 +149,15 @@ class SessionState:
     # of the semantic tree/LLM context; project-container persistence uses its
     # strict ``to_dict`` / ``from_dict`` representation.
     source_docx_map: SourceBodyMap | None = None
+    # Process-local derived indexes for ``source_docx_bytes``. This cache is
+    # deliberately absent from semantic/project persistence and is rebuilt
+    # from the exact source after import/load. ``repr=False`` avoids dumping
+    # retained source bytes through dataclass diagnostics.
+    source_patch_context: SourcePatchContext | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     # Sanitized, JSON-safe import diagnostics do ride the project file so a
     # resumed session still tells the truth about normalization and loss.
     import_report: dict[str, Any] | None = None
@@ -193,6 +203,50 @@ class SessionState:
     # Claude.ai's stop button) rather than rolling back like a failure.
     stop_requested: threading.Event = field(default_factory=threading.Event)
 
+    def ensure_source_patch_context(
+        self,
+        *,
+        baseline: SpecSection | None = None,
+    ) -> SourcePatchContext | None:
+        """Return the session's immutable source index, building it once.
+
+        Missing source artifacts remain the responsibility of the public
+        readiness/transition gates, which already report ``source_unavailable``
+        fail closed. A stale non-``None`` context is never silently replaced:
+        the gate binds it to the current bytes/map/baseline and rejects any
+        mismatch. Resolve the builder through its module so tests and future
+        instrumentation have one stable construction seam.
+        """
+        baseline_index = self.doc.baseline_index
+        if (
+            self.source_docx_bytes is None
+            or self.source_docx_map is None
+            or isinstance(baseline_index, bool)
+            or not isinstance(baseline_index, int)
+            or not 0 <= baseline_index < len(self.doc.versions)
+        ):
+            # Legacy/source-less project loads can clear bytes and maps without
+            # replacing the SessionState object. Never retain a cache after its
+            # owning source artifacts or imported baseline disappear.
+            self.source_patch_context = None
+            return None
+        if self.source_patch_context is None:
+            from ..spec_doc import source_patch as source_patch_module
+
+            resolved_baseline = baseline
+            if resolved_baseline is None:
+                resolved_baseline = SpecSection.from_dict(
+                    self.doc.versions[baseline_index]
+                )
+            self.source_patch_context = (
+                source_patch_module.build_source_patch_context(
+                    source_bytes=self.source_docx_bytes,
+                    source_map=self.source_docx_map,
+                    baseline=resolved_baseline,
+                )
+            )
+        return self.source_patch_context
+
     def apply_doc_edits(self, edits: Any) -> list[dict[str, Any]]:
         """The single guarded entry point for model and manual edit batches.
 
@@ -217,11 +271,13 @@ class SessionState:
             candidate, _candidate_ops = apply_edits(self.doc.doc, edits)
             baseline = SpecSection.from_dict(self.doc.versions[baseline_index])
             try:
+                context = self.ensure_source_patch_context(baseline=baseline)
                 validate_source_transition(
                     source_bytes=self.source_docx_bytes,
                     source_map=self.source_docx_map,
                     baseline=baseline,
                     current=candidate,
+                    context=context,
                 )
             except SourcePatchError as exc:
                 detail = exc.detail.rstrip(".")
@@ -251,11 +307,28 @@ class SessionState:
                 ],
             }
         baseline = SpecSection.from_dict(self.doc.versions[baseline_index])
+        try:
+            context = self.ensure_source_patch_context(baseline=baseline)
+        except SourcePatchError as exc:
+            return {
+                "ready": False,
+                "no_op": False,
+                "changed_uids": [],
+                "blockers": [
+                    {
+                        "uid": exc.uid,
+                        "blocker": exc.blocker,
+                        "message": exc.detail,
+                    }
+                ],
+                "mutation_blockers": [],
+            }
         return source_patch_readiness(
             source_bytes=self.source_docx_bytes,
             source_map=self.source_docx_map,
             baseline=baseline,
             current=self.doc.doc,
+            context=context,
         ).to_dict()
 
     def reset(self) -> None:
@@ -264,6 +337,7 @@ class SessionState:
         self.source_docx_bytes = None
         self.source_docx_filename = ""
         self.source_docx_map = None
+        self.source_patch_context = None
         self.import_report = None
         # Per-project priming text does not survive a reset (see the field
         # comment). Module and discipline are kept; this is not.

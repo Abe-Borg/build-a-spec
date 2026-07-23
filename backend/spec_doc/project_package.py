@@ -22,17 +22,18 @@ import stat
 import struct
 import unicodedata
 import zipfile
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from .project import validate_project_data
 from .source_package import (
     MAX_UPLOAD_BYTES as MAX_SOURCE_DOCX_BYTES,
-    SourcePackageError,
-    inspect_docx_package,
     sanitize_import_report,
     sanitize_source_filename,
 )
+
+if TYPE_CHECKING:
+    from .source_patch import SourcePatchContext
 
 PACKAGE_KIND = "buildaspec-project-package"
 PACKAGE_FORMAT = 1
@@ -78,6 +79,14 @@ class ParsedProjectPackage:
     source_docx_filename: str = ""
     source_map: dict[str, Any] | None = None
     legacy_json: bool = False
+    # Derived immutable state is process-local only.  It never enters the
+    # manifest or project JSON and is excluded from value equality/repr so the
+    # portable package contract remains exactly format 1.
+    source_patch_context: SourcePatchContext | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
 
 async def read_project_upload_bounded(
@@ -224,17 +233,13 @@ def _validated_project(project: Any):
         raise ProjectPackageError(str(exc)) from exc
 
 
-def _inspect_source_docx(source: bytes) -> None:
-    try:
-        inspect_docx_package(source)
-    except SourcePackageError as exc:
-        raise ProjectPackageError(
-            f"The attached source DOCX is invalid: {exc}"
-        ) from exc
-
-
-def _assert_source_binding(staged_project, source: bytes) -> None:
-    """Require an attached source to match its typed map and baseline."""
+def _assert_source_binding(
+    staged_project,
+    source: bytes,
+    *,
+    context: SourcePatchContext | None = None,
+) -> SourcePatchContext:
+    """Return one validated transient context for the source and baseline."""
     if staged_project.source_map is None:
         raise ProjectPackageError(
             "A project with an attached source DOCX needs a valid source map."
@@ -254,16 +259,27 @@ def _assert_source_binding(staged_project, source: bytes) -> None:
 
     from .model import SpecSection
     from .source_mapping import SourceBodyMap
-    from .source_patch import validate_source_map_identity
+    from .source_patch import (
+        build_source_patch_context,
+        validate_source_map_identity,
+    )
 
     try:
         baseline = SpecSection.from_dict(versions[baseline_index])
         source_map = SourceBodyMap.from_dict(staged_project.source_map)
+        if context is None:
+            return build_source_patch_context(
+                source_bytes=source,
+                source_map=source_map,
+                baseline=baseline,
+            )
         validate_source_map_identity(
             source_bytes=source,
             source_map=source_map,
             baseline=baseline,
+            context=context,
         )
+        return context
     except (TypeError, ValueError) as exc:
         raise ProjectPackageError(
             f"The source DOCX, source map, and imported baseline disagree: {exc}"
@@ -284,12 +300,14 @@ def build_project_package(
     *,
     source_docx_bytes: bytes | None = None,
     source_docx_filename: str = "",
+    source_patch_context: SourcePatchContext | None = None,
 ) -> bytes:
     """Serialize semantic JSON plus an optional exact source into ``.baspec``.
 
     The source is validated again at the persistence boundary.  This avoids
     writing a container whose manifest is self-consistent but whose attached
-    file is not a safe DOCX or no longer matches the import report.
+    file is not a safe DOCX or no longer matches the import report.  A supplied
+    source context is identity-checked and reused, but is never serialized.
     """
     staged_project = _validated_project(project)
     project_bytes = _json_bytes(project)
@@ -301,6 +319,11 @@ def build_project_package(
     source: bytes | None
     source_descriptor: dict[str, Any] | None
     if source_docx_bytes is None:
+        if source_patch_context is not None:
+            raise ProjectPackageError(
+                "A project package cannot use a source context without its "
+                "source DOCX."
+            )
         if staged_project.source_map is not None:
             raise ProjectPackageError(
                 "A project package cannot carry a source map without its "
@@ -317,9 +340,12 @@ def build_project_package(
                 "The attached source DOCX exceeds the project source limit."
             )
         filename = sanitize_source_filename(source_docx_filename)
-        _inspect_source_docx(source)
         _assert_source_matches_project(project, source, filename)
-        _assert_source_binding(staged_project, source)
+        _assert_source_binding(
+            staged_project,
+            source,
+            context=source_patch_context,
+        )
         source_descriptor = {
             "path": SOURCE_DOCX_PATH,
             "filename": filename,
@@ -403,8 +429,12 @@ def _read_member(
     return b"".join(chunks)
 
 
-def parse_project_package(data: bytes) -> ParsedProjectPackage:
-    """Validate and stage a ``.baspec`` container without mutating a session."""
+def parse_project_package(
+    data: bytes,
+    *,
+    source_patch_context: SourcePatchContext | None = None,
+) -> ParsedProjectPackage:
+    """Validate and stage a ``.baspec`` plus a transient source context."""
     if not isinstance(data, bytes):
         raise TypeError("data must be bytes")
     if len(data) > MAX_PACKAGE_BYTES:
@@ -510,6 +540,11 @@ def parse_project_package(data: bytes) -> ParsedProjectPackage:
         source_descriptor = manifest.get("source_docx")
         source_info = by_name.get(SOURCE_DOCX_PATH)
         if source_descriptor is None:
+            if source_patch_context is not None:
+                raise ProjectPackageError(
+                    "A source context cannot be used without an attached "
+                    "source DOCX."
+                )
             if source_info is not None:
                 raise ProjectPackageError(
                     "The project contains an undeclared source DOCX."
@@ -537,14 +572,18 @@ def parse_project_package(data: bytes) -> ParsedProjectPackage:
             raise ProjectPackageError(
                 "The source DOCX does not match its manifest integrity record."
             )
-        _inspect_source_docx(source)
         _assert_source_matches_project(project, source, source_filename)
-        _assert_source_binding(staged_project, source)
+        validated_context = _assert_source_binding(
+            staged_project,
+            source,
+            context=source_patch_context,
+        )
         return ParsedProjectPackage(
             project=project,
             source_docx_bytes=source,
             source_docx_filename=source_filename,
             source_map=source_map,
+            source_patch_context=validated_context,
         )
     except ProjectPackageError:
         raise
@@ -556,7 +595,11 @@ def parse_project_package(data: bytes) -> ParsedProjectPackage:
         archive.close()
 
 
-def parse_project_file(data: bytes) -> ParsedProjectPackage:
+def parse_project_file(
+    data: bytes,
+    *,
+    source_patch_context: SourcePatchContext | None = None,
+) -> ParsedProjectPackage:
     """Parse either a portable package or a legacy format-1 JSON project."""
     if not isinstance(data, bytes):
         raise TypeError("data must be bytes")
@@ -566,13 +609,20 @@ def parse_project_file(data: bytes) -> ParsedProjectPackage:
             f"(maximum {MAX_PACKAGE_BYTES // (1024 * 1024)} MiB)."
         )
     if data.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
-        return parse_project_package(data)
+        return parse_project_package(
+            data,
+            source_patch_context=source_patch_context,
+        )
     if len(data) > MAX_PROJECT_JSON_BYTES:
         raise ProjectPackageTooLargeError(
             "The legacy JSON project exceeds its size limit."
         )
     project = _decode_json(data, label="project data")
     staged_project = _validated_project(project)
+    if source_patch_context is not None:
+        raise ProjectPackageError(
+            "A source context cannot be used with a legacy JSON project."
+        )
     return ParsedProjectPackage(
         project=project,
         source_map=staged_project.source_map,

@@ -343,6 +343,8 @@ def load_project(data: Any, session) -> None:
     # attaches its separately validated bytes after this semantic commit.
     session.source_docx_bytes = None
     session.source_docx_filename = ""
+    if hasattr(session, "source_patch_context"):
+        session.source_patch_context = None
     session.import_report = restored_import_report
     # Keep the assignment conditional so format-1 compatibility callers with
     # an older/lightweight session object continue to load unchanged.

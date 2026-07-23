@@ -16,7 +16,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any
+from typing import Any, Callable
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_ZIP_MEMBERS = 5_000
@@ -174,48 +174,143 @@ def _xml_local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+class _RequiredOpcXmlTarget:
+    """Collect only the required facts while Expat streams one OPC part."""
+
+    __slots__ = (
+        "_child_matcher",
+        "_depth",
+        "_expected_root_local_name",
+        "has_required_child",
+        "root_is_valid",
+    )
+
+    def __init__(
+        self,
+        *,
+        expected_root_local_name: str,
+        child_matcher: Callable[[str, dict[str, str]], bool] | None = None,
+    ) -> None:
+        self._expected_root_local_name = expected_root_local_name
+        self._child_matcher = child_matcher
+        self._depth = 0
+        self.root_is_valid = False
+        self.has_required_child = child_matcher is None
+
+    def start(self, tag: str, attributes: dict[str, str]) -> None:
+        if self._depth == 0:
+            self.root_is_valid = (
+                _xml_local_name(tag) == self._expected_root_local_name
+            )
+        elif (
+            self._depth == 1
+            and self._child_matcher is not None
+            and self._child_matcher(tag, attributes)
+        ):
+            self.has_required_child = True
+        self._depth += 1
+
+    def end(self, _tag: str) -> None:
+        self._depth -= 1
+
+    def data(self, _data: str) -> None:
+        # Required OPC wiring is expressed entirely by element/attribute data.
+        # Ignoring character data here prevents large irrelevant text nodes
+        # from accumulating in an ElementTree.
+        return None
+
+    def close(self) -> "_RequiredOpcXmlTarget":
+        return self
+
+
+def _stream_required_opc_xml(
+    archive: zipfile.ZipFile,
+    filename: str,
+    *,
+    expected_root_local_name: str,
+    child_matcher: Callable[[str, dict[str, str]], bool] | None = None,
+) -> _RequiredOpcXmlTarget:
+    """Parse one required XML part through explicitly bounded member reads."""
+    target = _RequiredOpcXmlTarget(
+        expected_root_local_name=expected_root_local_name,
+        child_matcher=child_matcher,
+    )
+    parser = ET.XMLParser(target=target)
+    with archive.open(filename, "r") as member:
+        while True:
+            chunk = member.read(_ZIP_READ_CHUNK_BYTES)
+            if not chunk:
+                break
+            parser.feed(chunk)
+    return parser.close()
+
+
+def _declares_main_document(tag: str, attributes: dict[str, str]) -> bool:
+    return (
+        _xml_local_name(tag) == "Override"
+        and attributes.get("PartName", "").lstrip("/") == "word/document.xml"
+    )
+
+
+def _relates_to_main_document(tag: str, attributes: dict[str, str]) -> bool:
+    return (
+        _xml_local_name(tag) == "Relationship"
+        and attributes.get("Type") in _OFFICE_DOCUMENT_REL_TYPES
+        and attributes.get("Target", "").lstrip("/") == "word/document.xml"
+        and attributes.get("TargetMode", "Internal") != "External"
+    )
+
+
 def _validate_required_opc_xml(archive: zipfile.ZipFile) -> None:
     """Check required OPC XML is well-formed and wired to the main part."""
     try:
-        content_types = ET.fromstring(archive.read("[Content_Types].xml"))
-        relationships = ET.fromstring(archive.read("_rels/.rels"))
-        document = ET.fromstring(archive.read("word/document.xml"))
-    except (ET.ParseError, UnicodeError, zipfile.BadZipFile, RuntimeError) as exc:
+        content_types = _stream_required_opc_xml(
+            archive,
+            "[Content_Types].xml",
+            expected_root_local_name="Types",
+            child_matcher=_declares_main_document,
+        )
+        relationships = _stream_required_opc_xml(
+            archive,
+            "_rels/.rels",
+            expected_root_local_name="Relationships",
+            child_matcher=_relates_to_main_document,
+        )
+        document = _stream_required_opc_xml(
+            archive,
+            "word/document.xml",
+            expected_root_local_name="document",
+        )
+    except (
+        ET.ParseError,
+        UnicodeError,
+        zipfile.BadZipFile,
+        RuntimeError,
+        NotImplementedError,
+    ) as exc:
         raise SourcePackageError(
             "The DOCX package contains malformed required Word XML."
         ) from exc
 
-    if _xml_local_name(content_types.tag) != "Types":
+    if not content_types.root_is_valid:
         raise SourcePackageError(
             "The DOCX package has an invalid [Content_Types].xml part."
         )
-    has_document_override = any(
-        _xml_local_name(child.tag) == "Override"
-        and child.attrib.get("PartName", "").lstrip("/") == "word/document.xml"
-        for child in content_types
-    )
-    if not has_document_override:
+    if not content_types.has_required_child:
         raise SourcePackageError(
             "The DOCX package does not declare its main Word document part."
         )
 
-    if _xml_local_name(relationships.tag) != "Relationships":
+    if not relationships.root_is_valid:
         raise SourcePackageError(
             "The DOCX package has an invalid root relationships part."
         )
-    has_main_relationship = any(
-        _xml_local_name(child.tag) == "Relationship"
-        and child.attrib.get("Type") in _OFFICE_DOCUMENT_REL_TYPES
-        and child.attrib.get("Target", "").lstrip("/") == "word/document.xml"
-        and child.attrib.get("TargetMode", "Internal") != "External"
-        for child in relationships
-    )
-    if not has_main_relationship:
+    if not relationships.has_required_child:
         raise SourcePackageError(
             "The DOCX package has no valid relationship to word/document.xml."
         )
 
-    if _xml_local_name(document.tag) != "document":
+    if not document.root_is_valid:
         raise SourcePackageError(
             "The DOCX package has an invalid main Word document part."
         )

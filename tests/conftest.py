@@ -24,6 +24,23 @@ os.environ.setdefault("BUILD_A_SPEC_TRACE", "0")
 os.environ.setdefault("BUILD_A_SPEC_DISABLE_UPDATE_CHECK", "1")
 
 
+def _restore_default_module():
+    """Undo module/discipline leaks between tests.
+
+    ``SessionState.reset()`` deliberately KEEPS the active module and
+    discipline (app semantics: a fresh session in the same discipline), so
+    a test that switches the singleton to the generic module would poison
+    every later test. Restoring the default here is test-only hygiene, not
+    an app behavior change.
+    """
+    from backend import sessions
+    from backend.spec_modules import get_module
+
+    session = sessions.get_session()
+    session.module = get_module(None)
+    session.discipline = ""
+
+
 @pytest.fixture(autouse=True)
 def _fresh_session():
     from backend import sessions
@@ -31,11 +48,13 @@ def _fresh_session():
     from backend.llm.conversation import reset_thinking_display_probe
 
     sessions.reset_session()
+    _restore_default_module()
     reset_client_cache()
     # The thinking.display capability degrade is process-scoped; re-arm it so
     # a fallback test can't leak "omitted" into a later test's request.
     reset_thinking_display_probe()
     yield
     sessions.reset_session()
+    _restore_default_module()
     reset_client_cache()
     reset_thinking_display_probe()

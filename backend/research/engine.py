@@ -435,15 +435,28 @@ def build_research_system_prompt(module: SpecModule) -> str:
 
 
 def build_dimension_user_message(
-    module: SpecModule, profile: ProjectProfile, dimension: ResearchDimension
+    module: SpecModule,
+    profile: ProjectProfile,
+    dimension: ResearchDimension,
+    discipline: str = "",
 ) -> str:
-    """Project header + the dimension's formatted brief."""
+    """Project header + the dimension's formatted brief.
+
+    ``discipline`` (Batch 10) is the session-selected discipline for
+    open-catalog modules. The kwarg is set unconditionally — a template
+    referencing ``{discipline}`` must never KeyError at run time — but the
+    header names it only when non-empty, so curated-module messages are
+    byte-identical to before.
+    """
     kwargs = module.basis.format_kwargs()
     kwargs.update(profile.prompt_format_kwargs())
+    kwargs["discipline"] = discipline or "(discipline not stated)"
     header = (
         f"Project: {profile.city}, {profile.state_display}, "
         f"{profile.country_display}. Client: {profile.client_name}."
     )
+    if discipline:
+        header += f" Discipline: {discipline}."
     body = dimension.prompt_template.format(**kwargs)
     return f"{header}\n\n{body}"
 
@@ -556,6 +569,7 @@ def _run_dimension(
     dimension: ResearchDimension,
     model: str,
     max_tokens: int,
+    discipline: str = "",
     should_stop: Callable[[], bool] = lambda: False,
 ) -> _DimensionOutcome:
     """One dimension's full lifecycle: request → continuations → parse → ground.
@@ -577,7 +591,9 @@ def _run_dimension(
     max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
 
     system_prompt = build_research_system_prompt(module)
-    user_message = build_dimension_user_message(module, profile, dimension)
+    user_message = build_dimension_user_message(
+        module, profile, dimension, discipline
+    )
 
     def _failed(error: str, *, responses: list[Any] | None = None) -> _DimensionOutcome:
         billed = responses or []
@@ -792,6 +808,7 @@ def run_requirements_research(
     *,
     model: str,
     max_tokens: int,
+    discipline: str = "",
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> RequirementsProfile:
@@ -834,6 +851,7 @@ def run_requirements_research(
                 dimension=dimension,
                 model=model,
                 max_tokens=max_tokens,
+                discipline=discipline,
                 should_stop=should_stop,
             ): dimension
             for dimension in dimensions

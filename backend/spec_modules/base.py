@@ -119,6 +119,7 @@ PROFILE_FORMAT_PLACEHOLDERS: tuple[str, ...] = (
     "state_or_province",
     "country",
     "client_name",
+    "discipline",
 )
 
 _DUMMY_PROFILE_FORMAT_KWARGS: dict[str, str] = {
@@ -126,6 +127,7 @@ _DUMMY_PROFILE_FORMAT_KWARGS: dict[str, str] = {
     "state_or_province": "Virginia",
     "country": "USA",
     "client_name": "ExampleCo",
+    "discipline": "Electrical",
 }
 
 
@@ -159,6 +161,11 @@ class SpecModule:
             research protocol block. Required non-empty iff the module
             ships research dimensions — a module cannot carry dead
             location-aware content (Spec Critic's D-2 rule).
+        open_catalog: True for a module with no fixed section catalog (the
+            generic any-discipline module): the catalog may be empty, and
+            the prompt instructs the model to establish the MasterFormat
+            section from the session's stated discipline instead of a
+            module list.
     """
 
     module_id: str
@@ -176,6 +183,7 @@ class SpecModule:
     # rule as research_persona: required iff the module ships research
     # dimensions (the audit evaluates against the researched profile).
     compliance_persona: str = ""
+    open_catalog: bool = False
 
     def __post_init__(self) -> None:
         _coerce_tuple_fields(
@@ -206,6 +214,17 @@ def _validate_basis(module: SpecModule) -> None:
             f"SpecModule {module.module_id!r}: basis must be a StandardsBasis, "
             f"got {type(basis).__name__}"
         )
+    # Coherence matrix: an unpinned basis must pin nothing (every edition
+    # enters per-project through set_standard_edition); a pinned basis keeps
+    # the original non-empty requirements. Incoherent combinations are
+    # unrepresentable in a validated registry.
+    if basis.unpinned:
+        if basis.base_codes or basis.standards:
+            raise ValueError(
+                f"SpecModule {module.module_id!r}: an unpinned basis must "
+                "pin no base codes and no standards"
+            )
+        return
     if not basis.base_codes:
         raise ValueError(
             f"SpecModule {module.module_id!r}: basis pins no base codes"
@@ -247,7 +266,10 @@ def _validate_basis(module: SpecModule) -> None:
 
 
 def _validate_catalog(module: SpecModule) -> None:
-    if not module.section_catalog:
+    # An open-catalog module (the generic any-discipline module) may ship an
+    # empty catalog — the model establishes the section from the stated
+    # discipline. It may still ship suggestion entries; each is validated.
+    if not module.section_catalog and not module.open_catalog:
         raise ValueError(
             f"SpecModule {module.module_id!r}: section catalog is empty"
         )

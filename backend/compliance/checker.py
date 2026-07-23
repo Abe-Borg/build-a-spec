@@ -294,11 +294,23 @@ def build_audit_system_prompt(module: SpecModule) -> str:
 
 
 def build_audit_user_message(
-    section: SpecSection, profile: RequirementsProfile
+    section: SpecSection,
+    profile: RequirementsProfile,
+    discipline: str = "",
 ) -> str:
+    # The session discipline (Batch 10, open-catalog modules) renders only
+    # when non-empty — curated-module audits are byte-identical, and it
+    # grounds the compliance_persona's reference to "the discipline stated
+    # for the session."
+    discipline_block = (
+        f"<project_discipline>\n{discipline}\n</project_discipline>\n\n"
+        if discipline
+        else ""
+    )
     return (
         "Audit the following draft against the project requirements "
         "profile.\n\n"
+        f"{discipline_block}"
         "<project_requirements_profile>\n"
         f"{render_profile_block(profile)}\n"
         "</project_requirements_profile>\n\n"
@@ -427,6 +439,7 @@ def run_compliance_audit(
     *,
     model: str,
     max_tokens: int,
+    discipline: str = "",
 ) -> dict[str, Any]:
     """One streaming audit call with the ported retry policy.
 
@@ -455,7 +468,9 @@ def run_compliance_audit(
         "messages": [
             {
                 "role": "user",
-                "content": build_audit_user_message(section, profile),
+                "content": build_audit_user_message(
+                    section, profile, discipline
+                ),
             }
         ],
     }

@@ -75,6 +75,7 @@ class ResearchRunner:
         client: Any,
         model: str,
         max_tokens: int,
+        discipline: str = "",
         on_settled: Callable[[], None] | None = None,
         usage_sink: Callable[[dict], None] | None = None,
     ) -> bool:
@@ -111,6 +112,7 @@ class ResearchRunner:
                     client,
                     model=model,
                     max_tokens=max_tokens,
+                    discipline=discipline,
                     event_sink=_sink,
                     should_stop=cancel_event.is_set,
                 )

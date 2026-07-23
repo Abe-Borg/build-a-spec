@@ -370,12 +370,21 @@ def _lens_user_message(
     section: SpecSection,
     module: SpecModule,
     profile: RequirementsProfile | None,
+    discipline: str = "",
 ) -> str:
+    # The session discipline (Batch 10, open-catalog modules) renders only
+    # when non-empty — curated-module QC requests are byte-identical.
+    discipline_block = (
+        f"<project_discipline>\n{discipline}\n</project_discipline>\n\n"
+        if discipline
+        else ""
+    )
     return (
         f"[[QC-LENS:{lens.lens_id}]] {lens.title}\n\n"
         "<lens_brief>\n"
         f"{lens.brief}\n"
         "</lens_brief>\n\n"
+        f"{discipline_block}"
         "<standards_in_effect>\n"
         f"{_render_standards(module, section)}\n"
         "</standards_in_effect>\n\n"
@@ -676,6 +685,7 @@ def _run_lens(
     profile: RequirementsProfile | None,
     model: str,
     max_tokens: int,
+    discipline: str = "",
     should_stop: Callable[[], bool] = lambda: False,
 ) -> _LensOutcome:
     """One lens's full lifecycle. Never raises (KeyboardInterrupt aside)."""
@@ -692,7 +702,9 @@ def _run_lens(
     result = _run_streaming_call(
         client,
         system_prompt=_lens_system_prompt(module),
-        user_message=_lens_user_message(lens, section, module, profile),
+        user_message=_lens_user_message(
+            lens, section, module, profile, discipline
+        ),
         tools=_lens_tools(lens, model),
         tool_name=QC_FINDINGS_TOOL_NAME,
         json_tag=_FINDINGS_JSON_TAG,
@@ -832,6 +844,7 @@ def run_final_qc(
     version_index: int,
     started_at: str,
     finished_at: str,
+    discipline: str = "",
     remembered_dismissed: set[str] | None = None,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
@@ -873,6 +886,7 @@ def run_final_qc(
                 profile=profile,
                 model=model,
                 max_tokens=max_tokens,
+                discipline=discipline,
                 should_stop=should_stop,
             ): lens
             for lens in QC_LENSES

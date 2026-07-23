@@ -43,6 +43,18 @@ export interface Health {
   api_key_present: boolean;
   module?: string;
   module_id?: string;
+  /** Non-empty only while the generic open-catalog module is active (Batch 10). */
+  discipline?: string;
+}
+
+/** One selectable spec module (Batch 10 session-start picker). */
+export interface ModuleInfo {
+  module_id: string;
+  display_name: string;
+  description: string;
+  /** Open-catalog module — a session on it needs a stated discipline. */
+  generic: boolean;
+  default: boolean;
 }
 
 /** API-key resolution status (WI3 settings panel). Never carries the key. */

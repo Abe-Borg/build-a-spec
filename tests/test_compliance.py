@@ -383,3 +383,22 @@ def test_audit_api_lifecycle_and_export_and_round_trip(monkeypatch):
 
 def session_version(client) -> int:
     return client.get("/api/doc").json()["doc"]["version"]["index"]
+
+
+def test_audit_user_message_carries_discipline_only_when_stated():
+    # Batch 10: the deprecated audit path threads the session discipline so
+    # the generic compliance_persona's "discipline stated for the session"
+    # reference isn't left dangling. Curated audits stay byte-identical.
+    from backend.compliance.checker import build_audit_user_message
+    from backend.research import RequirementsProfile
+    from backend.spec_doc.model import SpecSection
+
+    section = SpecSection()
+    profile = RequirementsProfile(items=[])
+
+    without = build_audit_user_message(section, profile)
+    assert "<project_discipline>" not in without
+    assert build_audit_user_message(section, profile, "") == without
+
+    with_d = build_audit_user_message(section, profile, "Electrical")
+    assert "<project_discipline>\nElectrical\n</project_discipline>" in with_d

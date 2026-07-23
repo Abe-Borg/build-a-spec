@@ -659,9 +659,17 @@ export default function App() {
   };
 
   /** Picker confirm: reset into the chosen module, then resync everything. */
-  const onPickerConfirm = async (moduleId: string, discipline: string) => {
+  const onPickerConfirm = async (
+    moduleId: string,
+    discipline: string,
+    projectContext: string,
+  ) => {
     setPickerOpen(false);
-    await resetSession({ module_id: moduleId, discipline });
+    await resetSession({
+      module_id: moduleId,
+      discipline,
+      project_context: projectContext,
+    });
     clearSessionState();
     // The Header label renders module/discipline from health — resync it.
     refreshHealth();
@@ -894,6 +902,7 @@ export default function App() {
           busy={busy}
           onSend={send}
           suggestions={suggestions}
+          discipline={health?.discipline}
           onStartOnboarding={onboarding.start}
           onStop={onStop}
           prefill={prefill}

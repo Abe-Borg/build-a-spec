@@ -23,6 +23,7 @@ def save_project(
     audit_result: dict[str, Any] | None = None,
     qc_result: dict[str, Any] | None = None,
     discipline: str = "",
+    project_context: str = "",
     figures: dict[str, Any] | None = None,
     suggested_prompts: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -32,6 +33,7 @@ def save_project(
         "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "module_id": module_id,
         "discipline": discipline,
+        "project_context": project_context,
         "history": history,
         "doc": store.to_dict(),
     }
@@ -127,11 +129,16 @@ def load_project(data: Any, session) -> None:
     # untrusted string and enforce the invariant (non-empty only while an
     # open-catalog module is active — a curated module clears it). Old
     # files without the key degrade to "".
-    from ..llm.prompts import sanitize_discipline
+    from ..llm.prompts import sanitize_discipline, sanitize_project_context
 
     session.discipline = sanitize_discipline(str(data.get("discipline") or ""))
     if not getattr(session.module, "open_catalog", False):
         session.discipline = ""
+    # Priming text rides beside discipline; applies to any module (not gated by
+    # open_catalog). Old files without the key degrade to "".
+    session.project_context = sanitize_project_context(
+        str(data.get("project_context") or "")
+    )
     # A completed research profile rides the project file; a malformed one
     # degrades to "not researched" rather than failing the load (the doc
     # and history are the load-bearing content).

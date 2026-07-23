@@ -20,39 +20,52 @@ export interface StarterPrompt {
   kind: "onboarding" | "chat";
 }
 
-export const STARTER_PROMPTS: readonly StarterPrompt[] = [
-  {
-    // Verbatim by request — the onboarding entry point.
-    label: "New to this software, show me how to use this",
-    kind: "onboarding",
-  },
-  {
-    label: "What can Build-a-Spec do for me, and where do you need my judgment?",
-    sub: "The two-minute pitch",
-    kind: "chat",
-  },
-  {
-    label:
-      "21 13 13 wet-pipe sprinklers for a hyperscale data center campus in " +
-      "Council Bluffs, Iowa — client is a confidential hyperscaler. Start drafting.",
-    sub: "Watch a section take shape immediately",
-    kind: "chat",
-  },
-  {
-    label:
-      "Interview me about my project — one question at a time, with your " +
-      "recommended default for each. I'll say 'I don't know' when I don't.",
-    sub: "The guided interview",
-    kind: "chat",
-  },
-  {
-    label:
-      "I have an office master spec for this section — explain how importing " +
-      "and adapting it works here.",
-    sub: "The other on-ramp",
-    kind: "chat",
-  },
-];
+/**
+ * The empty-chat starter chips, tailored to the session's discipline. Only the
+ * "start drafting" chip is discipline-specific; the rest are discipline-neutral
+ * on-ramps. When no discipline is set (neutral boot, or a curated module that
+ * implies its own), the drafting chip is generic and the model asks. The
+ * project-description primer the user may enter in the picker is deliberately
+ * NOT embedded here — the model receives it via PROJECT CONTEXT, so clicking
+ * the drafting chip already yields project-specific output.
+ */
+export function starterPrompts(discipline?: string): StarterPrompt[] {
+  const d = discipline?.trim();
+  return [
+    {
+      // Verbatim by request — the onboarding entry point.
+      label: "New to this software, show me how to use this",
+      kind: "onboarding",
+    },
+    {
+      label:
+        "What can Build-a-Spec do for me, and where do you need my judgment?",
+      sub: "The two-minute pitch",
+      kind: "chat",
+    },
+    {
+      label: d
+        ? `Start drafting my ${d} section — show me what you assume as you go.`
+        : "Start drafting — I'll tell you the discipline, section, and project as we go.",
+      sub: "Watch a section take shape immediately",
+      kind: "chat",
+    },
+    {
+      label:
+        "Interview me about my project — one question at a time, with your " +
+        "recommended default for each. I'll say 'I don't know' when I don't.",
+      sub: "The guided interview",
+      kind: "chat",
+    },
+    {
+      label:
+        "I have an office master spec for this section — explain how importing " +
+        "and adapting it works here.",
+      sub: "The other on-ramp",
+      kind: "chat",
+    },
+  ];
+}
 
 /* --- Discipline picker --- */
 

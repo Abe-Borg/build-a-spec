@@ -303,7 +303,10 @@ def test_demo_sets_discipline_on_a_generic_session():
 
 def test_demo_leaves_a_curated_session_discipline_empty():
     client = _client()
-    # Default (curated) module — the invariant keeps discipline "".
+    # The neutral default is now the generic open-catalog module (which WOULD
+    # take the demo's discipline); select a curated module to exercise the
+    # invariant that keeps discipline "".
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
     resp = client.post(
         "/api/onboarding/demo", json={"discipline": "Mechanical (HVAC)"}
     )

@@ -251,6 +251,10 @@ def test_audit_requires_controlling_items():
 
 
 def _seed_doc_and_research(client: TestClient, monkeypatch) -> None:
+    # Research routes by the fire module's dimension messages and needs a
+    # curated module's discipline gate to pass; the neutral default is now the
+    # generic module, so select fire first (this helper is compliance-local).
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
     _record_profile(client, monkeypatch)
     draft = FakeClient(
         [

@@ -11,7 +11,10 @@ from backend.research import (
     research_context_block,
     run_requirements_research,
 )
-from backend.spec_modules import DEFAULT_MODULE
+# DIM_KEYS route scripted turns by hyperscale_fire dimension message substrings,
+# so bind the fire module explicitly (the registry default is now generic, whose
+# dimension messages are discipline-parameterized and would not match).
+from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE as DEFAULT_MODULE
 from tests.fakes import (
     SequencedFakeClient,
     pause_response,

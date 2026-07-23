@@ -24,6 +24,17 @@ def _client() -> TestClient:
     return TestClient(create_app())
 
 
+def _select_fire(client: TestClient) -> None:
+    """Select the curated fire module before a real research fan-out.
+
+    Research routes scripted turns by the fire module's dimension-message
+    substrings (``DIM_KEYS``); the neutral registry default is now the generic
+    module, whose dimension messages are discipline-parameterized and would not
+    match — and it also gates ``/api/research/start`` on a stated discipline.
+    """
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
+
+
 def _parse_sse(body: str) -> list[dict]:
     return [
         json.loads(line[len("data: "):])
@@ -198,6 +209,7 @@ def test_profile_op_rejects_unknown_country(monkeypatch):
 
 def test_research_lifecycle_stream_and_context_splice(monkeypatch):
     client = _client()
+    _select_fire(client)
     _record_profile(client, monkeypatch)
 
     research_fake = SequencedFakeClient(
@@ -250,6 +262,7 @@ def test_research_lifecycle_stream_and_context_splice(monkeypatch):
 
 def test_research_double_start_conflicts_and_total_failure_surfaces(monkeypatch):
     client = _client()
+    _select_fire(client)
     _record_profile(client, monkeypatch)
 
     all_fail = SequencedFakeClient(
@@ -303,6 +316,7 @@ def test_source_item_id_provenance_round_trips(monkeypatch):
 
 def test_research_profile_survives_project_round_trip(monkeypatch):
     client = _client()
+    _select_fire(client)
     _record_profile(client, monkeypatch)
     _patch_research_client(
         monkeypatch,
@@ -345,6 +359,7 @@ def test_research_profile_survives_project_round_trip(monkeypatch):
 
 def test_session_reset_abandons_running_research(monkeypatch):
     client = _client()
+    _select_fire(client)
     _record_profile(client, monkeypatch)
 
     import threading

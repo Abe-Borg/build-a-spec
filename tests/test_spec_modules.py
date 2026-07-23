@@ -252,8 +252,9 @@ def test_generic_module_is_coherent():
 
     assert AVAILABLE_MODULES["generic"] is GENERIC
     assert get_module("generic") is GENERIC
-    # The default module is unchanged (backward compat).
-    assert DEFAULT_MODULE is HYPERSCALE_FIRE
+    # The generic module is now the neutral default (the app no longer boots
+    # into the curated fire module).
+    assert DEFAULT_MODULE is GENERIC
     # The defining posture: no pins, open catalog.
     assert GENERIC.basis.unpinned
     assert GENERIC.basis.base_codes == () and GENERIC.basis.standards == ()

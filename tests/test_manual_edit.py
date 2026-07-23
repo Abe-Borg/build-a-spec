@@ -400,6 +400,9 @@ def test_manual_add_standard_edit():
 
 def test_manual_suppress_and_restore_standard():
     client = _client()
+    # Suppression here targets a module PIN (NFPA 2001); the neutral default is
+    # now the unpinned generic module, so select the curated fire module.
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
     # A module-pinned standard is present and not excluded by default.
     before = client.get("/api/doc").json()["standards"]
     assert any(
@@ -446,6 +449,9 @@ def test_manual_suppress_and_restore_standard():
 
 def test_manual_suppress_is_undoable():
     client = _client()
+    # Suppresses a module PIN (NFPA 2001) — needs the curated fire module now
+    # that the neutral default is the unpinned generic module.
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
     client.post(
         "/api/doc/edit",
         json={

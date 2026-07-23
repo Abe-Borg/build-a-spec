@@ -351,7 +351,7 @@ _RESEARCH_DIMENSIONS = (
 
 GENERIC = SpecModule(
     module_id="generic",
-    display_name="Generic — Any Discipline (USA & Canada)",
+    display_name="Any Discipline (USA & Canada)",
     description=(
         "Authors CSI SectionFormat sections in any discipline for "
         "projects in the USA and Canada. Pins no standard editions — "

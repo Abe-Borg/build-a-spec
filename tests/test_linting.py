@@ -3,7 +3,12 @@ override interplay — pure document-model exercises, no API."""
 from __future__ import annotations
 
 from backend.spec_doc import DocumentStore, lint_document
-from backend.spec_modules import DEFAULT_MODULE
+
+# These cases exercise stale-edition / unrecorded-edition rules against a
+# PINNED module's editions. The registry default is now the unpinned generic
+# module, so bind the pinned fire module explicitly (the file's generic-specific
+# cases use their own ``generic_module`` fixture).
+from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE as DEFAULT_MODULE
 
 
 def _doc_with(edits: list[dict]):

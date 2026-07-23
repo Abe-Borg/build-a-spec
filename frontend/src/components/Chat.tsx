@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { ChatMessage, Figure } from "../types";
-import { STARTER_PROMPTS } from "../lib/tour";
+import { starterPrompts } from "../lib/tour";
 import { hasCompletedOnboarding } from "../lib/onboardingStorage";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
@@ -12,6 +12,8 @@ interface Props {
   onSend: (text: string) => void;
   /** Model-staged reply chips (Batch 9), shown above the composer. */
   suggestions: string[];
+  /** Active discipline (generic open-catalog sessions) — tailors starter chips. */
+  discipline?: string;
   /** Start the guided tour (Batch 6) — the onboarding starter chip. */
   onStartOnboarding: () => void;
   /** Stop the in-flight turn, forwarded to the composer. */
@@ -29,6 +31,7 @@ export default function Chat({
   busy,
   onSend,
   suggestions,
+  discipline,
   onStartOnboarding,
   onStop,
   prefill,
@@ -92,7 +95,7 @@ export default function Chat({
               shape. Or start from one of these:
             </p>
             <div className="mt-6 flex w-full max-w-md flex-col gap-2 text-left">
-              {STARTER_PROMPTS.map((p) =>
+              {starterPrompts(discipline).map((p) =>
                 p.kind === "onboarding" ? (
                   <button
                     key={p.label}

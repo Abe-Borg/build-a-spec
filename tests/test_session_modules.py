@@ -60,6 +60,7 @@ def test_bodyless_reset_keeps_module_and_discipline():
         "module_id": "generic",
         "module": sessions.get_session().module.display_name,
         "discipline": "Electrical",
+        "project_context": "",
     }
     session = sessions.get_session()
     assert session.module.module_id == "generic"
@@ -93,9 +94,10 @@ def test_unknown_module_id_degrades_to_default():
         json={"module_id": "no-such-module", "discipline": "Electrical"},
     )
     data = resp.json()
-    assert data["module_id"] == "hyperscale_fire"
-    # Default is curated → the invariant clears the discipline too.
-    assert data["discipline"] == ""
+    # The neutral default is now the generic open-catalog module, so an unknown
+    # id degrades to it AND the discipline sticks (the invariant is satisfied).
+    assert data["module_id"] == "generic"
+    assert data["discipline"] == "Electrical"
 
 
 def test_blank_module_id_keeps_current_module():
@@ -127,10 +129,11 @@ def test_modules_endpoint_lists_the_registry_in_order():
     data = _client().get("/api/modules").json()
     assert data["ok"] is True
     mods = data["modules"]
-    assert [m["module_id"] for m in mods] == ["hyperscale_fire", "generic"]
-    fire, generic = mods
-    assert fire["default"] is True and fire["generic"] is False
-    assert generic["default"] is False and generic["generic"] is True
+    # The generic any-discipline module leads and is the neutral default.
+    assert [m["module_id"] for m in mods] == ["generic", "hyperscale_fire"]
+    generic, fire = mods
+    assert generic["default"] is True and generic["generic"] is True
+    assert fire["default"] is False and fire["generic"] is False
     assert all(
         m["display_name"].strip() and m["description"].strip() for m in mods
     )
@@ -173,6 +176,9 @@ def test_open_catalog_without_discipline_asks_for_it(monkeypatch):
 
 def test_curated_module_context_has_no_discipline_line(monkeypatch):
     client = _client()
+    # The default is now the generic open-catalog module (which DOES render a
+    # discipline line); select a curated module to exercise the no-line path.
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
     fake = FakeClient([text_turn(["Hi."])])
     _patch_client(monkeypatch, fake)
     client.post("/api/chat", json={"message": "Hello"})
@@ -212,6 +218,9 @@ def test_project_round_trip_preserves_module_and_discipline(monkeypatch):
 
 def test_old_project_file_without_discipline_loads_empty():
     client = _client()
+    # Save from a curated session so the file carries a curated module_id
+    # (the neutral default is now generic).
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
     saved = client.get("/api/project/save").json()
     saved.pop("discipline", None)  # a pre-Batch-8 file
     session = sessions.get_session()
@@ -238,3 +247,112 @@ def test_load_enforces_the_open_catalog_invariant():
     load_project(saved, session)
     assert session.module.module_id == "generic"
     assert session.discipline == "Fire Alarm"
+
+
+# ---------------------------------------------------------------------------
+# project_context — the optional priming field (any module, cleared on reset)
+# ---------------------------------------------------------------------------
+
+
+def test_reset_with_body_sets_sanitizes_and_echoes_project_context():
+    client = _client()
+    data = client.post(
+        "/api/session/reset",
+        json={
+            "module_id": "generic",
+            "discipline": "Electrical",
+            "project_context": "  A 12-story\n office  tower.  ",
+        },
+    ).json()
+    assert data["project_context"] == "A 12-story office tower."
+    # Health echoes the sanitized value too.
+    assert (
+        client.get("/api/health").json()["project_context"]
+        == "A 12-story office tower."
+    )
+    # Bounded to a sentence or two, not a pasted paragraph.
+    long = client.post(
+        "/api/session/reset",
+        json={
+            "module_id": "generic",
+            "discipline": "Electrical",
+            "project_context": "x" * 800,
+        },
+    ).json()
+    assert len(long["project_context"]) == 400
+
+
+def test_bodyless_reset_clears_project_context():
+    # The deliberate asymmetry with discipline: a bodyless reset KEEPS module
+    # and discipline but CLEARS the per-project priming text.
+    client = _client()
+    client.post(
+        "/api/session/reset",
+        json={
+            "module_id": "generic",
+            "discipline": "Electrical",
+            "project_context": "A data center.",
+        },
+    )
+    assert sessions.get_session().project_context == "A data center."
+    client.post("/api/session/reset")  # bodyless
+    assert sessions.get_session().project_context == ""
+    assert sessions.get_session().discipline == "Electrical"
+
+
+def test_project_context_rides_context_not_stable_for_any_module(monkeypatch):
+    client = _client()
+    client.post(
+        "/api/session/reset",
+        json={
+            "module_id": "generic",
+            "discipline": "Electrical",
+            "project_context": "A 12-story office tower.",
+        },
+    )
+    fake = FakeClient([text_turn(["Ok."])])
+    _patch_client(monkeypatch, fake)
+    client.post("/api/chat", json={"message": "Hi"})
+    request = fake.messages.last_request
+    assert "A 12-story office tower." in request_context_text(request)
+    # Never in the cached stable prompt.
+    assert "PROJECT DESCRIPTION" not in request["system"][0]["text"]
+
+    # Curated module — project_context is NOT gated by open_catalog.
+    client.post(
+        "/api/session/reset",
+        json={
+            "module_id": "hyperscale_fire",
+            "project_context": "A hyperscale campus.",
+        },
+    )
+    fake2 = FakeClient([text_turn(["Ok."])])
+    _patch_client(monkeypatch, fake2)
+    client.post("/api/chat", json={"message": "Hi"})
+    assert "A hyperscale campus." in request_context_text(
+        fake2.messages.last_request
+    )
+
+
+def test_project_context_survives_project_round_trip():
+    client = _client()
+    client.post(
+        "/api/session/reset",
+        json={
+            "module_id": "generic",
+            "discipline": "Electrical",
+            "project_context": "A 12-story office tower.",
+        },
+    )
+    saved = client.get("/api/project/save").json()
+    assert saved["project_context"] == "A 12-story office tower."
+    # A fresh session clears it; loading the file restores it.
+    client.post("/api/session/reset")
+    assert sessions.get_session().project_context == ""
+    session = sessions.get_session()
+    load_project(saved, session)
+    assert session.project_context == "A 12-story office tower."
+    # Old files without the key degrade to "".
+    saved.pop("project_context", None)
+    load_project(saved, session)
+    assert session.project_context == ""

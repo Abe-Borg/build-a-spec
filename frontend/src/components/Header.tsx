@@ -36,9 +36,7 @@ export default function Header({
           Build-a-Spec
         </h1>
         <span className="hidden text-xs text-ink-dim xl:inline">
-          {health?.discipline
-            ? `Generic — ${health.discipline}`
-            : (health?.module ?? "Division 21 — Hyperscale Fire Suppression")}
+          {health?.discipline || health?.module || ""}
         </span>
       </div>
       <span className="h-5 w-px flex-none bg-edge" aria-hidden="true" />

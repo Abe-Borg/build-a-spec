@@ -45,6 +45,8 @@ export interface Health {
   module_id?: string;
   /** Non-empty only while the generic open-catalog module is active (Batch 10). */
   discipline?: string;
+  /** Optional project-description primer captured at session start. */
+  project_context?: string;
 }
 
 /** One selectable spec module (Batch 10 session-start picker). */

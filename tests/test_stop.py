@@ -230,6 +230,9 @@ def test_research_stop_discards_running_work_and_allows_immediate_restart(
     monkeypatch,
 ):
     client = _client()
+    # The neutral default is now the generic module, which gates research on a
+    # stated discipline; select the curated fire module (no gate) instead.
+    client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
     _record_profile(client, monkeypatch)
 
     release = threading.Event()

@@ -16,7 +16,11 @@ interface Props {
   busy: boolean;
   currentModuleId?: string;
   onCancel: () => void;
-  onConfirm: (moduleId: string, discipline: string) => void;
+  onConfirm: (
+    moduleId: string,
+    discipline: string,
+    projectContext: string,
+  ) => void;
 }
 
 /** The active module when it's in the list, else the registry default. */
@@ -38,12 +42,14 @@ export default function ModulePickerDialog({
 }: Props) {
   const [selectedId, setSelectedId] = useState("");
   const [discipline, setDiscipline] = useState("");
+  const [projectContext, setProjectContext] = useState("");
 
   // Re-initialize the selection each time the dialog opens.
   useEffect(() => {
     if (!open) return;
     setSelectedId(preselect(modules, currentModuleId));
     setDiscipline("");
+    setProjectContext("");
   }, [open, modules, currentModuleId]);
 
   // Escape cancels (keeps the current session), matching ConfirmDialog.
@@ -64,7 +70,11 @@ export default function ModulePickerDialog({
     !busy && !!selected && !(needsDiscipline && !discipline.trim());
   const confirm = () => {
     if (!canConfirm || !selected) return;
-    onConfirm(selected.module_id, needsDiscipline ? discipline.trim() : "");
+    onConfirm(
+      selected.module_id,
+      needsDiscipline ? discipline.trim() : "",
+      projectContext.trim(),
+    );
   };
 
   return (
@@ -137,6 +147,20 @@ export default function ModulePickerDialog({
           />
         </div>
       )}
+      <div className="mt-4">
+        <p className="text-sm leading-relaxed text-ink-dim">
+          Describe this project{" "}
+          <span className="text-ink-faint">(optional)</span> — it just gives the
+          model some context to start from.
+        </p>
+        <textarea
+          value={projectContext}
+          onChange={(e) => setProjectContext(e.target.value)}
+          rows={2}
+          placeholder="In a sentence or two, describe this project."
+          className="mt-2 w-full resize-none rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+        />
+      </div>
       <div className="mt-4 flex gap-2">
         <button
           onClick={confirm}

@@ -700,6 +700,10 @@ export default function App() {
       const parsed: unknown = JSON.parse(await file.text());
       const result = await loadProject(parsed);
       applyDocPayload(result);
+      // Project load resolves session.module from the file's module_id, so the
+      // Header's (controlled) module picker must re-sync or it would keep
+      // showing the pre-load module.
+      refreshHealth();
       refreshResearch();
       refreshQc();
       refreshReadiness();

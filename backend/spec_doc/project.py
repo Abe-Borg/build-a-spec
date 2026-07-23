@@ -118,13 +118,19 @@ def load_project(data: Any, session) -> None:
     session.history.clear()
     session.history.extend(history)
     session.doc.load(doc_data)
-    # Module resolution degrades to the default on unknown/missing ids —
-    # the same posture as Spec Critic's registry (a file from a build with
-    # more modules still opens; the lint/prompt basis is then the default
-    # module's, which the standards block makes visible, never silent).
+    # Module resolution: a present-but-unknown id degrades to the current
+    # default (the Spec Critic registry posture — a file from a build with more
+    # modules still opens; the standards block makes the basis visible, never
+    # silent). A MISSING/BLANK id, however, means a legacy file saved before
+    # module ids existed, authored in the only module that then existed — the
+    # fire module. Pin it explicitly so those files keep their original
+    # prompt/standards/lint/research behavior even though the neutral default
+    # is now the generic module.
     from ..spec_modules import get_module
+    from ..spec_modules.hyperscale_fire import HYPERSCALE_FIRE
 
-    session.module = get_module(data.get("module_id"))
+    raw_module_id = str(data.get("module_id") or "").strip()
+    session.module = get_module(raw_module_id) if raw_module_id else HYPERSCALE_FIRE
     # Session discipline (Batch 10) rides beside module_id; sanitize the
     # untrusted string and enforce the invariant (non-empty only while an
     # open-catalog module is active — a curated module clears it). Old

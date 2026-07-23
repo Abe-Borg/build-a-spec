@@ -229,6 +229,19 @@ def test_old_project_file_without_discipline_loads_empty():
     assert session.module.module_id == "hyperscale_fire"
 
 
+def test_legacy_file_without_module_id_loads_the_fire_module():
+    # A pre-module-id project file (no module_id key at all) was authored in the
+    # only module that then existed — the fire module. It must still load there,
+    # not silently switch to the now-neutral generic default. A present-but-
+    # unknown id, by contrast, degrades to the default (tested separately).
+    client = _client()
+    saved = client.get("/api/project/save").json()
+    saved.pop("module_id", None)
+    session = sessions.get_session()
+    load_project(saved, session)
+    assert session.module.module_id == "hyperscale_fire"
+
+
 def test_load_enforces_the_open_catalog_invariant():
     # A (hand-edited or future-build) file pairing a curated module with a
     # discipline loads with the discipline cleared, never kept silently.

@@ -4,11 +4,14 @@ import { STARTER_PROMPTS } from "../lib/tour";
 import { hasCompletedOnboarding } from "../lib/onboardingStorage";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
+import SuggestedPrompts from "./SuggestedPrompts";
 
 interface Props {
   messages: ChatMessage[];
   busy: boolean;
   onSend: (text: string) => void;
+  /** Model-staged reply chips (Batch 9), shown above the composer. */
+  suggestions: string[];
   /** Start the guided tour (Batch 6) — the onboarding starter chip. */
   onStartOnboarding: () => void;
   /** Stop the in-flight turn, forwarded to the composer. */
@@ -25,6 +28,7 @@ export default function Chat({
   messages,
   busy,
   onSend,
+  suggestions,
   onStartOnboarding,
   onStop,
   prefill,
@@ -35,12 +39,14 @@ export default function Chat({
   const pinnedRef = useRef(true);
 
   // Stay pinned to the bottom on new messages unless the user scrolled up.
+  // The suggestions bar appearing/growing shrinks the scroll viewport, so
+  // re-pin on it too (respecting pinnedRef — never yanking a reader).
   useEffect(() => {
     const el = scrollRef.current;
     if (el && pinnedRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, suggestions]);
 
   // While a turn streams, the smoothed text grows between message updates
   // (via requestAnimationFrame inside the bubble), so follow the bottom on
@@ -138,6 +144,7 @@ export default function Chat({
           </div>
         )}
       </div>
+      <SuggestedPrompts prompts={suggestions} busy={busy} onSend={onSend} />
       <Composer disabled={busy} onSend={onSend} onStop={onStop} prefill={prefill} />
     </section>
   );

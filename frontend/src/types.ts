@@ -203,6 +203,8 @@ export interface DocPayload {
   baseline_index: number | null;
   /** Chat-authored figures (diagrams/schematics/tables); [] when none. */
   figures: Figure[];
+  /** Suggested reply chips staged by the model (Batch 9); [] when none. */
+  suggested_prompts: string[];
 }
 
 /* --- Version diff / redline (Batch 5, mirrors backend/spec_doc/diffing.py) --- */
@@ -487,6 +489,7 @@ export type StreamEvent =
   | { type: "web_search"; query: string }
   | { type: "web_fetch"; url: string }
   | { type: "figure"; figure: Figure }
+  | { type: "suggested_prompts"; prompts: string[] }
   | { type: "doc_patch"; ops: DocOp[]; doc: SpecDoc }
   | { type: "doc_snapshot"; doc: SpecDoc }
   | { type: "open_questions"; items: OpenItem[] }

@@ -23,6 +23,7 @@ def save_project(
     audit_result: dict[str, Any] | None = None,
     qc_result: dict[str, Any] | None = None,
     figures: dict[str, Any] | None = None,
+    suggested_prompts: list[str] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -42,6 +43,10 @@ def save_project(
     # format bump — old readers ignore it, new readers tolerate absence).
     if figures and figures.get("figures"):
         payload["figures"] = figures
+    # Suggested-reply chips ride the file the same optional way (omitted when
+    # empty, which is the common case once a section is finished).
+    if suggested_prompts:
+        payload["suggested_prompts"] = list(suggested_prompts)
     return payload
 
 
@@ -140,6 +145,13 @@ def load_project(data: Any, session) -> None:
     # Chat-authored figures ride the file too; a malformed block degrades to
     # "no figures" (load() resets then restores) rather than failing the load.
     session.figures.load(data.get("figures"))
+    # Suggested-reply chips restore the same lenient way. Assign
+    # UNCONDITIONALLY (load_project does not call session.reset()): loading
+    # over a live session must not inherit the previous session's chips, so
+    # an absent/malformed block resolves to [].
+    from ..suggestions import restore_prompts
+
+    session.suggested_prompts = restore_prompts(data.get("suggested_prompts"))
     # The meter is per-session; a resumed project starts its own count (the
     # prior session's spend lives in that session's traces, not this file).
     session.usage.reset()

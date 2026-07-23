@@ -25,10 +25,11 @@ Endpoints (all JSON unless noted):
   version; 409 while a model turn streams).
 - ``GET  /api/doc/diff``      → serialized version diff (``?base=N[&cur=M]``)
   for the in-app compare view (Batch 5).
-- ``GET  /api/export/docx``   → the section as a SectionFormat ``.docx``
-  (with the assumptions schedule), as a download. ``?redline=master`` or
-  ``?redline=version&base=N`` (Batch 5) exports genuine Word tracked changes
-  vs the imported master or a chosen version.
+- ``GET  /api/export/docx``   → explicit ``?mode=source|normalized`` DOCX
+  export. Imported source mode applies only verified body edits (structural
+  edits require a proven flat island with isolated direct Word list bindings);
+  ``?redline=master`` or ``?redline=version&base=N`` remains a normalized
+  semantic tracked-changes export.
 - ``POST /api/research/start``  → launch the requirements-research fan-out
   (requires a complete project profile; 409 while one runs).
 - ``GET  /api/usage``         → this session's billed usage + est. cost.
@@ -45,9 +46,10 @@ Endpoints (all JSON unless noted):
 - ``POST /api/qc/dismiss``     → dismiss a finding (remembered across re-runs).
 - ``GET  /api/qc/export``      → the QC memo as a standalone ``.docx``.
 - ``GET  /api/readiness``      → deterministic "can it go out the door" checklist.
-- ``GET  /api/project/save``  → project file (history + doc versions +
-  research profile + QC result) as a JSON download.
-- ``POST /api/project/load``  → restore a session from a project file.
+- ``GET  /api/project/save``  → native ``.baspec`` package (semantic state +
+  exact source DOCX when available).
+- ``POST /api/project/load-file`` → stage and restore ``.baspec`` or legacy JSON.
+- ``POST /api/project/load``  → legacy source-less JSON compatibility load.
 
 When ``frontend/dist`` exists (production / packaged), it is served at
 ``/``; in development the Vite dev server proxies ``/api`` here instead.
@@ -86,13 +88,14 @@ from .llm.client import (
     get_client,
     reset_client_cache,
 )
-from .llm.conversation import standards_payload, stream_user_turn
+from .llm.conversation import SessionState, standards_payload, stream_user_turn
 from .llm.prompts import (
     FULL_DRAFT_DIRECTIVE,
     onboarding_demo_directive,
     sanitize_discipline,
 )
 from .project_profile import ProjectProfile
+from .qc.engine import QCSourceGuard
 from .spec_modules import AVAILABLE_MODULES, DEFAULT_MODULE, get_module
 from .spec_doc import SpecEditError, diff_sections, lint_document, open_questions
 from .spec_doc.docx_export import (
@@ -104,6 +107,19 @@ from .spec_doc.docx_export import (
 from .spec_doc.importer import MasterImportError, parse_master_docx
 from .spec_doc.model import SpecSection, apply_edits, iter_paragraphs
 from .spec_doc.project import chat_transcript, load_project
+from .spec_doc.project_package import (
+    PACKAGE_MEDIA_TYPE,
+    ProjectPackageError,
+    ProjectPackageTooLargeError,
+    parse_project_file,
+    read_project_upload_bounded,
+)
+from .spec_doc.source_mapping import SourceBodyMap, source_blocker_message
+from .spec_doc.source_patch import (
+    SourcePatchError,
+    build_source_preserving_docx,
+    source_patch_readiness,
+)
 from .spec_doc.source_package import (
     SourcePackageError,
     UploadTooLargeError,
@@ -181,8 +197,146 @@ def _attachment_headers(filename: str) -> dict[str, str]:
     }
 
 
+def _source_baseline(session) -> SpecSection | None:
+    """Return the immutable imported semantic baseline, when still present."""
+    index = session.doc.baseline_index
+    if index is None or not 0 <= index < len(session.doc.versions):
+        return None
+    try:
+        return SpecSection.from_dict(session.doc.versions[index])
+    except (TypeError, ValueError):  # pragma: no cover - store validates on load
+        return None
+
+
+def _source_readiness(session):
+    baseline = _source_baseline(session)
+    if baseline is None:
+        return None
+    return source_patch_readiness(
+        source_bytes=session.source_docx_bytes,
+        source_map=getattr(session, "source_docx_map", None),
+        baseline=baseline,
+        current=session.doc.doc,
+    )
+
+
+def _qc_source_guard(session) -> QCSourceGuard | None:
+    """Capture immutable source inputs for the exact QC document snapshot.
+
+    Presence means the runner must enforce source preservation. An active
+    source-backed session with malformed or missing context still returns a
+    required, incomplete guard so proposal validation fails closed.
+    """
+    source_map = getattr(session, "source_docx_map", None)
+    baseline_index = session.doc.baseline_index
+    if baseline_index is None:
+        return None
+    baseline_valid = (
+        not isinstance(baseline_index, bool)
+        and isinstance(baseline_index, int)
+        and 0 <= baseline_index < len(session.doc.versions)
+    )
+    if baseline_valid and session.doc.index < baseline_index:
+        # The import was undone. Match SessionState.apply_doc_edits: a new
+        # pre-import branch is not constrained by the abandoned source.
+        return None
+    return QCSourceGuard(
+        required=True,
+        source_bytes=(
+            session.source_docx_bytes
+            if isinstance(session.source_docx_bytes, bytes)
+            else None
+        ),
+        source_map=(
+            source_map if isinstance(source_map, SourceBodyMap) else None
+        ),
+        baseline=_source_baseline(session) if baseline_valid else None,
+    )
+
+
+def _source_preservation_payload(
+    session, preservation
+) -> dict[str, Any] | None:
+    """Describe source export and mutation as separate capabilities.
+
+    ``preservation_ready`` predates package-wide mutation blockers and means
+    only that the *current* state can be exported through source mode.  A
+    signed, protected, revision-bearing, or active-content source is therefore
+    ready when it is an exact no-op, even though no body mutation is allowed.
+    Keep that boolean for compatibility and expose the distinction here.
+    """
+    imported_scope = (
+        session.import_report is not None
+        or session.doc.baseline_index is not None
+    )
+    if not imported_scope:
+        return None
+
+    source_available = session.source_docx_bytes is not None
+    source_map = getattr(session, "source_docx_map", None)
+    global_blockers = (
+        tuple(source_map.global_blockers)
+        if isinstance(source_map, SourceBodyMap)
+        else ()
+    )
+
+    if preservation is not None and preservation.ready:
+        if preservation.no_op and global_blockers:
+            status = "pass_through_only"
+            blockers = [
+                {
+                    "uid": "source",
+                    "blocker": blocker,
+                    "message": source_blocker_message(blocker),
+                }
+                for blocker in global_blockers
+            ]
+        else:
+            status = "ready"
+            blockers = []
+    elif source_available:
+        status = "blocked"
+        blockers = (
+            [issue.to_dict() for issue in preservation.blockers]
+            if preservation is not None
+            else [
+                {
+                    "uid": "source",
+                    "blocker": "baseline_unavailable",
+                    "message": "the imported semantic baseline is unavailable",
+                }
+            ]
+        )
+    else:
+        status = "unavailable"
+        blockers = (
+            [issue.to_dict() for issue in preservation.blockers]
+            if preservation is not None
+            else [
+                {
+                    "uid": "source",
+                    "blocker": "source_unavailable",
+                    "message": "the exact imported DOCX is unavailable",
+                }
+            ]
+        )
+
+    return {
+        "status": status,
+        "source_export_ready": bool(preservation and preservation.ready),
+        "exact_original_available": source_available,
+        # This is deliberately document-level and bounded. Per-UID edit
+        # eligibility is a separate future contract.
+        "body_editing": "bounded" if status == "ready" else "disabled",
+        "no_op": bool(preservation and preservation.no_op),
+        "changed_uids": list(preservation.changed_uids) if preservation else [],
+        "blockers": blockers,
+    }
+
+
 def _doc_payload(session) -> dict[str, Any]:
     profile = ProjectProfile.from_dict(session.doc.doc.project_profile)
+    preservation = _source_readiness(session)
     return {
         "doc": session.doc.snapshot(),
         "open_questions": open_questions(session.doc.doc),
@@ -201,11 +355,14 @@ def _doc_payload(session) -> dict[str, Any]:
         # refresh all sync the bar one way — a failed turn's refresh returns
         # the untouched pre-turn list, restoring the bar for free.
         "suggested_prompts": list(session.suggested_prompts),
-        # P0 import honesty/recovery metadata. ``source_available`` is
-        # intentionally dynamic and never persisted in project JSON: a loaded
-        # project keeps the report but does not contain the original bytes.
+        # Import honesty/recovery metadata. Native .baspec packages carry the
+        # source as a separate binary member; legacy JSON remains source-less.
         "import_report": session.import_report,
         "source_available": session.source_docx_bytes is not None,
+        "preservation_ready": bool(preservation and preservation.ready),
+        "source_preservation": _source_preservation_payload(
+            session, preservation
+        ),
     }
 
 
@@ -577,6 +734,15 @@ def create_app() -> FastAPI:
     @app.post("/api/doc/undo")
     def undo_doc() -> JSONResponse:
         session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is streaming — try undo again "
+                    "once it finishes.",
+                },
+                status_code=409,
+            )
         if not session.doc.undo():
             return JSONResponse(
                 {"ok": False, "error": "Nothing to undo."}, status_code=409
@@ -586,6 +752,15 @@ def create_app() -> FastAPI:
     @app.post("/api/doc/redo")
     def redo_doc() -> JSONResponse:
         session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is streaming — try redo again "
+                    "once it finishes.",
+                },
+                status_code=409,
+            )
         if not session.doc.redo():
             return JSONResponse(
                 {"ok": False, "error": "Nothing to redo."}, status_code=409
@@ -615,7 +790,7 @@ def create_app() -> FastAPI:
         generation = session.generation
         session.doc.begin_turn()
         try:
-            applied = session.doc.apply_edits(body.ops)
+            applied = session.apply_doc_edits(body.ops)
         except SpecEditError as exc:
             session.doc.rollback_turn()
             return JSONResponse(
@@ -675,13 +850,82 @@ def create_app() -> FastAPI:
 
     @app.get("/api/export/docx")
     def export_docx(
-        redline: str | None = None, base: int | None = None
+        redline: str | None = None,
+        base: int | None = None,
+        mode: str | None = None,
     ) -> Response:
         session = sessions.get_session()
         store = session.doc
+        if mode not in (None, "source", "normalized"):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "mode must be 'source' or 'normalized'.",
+                },
+                status_code=400,
+            )
+        if redline is not None and mode == "source":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Source-preserving export and semantic redline "
+                    "export are separate modes.",
+                },
+                status_code=400,
+            )
         redline_diff, error = _redline_for_export(store, redline, base)
         if error is not None:
             return error
+
+        # Redlines are always generated from the semantic tree. Otherwise an
+        # imported project defaults to the preservation path and never
+        # silently falls back to a normalized reconstruction.
+        imported_scope = (
+            session.import_report is not None or store.baseline_index is not None
+        )
+        selected_mode = (
+            "normalized"
+            if redline_diff is not None
+            else (mode or ("source" if imported_scope else "normalized"))
+        )
+        if selected_mode == "source":
+            baseline = _source_baseline(session)
+            source_map = getattr(session, "source_docx_map", None)
+            if (
+                baseline is None
+                or session.source_docx_bytes is None
+                or source_map is None
+            ):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Source-preserving export is unavailable: "
+                        "this project does not contain a validated source "
+                        "DOCX, source map, and imported baseline. Choose "
+                        "normalized export explicitly if that is intended.",
+                    },
+                    status_code=409,
+                )
+            try:
+                payload = build_source_preserving_docx(
+                    source_bytes=session.source_docx_bytes,
+                    source_map=source_map,
+                    baseline=baseline,
+                    current=store.doc,
+                )
+            except SourcePatchError as exc:
+                return JSONResponse(
+                    {"ok": False, "error": str(exc)}, status_code=409
+                )
+            return Response(
+                content=payload,
+                media_type=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+                headers=_attachment_headers(export_filename(store.doc)),
+            )
+
         qc_result = session.qc.result.to_dict() if session.qc.result else None
         payload = build_docx(
             store.doc,
@@ -841,6 +1085,11 @@ def create_app() -> FastAPI:
                 warnings=result.warnings,
                 tracked_changes_detected=result.tracked_changes_detected,
             )
+            if result.source_map is None:
+                raise MasterImportError(
+                    "The source document could not be mapped safely for "
+                    "preserving export."
+                )
             session.doc.adopt_imported(result.section)
         except (MasterImportError, ValueError) as exc:
             return JSONResponse(
@@ -853,6 +1102,7 @@ def create_app() -> FastAPI:
         # active session untouched.
         session.source_docx_bytes = source_bytes
         session.source_docx_filename = safe_filename
+        session.source_docx_map = result.source_map
         session.import_report = report
         # The import counts as session-changing work: invalidate any turn
         # that was streaming against the empty document.
@@ -887,8 +1137,8 @@ def create_app() -> FastAPI:
                     {
                         "ok": False,
                         "error": "The original master is not available in this "
-                        "resumed project. P0 project files retain the import "
-                        "report, but not source DOCX bytes.",
+                        "resumed legacy project. Legacy JSON files retain the "
+                        "import report, but not source DOCX bytes.",
                     },
                     status_code=409,
                 )
@@ -908,8 +1158,8 @@ def create_app() -> FastAPI:
             ),
             headers={
                 **_attachment_headers(filename),
-                # The recovery copy is deliberately active-session-only.
-                # Do not let a browser/proxy retain it after reset or load.
+                # Do not let a browser/proxy retain a project source outside
+                # the application's own bounded project package.
                 "Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff",
             },
@@ -1100,6 +1350,7 @@ def create_app() -> FastAPI:
         # Snapshot the tree so a turn streaming mid-QC can't mutate it under
         # the call; capture dismiss memory before start() clears the result.
         snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
+        source_guard = _qc_source_guard(session)
         remembered = session.qc.remembered_dismissed()
         started = session.qc.start(
             section=snapshot,
@@ -1110,6 +1361,7 @@ def create_app() -> FastAPI:
             max_tokens=settings.QC_MAX_TOKENS,
             version_index=session.doc.index,
             discipline=session.discipline,
+            source_guard=source_guard,
             remembered_dismissed=remembered,
             usage_sink=lambda u: session.usage.add("qc", u),
         )
@@ -1207,7 +1459,7 @@ def create_app() -> FastAPI:
             generation = session.generation
             session.doc.begin_turn()
             try:
-                session.doc.apply_edits(combined_ops)
+                session.apply_doc_edits(combined_ops)
             except SpecEditError as exc:  # pragma: no cover — validated above
                 session.doc.rollback_turn()
                 return JSONResponse(
@@ -1285,23 +1537,150 @@ def create_app() -> FastAPI:
     @app.get("/api/project/save")
     def project_save() -> Response:
         session = sessions.get_session()
-        payload = sessions.project_payload(session)
+        try:
+            payload = sessions.project_package_bytes(session)
+        except ProjectPackageError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=409
+            )
         filename = sessions.project_default_filename(session)
         return Response(
-            content=json.dumps(payload, ensure_ascii=False, indent=2),
-            media_type="application/json",
+            content=payload,
+            media_type=PACKAGE_MEDIA_TYPE,
             headers=_attachment_headers(filename),
         )
 
     @app.post("/api/project/load")
     def project_load(body: dict[str, Any]) -> JSONResponse:
+        """Legacy format-1 JSON load (source-less compatibility endpoint)."""
         session = sessions.get_session()
         try:
             load_project(body, session)
+            # JSON has no binary source member. Never retain or claim a map
+            # that cannot be checked against exact source bytes.
+            session.source_docx_map = None
         except ValueError as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
+        return JSONResponse(
+            {
+                "ok": True,
+                "chat": chat_transcript(session.history),
+                **_doc_payload(session),
+            }
+        )
+
+    @app.post("/api/project/load-file")
+    async def project_load_file(file: UploadFile) -> JSONResponse:
+        """Load a native .baspec package or a legacy JSON project upload.
+
+        The complete outer package, semantic history, source DOCX, typed
+        source map, and current preservation plan are validated against a
+        throwaway session before the live session is touched.
+        """
+        try:
+            payload = await read_project_upload_bounded(file)
+            parsed = parse_project_file(payload)
+
+            staged = SessionState()
+            load_project(parsed.project, staged)
+            typed_map: SourceBodyMap | None = None
+            if parsed.source_docx_bytes is not None:
+                if parsed.source_map is None:
+                    raise ProjectPackageError(
+                        "The project source DOCX has no preservation map."
+                    )
+                try:
+                    stored_map = SourceBodyMap.from_dict(parsed.source_map)
+                except ValueError as exc:
+                    raise ProjectPackageError(str(exc)) from exc
+
+                # Rebuild anchors from the attached source instead of
+                # trusting serialized indices/hashes. The stored map is an
+                # integrity record; the recomputed map is the authority used
+                # by the live session.
+                with tempfile.NamedTemporaryFile(
+                    suffix=".docx", delete=False
+                ) as handle:
+                    handle.write(parsed.source_docx_bytes)
+                    source_path = Path(handle.name)
+                try:
+                    reparsed = parse_master_docx(source_path)
+                except MasterImportError as exc:
+                    raise ProjectPackageError(
+                        "The attached source DOCX cannot be re-imported safely."
+                    ) from exc
+                finally:
+                    source_path.unlink(missing_ok=True)
+                if reparsed.source_map is None:
+                    raise ProjectPackageError(
+                        "The attached source DOCX cannot be remapped safely."
+                    )
+                if stored_map.to_dict() != reparsed.source_map.to_dict():
+                    raise ProjectPackageError(
+                        "The project source map does not match a fresh parse "
+                        "of the attached DOCX."
+                    )
+                typed_map = reparsed.source_map
+                staged.source_docx_bytes = parsed.source_docx_bytes
+                staged.source_docx_filename = parsed.source_docx_filename
+                staged.source_docx_map = typed_map
+                baseline = _source_baseline(staged)
+                if baseline is None:
+                    raise ProjectPackageError(
+                        "The project source has no imported semantic baseline."
+                    )
+                # Every retained state on the source-backed side of history
+                # must fit the preservation boundary. Checking only the
+                # active index would let an unsafe forged redo/undo version
+                # enter the session and become active later without another
+                # package validation pass.
+                baseline_index = staged.doc.baseline_index
+                for version_index in range(
+                    baseline_index, len(staged.doc.versions)
+                ):
+                    retained = SpecSection.from_dict(
+                        staged.doc.versions[version_index]
+                    )
+                    preservation = source_patch_readiness(
+                        source_bytes=staged.source_docx_bytes,
+                        source_map=typed_map,
+                        baseline=baseline,
+                        current=retained,
+                    )
+                    if preservation is None or not preservation.ready:
+                        detail = (
+                            preservation.blockers[0].message
+                            if preservation and preservation.blockers
+                            else "the current body exceeds the preservation boundary"
+                        )
+                        raise ProjectPackageError(
+                            "The project source cannot restore retained "
+                            f"version {version_index} safely: {detail}"
+                        )
+            elif parsed.source_map is not None and not parsed.legacy_json:
+                raise ProjectPackageError(
+                    "The project contains a source map without its source DOCX."
+                )
+        except ProjectPackageTooLargeError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=413
+            )
+        except (ProjectPackageError, ValueError) as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400
+            )
+
+        # The same semantic payload was fully staged above, so these writes
+        # are the commit point. A rejected package never reaches them.
+        session = sessions.get_session()
+        load_project(parsed.project, session)
+        session.source_docx_bytes = parsed.source_docx_bytes
+        session.source_docx_filename = (
+            parsed.source_docx_filename if parsed.source_docx_bytes else ""
+        )
+        session.source_docx_map = typed_map
         return JSONResponse(
             {
                 "ok": True,

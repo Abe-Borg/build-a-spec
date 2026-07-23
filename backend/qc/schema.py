@@ -153,6 +153,7 @@ QC_LENS_BY_ID: dict[str, QCLens] = {lens.lens_id: lens for lens in QC_LENSES}
 QC_OP_ACTIONS: tuple[str, ...] = (
     "add_article",
     "add_paragraph",
+    "move",
     "replace",
     "delete",
     "set_status",

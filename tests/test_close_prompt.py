@@ -8,7 +8,6 @@ the unsaved-progress predicate, the shared save-payload helpers, and the
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
 import time
@@ -16,6 +15,7 @@ import types
 
 from backend import sessions
 from backend.llm.conversation import SessionState
+from backend.spec_doc.project_package import parse_project_package
 
 import main
 
@@ -81,12 +81,12 @@ def test_project_default_filename_is_timestamped():
     session = SessionState()
     session.doc.doc.number = "21 13 13"
     filename = sessions.project_default_filename(session)
-    assert re.fullmatch(rf"buildaspec-211313-{_TIMESTAMP_RE}\.json", filename)
+    assert re.fullmatch(rf"buildaspec-211313-{_TIMESTAMP_RE}\.baspec", filename)
 
 
 def test_project_default_filename_fallback_stem():
     filename = sessions.project_default_filename(SessionState())
-    assert re.fullmatch(rf"buildaspec-draft-{_TIMESTAMP_RE}\.json", filename)
+    assert re.fullmatch(rf"buildaspec-draft-{_TIMESTAMP_RE}\.baspec", filename)
 
 
 def test_project_default_filename_distinguishes_same_day_saves():
@@ -220,15 +220,16 @@ def _fake_webview(monkeypatch) -> None:
 
 def test_save_and_close_writes_file_then_closes(tmp_path, monkeypatch):
     _fake_webview(monkeypatch)
-    target = tmp_path / "buildaspec-draft.json"
+    target = tmp_path / "buildaspec-draft.baspec"
     window = _FakeWindow(dialog_path=str(target))
     controller = _controller_with(window)
 
     controller.save_and_close()
 
     assert target.exists()
-    data = json.loads(target.read_text(encoding="utf-8"))
-    assert data["kind"] == "buildaspec-project"
+    parsed = parse_project_package(target.read_bytes())
+    assert parsed.project["kind"] == "buildaspec-project"
+    assert parsed.source_docx_bytes is None
     assert window.destroyed is True
     assert controller._allow_close is True
 
@@ -248,15 +249,15 @@ def test_save_and_close_cancelled_dialog_stays_open(monkeypatch):
 def test_save_project_writes_file_but_keeps_window_open(tmp_path, monkeypatch):
     # The in-app save gate (New session / Open project): save WITHOUT closing.
     _fake_webview(monkeypatch)
-    target = tmp_path / "buildaspec-draft.json"
+    target = tmp_path / "buildaspec-draft.baspec"
     window = _FakeWindow(dialog_path=str(target))
     controller = _controller_with(window)
 
     assert controller.save_project() is True
 
     assert target.exists()
-    data = json.loads(target.read_text(encoding="utf-8"))
-    assert data["kind"] == "buildaspec-project"
+    parsed = parse_project_package(target.read_bytes())
+    assert parsed.project["kind"] == "buildaspec-project"
     # Unlike save_and_close, the window is never destroyed.
     assert window.destroyed is False
     assert controller._allow_close is False

@@ -1,9 +1,8 @@
-"""P0 safety and honesty tests for imported ``.docx`` source packages.
+"""Safety, accounting, and recovery tests for imported DOCX packages.
 
-P0 deliberately does *not* make the normal exporter preservation-aware.  It
-retains the exact upload for download during the active session, records an
-honest import report, and rejects packages that are unsafe to inspect.  P1 is
-responsible for editing a clone of that retained source package.
+P0 established the bounded validation and honesty boundary. P1 keeps those
+guarantees while making a retained source the default export base; normalized
+reconstruction remains an explicit mode.
 """
 from __future__ import annotations
 
@@ -21,6 +20,7 @@ from docx import Document
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
+from backend import sessions
 from backend.app import create_app
 from backend.spec_doc.source_package import (
     SourcePackageError,
@@ -54,6 +54,14 @@ IMPORT_REPORT_KEYS = {
 
 def _client() -> TestClient:
     return TestClient(create_app())
+
+
+def _legacy_project_payload() -> dict:
+    """Return the source-less inner JSON shape used before .baspec files."""
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
+    for key in ("source_map", "source_body_map", "source_docx"):
+        project.pop(key, None)
+    return project
 
 
 def _master_docx_bytes(*, header_marker: str = "SOURCE HEADER â€” KEEP") -> bytes:
@@ -341,11 +349,20 @@ def test_successful_import_reports_honestly_and_retains_exact_source():
         "content-disposition"
     ]
 
-    # P0 keeps these artifacts explicitly separate.  The regular exporter is
-    # still Build-a-Spec's normalized reconstruction; source-preserving edits
-    # are a P1 feature.  In particular, an out-of-scope source header is only
-    # present in the exact-original download today.
-    normalized = client.get("/api/export/docx")
+    # P1 makes the source-preserving path the imported-document default. The
+    # old semantic reconstruction still exists, but only by explicit request.
+    preserving = client.get("/api/export/docx")
+    assert preserving.status_code == 200
+    assert preserving.content == source
+    preserved_doc = Document(io.BytesIO(preserving.content))
+    preserved_headers = "\n".join(
+        paragraph.text
+        for section in preserved_doc.sections
+        for paragraph in section.header.paragraphs
+    )
+    assert header_marker in preserved_headers
+
+    normalized = client.get("/api/export/docx", params={"mode": "normalized"})
     assert normalized.status_code == 200
     assert normalized.content != source
     normalized_doc = Document(io.BytesIO(normalized.content))
@@ -369,13 +386,13 @@ def test_reset_clears_retained_source_and_import_report():
     assert client.get("/api/import/original").status_code == 404
 
 
-def test_project_round_trip_persists_report_but_never_source_bytes():
+def test_legacy_json_project_persists_report_but_never_source_bytes():
     client = _client()
     source = _master_docx_bytes()
     imported = _post_master(client, source).json()
     report = imported["import_report"]
 
-    project = json.loads(client.get("/api/project/save").content)
+    project = _legacy_project_payload()
     assert project["import_report"] == report
     serialized = json.dumps(project)
     assert "source_docx_bytes" not in serialized
@@ -393,7 +410,7 @@ def test_project_round_trip_persists_report_but_never_source_bytes():
     assert unavailable.status_code == 409
     assert unavailable.json()["ok"] is False
 
-    saved_again = json.loads(client.get("/api/project/save").content)
+    saved_again = _legacy_project_payload()
     assert saved_again["import_report"] == report
 
 
@@ -401,7 +418,7 @@ def test_project_load_sanitizes_report_and_clears_an_active_source():
     client = _client()
     imported = _post_master(client, _master_docx_bytes()).json()
     canonical_report = imported["import_report"]
-    project = json.loads(client.get("/api/project/save").content)
+    project = _legacy_project_payload()
     project["import_report"].update(
         {
             "filename": "../../evil.docx",
@@ -432,7 +449,7 @@ def test_project_load_sanitizes_report_and_clears_an_active_source():
 
 def test_malformed_optional_import_report_does_not_break_project_load():
     client = _client()
-    project = json.loads(client.get("/api/project/save").content)
+    project = _legacy_project_payload()
     project["import_report"] = {
         "filename": "master.docx",
         "sha256": "not-a-sha256",
@@ -447,7 +464,7 @@ def test_malformed_optional_import_report_does_not_break_project_load():
 
 def test_legacy_project_without_import_report_still_loads_and_clears_source():
     client = _client()
-    legacy_project = json.loads(client.get("/api/project/save").content)
+    legacy_project = _legacy_project_payload()
     legacy_project.pop("import_report", None)
 
     # Loading any project replaces the active session.  A pre-P0 project has

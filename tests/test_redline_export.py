@@ -499,7 +499,7 @@ def test_baseline_index_survives_project_save_and_load(tmp_path):
         )
     assert sessions.get_session().doc.baseline_index == 1
 
-    project = json.loads(client.get("/api/project/save").content)
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     client.post("/api/session/reset")
     assert sessions.get_session().doc.baseline_index is None
 

@@ -1,9 +1,9 @@
 """Bounded upload handling and defensive inspection for imported DOCX files.
 
-P0 deliberately keeps the imported package only as an active-session recovery
-artifact; it does not yet use that package as the export base.  This module is
-the single boundary in front of ``python-docx`` so malformed or hostile ZIP
-containers are rejected before the OOXML parser sees them.
+The validated package becomes an immutable source artifact for recovery,
+native project persistence, and fail-closed clone-and-patch export. This module
+is the single boundary in front of OOXML consumers so malformed or hostile ZIP
+containers are rejected before a parser sees them.
 """
 from __future__ import annotations
 
@@ -41,11 +41,13 @@ _OFFICE_DOCUMENT_REL_TYPES = frozenset(
 )
 
 FIDELITY_NOTICE = (
-    "Build-a-Spec currently imports normalized body content, not the original "
-    "Word document's formatting. Exports are newly generated DOCX files and "
-    "do not yet preserve existing headers, footers, styles, numbering, table "
-    "structure, or other unsupported Word features. Keep the original master "
-    "for reference."
+    "Build-a-Spec retains the exact source package and extracts supported body "
+    "content into its semantic model. Preserved export clones the source and "
+    "patches verified simple body-paragraph text. Bounded add, delete, and "
+    "reorder are available only inside proven flat body islands with isolated "
+    "direct Word list bindings; all other structural or complex-format edits "
+    "are refused. Headers, footers, and general Word formatting remain outside "
+    "the edit surface. Normalized DOCX remains a separate, explicit export mode."
 )
 
 
@@ -350,7 +352,7 @@ def build_import_report(
     warnings: list[str],
     tracked_changes_detected: bool,
 ) -> dict[str, Any]:
-    """Build the whitelist-only report persisted with a P0 project."""
+    """Build the whitelist-only report persisted with a project."""
     report = {
         "filename": sanitize_source_filename(filename),
         "sha256": hashlib.sha256(source_bytes).hexdigest(),

@@ -123,6 +123,7 @@ export interface DocOp {
   action:
     | "add_article"
     | "add_paragraph"
+    | "move"
     | "replace"
     | "delete"
     | "set_status"
@@ -136,6 +137,8 @@ export interface DocOp {
   removed?: boolean;
   suppressed?: boolean;
   restored?: boolean;
+  position?: number;
+  previous_position?: number;
 }
 
 /** A manual edit op sent to POST /api/doc/edit (WI2; set_project_profile added
@@ -147,6 +150,7 @@ export interface EditOp {
     | "delete"
     | "set_status"
     | "add_paragraph"
+    | "move"
     | "set_project_profile"
     | "set_standard_edition"
     | "set_standard_suppressed";
@@ -154,6 +158,9 @@ export interface EditOp {
   text?: string;
   status?: BlockStatus;
   source_item_id?: string;
+  /** add_paragraph: optional insertion index; move: required final index
+   * among the target paragraph's existing siblings. */
+  position?: number;
   /** set_project_profile fields (target_id must be "sec") — provide only
    * the ones being changed; an explicit empty string clears that field. */
   city?: string;
@@ -243,6 +250,30 @@ export interface ImportReport {
   fidelity_notice: string;
 }
 
+export type SourcePreservationStatus =
+  | "ready"
+  | "pass_through_only"
+  | "blocked"
+  | "unavailable";
+
+export interface SourcePreservationBlocker {
+  uid: string;
+  blocker: string;
+  message: string;
+}
+
+/** Source export readiness is distinct from permission to mutate DOCX body XML. */
+export interface SourcePreservationState {
+  status: SourcePreservationStatus;
+  source_export_ready: boolean;
+  exact_original_available: boolean;
+  /** "bounded" never implies that every imported block is editable. */
+  body_editing: "bounded" | "disabled";
+  no_op: boolean;
+  changed_uids: string[];
+  blockers: SourcePreservationBlocker[];
+}
+
 export interface DocPayload {
   doc: SpecDoc;
   open_questions: OpenItem[];
@@ -258,8 +289,12 @@ export interface DocPayload {
   suggested_prompts: string[];
   /** Import fidelity/recovery state; null for a from-scratch document. */
   import_report: ImportReport | null;
-  /** True only while the server still holds the active-session source copy. */
+  /** True when this active session has an exact attached source DOCX. */
   source_available: boolean;
+  /** True when edits can be exported by cloning and narrowly patching the source. */
+  preservation_ready: boolean;
+  /** Detailed imported-source capability state; null for from-scratch documents. */
+  source_preservation: SourcePreservationState | null;
 }
 
 /* --- Version diff / redline (Batch 5, mirrors backend/spec_doc/diffing.py) --- */

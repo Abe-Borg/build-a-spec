@@ -292,8 +292,9 @@ export const TOUR: readonly TourChunk[] = [
         placement: "left",
         title: "Edit directly on the paper",
         body:
-          "Hover any block: ✏️ rewrites it (stamped confirmed), ✓ " +
-          "confirms it as-is, 🗑 deletes it. No chat round-trip — the " +
+          "Hover an editable block: ✏️ rewrites it (stamped confirmed), ✓ " +
+          "confirms it as-is, 🗑 deletes it. Imported DOCX safety rules can " +
+          "restrict these body actions. No chat round-trip — the " +
           "model simply sees the result next turn. Try confirming this one.",
       },
       {
@@ -345,8 +346,10 @@ export const TOUR: readonly TourChunk[] = [
           "Instead of drafting from scratch, extract supported body " +
           "content from an office .docx into a blank session: every " +
           "block lands stamped imported and the interview pivots to " +
-          "adapting it. Import normalizes content; it does not preserve " +
-          "the source Word formatting or layout. It's disabled now " +
+          "adapting it. The exact source package is retained, and only " +
+          "verified simple body-text edits are allowed through the " +
+          "source-preserving path. Bounded structural edits require a " +
+          "proven flat island with isolated direct Word list bindings. It's disabled now " +
           "because this session has content.",
       },
     ],
@@ -395,9 +398,11 @@ export const TOUR: readonly TourChunk[] = [
         title: "Export",
         body:
           "A clean .docx with the assumptions and open-items schedules — " +
-          "or, after import, a normalized DOCX and Word tracked-changes " +
-          "redline of the extracted provisions. Neither is a " +
-          "formatting-preserving edit or comparison of the original DOCX.",
+          "or, after import, a preserved DOCX that clones the master and " +
+          "patches verified simple body text, with bounded add, delete, or " +
+          "reorder only in proven isolated Word-list body islands. Normalized " +
+          "DOCX and the " +
+          "extracted-provision redline remain explicit separate choices.",
       },
       {
         id: "save-open",
@@ -406,8 +411,9 @@ export const TOUR: readonly TourChunk[] = [
         title: "Projects are one file",
         body:
           "Save writes the whole session — conversation, every version, " +
-          "research, QC — to a single JSON file. Open resumes it " +
-          "exactly, undo history included.",
+          "research, QC, and the exact imported source when present — to " +
+          "one .baspec file. Open resumes it exactly, undo and source-export " +
+          "state included.",
       },
       {
         id: "settings",

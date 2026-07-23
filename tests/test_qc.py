@@ -17,6 +17,11 @@ from backend.qc.engine import QCFanoutError, QCResult, run_final_qc
 from backend.qc.schema import QC_LENSES
 from backend.spec_doc.model import DocumentStore
 from backend.spec_modules import DEFAULT_MODULE
+from tests.docx_fidelity_helpers import (
+    DOCX_MEDIA_TYPE,
+    TARGET_EDITED_TEXT,
+    make_fidelity_master,
+)
 from tests.fakes import (
     FakeClient,
     SequencedFakeClient,
@@ -88,7 +93,16 @@ def _qc_scripts(**per_lens) -> dict[str, list]:
     return scripts
 
 
-def _run(client, store, *, profile=None, remembered=None, sink=None, version_index=0):
+def _run(
+    client,
+    store,
+    *,
+    profile=None,
+    remembered=None,
+    sink=None,
+    version_index=0,
+    source_guard=None,
+):
     return run_final_qc(
         store.doc,
         profile,
@@ -99,6 +113,7 @@ def _run(client, store, *, profile=None, remembered=None, sink=None, version_ind
         version_index=version_index,
         started_at="2026-07-21 10:00",
         finished_at="2026-07-21 10:05",
+        source_guard=source_guard,
         remembered_dismissed=remembered,
         event_sink=sink or (lambda _e: None),
     )
@@ -328,6 +343,149 @@ def test_invalid_ops_become_advisory_with_reason():
     assert "pt9.a9.p9" in result.findings[0].ops_invalid_reason
 
 
+def test_source_backed_ops_require_final_state_preservation_guard(
+    tmp_path, monkeypatch
+):
+    """Semantic validity alone cannot make an imported-DOCX fix applicable."""
+    client = _client()
+    source = make_fidelity_master(tmp_path)
+    imported = client.post(
+        "/api/import/master",
+        files={
+            "file": (
+                "qc-source-master.docx",
+                source,
+                DOCX_MEDIA_TYPE,
+            )
+        },
+    )
+    assert imported.status_code == 200, imported.text
+
+    session = sessions.get_session()
+    before = session.doc.doc.to_dict()
+    scripts = _qc_scripts(
+        code_compliance=[
+            qc_findings_response(
+                "code_compliance",
+                findings=[
+                    _finding(
+                        "Unsafe heading rewrite",
+                        "Rewrite the imported article heading.",
+                        element_id="pt1.a1",
+                        severity="medium",
+                        ops=[
+                            {
+                                "action": "replace",
+                                "target_id": "pt1.a1",
+                                "text": "REVISED SUMMARY",
+                            }
+                        ],
+                    ),
+                    _finding(
+                        "Safe provision rewrite",
+                        "Update one mapped body provision.",
+                        severity="medium",
+                        ops=[
+                            {
+                                "action": "replace",
+                                "target_id": "pt1.a1.p1",
+                                "text": TARGET_EDITED_TEXT,
+                                "status": "confirmed",
+                            }
+                        ],
+                    ),
+                ],
+            )
+        ],
+    )
+    scripts["Unsafe heading rewrite"] = [
+        qc_verdict_response(True) for _ in range(2)
+    ]
+    scripts["Safe provision rewrite"] = [
+        qc_verdict_response(True) for _ in range(2)
+    ]
+
+    monkeypatch.setattr(
+        "backend.app.get_client", lambda: SequencedFakeClient(scripts)
+    )
+    assert client.post("/api/qc/start").json()["ok"] is True
+    snapshot = _wait_qc(client)
+    assert snapshot["status"] == "complete"
+    findings = {
+        finding["title"]: finding
+        for finding in snapshot["result"]["findings"]
+    }
+
+    unsafe = findings["Unsafe heading rewrite"]
+    assert unsafe["ops_valid"] is False
+    assert "source-backed edit rejected" in unsafe["ops_invalid_reason"].lower()
+    safe = findings["Safe provision rewrite"]
+    assert safe["ops_valid"] is True
+    assert safe["ops_invalid_reason"] == ""
+    # Both validation layers are dry-runs; neither may touch the live session.
+    assert session.doc.doc.to_dict() == before
+
+
+def test_source_backed_qc_fails_closed_when_guard_context_is_incomplete(
+    tmp_path, monkeypatch
+):
+    client = _client()
+    source = make_fidelity_master(tmp_path)
+    imported = client.post(
+        "/api/import/master",
+        files={
+            "file": (
+                "qc-incomplete-source-master.docx",
+                source,
+                DOCX_MEDIA_TYPE,
+            )
+        },
+    )
+    assert imported.status_code == 200, imported.text
+
+    # Keep the active imported baseline but corrupt one required input. The
+    # app must still mark this run source-backed; None must not downgrade it
+    # to semantic-only proposal validation.
+    sessions.get_session().source_docx_map = None
+    scripts = _qc_scripts(
+        code_compliance=[
+            qc_findings_response(
+                "code_compliance",
+                findings=[
+                    _finding(
+                        "Apparently safe provision rewrite",
+                        "Update one body provision.",
+                        severity="medium",
+                        ops=[
+                            {
+                                "action": "replace",
+                                "target_id": "pt1.a1.p1",
+                                "text": TARGET_EDITED_TEXT,
+                                "status": "confirmed",
+                            }
+                        ],
+                    )
+                ],
+            )
+        ],
+    )
+    scripts["Apparently safe provision rewrite"] = [
+        qc_verdict_response(True) for _ in range(2)
+    ]
+    monkeypatch.setattr(
+        "backend.app.get_client", lambda: SequencedFakeClient(scripts)
+    )
+
+    assert client.post("/api/qc/start").json()["ok"] is True
+    snapshot = _wait_qc(client)
+    assert snapshot["status"] == "complete"
+    finding = snapshot["result"]["findings"][0]
+    assert finding["ops_valid"] is False
+    assert "incomplete source-preservation context" in finding[
+        "ops_invalid_reason"
+    ].lower()
+
+
 # ---------------------------------------------------------------------------
 # Dismiss memory across re-runs (content-addressed ids)
 # ---------------------------------------------------------------------------
@@ -499,7 +657,7 @@ def test_qc_dismiss_and_project_round_trip_and_staleness(monkeypatch):
     assert dm["qc"]["result"]["dismissed_ids"] == [fid]
 
     # Project round-trips the QC result.
-    project = json.loads(client.get("/api/project/save").content)
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert project["qc_result"]["findings"]
     client.post("/api/session/reset")
     assert client.get("/api/qc/status").json()["status"] == "idle"
@@ -660,7 +818,7 @@ def test_qc_result_from_dict_degrades_on_malformed_data():
 def test_project_load_survives_malformed_qc_result(monkeypatch):
     client = _client()
     _seed_doc(client, monkeypatch)
-    project = json.loads(client.get("/api/project/save").content)
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     # A malformed QC result (non-numeric version_index) would raise in a naive
     # from_dict — the load must still succeed and the doc must still restore.
     project["qc_result"] = {
@@ -735,6 +893,29 @@ def test_qc_proposed_ops_allow_set_standard_suppressed():
     }
     add_payload = {"summary": "s", "findings": [_finding("Add", "x", ops=[add])]}
     assert normalize_findings(add_payload)["findings"][0]["proposed_ops"] == [add]
+
+
+def test_qc_proposed_ops_retain_valid_same_parent_move():
+    from backend.qc.schema import QC_OP_ACTIONS, normalize_findings
+
+    assert "move" in QC_OP_ACTIONS
+    op = {
+        "action": "move",
+        "target_id": "pt1.a1.p3",
+        "position": 0,
+    }
+    payload = {
+        "summary": "s",
+        "findings": [
+            _finding(
+                "Reorder provision",
+                "The provision belongs first in its current article.",
+                element_id="pt1.a1.p3",
+                ops=[op],
+            )
+        ],
+    }
+    assert normalize_findings(payload)["findings"][0]["proposed_ops"] == [op]
 
 
 # ---------------------------------------------------------------------------

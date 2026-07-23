@@ -8,6 +8,8 @@ interface Props {
   cancelLabel?: string;
   /** Red confirm button, for destructive/lossy actions (e.g. stopping a run). */
   danger?: boolean;
+  /** Render above the guided-tour overlay (z-80) instead of the default z-60. */
+  elevated?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -25,6 +27,7 @@ export default function ConfirmDialog({
   confirmLabel,
   cancelLabel = "Cancel",
   danger = false,
+  elevated = false,
   onConfirm,
   onCancel,
 }: Props) {
@@ -41,7 +44,10 @@ export default function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-6"
+      className={
+        "fixed inset-0 flex items-center justify-center bg-black/50 p-6 " +
+        (elevated ? "z-[80]" : "z-[60]")
+      }
       onClick={onCancel}
       role="dialog"
       aria-modal="true"

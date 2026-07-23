@@ -23,6 +23,7 @@ def save_project(
     audit_result: dict[str, Any] | None = None,
     qc_result: dict[str, Any] | None = None,
     discipline: str = "",
+    figures: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -39,6 +40,10 @@ def save_project(
         payload["audit_result"] = audit_result
     if qc_result:
         payload["qc_result"] = qc_result
+    # Chat-authored figures ride the file the same way (optional field, no
+    # format bump — old readers ignore it, new readers tolerate absence).
+    if figures and figures.get("figures"):
+        payload["figures"] = figures
     return payload
 
 
@@ -113,7 +118,7 @@ def load_project(data: Any, session) -> None:
     from ..spec_modules import get_module
 
     session.module = get_module(data.get("module_id"))
-    # Session discipline (Batch 8) rides beside module_id; sanitize the
+    # Session discipline (Batch 9) rides beside module_id; sanitize the
     # untrusted string and enforce the invariant (non-empty only while an
     # open-catalog module is active — a curated module clears it). Old
     # files without the key degrade to "".
@@ -143,6 +148,9 @@ def load_project(data: Any, session) -> None:
     restored_qc = QCResult.from_dict(data.get("qc_result"))
     if restored_qc is not None:
         session.qc.restore(restored_qc)
+    # Chat-authored figures ride the file too; a malformed block degrades to
+    # "no figures" (load() resets then restores) rather than failing the load.
+    session.figures.load(data.get("figures"))
     # The meter is per-session; a resumed project starts its own count (the
     # prior session's spend lives in that session's traces, not this file).
     session.usage.reset()

@@ -1,12 +1,12 @@
 # Build-a-Spec
 
-**v1.3.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.4.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
-First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.3.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
+First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.4.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## Current Status — v1.3.0 (Batch 8: Generic any-discipline module)
+## Current Status — v1.4.0 (Batch 9: Generic any-discipline module)
 
 **Any discipline, any project type, anywhere in the USA and Canada.** The
 "New session" button now opens a module picker: the curated hyperscale-fire
@@ -31,8 +31,10 @@ text welcome) and the app drafts to that discipline's conventions.
   ("Generic — Electrical").
 - **The curated module is untouched**: hyperscale fire suppression keeps
   its NFPA pins, playbook, and byte-identical behavior; it stays the
-  default. (v1.2.0 / Batch 7 — stop buttons for generation, research, and
-  Final QC — shipped between these notes and Batch 6 below.)
+  default. (Shipped between here and Batch 6 below: **v1.2.0 / Batch 7** —
+  stop buttons for generation, research, and Final QC; **v1.3.0 / Batch 8** —
+  chat figures: the model can create diagrams, schematics, and tables inline
+  with download links.)
 
 ## Shipped in v1.1.0 (Batch 6: Guided onboarding + starter prompts) and still current
 
@@ -307,7 +309,7 @@ Shipped in v0.4.0 (Phase 4) and still current (the near-verbatim port of Spec Cr
 
 - **Project profile, conversationally.** As you state the project's city/state/country/client in the interview, the model records them with a `set_project_profile` operation (normalized against the ported US-state/CA-province tables, riding the same undo/save machinery as document text). A complete profile arms the research phase.
 - **Grounded requirements research, on demand.** A "Research requirements" button in the panel launches four parallel streaming web-search agents — governing codes & amendments, AHJ requirements (including the water purveyor), client/insurer standards, site environment — each searching as the project's own locale, with pause-turn continuation, per-dimension search budgets, a 2× runaway ceiling, and a fetched-PDF elision guard so a 600-page code PDF can't 400 its own continuation. Research never auto-triggers: dozens of web searches are real spend, so you pull the trigger.
-- **Citations or it didn't happen.** Every reported item is validated accepted-vs-cited: a URL the model cites must match one the server tools actually retrieved, or the item renders **[UNVERIFIED]** (kept as a lead, never a fact). Process/schedule facts render **[PROCESS]** and never become spec text. One dimension failing never cancels the others; partial profiles are flagged; total failure aborts clean.
+- **Citations or it didn't happen.** Every reported item is validated accepted-vs-cited: a URL the model cites must match one the server tools actually retrieved, or the item renders **[UNVERIFIED]** (kept as a lead, never a fact). Process/schedule facts render **[PROCESS]** and never become spec text. One dimension failing never cancels the others; partial profiles are flagged; total failure aborts clean. A **View report** button opens the full findings report in a modal — every agent's items grouped by dimension, with each dimension's completion status and search/fetch telemetry, requirement, authority, code reference, confidence, and grounded sources.
 - **Research → drafting, closed loop.** The profile block joins the drafting context every turn (token-capped, trimmed lowest-confidence-first; the structured profile keeps everything). Provisions drafted from a research item carry its `source_item_id` — a ◆ chip in the panel answers "why is this paragraph here?" with the requirement and its accepted sources. When a grounded item establishes the jurisdiction's adopted edition, the model records a Phase 3 `set_standard_edition` override citing the item — and the lint immediately checks the draft against it.
 - **Research results persist**: the profile rides the project file; a resumed project restores it into the panel drawer and the drafting context.
 
@@ -373,7 +375,7 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          persona + dimensions      [seeded from Spec Critic datacenter_fire]
     generic.py           the any-discipline module (USA & Canada): unpinned basis,
                          open catalog, scaffold playbook, discipline-parameterized
-                         research dimensions                       [Batch 8, native]
+                         research dimensions                       [Batch 9, native]
   research/
     engine.py            the fan-out: parallel streaming web-search dimensions,
                          pause_turn continuations, budget ceilings, grounding,

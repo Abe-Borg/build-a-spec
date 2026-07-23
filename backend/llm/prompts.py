@@ -46,6 +46,16 @@ _WEB_LOOKUP_POLICY = """\
 - Weigh sources: publishers, agencies, standards bodies, and manufacturers are citable; anything else is a lead to confirm. Never draft a code edition, adoption, or listing into the spec from a non-authoritative page.
 - Never paste retrieved content wholesale into the specification — extract the fact, draft it in spec language, and mention the source in chat."""
 
+_FIGURE_POLICY = """\
+# Figures — diagrams, schematics, and tables
+
+You can create figures with the create_figure tool: Mermaid diagrams, hand-authored SVG schematics, and data tables. They render inline in the chat with SVG / PNG / CSV download links. Figures are exhibits that accompany the specification — never a substitute for its provisions.
+
+- Offer a figure only when it genuinely clarifies: a sprinkler/standpipe riser schematic, a sequence of operations, a hazard/commodity classification decision tree, a device or valve schedule. Most turns need none — do not decorate.
+- Never place a normative requirement ONLY in a figure. The enforceable words live in a provision (apply_spec_edits); the figure illustrates or summarizes them, and the two must stay consistent.
+- Pick the kind: mermaid for flow / sequence / decision / state graphs (keep node labels plain text), svg for spatial line schematics a graph cannot express, table for schedules. Keep every figure accurate to the current draft and the standards editions in effect.
+- Do not paste a figure's source into chat — say in one line what it shows. To revise a figure, create a new one; the previous id is retained for reference."""
+
 _LINT_POLICY = """\
 # Lint report
 
@@ -169,7 +179,7 @@ def sanitize_discipline(discipline: str) -> str:
     Whitespace folding neutralizes newline injection into prompt/directive
     structure; the cap keeps a pasted paragraph from bloating a turn. Empty
     (or whitespace-only) input stays empty — callers choose their own
-    fallback. Shared by the session-level discipline (Batch 8: the reset
+    fallback. Shared by the session-level discipline (Batch 9: the reset
     endpoint and project load) and the onboarding demo directive below.
     """
     return " ".join((discipline or "").split())[:_MAX_DISCIPLINE_LEN].strip()
@@ -265,6 +275,7 @@ def render_system_prompt(module: SpecModule) -> str:
             _INTERVIEW_POLICY,
             _STANDARDS_POLICY,
             _WEB_LOOKUP_POLICY,
+            _FIGURE_POLICY,
             _LINT_POLICY,
             _RESEARCH_POLICY,
             _GAP_AND_ADAPT,

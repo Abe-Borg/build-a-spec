@@ -49,14 +49,14 @@ backend/
                            demo directive; 409 unless the document is blank);
                            Batch 7 adds POST /api/chat/stop + /api/research/stop
                            + /api/qc/stop (409 when nothing is running/streaming);
-                           Batch 8 adds an optional reset body {module_id,
+                           Batch 9 adds an optional reset body {module_id,
                            discipline} + GET /api/modules + health.discipline +
                            a 400 research backstop (generic module, no discipline)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides);
                            standards_context_block; validate_overrides_shape;
-                           Batch 8 adds StandardsBasis.unpinned (sanctioned
+                           Batch 9 adds StandardsBasis.unpinned (sanctioned
                            pinless basis + its own context-block posture)
   project_profile.py       [PORT: Spec Critic src/core/project_profile.py]
                            ProjectProfile: US/CA tables, country/state
@@ -69,7 +69,7 @@ backend/
                            render_text + research_context_block (trim-to-cap);
                            Batch 7 threads a should_stop callback into
                            _run_dimension (checked before each retry/continuation
-                           — cooperative, not mid-call interruption); Batch 8
+                           — cooperative, not mid-call interruption); Batch 9
                            threads discipline into the dimension kwargs (set
                            unconditionally — no KeyError) + the header line
                            (only when non-empty — curated runs byte-identical)
@@ -83,7 +83,10 @@ backend/
   research/runner.py       session-bound run lifecycle: daemon thread, event
                            log, snapshot, SSE follow generator (Build-a-Spec
                            native — no Spec Critic source); Batch 7 adds stop()
-                           (per-run cancel_event + race-free _try_resolve)
+                           (per-run cancel_event + race-free _try_resolve). The
+                           snapshot's per-dimension view now carries the human
+                           dimension title (DimensionStatus.title, defaulted +
+                           serialized) for the findings-report headings
   updates.py               [PORT ≈verbatim: Spec Critic src/core/updates.py]
                            GitHub-Releases manifest updater: https-only +
                            redirect-downgrade guard, SHA-256 verify before
@@ -108,7 +111,7 @@ backend/
                            dry-run validation → QCResult (content-addressed
                            findings, dismiss memory); Batch 7 threads should_stop
                            into _run_lens/_verify_one (same cooperative pattern
-                           as research/engine.py); Batch 8 threads discipline into
+                           as research/engine.py); Batch 9 threads discipline into
                            the lens user message (<project_discipline>, only when
                            non-empty)
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
@@ -129,11 +132,22 @@ backend/
   usage_ledger.py          [Batch 2] session-scoped billed-usage ledger (interview/
                            research/audit), thread-safe, cost estimate from
                            settings.PRICING; not persisted (per-session meter)
+  figures.py               [Batch 8] chat-authored figures: Figure + FigureStore
+                           (per-turn atomic like DocumentStore — begin/commit/
+                           rollback, monotonic never-reused ids, validation, CSV
+                           render, source-free context stubs, project persistence)
+                           + CREATE_FIGURE_TOOL. Figure SOURCE never enters the
+                           re-billed doc context or tool results (PDF-elision
+                           posture) — only id/kind/title do; recurring token cost
+                           is negligible regardless of figure count
   sessions.py              single module-level SessionState (history + DocumentStore
-                           + SpecModule + discipline (Batch 8, session-level like
+                           + SpecModule + discipline (Batch 9, session-level like
                            module) + ResearchRunner + AuditRunner + QCRunner
-                           + UsageLedger) + has_unsaved_progress /
-                           project_payload / project_default_stem (shared by
+                           + FigureStore + UsageLedger) + has_unsaved_progress /
+                           project_payload / project_default_stem /
+                           project_default_filename (timestamped
+                           buildaspec-<stem>-<YYYY-MM-DD-HHMMSS>.json, so
+                           same-day re-saves never collide; shared by
                            /api/project/save and the native save-on-close)
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint
@@ -146,7 +160,7 @@ backend/
                            [SEED: Spec Critic src/modules/datacenter_fire.py]
                            first module: 21 13 13 lead + sibling catalog, playbook,
                            current-edition NFPA pins w/ provenance, research dims
-  spec_modules/generic.py  [Batch 8, native] the any-discipline module (USA &
+  spec_modules/generic.py  [Batch 9, native] the any-discipline module (USA &
                            Canada): unpinned basis (NO pins — editions enter via
                            set_standard_edition w/ stated basis), open_catalog
                            (empty catalog; section from the session discipline),
@@ -172,7 +186,7 @@ backend/
   spec_doc/linting.py      [PORT: Spec Critic src/input/preprocessor.py logic]
                            deterministic advisory lint: stale editions vs effective
                            pins (negation suppression), placeholders/markers,
-                           empty/duplicate articles, unset header; Batch 8 adds
+                           empty/duplicate articles, unset header; Batch 9 adds
                            unrecorded_edition (unpinned modules ONLY: designation
                            cited w/ a year but absent from effective_editions —
                            publisher-grammar discovery, then the same four
@@ -185,7 +199,7 @@ backend/
                            ins/del via docx.oxml; clean path untouched, byte-stable)
                            + redline_filename
   spec_doc/project.py      JSON project files (save/resume) + chat transcript +
-                           module_id + discipline (Batch 8: saved unconditionally,
+                           module_id + discipline (Batch 9: saved unconditionally,
                            loaded w/ sanitize + the open-catalog invariant; old
                            files degrade to "") + audit_result + qc_result
                            (baseline_index rides store.to_dict/load — no
@@ -195,13 +209,13 @@ backend/
                            FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message);
                            Batch 6 adds onboarding_demo_directive (discipline-
                            sanitized) + _ONBOARDING_POLICY in the stable prompt;
-                           Batch 8 splits sanitize_discipline (public, no
+                           Batch 9 splits sanitize_discipline (public, no
                            fallback — shared w/ reset + project load), renders
                            open-catalog guidance in _render_catalog, and rewords
                            _STANDARDS_POLICY/_PROVENANCE/FULL_DRAFT_DIRECTIVE
                            to stay true for pinless modules
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
-                           lint event + standards_payload; Batch 8 renders the
+                           lint event + standards_payload; Batch 9 renders the
                            PROJECT DISCIPLINE line first in PROJECT CONTEXT
                            (open-catalog sessions only — curated request bytes
                            unchanged); Batch 7 adds
@@ -213,7 +227,7 @@ backend/
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
-                           baselineIndex, pickerOpen + modules (Batch 8 module
+                           baselineIndex, pickerOpen + modules (Batch 9 module
                            picker; New session → picker → reset-with-body; the
                            raw newSession stays bodyless for the tour),
                            settings-open, closePromptOpen
@@ -229,7 +243,7 @@ frontend/src/
                            start/status/stream/apply/dismiss + readiness; Batch 5
                            getDocDiff; Batch 7 stopChat/stopResearch/stopQc (409
                            from an already-settled run/turn is swallowed, not
-                           thrown); Batch 8 resetSession(opts?) (JSON body only
+                           thrown); Batch 9 resetSession(opts?) (JSON body only
                            when opts given) + getModules
   lib/useSmoothText.ts     [Batch 2] rAF typewriter smoothing + reduced-motion +
                            splitStableTail (cheap-markdown prefix/tail split)
@@ -241,9 +255,19 @@ frontend/src/
                            anchorSelector (data-tour / el-* / doc-snapshot resolvers)
   lib/useOnboarding.ts     [Batch 6] tour phase machine: runId zombie guard on
                            every await, key-gate auto-advance, do-this-for-me +
-                           run-it dispatch, fresh-vs-keep resolution
+                           run-it dispatch, fresh-vs-keep resolution; endConfirm
+                           flag (requestEnd/cancelEnd) gates every popup close (✕ /
+                           backdrop) behind an end-or-continue confirmation —
+                           orthogonal to phase, so "Continue" restores the popup
+                           untouched and abort/start clear it
   lib/onboardingStorage.ts [Batch 6] "tour completed" flag — the codebase's first
                            localStorage use; try/caught, cosmetic only
+  lib/figures.ts           [Batch 8] figure render + security helpers: DOMPurify
+                           SVG sanitize, lazy mermaid.render (securityLevel strict,
+                           htmlLabels off), sandbox-iframe srcdoc with a strict CSP
+                           (default-src none), canvas SVG→PNG, SVG/CSV blob
+                           downloads — the render-time sanitization boundary for
+                           model-authored markup (never inline into the bridge DOM)
   components/*             Chat (Batch 6 starter chips in the empty state) /
                            MessageBubble (smoothing + thinking block; renders a
                            ChatMessage.note as a compact centered event marker) /
@@ -257,7 +281,13 @@ frontend/src/
                            ResearchDrawer (research only — audit UI retired in
                            Batch 4; also hosts the project-profile form for direct
                            upfront entry; Batch 7 adds a Stop button while running,
-                           gated by ConfirmDialog) / QCDrawer (Batch 4: readiness
+                           gated by ConfirmDialog; a "View report" button opens
+                           ResearchReportModal) / ResearchReportModal (the full
+                           research findings report — a read-only modal grouping
+                           the completed profile's items by dimension/agent with
+                           per-dimension telemetry + full item detail; the same
+                           profile already rides the chat model's per-turn context)
+                           / QCDrawer (Batch 4: readiness
                            checklist, lens progress, accept/dismiss fix queue,
                            hold-to-apply-criticals, refuted appendix; Batch 7 adds a
                            Stop button while running, gated by ConfirmDialog) /
@@ -270,15 +300,22 @@ frontend/src/
                            / OnboardingOverlay (Batch 6: spotlight cutout + step
                            bubbles + discipline/entry/work-choice dialogs + resume
                            pill; drawers gain an openNonce prop, controls gain
-                           data-tour anchors) / ConfirmDialog (Batch 7: generic
+                           data-tour anchors; every popup close (✕ / backdrop) now
+                           routes to ob.requestEnd, and Escape yields to the confirm
+                           while it's open) / ConfirmDialog (Batch 7: generic
                            title/body/confirm/cancel modal — the lose-progress
                            warnings for stopping research/QC; the Final-QC launch
-                           confirmation stays its own purpose-built modal) /
-                           ModalShell (Batch 8: extracted from OnboardingOverlay
+                           confirmation stays its own purpose-built modal; an
+                           `elevated` prop (z-80) lets App host the tour's
+                           end-or-continue confirm above the overlay's own modals) /
+                           ModalShell (Batch 9: extracted from OnboardingOverlay
                            + primaryBtn/quietBtn, shared) / ModulePickerDialog
-                           (Batch 8: session-start module cards + discipline
+                           (Batch 9: session-start module cards + discipline
                            chips/input for generic; Header label shows
-                           "Generic — {discipline}" when set)
+                           "Generic — {discipline}" when set) /
+                           FigureCard (Batch 8: inline figure render — sanitized
+                           SVG/mermaid in a sandbox="" iframe, escaped data table,
+                           SVG/PNG/CSV downloads + a ✕ to remove)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
   conftest.py              hermetic env + fresh session per test
@@ -315,7 +352,13 @@ tests/
                            409 once already resolved, the abandoned thread's
                            eventual completion can't clobber the resolved status,
                            immediate restart works)
-  test_session_modules.py  [Batch 8] reset-with-body matrix (bodyless keeps,
+  test_figures.py          [Batch 8] FigureStore units (validation, turn atomicity,
+                           monotonic ids, persistence, CSV, source-free stubs) +
+                           create_figure through /api/chat (figure SSE event, the
+                           token-discipline tool result, rollback on failure,
+                           self-correction on a bad payload) + REST (list/CSV/
+                           delete/project round-trip)
+  test_session_modules.py  [Batch 9] reset-with-body matrix (bodyless keeps,
                            switch + invariant, unknown degrades, sanitize),
                            GET /api/modules, discipline in context / not the
                            stable block, project round-trip + old-file compat +
@@ -333,6 +376,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `thinking_delta` | `text` | streamed adaptive-thinking summary chunk (Batch 2; only when `THINKING_DISPLAY=summarized` and the model streams it). Rendered in a collapsible block; transient, never persisted |
 | `web_search` | `query` | the model ran a server-side web search this round — emitted LIVE (Batch 2) the instant the server-tool block's input completes, not derived post-hoc |
 | `web_fetch` | `url` | the model fetched a page/document server-side this round — emitted live on the block's completion |
+| `figure` | `figure` | the model created a figure (diagram/schematic/table) via `create_figure` this round — the full serialized `Figure` for inline chat rendering + downloads (Batch 8). Emitted live on the tool dispatch. Source is client-sanitized before render; it lives only in the figure store, never in history/traces/the re-billed doc context |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
 | `open_questions` | `items` | open-item list (TBD markers + needs_input blocks); emitted when a turn changed the doc |
@@ -1117,7 +1161,86 @@ batch: no new SSE event types, no new env vars, no new Python deps.
   stream truncates; the turn still commits) without reimplementing the
   SDK's accumulator.
 
-## Batch 8 — implemented notes (v1.3.0: generic any-discipline module)
+## Batch 8 — implemented notes (v1.3.0: chat figures — diagrams / schematics / tables)
+
+Abraham's ask: the main chat gains the ability to create figures —
+diagrams, schematics, data tables — surfaced to the user as download
+links. Scoped deliberately to **Tier 1 only** (confirmed twice: "we don't
+need tier 2/3 features"): Mermaid diagrams, hand-authored SVG, and CSV
+tables, rendered inline in the chat. NOT in scope (by that decision):
+`.docx` figure embedding, charts as a distinct type, a persistent figure
+gallery panel, and model-side revision of an existing figure. No new
+Python deps; two new frontend deps (`mermaid`, `dompurify`).
+
+- **`create_figure` is a second document-adjacent tool** (peer to
+  `apply_spec_edits`, defined in `backend/figures.py`), kinds
+  `mermaid | svg | table`. It rides the ONE chat/tool loop — no new
+  pipeline: `conversation._run_tool` dispatches it, the store stages the
+  figure, and a live `figure` SSE event carries the full serialized
+  `Figure` to the chat for inline rendering. A `drawing` status hint fires
+  on the tool block's start. Bad input becomes an `is_error` tool result
+  the model self-corrects from, never a turn failure — exactly the
+  `apply_spec_edits` posture.
+- **Token discipline is the design's spine** (the whole point of the
+  feasibility analysis that preceded it). This app re-bills the ENTIRE
+  document context every turn, so figure SOURCE — an SVG is easily
+  thousands of tokens — must never land there. It lives only in the
+  `FigureStore`: the model's tool RESULT echoes just `{fid, kind, title}`,
+  and the per-turn PROJECT CONTEXT carries a one-line stub per figure
+  (`context_stubs`), never the markup. This is the fetched-PDF elision
+  policy applied to a new artifact class; recurring token cost is a
+  rounding error regardless of figure count. Pinned by
+  `test_figure_source_stays_out_of_the_next_turns_context`.
+- **Turn atomicity now spans THREE stores.** `FigureStore.begin_turn`
+  marks the pre-turn size; `commit_turn` keeps the turn's additions;
+  `rollback_turn` truncates them — wired into `stream_user_turn` right
+  beside the document store's begin/commit/rollback, so a failed or
+  abandoned turn leaves no orphan figure. Ids are monotonic and never
+  reused (the document-store philosophy): a rolled-back id is skipped, not
+  recycled. Reset is IN PLACE (never reassigned, like `DocumentStore`) so a
+  zombie turn's commit/rollback settles harmlessly against the cleared
+  store; the generation guard already blocks a stale commit.
+- **Security is render-time, in three independent layers** (the app runs
+  in a pywebview shell with a native `window.pywebview.api` bridge, so an
+  injection here is worse than plain-web XSS). (1) Mermaid runs
+  `securityLevel: 'strict'` + `htmlLabels: false` — diagram text is data,
+  never markup. (2) Every SVG (Mermaid output OR a raw `svg` figure) passes
+  through DOMPurify's SVG profile (`<script>`/`<foreignObject>`/handlers/
+  `javascript:` stripped). (3) The sanitized SVG renders inside a
+  `sandbox=""` iframe (no `allow-scripts` → no execution, no
+  `allow-same-origin` → no bridge reach) whose `srcdoc` carries a strict
+  CSP (`default-src 'none'`) blocking every external resource load. The
+  server NEVER serves executable SVG: SVG/PNG downloads are built
+  client-side from the already-sanitized string (`lib/figures.ts`); only
+  CSV is a server route, emitting `text/csv`. Tables render as plain
+  React-escaped HTML.
+- **Inline in the chat, no gallery** (the Tier-1 scope call). A figure
+  attaches to the assistant bubble that created it (`ChatMessage.figureIds`
+  → `FigureCard`), appearing the instant the `figure` event streams. It
+  persists in the project file (optional `figures` block on the store's
+  `to_dict`, no format bump, graceful-degrade on absence) and re-inlines on
+  reload via a stored `message_index` (the ordinal among assistant bubbles,
+  computed from `chat_transcript` at creation).
+- **REST surface** (all thin): `figures` on every `_doc_payload`,
+  `GET /api/figures` (standalone snapshot), `GET /api/figure/{fid}/csv`
+  (table figures only; 400 non-table, 404 unknown), `DELETE
+  /api/figure/{fid}` (409 while a turn owns the store — a mid-turn delete
+  would shift the index the rollback bookkeeping relies on). No undo of a
+  delete (figures are not version-tracked — a deliberate MVP simplification;
+  the model can regenerate).
+- **`_FIGURE_POLICY`** joins the STABLE prompt after `_WEB_LOOKUP_POLICY`:
+  figures are exhibits, never a substitute for a provision (the enforceable
+  words stay in `apply_spec_edits`); most turns need none; kind selection
+  (mermaid = flow/sequence/decision, svg = spatial schematic, table =
+  schedule); no source pasted into chat. Module-stable, zero session data
+  (the cache rule).
+- **Frontend deps**: `mermaid` is lazy-loaded (`import('mermaid')`) so its
+  large bundle splits into its own chunk and only loads when a figure needs
+  it; `dompurify` ships its own types. The no-vitest convention stands —
+  the figure contract is pinned by `test_figures.py` (24 tests) and the
+  frontend by `npm run build` (tsc).
+
+## Batch 9 — implemented notes (v1.4.0: generic any-discipline module)
 
 "Max flexibility" tier 2 (decided w/ Abraham 2026-07-22): a second module,
 `generic`, drafts ANY discipline for projects anywhere in the USA or Canada,
@@ -1156,7 +1279,7 @@ new REST route (`GET /api/modules`) + an optional body on the reset route.
 - **Discipline is session state, captured at session start.**
   `SessionState.discipline` (kept on reset, like `module`); the INVARIANT —
   non-empty ⇒ the active module is open-catalog — is enforced at the only
-  two write sites (`POST /api/session/reset` with the Batch 8 optional
+  two write sites (`POST /api/session/reset` with the Batch 9 optional
   body, and `load_project`), so a curated module can never carry a stale
   discipline and the Header label ("Generic — {discipline}") needs no extra
   state. Sanitized by the shared `sanitize_discipline` (whitespace fold,

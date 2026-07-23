@@ -278,6 +278,7 @@ def _profile_view(profile: RequirementsProfile) -> dict[str, Any]:
         "dimension_statuses": [
             {
                 "dimension_id": s.dimension_id,
+                "title": s.title,
                 "status": s.status,
                 "item_count": s.item_count,
                 "grounded_count": s.grounded_count,

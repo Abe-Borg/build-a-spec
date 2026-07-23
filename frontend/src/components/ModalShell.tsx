@@ -1,5 +1,5 @@
 /**
- * Shared modal shell + button class strings (Batch 8): extracted verbatim
+ * Shared modal shell + button class strings (Batch 9): extracted verbatim
  * from OnboardingOverlay so dialogs outside the tour (the session-start
  * module picker) reuse the exact same shell. Behavior unchanged: z-[70],
  * backdrop click closes, title + ✕ header, optional `wide`.

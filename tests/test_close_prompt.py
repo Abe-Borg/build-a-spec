@@ -9,6 +9,7 @@ the unsaved-progress predicate, the shared save-payload helpers, and the
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 import types
@@ -58,6 +59,32 @@ def test_project_default_stem_from_section_number():
     session = SessionState()
     session.doc.doc.number = "21 13 13"
     assert sessions.project_default_stem(session) == "211313"
+
+
+_TIMESTAMP_RE = r"\d{4}-\d{2}-\d{2}-\d{6}"
+
+
+def test_project_default_filename_is_timestamped():
+    session = SessionState()
+    session.doc.doc.number = "21 13 13"
+    filename = sessions.project_default_filename(session)
+    assert re.fullmatch(rf"buildaspec-211313-{_TIMESTAMP_RE}\.json", filename)
+
+
+def test_project_default_filename_fallback_stem():
+    filename = sessions.project_default_filename(SessionState())
+    assert re.fullmatch(rf"buildaspec-draft-{_TIMESTAMP_RE}\.json", filename)
+
+
+def test_project_default_filename_distinguishes_same_day_saves():
+    # Two saves of the same section, even moments apart, must not collide —
+    # the native Save dialog defaulting to a stale filename would otherwise
+    # risk silently overwriting the earlier save (Codex review on PR #24).
+    session = SessionState()
+    first = sessions.project_default_filename(session)
+    time.sleep(1.1)  # timestamp resolution is whole seconds
+    second = sessions.project_default_filename(session)
+    assert first != second
 
 
 # --- _CloseController driven by a fake pywebview window ---------------------

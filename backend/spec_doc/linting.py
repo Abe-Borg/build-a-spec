@@ -17,7 +17,7 @@ Rules (stable ids consumers can branch on):
 
 - ``stale_edition`` — a standard cited at an edition contradicting the
   edition in effect (module pin or jurisdiction override).
-- ``unrecorded_edition`` — (unpinned-basis modules only, Batch 8) a
+- ``unrecorded_edition`` — (unpinned-basis modules only, Batch 9) a
   designation cited WITH an edition year while no edition is recorded for
   that standard at all — the no-pins posture's enforcement: record the
   edition and its basis via ``set_standard_edition``, or drop the year.
@@ -207,7 +207,7 @@ def _scan_editions(
 
 
 # ---------------------------------------------------------------------------
-# Unrecorded-edition detection (unpinned-basis modules only, Batch 8)
+# Unrecorded-edition detection (unpinned-basis modules only, Batch 9)
 # ---------------------------------------------------------------------------
 
 # Publisher grammar for standards designations. Longest-first alternation so

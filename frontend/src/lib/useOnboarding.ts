@@ -44,6 +44,15 @@ export interface OnboardingCaps {
 
 export interface OnboardingApi {
   phase: OnboardingPhase;
+  /**
+   * Close (✕ / backdrop) on any tour popup opens an end-or-continue
+   * confirmation instead of silently exiting; true while it's showing.
+   */
+  endConfirm: boolean;
+  /** Open the end-or-continue confirmation (wired to every popup's close). */
+  requestEnd: () => void;
+  /** Dismiss the confirmation and stay on the current popup ("Continue"). */
+  cancelEnd: () => void;
   /** The chip / Header entry point (runs the has-content entry guard). */
   start: () => void;
   confirmFreshStart: () => void;
@@ -66,6 +75,10 @@ export interface OnboardingApi {
 
 export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
   const [phase, setPhase] = useState<OnboardingPhase>({ kind: "idle" });
+  // Whether the "End the tour or continue?" confirmation is showing. Orthogonal
+  // to `phase`: opening it never changes the underlying popup, so "Continue"
+  // just drops it and the user is exactly where they were.
+  const [endConfirm, setEndConfirm] = useState(false);
   const capsRef = useRef(caps);
   capsRef.current = caps;
   const phaseRef = useRef(phase);
@@ -78,16 +91,21 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
   const abort = useCallback(() => {
     runRef.current += 1;
     generatingRef.current = false;
+    setEndConfirm(false);
     setPhase({ kind: "idle" });
   }, []);
 
   const start = useCallback(() => {
     runRef.current += 1;
     generatingRef.current = false;
+    setEndConfirm(false);
     setPhase(
       capsRef.current.hasContent ? { kind: "entry-guard" } : { kind: "discipline" },
     );
   }, []);
+
+  const requestEnd = useCallback(() => setEndConfirm(true), []);
+  const cancelEnd = useCallback(() => setEndConfirm(false), []);
 
   const generate = useCallback(async (discipline: string) => {
     if (generatingRef.current) return;
@@ -279,6 +297,9 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
 
   return {
     phase,
+    endConfirm,
+    requestEnd,
+    cancelEnd,
     start,
     confirmFreshStart,
     chooseDiscipline,

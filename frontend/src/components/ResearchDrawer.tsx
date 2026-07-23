@@ -21,6 +21,7 @@ import type {
   SpecDoc,
 } from "../types";
 import ConfirmDialog from "./ConfirmDialog";
+import ResearchReportModal from "./ResearchReportModal";
 import Tip from "./Tip";
 
 interface Props {
@@ -177,6 +178,7 @@ export default function ResearchDrawer({
     if (openNonce) setExpanded(true);
   }, [openNonce]);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const status: ResearchRunStatus = research?.status ?? "idle";
   const running = status === "running";
   const items = research?.profile?.items ?? [];
@@ -225,6 +227,15 @@ export default function ResearchDrawer({
           </span>
           <span className="ml-auto shrink-0">{expanded ? "▾" : "▸"}</span>
         </button>
+        {research?.profile && !running && (
+          <button
+            className="shrink-0 rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent"
+            onClick={() => setReportOpen(true)}
+            title="View the full research findings report"
+          >
+            View report
+          </button>
+        )}
         <Tip tip={startTip} className="shrink-0">
           <button
             className={`rounded-md border bg-raised px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none ${
@@ -278,6 +289,12 @@ export default function ResearchDrawer({
           onStop();
         }}
         onCancel={() => setStopConfirmOpen(false)}
+      />
+
+      <ResearchReportModal
+        open={reportOpen}
+        profile={research?.profile}
+        onClose={() => setReportOpen(false)}
       />
 
       {expanded && (

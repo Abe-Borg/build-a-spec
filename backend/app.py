@@ -128,7 +128,7 @@ class OnboardingDemoRequest(BaseModel):
 
 
 class SessionResetRequest(BaseModel):
-    """Optional body for POST /api/session/reset (Batch 8).
+    """Optional body for POST /api/session/reset (Batch 9).
 
     Absent body = the historical contract exactly (reset keeps the active
     module and discipline). ``module_id`` blank keeps the current module;
@@ -185,6 +185,9 @@ def _doc_payload(session) -> dict[str, Any]:
         # The imported-master version index (Batch 5), for the compare
         # picker's "Master (import)" option; ``None`` for from-scratch.
         "baseline_index": session.doc.baseline_index,
+        # Chat-authored figures (diagrams/schematics/tables) — full source so
+        # the frontend can render + offer downloads. Not part of the doc tree.
+        "figures": session.figures.snapshot(),
     }
 
 
@@ -698,6 +701,58 @@ def create_app() -> FastAPI:
             }
         )
 
+    # --- Chat-authored figures (diagrams / schematics / tables) -------------
+    #
+    # Figures are created by the model through the create_figure tool and ride
+    # the SSE ``figure`` event + every _doc_payload; these routes cover a
+    # standalone snapshot, the CSV download for table figures, and delete.
+    # Diagram (SVG/PNG) downloads are produced client-side from the sanitized
+    # source (the server never serves executable SVG) — see
+    # ``frontend/src/lib/figures.ts``.
+
+    @app.get("/api/figures")
+    def figures_list() -> JSONResponse:
+        session = sessions.get_session()
+        return JSONResponse({"ok": True, "figures": session.figures.snapshot()})
+
+    @app.get("/api/figure/{fid}/csv")
+    def figure_csv(fid: str) -> Response:
+        session = sessions.get_session()
+        figure = session.figures.get(fid)
+        if figure is None:
+            return JSONResponse(
+                {"ok": False, "error": f"No figure {fid!r}."}, status_code=404
+            )
+        if figure.kind != "table":
+            return JSONResponse(
+                {"ok": False, "error": "Only table figures export as CSV."},
+                status_code=400,
+            )
+        return Response(
+            content=figure.to_csv(),
+            media_type="text/csv; charset=utf-8",
+            headers=_attachment_headers(f"{figure.title or figure.fid}.csv"),
+        )
+
+    @app.delete("/api/figure/{fid}")
+    def figure_delete(fid: str) -> JSONResponse:
+        session = sessions.get_session()
+        if session.turn_active:
+            # Deleting mid-turn would shift the list under the turn's
+            # provisional-figure bookkeeping (begin/rollback by index).
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A turn is generating — try again in a moment.",
+                },
+                status_code=409,
+            )
+        if not session.figures.delete(fid):
+            return JSONResponse(
+                {"ok": False, "error": f"No figure {fid!r}."}, status_code=404
+            )
+        return JSONResponse({"ok": True, "figures": session.figures.snapshot()})
+
     # --- Master-spec import (Phase 5) ---------------------------------------
 
     @app.post("/api/import/master")
@@ -777,7 +832,7 @@ def create_app() -> FastAPI:
                 },
                 status_code=400,
             )
-        # Batch 8 backstop: an open-catalog session researches "{discipline}
+        # Batch 9 backstop: an open-catalog session researches "{discipline}
         # work" — without a stated discipline the templates have nothing to
         # research. The session-start picker normally guarantees this.
         if getattr(session.module, "open_catalog", False) and not (
@@ -1122,11 +1177,11 @@ def create_app() -> FastAPI:
     def project_save() -> Response:
         session = sessions.get_session()
         payload = sessions.project_payload(session)
-        stem = sessions.project_default_stem(session)
+        filename = sessions.project_default_filename(session)
         return Response(
             content=json.dumps(payload, ensure_ascii=False, indent=2),
             media_type="application/json",
-            headers=_attachment_headers(f"buildaspec-{stem}.json"),
+            headers=_attachment_headers(filename),
         )
 
     @app.post("/api/project/load")

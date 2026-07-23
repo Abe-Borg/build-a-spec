@@ -277,7 +277,7 @@ def test_references_article_line_shape_is_checked():
 
 
 # ---------------------------------------------------------------------------
-# Batch 8: unrecorded_edition (unpinned-basis modules only)
+# Batch 9: unrecorded_edition (unpinned-basis modules only)
 # ---------------------------------------------------------------------------
 
 

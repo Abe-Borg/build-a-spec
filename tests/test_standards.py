@@ -109,7 +109,7 @@ def test_references_article_lines_orders_and_filters():
 
 
 # ---------------------------------------------------------------------------
-# Batch 8: the unpinned basis rendering
+# Batch 9: the unpinned basis rendering
 # ---------------------------------------------------------------------------
 
 _UNPINNED = StandardsBasis(label="test-unpinned", unpinned=True)
@@ -145,7 +145,7 @@ def test_unpinned_context_block_lists_recorded_overrides():
 
 
 def test_pinned_context_block_unchanged_by_the_unpinned_branch():
-    # The pinned rendering is byte-stable across the Batch 8 change.
+    # The pinned rendering is byte-stable across the Batch 9 change.
     block = standards_context_block(_BASIS, None)
     assert block.startswith("Standards editions in effect for this project:")
     assert "- NFPA 13: 2025 — module default (current published edition)" in block

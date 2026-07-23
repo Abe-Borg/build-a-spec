@@ -1,5 +1,5 @@
 /**
- * Session-start module picker (Batch 8): choose the spec module the next
+ * Session-start module picker (Batch 9): choose the spec module the next
  * session runs on — and, when the chosen module is the generic open-catalog
  * one, state the discipline that steers its drafting and research. Opens
  * from the Header's "New session" button; Cancel / backdrop / Escape keep

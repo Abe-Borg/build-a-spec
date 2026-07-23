@@ -416,9 +416,11 @@ export default function OnboardingOverlay({
   }, [touringStep]);
 
   // Escape: pause a live step / back out of a dialog. Never marks complete.
+  // While the end-or-continue confirmation is up, it owns Escape (ConfirmDialog
+  // cancels on Escape) — don't also pause/abort the popup underneath it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || ob.endConfirm) return;
       if (phase.kind === "touring" || phase.kind === "chunk-break") ob.pause();
       else if (
         phase.kind === "entry-guard" ||
@@ -438,7 +440,7 @@ export default function OnboardingOverlay({
   /* Entry guard: the tour needs a blank session. */
   if (phase.kind === "entry-guard") {
     return (
-      <ModalShell title="Take the guided tour" onClose={ob.abort}>
+      <ModalShell title="Take the guided tour" onClose={ob.requestEnd}>
         <p className="text-sm leading-relaxed text-ink-dim">
           The tour drafts a small demo spec into a blank session, and this
           session already has content. Start fresh to run it — and if the
@@ -460,7 +462,7 @@ export default function OnboardingOverlay({
   /* Discipline picker — before anything is generated. */
   if (phase.kind === "discipline") {
     return (
-      <ModalShell title="What's your discipline?" onClose={ob.abort} wide>
+      <ModalShell title="What's your discipline?" onClose={ob.requestEnd} wide>
         <p className="text-sm leading-relaxed text-ink-dim">
           The tour opens by drafting a short demo spec section in your
           discipline — a live teaching prop, not a real deliverable.
@@ -508,7 +510,7 @@ export default function OnboardingOverlay({
           <CardHeader
             kicker="Before the demo"
             title="First: your Anthropic API key"
-            onClose={ob.abort}
+            onClose={ob.requestEnd}
           />
           <p className="mt-1 text-sm leading-relaxed text-ink-dim">
             The demo drafts with your key — paste it in the banner above.
@@ -525,7 +527,7 @@ export default function OnboardingOverlay({
   if (phase.kind === "generating") {
     if (phase.error) {
       return (
-        <ModalShell title="The demo didn't start" onClose={ob.abort}>
+        <ModalShell title="The demo didn't start" onClose={ob.requestEnd}>
           <p className="text-sm leading-relaxed text-err">{phase.error}</p>
           <div className="mt-4 flex gap-2">
             <button onClick={ob.retryGenerate} className={primaryBtn}>
@@ -543,7 +545,7 @@ export default function OnboardingOverlay({
         <CardHeader
           kicker="Drafting the demo"
           title={`A small ${phase.discipline} section`}
-          onClose={ob.abort}
+          onClose={ob.requestEnd}
         />
         <p className="mt-1 text-sm leading-relaxed text-ink-dim">
           Watch the paper on the right — each edit lands live as the model
@@ -561,7 +563,7 @@ export default function OnboardingOverlay({
     return (
       <ModalShell
         title={`Part ${phase.nextChunk} of ${TOUR.length} done — ${doneChunk.title}`}
-        onClose={ob.pause}
+        onClose={ob.requestEnd}
       >
         <div className="flex items-center gap-1.5" aria-hidden>
           {TOUR.map((c, i) => (
@@ -604,7 +606,7 @@ export default function OnboardingOverlay({
           ▶ Resume tour
         </button>
         <button
-          onClick={ob.startRealWork}
+          onClick={ob.requestEnd}
           aria-label="End tour"
           title="End the tour"
           className="flex h-8 w-8 items-center justify-center rounded-full border border-edge bg-surface text-ink-dim shadow-2xl transition-colors hover:border-accent hover:text-accent"
@@ -618,10 +620,7 @@ export default function OnboardingOverlay({
   /* Work choice: start fresh vs keep the demo. */
   if (phase.kind === "work-choice") {
     return (
-      <ModalShell
-        title="Start real work"
-        onClose={phase.resume ? ob.backToTour : ob.abort}
-      >
+      <ModalShell title="Start real work" onClose={ob.requestEnd}>
         <p className="text-sm leading-relaxed text-ink-dim">
           Keep the demo as a scratch starting point, or clear everything for
           a blank page — the starter prompts will be waiting.
@@ -656,7 +655,7 @@ export default function OnboardingOverlay({
             phase.step + 1
           }/${chunk.steps.length}`}
           title={step.title}
-          onClose={ob.pause}
+          onClose={ob.requestEnd}
         />
         <p className="mt-1 text-sm leading-relaxed text-ink-dim">{step.body}</p>
         <StepActions

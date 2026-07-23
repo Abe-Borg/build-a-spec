@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ChatMessage } from "../types";
+import type { ChatMessage, Figure } from "../types";
 import { STARTER_PROMPTS } from "../lib/tour";
 import { hasCompletedOnboarding } from "../lib/onboardingStorage";
 import MessageBubble from "./MessageBubble";
@@ -15,6 +15,10 @@ interface Props {
   onStop: () => void;
   /** WI2 "Ask model" prefill, forwarded to the composer. */
   prefill?: { text: string; nonce: number };
+  /** Session figures, keyed by id, for inline rendering in the bubbles. */
+  figuresById?: Map<string, Figure>;
+  /** Remove a figure (forwarded to each figure card). */
+  onDeleteFigure?: (fid: string) => void;
 }
 
 export default function Chat({
@@ -24,6 +28,8 @@ export default function Chat({
   onStartOnboarding,
   onStop,
   prefill,
+  figuresById,
+  onDeleteFigure,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
@@ -122,7 +128,12 @@ export default function Chat({
         ) : (
           <div className="mx-auto flex max-w-3xl flex-col gap-5">
             {messages.map((m) => (
-              <MessageBubble key={m.id} msg={m} />
+              <MessageBubble
+                key={m.id}
+                msg={m}
+                figuresById={figuresById}
+                onDeleteFigure={onDeleteFigure}
+              />
             ))}
           </div>
         )}

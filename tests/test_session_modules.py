@@ -1,4 +1,4 @@
-"""Batch 8 session-surface tests: the module picker's backend — reset with
+"""Batch 9 session-surface tests: the module picker's backend — reset with
 an optional body, the modules listing, the session discipline in per-turn
 context (never the stable prompt), and project-file persistence with the
 open-catalog invariant."""

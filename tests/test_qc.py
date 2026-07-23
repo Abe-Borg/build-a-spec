@@ -697,7 +697,7 @@ def test_qc_result_from_dict_round_trips():
 
 
 # ---------------------------------------------------------------------------
-# Batch 8: session discipline in the lens user message
+# Batch 9: session discipline in the lens user message
 # ---------------------------------------------------------------------------
 
 

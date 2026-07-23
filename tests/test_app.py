@@ -117,6 +117,7 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
     assert "document" in context
     assert [t["name"] for t in request["tools"]] == [
         "apply_spec_edits",
+        "create_figure",
         "web_search",
         "web_fetch",
     ]
@@ -162,7 +163,7 @@ def test_session_reset_clears_history_and_document(monkeypatch):
     assert not sessions.get_session().doc.doc.is_empty()
 
     resp = client.post("/api/session/reset")
-    # Batch 8: the reset response reports the (kept) module + discipline.
+    # Batch 9: the reset response reports the (kept) module + discipline.
     assert resp.json() == {
         "ok": True,
         "module_id": "hyperscale_fire",

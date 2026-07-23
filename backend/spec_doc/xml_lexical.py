@@ -68,6 +68,20 @@ class WordTextByteSpan:
 
 
 @dataclass(frozen=True, slots=True)
+class XmlElementByteSpan:
+    expanded_name: str
+    lexical_name: bytes
+    element_span: XmlByteSpan
+    start_tag_span: XmlByteSpan
+    end_tag_span: XmlByteSpan | None
+    parent_start: int | None
+    body_child_index: int | None
+    local_namespace_bindings: tuple[tuple[str, str], ...]
+    external_namespace_bindings: tuple[tuple[str, str], ...]
+    contains_special_markup: bool
+
+
+@dataclass(frozen=True, slots=True)
 class BodyChildByteSpan:
     body_child_index: int
     expanded_name: str
@@ -94,6 +108,7 @@ class SourceXmlIndex:
     body_content_span: XmlByteSpan
     body_children: tuple[BodyChildByteSpan, ...]
     paragraph_spans: tuple[BodyChildByteSpan, ...]
+    elements: tuple[XmlElementByteSpan, ...]
     word_text_nodes: tuple[WordTextByteSpan, ...]
     body_gaps: tuple[XmlByteSpan, ...]
     body_namespace_bindings: tuple[tuple[str, str], ...]
@@ -121,6 +136,24 @@ class SourceXmlIndex:
             "the mapped Word text node has no proven lexical span",
         )
 
+    def element_for_span(self, span: XmlByteSpan) -> XmlElementByteSpan:
+        for element in self.elements:
+            if element.element_span == span:
+                return element
+        raise XmlLexicalError(
+            "body_anchor_mismatch",
+            "the mapped XML element has no proven lexical record",
+        )
+
+    def direct_children(
+        self, element: XmlElementByteSpan
+    ) -> tuple[XmlElementByteSpan, ...]:
+        return tuple(
+            candidate
+            for candidate in self.elements
+            if candidate.parent_start == element.element_span.start
+        )
+
 
 @dataclass(slots=True)
 class _RawAttribute:
@@ -136,9 +169,13 @@ class _Frame:
     start: int
     start_tag_end: int
     namespaces: dict[str, str]
+    local_namespaces: dict[str, str]
+    external_namespaces: dict[str, str]
+    parent_start: int | None
     body_child_index: int | None
     direct_body_child: bool
     text_node_ordinal: int | None
+    contains_special_markup: bool = False
     empty: bool = False
 
 
@@ -160,6 +197,7 @@ class _ScanResult:
     body_end_tag_span: XmlByteSpan | None
     body_content_span: XmlByteSpan | None
     body_children: list[BodyChildByteSpan]
+    elements: list[XmlElementByteSpan]
     word_text_nodes: list[_RawTextRecord]
     body_namespaces: dict[str, str] | None
 
@@ -501,7 +539,7 @@ def _parse_end_tag(data: bytes, start: int) -> tuple[bytes, int]:
 
 
 def _scanner(document_xml: bytes, bom: bytes) -> _ScanResult:
-    result = _ScanResult([], None, None, None, None, [], [], None)
+    result = _ScanResult([], None, None, None, None, [], [], [], None)
     stack: list[_Frame] = []
     body_child_count = 0
     text_counts: dict[int, int] = {}
@@ -511,6 +549,39 @@ def _scanner(document_xml: bytes, bom: bytes) -> _ScanResult:
     def finish(frame: _Frame, end_start: int, end: int) -> None:
         nonlocal result
         element_span = XmlByteSpan(frame.start, end)
+        result.elements.append(
+            XmlElementByteSpan(
+                expanded_name=frame.expanded_name,
+                lexical_name=frame.lexical_name,
+                element_span=element_span,
+                start_tag_span=XmlByteSpan(frame.start, frame.start_tag_end),
+                end_tag_span=(
+                    None if frame.empty else XmlByteSpan(end_start, end)
+                ),
+                parent_start=frame.parent_start,
+                body_child_index=frame.body_child_index,
+                local_namespace_bindings=tuple(
+                    sorted(frame.local_namespaces.items())
+                ),
+                external_namespace_bindings=tuple(
+                    sorted(frame.external_namespaces.items())
+                ),
+                contains_special_markup=frame.contains_special_markup,
+            )
+        )
+        if stack:
+            parent = stack[-1]
+            if frame.contains_special_markup:
+                parent.contains_special_markup = True
+            for prefix, uri in frame.external_namespaces.items():
+                if parent.local_namespaces.get(prefix) == uri:
+                    continue
+                existing = parent.external_namespaces.get(prefix)
+                if existing is not None and existing != uri:
+                    raise _unsafe(
+                        "one XML prefix resolves ambiguously inside an element subtree"
+                    )
+                parent.external_namespaces[prefix] = uri
         if frame.direct_body_child:
             if frame.body_child_index is None:  # pragma: no cover - invariant
                 raise _unsafe("a direct body child lost its lexical index")
@@ -569,12 +640,16 @@ def _scanner(document_xml: bytes, bom: bytes) -> _ScanResult:
             end_marker = document_xml.find(b"-->", position + 4)
             if end_marker < 0:
                 raise _unsafe("an XML comment is unterminated")
+            if stack:
+                stack[-1].contains_special_markup = True
             position = end_marker + 3
             continue
         if document_xml.startswith(b"<?", position):
             end_marker = document_xml.find(b"?>", position + 2)
             if end_marker < 0:
                 raise _unsafe("an XML processing instruction is unterminated")
+            if stack:
+                stack[-1].contains_special_markup = True
             position = end_marker + 2
             continue
         if document_xml.startswith(b"<![CDATA[", position):
@@ -587,6 +662,7 @@ def _scanner(document_xml: bytes, bom: bytes) -> _ScanResult:
                 document_xml[position + 9 : end_marker].decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise _unsafe("an XML CDATA section is not valid UTF-8") from exc
+            stack[-1].contains_special_markup = True
             position = end_marker + 3
             continue
         if document_xml.startswith(b"<!", position):
@@ -611,6 +687,7 @@ def _scanner(document_xml: bytes, bom: bytes) -> _ScanResult:
             if stack
             else {"xml": _XML_NS}
         )
+        local_namespaces: dict[str, str] = {}
         decoded_attribute_values = [
             _decode_text_with_boundaries(
                 attribute.raw_value,
@@ -637,8 +714,41 @@ def _scanner(document_xml: bytes, bom: bytes) -> _ScanResult:
                 namespaces[declared_prefix] = uri
             else:
                 namespaces.pop(declared_prefix, None)
+            local_namespaces[declared_prefix] = uri
 
         expanded = _expanded_name(raw_name, namespaces)
+        external_namespaces: dict[str, str] = {}
+
+        def require_external_prefix(
+            lexical_name: bytes, *, attribute: bool
+        ) -> None:
+            prefix, _local = _qname_parts(lexical_name)
+            if attribute and not prefix:
+                return
+            if prefix in {"xml", "xmlns"}:
+                return
+            resolved = _expanded_name(
+                lexical_name, namespaces, attribute=attribute
+            )
+            if prefix:
+                uri = namespaces[prefix]
+            elif resolved.startswith("{"):
+                uri = namespaces.get("", "")
+            else:
+                return
+            if prefix not in local_namespaces:
+                external_namespaces[prefix] = uri
+
+        require_external_prefix(raw_name, attribute=False)
+        for attribute in attributes:
+            prefix, local = _qname_parts(attribute.lexical_name)
+            if (not prefix and local == "xmlns") or prefix == "xmlns":
+                continue
+            # Resolve every ordinary attribute independently. The default
+            # namespace never applies to an unprefixed attribute.
+            _expanded_name(attribute.lexical_name, namespaces, attribute=True)
+            require_external_prefix(attribute.lexical_name, attribute=True)
+
         parent = stack[-1] if stack else None
         direct_body_child = bool(parent and parent.expanded_name == _W_BODY)
         if direct_body_child:
@@ -657,6 +767,9 @@ def _scanner(document_xml: bytes, bom: bytes) -> _ScanResult:
             start=position,
             start_tag_end=end,
             namespaces=namespaces,
+            local_namespaces=local_namespaces,
+            external_namespaces=external_namespaces,
+            parent_start=parent.start if parent is not None else None,
             body_child_index=body_child_index,
             direct_body_child=direct_body_child,
             text_node_ordinal=text_ordinal,
@@ -781,6 +894,11 @@ def build_source_xml_index(
     lxml_events = _lxml_events(root)
     if scan.events != expat_events or scan.events != lxml_events:
         raise _unsafe("independent XML parsers disagree on element names or nesting")
+    scan.elements.sort(key=lambda element: element.element_span.start)
+    if [element.expanded_name for element in scan.elements] != [
+        event[1] for event in lxml_events if event[0] == "start"
+    ]:
+        raise _unsafe("the lexical and semantic XML element inventories disagree")
     if root.tag != _W_DOCUMENT:
         raise _unsafe("the main part is not a supported Word document element")
 
@@ -887,6 +1005,7 @@ def build_source_xml_index(
         body_content_span=body_content,
         body_children=tuple(scan.body_children),
         paragraph_spans=paragraphs,
+        elements=tuple(scan.elements),
         word_text_nodes=tuple(word_text_nodes),
         body_gaps=tuple(gaps),
         body_namespace_bindings=tuple(sorted(scan.body_namespaces.items())),
@@ -925,6 +1044,23 @@ def decoded_slice_byte_span(
             "the mapped Word text no longer matches its lexical byte span",
         )
     return XmlByteSpan(boundaries[start], boundaries[end])
+
+
+def xml_gap_is_whitespace(document_xml: bytes, span: XmlByteSpan) -> bool:
+    """Return whether a proven inter-element gap is only XML whitespace.
+
+    Character references such as ``&#10;`` are decoded before classification.
+    Markup, custom entities, non-breaking spaces, and every character outside
+    XML's S production fail closed.
+    """
+    if span.end > len(document_xml):
+        raise XmlLexicalError(
+            "unsafe_document_xml", "an XML gap extends beyond the source bytes"
+        )
+    decoded, _boundaries = _decode_text_with_boundaries(
+        document_xml[span.start : span.end], absolute_start=span.start
+    )
+    return all(character in " \t\r\n" for character in decoded)
 
 
 def encode_word_text(
@@ -1028,6 +1164,7 @@ __all__ = [
     "SourceXmlIndex",
     "WordTextByteSpan",
     "XmlByteSpan",
+    "XmlElementByteSpan",
     "XmlLexicalError",
     "XmlPatch",
     "apply_xml_patches",
@@ -1035,4 +1172,5 @@ __all__ = [
     "decoded_slice_byte_span",
     "detect_xml_encoding",
     "encode_word_text",
+    "xml_gap_is_whitespace",
 ]

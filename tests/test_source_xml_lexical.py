@@ -19,6 +19,7 @@ from lxml import etree
 from backend.app import create_app
 import backend.spec_doc.source_patch as source_patch_module
 from backend.spec_doc.xml_lexical import (
+    XmlByteSpan,
     XmlLexicalError,
     XmlPatch,
     apply_xml_patches,
@@ -26,6 +27,7 @@ from backend.spec_doc.xml_lexical import (
     decoded_slice_byte_span,
     detect_xml_encoding,
     encode_word_text,
+    xml_gap_is_whitespace,
 )
 from tests.docx_fidelity_helpers import (
     DOCX_MEDIA_TYPE,
@@ -302,6 +304,166 @@ def test_index_and_multiple_patches_preserve_adversarial_lexical_bytes(
     assert b"A&#46; R&amp;D&#32;" in patched
     assert b"Z&#x2E; Sigma&#x20;" in patched
     etree.fromstring(patched)
+
+
+def test_generic_element_index_tracks_parents_children_and_namespace_dependencies(
+):
+    format_ns = "urn:build-a-spec:test-format"
+    source = b"".join(
+        (
+            b"<docWord:document xmlns:docWord='",
+            _W_NS.encode("ascii"),
+            b"'><docWord:body><paragraphWord:p xmlns:paragraphWord='",
+            _W_NS.encode("ascii"),
+            b"' xmlns:format='",
+            format_ns.encode("ascii"),
+            b"'><paragraphWord:pPr><format:shade format:value='blue'/>",
+            b"</paragraphWord:pPr><runWord:r xmlns:runWord='",
+            _W_NS.encode("ascii"),
+            b"'><runWord:rPr><format:weight/>",
+            b"<localWord:color xmlns:localWord='",
+            _W_NS.encode("ascii"),
+            b"' localWord:val='112233'/></runWord:rPr>",
+            b"<runWord:t>Indexed text</runWord:t></runWord:r>",
+            b"</paragraphWord:p></docWord:body></docWord:document>",
+        )
+    )
+
+    index = build_source_xml_index(source)
+    paragraph = index.element_for_span(index.body_child(0).element_span)
+    paragraph_children = index.direct_children(paragraph)
+    assert paragraph.lexical_name == b"paragraphWord:p"
+    assert paragraph.parent_start == index.body_start_tag_span.start
+    assert paragraph.body_child_index == 0
+    assert dict(paragraph.local_namespace_bindings) == {
+        "format": format_ns,
+        "paragraphWord": _W_NS,
+    }
+    assert dict(paragraph.external_namespace_bindings) == {}
+    assert [child.lexical_name for child in paragraph_children] == [
+        b"paragraphWord:pPr",
+        b"runWord:r",
+    ]
+    assert all(
+        child.parent_start == paragraph.element_span.start
+        for child in paragraph_children
+    )
+
+    paragraph_properties, run = paragraph_children
+    expected_ppr = (
+        b"<paragraphWord:pPr><format:shade format:value='blue'/>"
+        b"</paragraphWord:pPr>"
+    )
+    assert source[
+        paragraph_properties.element_span.start : paragraph_properties.element_span.end
+    ] == expected_ppr
+    assert dict(paragraph_properties.local_namespace_bindings) == {}
+    assert dict(paragraph_properties.external_namespace_bindings) == {
+        "format": format_ns,
+        "paragraphWord": _W_NS,
+    }
+
+    assert dict(run.local_namespace_bindings) == {"runWord": _W_NS}
+    assert dict(run.external_namespace_bindings) == {"format": format_ns}
+    run_properties, text = index.direct_children(run)
+    assert [child.lexical_name for child in (run_properties, text)] == [
+        b"runWord:rPr",
+        b"runWord:t",
+    ]
+    assert dict(run_properties.external_namespace_bindings) == {
+        "format": format_ns,
+        "runWord": _W_NS,
+    }
+    local_color = index.direct_children(run_properties)[1]
+    assert local_color.lexical_name == b"localWord:color"
+    assert dict(local_color.local_namespace_bindings) == {"localWord": _W_NS}
+    assert dict(local_color.external_namespace_bindings) == {}
+
+
+def test_generic_element_index_marks_internal_special_markup_but_not_sibling_gaps(
+):
+    source = b"".join(
+        (
+            b"<w:document xmlns:w='",
+            _W_NS.encode("ascii"),
+            b"'><w:body>",
+            b"<w:p><w:r><w:t>First plain paragraph.</w:t></w:r></w:p>",
+            b"<!-- sibling comment --><?sibling-gap keep?>",
+            b"<w:p><w:r><w:t>Second plain paragraph.</w:t></w:r></w:p>",
+            b"<w:p><w:pPr>",
+            b"<w:commentHost><!-- nested comment --></w:commentHost>",
+            b"<w:piHost><?nested keep?></w:piHost>",
+            b"<w:cdataHost><![CDATA[nested raw text]]></w:cdataHost>",
+            b"</w:pPr><w:r><w:t>Special paragraph.</w:t></w:r></w:p>",
+            b"</w:body></w:document>",
+        )
+    )
+
+    index = build_source_xml_index(source)
+    paragraphs = [
+        index.element_for_span(index.body_child(body_index).element_span)
+        for body_index in range(3)
+    ]
+    assert [paragraph.contains_special_markup for paragraph in paragraphs] == [
+        False,
+        False,
+        True,
+    ]
+
+    document = next(
+        element
+        for element in index.elements
+        if element.expanded_name == f"{{{_W_NS}}}document"
+    )
+    body = index.direct_children(document)[0]
+    assert body.contains_special_markup is True
+
+    special_properties = index.direct_children(paragraphs[2])[0]
+    special_children = index.direct_children(special_properties)
+    assert special_properties.contains_special_markup is True
+    assert [child.contains_special_markup for child in special_children] == [
+        True,
+        True,
+        True,
+    ]
+    assert [child.lexical_name for child in special_children] == [
+        b"w:commentHost",
+        b"w:piHost",
+        b"w:cdataHost",
+    ]
+
+
+def test_xml_gap_is_whitespace_accepts_xml_s_and_numeric_references():
+    raw_gap = b" \t\r\n&#32;&#x20;&#9;&#x9;&#10;&#xA;&#13;&#xD;"
+    assert xml_gap_is_whitespace(raw_gap, XmlByteSpan(0, len(raw_gap))) is True
+    assert xml_gap_is_whitespace(raw_gap, XmlByteSpan(0, 0)) is True
+
+
+@pytest.mark.parametrize(
+    "raw_gap",
+    [
+        pytest.param(b"non-whitespace", id="ordinary-text"),
+        pytest.param("\u00a0".encode("utf-8"), id="literal-nbsp"),
+        pytest.param(b"&#160;", id="numeric-nbsp"),
+    ],
+)
+def test_xml_gap_is_whitespace_rejects_non_xml_s(raw_gap: bytes):
+    assert xml_gap_is_whitespace(raw_gap, XmlByteSpan(0, len(raw_gap))) is False
+
+
+@pytest.mark.parametrize(
+    "raw_gap",
+    [
+        pytest.param(b"<!-- comment -->", id="comment"),
+        pytest.param(b"<?gap keep?>", id="processing-instruction"),
+        pytest.param(b"<![CDATA[ ]]>", id="cdata"),
+        pytest.param(b"<w:p/>", id="element"),
+    ],
+)
+def test_xml_gap_is_whitespace_rejects_markup(raw_gap: bytes):
+    with pytest.raises(XmlLexicalError) as exc_info:
+        xml_gap_is_whitespace(raw_gap, XmlByteSpan(0, len(raw_gap)))
+    assert exc_info.value.blocker == "unsupported_source_text_lexical_form"
 
 
 @pytest.mark.parametrize(

@@ -38,6 +38,9 @@ from .source_mapping import (
 )
 from .source_package import SourcePackageError, inspect_docx_package
 from .xml_lexical import (
+    SourceXmlIndex,
+    XmlByteSpan,
+    XmlElementByteSpan,
     XmlLexicalError,
     XmlPatch,
     apply_xml_patches,
@@ -45,6 +48,7 @@ from .xml_lexical import (
     decoded_slice_byte_span,
     detect_xml_encoding,
     encode_word_text,
+    xml_gap_is_whitespace,
 )
 
 _DOCUMENT_PART = "word/document.xml"
@@ -71,6 +75,7 @@ _W_R = f"{{{_W_NS}}}r"
 _W_RPR = f"{{{_W_NS}}}rPr"
 _W_T = f"{{{_W_NS}}}t"
 _W_SECTPR = f"{{{_W_NS}}}sectPr"
+_W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
 _DOCUMENT_RELS_PART = "word/_rels/document.xml.rels"
 _CONTENT_TYPES_PART = "[Content_Types].xml"
 _REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -102,6 +107,140 @@ _AUTOMATIC_NUMBER_FORMATS = frozenset(
         "upperRoman",
     }
 )
+_ON_OFF_ATTRIBUTES = frozenset({"val"})
+_SAFE_PPR_LEAF_ATTRIBUTES: dict[str, frozenset[str]] = {
+    "adjustRightInd": _ON_OFF_ATTRIBUTES,
+    "autoSpaceDE": _ON_OFF_ATTRIBUTES,
+    "autoSpaceDN": _ON_OFF_ATTRIBUTES,
+    "bidi": _ON_OFF_ATTRIBUTES,
+    "contextualSpacing": _ON_OFF_ATTRIBUTES,
+    "ind": frozenset(
+        {
+            "end",
+            "endChars",
+            "firstLine",
+            "firstLineChars",
+            "hanging",
+            "hangingChars",
+            "left",
+            "leftChars",
+            "right",
+            "rightChars",
+            "start",
+            "startChars",
+        }
+    ),
+    "jc": frozenset({"val"}),
+    "keepLines": _ON_OFF_ATTRIBUTES,
+    "keepNext": _ON_OFF_ATTRIBUTES,
+    "kinsoku": _ON_OFF_ATTRIBUTES,
+    "mirrorIndents": _ON_OFF_ATTRIBUTES,
+    "outlineLvl": frozenset({"val"}),
+    "overflowPunct": _ON_OFF_ATTRIBUTES,
+    "pageBreakBefore": _ON_OFF_ATTRIBUTES,
+    "pStyle": frozenset({"val"}),
+    "shd": frozenset(
+        {
+            "color",
+            "fill",
+            "themeColor",
+            "themeFill",
+            "themeFillShade",
+            "themeFillTint",
+            "themeShade",
+            "themeTint",
+            "val",
+        }
+    ),
+    "snapToGrid": _ON_OFF_ATTRIBUTES,
+    "spacing": frozenset(
+        {
+            "after",
+            "afterAutospacing",
+            "afterLines",
+            "before",
+            "beforeAutospacing",
+            "beforeLines",
+            "line",
+            "lineRule",
+        }
+    ),
+    "suppressAutoHyphens": _ON_OFF_ATTRIBUTES,
+    "suppressLineNumbers": _ON_OFF_ATTRIBUTES,
+    "suppressOverlap": _ON_OFF_ATTRIBUTES,
+    "textAlignment": frozenset({"val"}),
+    "textDirection": frozenset({"val"}),
+    "topLinePunct": _ON_OFF_ATTRIBUTES,
+    "widowControl": _ON_OFF_ATTRIBUTES,
+    "wordWrap": _ON_OFF_ATTRIBUTES,
+}
+_SAFE_RPR_LEAF_ATTRIBUTES: dict[str, frozenset[str]] = {
+    "b": _ON_OFF_ATTRIBUTES,
+    "bCs": _ON_OFF_ATTRIBUTES,
+    "bdr": frozenset(
+        {
+            "color",
+            "frame",
+            "shadow",
+            "space",
+            "sz",
+            "themeColor",
+            "themeShade",
+            "themeTint",
+            "val",
+        }
+    ),
+    "caps": _ON_OFF_ATTRIBUTES,
+    "color": frozenset(
+        {"themeColor", "themeShade", "themeTint", "val"}
+    ),
+    "cs": _ON_OFF_ATTRIBUTES,
+    "dstrike": _ON_OFF_ATTRIBUTES,
+    "effect": frozenset({"val"}),
+    "em": frozenset({"val"}),
+    "emboss": _ON_OFF_ATTRIBUTES,
+    "highlight": frozenset({"val"}),
+    "i": _ON_OFF_ATTRIBUTES,
+    "iCs": _ON_OFF_ATTRIBUTES,
+    "imprint": _ON_OFF_ATTRIBUTES,
+    "kern": frozenset({"val"}),
+    "lang": frozenset({"bidi", "eastAsia", "val"}),
+    "noProof": _ON_OFF_ATTRIBUTES,
+    "oMath": _ON_OFF_ATTRIBUTES,
+    "outline": _ON_OFF_ATTRIBUTES,
+    "position": frozenset({"val"}),
+    "rFonts": frozenset(
+        {
+            "ascii",
+            "asciiTheme",
+            "cs",
+            "cstheme",
+            "eastAsia",
+            "eastAsiaTheme",
+            "hAnsi",
+            "hAnsiTheme",
+            "hint",
+        }
+    ),
+    "rStyle": frozenset({"val"}),
+    "rtl": _ON_OFF_ATTRIBUTES,
+    "shadow": _ON_OFF_ATTRIBUTES,
+    "shd": _SAFE_PPR_LEAF_ATTRIBUTES["shd"],
+    "smallCaps": _ON_OFF_ATTRIBUTES,
+    "snapToGrid": _ON_OFF_ATTRIBUTES,
+    "spacing": frozenset({"val"}),
+    "specVanish": _ON_OFF_ATTRIBUTES,
+    "strike": _ON_OFF_ATTRIBUTES,
+    "sz": frozenset({"val"}),
+    "szCs": frozenset({"val"}),
+    "u": frozenset(
+        {"color", "themeColor", "themeShade", "themeTint", "val"}
+    ),
+    "vanish": _ON_OFF_ATTRIBUTES,
+    "vertAlign": frozenset({"val"}),
+    "w": frozenset({"val"}),
+    "webHidden": _ON_OFF_ATTRIBUTES,
+}
 
 
 class SourcePatchError(ValueError):
@@ -204,6 +343,34 @@ class _DesiredParagraph:
 class _IslandPatch:
     island: _NumberedIsland
     desired: tuple[_DesiredParagraph, ...]
+
+
+@dataclass(frozen=True)
+class _IslandBytePatch:
+    island_key: str
+    source_span: XmlByteSpan
+    desired_elements: tuple[bytes, ...]
+    original_gaps: tuple[bytes, ...]
+    changed_uids: tuple[str, ...]
+
+    @property
+    def replacement(self) -> bytes:
+        """Assign desired elements to source slots without rewriting gaps."""
+        slot_count = len(self.original_gaps) + 1
+        slots: list[list[bytes]] = [[] for _index in range(slot_count)]
+        if len(self.desired_elements) <= slot_count:
+            for index, element in enumerate(self.desired_elements):
+                slots[index].append(element)
+        else:
+            for index in range(slot_count - 1):
+                slots[index].append(self.desired_elements[index])
+            slots[-1].extend(self.desired_elements[slot_count - 1 :])
+        output: list[bytes] = []
+        for index, slot in enumerate(slots):
+            output.extend(slot)
+            if index < len(self.original_gaps):
+                output.append(self.original_gaps[index])
+        return b"".join(output)
 
 
 @dataclass(frozen=True)
@@ -1342,15 +1509,11 @@ def _plan_projection_changes(
     if unassigned:
         raise SourcePatchError(unassigned[0], "unsafe_structural_island")
 
-    if island_patches and (
-        len(list(body.iterchildren())) != len(body_children)
-        or _has_non_whitespace_direct_character_data(body)
-    ):
+    if island_patches and _has_non_whitespace_direct_character_data(body):
         raise SourcePatchError(
             island_patches[0].island.key,
             "unsafe_structural_island",
-            "the source body contains unmapped character, comment, or "
-            "processing-node content",
+            "the source body contains non-whitespace direct character content",
         )
 
     text_patches: list[_TextPatch] = []
@@ -1473,8 +1636,12 @@ def _validate_source_and_plan(
             )
 
     lexically_patched_xml: bytes | None = None
-    if plan.text_patches and not plan.island_patches:
-        lexically_patched_xml = _lexically_patch_text_only_document(
+    if not plan.no_op:
+        # Lexical synthesis is part of the final-state gate, not merely an
+        # export implementation detail.  A namespace or raw-template ambiguity
+        # therefore rejects model, manual, QC, and restored-history candidates
+        # before any session state can be committed.
+        lexically_patched_xml = _lexically_patch_document(
             document_xml=document_xml,
             tree=tree,
             plan=plan,
@@ -1607,23 +1774,14 @@ def _element_with_text_patch(
     return element
 
 
-def _lexically_patch_text_only_document(
+def _lexical_text_patch_manifest(
     *,
     document_xml: bytes,
-    tree,
-    plan: _PatchPlan,
-) -> bytes:
-    """Build a text-only document from immutable bytes plus a patch manifest."""
-    if plan.island_patches or not plan.text_patches:
-        raise ValueError("lexical text patching requires a non-empty text-only plan")
-    first_uid = plan.text_patches[0].binding.uid
-    try:
-        index = build_source_xml_index(document_xml, validated_tree=tree)
-    except XmlLexicalError as exc:
-        raise SourcePatchError(first_uid, exc.blocker, exc.detail) from exc
-
+    index: SourceXmlIndex,
+    text_patches: tuple[_TextPatch, ...],
+) -> tuple[XmlPatch, ...]:
     manifest: list[XmlPatch] = []
-    for patch in plan.text_patches:
+    for patch in text_patches:
         binding = patch.binding
         span = binding.text_span
         if span is None:
@@ -1676,15 +1834,576 @@ def _lexically_patch_text_only_document(
                 reason="replace_text",
             )
         )
+    return tuple(manifest)
+
+
+def _element_record_for_body_child(
+    index: SourceXmlIndex,
+    body_child_index: int,
+) -> XmlElementByteSpan:
+    child = index.body_child(body_child_index)
+    return index.element_for_span(child.element_span)
+
+
+def _single_direct_child(
+    index: SourceXmlIndex,
+    parent: XmlElementByteSpan,
+    expanded_name: str,
+    *,
+    uid: str,
+    required: bool,
+) -> XmlElementByteSpan | None:
+    matches = [
+        child
+        for child in index.direct_children(parent)
+        if child.expanded_name == expanded_name
+    ]
+    if len(matches) > 1 or (required and len(matches) != 1):
+        raise SourcePatchError(uid, "ambiguous_structural_template")
+    return matches[0] if matches else None
+
+
+def _lexical_prefix(lexical_name: bytes, expected_local: bytes) -> bytes:
+    pieces = lexical_name.split(b":")
+    if len(pieces) == 1 and pieces[0] == expected_local:
+        return b""
+    if len(pieces) == 2 and pieces[0] and pieces[1] == expected_local:
+        return pieces[0]
+    raise XmlLexicalError(
+        "ambiguous_structural_template",
+        "the template paragraph uses an ambiguous lexical Word name",
+    )
+
+
+def _prefixed_name(prefix: bytes, local: bytes) -> bytes:
+    return prefix + b":" + local if prefix else local
+
+
+def _required_namespace_declarations(
+    *,
+    index: SourceXmlIndex,
+    paragraph: XmlElementByteSpan,
+    p_pr: XmlElementByteSpan,
+    r_pr: XmlElementByteSpan | None,
+    word_prefix: bytes,
+    uid: str,
+) -> bytes:
+    body_bindings = dict(index.body_namespace_bindings)
+    paragraph_local = dict(paragraph.local_namespace_bindings)
+    paragraph_external = dict(paragraph.external_namespace_bindings)
+    try:
+        prefix_text = word_prefix.decode("utf-8")
+    except UnicodeDecodeError as exc:  # pragma: no cover - scanner proves UTF-8
+        raise SourcePatchError(uid, "ambiguous_structural_template") from exc
+
+    word_uri = paragraph_local.get(
+        prefix_text,
+        paragraph_external.get(prefix_text, body_bindings.get(prefix_text, "")),
+    )
+    if word_uri != _W_NS:
+        raise SourcePatchError(
+            uid,
+            "ambiguous_structural_template",
+            "the template paragraph's lexical prefix is not bound to WordprocessingML",
+        )
+
+    required: dict[str, str] = {prefix_text: word_uri}
+    for element in (p_pr, r_pr):
+        if element is None:
+            continue
+        for prefix, uri in element.external_namespace_bindings:
+            if prefix == "xml" and uri == "http://www.w3.org/XML/1998/namespace":
+                continue
+            previous = required.get(prefix)
+            if previous is not None and previous != uri:
+                raise SourcePatchError(
+                    uid,
+                    "ambiguous_structural_template",
+                    "the template formatting requires conflicting namespace bindings",
+                )
+            required[prefix] = uri
+
+    declarations: list[bytes] = []
+    for prefix, uri in sorted(required.items()):
+        if body_bindings.get(prefix) == uri:
+            continue
+        if not uri:
+            raise SourcePatchError(uid, "ambiguous_structural_template")
+        try:
+            encoded_uri = encode_word_text(uri).replace(b'"', b"&quot;")
+            encoded_prefix = prefix.encode("utf-8")
+        except (UnicodeEncodeError, XmlLexicalError) as exc:
+            raise SourcePatchError(
+                uid,
+                "ambiguous_structural_template",
+                "the template namespace binding cannot be reproduced safely",
+            ) from exc
+        attribute_name = (
+            b"xmlns" if not encoded_prefix else b"xmlns:" + encoded_prefix
+        )
+        declarations.append(b" " + attribute_name + b'="' + encoded_uri + b'"')
+    return b"".join(declarations)
+
+
+def _expanded_name_parts(name: str) -> tuple[str, str]:
+    if name.startswith("{") and "}" in name:
+        namespace, local = name[1:].split("}", 1)
+        return namespace, local
+    return "", name
+
+
+def _xml_s_only(value: str | None) -> bool:
+    return not value or all(character in " \t\r\n" for character in value)
+
+
+def _validate_synthesis_wrapper_attributes(element, *, uid: str) -> None:
+    """Permit only source identity/session attributes that are discarded.
+
+    A new paragraph never copies its source paragraph/run start tags.  Known
+    volatile Word identity attributes may therefore be omitted deliberately;
+    any other wrapper attribute could affect formatting or behavior and makes
+    the clone template ambiguous.
+    """
+    for name in element.attrib:
+        namespace, local = _expanded_name_parts(name)
+        if namespace == _W_NS and local.startswith("rsid"):
+            continue
+        if namespace == _W14_NS and local in {"paraId", "textId"}:
+            continue
+        raise SourcePatchError(
+            uid,
+            "ambiguous_structural_template",
+            "the numbered template has a paragraph or run attribute that "
+            "cannot be inherited safely",
+        )
+
+
+def _validate_synthesis_property(
+    element,
+    record: XmlElementByteSpan,
+    *,
+    uid: str,
+) -> None:
+    """Prove an exact raw pPr/rPr fragment is safe to duplicate.
+
+    The source is not schema-validated, so a denylist would silently accept
+    future or crafted WordprocessingML behavior.  Only a deliberately small
+    set of ordinary formatting properties is cloneable.  Unknown properties,
+    nested behavior, and unknown attributes remain moveable as part of an
+    existing paragraph but cannot be stamped onto a new paragraph.
+    """
+    if record.contains_special_markup:
+        raise SourcePatchError(
+            uid,
+            "ambiguous_structural_template",
+            "the numbered template formatting contains comments, processing "
+            "instructions, or CDATA",
+        )
+
+    root_namespace, root_local = _expanded_name_parts(element.tag)
+    if root_namespace != _W_NS or root_local not in {"pPr", "rPr"}:
+        raise SourcePatchError(uid, "ambiguous_structural_template")
+    if element.attrib or not _xml_s_only(element.text):
+        raise SourcePatchError(uid, "ambiguous_structural_template")
+
+    allowed_properties = (
+        _SAFE_PPR_LEAF_ATTRIBUTES
+        if root_local == "pPr"
+        else _SAFE_RPR_LEAF_ATTRIBUTES
+    )
+    seen: set[str] = set()
+    for item in element.iterchildren():
+        if not isinstance(item.tag, str) or not _xml_s_only(item.tail):
+            raise SourcePatchError(uid, "ambiguous_structural_template")
+        namespace, local = _expanded_name_parts(item.tag)
+        if namespace != _W_NS or local in seen:
+            raise SourcePatchError(
+                uid,
+                "ambiguous_structural_template",
+                "the numbered template contains duplicate or unknown formatting",
+            )
+        seen.add(local)
+
+        if root_local == "pPr" and local == "numPr":
+            if item.attrib or not _xml_s_only(item.text):
+                raise SourcePatchError(uid, "ambiguous_structural_template")
+            children = list(item.iterchildren())
+            if [child.tag for child in children] != [_W_ILVL, _W_NUMID]:
+                raise SourcePatchError(uid, "ambiguous_structural_template")
+            for child in children:
+                if (
+                    list(child.iterchildren())
+                    or not _xml_s_only(child.text)
+                    or not _xml_s_only(child.tail)
+                    or set(child.attrib) != {_W_VAL}
+                ):
+                    raise SourcePatchError(uid, "ambiguous_structural_template")
+            continue
+
+        allowed_attributes = allowed_properties.get(local)
+        if allowed_attributes is None or list(item.iterchildren()):
+            raise SourcePatchError(
+                uid,
+                "ambiguous_structural_template",
+                "the numbered template formatting is outside the proven clone set",
+            )
+        if not _xml_s_only(item.text):
+            raise SourcePatchError(uid, "ambiguous_structural_template")
+        for attribute in item.attrib:
+            attribute_namespace, attribute_local = _expanded_name_parts(attribute)
+            if (
+                attribute_namespace != _W_NS
+                or attribute_local not in allowed_attributes
+            ):
+                raise SourcePatchError(
+                    uid,
+                    "ambiguous_structural_template",
+                    "the numbered template formatting has an unknown attribute",
+                )
+
+
+def _validate_synthesis_template_shape(
+    *,
+    paragraph_element,
+    run_element,
+    text_element,
+    paragraph_record: XmlElementByteSpan,
+    p_pr_element,
+    p_pr_record: XmlElementByteSpan,
+    r_pr_element,
+    r_pr_record: XmlElementByteSpan | None,
+    uid: str,
+) -> None:
+    if paragraph_record.contains_special_markup:
+        raise SourcePatchError(
+            uid,
+            "ambiguous_structural_template",
+            "the numbered template contains comments, processing instructions, "
+            "or CDATA",
+        )
+    _validate_synthesis_wrapper_attributes(paragraph_element, uid=uid)
+    _validate_synthesis_wrapper_attributes(run_element, uid=uid)
+    if text_element.attrib:
+        raise SourcePatchError(
+            uid,
+            "ambiguous_structural_template",
+            "the numbered template text carries attributes that a new text node "
+            "cannot safely inherit",
+        )
+    if not _xml_s_only(paragraph_element.text) or not _xml_s_only(run_element.text):
+        raise SourcePatchError(uid, "ambiguous_structural_template")
+    if any(
+        not _xml_s_only(child.tail)
+        for child in paragraph_element.iterchildren()
+    ) or any(not _xml_s_only(child.tail) for child in run_element.iterchildren()):
+        raise SourcePatchError(uid, "ambiguous_structural_template")
+    _validate_synthesis_property(p_pr_element, p_pr_record, uid=uid)
+    if r_pr_element is not None:
+        if r_pr_record is None:  # pragma: no cover - caller invariant
+            raise SourcePatchError(uid, "ambiguous_structural_template")
+        _validate_synthesis_property(r_pr_element, r_pr_record, uid=uid)
+
+
+def _minimal_numbered_paragraph_bytes(
+    *,
+    document_xml: bytes,
+    index: SourceXmlIndex,
+    template: SourceParagraphBinding,
+    template_element,
+    uid: str,
+    text: str,
+) -> bytes:
+    _validate_text_for_single_word_node(uid, text)
+    paragraph = _element_record_for_body_child(
+        index, template.body_child_index
+    )
+    if paragraph.expanded_name != _W_P:
+        raise SourcePatchError(uid, "ambiguous_structural_template")
+    p_pr = _single_direct_child(
+        index, paragraph, _W_PPR, uid=uid, required=True
+    )
+    run = _single_direct_child(
+        index, paragraph, _W_R, uid=uid, required=True
+    )
+    assert p_pr is not None and run is not None
+    r_pr = _single_direct_child(
+        index, run, _W_RPR, uid=uid, required=False
+    )
+    text_record = _single_direct_child(
+        index, run, _W_T, uid=uid, required=True
+    )
+    paragraph_children = index.direct_children(paragraph)
+    run_children = index.direct_children(run)
+    expected_run_names = [_W_RPR, _W_T] if r_pr is not None else [_W_T]
+    if (
+        [child.expanded_name for child in paragraph_children] != [_W_PPR, _W_R]
+        or [child.expanded_name for child in run_children] != expected_run_names
+        or text_record is None
+    ):
+        raise SourcePatchError(uid, "ambiguous_structural_template")
+    semantic_children = _meaningful_children(template_element)
+    if [child.tag for child in semantic_children] != [_W_PPR, _W_R]:
+        raise SourcePatchError(uid, "ambiguous_structural_template")
+    p_pr_element, run_element = semantic_children
+    semantic_run_children = _meaningful_children(run_element)
+    expected_semantic_names = [_W_RPR, _W_T] if r_pr is not None else [_W_T]
+    if [child.tag for child in semantic_run_children] != expected_semantic_names:
+        raise SourcePatchError(uid, "ambiguous_structural_template")
+    r_pr_element = semantic_run_children[0] if r_pr is not None else None
+    text_element = semantic_run_children[-1]
+    _validate_synthesis_template_shape(
+        paragraph_element=template_element,
+        run_element=run_element,
+        text_element=text_element,
+        paragraph_record=paragraph,
+        p_pr_element=p_pr_element,
+        p_pr_record=p_pr,
+        r_pr_element=r_pr_element,
+        r_pr_record=r_pr,
+        uid=uid,
+    )
+    try:
+        word_prefix = _lexical_prefix(paragraph.lexical_name, b"p")
+        declarations = _required_namespace_declarations(
+            index=index,
+            paragraph=paragraph,
+            p_pr=p_pr,
+            r_pr=r_pr,
+            word_prefix=word_prefix,
+            uid=uid,
+        )
+        encoded_text = encode_word_text(text)
+    except XmlLexicalError as exc:
+        raise SourcePatchError(uid, exc.blocker, exc.detail) from exc
+
+    p_pr_bytes = document_xml[p_pr.element_span.start : p_pr.element_span.end]
+    r_pr_bytes = (
+        document_xml[r_pr.element_span.start : r_pr.element_span.end]
+        if r_pr is not None
+        else b""
+    )
+    p_name = _prefixed_name(word_prefix, b"p")
+    r_name = _prefixed_name(word_prefix, b"r")
+    t_name = _prefixed_name(word_prefix, b"t")
+    return b"".join(
+        (
+            b"<",
+            p_name,
+            declarations,
+            b">",
+            p_pr_bytes,
+            b"<",
+            r_name,
+            b">",
+            r_pr_bytes,
+            b"<",
+            t_name,
+            b">",
+            encoded_text,
+            b"</",
+            t_name,
+            b"></",
+            r_name,
+            b"></",
+            p_name,
+            b">",
+        )
+    )
+
+
+def _retained_paragraph_bytes(
+    *,
+    document_xml: bytes,
+    index: SourceXmlIndex,
+    binding: SourceParagraphBinding,
+    text_patch: XmlPatch | None,
+) -> bytes:
+    child = index.body_child(binding.body_child_index)
+    raw = document_xml[child.element_span.start : child.element_span.end]
+    if text_patch is None:
+        return raw
+    if not (
+        child.element_span.start <= text_patch.start
+        <= text_patch.end <= child.element_span.end
+    ):
+        raise SourcePatchError(binding.uid, "text_anchor_mismatch")
+    relative = XmlPatch(
+        start=text_patch.start - child.element_span.start,
+        end=text_patch.end - child.element_span.start,
+        replacement=text_patch.replacement,
+        uid=text_patch.uid,
+        reason=text_patch.reason,
+    )
+    try:
+        return apply_xml_patches(raw, (relative,))
+    except XmlLexicalError as exc:
+        raise SourcePatchError(binding.uid, exc.blocker, exc.detail) from exc
+
+
+def _build_island_byte_patch(
+    *,
+    document_xml: bytes,
+    index: SourceXmlIndex,
+    island_patch: _IslandPatch,
+    text_by_uid: dict[str, XmlPatch],
+    source_body_children: list,
+) -> _IslandBytePatch:
+    island = island_patch.island
+    expected_indices = list(range(island.start_index, island.end_index + 1))
+    member_indices = [
+        member.binding.body_child_index for member in island.members
+    ]
+    if member_indices != expected_indices:
+        raise SourcePatchError(island.key, "unsafe_structural_island")
+    source_children = [index.body_child(item) for item in expected_indices]
+    if any(child.expanded_name != _W_P for child in source_children):
+        raise SourcePatchError(island.key, "unsafe_structural_island")
+
+    gaps: list[bytes] = []
+    for body_child_index in expected_indices[:-1]:
+        gap_span = index.body_gaps[body_child_index + 1]
+        gap = document_xml[gap_span.start : gap_span.end]
+        try:
+            gap_is_whitespace = xml_gap_is_whitespace(document_xml, gap_span)
+        except XmlLexicalError as exc:
+            raise SourcePatchError(
+                island.key,
+                "unsafe_structural_island",
+                "the numbered island contains ambiguous lexical gap content",
+            ) from exc
+        if not gap_is_whitespace:
+            raise SourcePatchError(
+                island.key,
+                "unsafe_structural_island",
+                "the numbered island contains non-whitespace lexical gap content",
+            )
+        gaps.append(gap)
+
+    island_uids = {member.binding.uid for member in island.members}
+    desired_bytes: list[bytes] = []
+    for desired in island_patch.desired:
+        if desired.binding is not None:
+            if desired.uid not in island_uids:
+                raise SourcePatchError(desired.uid, "cross_island_move")
+            desired_bytes.append(
+                _retained_paragraph_bytes(
+                    document_xml=document_xml,
+                    index=index,
+                    binding=desired.binding,
+                    text_patch=text_by_uid.get(desired.uid),
+                )
+            )
+        else:
+            if desired.template is None:
+                raise SourcePatchError(
+                    desired.uid, "ambiguous_structural_template"
+                )
+            desired_bytes.append(
+                _minimal_numbered_paragraph_bytes(
+                    document_xml=document_xml,
+                    index=index,
+                    template=desired.template,
+                    template_element=source_body_children[
+                        desired.template.body_child_index
+                    ],
+                    uid=desired.uid,
+                    text=desired.text,
+                )
+            )
+
+    return _IslandBytePatch(
+        island_key=island.key,
+        source_span=XmlByteSpan(
+            source_children[0].element_span.start,
+            source_children[-1].element_span.end,
+        ),
+        desired_elements=tuple(desired_bytes),
+        original_gaps=tuple(gaps),
+        changed_uids=tuple(
+            dict.fromkeys(
+                [member.binding.uid for member in island.members]
+                + [desired.uid for desired in island_patch.desired]
+            )
+        ),
+    )
+
+
+def _lexically_patch_document(
+    *,
+    document_xml: bytes,
+    tree,
+    plan: _PatchPlan,
+) -> bytes:
+    """Compose text and structural changes from immutable source bytes."""
+    if plan.no_op:
+        raise ValueError("lexical patching requires a non-empty plan")
+    first_uid = plan.changed_uids[0] if plan.changed_uids else "source"
+    try:
+        index = build_source_xml_index(document_xml, validated_tree=tree)
+        source_body = tree.getroot().find(f".//{_W_BODY}")
+        if source_body is None:  # pragma: no cover - identity gate proves it
+            raise SourcePatchError(first_uid, "unsafe_document_xml")
+        source_body_children = _meaningful_children(source_body)
+        text_manifest = _lexical_text_patch_manifest(
+            document_xml=document_xml,
+            index=index,
+            text_patches=plan.text_patches,
+        )
+    except XmlLexicalError as exc:
+        raise SourcePatchError(first_uid, exc.blocker, exc.detail) from exc
+
+    text_by_uid = {patch.uid: patch for patch in text_manifest}
+    if len(text_by_uid) != len(text_manifest):
+        raise SourcePatchError(
+            first_uid,
+            "overlapping_xml_patches",
+            "more than one text patch targets the same paragraph",
+        )
+    top_level: list[XmlPatch] = []
+    nested_text_uids: set[str] = set()
+    for island_patch in plan.island_patches:
+        byte_patch = _build_island_byte_patch(
+            document_xml=document_xml,
+            index=index,
+            island_patch=island_patch,
+            text_by_uid=text_by_uid,
+            source_body_children=source_body_children,
+        )
+        nested_text_uids.update(
+            desired.uid
+            for desired in island_patch.desired
+            if desired.binding is not None and desired.uid in text_by_uid
+        )
+        top_level.append(
+            XmlPatch(
+                start=byte_patch.source_span.start,
+                end=byte_patch.source_span.end,
+                replacement=byte_patch.replacement,
+                uid=byte_patch.island_key,
+                reason="structural_island",
+            )
+        )
+    top_level.extend(
+        patch for patch in text_manifest if patch.uid not in nested_text_uids
+    )
 
     try:
-        patched_xml = apply_xml_patches(document_xml, manifest)
+        patched_xml = apply_xml_patches(document_xml, top_level)
     except XmlLexicalError as exc:
         raise SourcePatchError(first_uid, exc.blocker, exc.detail) from exc
     # Byte locality is necessary but not sufficient.  Reparse the composed
     # document before it is placed into a package; the package audit later
     # independently proves its semantic body against the same final-state plan.
-    _parse_document_xml(patched_xml)
+    patched_tree, _patched_body = _parse_document_xml(patched_xml)
+    try:
+        build_source_xml_index(patched_xml, validated_tree=patched_tree)
+    except XmlLexicalError as exc:
+        raise SourcePatchError(
+            first_uid,
+            "output_validation_failed",
+            "the composed Word XML did not pass the independent lexical index",
+        ) from exc
+    _audit_document_xml_preservation(document_xml, patched_xml, plan)
     return patched_xml
 
 
@@ -1695,10 +2414,13 @@ def _minimal_numbered_paragraph(template_element, uid: str, text: str):
     run = template_element.find(_W_R)
     if p_pr is None or run is None:
         raise SourcePatchError(uid, "ambiguous_structural_template")
-    # Give the detached audit copy the same stable Word prefix it receives
-    # under document.xml; exclusive C14N intentionally treats prefix choice
+    # Give the detached audit copy the same lexical Word prefix selected by
+    # the source template. Exclusive C14N intentionally treats prefix choice
     # as significant even when expanded names are identical.
-    paragraph = etree.Element(_W_P, nsmap={"w": _W_NS})
+    paragraph = etree.Element(
+        _W_P,
+        nsmap={template_element.prefix: _W_NS},
+    )
     paragraph.append(copy.deepcopy(p_pr))
     new_run = etree.SubElement(paragraph, _W_R)
     r_pr = run.find(_W_RPR)
@@ -1764,41 +2486,19 @@ def _expected_body_elements(
     return expected
 
 
-def _audit_package_preservation(
-    source_bytes: bytes,
-    output_bytes: bytes,
+def _audit_document_xml_preservation(
+    source_document_xml: bytes,
+    output_document_xml: bytes,
     plan: _PatchPlan,
 ) -> None:
-    try:
-        inspect_docx_package(output_bytes)
-        with zipfile.ZipFile(BytesIO(source_bytes), "r") as source:
-            source_names = source.namelist()
-            source_parts = {name: source.read(name) for name in source_names}
-        with zipfile.ZipFile(BytesIO(output_bytes), "r") as output:
-            output_names = output.namelist()
-            output_parts = {name: output.read(name) for name in output_names}
-    except (SourcePackageError, KeyError, RuntimeError, zipfile.BadZipFile) as exc:
-        raise SourcePatchError(
-            "source",
-            "output_validation_failed",
-            "the patched DOCX failed package validation",
-        ) from exc
-    if source_names != output_names:
-        raise SourcePatchError(
-            "source",
-            "part_inventory_changed",
-            "the patched package member inventory changed",
-        )
-    for name in source_names:
-        if name != _DOCUMENT_PART and source_parts[name] != output_parts[name]:
-            raise SourcePatchError(
-                "source",
-                "out_of_scope_part_changed",
-                f"out-of-scope part {name!r} changed",
-            )
+    """Prove the composed main part is exactly the plan's semantic result.
 
-    source_tree, source_body = _parse_document_xml(source_parts[_DOCUMENT_PART])
-    output_tree, output_body = _parse_document_xml(output_parts[_DOCUMENT_PART])
+    This runs inside transition validation as well as after package cloning, so
+    manual, model, QC, history-restoration, and download paths share the same
+    final-state gate.
+    """
+    source_tree, source_body = _parse_document_xml(source_document_xml)
+    output_tree, output_body = _parse_document_xml(output_document_xml)
     source_root = source_tree.getroot()
     output_root = output_tree.getroot()
     if (
@@ -1850,10 +2550,12 @@ def _audit_package_preservation(
             )
     if output_children and output_children[-1].tag != _W_SECTPR:
         # Word permits a body without a final sectPr, but if one exists it must
-        # remain last.  The source inventory comparison above preserves the
+        # remain last. The source inventory comparison above preserves the
         # no-sectPr case; this catches an accidentally displaced one.
         sect_indices = [
-            index for index, child in enumerate(output_children) if child.tag == _W_SECTPR
+            index
+            for index, child in enumerate(output_children)
+            if child.tag == _W_SECTPR
         ]
         if sect_indices:
             raise SourcePatchError(
@@ -1861,6 +2563,55 @@ def _audit_package_preservation(
                 "section_properties_moved",
                 "final Word section properties are no longer the last body child",
             )
+
+
+def _audit_package_preservation(
+    source_bytes: bytes,
+    output_bytes: bytes,
+    plan: _PatchPlan,
+    *,
+    expected_document_xml: bytes,
+) -> None:
+    try:
+        inspect_docx_package(output_bytes)
+        with zipfile.ZipFile(BytesIO(source_bytes), "r") as source:
+            source_names = source.namelist()
+            source_parts = {name: source.read(name) for name in source_names}
+        with zipfile.ZipFile(BytesIO(output_bytes), "r") as output:
+            output_names = output.namelist()
+            output_parts = {name: output.read(name) for name in output_names}
+    except (SourcePackageError, KeyError, RuntimeError, zipfile.BadZipFile) as exc:
+        raise SourcePatchError(
+            "source",
+            "output_validation_failed",
+            "the patched DOCX failed package validation",
+        ) from exc
+    if source_names != output_names:
+        raise SourcePatchError(
+            "source",
+            "part_inventory_changed",
+            "the patched package member inventory changed",
+        )
+    for name in source_names:
+        if name != _DOCUMENT_PART and source_parts[name] != output_parts[name]:
+            raise SourcePatchError(
+                "source",
+                "out_of_scope_part_changed",
+                f"out-of-scope part {name!r} changed",
+            )
+
+    if output_parts[_DOCUMENT_PART] != expected_document_xml:
+        raise SourcePatchError(
+            "source",
+            "unexpected_document_xml",
+            "the cloned package does not contain the approved lexical XML result",
+        )
+
+    _audit_document_xml_preservation(
+        source_parts[_DOCUMENT_PART],
+        output_parts[_DOCUMENT_PART],
+        plan,
+    )
 
 
 def build_source_preserving_docx(
@@ -1887,70 +2638,19 @@ def build_source_preserving_docx(
     if plan.no_op:
         return source_bytes
 
-    # Chunk 1's byte-exact path is intentionally limited to pure text plans.
-    # P1b structural islands retain their existing semantic serializer until
-    # body-element byte splicing is implemented as its own independently
-    # verified change.
-    if not plan.island_patches:
-        if lexically_patched_xml is None:  # pragma: no cover - plan invariant
-            raise SourcePatchError(
-                "source",
-                "output_validation_failed",
-                "the text-only patch plan has no lexical XML result",
-            )
-        output = _clone_with_document_xml(source_bytes, lexically_patched_xml)
-        _audit_package_preservation(source_bytes, output, plan)
-        return output
-
-    source_children = _meaningful_children(body)
-    for patch in plan.text_patches:
-        binding = patch.binding
-        original = source_children[binding.body_child_index]
-        patched = _element_with_text_patch(original, binding, patch.new_text)
-        parent_index = body.index(original)
-        patched.tail = original.tail
-        body.remove(original)
-        body.insert(parent_index, patched)
-        source_children[binding.body_child_index] = patched
-
-    # Work from the end of the body toward the start so earlier source
-    # insertion positions remain stable. Element references, not live numeric
-    # offsets, carry retained paragraphs through a reorder.
-    for island_patch in sorted(
-        plan.island_patches,
-        key=lambda patch: patch.island.start_index,
-        reverse=True,
-    ):
-        original_elements = [
-            source_children[member.binding.body_child_index]
-            for member in island_patch.island.members
-        ]
-        insertion_index = body.index(original_elements[0])
-        desired_elements: list = []
-        for desired in island_patch.desired:
-            if desired.binding is not None:
-                desired_elements.append(
-                    source_children[desired.binding.body_child_index]
-                )
-            else:
-                if desired.template is None:
-                    raise SourcePatchError(desired.uid, "ambiguous_structural_template")
-                template_element = source_children[desired.template.body_child_index]
-                desired_elements.append(
-                    _minimal_numbered_paragraph(
-                        template_element,
-                        desired.uid,
-                        desired.text,
-                    )
-                )
-        for element in original_elements:
-            body.remove(element)
-        for offset, element in enumerate(desired_elements):
-            body.insert(insertion_index + offset, element)
-
-    patched_xml = _serialize_tree(tree, document_xml)
-    output = _clone_with_document_xml(source_bytes, patched_xml)
-    _audit_package_preservation(source_bytes, output, plan)
+    if lexically_patched_xml is None:  # pragma: no cover - plan invariant
+        raise SourcePatchError(
+            "source",
+            "output_validation_failed",
+            "the source patch plan has no lexical XML result",
+        )
+    output = _clone_with_document_xml(source_bytes, lexically_patched_xml)
+    _audit_package_preservation(
+        source_bytes,
+        output,
+        plan,
+        expected_document_xml=lexically_patched_xml,
+    )
     return output
 
 

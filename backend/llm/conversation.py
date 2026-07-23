@@ -131,6 +131,14 @@ class SessionState:
 
     history: list[dict[str, Any]] = field(default_factory=list)
     doc: DocumentStore = field(default_factory=DocumentStore)
+    # Exact imported DOCX bytes are retained only for active-session recovery
+    # (GET /api/import/original).  P0 intentionally does not persist them in
+    # project JSON or use them as an export base yet.
+    source_docx_bytes: bytes | None = None
+    source_docx_filename: str = ""
+    # Sanitized, JSON-safe import diagnostics do ride the project file so a
+    # resumed session still tells the truth about normalization and loss.
+    import_report: dict[str, Any] | None = None
     generation: int = 0
     module: SpecModule = field(default_factory=lambda: get_module(None))
     # Session-level discipline (Batch 10), meaningful only with an
@@ -170,6 +178,9 @@ class SessionState:
     def reset(self) -> None:
         self.history.clear()
         self.doc.reset()
+        self.source_docx_bytes = None
+        self.source_docx_filename = ""
+        self.import_report = None
         # Fresh runners: work still running against the old session
         # finishes into the abandoned objects (the zombie-turn pattern).
         self.research = ResearchRunner()

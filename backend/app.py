@@ -104,6 +104,14 @@ from .spec_doc.docx_export import (
 from .spec_doc.importer import MasterImportError, parse_master_docx
 from .spec_doc.model import SpecSection, apply_edits, iter_paragraphs
 from .spec_doc.project import chat_transcript, load_project
+from .spec_doc.source_package import (
+    SourcePackageError,
+    UploadTooLargeError,
+    build_import_report,
+    inspect_docx_package,
+    read_upload_bounded,
+    sanitize_source_filename,
+)
 
 _DEV_ORIGINS = [
     "http://localhost:5173",
@@ -193,6 +201,11 @@ def _doc_payload(session) -> dict[str, Any]:
         # refresh all sync the bar one way — a failed turn's refresh returns
         # the untouched pre-turn list, restoring the bar for free.
         "suggested_prompts": list(session.suggested_prompts),
+        # P0 import honesty/recovery metadata. ``source_available`` is
+        # intentionally dynamic and never persisted in project JSON: a loaded
+        # project keeps the report but does not contain the original bytes.
+        "import_report": session.import_report,
+        "source_available": session.source_docx_bytes is not None,
     }
 
 
@@ -778,19 +791,42 @@ def create_app() -> FastAPI:
                 },
                 status_code=409,
             )
-        suffix = Path(file.filename or "").suffix.lower()
-        if suffix != ".docx":
+        submitted_name = (
+            (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+        )
+        if not submitted_name.lower().endswith(".docx"):
             return JSONResponse(
                 {"ok": False, "error": "Upload a .docx master specification."},
                 status_code=400,
             )
+        safe_filename = sanitize_source_filename(submitted_name)
+        try:
+            source_bytes = await read_upload_bounded(file)
+            package_info = inspect_docx_package(source_bytes)
+        except UploadTooLargeError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=413
+            )
+        except SourcePackageError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400
+            )
         with tempfile.NamedTemporaryFile(
             suffix=".docx", delete=False
         ) as handle:
-            handle.write(await file.read())
+            handle.write(source_bytes)
             temp_path = Path(handle.name)
         try:
             result = parse_master_docx(temp_path)
+            report = build_import_report(
+                filename=safe_filename,
+                source_bytes=source_bytes,
+                package_info=package_info,
+                imported_block_count=result.imported_block_count,
+                skipped_empty_count=result.skipped_empty_count,
+                warnings=result.warnings,
+                tracked_changes_detected=result.tracked_changes_detected,
+            )
             session.doc.adopt_imported(result.section)
         except (MasterImportError, ValueError) as exc:
             return JSONResponse(
@@ -798,6 +834,12 @@ def create_app() -> FastAPI:
             )
         finally:
             temp_path.unlink(missing_ok=True)
+        # Adopt the recovery artifact only after validation, parsing, and the
+        # document-store transaction all succeed. Failed imports leave the
+        # active session untouched.
+        session.source_docx_bytes = source_bytes
+        session.source_docx_filename = safe_filename
+        session.import_report = report
         # The import counts as session-changing work: invalidate any turn
         # that was streaming against the empty document.
         session.generation += 1
@@ -811,11 +853,52 @@ def create_app() -> FastAPI:
         return JSONResponse(
             {
                 "ok": True,
-                "warnings": result.warnings,
-                "imported_block_count": result.imported_block_count,
-                "tracked_changes_detected": result.tracked_changes_detected,
+                "warnings": report["warnings"],
+                "imported_block_count": report["imported_block_count"],
+                "skipped_empty_count": report["skipped_empty_count"],
+                "tracked_changes_detected": report[
+                    "tracked_changes_detected"
+                ],
                 **_doc_payload(session),
             }
+        )
+
+    @app.get("/api/import/original")
+    def import_original() -> Response:
+        """Download the exact validated upload while this session retains it."""
+        session = sessions.get_session()
+        if session.source_docx_bytes is None:
+            if session.import_report is not None:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "The original master is not available in this "
+                        "resumed project. P0 project files retain the import "
+                        "report, but not source DOCX bytes.",
+                    },
+                    status_code=409,
+                )
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "No original master is available in this session.",
+                },
+                status_code=404,
+            )
+        filename = session.source_docx_filename or "imported-master.docx"
+        return Response(
+            content=session.source_docx_bytes,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+            headers={
+                **_attachment_headers(filename),
+                # The recovery copy is deliberately active-session-only.
+                # Do not let a browser/proxy retain it after reset or load.
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     # --- Requirements research (Phase 4) ------------------------------------

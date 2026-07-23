@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   EditOp,
+  ImportReport,
   LintIssue,
   OpenItem,
   QcSnapshot,
@@ -23,6 +24,7 @@ import ResearchDrawer from "./ResearchDrawer";
 import ReviewDrawer from "./ReviewDrawer";
 import SpecDocument from "./SpecDocument";
 import Tip from "./Tip";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface Props {
   doc: SpecDoc | null;
@@ -36,6 +38,8 @@ interface Props {
   usage: UsageSummary | null;
   changedIds: ReadonlySet<string>;
   baselineIndex: number | null;
+  importReport: ImportReport | null;
+  sourceAvailable: boolean;
   busy: boolean;
   onUndo: () => void;
   onRedo: () => void;
@@ -111,6 +115,8 @@ export default function ArtifactPanel({
   usage,
   changedIds,
   baselineIndex,
+  importReport,
+  sourceAvailable,
   busy,
   onUndo,
   onRedo,
@@ -130,6 +136,7 @@ export default function ArtifactPanel({
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  const [pendingImport, setPendingImport] = useState<File | null>(null);
   // Open-items list collapses like the Review / Final QC drawers; the count
   // stays visible in the bar, so nothing is lost at a glance when collapsed.
   const [openItemsExpanded, setOpenItemsExpanded] = useState(false);
@@ -155,6 +162,7 @@ export default function ArtifactPanel({
     (doc.section.number !== "" ||
       doc.section.title !== "" ||
       doc.parts.some((p) => p.articles.length > 0));
+  const importedMode = importReport !== null || baselineIndex !== null;
 
   // Full-draft affordance (WI1): offered while the document is empty-or-sparse
   // (fewer than 3 articles) — past that, a wholesale draft is the wrong tool.
@@ -200,7 +208,7 @@ export default function ArtifactPanel({
     if (baselineIndex !== null && baselineIndex !== curIndex) {
       opts.push({
         value: baselineIndex,
-        label: `Master (import) · v${baselineIndex + 1}`,
+        label: `Imported extraction · v${baselineIndex + 1}`,
       });
     }
     for (let i = 0; i < versionCount; i += 1) {
@@ -314,10 +322,10 @@ export default function ArtifactPanel({
           <Tip
             tip={
               !canCompare
-                ? "Compare needs a prior version or an imported master — make an edit or import a master first."
+                ? "Compare needs a prior version or an imported extraction — make an edit or import a DOCX first."
                 : busy
                   ? "Finish the current turn first."
-                  : "Compare the current version against the master or a prior version."
+                  : "Compare the current version against the extracted import baseline or a prior version."
             }
           >
             <button
@@ -334,8 +342,8 @@ export default function ArtifactPanel({
             </button>
           </Tip>
           <span className="mx-1 h-4 w-px bg-edge" />
-          {/* Export menu (Batch 5): clean, or a genuine tracked-changes
-              redline vs the master / a chosen version. Downloads are disabled
+          {/* Export menu (Batch 5): generated DOCX, or tracked changes over
+              the normalized provision tree / a chosen version. Downloads are disabled
               while a turn streams — mid-turn the live doc holds provisional
               edits and only committed versions are downloadable. */}
           <div className="relative" data-tour="export">
@@ -352,7 +360,7 @@ export default function ArtifactPanel({
             </button>
             {exportMenuOpen && (
               <div
-                className="absolute right-0 z-20 mt-1 w-56 rounded-md border border-edge bg-raised py-1 text-[11px] shadow-lg"
+                className="absolute right-0 z-20 mt-1 w-72 rounded-md border border-edge bg-raised py-1 text-[11px] shadow-lg"
                 onMouseLeave={() => setExportMenuOpen(false)}
               >
                 <a
@@ -360,9 +368,13 @@ export default function ArtifactPanel({
                   href="/api/export/docx"
                   download
                   onClick={() => setExportMenuOpen(false)}
-                  title="Plain .docx with the assumptions / open-items schedules"
+                  title={
+                    importedMode
+                      ? "Newly generated DOCX from extracted content; source Word formatting and layout are not preserved"
+                      : "Plain .docx with the assumptions / open-items schedules"
+                  }
                 >
-                  Export clean
+                  {importedMode ? "Export normalized DOCX" : "Export clean"}
                 </a>
                 {baselineIndex !== null ? (
                   <a
@@ -370,16 +382,16 @@ export default function ArtifactPanel({
                     href="/api/export/docx?redline=master"
                     download
                     onClick={() => setExportMenuOpen(false)}
-                    title="Tracked-changes .docx vs the imported master — Accept All yields this draft, Reject All yields the master"
+                    title="Tracked changes over the normalized provision text; this is not a redline of the original DOCX package"
                   >
-                    Redline vs master
+                    Redline of extracted provisions
                   </a>
                 ) : (
                   <span
                     className="block cursor-default px-3 py-1.5 text-ink-faint"
-                    title="Import an office master first (Import master) — then this shows every change vs that master as Word tracked changes"
+                    title="Import an office DOCX first; the redline compares normalized extracted provisions, not the original Word package"
                   >
-                    Redline vs master
+                    Redline of extracted provisions
                   </span>
                 )}
                 {compareMode && compareBase !== null ? (
@@ -440,7 +452,7 @@ export default function ArtifactPanel({
                 ? "Import needs a blank document — start a new session first (New session)."
                 : busy
                   ? "Finish the current turn first."
-                  : "Import an office master (.docx) as the starting point; the interview pivots to gap-and-adapt."
+                  : "Import supported body content from an office DOCX. The current importer normalizes content and does not preserve Word layout or formatting."
             }
           >
             <button
@@ -459,12 +471,126 @@ export default function ArtifactPanel({
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) onImportMaster(file);
+              if (file) setPendingImport(file);
               e.target.value = "";
             }}
           />
         </div>
       </div>
+
+      {importedMode && (
+        <div
+          className="border-b border-warn/40 bg-warn/10 px-5 py-3 text-[11px] leading-relaxed text-ink-dim"
+          role="status"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold text-warn">
+                Imported DOCX — normalized-content mode
+              </p>
+              <p className="mt-0.5">
+                {importReport?.fidelity_notice ||
+                  "Build-a-Spec extracted supported body content into its own document model. Exports are newly generated and do not preserve the source DOCX's Word formatting or layout."}
+              </p>
+              {importReport ? (
+                <>
+                  <p className="mt-1 text-ink-faint">
+                    {importReport.imported_block_count} provisions imported
+                    from{" "}
+                    <span className="font-medium text-ink-dim">
+                      {importReport.filename}
+                    </span>
+                    ; {importReport.skipped_empty_count} empty body block
+                    {importReport.skipped_empty_count === 1 ? "" : "s"}{" "}
+                    skipped
+                    {importReport.warnings.length
+                      ? `; ${importReport.warnings.length} import note${
+                          importReport.warnings.length === 1 ? "" : "s"
+                        }`
+                      : ""}
+                    .
+                  </p>
+                  {importReport.tracked_changes_detected && (
+                    <p className="mt-1 text-ink-faint">
+                      Tracked changes were detected and resolved to their
+                      Accept-All text view during extraction.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="mt-1 text-ink-faint">
+                  This legacy project has no detailed import-fidelity report.
+                </p>
+              )}
+              {(importReport?.warnings.length ?? 0) > 0 && (
+                <details className="mt-1.5">
+                  <summary className="cursor-pointer text-ink-dim hover:text-ink">
+                    Review import notes
+                  </summary>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5 text-ink-faint">
+                    {importReport?.warnings.map((warning, index) => (
+                      <li key={`${index}-${warning}`}>{warning}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+            <div className="shrink-0 text-right">
+              {sourceAvailable ? (
+                <a
+                  className="font-medium text-accent hover:text-accent-hover"
+                  href="/api/import/original"
+                  download
+                >
+                  Download original upload
+                </a>
+              ) : (
+                <p className="font-medium text-warn">
+                  Original upload unavailable in this session
+                </p>
+              )}
+              <p className="mt-0.5 max-w-56 text-ink-faint">
+                Original-file recovery is active-session only; it is not
+                carried by a saved project.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={pendingImport !== null}
+        danger
+        title="Import as normalized content?"
+        body={
+          <div className="space-y-2">
+            <p>
+              Build-a-Spec will extract supported body text from{" "}
+              <b className="text-ink">{pendingImport?.name}</b> into its own
+              SectionFormat model. It does not edit the original DOCX in
+              place.
+            </p>
+            <p>
+              The current import/export path does not preserve headers,
+              footers, styles, tables, section layout, inline formatting, or
+              real Word numbering. Export will create a normalized DOCX.
+            </p>
+            <p className="text-ink-faint">
+              After a successful import, a recovery copy of the original is
+              available only during this active session. Keep your own source
+              copy.
+            </p>
+          </div>
+        }
+        confirmLabel="Import normalized content"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          const file = pendingImport;
+          setPendingImport(null);
+          if (file) onImportMaster(file);
+        }}
+        onCancel={() => setPendingImport(null)}
+      />
 
       {compareMode && (
         <div className="flex flex-wrap items-center gap-3 border-b border-edge bg-bg/40 px-5 py-2 text-[11px]">

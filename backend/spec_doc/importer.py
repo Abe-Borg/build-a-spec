@@ -28,6 +28,7 @@ drives the depth.
 from __future__ import annotations
 
 import re
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,6 +37,7 @@ from docx.opc.exceptions import PackageNotFoundError
 from docx.oxml.ns import qn
 from docx.table import Table as DocxTable
 from docx.text.paragraph import Paragraph as DocxParagraph
+from lxml.etree import XMLSyntaxError
 
 from .model import (
     MAX_PARAGRAPH_DEPTH,
@@ -289,7 +291,13 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     filepath = Path(filepath)
     try:
         document = Document(str(filepath))
-    except PackageNotFoundError as exc:
+    except (
+        PackageNotFoundError,
+        zipfile.BadZipFile,
+        XMLSyntaxError,
+        KeyError,
+        ValueError,
+    ) as exc:
         raise MasterImportError(
             "That file is not a readable .docx document."
         ) from exc

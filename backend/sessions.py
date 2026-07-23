@@ -52,6 +52,7 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         discipline=session.discipline,
         figures=session.figures.to_dict(),
         suggested_prompts=list(session.suggested_prompts),
+        import_report=session.import_report,
     )
 
 

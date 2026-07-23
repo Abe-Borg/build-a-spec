@@ -25,6 +25,7 @@ def save_project(
     discipline: str = "",
     figures: dict[str, Any] | None = None,
     suggested_prompts: list[str] | None = None,
+    import_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -49,6 +50,14 @@ def save_project(
     # empty, which is the common case once a section is finished).
     if suggested_prompts:
         payload["suggested_prompts"] = list(suggested_prompts)
+    # P0 persists only the small, sanitized honesty trail.  The uploaded DOCX
+    # bytes remain active-session-only until the preservation container lands.
+    if import_report:
+        from .source_package import sanitize_import_report
+
+        safe_report = sanitize_import_report(import_report)
+        if safe_report is not None:
+            payload["import_report"] = safe_report
     return payload
 
 
@@ -113,6 +122,13 @@ def load_project(data: Any, session) -> None:
     staging = DocumentStore()
     staging.load(doc_data)  # raises ValueError on bad snapshots
 
+    # Optional P0 import metadata is lenient like research/QC metadata: a
+    # malformed block must not prevent an otherwise valid format-1 project
+    # from opening.  Sanitize before mutating the live session.
+    from .source_package import sanitize_import_report
+
+    restored_import_report = sanitize_import_report(data.get("import_report"))
+
     session.history.clear()
     session.history.extend(history)
     session.doc.load(doc_data)
@@ -166,5 +182,11 @@ def load_project(data: Any, session) -> None:
     # The meter is per-session; a resumed project starts its own count (the
     # prior session's spend lives in that session's traces, not this file).
     session.usage.reset()
+    # Source bytes are deliberately absent from P0 project JSON.  Clear them
+    # only after the incoming project's load-bearing content validated, so a
+    # rejected load leaves the active source recovery download untouched.
+    session.source_docx_bytes = None
+    session.source_docx_filename = ""
+    session.import_report = restored_import_report
     # Invalidate any turn that was still streaming against the old state.
     session.generation += 1

@@ -150,9 +150,11 @@ function HowToUse() {
             t: "Start from a master, or a blank page",
             d: (
               <>
-                Optionally import an office master <Tag>.docx</Tag> to adapt —
-                every block lands stamped <Tag>imported</Tag> until you review
-                it — or draft the section from scratch.
+                Optionally extract supported body content from an office master{" "}
+                <Tag>.docx</Tag> to adapt — every block lands stamped{" "}
+                <Tag>imported</Tag> until you review it — or draft the section
+                from scratch. Import is a normalized-content workflow, not a
+                formatting-preserving Word edit.
               </>
             ),
           },
@@ -180,7 +182,7 @@ function HowToUse() {
           },
           {
             t: "Export",
-            d: "A clean .docx, or a redline vs the master with genuine Word tracked changes.",
+            d: "From-scratch drafts export as a generated .docx. Imported drafts export as a normalized .docx, with an optional tracked-changes redline of the extracted provisions — not of the original Word package.",
           },
         ]}
       />
@@ -212,21 +214,22 @@ function Workflows() {
       />
       <Recipe
         title="From an office master"
-        tagline="Adapt a company master to this project."
+        tagline="Adapt extracted body content; keep the formatted master separately."
         steps={[
-          "Import the master .docx — every block lands imported.",
-          "Tell Claude the project; it walks the master article by article, adapting each block.",
+          "Import the master .docx after reviewing the normalization warning — every extracted block lands imported.",
+          "Download or retain the original upload separately; the in-app recovery copy lasts only for the active session.",
+          "Tell Claude the project; it walks the extracted content article by article, adapting each block.",
           "Clear the Review queue of imported and assumed blocks.",
           "Send to Final QC.",
-          "Export a redline vs the master — the reviewer sees exactly what changed.",
+          "Export a normalized DOCX or a redline of extracted provisions. Neither preserves or compares the original Word formatting and layout.",
         ]}
       />
       <Recipe
-        title="Reviewer-ready redline"
-        tagline="When the deliverable is a marked-up master."
+        title="Extracted-provision redline"
+        tagline="Review content changes inside Build-a-Spec's normalized model."
         steps={[
-          "Use Compare in the panel to diff any version against the master or a prior version.",
-          "Export “Redline vs master”: genuine Word tracked changes — Accept All is your draft, Reject All is the original master.",
+          "Use Compare in the panel to diff any version against the imported extraction or a prior version.",
+          "Export “Redline of extracted provisions” for Word tracked changes over normalized provision text. It is not a redline of the uploaded DOCX and cannot restore that file with Reject All.",
         ]}
       />
       <Recipe
@@ -281,6 +284,14 @@ function HowItWorks() {
               </>
             ),
           },
+          {
+            t: "Imported DOCX files have a narrow boundary",
+            d: "Build-a-Spec extracts supported main-body content into a semantic tree. It does not edit the uploaded package in place, and the current normalized export does not preserve headers, footers, styles, tables, section layout, inline formatting, or other unsupported Word structures.",
+          },
+          {
+            t: "Numbering is display numbering",
+            d: "Labels such as A., 1., a., and 1) are calculated from the tree and written as visible text on export. They are not real Word list bindings, so Word will not automatically continue or renumber them after you edit the exported file.",
+          },
         ]}
       />
     </div>
@@ -321,8 +332,8 @@ function WhyTrustIt() {
             d: "Every candidate finding faces a panel of independent Fable 5 refuters. A tie goes to the refuters, so plausible-but-wrong noise never reaches you — only real, actionable defects survive.",
           },
           {
-            t: "The redline is exact, and tested",
-            d: "Accept All in Word yields exactly the issued draft; Reject All yields the master’s provisions. That round-trip is a hard test in the suite, not a claim.",
+            t: "The redline scope is explicit",
+            d: "The imported redline compares Build-a-Spec's normalized provision tree with its extracted baseline. It does not compare headers, footers, styles, tables, layout, or other original DOCX package content, and Reject All does not recreate the uploaded master.",
           },
           {
             t: "Standards carry receipts",

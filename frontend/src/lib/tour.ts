@@ -333,7 +333,8 @@ export const TOUR: readonly TourChunk[] = [
         body:
           "Insertions green, deletions struck — the same diff engine " +
           "that produces the Word redline export. With an imported " +
-          "master, \"vs master\" shows exactly what changed.",
+          "DOCX, the baseline is the normalized provision extraction, " +
+          "not the original Word package.",
       },
       {
         id: "import",
@@ -341,10 +342,12 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "The other on-ramp",
         body:
-          "Instead of drafting from scratch, import an office master " +
-          ".docx into a blank session: every block lands stamped " +
-          "imported and the interview pivots to adapting it to this " +
-          "project. It's disabled now because this session has content.",
+          "Instead of drafting from scratch, extract supported body " +
+          "content from an office .docx into a blank session: every " +
+          "block lands stamped imported and the interview pivots to " +
+          "adapting it. Import normalizes content; it does not preserve " +
+          "the source Word formatting or layout. It's disabled now " +
+          "because this session has content.",
       },
     ],
   },
@@ -392,9 +395,9 @@ export const TOUR: readonly TourChunk[] = [
         title: "Export",
         body:
           "A clean .docx with the assumptions and open-items schedules — " +
-          "or a genuine Word tracked-changes redline against the " +
-          "imported master, where Accept All reproduces this draft " +
-          "exactly.",
+          "or, after import, a normalized DOCX and Word tracked-changes " +
+          "redline of the extracted provisions. Neither is a " +
+          "formatting-preserving edit or comparison of the original DOCX.",
       },
       {
         id: "save-open",

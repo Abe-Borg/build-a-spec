@@ -194,3 +194,106 @@ def test_rendered_prompt_is_stable_and_complete():
     # Editions in effect do NOT render here (they are dynamic-block data —
     # the stable prompt must stay cacheable across override changes).
     assert "Standards editions in effect" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Batch 10: the unpinned basis, the open catalog, and the generic module
+# ---------------------------------------------------------------------------
+
+
+def test_unpinned_basis_with_pins_rejected():
+    # unpinned=True must pin NOTHING — a standard or a base code is incoherent.
+    for bad_basis in (
+        StandardsBasis(
+            label="bad-unpinned-std",
+            standards=(StandardEdition("NFPA 13", "2025", source="x"),),
+            unpinned=True,
+        ),
+        StandardsBasis(
+            label="bad-unpinned-code",
+            base_codes=_valid().basis.base_codes,
+            unpinned=True,
+        ),
+    ):
+        bad = replace(_valid(), module_id="bad", basis=bad_basis)
+        with pytest.raises(ValueError, match="unpinned basis must pin no"):
+            validate_module_registry([bad])
+
+
+def test_empty_basis_without_unpinned_flag_still_rejected():
+    # The sanctioned pinless path requires the explicit flag — a plainly
+    # empty basis stays a registration error (accidental-empty protection).
+    bad = replace(
+        _valid(), basis=StandardsBasis(label="accidentally-empty")
+    )
+    with pytest.raises(ValueError, match="pins no base codes"):
+        validate_module_registry([bad])
+
+
+def test_empty_catalog_requires_open_catalog_flag():
+    unpinned = StandardsBasis(label="flagged", unpinned=True)
+    # A pinless basis exposes only {pinned_standards}; the hybrid fixture
+    # needs placeholder-free conventions or the (correct) format check
+    # fires first.
+    bad = replace(
+        _valid(),
+        basis=unpinned,
+        section_catalog=(),
+        domain_conventions="Plain conventions, no placeholders.",
+    )
+    with pytest.raises(ValueError, match="section catalog is empty"):
+        validate_module_registry([bad])
+    ok = replace(bad, open_catalog=True)
+    validate_module_registry([ok])  # does not raise
+
+
+def test_generic_module_is_coherent():
+    from backend.spec_modules.generic import GENERIC
+
+    assert AVAILABLE_MODULES["generic"] is GENERIC
+    assert get_module("generic") is GENERIC
+    # The default module is unchanged (backward compat).
+    assert DEFAULT_MODULE is HYPERSCALE_FIRE
+    # The defining posture: no pins, open catalog.
+    assert GENERIC.basis.unpinned
+    assert GENERIC.basis.base_codes == () and GENERIC.basis.standards == ()
+    assert GENERIC.open_catalog and GENERIC.section_catalog == ()
+    # Non-defaultable minimum: section, identity, and the scope basis.
+    hard = {t.topic_id for t in GENERIC.interview_playbook if t.non_defaultable}
+    assert hard == {"section_selection", "project_identity", "scope_basis"}
+    # Research fan-out parity with the curated module's dimension axes.
+    assert {d.dimension_id for d in GENERIC.research_dimensions} == {
+        "governing_codes",
+        "ahj_requirements",
+        "client_standards",
+        "site_environment",
+    }
+    # Every dimension is discipline-parameterized.
+    assert all(
+        "{discipline}" in d.prompt_template for d in GENERIC.research_dimensions
+    )
+    validate_module_registry([HYPERSCALE_FIRE, GENERIC])
+
+
+def test_generic_rendered_prompt_is_stable_and_clean():
+    from backend.llm.prompts import render_system_prompt
+    from backend.spec_modules.generic import GENERIC
+
+    prompt = render_system_prompt(GENERIC)
+    assert prompt == render_system_prompt(GENERIC)  # deterministic
+    # Open-catalog guidance replaced the section list.
+    assert "OPEN catalog" in prompt
+    assert "MasterFormat section number and title" in prompt
+    # The no-pins drafting policy rides the module conventions.
+    assert "model-proposed, unverified" in prompt
+    # No unresolved module placeholders (engine blocks legitimately carry
+    # brace-shaped op examples, so this is targeted, not a blanket ban).
+    for placeholder in ("{discipline}", "{pinned_standards}", "{ibc}"):
+        assert placeholder not in prompt
+    # Session-varying data stays out (cacheability): the editions in
+    # effect never render here, and the discipline appears only as the
+    # POLICY POINTER naming where the value lives (the PROJECT CONTEXT
+    # block) — never as a value (render_system_prompt takes only the
+    # module, so a session value structurally cannot leak in).
+    assert "Standards editions in effect" not in prompt
+    assert "PROJECT DISCIPLINE line" in prompt

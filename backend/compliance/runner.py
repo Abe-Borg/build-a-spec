@@ -43,6 +43,7 @@ class AuditRunner:
         model: str,
         max_tokens: int,
         version_index: int,
+        discipline: str = "",
         on_settled: Callable[[], None] | None = None,
         usage_sink: Callable[[dict], None] | None = None,
     ) -> bool:
@@ -71,6 +72,7 @@ class AuditRunner:
                     client,
                     model=model,
                     max_tokens=max_tokens,
+                    discipline=discipline,
                 )
             except ComplianceAuditError as exc:
                 with self._lock:

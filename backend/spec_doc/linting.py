@@ -17,6 +17,11 @@ Rules (stable ids consumers can branch on):
 
 - ``stale_edition`` — a standard cited at an edition contradicting the
   edition in effect (module pin or jurisdiction override).
+- ``unrecorded_edition`` — (unpinned-basis modules only, Batch 10) a
+  designation cited WITH an edition year while no edition is recorded for
+  that standard at all — the no-pins posture's enforcement: record the
+  edition and its basis via ``set_standard_edition``, or drop the year.
+  Never active for a pinned module, so its lint output is unchanged.
 - ``placeholder_marker`` — unresolved editorial placeholders beyond the
   first-class ``[TBD: ...]`` tracking: ``[INSERT ...]``, ``[VERIFY ...]``,
   ``___``, ``<VERIFY>``, ellipsis brackets, and module extras.
@@ -33,10 +38,15 @@ import re
 from functools import lru_cache
 from typing import Any, Iterable, Mapping
 
-from ..standards import EffectiveEdition, effective_editions
+from ..standards import (
+    EffectiveEdition,
+    effective_editions,
+    normalize_standard_name,
+)
 from .model import SpecSection, iter_paragraphs
 
 RULE_STALE_EDITION = "stale_edition"
+RULE_UNRECORDED_EDITION = "unrecorded_edition"
 RULE_PLACEHOLDER = "placeholder_marker"
 RULE_TEMPLATE_MARKER = "template_marker"
 RULE_EMPTY_ARTICLE = "empty_article"
@@ -162,16 +172,48 @@ def _suppressed(text: str, start: int, end: int) -> bool:
     )
 
 
+def _name_punctuation_variants(name: str) -> tuple[str, ...]:
+    """A designation's hyphen/space spelling variants (dedup, order-stable).
+
+    "CAN/ULC S524" and "CAN/ULC-S524" name the same standard; a recorded
+    edition in one form must still stale-check a citation written in the
+    other (Batch 10). Used only for unpinned modules, where recorded names
+    are free-text and their punctuation need not match the document's.
+    """
+    variants: list[str] = []
+    for form in (name, name.replace("-", " "), name.replace(" ", "-")):
+        if form not in variants:
+            variants.append(form)
+    return tuple(variants)
+
+
 def _scan_editions(
-    text: str, editions: tuple[EffectiveEdition, ...]
+    text: str,
+    editions: tuple[EffectiveEdition, ...],
+    *,
+    variant_tolerant: bool = False,
 ) -> Iterable[dict[str, str]]:
-    """Yield stale-edition hits in ``text`` against the editions in effect."""
+    """Yield stale-edition hits in ``text`` against the editions in effect.
+
+    ``variant_tolerant`` (unpinned modules only) also matches a recorded
+    designation's hyphen/space spelling variant, so a recorded standard
+    cited in the other punctuation form still stale-checks. Pinned modules
+    pass False → byte-identical to the pre-Batch-9 behavior.
+    """
     seen_spans: list[tuple[int, int]] = []
     for eff in editions:
         expected = eff.edition.strip()
         if not expected:
             continue
-        for pattern in _edition_patterns_for(eff.name):
+        names = (
+            _name_punctuation_variants(eff.name)
+            if variant_tolerant
+            else (eff.name,)
+        )
+        patterns = tuple(
+            pattern for name in names for pattern in _edition_patterns_for(name)
+        )
+        for pattern in patterns:
             for match in pattern.finditer(text):
                 year = match.group(1)
                 if year == expected:
@@ -192,6 +234,97 @@ def _scan_editions(
                     "message": (
                         f"{eff.name} cited at {year}, but the edition in "
                         f"effect is {expected}{basis_note}."
+                    ),
+                }
+
+
+# ---------------------------------------------------------------------------
+# Unrecorded-edition detection (unpinned-basis modules only, Batch 10)
+# ---------------------------------------------------------------------------
+
+# Publisher grammar for standards designations. Longest-first alternation so
+# "CAN/ULC" claims before "ULC" before "UL", "AWWA" before "AWS". Compiled
+# case-SENSITIVE deliberately: designations are acronym-styled in real spec
+# text, and requiring caps keeps prose words from false-matching.
+_DESIGNATION_PUBLISHERS: tuple[str, ...] = (
+    "CAN/ULC", "CAN/CSA", "SMACNA", "ASHRAE", "IAPMO", "AWWA", "AMCA",
+    "AHRI", "NEMA", "NFPA", "ASTM", "ANSI", "ASME", "IEEE", "SSPC", "ASSE",
+    "AISC", "AISI", "ACI", "AWS", "CSA", "CTI", "ICC", "IEC", "ISA", "ISO",
+    "MSS", "NSF", "PDI", "TIA", "ULC", "FM", "UL",
+)
+
+# Designation token: optional letter prefix, digits (dotted parts allowed),
+# optional letter suffix, optional slash-companion ("A53/A53M"). It cannot
+# swallow a trailing "-<year>" — dashes are not part of the token — so
+# "NFPA 13-2019" discovers "NFPA 13" and leaves the year for the citation
+# patterns; the trailing lookahead keeps "NFPA 13" from ending inside
+# "NFPA 13R" or "NFPA 130".
+_DESIGNATION_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(p) for p in _DESIGNATION_PUBLISHERS) + r")"
+    r"[ -]?"
+    r"[A-Z]{0,3}\d+(?:\.\d+)*[A-Z]{0,2}(?:/[A-Z]{0,3}\d+[A-Z]{0,2})?"
+    r"(?![0-9A-Za-z])"
+)
+
+
+def _canonical_designation_forms(name: str) -> set[str]:
+    """Canonical keys for matching a designation against recorded editions.
+
+    Text writes "CAN/ULC-S524" where an override may be recorded as
+    "CAN/ULC S524" (or vice versa) — treat hyphen and space forms as the
+    same standard. Broadening the match errs toward "recorded" (fewer
+    advisory warns), the safe direction.
+    """
+    return {
+        normalize_standard_name(name),
+        normalize_standard_name(name.replace("-", " ")),
+    }
+
+
+def _scan_unrecorded_editions(
+    text: str, editions: tuple[EffectiveEdition, ...]
+) -> Iterable[dict[str, str]]:
+    """Yield year-cited designations with NO recorded edition at all.
+
+    The complement of :func:`_scan_editions`: that rule checks names IN the
+    effective set for a contradicting year; this one checks names ABSENT
+    from the set for any year binding (same four citation shapes, same
+    span-dedup and negation suppression). Only meaningful for an
+    unpinned-basis module — the caller gates on ``module.basis.unpinned``.
+    """
+    known: set[str] = set()
+    for eff in editions:
+        known |= _canonical_designation_forms(eff.name)
+    unrecorded: list[str] = []
+    for match in _DESIGNATION_RE.finditer(text):
+        raw = match.group(0).strip()
+        if _canonical_designation_forms(raw) & known:
+            continue
+        if raw not in unrecorded:
+            unrecorded.append(raw)
+    seen_spans: list[tuple[int, int]] = []
+    # Longest designation first: a longer designation's citation span
+    # ("CAN/ULC-S524-2019") claims its span before a shorter one whose
+    # pattern also matches inside it ("ULC-S524-2019"), so the shorter's
+    # contained inner match is dropped by the span-dedup below instead of
+    # double-reporting the same physical citation (Batch 10).
+    for raw in sorted(unrecorded, key=len, reverse=True):
+        for pattern in _edition_patterns_for(raw):
+            for match in pattern.finditer(text):
+                year = match.group(1)
+                span = (match.start(), match.end())
+                if any(s <= span[0] and span[1] <= e for s, e in seen_spans):
+                    continue
+                seen_spans.append(span)
+                if _suppressed(text, *span):
+                    continue
+                yield {
+                    "match": match.group(0),
+                    "message": (
+                        f"{raw} cited at {year} but no edition is recorded "
+                        "for it — record the edition and its basis with a "
+                        "set_standard_edition operation (or drop the year "
+                        "until one is established)."
                     ),
                 }
 
@@ -264,10 +397,15 @@ def lint_document(
             }
         )
 
+    # The unrecorded-edition rule exists only for an unpinned basis (the
+    # generic module) — a pinned module's lint output is unchanged by
+    # construction (the scan below is never reached).
+    unpinned = bool(getattr(module.basis, "unpinned", False))
+
     # --- per-paragraph text scans -----------------------------------------
     for _part, _article, paragraph, _depth, ref in iter_paragraphs(section):
         text = paragraph.text
-        for hit in _scan_editions(text, editions):
+        for hit in _scan_editions(text, editions, variant_tolerant=unpinned):
             add(
                 RULE_STALE_EDITION,
                 paragraph.uid,
@@ -275,6 +413,15 @@ def lint_document(
                 hit["message"],
                 hit["match"],
             )
+        if unpinned:
+            for hit in _scan_unrecorded_editions(text, editions):
+                add(
+                    RULE_UNRECORDED_EDITION,
+                    paragraph.uid,
+                    ref,
+                    hit["message"],
+                    hit["match"],
+                )
         for hit in _scan_markers(text, _PLACEHOLDER_PATTERNS):
             add(
                 RULE_PLACEHOLDER,

@@ -108,6 +108,50 @@ def test_references_article_lines_orders_and_filters():
     assert len(references_article_lines(_BASIS, None)) == 2
 
 
+# ---------------------------------------------------------------------------
+# Batch 10: the unpinned basis rendering
+# ---------------------------------------------------------------------------
+
+_UNPINNED = StandardsBasis(label="test-unpinned", unpinned=True)
+
+
+def test_unpinned_context_block_states_the_mandatory_basis_posture():
+    block = standards_context_block(_UNPINNED, None)
+    assert "pins NO default editions" in block
+    assert "- (none recorded yet)" in block
+    # The decision-1 policy, verbatim territory: stated basis, honest
+    # model proposals, year-free until recorded.
+    assert "set_standard_edition" in block
+    assert "model-proposed, unverified" in block
+    assert "without an edition year" in block
+    # Nothing renders as a module default.
+    assert "module default" not in block
+
+
+def test_unpinned_context_block_lists_recorded_overrides():
+    block = standards_context_block(
+        _UNPINNED,
+        {"CSA Z662": {"edition": "2023", "basis": "user: AB adoption"}},
+    )
+    assert "- CSA Z662: 2023 — recorded (basis: user: AB adoption)" in block
+    assert "(none recorded yet)" not in block
+    # Effective editions with zero pins are exactly the overrides.
+    effs = effective_editions(
+        _UNPINNED, {"CSA Z662": {"edition": "2023", "basis": "x"}}
+    )
+    assert [(e.name, e.edition, e.is_override) for e in effs] == [
+        ("CSA Z662", "2023", True)
+    ]
+
+
+def test_pinned_context_block_unchanged_by_the_unpinned_branch():
+    # The pinned rendering is byte-stable across the Batch 10 change.
+    block = standards_context_block(_BASIS, None)
+    assert block.startswith("Standards editions in effect for this project:")
+    assert "- NFPA 13: 2025 — module default (current published edition)" in block
+    assert "pins NO default editions" not in block
+
+
 def test_validate_overrides_shape_rejects_malformed():
     assert validate_overrides_shape(None) == {}
     clean = validate_overrides_shape(

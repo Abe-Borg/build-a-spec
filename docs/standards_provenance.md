@@ -68,3 +68,15 @@ NFPA 291-2025 (ANSI webstore, Amazon).
 - Owner-invoked standards (NFPA 75/76) are pinned at current editions;
   they are commonly invoked by hyperscaler programs rather than mandated
   by code — keep them pinned so REFERENCES articles cite real editions.
+
+## The generic module (Batch 8) pins nothing — by design
+
+`spec_modules/generic.py` (`generic-unpinned` basis) deliberately carries
+ZERO pinned editions, so it has no receipts here and never will. Every
+edition in effect for a generic-module project is recorded per-project via
+`set_standard_edition` with a stated basis (grounded research item, user
+statement, or an explicitly-labeled unverified model proposal), and the
+`unrecorded_edition` lint rule flags any year citation without a recorded
+basis. Do not add pins to the generic module — that would recreate the
+curation burden this module exists to avoid; author a new curated module
+instead.

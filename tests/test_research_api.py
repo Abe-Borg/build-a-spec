@@ -377,3 +377,58 @@ def test_session_reset_abandons_running_research(monkeypatch):
         time.sleep(0.05)
     assert old_runner.status == "failed"
     assert client.get("/api/research/status").json()["status"] == "idle"
+
+
+# ---------------------------------------------------------------------------
+# Batch 10: session discipline threading + the generic-module backstop
+# ---------------------------------------------------------------------------
+
+# Substrings unique to each GENERIC-module dimension message. Three of the
+# four embed the session discipline — routing scripted turns on them is
+# itself the proof that {discipline} rendered into every dimension prompt.
+_GENERIC_DIM_KEYS = {
+    "governing_codes": "governing construction codes for Electrical work",
+    "ahj_requirements": "authority having jurisdiction over Electrical work",
+    "client_standards": "publishes design and construction standards",
+    "site_environment": "site and environmental factors",
+}
+
+
+def test_research_start_requires_discipline_for_generic_module(monkeypatch):
+    client = _client()
+    resp = client.post("/api/session/reset", json={"module_id": "generic"})
+    assert resp.json()["discipline"] == ""
+    _record_profile(client, monkeypatch)
+    resp = client.post("/api/research/start")
+    assert resp.status_code == 400
+    assert "discipline" in resp.json()["error"].lower()
+
+
+def test_generic_research_threads_discipline_into_every_dimension(monkeypatch):
+    client = _client()
+    client.post(
+        "/api/session/reset",
+        json={"module_id": "generic", "discipline": "Electrical"},
+    )
+    _record_profile(client, monkeypatch)
+
+    scripts = {
+        key: [research_response(items=[], searched_urls=["https://x.gov"])]
+        for key in _GENERIC_DIM_KEYS.values()
+    }
+    fake = SequencedFakeClient(scripts)
+    _patch_research_client(monkeypatch, fake)
+    assert client.post("/api/research/start").json()["ok"] is True
+    snapshot = _wait_terminal(client)
+    # All four dimensions completed — every message matched its
+    # discipline-bearing routing key.
+    assert snapshot["status"] == "complete"
+    statuses = snapshot["profile"]["dimension_statuses"]
+    assert all(s["status"] == "completed" for s in statuses)
+    # And the fan-out headers named the discipline explicitly (four
+    # dimension requests — never vacuous).
+    assert len(fake.requests) == 4
+    assert all(
+        "Discipline: Electrical." in req["messages"][0]["content"]
+        for req in fake.requests
+    )

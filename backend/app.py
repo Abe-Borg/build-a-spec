@@ -62,7 +62,7 @@ from typing import Any, Iterator
 from urllib.parse import quote
 
 import anthropic
-from fastapi import FastAPI, UploadFile
+from fastapi import Body, FastAPI, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
@@ -87,8 +87,13 @@ from .llm.client import (
     reset_client_cache,
 )
 from .llm.conversation import standards_payload, stream_user_turn
-from .llm.prompts import FULL_DRAFT_DIRECTIVE, onboarding_demo_directive
+from .llm.prompts import (
+    FULL_DRAFT_DIRECTIVE,
+    onboarding_demo_directive,
+    sanitize_discipline,
+)
 from .project_profile import ProjectProfile
+from .spec_modules import AVAILABLE_MODULES, DEFAULT_MODULE, get_module
 from .spec_doc import SpecEditError, diff_sections, lint_document, open_questions
 from .spec_doc.docx_export import (
     build_docx,
@@ -120,6 +125,19 @@ class EditDocRequest(BaseModel):
 
 class OnboardingDemoRequest(BaseModel):
     discipline: str
+
+
+class SessionResetRequest(BaseModel):
+    """Optional body for POST /api/session/reset (Batch 10).
+
+    Absent body = the historical contract exactly (reset keeps the active
+    module and discipline). ``module_id`` blank keeps the current module;
+    unknown ids degrade to the default (the registry posture). Discipline
+    only sticks when the resulting module is open-catalog (the invariant).
+    """
+
+    module_id: str = ""
+    discipline: str = ""
 
 
 class QcApplyRequest(BaseModel):
@@ -300,6 +318,7 @@ def create_app() -> FastAPI:
             "api_key_present": bool(load_api_key()),
             "module": session.module.display_name,
             "module_id": session.module.module_id,
+            "discipline": session.discipline,
         }
 
     @app.post("/api/key")
@@ -369,9 +388,41 @@ def create_app() -> FastAPI:
         return JSONResponse({"ok": True})
 
     @app.post("/api/session/reset")
-    def reset() -> dict:
-        sessions.reset_session()
-        return {"ok": True}
+    def reset(body: SessionResetRequest | None = Body(default=None)) -> dict:
+        session = sessions.get_session()
+        session.reset()
+        if body is not None:
+            if body.module_id.strip():
+                session.module = get_module(body.module_id)
+            # Invariant: discipline is non-empty only while an open-catalog
+            # module is active. A curated module always clears it.
+            if getattr(session.module, "open_catalog", False):
+                session.discipline = sanitize_discipline(body.discipline)
+            else:
+                session.discipline = ""
+        return {
+            "ok": True,
+            "module_id": session.module.module_id,
+            "module": session.module.display_name,
+            "discipline": session.discipline,
+        }
+
+    @app.get("/api/modules")
+    def modules() -> dict:
+        """The selectable module registry, for the session-start picker."""
+        return {
+            "ok": True,
+            "modules": [
+                {
+                    "module_id": module.module_id,
+                    "display_name": module.display_name,
+                    "description": module.description,
+                    "generic": module.open_catalog,
+                    "default": module.module_id == DEFAULT_MODULE.module_id,
+                }
+                for module in AVAILABLE_MODULES.values()
+            ],
+        }
 
     @app.post("/api/chat")
     def chat(body: ChatRequest) -> StreamingResponse:
@@ -480,6 +531,12 @@ def create_app() -> FastAPI:
                 },
                 status_code=409,
             )
+        # On an open-catalog session, align the session discipline with the
+        # demo's chosen discipline (honoring the invariant — a curated module
+        # stays ""). Otherwise the demo directive would draft discipline B
+        # while the PROJECT CONTEXT still names an earlier discipline A.
+        if getattr(session.module, "open_catalog", False):
+            session.discipline = sanitize_discipline(body.discipline)
         return JSONResponse(
             {"ok": True, "message": onboarding_demo_directive(body.discipline)}
         )
@@ -786,6 +843,20 @@ def create_app() -> FastAPI:
                 },
                 status_code=400,
             )
+        # Batch 10 backstop: an open-catalog session researches "{discipline}
+        # work" — without a stated discipline the templates have nothing to
+        # research. The session-start picker normally guarantees this.
+        if getattr(session.module, "open_catalog", False) and not (
+            session.discipline
+        ):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "State the discipline first — the generic "
+                    "module needs it before research can run.",
+                },
+                status_code=400,
+            )
         try:
             client = get_client()
         except MissingApiKeyError as exc:
@@ -798,6 +869,7 @@ def create_app() -> FastAPI:
             client=client,
             model=settings.RESEARCH_MODEL,
             max_tokens=settings.RESEARCH_MAX_TOKENS,
+            discipline=session.discipline,
             usage_sink=lambda u: session.usage.add("research", u),
         )
         if not started:
@@ -882,6 +954,7 @@ def create_app() -> FastAPI:
             model=settings.RESEARCH_MODEL,
             max_tokens=settings.RESEARCH_MAX_TOKENS,
             version_index=session.doc.index,
+            discipline=session.discipline,
             usage_sink=lambda u: session.usage.add("audit", u),
         )
         if not started:
@@ -939,6 +1012,7 @@ def create_app() -> FastAPI:
             model=settings.QC_MODEL,
             max_tokens=settings.QC_MAX_TOKENS,
             version_index=session.doc.index,
+            discipline=session.discipline,
             remembered_dismissed=remembered,
             usage_sink=lambda u: session.usage.add("qc", u),
         )

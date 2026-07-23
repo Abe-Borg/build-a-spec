@@ -38,7 +38,7 @@ export async function saveApiKey(apiKey: string): Promise<void> {
 }
 
 /**
- * Reset the session. With `opts` (the Batch 9 module picker) the chosen
+ * Reset the session. With `opts` (the Batch 10 module picker) the chosen
  * module/discipline ride a JSON body; without, the historical bodyless call
  * — reset keeps the active module + discipline (the onboarding tour's path).
  */
@@ -57,7 +57,7 @@ export async function resetSession(opts?: {
   await fetch("/api/session/reset", { method: "POST" });
 }
 
-/** The selectable module registry (Batch 9 session-start picker). */
+/** The selectable module registry (Batch 10 session-start picker). */
 export async function getModules(): Promise<ModuleInfo[]> {
   const resp = await fetch("/api/modules");
   const data = await resp.json();

@@ -380,7 +380,7 @@ def test_session_reset_abandons_running_research(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Batch 9: session discipline threading + the generic-module backstop
+# Batch 10: session discipline threading + the generic-module backstop
 # ---------------------------------------------------------------------------
 
 # Substrings unique to each GENERIC-module dimension message. Three of the

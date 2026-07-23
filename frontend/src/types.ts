@@ -43,11 +43,11 @@ export interface Health {
   api_key_present: boolean;
   module?: string;
   module_id?: string;
-  /** Non-empty only while the generic open-catalog module is active (Batch 9). */
+  /** Non-empty only while the generic open-catalog module is active (Batch 10). */
   discipline?: string;
 }
 
-/** One selectable spec module (Batch 9 session-start picker). */
+/** One selectable spec module (Batch 10 session-start picker). */
 export interface ModuleInfo {
   module_id: string;
   display_name: string;
@@ -215,6 +215,8 @@ export interface DocPayload {
   baseline_index: number | null;
   /** Chat-authored figures (diagrams/schematics/tables); [] when none. */
   figures: Figure[];
+  /** Suggested reply chips staged by the model (Batch 9); [] when none. */
+  suggested_prompts: string[];
 }
 
 /* --- Version diff / redline (Batch 5, mirrors backend/spec_doc/diffing.py) --- */
@@ -499,6 +501,7 @@ export type StreamEvent =
   | { type: "web_search"; query: string }
   | { type: "web_fetch"; url: string }
   | { type: "figure"; figure: Figure }
+  | { type: "suggested_prompts"; prompts: string[] }
   | { type: "doc_patch"; ops: DocOp[]; doc: SpecDoc }
   | { type: "doc_snapshot"; doc: SpecDoc }
   | { type: "open_questions"; items: OpenItem[] }

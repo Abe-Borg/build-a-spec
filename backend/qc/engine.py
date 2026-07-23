@@ -370,7 +370,7 @@ def _lens_user_message(
     profile: RequirementsProfile | None,
     discipline: str = "",
 ) -> str:
-    # The session discipline (Batch 9, open-catalog modules) renders only
+    # The session discipline (Batch 10, open-catalog modules) renders only
     # when non-empty — curated-module QC requests are byte-identical.
     discipline_block = (
         f"<project_discipline>\n{discipline}\n</project_discipline>\n\n"

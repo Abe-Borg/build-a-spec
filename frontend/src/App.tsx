@@ -86,6 +86,10 @@ export default function App() {
     () => new Map(figures.map((f) => [f.fid, f])),
     [figures],
   );
+  // Model-staged reply chips (Batch 9), shown above the composer. Cleared at
+  // turn start; re-synced from the doc payload on every refresh (so a failed
+  // turn's refresh restores the untouched pre-turn set).
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   // Composer prefill for the review queue's "Ask model" (WI2). The nonce
   // fires the composer's effect even when the same ref is asked twice.
   const [prefill, setPrefill] = useState({ text: "", nonce: 0 });
@@ -96,7 +100,7 @@ export default function App() {
     qc: 0,
     openItems: 0,
   });
-  // Session-start module picker (Batch 9). The registry is fetched lazily on
+  // Session-start module picker (Batch 10). The registry is fetched lazily on
   // first open, then cached for the app's lifetime (it's static per build).
   const [pickerOpen, setPickerOpen] = useState(false);
   const [modules, setModules] = useState<ModuleInfo[] | null>(null);
@@ -126,6 +130,7 @@ export default function App() {
         setProfileComplete(payload.profile_complete);
         setBaselineIndex(payload.baseline_index ?? null);
         setFigures(payload.figures ?? []);
+        setSuggestions(payload.suggested_prompts ?? []);
       })
       .catch(() => setDoc(null));
   }, []);
@@ -454,6 +459,9 @@ export default function App() {
     busyRef.current = true;
     setBusy(true);
     setChangedIds(new Set());
+    // Clear the suggestion bar the moment a message (typed or chip-clicked)
+    // goes out; the turn re-populates it (or leaves it empty) as it streams.
+    setSuggestions([]);
     setMessages((prev) => [
       ...prev,
       { id: newId(), role: "user", text },
@@ -490,6 +498,10 @@ export default function App() {
           // pin it to the current assistant bubble for inline rendering.
           setFigures((prev) => [...prev, evt.figure]);
           attachFigureToLast(evt.figure.fid);
+        } else if (evt.type === "suggested_prompts") {
+          // Live-staged reply chips; the commit-authoritative value re-syncs
+          // via refreshDoc on turn_complete (same list) or error (pre-turn).
+          setSuggestions(evt.prompts);
         } else if (evt.type === "doc_patch") {
           setDoc(evt.doc);
           const changed = evt.ops
@@ -618,6 +630,7 @@ export default function App() {
     setStandards([]);
     setChangedIds(new Set());
     setFigures([]);
+    setSuggestions([]);
     refreshDoc();
     refreshResearch();
     refreshQc();
@@ -631,7 +644,7 @@ export default function App() {
     clearSessionState();
   };
 
-  /** Open the module picker (Batch 9), fetching the registry on first use. */
+  /** Open the module picker (Batch 10), fetching the registry on first use. */
   const openPicker = async () => {
     if (modules === null) {
       try {
@@ -662,6 +675,7 @@ export default function App() {
     profile_complete: boolean;
     baseline_index?: number | null;
     figures?: Figure[];
+    suggested_prompts?: string[];
   }) => {
     setDoc(payload.doc);
     setOpenItems(payload.open_questions);
@@ -670,6 +684,7 @@ export default function App() {
     setProfileComplete(payload.profile_complete);
     setBaselineIndex(payload.baseline_index ?? null);
     setFigures(payload.figures ?? []);
+    setSuggestions(payload.suggested_prompts ?? []);
     setChangedIds(new Set());
   };
 
@@ -878,6 +893,7 @@ export default function App() {
           messages={messages}
           busy={busy}
           onSend={send}
+          suggestions={suggestions}
           onStartOnboarding={onboarding.start}
           onStop={onStop}
           prefill={prefill}

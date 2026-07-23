@@ -386,7 +386,7 @@ def session_version(client) -> int:
 
 
 def test_audit_user_message_carries_discipline_only_when_stated():
-    # Batch 9: the deprecated audit path threads the session discipline so
+    # Batch 10: the deprecated audit path threads the session discipline so
     # the generic compliance_persona's "discipline stated for the session"
     # reference isn't left dangling. Curated audits stay byte-identical.
     from backend.compliance.checker import build_audit_user_message

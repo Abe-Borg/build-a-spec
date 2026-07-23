@@ -120,6 +120,7 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
         "create_figure",
         "web_search",
         "web_fetch",
+        "suggest_prompts",
     ]
     # Adaptive thinking with the summarized-display opt-in (the "see what
     # the model is thinking" stream) at the configured effort.
@@ -163,7 +164,7 @@ def test_session_reset_clears_history_and_document(monkeypatch):
     assert not sessions.get_session().doc.doc.is_empty()
 
     resp = client.post("/api/session/reset")
-    # Batch 9: the reset response reports the (kept) module + discipline.
+    # Batch 10: the reset response reports the (kept) module + discipline.
     assert resp.json() == {
         "ok": True,
         "module_id": "hyperscale_fire",

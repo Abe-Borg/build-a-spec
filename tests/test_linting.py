@@ -277,7 +277,7 @@ def test_references_article_line_shape_is_checked():
 
 
 # ---------------------------------------------------------------------------
-# Batch 9: unrecorded_edition (unpinned-basis modules only)
+# Batch 10: unrecorded_edition (unpinned-basis modules only)
 # ---------------------------------------------------------------------------
 
 
@@ -416,7 +416,7 @@ def test_pinned_module_never_runs_the_unrecorded_rule():
 
 
 # ---------------------------------------------------------------------------
-# Batch 9 remediation: the two review-workflow findings on the new rule.
+# Batch 10 remediation: the two review-workflow findings on the new rule.
 # ---------------------------------------------------------------------------
 
 

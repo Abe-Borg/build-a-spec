@@ -80,6 +80,7 @@ from ..research.resend_sanitizer import (
     sanitize_messages_for_resend,
 )
 from ..research.schema import build_web_fetch_tool, build_web_search_tool
+from ..suggestions import SUGGEST_PROMPTS_TOOL, SuggestError, validate_prompts
 from ..tracing import capture as _trace
 from ..spec_modules import SpecModule, get_module
 from ..standards import standards_context_block
@@ -97,18 +98,22 @@ MAX_TOOL_ROUNDS = 50
 
 
 def _chat_tools() -> list[dict[str, Any]]:
-    """The interview tool list: document edits + live web lookups.
+    """The interview tool list: document edits + figures + live web lookups
+    + suggested replies.
 
     Static configuration on purpose — tools precede the system prompt in
     the cached prefix, so anything per-turn here (e.g. a profile-derived
     ``user_location``) would bust the prompt cache for the whole session.
     The model steers search locale through its query text instead.
+    ``suggest_prompts`` is appended LAST so the existing tool bytes stay a
+    stable cached prefix.
     """
     return [
         APPLY_SPEC_EDITS_TOOL,
         CREATE_FIGURE_TOOL,
         build_web_search_tool(max_uses=settings.CHAT_MAX_SEARCHES),
         build_web_fetch_tool(max_uses=settings.CHAT_MAX_FETCHES),
+        SUGGEST_PROMPTS_TOOL,
     ]
 
 
@@ -128,7 +133,7 @@ class SessionState:
     doc: DocumentStore = field(default_factory=DocumentStore)
     generation: int = 0
     module: SpecModule = field(default_factory=lambda: get_module(None))
-    # Session-level discipline (Batch 9), meaningful only with an
+    # Session-level discipline (Batch 10), meaningful only with an
     # open-catalog module — invariant: non-empty ⇒ the active module is
     # open-catalog, enforced at the two write sites (the reset endpoint and
     # project load). Like ``module``, reset keeps it (the session-start
@@ -144,6 +149,12 @@ class SessionState:
     # store it is reset in place (never reassigned) so a zombie turn's
     # commit/rollback settles harmlessly against the cleared store.
     figures: FigureStore = field(default_factory=FigureStore)
+    # Suggested-reply chips staged by the model (Batch 9). Turn-atomic,
+    # latest-only: each committed turn REPLACES this with what it staged —
+    # including [] when the tool was not called, which is how the bar winds
+    # down as the section nears issue-ready. A failed turn leaves it
+    # untouched (staging is a turn-local in stream_user_turn, not a store).
+    suggested_prompts: list[str] = field(default_factory=list)
     # Session-scoped billed-usage meter (WI4). Reset/load clear it.
     usage: UsageLedger = field(default_factory=UsageLedger)
     # True while a model turn owns the document store (WI2). Manual edits are
@@ -167,6 +178,9 @@ class SessionState:
         # In-place reset (see the field comment): a still-streaming zombie
         # turn holds this same object; clearing turn state neutralizes it.
         self.figures.reset()
+        # Clear staged chips (commit is generation-guarded, so a zombie
+        # turn can't repopulate the fresh session).
+        self.suggested_prompts.clear()
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()
@@ -247,7 +261,7 @@ def _turn_context_text(session: SessionState) -> str:
     """
     doc = session.doc.doc
     parts = []
-    # Session discipline (Batch 9): renders only for open-catalog sessions
+    # Session discipline (Batch 10): renders only for open-catalog sessions
     # (never for curated modules — their request bytes are unchanged).
     if session.discipline:
         parts.append(
@@ -667,6 +681,40 @@ def _run_create_figure(
     return result, [{"type": "figure", "figure": figure.to_dict()}]
 
 
+def _run_suggest_prompts(
+    block: dict[str, Any], trace_handle: Any = None
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Execute one ``suggest_prompts`` tool_use block.
+
+    The tool result is deliberately compact (``{"suggested": N}`` — token
+    discipline); the validated list travels in the ``suggested_prompts`` UI
+    event, which ``stream_user_turn`` also stages (committed only on turn
+    success, replacing the previous set). A bad payload becomes an
+    ``is_error`` result the model can correct — never a turn failure.
+    """
+    try:
+        prompts = validate_prompts(block.get("input") or {})
+    except SuggestError as exc:
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": f"suggest_prompts rejected (nothing was staged): {exc}",
+                "is_error": True,
+            },
+            [],
+        )
+    _trace.note(trace_handle, f"staged {len(prompts)} suggested prompt(s)")
+    return (
+        {
+            "type": "tool_result",
+            "tool_use_id": block.get("id"),
+            "content": json.dumps({"suggested": len(prompts)}),
+        },
+        [{"type": "suggested_prompts", "prompts": prompts}],
+    )
+
+
 def _run_tool(
     session: SessionState,
     block: dict[str, Any],
@@ -685,6 +733,8 @@ def _run_tool(
         return _run_create_figure(
             session, block, message_index=message_index, trace_handle=trace_handle
         )
+    if name == "suggest_prompts":
+        return _run_suggest_prompts(block, trace_handle)
     if name != "apply_spec_edits":
         return (
             {
@@ -748,9 +798,11 @@ def stream_user_turn(
     drafting/searching/fetching) and ``thinking_delta`` summaries interleave
     with ``text_delta`` chunks across every continuation round; live
     ``web_search``/``web_fetch`` events fire the instant a server-tool call
-    completes; ``doc_patch`` follows each applied edit batch. Then — on
-    success — ``open_questions`` and ``lint`` (if the document changed) and
-    ``turn_complete``, which carries the turn's aggregated billed usage.
+    completes; ``doc_patch`` follows each applied edit batch and ``figure``
+    each created figure; a ``suggested_prompts`` event carries the reply
+    chips the model staged this turn. Then — on success — ``open_questions``
+    and ``lint`` (if the document changed) and ``turn_complete``, which
+    carries the turn's aggregated billed usage.
     ``status`` frames are transient UI hints, never persisted. Any failure
     yields a single ``error`` event, rolls the document back, and leaves
     history unchanged. A user-initiated stop (``session.stop_requested``) is
@@ -820,6 +872,12 @@ def stream_user_turn(
     doc_changed = False
     committed = False
     usage_totals: dict[str, int] = {}
+    # Turn-local staging for suggested-reply chips: the dispatch loop records
+    # each suggest_prompts call here (latest wins); a successful turn commits
+    # it into session.suggested_prompts, a failed turn drops it with the
+    # generator. Initializes to [] so a turn that never calls the tool
+    # commits an empty set — that "no call = clear" rule is the wind-down.
+    staged_suggestions: list[str] = []
     try:
         client = get_client()
         resumed_from_pause = False
@@ -924,6 +982,11 @@ def stream_user_turn(
                 )
                 tool_results.append(result)
                 for event in ui_events:
+                    if event.get("type") == "suggested_prompts":
+                        # Turn-local staging: committed on turn success only
+                        # (latest call in a turn wins by reassignment; a
+                        # failed turn drops this local untouched).
+                        staged_suggestions = list(event["prompts"])
                     yield event
             new_messages.append({"role": "user", "content": tool_results})
         else:
@@ -966,6 +1029,11 @@ def stream_user_turn(
         session.history.extend(_committed_messages(new_messages, user_text))
         doc_changed = session.doc.commit_turn()
         session.figures.commit_turn()
+        # Latest-only replace: whatever this turn staged (including [] when
+        # the tool was not called) becomes the current chip set. Failure
+        # paths return before this else block, so there is nothing to roll
+        # back — the previous list is simply never overwritten.
+        session.suggested_prompts = staged_suggestions
         committed = True
     finally:
         # Runs on every exit — including GeneratorExit when the SSE client

@@ -1,6 +1,6 @@
 """The generic any-discipline authoring module (USA & Canada).
 
-Native Build-a-Spec (Batch 9) — not a Spec Critic port. Where
+Native Build-a-Spec (Batch 10) — not a Spec Critic port. Where
 ``hyperscale_fire`` encodes one curated domain (fixed catalog, pinned
 current editions with receipts, a fire-specific playbook), this module
 encodes the *absence* of curation honestly:

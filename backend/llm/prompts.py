@@ -56,6 +56,20 @@ You can create figures with the create_figure tool: Mermaid diagrams, hand-autho
 - Pick the kind: mermaid for flow / sequence / decision / state graphs (keep node labels plain text), svg for spatial line schematics a graph cannot express, table for schedules. Keep every figure accurate to the current draft and the standards editions in effect.
 - Do not paste a figure's source into chat — say in one line what it shows. To revise a figure, create a new one; the previous id is retained for reference."""
 
+_SUGGESTED_PROMPTS_POLICY = """\
+# Suggested replies
+
+You can stage up to five one-tap reply chips with the suggest_prompts tool — short messages, shown just above the composer, that the user sends by clicking instead of typing. Call it at most once per turn, near the end of your reply, once your questions for the turn are on the table. Each call replaces last turn's chips entirely, and a turn without a call clears the bar — silence is a valid, meaningful signal.
+
+- Write every chip in the USER'S voice as a complete, sendable reply: "Use your recommended default", "Draft PART 2 now", "Yes, ESFR at the ceiling only". Never a fill-in-the-blank template, never a question, never spec text.
+- Answers first: when you asked questions this turn, lead with direct answers to them — your recommended answer, a plausible alternative or two, and an "I don't know — use your default" option. Add momentum moves (continue drafting, move to the next topic) only in the remaining slots.
+- Offer a concrete value ("The ceiling height is 32 ft") only when that value is already established by the user, the profile, or grounded research — never invent a number for the user to rubber-stamp.
+- Suggest only things sayable in chat that you can act on next turn. Research runs, Final QC, export, undo, and saving are panel buttons — never chips. Don't re-suggest anything already done or answered.
+- Keep chips glanceable: aim under ~60 characters (120 is the hard cap), no numbering or "Option A:" prefixes.
+- Wind down honestly. As the section nears issue-ready — open items resolved, statuses reviewed, lint clean — drop to one or two genuinely useful chips, or none. A full bar on a finished section is noise, not help.
+- After a full-section draft pass, the chips ARE the clickable answers to the 2-3 follow-up questions you close with.
+- The guided-tour demo pass is the exception: do not call suggest_prompts there — the tour, not chat, drives what happens next."""
+
 _LINT_POLICY = """\
 # Lint report
 
@@ -170,7 +184,7 @@ This is the guided-tour DEMO pass — I'm brand new here, and the tour is about 
 - Stamp provenance honestly: I've told you nothing, so nearly everything will be assumed. Include exactly one inline [TBD: ...] marker and exactly one needs_input paragraph so the open-items tracking has live material for the tour.
 - Do NOT set the project profile and do NOT record edition overrides — later tour steps teach those.
 - Keep each apply_spec_edits call small (about one PART per call) so the document assembles visibly while I watch.
-- Close with 2-3 sentences in chat saying what you built and that it's a demo. Ask NO follow-up questions — the guided tour drives what happens next."""
+- Close with 2-3 sentences in chat saying what you built and that it's a demo. Ask NO follow-up questions and do NOT call suggest_prompts — the guided tour drives what happens next."""
 
 
 def sanitize_discipline(discipline: str) -> str:
@@ -179,7 +193,7 @@ def sanitize_discipline(discipline: str) -> str:
     Whitespace folding neutralizes newline injection into prompt/directive
     structure; the cap keeps a pasted paragraph from bloating a turn. Empty
     (or whitespace-only) input stays empty — callers choose their own
-    fallback. Shared by the session-level discipline (Batch 9: the reset
+    fallback. Shared by the session-level discipline (Batch 10: the reset
     endpoint and project load) and the onboarding demo directive below.
     """
     return " ".join((discipline or "").split())[:_MAX_DISCIPLINE_LEN].strip()
@@ -276,6 +290,7 @@ def render_system_prompt(module: SpecModule) -> str:
             _STANDARDS_POLICY,
             _WEB_LOOKUP_POLICY,
             _FIGURE_POLICY,
+            _SUGGESTED_PROMPTS_POLICY,
             _LINT_POLICY,
             _RESEARCH_POLICY,
             _GAP_AND_ADAPT,

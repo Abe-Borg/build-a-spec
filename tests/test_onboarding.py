@@ -283,7 +283,7 @@ def test_demo_directive_drives_a_small_streaming_turn(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Batch 9: the demo aligns an open-catalog session's discipline with the
+# Batch 10: the demo aligns an open-catalog session's discipline with the
 # tour's chosen discipline (so PROJECT CONTEXT can't name a stale one).
 # ---------------------------------------------------------------------------
 

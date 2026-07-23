@@ -49,14 +49,16 @@ backend/
                            demo directive; 409 unless the document is blank);
                            Batch 7 adds POST /api/chat/stop + /api/research/stop
                            + /api/qc/stop (409 when nothing is running/streaming);
-                           Batch 9 adds an optional reset body {module_id,
+                           Batch 9 adds suggested_prompts to _doc_payload (no new
+                           endpoint — the suggest_prompts SSE event rides /api/chat);
+                           Batch 10 adds an optional reset body {module_id,
                            discipline} + GET /api/modules + health.discipline +
                            a 400 research backstop (generic module, no discipline)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides);
                            standards_context_block; validate_overrides_shape;
-                           Batch 9 adds StandardsBasis.unpinned (sanctioned
+                           Batch 10 adds StandardsBasis.unpinned (sanctioned
                            pinless basis + its own context-block posture)
   project_profile.py       [PORT: Spec Critic src/core/project_profile.py]
                            ProjectProfile: US/CA tables, country/state
@@ -69,7 +71,7 @@ backend/
                            render_text + research_context_block (trim-to-cap);
                            Batch 7 threads a should_stop callback into
                            _run_dimension (checked before each retry/continuation
-                           — cooperative, not mid-call interruption); Batch 9
+                           — cooperative, not mid-call interruption); Batch 10
                            threads discipline into the dimension kwargs (set
                            unconditionally — no KeyError) + the header line
                            (only when non-empty — curated runs byte-identical)
@@ -111,7 +113,7 @@ backend/
                            dry-run validation → QCResult (content-addressed
                            findings, dismiss memory); Batch 7 threads should_stop
                            into _run_lens/_verify_one (same cooperative pattern
-                           as research/engine.py); Batch 9 threads discipline into
+                           as research/engine.py); Batch 10 threads discipline into
                            the lens user message (<project_discipline>, only when
                            non-empty)
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
@@ -140,10 +142,17 @@ backend/
                            re-billed doc context or tool results (PDF-elision
                            posture) — only id/kind/title do; recurring token cost
                            is negligible regardless of figure count
+  suggestions.py           [Batch 9] model-driven reply chips: MAX_PROMPTS/
+                           MAX_PROMPT_CHARS, SuggestError, validate_prompts (strict,
+                           fold-whitespace/dedupe/cap; empty list valid) +
+                           restore_prompts (lenient project loader) +
+                           SUGGEST_PROMPTS_TOOL. Latest-only session state, tiny
+                           payload — no store, no elision (rides history verbatim)
   sessions.py              single module-level SessionState (history + DocumentStore
-                           + SpecModule + discipline (Batch 9, session-level like
-                           module) + ResearchRunner + AuditRunner + QCRunner
-                           + FigureStore + UsageLedger) + has_unsaved_progress /
+                           + SpecModule + discipline (Batch 10, session-level
+                           like module) + ResearchRunner + AuditRunner + QCRunner
+                           + FigureStore + UsageLedger + suggested_prompts) +
+                           has_unsaved_progress /
                            project_payload / project_default_stem /
                            project_default_filename (timestamped
                            buildaspec-<stem>-<YYYY-MM-DD-HHMMSS>.json, so
@@ -160,7 +169,7 @@ backend/
                            [SEED: Spec Critic src/modules/datacenter_fire.py]
                            first module: 21 13 13 lead + sibling catalog, playbook,
                            current-edition NFPA pins w/ provenance, research dims
-  spec_modules/generic.py  [Batch 9, native] the any-discipline module (USA &
+  spec_modules/generic.py  [Batch 10, native] the any-discipline module (USA &
                            Canada): unpinned basis (NO pins — editions enter via
                            set_standard_edition w/ stated basis), open_catalog
                            (empty catalog; section from the session discipline),
@@ -186,7 +195,7 @@ backend/
   spec_doc/linting.py      [PORT: Spec Critic src/input/preprocessor.py logic]
                            deterministic advisory lint: stale editions vs effective
                            pins (negation suppression), placeholders/markers,
-                           empty/duplicate articles, unset header; Batch 9 adds
+                           empty/duplicate articles, unset header; Batch 10 adds
                            unrecorded_edition (unpinned modules ONLY: designation
                            cited w/ a year but absent from effective_editions —
                            publisher-grammar discovery, then the same four
@@ -199,23 +208,27 @@ backend/
                            ins/del via docx.oxml; clean path untouched, byte-stable)
                            + redline_filename
   spec_doc/project.py      JSON project files (save/resume) + chat transcript +
-                           module_id + discipline (Batch 9: saved unconditionally,
-                           loaded w/ sanitize + the open-catalog invariant; old
-                           files degrade to "") + audit_result + qc_result
-                           (baseline_index rides store.to_dict/load — no
-                           project.py change)
+                           module_id + discipline (Batch 10: saved
+                           unconditionally, loaded w/ sanitize + the open-catalog
+                           invariant; old files degrade to "") + audit_result +
+                           qc_result (baseline_index rides store.to_dict/load — no
+                           project.py change); Batch 9 adds an optional
+                           suggested_prompts key (omitted when empty;
+                           restore_prompts on load, assigned unconditionally)
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
                            FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message);
                            Batch 6 adds onboarding_demo_directive (discipline-
                            sanitized) + _ONBOARDING_POLICY in the stable prompt;
-                           Batch 9 splits sanitize_discipline (public, no
+                           Batch 9 adds _SUGGESTED_PROMPTS_POLICY (after
+                           _FIGURE_POLICY) + the demo directive's no-suggest clause;
+                           Batch 10 splits sanitize_discipline (public, no
                            fallback — shared w/ reset + project load), renders
                            open-catalog guidance in _render_catalog, and rewords
                            _STANDARDS_POLICY/_PROVENANCE/FULL_DRAFT_DIRECTIVE
                            to stay true for pinless modules
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
-                           lint event + standards_payload; Batch 9 renders the
+                           lint event + standards_payload; Batch 10 renders the
                            PROJECT DISCIPLINE line first in PROJECT CONTEXT
                            (open-catalog sessions only — curated request bytes
                            unchanged); Batch 7 adds
@@ -223,13 +236,17 @@ backend/
                            user stop ends the round loop early but still
                            commits (current_message_snapshot, not
                            get_final_message(), so the closed request doesn't
-                           drain)
+                           drain); Batch 9 adds the suggest_prompts tool
+                           (_run_suggest_prompts + turn-local staged_suggestions
+                           committed beside doc/figures — latest-only replace) +
+                           SessionState.suggested_prompts
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
-                           baselineIndex, pickerOpen + modules (Batch 9 module
-                           picker; New session → picker → reset-with-body; the
-                           raw newSession stays bodyless for the tour),
+                           baselineIndex, suggestions (Batch 9 reply chips),
+                           pickerOpen + modules (Batch 10 module picker; New
+                           session → picker → reset-with-body; the raw newSession
+                           stays bodyless for the tour),
                            settings-open, closePromptOpen
                            (window.buildaspecRequestClose hook), send loop (SSE
                            switch incl. status/thinking_delta); QC follow-stream
@@ -243,7 +260,7 @@ frontend/src/
                            start/status/stream/apply/dismiss + readiness; Batch 5
                            getDocDiff; Batch 7 stopChat/stopResearch/stopQc (409
                            from an already-settled run/turn is swallowed, not
-                           thrown); Batch 9 resetSession(opts?) (JSON body only
+                           thrown); Batch 10 resetSession(opts?) (JSON body only
                            when opts given) + getModules
   lib/useSmoothText.ts     [Batch 2] rAF typewriter smoothing + reduced-motion +
                            splitStableTail (cheap-markdown prefix/tail split)
@@ -308,14 +325,19 @@ frontend/src/
                            confirmation stays its own purpose-built modal; an
                            `elevated` prop (z-80) lets App host the tour's
                            end-or-continue confirm above the overlay's own modals) /
-                           ModalShell (Batch 9: extracted from OnboardingOverlay
+                           ModalShell (Batch 10: extracted from OnboardingOverlay
                            + primaryBtn/quietBtn, shared) / ModulePickerDialog
-                           (Batch 9: session-start module cards + discipline
+                           (Batch 10: session-start module cards + discipline
                            chips/input for generic; Header label shows
                            "Generic — {discipline}" when set) /
                            FigureCard (Batch 8: inline figure render — sanitized
                            SVG/mermaid in a sandbox="" iframe, escaped data table,
-                           SVG/PNG/CSV downloads + a ✕ to remove)
+                           SVG/PNG/CSV downloads + a ✕ to remove) /
+                           SuggestedPrompts (Batch 9: model-staged reply-chip bar
+                           between the scroll region and Composer — rounded-full
+                           accent pills, hidden when empty, disabled while
+                           streaming, click sends via onSend; .prompt-chip-in
+                           rise-in, reduced-motion-gated)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
   conftest.py              hermetic env + fresh session per test
@@ -358,7 +380,14 @@ tests/
                            token-discipline tool result, rollback on failure,
                            self-correction on a bad payload) + REST (list/CSV/
                            delete/project round-trip)
-  test_session_modules.py  [Batch 9] reset-with-body matrix (bodyless keeps,
+  test_suggested_prompts.py [Batch 9] validate_prompts/restore_prompts units
+                           (fold/dedupe/cap, empty valid, lenient degrade) +
+                           suggest_prompts through /api/chat (SSE event + commit,
+                           token-discipline result + no-elision, not-called clears,
+                           failed turn preserves prior, is_error self-correction,
+                           empty clears, latest-call-wins, reset clears) +
+                           project save/load round-trip + stable-policy/demo pins
+  test_session_modules.py  [Batch 10] reset-with-body matrix (bodyless keeps,
                            switch + invariant, unknown degrades, sanitize),
                            GET /api/modules, discipline in context / not the
                            stable block, project round-trip + old-file compat +
@@ -377,6 +406,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `web_search` | `query` | the model ran a server-side web search this round — emitted LIVE (Batch 2) the instant the server-tool block's input completes, not derived post-hoc |
 | `web_fetch` | `url` | the model fetched a page/document server-side this round — emitted live on the block's completion |
 | `figure` | `figure` | the model created a figure (diagram/schematic/table) via `create_figure` this round — the full serialized `Figure` for inline chat rendering + downloads (Batch 8). Emitted live on the tool dispatch. Source is client-sanitized before render; it lives only in the figure store, never in history/traces/the re-billed doc context |
+| `suggested_prompts` | `prompts` | the model staged up to 5 one-tap reply chips via `suggest_prompts` this round (Batch 8→9), shown above the composer; emitted live on the tool dispatch. Latest-only, committed turn-atomically: a committed turn REPLACES the session's set with what it staged (not calling the tool = clear, which is the wind-down; a failed turn keeps the prior set). Tiny payload — rides committed history verbatim (no elision, no PROJECT CONTEXT stub) |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
 | `open_questions` | `items` | open-item list (TBD markers + needs_input blocks); emitted when a turn changed the doc |
@@ -388,8 +418,9 @@ The frontend switch in `App.tsx#send` is the single place events dispatch.
 Snapshots outside a turn travel over REST, not SSE: `GET /api/doc`,
 `POST /api/doc/undo|redo`, and `POST /api/project/load` all return
 `{doc, open_questions, lint, standards, profile_complete, research_status,
-baseline_index}` (load adds `chat`, the rebuilt transcript; `baseline_index`
-is the imported-master version for the redline picker). Patches and snapshots
+baseline_index, figures, suggested_prompts}` (load adds `chat`, the rebuilt
+transcript; `baseline_index` is the imported-master version for the redline
+picker; `suggested_prompts` re-syncs the reply-chip bar, incl. restore-on-error). Patches and snapshots
 always carry the full tree — the frontend never applies ops itself. The
 Batch 3 full-draft pass adds NO SSE event: `POST /api/draft/full` returns the
 canned directive `{ok, message}` over REST (409 while a turn or research runs)
@@ -1240,7 +1271,81 @@ Python deps; two new frontend deps (`mermaid`, `dompurify`).
   the figure contract is pinned by `test_figures.py` (24 tests) and the
   frontend by `npm run build` (tsc).
 
-## Batch 9 — implemented notes (v1.4.0: generic any-discipline module)
+## Batch 9 — implemented notes (v1.4.0: dynamic suggested-prompts bar)
+
+Abraham's ask: a row of up to 5 pretty, clickable prompt chips just above the
+chat composer, the model choosing the set each turn — direct answers to what
+it just asked, or momentum moves — and the count winding down toward zero as
+the section nears issue-ready. The whole feature is the Batch 8 `create_figure`
+blueprint re-applied: one new chat tool on the ONE chat/tool loop, one live
+SSE event, turn-atomic session state, optional project persistence, one stable
+policy block. No new deps, no new env vars, no new endpoints, no format bump.
+
+- **`suggest_prompts` is a third chat tool** (peer of `apply_spec_edits` /
+  `create_figure`, defined in `backend/suggestions.py`), lenient schema (the
+  create_figure posture, NOT the research strict shape), appended LAST in
+  `_chat_tools()` so the existing tool bytes stay a stable cached prefix. It
+  rides the one tool loop: `conversation._run_tool` dispatches it to
+  `_run_suggest_prompts`, which validates, returns a compact token-discipline
+  result (`{"suggested": N}`), and yields a live `suggested_prompts` UI event
+  with the validated list. A bad payload becomes an `is_error` result the
+  model self-corrects from — never a turn failure (the apply_spec_edits /
+  create_figure posture). No `drawing`-style status hint (payload streams
+  sub-second; the round-top `working` status covers it).
+- **Latest-only, turn-atomic REPLACE semantics.** `stream_user_turn` keeps a
+  turn-local `staged_suggestions` (initialized `[]`); the dispatch loop records
+  each call's list (latest wins) before yielding the event; the success `else:`
+  block assigns `session.suggested_prompts = staged_suggestions` beside the
+  doc/figure commits. A committed turn REPLACES the set — including `[]` when
+  the tool was NOT called, which is the wind-down (silence = clear the bar). A
+  failed turn `return`s before the commit, so the previous list is simply never
+  overwritten — rollback by construction, no begin/rollback bookkeeping, nothing
+  extra for zombie turns (commit is already generation-guarded). A user stop
+  takes the commit path (Batch 7) with whatever was staged; a stop caught
+  mid-`suggest_prompts`-block strips the unexecuted `tool_use` (existing
+  truncation branch) → commits `[]` (bar clears). `SessionState.suggested_prompts`
+  clears in `reset()`.
+- **No elision, no PROJECT CONTEXT stub** (the deliberate contrast with
+  figures). The payload is tiny (≤5 × ≤120 chars), so the `tool_use` input rides
+  committed history verbatim and the model sees last turn's chips naturally —
+  `_elide_figure_tool_inputs` filters on `create_figure` only, so nothing
+  touches the suggest_prompts input. The tool RESULT still stays compact.
+- **Validation** (`suggestions.validate_prompts`, strict → `SuggestError` →
+  `is_error`): dict with `prompts: list`; each entry a string; internal
+  whitespace folds to single spaces; blank-after-cleanup → error; > 120 chars →
+  error; dedupe preserving order; the > 5 check runs AFTER cleanup (so a list
+  that dedupes down to 5 passes). An EMPTY list is VALID — the deliberate
+  "nothing useful to suggest" signal. `restore_prompts` is the lenient project
+  loader (malformed → `[]`, the FigureStore.load posture).
+- **Persistence + one-way sync.** Optional `suggested_prompts` key in the
+  project file (`save_project`, gated on truthy — omitted when empty; no format
+  bump), restored by `load_project` UNCONDITIONALLY (it doesn't call reset(), so
+  a load over a live session must not inherit stale chips). `_doc_payload`
+  carries `suggested_prompts`, so boot, project load (`**_doc_payload`),
+  undo/redo, and the failed-turn `refreshDoc()` all re-sync the bar one way —
+  a failed turn's refresh returns the untouched pre-turn list, restoring the
+  bar for free.
+- **`_SUGGESTED_PROMPTS_POLICY`** joins the STABLE prompt after `_FIGURE_POLICY`:
+  chips in the USER'S voice (complete sendable replies, never fill-in-the-blank /
+  questions / spec text); answers-to-your-questions first (incl. an accept-default
+  / "I don't know" option), then momentum moves; chat-actionable only (research /
+  QC / export / undo / save are panel buttons, never chips); ≤60-char aim,
+  120 hard; wind down near issue-ready; harmonize with the full-draft close (the
+  chips ARE the clickable answers to its 2-3 follow-ups). Module-stable, zero
+  session data (the cache rule). The onboarding demo directive gains an explicit
+  "do NOT call suggest_prompts" clause (the demo mandates no follow-ups; the tour
+  drives what's next).
+- **Frontend**: `SuggestedPrompts.tsx` renders between the chat scroll region
+  and `Composer` (outside `data-tour="composer"`, so tour spotlight rects are
+  untouched) — `rounded-full` accent pills, hidden entirely when empty, disabled
+  while streaming, click → `onSend(label)` (send-immediately, the starter-chip
+  pattern; a prefill variant is a one-call swap). `App` owns `suggestions` state:
+  cleared at turn start, set live from the `suggested_prompts` SSE branch,
+  re-synced authoritatively via `refreshDoc`/`applyDocPayload` from the doc
+  payload. `.prompt-chip-in` rise-in, reduced-motion-gated. No-vitest convention
+  stands — pinned by `test_suggested_prompts.py` (24 tests) + `npm run build`.
+
+## Batch 10 — implemented notes (v1.5.0: generic any-discipline module)
 
 "Max flexibility" tier 2 (decided w/ Abraham 2026-07-22): a second module,
 `generic`, drafts ANY discipline for projects anywhere in the USA or Canada,
@@ -1279,7 +1384,7 @@ new REST route (`GET /api/modules`) + an optional body on the reset route.
 - **Discipline is session state, captured at session start.**
   `SessionState.discipline` (kept on reset, like `module`); the INVARIANT —
   non-empty ⇒ the active module is open-catalog — is enforced at the only
-  two write sites (`POST /api/session/reset` with the Batch 9 optional
+  two write sites (`POST /api/session/reset` with the Batch 10 optional
   body, and `load_project`), so a curated module can never carry a stale
   discipline and the Header label ("Generic — {discipline}") needs no extra
   state. Sanitized by the shared `sanitize_discipline` (whitespace fold,
@@ -1332,8 +1437,8 @@ new REST route (`GET /api/modules`) + an optional body on the reset route.
   the proof) + the 400 backstop (test_research_api); the lens-message
   discipline block (test_qc).
 - **Post-merge remediation (v1.4.0, after the master merge + review).**
-  Batch 9 landed on top of master's Batch 8 (chat figures, v1.3.0), so it
-  renumbered to Batch 9 / v1.4.0. Five review findings fixed: (1) the stale
+  This work renumbered to Batch 10 / v1.5.0 after master shipped its own
+  Batch 8 (chat figures) and Batch 9 (suggested-prompts bar). Five review findings fixed: (1) the stale
   scan is now punctuation-tolerant for unpinned modules
   (`_scan_editions(variant_tolerant=unpinned)` builds patterns for a
   recorded name's hyphen AND space forms) — closes the hole where a

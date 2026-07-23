@@ -17,7 +17,7 @@ Rules (stable ids consumers can branch on):
 
 - ``stale_edition`` — a standard cited at an edition contradicting the
   edition in effect (module pin or jurisdiction override).
-- ``unrecorded_edition`` — (unpinned-basis modules only, Batch 9) a
+- ``unrecorded_edition`` — (unpinned-basis modules only, Batch 10) a
   designation cited WITH an edition year while no edition is recorded for
   that standard at all — the no-pins posture's enforcement: record the
   edition and its basis via ``set_standard_edition``, or drop the year.
@@ -177,7 +177,7 @@ def _name_punctuation_variants(name: str) -> tuple[str, ...]:
 
     "CAN/ULC S524" and "CAN/ULC-S524" name the same standard; a recorded
     edition in one form must still stale-check a citation written in the
-    other (Batch 9). Used only for unpinned modules, where recorded names
+    other (Batch 10). Used only for unpinned modules, where recorded names
     are free-text and their punctuation need not match the document's.
     """
     variants: list[str] = []
@@ -239,7 +239,7 @@ def _scan_editions(
 
 
 # ---------------------------------------------------------------------------
-# Unrecorded-edition detection (unpinned-basis modules only, Batch 9)
+# Unrecorded-edition detection (unpinned-basis modules only, Batch 10)
 # ---------------------------------------------------------------------------
 
 # Publisher grammar for standards designations. Longest-first alternation so
@@ -307,7 +307,7 @@ def _scan_unrecorded_editions(
     # ("CAN/ULC-S524-2019") claims its span before a shorter one whose
     # pattern also matches inside it ("ULC-S524-2019"), so the shorter's
     # contained inner match is dropped by the span-dedup below instead of
-    # double-reporting the same physical citation (Batch 9).
+    # double-reporting the same physical citation (Batch 10).
     for raw in sorted(unrecorded, key=len, reverse=True):
         for pattern in _edition_patterns_for(raw):
             for match in pattern.finditer(text):

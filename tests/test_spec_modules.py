@@ -197,7 +197,7 @@ def test_rendered_prompt_is_stable_and_complete():
 
 
 # ---------------------------------------------------------------------------
-# Batch 9: the unpinned basis, the open catalog, and the generic module
+# Batch 10: the unpinned basis, the open catalog, and the generic module
 # ---------------------------------------------------------------------------
 
 

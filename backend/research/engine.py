@@ -442,7 +442,7 @@ def build_dimension_user_message(
 ) -> str:
     """Project header + the dimension's formatted brief.
 
-    ``discipline`` (Batch 9) is the session-selected discipline for
+    ``discipline`` (Batch 10) is the session-selected discipline for
     open-catalog modules. The kwarg is set unconditionally — a template
     referencing ``{discipline}`` must never KeyError at run time — but the
     header names it only when non-empty, so curated-module messages are

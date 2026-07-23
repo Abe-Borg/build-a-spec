@@ -298,7 +298,7 @@ def build_audit_user_message(
     profile: RequirementsProfile,
     discipline: str = "",
 ) -> str:
-    # The session discipline (Batch 9, open-catalog modules) renders only
+    # The session discipline (Batch 10, open-catalog modules) renders only
     # when non-empty — curated-module audits are byte-identical, and it
     # grounds the compliance_persona's reference to "the discipline stated
     # for the session."

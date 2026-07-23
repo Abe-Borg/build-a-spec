@@ -1,12 +1,12 @@
 # Build-a-Spec
 
-**v1.4.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.5.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
-First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.4.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
+First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## Current Status — v1.4.0 (Batch 9: Generic any-discipline module)
+## Current Status — v1.5.0 (Batch 10: Generic any-discipline module)
 
 **Any discipline, any project type, anywhere in the USA and Canada.** The
 "New session" button now opens a module picker: the curated hyperscale-fire
@@ -31,10 +31,37 @@ text welcome) and the app drafts to that discipline's conventions.
   ("Generic — Electrical").
 - **The curated module is untouched**: hyperscale fire suppression keeps
   its NFPA pins, playbook, and byte-identical behavior; it stays the
-  default. (Shipped between here and Batch 6 below: **v1.2.0 / Batch 7** —
-  stop buttons for generation, research, and Final QC; **v1.3.0 / Batch 8** —
-  chat figures: the model can create diagrams, schematics, and tables inline
-  with download links.)
+  default.
+
+## Shipped in v1.4.0 (Batch 9: Dynamic suggested-prompts bar) and still current
+
+**A row of one-tap reply chips sits just above the chat box, and the model
+fills it fresh every turn.** After each reply, Claude may stage up to five
+short prompts — direct answers to the question it just asked (its recommended
+default, a plausible alternative, an "I don't know — use your default"), or
+momentum moves like *"Draft PART 2 now."* Clicking a chip sends it as your
+next message, so an interview is mostly tapping, not typing.
+
+- **The model decides the set, every turn, via a new `suggest_prompts` chat
+  tool.** It rides the one chat/tool loop and streams a live `suggested_prompts`
+  event the instant it's called — the same thin-tool pattern as Batch 8's
+  figures. Chips are always complete, sendable replies in your voice (never
+  fill-in-the-blank templates, never panel-button actions like "Run research").
+- **It winds down as the section finishes.** Not calling the tool clears the
+  bar, so as open items resolve and the draft nears issue-ready the model
+  naturally offers fewer chips — one or two, then none. An empty section of
+  chips is a real signal, not a bug.
+- **Turn-atomic and honest.** A committed turn replaces the set (a stopped
+  turn keeps whatever it staged); a failed turn leaves the previous chips
+  untouched and the bar restores itself on the next refresh. The current set
+  rides the project file, so a saved-and-resumed session comes back with its
+  chips. The guided-tour demo pass deliberately offers none — the tour drives
+  what happens next.
+
+> Note: the v1.2.0 (Batch 7: stop generation / research / QC) and v1.3.0
+> (Batch 8: chat figures) status sections were never written into this README;
+> both shipped and are described in `CLAUDE.md`. This is a pre-existing
+> documentation gap, called out here rather than silently left implied.
 
 ## Shipped in v1.1.0 (Batch 6: Guided onboarding + starter prompts) and still current
 
@@ -375,7 +402,7 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          persona + dimensions      [seeded from Spec Critic datacenter_fire]
     generic.py           the any-discipline module (USA & Canada): unpinned basis,
                          open catalog, scaffold playbook, discipline-parameterized
-                         research dimensions                       [Batch 9, native]
+                         research dimensions                       [Batch 10, native]
   research/
     engine.py            the fan-out: parallel streaming web-search dimensions,
                          pause_turn continuations, budget ceilings, grounding,

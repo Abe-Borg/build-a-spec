@@ -128,7 +128,7 @@ class OnboardingDemoRequest(BaseModel):
 
 
 class SessionResetRequest(BaseModel):
-    """Optional body for POST /api/session/reset (Batch 9).
+    """Optional body for POST /api/session/reset (Batch 10).
 
     Absent body = the historical contract exactly (reset keeps the active
     module and discipline). ``module_id`` blank keeps the current module;
@@ -188,6 +188,11 @@ def _doc_payload(session) -> dict[str, Any]:
         # Chat-authored figures (diagrams/schematics/tables) — full source so
         # the frontend can render + offer downloads. Not part of the doc tree.
         "figures": session.figures.snapshot(),
+        # Suggested-reply chips staged by the model (Batch 9); [] when none.
+        # Surfaced here so boot, project load, undo/redo, and the failed-turn
+        # refresh all sync the bar one way — a failed turn's refresh returns
+        # the untouched pre-turn list, restoring the bar for free.
+        "suggested_prompts": list(session.suggested_prompts),
     }
 
 
@@ -838,7 +843,7 @@ def create_app() -> FastAPI:
                 },
                 status_code=400,
             )
-        # Batch 9 backstop: an open-catalog session researches "{discipline}
+        # Batch 10 backstop: an open-catalog session researches "{discipline}
         # work" — without a stated discipline the templates have nothing to
         # research. The session-start picker normally guarantees this.
         if getattr(session.module, "open_catalog", False) and not (

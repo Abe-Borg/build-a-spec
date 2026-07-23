@@ -155,6 +155,18 @@ class _CloseController:
         """Frontend chose 'Don't save': close without writing anything."""
         self._force_close()
 
+    def save_project(self) -> bool:
+        """Frontend's in-app save gate (New session / Open project) chose
+        'Save': write a project file but keep the window open.
+
+        Returns True if a file was written, False if the user cancelled the
+        native Save dialog or the write failed. The frontend proceeds to the
+        reset/load only on True, so a cancelled save never discards the
+        session. Same payload + native dialog as ``save_and_close``, minus the
+        ``_force_close()``.
+        """
+        return self._save_project_file()
+
     # --- internals ---------------------------------------------------------
     def _force_close(self) -> None:
         self._allow_close = True

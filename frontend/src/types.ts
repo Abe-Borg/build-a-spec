@@ -565,6 +565,10 @@ declare global {
       api?: {
         save_and_close?: () => Promise<void>;
         discard_and_close?: () => Promise<void>;
+        /** In-app save without closing (the New-session / Open-project save
+         *  gate); resolves true when a file was written, false if the native
+         *  Save dialog was cancelled. */
+        save_project?: () => Promise<boolean>;
       };
     };
     buildaspecRequestClose?: () => void;

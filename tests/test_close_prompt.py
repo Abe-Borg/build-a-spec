@@ -45,6 +45,19 @@ def test_has_unsaved_progress_with_doc_content():
     assert sessions.has_unsaved_progress(session) is True
 
 
+def test_has_unsaved_progress_with_only_figures():
+    # A chat-authored figure is content worth saving even with no history and
+    # a blank document — the save gate depends on this (a figure must never be
+    # discarded silently just because it isn't "in the document").
+    session = SessionState()
+    session.figures.create(
+        {"kind": "mermaid", "title": "Riser", "source": "graph TD; A-->B"}
+    )
+    assert not session.history
+    assert session.doc.doc.is_empty()
+    assert sessions.has_unsaved_progress(session) is True
+
+
 def test_project_payload_shape_and_stem_default():
     session = SessionState()
     payload = sessions.project_payload(session)
@@ -230,3 +243,32 @@ def test_save_and_close_cancelled_dialog_stays_open(monkeypatch):
     assert window.dialog_calls, "the Save dialog should have been offered"
     assert window.destroyed is False
     assert controller._allow_close is False
+
+
+def test_save_project_writes_file_but_keeps_window_open(tmp_path, monkeypatch):
+    # The in-app save gate (New session / Open project): save WITHOUT closing.
+    _fake_webview(monkeypatch)
+    target = tmp_path / "buildaspec-draft.json"
+    window = _FakeWindow(dialog_path=str(target))
+    controller = _controller_with(window)
+
+    assert controller.save_project() is True
+
+    assert target.exists()
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["kind"] == "buildaspec-project"
+    # Unlike save_and_close, the window is never destroyed.
+    assert window.destroyed is False
+    assert controller._allow_close is False
+
+
+def test_save_project_cancelled_dialog_returns_false(monkeypatch):
+    # A cancelled Save-As returns False so the frontend keeps the session
+    # (a mis-click behind "Save" must never discard the work).
+    _fake_webview(monkeypatch)
+    window = _FakeWindow(dialog_path=None)
+    controller = _controller_with(window)
+
+    assert controller.save_project() is False
+    assert window.dialog_calls, "the Save dialog should have been offered"
+    assert window.destroyed is False

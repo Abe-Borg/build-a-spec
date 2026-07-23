@@ -374,6 +374,18 @@ def test_delete_figure_removes_it_and_guards(monkeypatch):
     assert client.get("/api/figures").json()["figures"] == []
 
 
+def test_session_unsaved_endpoint_reports_work(monkeypatch):
+    # The in-app save gate (New session / Open project) reads this flag.
+    client = _client()
+    assert client.get("/api/session/unsaved").json() == {
+        "ok": True,
+        "unsaved": False,
+    }
+    _patch_client(monkeypatch, _figure_turn(_MERMAID_FIGURE))
+    client.post("/api/chat", json={"message": "Draw."})
+    assert client.get("/api/session/unsaved").json()["unsaved"] is True
+
+
 def test_figures_survive_project_save_and_load(monkeypatch):
     client = _client()
     _patch_client(monkeypatch, _figure_turn(_MERMAID_FIGURE))

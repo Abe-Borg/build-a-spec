@@ -18,9 +18,11 @@ import type {
 } from "./types";
 import {
   applyQc,
+  checkUnsaved,
   checkUpdate,
   deleteFigure,
   dismissQc,
+  downloadProjectFile,
   draftFull,
   editDoc,
   getDoc,
@@ -107,6 +109,13 @@ export default function App() {
   // first open, then cached for the app's lifetime (it's static per build).
   const [pickerOpen, setPickerOpen] = useState(false);
   const [modules, setModules] = useState<ModuleInfo[] | null>(null);
+  // The in-app save-before-you-lose-it gate for the two paths that discard the
+  // session (New session, Open project). Non-null = the prompt is open; the
+  // pending action (and, for a load, its file) runs after Save/Discard. Null
+  // when idle — the session-close window prompt is separate (closePromptOpen).
+  const [saveGate, setSaveGate] = useState<
+    { kind: "new-session" } | { kind: "open-project"; file: File } | null
+  >(null);
   const busyRef = useRef(false);
   const researchFollowRef = useRef(false);
   const qcFollowRef = useRef(false);
@@ -758,10 +767,78 @@ export default function App() {
     }
   };
 
-  const onLoadProject = async (file: File) => {
-    // Loading a project is session-changing work — a mid-tour load kills
-    // the tour (the runId guard keeps any in-flight step from advancing).
+  // --- Save gate: never discard a session's work without offering to save ---
+  // New session and Open project both replace the whole session, so each routes
+  // through this gate first (Save / Don't save / Cancel). The only way to lose
+  // work becomes explicitly declining the save — the user's rule. Mirrors the
+  // native window-close prompt, reusing the same predicate + save machinery.
+
+  /** Native save (pywebview) or, in dev/browser, the download fallback.
+   *  Resolves true once a file is actually written (false = cancelled). */
+  const saveProjectFile = async (): Promise<boolean> => {
+    const api = window.pywebview?.api;
+    if (api?.save_project) {
+      try {
+        return !!(await api.save_project());
+      } catch {
+        return false;
+      }
+    }
+    // No native bridge (dev/browser): download the project file. We can't
+    // observe the browser's own save dialog, so a completed fetch counts as
+    // done (and it's awaited, so the reset can't race the save payload).
+    try {
+      await downloadProjectFile();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  /** Does the session hold work worth saving? Authoritative server check
+   *  (same predicate as the close prompt), with a local fallback if it fails. */
+  const isUnsaved = async (): Promise<boolean> => {
+    try {
+      return await checkUnsaved();
+    } catch {
+      return messages.length > 0 || figures.length > 0 || hasContent;
+    }
+  };
+
+  /** Run the pending session-discarding action once the gate resolves. */
+  const runGate = (gate: NonNullable<typeof saveGate>) => {
+    if (gate.kind === "new-session") void openPicker();
+    else void doLoadProject(gate.file);
+  };
+
+  const onGateSave = async () => {
+    const gate = saveGate;
+    if (!gate) return;
+    const saved = await saveProjectFile();
+    setSaveGate(null);
+    // Proceed only once a file was written — a cancelled Save dialog keeps the
+    // session, so a mis-click behind "Save" can never lose the work.
+    if (saved) runGate(gate);
+  };
+
+  const onGateDiscard = () => {
+    const gate = saveGate;
+    setSaveGate(null);
+    if (gate) runGate(gate);
+  };
+
+  /** Header "New session": offer to save, then open the module picker. */
+  const requestNewSession = async () => {
+    // Session-changing work kills the tour (its own fresh-start path calls the
+    // raw newSession, never this gated one).
     onboarding.abort();
+    if (await isUnsaved()) setSaveGate({ kind: "new-session" });
+    else void openPicker();
+  };
+
+  /** The actual project load (after the save gate). Rebuilds the transcript
+   *  and re-inlines each figure by its stored message_index. */
+  const doLoadProject = async (file: File) => {
     try {
       const parsed: unknown = JSON.parse(await file.text());
       const result = await loadProject(parsed);
@@ -807,6 +884,13 @@ export default function App() {
     }
   };
 
+  /** Open project (the panel's file picker): offer to save, then load. */
+  const onLoadProject = async (file: File) => {
+    onboarding.abort();
+    if (await isUnsaved()) setSaveGate({ kind: "open-project", file });
+    else void doLoadProject(file);
+  };
+
   // --- Guided tour (Batch 6) ---
   const hasContent =
     !!doc &&
@@ -837,13 +921,7 @@ export default function App() {
         busy={busy}
         update={update}
         usage={usage}
-        onNewSession={() => {
-          // The header button is session-changing work: kill the tour first
-          // (the hook's own fresh-start path calls the raw newSession). The
-          // picker owns the actual reset — Cancel keeps the session.
-          onboarding.abort();
-          void openPicker();
-        }}
+        onNewSession={() => void requestNewSession()}
         onStartTour={onboarding.start}
         onInstallUpdate={onInstallUpdate}
         onOpenSettings={() => {
@@ -916,6 +994,31 @@ export default function App() {
           void window.pywebview?.api?.discard_and_close?.();
         }}
         onCancel={() => setClosePromptOpen(false)}
+      />
+      {/* In-app save gate: New session / Open project both discard the
+          session, so offer to save first (the user's "don't lose content"
+          rule). Same 3-way dialog; copy switches on the pending action. */}
+      <CloseDialog
+        open={saveGate !== null}
+        title={
+          saveGate?.kind === "open-project"
+            ? "Open a different project?"
+            : "Start a new session?"
+        }
+        body="You have unsaved work in this session. Save it to a project file first, or continue without saving — this can't be undone."
+        saveLabel={
+          saveGate?.kind === "open-project"
+            ? "Save, then open"
+            : "Save, then start"
+        }
+        discardLabel={
+          saveGate?.kind === "open-project"
+            ? "Open without saving"
+            : "Start without saving"
+        }
+        onSave={onGateSave}
+        onDiscard={onGateDiscard}
+        onCancel={() => setSaveGate(null)}
       />
       <main className="flex min-h-0 flex-1">
         <Chat

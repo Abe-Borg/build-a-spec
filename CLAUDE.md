@@ -1522,6 +1522,63 @@ merge. No new SSE event, no new REST route, no new Python/npm deps.
   through the endpoint), `test_app.py` (payload flag set), `test_qc.py`
   (QC-proposed suppression survives cleaning).
 
+## Content persistence — implemented notes (save gate + figure minimize/confirm)
+
+The rule (Abraham): never lose session content unless the user starts a new
+session (or opens another project) AND explicitly declines to save; anything
+created must be saved when the user saves. The save path already captured
+everything — figures included (`project_payload` → `save_project(figures=…)`).
+What was missing were guards on the destructive paths. No new SSE events, no
+new deps, no project-file format bump; one thin REST route + one js_api method.
+
+- **Two destructive paths are now save-gated.** "New session"
+  (Header → `requestNewSession`) and "Open project"
+  (`ArtifactPanel` file input → `onLoadProject`) both replace the whole
+  session, so each first checks `has_unsaved_progress` and, if there's work,
+  opens a Save / Don't save / Cancel prompt. Loss now requires an explicit
+  "…without saving". The native window-close prompt (`main._CloseController`)
+  was already gated; these reuse the same predicate + save machinery. The raw
+  bodyless `newSession` is UNTOUCHED (the onboarding tour's fresh-start path
+  depends on it — the Batch 6 never-re-wrap rule); only the Header button path
+  gets the gate.
+- **`CloseDialog` is now the shared 3-way "save before you lose this?" modal**
+  — optional `title`/`body`/`saveLabel`/`discardLabel` props default to the
+  window-close wording (that instance is byte-unchanged); the in-app gate
+  renders a second instance whose copy switches on the pending action
+  (new-session vs open-project). App owns `saveGate`
+  (`{kind:"new-session"} | {kind:"open-project"; file} | null`) — the pending
+  File rides the state so the load runs after the gate resolves.
+- **The save mechanism.** `_CloseController.save_project()` (main.py) reuses
+  `_save_project_file()` (native `webview.SAVE_DIALOG`) but never
+  `_force_close()` — auto-exposed to JS as `window.pywebview.api.save_project`,
+  returning True on write / False on a cancelled Save-As. The frontend proceeds
+  to the reset/load ONLY on True, so a cancelled save keeps the session.
+  Dev/browser fallback (no bridge): `downloadProjectFile()` fetches
+  `/api/project/save` (awaited — so a fast reset can't race the payload) and
+  downloads the blob.
+- **`has_unsaved_progress` now counts figures explicitly**
+  (`or bool(session.figures.figures)`) — a session whose only work is a
+  diagram/table still offers to save (they no longer merely ride the chat
+  history that produced them). Surfaced to the frontend by a thin
+  `GET /api/session/unsaved` → `{ok, unsaved}` (`checkUnsaved()`), called on
+  the New-session / Open click so the gate uses the same truth as the close
+  prompt (frontend falls back to a local heuristic if that fetch fails).
+- **Figure ✕ is now confirm-then-delete** (was a silent hard delete — the odd
+  one out vs the doc-tree 🗑 / standards deletes). Inline two-step confirm in
+  `FigureCard`, mirroring `SpecDocument`'s row-delete pattern; the backend
+  `DELETE /api/figure/{fid}` + `FigureStore.delete` are unchanged.
+- **Figure minimize** is a new non-destructive fold: a caret in the figure
+  card collapses the rendered body/caption/downloads while the figure stays in
+  the session (and in every save). LOCAL `FigureCard` state (no prop drilling,
+  no store/endpoint) — it survives in-session re-syncs (the card is keyed by
+  fid) and resets on New session / project load (the bubbles remount). A
+  deliberate view-only preference; persisting it across reload would be a
+  one-field add, intentionally skipped.
+- **Tests**: `test_close_prompt.py` (`has_unsaved_progress` with only a figure;
+  `save_project()` writes-but-keeps-open + cancelled-returns-False),
+  `test_figures.py` (`/api/session/unsaved` reflects work). Frontend pinned by
+  `npm run build` (tsc) — the no-vitest convention stands.
+
 ## Commands
 
 ```

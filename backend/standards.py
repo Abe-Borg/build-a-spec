@@ -240,8 +240,21 @@ def standards_context_block(
     the model can cite it — a jurisdiction edition is never in effect
     silently.
     """
+    editions = effective_editions(basis, overrides)
+    if not editions:
+        # A domain-neutral module pins nothing until the discipline / AHJ /
+        # overrides establish it. Say so intentionally rather than emitting an
+        # empty list that reads as a bug.
+        return (
+            "Standards editions in effect for this project: none pinned by "
+            "default. Cite the codes and standards this section's discipline "
+            "and its authority having jurisdiction require, at their current "
+            "published editions. When the user states a jurisdiction-adopted "
+            "edition, record it with a set_standard_edition operation "
+            "(adoption basis required) before drafting to it."
+        )
     lines = ["Standards editions in effect for this project:"]
-    for eff in effective_editions(basis, overrides):
+    for eff in editions:
         line = f"- {eff.name}: {eff.edition}"
         if eff.note:
             line += f" ({eff.note})"

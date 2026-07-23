@@ -29,13 +29,20 @@ def _fresh_session():
     from backend import sessions
     from backend.llm.client import reset_client_cache
     from backend.llm.conversation import reset_thinking_display_probe
+    from backend.spec_modules import DEFAULT_MODULE
 
     sessions.reset_session()
+    # SessionState.reset() deliberately KEEPS the active module ("a fresh
+    # session in the same discipline"), so a test that pins a non-default
+    # module would otherwise leak it into the next test. Pin the default for
+    # per-test isolation.
+    sessions.get_session().module = DEFAULT_MODULE
     reset_client_cache()
     # The thinking.display capability degrade is process-scoped; re-arm it so
     # a fallback test can't leak "omitted" into a later test's request.
     reset_thinking_display_probe()
     yield
     sessions.reset_session()
+    sessions.get_session().module = DEFAULT_MODULE
     reset_client_cache()
     reset_thinking_display_probe()

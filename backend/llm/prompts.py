@@ -41,7 +41,7 @@ _TOOL_GUIDE = """\
 _WEB_LOOKUP_POLICY = """\
 # Live web lookups
 
-- You have web_search and web_fetch for quick mid-interview verification: a product listing or UL category, a manufacturer datasheet, a standard designation, a fact the user is unsure of. Use them freely whenever a verified fact would improve the draft over a recalled one; say in one line what you looked up and what it settled.
+- You have web_search and web_fetch for quick mid-interview verification: a product listing or agency classification, a manufacturer datasheet, a standard designation, a fact the user is unsure of. Use them freely whenever a verified fact would improve the draft over a recalled one; say in one line what you looked up and what it settled.
 - Quick lookups are NOT the requirements-research phase. For the systematic jurisdiction / AHJ / client / insurer sweep, point the user at the Research button (once, when the profile completes) instead of recreating it piecemeal.
 - Weigh sources: publishers, agencies, standards bodies, and manufacturers are citable; anything else is a lead to confirm. Never draft a code edition, adoption, or listing into the spec from a non-authoritative page.
 - Never paste retrieved content wholesale into the specification — extract the fact, draft it in spec language, and mention the source in chat."""
@@ -51,7 +51,7 @@ _FIGURE_POLICY = """\
 
 You can create figures with the create_figure tool: Mermaid diagrams, hand-authored SVG schematics, and data tables. They render inline in the chat with SVG / PNG / CSV download links. Figures are exhibits that accompany the specification — never a substitute for its provisions.
 
-- Offer a figure only when it genuinely clarifies: a sprinkler/standpipe riser schematic, a sequence of operations, a hazard/commodity classification decision tree, a device or valve schedule. Most turns need none — do not decorate.
+- Offer a figure only when it genuinely clarifies: a riser or one-line schematic, a sequence of operations, a classification or selection decision tree, an equipment or finish schedule. Most turns need none — do not decorate.
 - Never place a normative requirement ONLY in a figure. The enforceable words live in a provision (apply_spec_edits); the figure illustrates or summarizes them, and the two must stay consistent.
 - Pick the kind: mermaid for flow / sequence / decision / state graphs (keep node labels plain text), svg for spatial line schematics a graph cannot express, table for schedules. Keep every figure accurate to the current draft and the standards editions in effect.
 - Do not paste a figure's source into chat — say in one line what it shows. To revise a figure, create a new one; the previous id is retained for reference."""
@@ -83,7 +83,7 @@ When the document contains imported blocks, the user started from an office mast
 - Work article by article in document order. For each: keep-as-is (replace status to confirmed once the user confirms, or assumed when you judge it fits this project's profile and defaults), adapt (replace text + status), or delete what doesn't apply. Batch the edits per article.
 - The master's edition citations are data, not truth: check them against the standards editions in effect, and fix stale ones (the lint flags them).
 - Masters carry other projects' remnants — placeholders, wrong-jurisdiction references, sections that don't apply. Hunt them; the lint helps.
-- Still run the interview: the playbook topics apply, but ask them against what the master already says ("the master specifies Schedule 10 roll-grooved for 2-1/2 in. and larger — keep that here?").
+- Still run the interview: the playbook topics apply, but ask them against what the master already says ("the master specifies a particular material or method for this scope — keep that here?").
 - The export schedules every block still stamped imported, so a block you never visited stays visible to the reviewer. Do not mass-upgrade statuses without actually reviewing content."""
 
 _FULL_DRAFT_POLICY = """\
@@ -193,13 +193,22 @@ def onboarding_demo_directive(discipline: str) -> str:
 
 
 def _render_catalog(module: SpecModule) -> str:
-    lines = [
-        "# Section catalog",
-        "",
-        "Sections this module authors (steer toward the first unless the "
-        "user names another):",
-        "",
-    ]
+    lines = ["# Section catalog", ""]
+    if not module.section_catalog:
+        lines.append(
+            "This configuration is not tied to a fixed list of sections — "
+            "author whatever CSI SectionFormat section the user names, in "
+            "whatever discipline. Establish the section number and title, set "
+            "the header (replace on 'sec'), and draft to that discipline's "
+            "conventions and standards."
+        )
+        return "\n".join(lines)
+    lines.append(
+        "You can author any CSI SectionFormat section the user names; the "
+        "sections below are common examples this configuration is tuned for, "
+        "not a limit — draft whatever section the user asks for:"
+    )
+    lines.append("")
     for section in module.section_catalog:
         line = f"- {section.number} {section.title}"
         if section.scope_note:
@@ -212,7 +221,7 @@ def _render_playbook(module: SpecModule) -> str:
     lines = [
         "# Interview playbook",
         "",
-        "Ordered topics for the lead section. Defaultable topics carry the "
+        "Ordered interview topics. Defaultable topics carry the "
         "recommended default to apply (stamped assumed) when the user "
         "defers; (must ask) topics have no default and require an answer:",
         "",

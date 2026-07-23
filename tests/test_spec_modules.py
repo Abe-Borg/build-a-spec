@@ -19,7 +19,7 @@ from backend.spec_modules.base import (
     SectionDef,
 )
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
-from backend.standards import StandardEdition, StandardsBasis
+from backend.standards import StandardEdition
 
 
 def _valid() -> object:
@@ -28,8 +28,12 @@ def _valid() -> object:
 
 def test_registry_resolves_and_defaults():
     assert "hyperscale_fire" in AVAILABLE_MODULES
+    assert "general" in AVAILABLE_MODULES
     assert get_module("hyperscale_fire") is HYPERSCALE_FIRE
     assert get_module(None) is DEFAULT_MODULE
+    # The domain-neutral module is the default: a fresh session is not boxed
+    # into any one discipline's section list.
+    assert DEFAULT_MODULE.module_id == "general"
     assert get_module("no-such-module") is DEFAULT_MODULE
     validate_module_registry(AVAILABLE_MODULES.values())
 
@@ -95,11 +99,20 @@ def test_duplicate_pin_rejected():
         validate_module_registry([bad])
 
 
-def test_basis_without_standards_rejected():
-    bad_basis = StandardsBasis(label="empty", base_codes=_valid().basis.base_codes)
-    bad = replace(_valid(), basis=bad_basis)
-    with pytest.raises(ValueError, match="pins no standards"):
-        validate_module_registry([bad])
+def test_general_module_is_open_and_valid():
+    # The domain-neutral default: no fixed section catalog and no pinned
+    # standards basis, yet still a valid module (the relaxed validation).
+    from backend.spec_modules import GENERAL
+
+    assert GENERAL.module_id == "general"
+    assert GENERAL.section_catalog == ()
+    assert GENERAL.basis.standards == ()
+    assert GENERAL.basis.base_codes == ()
+    assert GENERAL.lead_section() is None
+    # Its research dimensions template the section being authored.
+    templates = " ".join(d.prompt_template for d in GENERAL.research_dimensions)
+    assert "{section_number}" in templates and "{section_title}" in templates
+    validate_module_registry([GENERAL])  # does not raise
 
 
 def test_malformed_section_number_rejected():

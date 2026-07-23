@@ -3,7 +3,7 @@ override interplay — pure document-model exercises, no API."""
 from __future__ import annotations
 
 from backend.spec_doc import DocumentStore, lint_document
-from backend.spec_modules import DEFAULT_MODULE
+from backend.spec_modules import HYPERSCALE_FIRE
 
 
 def _doc_with(edits: list[dict]):
@@ -50,7 +50,7 @@ def test_stale_edition_detected_in_three_citation_shapes():
         )
     )
     issues = [
-        i for i in lint_document(doc, DEFAULT_MODULE)
+        i for i in lint_document(doc, HYPERSCALE_FIRE)
         if i["rule"] == "stale_edition"
     ]
     assert len(issues) == 3
@@ -68,7 +68,7 @@ def test_matching_edition_and_bare_reference_do_not_flag():
         )
     )
     assert [
-        i for i in lint_document(doc, DEFAULT_MODULE)
+        i for i in lint_document(doc, HYPERSCALE_FIRE)
         if i["rule"] == "stale_edition"
     ] == []
 
@@ -82,7 +82,7 @@ def test_sibling_designations_do_not_cross_match():
         )
     )
     issues = [
-        i for i in lint_document(doc, DEFAULT_MODULE)
+        i for i in lint_document(doc, HYPERSCALE_FIRE)
         if i["rule"] == "stale_edition"
     ]
     assert issues == []
@@ -96,7 +96,7 @@ def test_negation_suppresses_historical_citations():
         )
     )
     assert [
-        i for i in lint_document(doc, DEFAULT_MODULE)
+        i for i in lint_document(doc, HYPERSCALE_FIRE)
         if i["rule"] == "stale_edition"
     ] == []
 
@@ -115,7 +115,7 @@ def test_override_retargets_the_stale_check():
         ]
     )
     issues = [
-        i for i in lint_document(doc, DEFAULT_MODULE)
+        i for i in lint_document(doc, HYPERSCALE_FIRE)
         if i["rule"] == "stale_edition"
     ]
     # The module-default 2025 citation now contradicts the jurisdiction's
@@ -138,7 +138,7 @@ def test_override_retargets_the_stale_check():
         ]
     )
     assert [
-        i for i in lint_document(doc2, DEFAULT_MODULE)
+        i for i in lint_document(doc2, HYPERSCALE_FIRE)
         if i["rule"] == "stale_edition"
     ] == []
 
@@ -157,7 +157,7 @@ def test_placeholder_and_template_markers():
             "Lorem ipsum dolor sit amet.",
         )
     )
-    issues = lint_document(doc, DEFAULT_MODULE)
+    issues = lint_document(doc, HYPERSCALE_FIRE)
     rules = [i["rule"] for i in issues]
     assert rules.count("placeholder_marker") == 2
     assert rules.count("template_marker") == 2
@@ -167,7 +167,7 @@ def test_tbd_is_not_double_reported_by_lint():
     # [TBD: ...] is first-class open-item tracking, not lint.
     doc = _doc_with(_base("Design density [TBD: value] applies."))
     assert [
-        i for i in lint_document(doc, DEFAULT_MODULE)
+        i for i in lint_document(doc, HYPERSCALE_FIRE)
         if "TBD" in i.get("match", "")
     ] == []
 
@@ -175,7 +175,7 @@ def test_tbd_is_not_double_reported_by_lint():
 def test_module_extra_marker_patterns_apply():
     doc = _doc_with(_base("Project: [PROJECT NAME] campus, phase XXXX."))
     issues = [
-        i for i in lint_document(doc, DEFAULT_MODULE)
+        i for i in lint_document(doc, HYPERSCALE_FIRE)
         if i["rule"] == "template_marker"
     ]
     assert len(issues) == 2  # [PROJECT NAME] + XXXX from module extras
@@ -200,7 +200,7 @@ def test_empty_article_and_duplicate_title():
             {"action": "add_paragraph", "target_id": "pt1.a2", "text": "Body."},
         ]
     )
-    issues = lint_document(doc, DEFAULT_MODULE)
+    issues = lint_document(doc, HYPERSCALE_FIRE)
     rules = _rules(issues)
     assert ("empty_article", "pt1.a1") in rules
     assert ("duplicate_article_title", "pt1.a2") in rules
@@ -214,7 +214,7 @@ def test_missing_section_header_is_info_level():
         ]
     )
     issues = [
-        i for i in lint_document(doc, DEFAULT_MODULE)
+        i for i in lint_document(doc, HYPERSCALE_FIRE)
         if i["rule"] == "missing_section_header"
     ]
     assert len(issues) == 1
@@ -229,13 +229,13 @@ def test_clean_document_produces_no_issues():
             "Hydrostatically test at 200 psi for 2 hours.",
         )
     )
-    assert lint_document(doc, DEFAULT_MODULE) == []
+    assert lint_document(doc, HYPERSCALE_FIRE) == []
 
 
 def test_issue_ids_are_stable_per_tree():
     doc = _doc_with(_base("TODO: one. TODO: two."))
-    first = lint_document(doc, DEFAULT_MODULE)
-    second = lint_document(doc, DEFAULT_MODULE)
+    first = lint_document(doc, HYPERSCALE_FIRE)
+    second = lint_document(doc, HYPERSCALE_FIRE)
     assert [i["id"] for i in first] == [i["id"] for i in second]
     assert len({i["id"] for i in first}) == len(first)
 
@@ -249,7 +249,7 @@ def test_references_article_line_shape_is_checked():
         )
     )
     issues = [
-        i for i in lint_document(doc, DEFAULT_MODULE)
+        i for i in lint_document(doc, HYPERSCALE_FIRE)
         if i["rule"] == "stale_edition"
     ]
     assert len(issues) == 1 and "2019" in issues[0]["match"]
@@ -262,7 +262,7 @@ def test_references_article_line_shape_is_checked():
         )
     )
     assert [
-        i for i in lint_document(doc2, DEFAULT_MODULE)
+        i for i in lint_document(doc2, HYPERSCALE_FIRE)
         if i["rule"] == "stale_edition"
     ] == []
 
@@ -271,6 +271,18 @@ def test_references_article_line_shape_is_checked():
     # NFPA 20 because the gap contains digits ("14").
     doc3 = _doc_with(_base("Pumps per NFPA 20 and NFPA 14 (2024 edition)."))
     assert [
-        i for i in lint_document(doc3, DEFAULT_MODULE)
+        i for i in lint_document(doc3, HYPERSCALE_FIRE)
         if i["rule"] == "stale_edition"
+    ] == []
+
+
+def test_empty_basis_yields_no_stale_edition_findings():
+    # The domain-neutral general module pins no standards, so there is no
+    # pinned edition for a citation to be "stale" against — what flags under
+    # the fire basis is silent here.
+    from backend.spec_modules import GENERAL
+
+    doc = _doc_with(_base("Comply with NFPA 13-2019 throughout."))
+    assert [
+        i for i in lint_document(doc, GENERAL) if i["rule"] == "stale_edition"
     ] == []

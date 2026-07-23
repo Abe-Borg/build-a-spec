@@ -12,6 +12,10 @@ interface Props {
   onOpenHelp: (topic: HelpTopic) => void;
   /** Restart the guided tour (Batch 6) — same entry guard as the chip. */
   onStartTour: () => void;
+  /** Switch the active spec module (flexible sections). */
+  onSwitchModule: (moduleId: string) => void;
+  /** Whether a switch is allowed now (blank document, not mid-turn). */
+  canSwitchModule: boolean;
 }
 
 export default function Header({
@@ -24,6 +28,8 @@ export default function Header({
   onOpenSettings,
   onOpenHelp,
   onStartTour,
+  onSwitchModule,
+  canSwitchModule,
 }: Props) {
   const spend = usage?.estimated_cost_usd.total ?? 0;
   const spendLabel = spend > 0 ? `≈ $${spend.toFixed(2)}` : "—";
@@ -35,9 +41,29 @@ export default function Header({
         <h1 className="font-[family-name:var(--font-display)] text-lg font-semibold tracking-tight">
           Build-a-Spec
         </h1>
-        <span className="hidden text-xs text-ink-dim xl:inline">
-          {health?.module ?? "Division 21 — Hyperscale Fire Suppression"}
-        </span>
+        {health?.available_modules && health.available_modules.length > 1 ? (
+          <select
+            value={health.module_id ?? ""}
+            onChange={(e) => onSwitchModule(e.target.value)}
+            disabled={!canSwitchModule}
+            title={
+              canSwitchModule
+                ? "Spec configuration — switch on a blank document"
+                : "Start a new session to switch (the page already has content)"
+            }
+            className="hidden max-w-[15rem] rounded-md border border-edge bg-raised px-2 py-1 text-xs text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60 xl:inline-block"
+          >
+            {health.available_modules.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.display_name}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="hidden text-xs text-ink-dim xl:inline">
+            {health?.module ?? "General — Any CSI Section"}
+          </span>
+        )}
       </div>
       <span className="h-5 w-px flex-none bg-edge" aria-hidden="true" />
       <nav className="flex flex-none items-center gap-0.5">

@@ -77,12 +77,16 @@ class ResearchRunner:
         max_tokens: int,
         on_settled: Callable[[], None] | None = None,
         usage_sink: Callable[[dict], None] | None = None,
+        section_number: str = "",
+        section_title: str = "",
     ) -> bool:
         """Kick off the fan-out on a daemon thread. False if already running.
 
         ``on_settled`` (optional) runs after the terminal state is set —
         the app layer uses it for nothing today but tests can synchronize
-        on it.
+        on it. ``section_number``/``section_title`` are the section being
+        authored, threaded into the research templates so a domain-neutral
+        module targets the user's actual section.
         """
         with self._lock:
             if self.status == STATUS_RUNNING:
@@ -113,6 +117,8 @@ class ResearchRunner:
                     max_tokens=max_tokens,
                     event_sink=_sink,
                     should_stop=cancel_event.is_set,
+                    section_number=section_number,
+                    section_title=section_title,
                 )
             except ResearchFanoutError as exc:
                 if self._try_resolve(STATUS_FAILED, error=str(exc)):

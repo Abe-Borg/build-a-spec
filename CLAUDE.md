@@ -18,6 +18,14 @@ file is the working reference for AI-assisted development sessions.
 - Frozen decisions (2026-07-21, confirmed with Abraham): pywebview+React+FastAPI
   UI; copy-based reuse; first module = hyperscale fire suppression Div 21;
   research agents land right after the core drafting loop works.
+- Flexible sections (2026-07-23, confirmed with Abraham): the app is NOT boxed
+  into one discipline's section list. The domain-neutral `general` module is the
+  DEFAULT (authors any CSI section in any discipline); `hyperscale_fire` is
+  retained as a selectable specialized module (Header picker → POST /api/module,
+  blank-doc gated). The document engine was already section-agnostic — the section
+  header is free-form — so this is module content + registry config, not an engine
+  change. The empty state offers a discipline starter; each turn's PROJECT CONTEXT
+  leads with an AUTHORING anchor naming the current section.
 - NFPA 13 default edition is **2025** (current edition). Jurisdiction-adopted
   earlier editions override when known — never silently, always with the
   adoption basis stated. This mirrors Spec Critic's pinned-edition philosophy
@@ -140,14 +148,28 @@ backend/
                            /api/project/save and the native save-on-close)
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint
-                           vocabulary, dormant research dimensions); import-time
-                           validate_module_registry — bad module = startup failure
+                           vocabulary, research dimensions); import-time
+                           validate_module_registry — bad module = startup failure.
+                           A module MAY carry an EMPTY catalog and an EMPTY standards
+                           basis (the domain-neutral general module); populated
+                           fields are still fully shape-checked. lead_section() → None
+                           on an empty catalog
   spec_modules/registry.py [PORT: Spec Critic src/modules/registry.py]
                            AVAILABLE_MODULES / DEFAULT_MODULE / get_module
-                           (unknown id degrades to default, never errors)
+                           (unknown id degrades to default, never errors).
+                           DEFAULT_MODULE = general (domain-neutral); hyperscale_fire
+                           stays registered as a selectable specialized module
+  spec_modules/general.py  the domain-neutral DEFAULT module: authors ANY CSI
+                           section in any discipline — neutral persona, empty catalog
+                           (no fixed section list), empty standards basis (standards
+                           emerge from the discipline/AHJ/overrides), generic
+                           SectionFormat playbook, research dims templated on the
+                           {section_number}/{section_title} being authored. Reach a
+                           specialized module via POST /api/module (blank-doc gated)
   spec_modules/hyperscale_fire.py
                            [SEED: Spec Critic src/modules/datacenter_fire.py]
-                           first module: 21 13 13 lead + sibling catalog, playbook,
+                           specialized module (selectable, NOT the default now):
+                           21 13 13 lead + sibling catalog, playbook,
                            current-edition NFPA pins w/ provenance, research dims
   spec_doc/model.py        SectionFormat tree; stable ids (pt1.a2.p3); statuses
                            (confirmed/assumed/needs_input/imported);

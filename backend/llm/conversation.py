@@ -239,7 +239,19 @@ def _turn_context_text(session: SessionState) -> str:
     state block, never a stale one.
     """
     doc = session.doc.doc
+    if doc.number or doc.title:
+        authoring = (
+            f"AUTHORING: Section {doc.number or '[number TBD]'} — "
+            f"{doc.title or '[title TBD]'}"
+        )
+    else:
+        authoring = (
+            "AUTHORING: no section chosen yet — establish the section number "
+            "and title with the user and set the header (replace on 'sec') "
+            "before drafting provisions."
+        )
     parts = [
+        authoring,
         standards_context_block(session.module.basis, doc.edition_overrides),
         _profile_status_block(doc.project_profile),
     ]

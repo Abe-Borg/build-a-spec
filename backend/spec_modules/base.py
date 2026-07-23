@@ -111,14 +111,19 @@ class ResearchDimension:
     max_fetches: int = 0
 
 
-# Per-run project-identity placeholders a research template may reference
-# (same contract as Spec Critic). Dummy values exist only for
-# registration-time format checking — they never reach a real prompt.
+# Per-run placeholders a research template may reference: the project identity
+# (same contract as Spec Critic) plus the section being authored, which the
+# engine threads in at run start (research/engine.build_dimension_user_message)
+# so a domain-neutral module can target the user's actual section. Dummy values
+# exist only for registration-time format checking — they never reach a real
+# prompt.
 PROFILE_FORMAT_PLACEHOLDERS: tuple[str, ...] = (
     "city",
     "state_or_province",
     "country",
     "client_name",
+    "section_number",
+    "section_title",
 )
 
 _DUMMY_PROFILE_FORMAT_KWARGS: dict[str, str] = {
@@ -126,6 +131,8 @@ _DUMMY_PROFILE_FORMAT_KWARGS: dict[str, str] = {
     "state_or_province": "Virginia",
     "country": "USA",
     "client_name": "ExampleCo",
+    "section_number": "00 00 00",
+    "section_title": "Example Section",
 }
 
 
@@ -188,8 +195,9 @@ class SpecModule:
             ),
         )
 
-    def lead_section(self) -> SectionDef:
-        return self.section_catalog[0]
+    def lead_section(self) -> SectionDef | None:
+        """The section the interview steers toward, or None for an open catalog."""
+        return self.section_catalog[0] if self.section_catalog else None
 
 
 def research_template_format_kwargs(basis: StandardsBasis) -> dict[str, str]:
@@ -200,15 +208,15 @@ def research_template_format_kwargs(basis: StandardsBasis) -> dict[str, str]:
 
 
 def _validate_basis(module: SpecModule) -> None:
+    # An empty basis is allowed: a domain-neutral module (general) pins no base
+    # codes and no standards — the discipline and jurisdiction decide what
+    # governs, and adopted editions arrive through set_standard_edition. What
+    # IS pinned is still fully shape-checked below (the loops no-op on empty).
     basis = module.basis
     if not isinstance(basis, StandardsBasis):
         raise ValueError(
             f"SpecModule {module.module_id!r}: basis must be a StandardsBasis, "
             f"got {type(basis).__name__}"
-        )
-    if not basis.base_codes:
-        raise ValueError(
-            f"SpecModule {module.module_id!r}: basis pins no base codes"
         )
     keys = [code.key for code in basis.base_codes]
     if len(set(keys)) != len(keys) or not all(
@@ -218,10 +226,6 @@ def _validate_basis(module: SpecModule) -> None:
         raise ValueError(
             f"SpecModule {module.module_id!r}: base codes need unique "
             f"non-empty keys, names, and years (got keys {keys})"
-        )
-    if not basis.standards:
-        raise ValueError(
-            f"SpecModule {module.module_id!r}: basis pins no standards"
         )
     seen: set[str] = set()
     for std in basis.standards:
@@ -247,10 +251,9 @@ def _validate_basis(module: SpecModule) -> None:
 
 
 def _validate_catalog(module: SpecModule) -> None:
-    if not module.section_catalog:
-        raise ValueError(
-            f"SpecModule {module.module_id!r}: section catalog is empty"
-        )
+    # An empty catalog is allowed: the domain-neutral general module authors
+    # any section the user names (the prompt's catalog renderer handles the
+    # empty case). Any entries that ARE present are still fully shape-checked.
     seen: set[str] = set()
     for section in module.section_catalog:
         if not isinstance(section, SectionDef):

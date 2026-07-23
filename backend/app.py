@@ -99,6 +99,7 @@ from .spec_doc.docx_export import (
 from .spec_doc.importer import MasterImportError, parse_master_docx
 from .spec_doc.model import SpecSection, apply_edits, iter_paragraphs
 from .spec_doc.project import chat_transcript, load_project
+from .spec_modules import AVAILABLE_MODULES, get_module
 
 _DEV_ORIGINS = [
     "http://localhost:5173",
@@ -133,6 +134,10 @@ class QcDismissRequest(BaseModel):
 
 class TestKeyRequest(BaseModel):
     api_key: str | None = None
+
+
+class ModuleRequest(BaseModel):
+    module_id: str
 
 
 def _sse(event: dict) -> str:
@@ -295,7 +300,54 @@ def create_app() -> FastAPI:
             "api_key_present": bool(load_api_key()),
             "module": session.module.display_name,
             "module_id": session.module.module_id,
+            "available_modules": [
+                {"id": m.module_id, "display_name": m.display_name}
+                for m in AVAILABLE_MODULES.values()
+            ],
         }
+
+    @app.post("/api/module")
+    def set_module(body: ModuleRequest) -> JSONResponse:
+        """Switch the active spec module.
+
+        Only on a blank document: switching changes the drafting persona and
+        the standards basis, which must not silently reinterpret existing
+        content. Never mid-turn. Unknown id → 400 (rather than degrading to the
+        default, which would silently ignore the request).
+        """
+        session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A turn is streaming — try again once it "
+                    "finishes.",
+                },
+                status_code=409,
+            )
+        module_id = (body.module_id or "").strip()
+        if module_id not in AVAILABLE_MODULES:
+            return JSONResponse(
+                {"ok": False, "error": f"Unknown module {module_id!r}."},
+                status_code=400,
+            )
+        if not session.doc.doc.is_empty():
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Switch modules on a blank document — the current "
+                    "section already has content. Start a new session first.",
+                },
+                status_code=409,
+            )
+        session.module = get_module(module_id)
+        return JSONResponse(
+            {
+                "ok": True,
+                "module": session.module.display_name,
+                "module_id": session.module.module_id,
+            }
+        )
 
     @app.post("/api/key")
     def save_key(body: SaveKeyRequest) -> JSONResponse:
@@ -794,6 +846,8 @@ def create_app() -> FastAPI:
             model=settings.RESEARCH_MODEL,
             max_tokens=settings.RESEARCH_MAX_TOKENS,
             usage_sink=lambda u: session.usage.add("research", u),
+            section_number=session.doc.doc.number,
+            section_title=session.doc.doc.title,
         )
         if not started:
             return JSONResponse(

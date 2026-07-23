@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend import sessions
+from backend.spec_modules import HYPERSCALE_FIRE
 from tests.fakes import (
     FakeClient,
     SequencedFakeClient,
@@ -21,7 +22,11 @@ from tests.test_research_engine import DIM_KEYS, _item, _scripts
 
 
 def _client() -> TestClient:
-    return TestClient(create_app())
+    app = create_app()
+    # This suite exercises the fire module's research (DIM_KEYS routes scripted
+    # turns by its dimension wording); pin it over the neutral default.
+    sessions.get_session().module = HYPERSCALE_FIRE
+    return TestClient(app)
 
 
 def _parse_sse(body: str) -> list[dict]:

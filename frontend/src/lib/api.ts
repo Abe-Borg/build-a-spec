@@ -24,6 +24,23 @@ export async function getHealth(): Promise<Health> {
   return resp.json();
 }
 
+/** Switch the active spec module. Only on a blank document (409 otherwise)
+ * and never mid-turn (409); an unknown id is a 400. */
+export async function setModule(
+  moduleId: string,
+): Promise<{ module: string; module_id: string }> {
+  const resp = await fetch("/api/module", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ module_id: moduleId }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `switch module failed (${resp.status})`);
+  }
+  return data;
+}
+
 export async function saveApiKey(apiKey: string): Promise<void> {
   const resp = await fetch("/api/key", {
     method: "POST",

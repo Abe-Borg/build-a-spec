@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend import sessions
+from backend.spec_modules import HYPERSCALE_FIRE
 from tests.fakes import (
     FakeClient,
     chat_search_blocks,
@@ -524,8 +525,12 @@ _OVERRIDE_EDITS = {
 
 def test_health_reports_module(monkeypatch):
     data = _client().get("/api/health").json()
-    assert data["module_id"] == "hyperscale_fire"
-    assert "Fire Suppression" in data["module"]
+    # The domain-neutral module is the default.
+    assert data["module_id"] == "general"
+    assert "Any CSI Section" in data["module"]
+    # Both the neutral default and the specialized fire module are selectable.
+    ids = {m["id"] for m in data["available_modules"]}
+    assert {"general", "hyperscale_fire"} <= ids
 
 
 def test_chat_turn_emits_lint_event_and_payloads_carry_standards(monkeypatch):
@@ -600,7 +605,7 @@ def test_override_survives_project_round_trip(monkeypatch):
     client.post("/api/chat", json={"message": "go"})
 
     project = json.loads(client.get("/api/project/save").content)
-    assert project["module_id"] == "hyperscale_fire"
+    assert project["module_id"] == "general"
 
     client.post("/api/session/reset")
     loaded = client.post("/api/project/load", json=project).json()
@@ -635,7 +640,12 @@ def test_undo_rolls_back_override_and_lint(monkeypatch):
 def test_stable_system_prompt_is_cached_and_module_rendered(monkeypatch):
     fake = FakeClient([text_turn(["ok"])])
     _patch_client(monkeypatch, fake)
-    _client().post("/api/chat", json={"message": "hello"})
+    client = _client()
+    # Verifies the caching mechanism + that MODULE content renders; use the
+    # fire module as the representative (the neutral default pins no standards
+    # and carries no fixed catalog).
+    sessions.get_session().module = HYPERSCALE_FIRE
+    client.post("/api/chat", json={"message": "hello"})
     request = fake.messages.last_request
     # The system prompt is ONLY the stable module block — everything
     # session-varying rides the PROJECT CONTEXT block in the user message.

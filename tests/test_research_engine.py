@@ -11,7 +11,7 @@ from backend.research import (
     research_context_block,
     run_requirements_research,
 )
-from backend.spec_modules import DEFAULT_MODULE
+from backend.spec_modules import HYPERSCALE_FIRE
 from tests.fakes import (
     SequencedFakeClient,
     pause_response,
@@ -57,8 +57,10 @@ def _scripts(**per_dimension) -> dict[str, list]:
 
 
 def _run(client) -> RequirementsProfile:
+    # These tests exercise the fire module's research dimensions specifically:
+    # DIM_KEYS routes scripted turns by substrings unique to its templates.
     return run_requirements_research(
-        DEFAULT_MODULE, PROFILE, client, model="claude-sonnet-5", max_tokens=4096
+        HYPERSCALE_FIRE, PROFILE, client, model="claude-sonnet-5", max_tokens=4096
     )
 
 

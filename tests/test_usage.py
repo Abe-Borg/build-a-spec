@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend import sessions
+from backend.spec_modules import HYPERSCALE_FIRE
 from backend.usage_ledger import UsageLedger
 from tests.fakes import (
     FakeClient,
@@ -150,6 +151,9 @@ def test_research_run_rolls_up_into_ledger(monkeypatch):
     import time as _time
 
     client = _client()
+    # This test scripts the fire module's research dimensions (_scripts routes
+    # by their wording); pin it over the neutral default.
+    sessions.get_session().module = HYPERSCALE_FIRE
     # Record a complete profile via chat so research can start.
     profile_edits = {
         "edits": [

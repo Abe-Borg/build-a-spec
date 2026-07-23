@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { ChatMessage, Figure } from "../types";
-import { STARTER_PROMPTS } from "../lib/tour";
+import { DISCIPLINES, STARTER_PROMPTS } from "../lib/tour";
 import { hasCompletedOnboarding } from "../lib/onboardingStorage";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
@@ -123,6 +123,31 @@ export default function Chat({
                   </button>
                 ),
               )}
+            </div>
+            <div className="mt-6 w-full max-w-md text-left">
+              <p className="mb-2 text-[11px] uppercase tracking-wide text-ink-faint">
+                Or start a section by discipline
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {DISCIPLINES.map((d) => (
+                  <button
+                    key={d}
+                    onClick={() =>
+                      onSend(
+                        `Let's start a ${d} specification section. Help me pick the right CSI section number and title, then begin the interview.`,
+                      )
+                    }
+                    disabled={busy}
+                    className="rounded-full border border-edge bg-surface px-3 py-1 text-xs text-ink-dim transition-colors hover:border-accent/70 hover:text-accent disabled:pointer-events-none disabled:opacity-40"
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-ink-faint">
+                Any discipline and any CSI section — or just name the section
+                number in the box below.
+              </p>
             </div>
           </div>
         ) : (

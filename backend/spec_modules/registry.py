@@ -10,9 +10,14 @@ what keeps project files written by other builds loading cleanly.
 from __future__ import annotations
 
 from .base import SpecModule, validate_module_registry
+from .general import GENERAL
 from .hyperscale_fire import HYPERSCALE_FIRE
 
-_ALL_MODULES: tuple[SpecModule, ...] = (HYPERSCALE_FIRE,)
+# The domain-neutral GENERAL module leads and is the default: a fresh session
+# authors any CSI section in any discipline, not a fixed catalog. Specialized
+# modules (HYPERSCALE_FIRE) follow and are selectable for their deep basis,
+# playbook, and research.
+_ALL_MODULES: tuple[SpecModule, ...] = (GENERAL, HYPERSCALE_FIRE)
 
 validate_module_registry(_ALL_MODULES)
 
@@ -20,7 +25,7 @@ AVAILABLE_MODULES: dict[str, SpecModule] = {
     module.module_id: module for module in _ALL_MODULES
 }
 
-DEFAULT_MODULE: SpecModule = HYPERSCALE_FIRE
+DEFAULT_MODULE: SpecModule = GENERAL
 
 
 def get_module(module_id: str | None) -> SpecModule:

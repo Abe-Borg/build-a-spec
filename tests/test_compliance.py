@@ -15,7 +15,7 @@ from backend.compliance.checker import (
     render_profile_block,
 )
 from backend.research import RequirementsProfile
-from backend.spec_modules import DEFAULT_MODULE
+from backend.spec_modules import DEFAULT_MODULE, HYPERSCALE_FIRE
 from tests.fakes import (
     FakeClient,
     SequencedFakeClient,
@@ -34,7 +34,11 @@ from tests.test_research_engine import _item, _scripts
 
 
 def _client() -> TestClient:
-    return TestClient(create_app())
+    app = create_app()
+    # The audit lifecycle exercises the fire module's research (scripted by its
+    # dimension wording); pin it over the neutral default.
+    sessions.get_session().module = HYPERSCALE_FIRE
+    return TestClient(app)
 
 
 def _profile_with(items: list[dict]) -> RequirementsProfile:

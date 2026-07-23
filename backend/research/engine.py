@@ -435,15 +435,32 @@ def build_research_system_prompt(module: SpecModule) -> str:
 
 
 def build_dimension_user_message(
-    module: SpecModule, profile: ProjectProfile, dimension: ResearchDimension
+    module: SpecModule,
+    profile: ProjectProfile,
+    dimension: ResearchDimension,
+    *,
+    section_number: str = "",
+    section_title: str = "",
 ) -> str:
-    """Project header + the dimension's formatted brief."""
+    """Project + section header + the dimension's formatted brief.
+
+    ``section_number``/``section_title`` are the section being authored (read
+    from the live document at run start); they feed the ``{section_number}`` /
+    ``{section_title}`` template placeholders so a domain-neutral module's
+    dimensions target the user's actual section. A module whose templates do
+    not reference them (e.g. hyperscale_fire) is unaffected — ``str.format``
+    ignores unused keys.
+    """
     kwargs = module.basis.format_kwargs()
     kwargs.update(profile.prompt_format_kwargs())
+    kwargs["section_number"] = section_number or "[not specified]"
+    kwargs["section_title"] = section_title or "[not specified]"
     header = (
         f"Project: {profile.city}, {profile.state_display}, "
         f"{profile.country_display}. Client: {profile.client_name}."
     )
+    if section_number or section_title:
+        header += f" Section being authored: {section_number} {section_title}".rstrip()
     body = dimension.prompt_template.format(**kwargs)
     return f"{header}\n\n{body}"
 
@@ -557,6 +574,8 @@ def _run_dimension(
     model: str,
     max_tokens: int,
     should_stop: Callable[[], bool] = lambda: False,
+    section_number: str = "",
+    section_title: str = "",
 ) -> _DimensionOutcome:
     """One dimension's full lifecycle: request → continuations → parse → ground.
 
@@ -577,7 +596,13 @@ def _run_dimension(
     max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
 
     system_prompt = build_research_system_prompt(module)
-    user_message = build_dimension_user_message(module, profile, dimension)
+    user_message = build_dimension_user_message(
+        module,
+        profile,
+        dimension,
+        section_number=section_number,
+        section_title=section_title,
+    )
 
     def _failed(error: str, *, responses: list[Any] | None = None) -> _DimensionOutcome:
         billed = responses or []
@@ -794,6 +819,8 @@ def run_requirements_research(
     max_tokens: int,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
+    section_number: str = "",
+    section_title: str = "",
 ) -> RequirementsProfile:
     """Run every module research dimension in parallel; merge the results.
 
@@ -835,6 +862,8 @@ def run_requirements_research(
                 model=model,
                 max_tokens=max_tokens,
                 should_stop=should_stop,
+                section_number=section_number,
+                section_title=section_title,
             ): dimension
             for dimension in dimensions
         }

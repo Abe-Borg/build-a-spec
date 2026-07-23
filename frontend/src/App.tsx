@@ -33,6 +33,7 @@ import {
   loadProject,
   redoDoc,
   resetSession,
+  setModule,
   startQc,
   startResearch,
   stopChat,
@@ -139,6 +140,21 @@ export default function App() {
       .then(setUsage)
       .catch(() => setUsage(null));
   }, []);
+
+  // Switch the active spec module (flexible sections). The backend permits it
+  // only on a blank document and never mid-turn; on rejection we simply
+  // re-sync health so the picker snaps back to the real active module.
+  const onSwitchModule = useCallback(
+    (moduleId: string) => {
+      setModule(moduleId)
+        .then(() => {
+          refreshHealth();
+          refreshDoc();
+        })
+        .catch(() => refreshHealth());
+    },
+    [refreshHealth, refreshDoc],
+  );
 
   /**
    * Append a terse workflow-event note to the chat (e.g. research / Final QC
@@ -758,6 +774,8 @@ export default function App() {
           void newSession();
         }}
         onStartTour={onboarding.start}
+        onSwitchModule={onSwitchModule}
+        canSwitchModule={!hasContent && !busy}
         onInstallUpdate={onInstallUpdate}
         onOpenSettings={() => {
           setSettingsOpen(true);

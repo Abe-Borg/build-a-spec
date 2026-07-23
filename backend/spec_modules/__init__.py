@@ -14,11 +14,15 @@ from .base import (
     SpecModule,
     validate_module_registry,
 )
+from .general import GENERAL
+from .hyperscale_fire import HYPERSCALE_FIRE
 from .registry import AVAILABLE_MODULES, DEFAULT_MODULE, get_module
 
 __all__ = [
     "AVAILABLE_MODULES",
     "DEFAULT_MODULE",
+    "GENERAL",
+    "HYPERSCALE_FIRE",
     "InterviewTopic",
     "ResearchDimension",
     "SectionDef",

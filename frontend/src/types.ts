@@ -43,6 +43,8 @@ export interface Health {
   api_key_present: boolean;
   module?: string;
   module_id?: string;
+  /** Selectable spec modules (the neutral default + any specialized ones). */
+  available_modules?: { id: string; display_name: string }[];
 }
 
 /** API-key resolution status (WI3 settings panel). Never carries the key. */

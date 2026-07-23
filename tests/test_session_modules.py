@@ -194,7 +194,7 @@ def test_curated_module_context_has_no_discipline_line(monkeypatch):
 def test_project_round_trip_preserves_module_and_discipline(monkeypatch):
     client = _client()
     _reset_generic(client, discipline="Structural")
-    saved = client.get("/api/project/save").json()
+    saved = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert saved["module_id"] == "generic"
     assert saved["discipline"] == "Structural"
 
@@ -221,7 +221,7 @@ def test_old_project_file_without_discipline_loads_empty():
     # Save from a curated session so the file carries a curated module_id
     # (the neutral default is now generic).
     client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
-    saved = client.get("/api/project/save").json()
+    saved = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     saved.pop("discipline", None)  # a pre-Batch-8 file
     session = sessions.get_session()
     load_project(saved, session)
@@ -235,7 +235,7 @@ def test_legacy_file_without_module_id_loads_the_fire_module():
     # not silently switch to the now-neutral generic default. A present-but-
     # unknown id, by contrast, degrades to the default (tested separately).
     client = _client()
-    saved = client.get("/api/project/save").json()
+    saved = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     saved.pop("module_id", None)
     session = sessions.get_session()
     load_project(saved, session)
@@ -246,7 +246,7 @@ def test_load_enforces_the_open_catalog_invariant():
     # A (hand-edited or future-build) file pairing a curated module with a
     # discipline loads with the discipline cleared, never kept silently.
     client = _client()
-    saved = client.get("/api/project/save").json()
+    saved = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     saved["module_id"] = "hyperscale_fire"
     saved["discipline"] = "Electrical"
     session = sessions.get_session()
@@ -357,7 +357,7 @@ def test_project_context_survives_project_round_trip():
             "project_context": "A 12-story office tower.",
         },
     )
-    saved = client.get("/api/project/save").json()
+    saved = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert saved["project_context"] == "A 12-story office tower."
     # A fresh session clears it; loading the file restores it.
     client.post("/api/session/reset")

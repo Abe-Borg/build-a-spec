@@ -6,6 +6,42 @@ First curated domain: **Division 21 fire suppression for hyperscale data centers
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
+## DOCX fidelity boundary (P1 source-preserving foundation)
+
+> **Important:** Build-a-Spec edits a deliberately narrow semantic view of an
+> imported `.docx`; it is not a general-purpose Word formatting editor.
+
+- Import retains the exact validated DOCX as an immutable source artifact and
+  separately extracts supported main-body content into Build-a-Spec's
+  SectionFormat tree. Headers, footers, section/page layout, styles, fields,
+  drawings, and other unsupported OOXML never become editable claims.
+- **Export preserved DOCX** clones that source package and applies only edits
+  the preservation gate can prove safe. P1 accepts unambiguous text replacement
+  in a simple, directly mapped body paragraph. It preserves that paragraph's
+  existing paragraph/run properties—including real `w:numPr` numbering—and
+  leaves every other package member payload untouched.
+- Unsafe mutations fail closed. Structural changes (add/delete/reorder),
+  table-derived blocks, fields, hyperlinks, drawings, content controls,
+  tracked-revision targets, complex multi-run formatting, and ambiguous
+  mappings are refused in source-preserving mode. Signed, protected,
+  revision-bearing, and active-content packages are pass-through-only: exact
+  no-op export is allowed, but mutation is not. Build-a-Spec does not flatten
+  the source as a fallback.
+- A no-op source export—including status/profile/standards-only changes or an
+  undo back to the imported baseline—returns the exact original DOCX bytes.
+- Native `.baspec` project files carry the semantic project and the exact source
+  DOCX together, with manifest hashes and bounded package validation. Legacy
+  JSON projects still load, but are source-less and can only use normalized
+  export.
+- **Export normalized DOCX** remains an explicit separate choice. It generates a
+  new document from the semantic tree and still uses positional display labels,
+  not real Word automatic-numbering bindings. “Redline of extracted provisions”
+  likewise remains a semantic redline, not a source-package redline.
+
+This is the P1 foundation. Later preservation phases can expand the safe edit
+islands (for example bounded add/delete/reorder) without expanding the product
+into headers, footers, or general Word formatting.
+
 ## Current Status — v1.5.0 (Batch 10: Generic any-discipline module)
 
 **Any discipline, any project type, anywhere in the USA and Canada.** The
@@ -112,22 +148,19 @@ drafts in front of you.
 
 ## Shipped in v1.0.0 (Batch 5: Redline export + version diff) and still current
 
-**The single most impressive thing the app can hand another human: a `.docx`
-with genuine Word tracked changes showing exactly what Build-a-Spec did to
-the office master.** Spec reviewers live on redlines. One deterministic diff
-engine powers both the export and an in-app version-compare view.
+**A `.docx` with genuine Word tracked-change markup over Build-a-Spec's
+normalized provision model.** One deterministic semantic diff engine powers
+both the export and an in-app version-compare view. For imported files, its
+baseline is the extracted SectionFormat tree — not the uploaded Word package.
 
-- **Real tracked changes, not a colored diff.** Export a redline vs the
-  imported master (or any prior version) and open it in Word: insertions,
+- **Real tracked-change markup, explicitly scoped.** Export a redline of the
+  imported extraction (or any prior version) and open it in Word: insertions,
   deletions, and word-level edits render as native `w:ins`/`w:del` revisions
-  authored by "Build-a-Spec". **Accept All** yields exactly the issued draft
-  (numbering included); **Reject All** yields the master's provisions. That
-  round-trip is a hard test in the suite — the redline re-imported through the
-  Accept-All resolver reproduces the current document, and a Reject-All reading
-  reproduces the baseline's provision text. (Display numbering — A., 1.1, a. —
-  is positional and recomputes to the rendered view rather than being tracked,
-  so a clause that shifts position shows the current number under both
-  resolutions; the *text* is always faithful.)
+  authored by "Build-a-Spec". Accept/Reject round-trip tests cover the
+  normalized provision text, not source-package fidelity. Display labels such
+  as `A.` and `1.1` are positional literal text rather than tracked Word list
+  numbering, so they recompute to the generated view and do not represent the
+  uploaded file's original numbering definitions.
 - **Word-level, reviewer-grade diffs.** Text edits diff at the word (not
   character) grain — no unreadable confetti in legal-style review. Whole-block
   insertions and deletions flag the paragraph *mark* too, so Word collapses a
@@ -135,22 +168,23 @@ engine powers both the export and an in-app version-compare view.
   marked (display numbering is positional and recomputes) — a reviewer sees
   real changes, not renumbering noise.
 - **Compare mode, in the panel.** The version stepper gains a **Compare**
-  toggle: pick the master (pinned first when a master was imported), the blank
-  start, or any prior version, and the paper surface renders the diff inline —
+  toggle: pick the imported extraction baseline (pinned first when present),
+  the blank start, or any prior version, and the paper surface renders the diff inline —
   green/underline insertions, red/strikethrough deletions, whole-block
   insert/delete badges, a provenance **status-changes** strip, and a
   `+N added / −M removed / K edited` stat line. It matches the exported
   redline run-for-run because both read the same diff.
-- **Stable ids make it exact, not fuzzy.** Baseline↔current alignment is an id
-  join on the never-reused element uids, not a text match — so a provision
+- **Stable ids make semantic alignment deterministic.** Baseline↔current
+  alignment is an id join on the never-reused element uids, not a text match — so a provision
   that only had its status confirmed shows as a status change, never a
-  spurious edit. The imported-master version is remembered as the redline
-  baseline and survives save/resume (old project files simply have no
-  baseline).
-- **Export menu.** The single Export button becomes a small menu: *Export
-  clean*, *Redline vs master* (shown only when a master was imported), and
-  *Redline vs version…* (uses the compare picker's selection). The clean path
-  is byte-identical to v0.9.0 — a regression guard pins it.
+  spurious edit. The imported-extraction version is remembered as the redline
+  baseline and survives save/resume; this baseline contains normalized
+  provision data, not the original DOCX package.
+- **Export menu.** The single Export button becomes a small menu. P1 adds
+  *Export preserved DOCX* as the primary imported-document path when the
+  preservation gate is satisfied; *Export normalized DOCX*, *Redline of
+  extracted provisions*, and *Redline vs version…* remain explicit semantic
+  outputs. Fresh drafts use *Export clean*.
 
 This is the **1.0 release milestone**. Cut the first Windows build per
 `docs/RELEASE_WINDOWS.md` after this lands.
@@ -327,7 +361,16 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
 
 Shipped in v0.5.0 (Phase 5) and still current:
 
-- **Master-spec import (gap-and-adapt).** "Import master" ingests an office master or previous-project `.docx` into the live tree — SectionFormat structure parsed from explicit labels *or* Word auto-numbering, tables flattened with warnings, and pending tracked changes resolved to the **Accept-All view** (the text that would actually issue), all mechanics ported from Spec Critic's extractor. Every block enters with a fourth provenance status, **`imported`** (badged blue, scheduled in the export until reviewed), and the interview pivots to gap-and-adapt: walking the master against this project article by article — confirm, adapt, or delete — instead of drafting from zero. Nothing is ever silently dropped; every parse guess lands in the import warnings.
+- **Master-spec import (gap-and-adapt).** "Import master" extracts supported
+  main-body content from an office master or previous-project `.docx` into the
+  live SectionFormat tree. Structure is inferred from explicit labels and
+  limited direct-numbering metadata; tables are flattened, whitespace is
+  normalized, unsupported Word structures are omitted, and pending tracked
+  changes are resolved to an Accept-All text view. Every extracted block enters
+  with the fourth provenance status **`imported`** (badged blue and scheduled
+  in the export until reviewed), and the interview pivots to adapting that
+  normalized content. The import report records known warnings and skipped
+  empty blocks, but it is not a proof that the full Word package was preserved.
 - **Compliance audit.** One click audits the draft against the Phase 4 requirements profile, with Spec Critic's trust model intact: only **grounded** requirements control; `[UNVERIFIED]` items can at most earn a confirm-with-authority advisory; `[PROCESS]` items are excluded. Output: a coverage matrix (`represented / missing / contradicted / unclear`, every controlling requirement always classified — a skipped one reports `unclear`, never invisible) with evidence quotes + click-to-jump element ids, advisory findings, a staleness marker when the draft moves past the audited version, and a **compliance closing section in the `.docx` export**. Full multi-spec reviews still belong to Spec Critic.
 - **Windows packaging + auto-update.** Spec Critic's release pipeline, cloned: PyInstaller one-folder build (`packaging/windows/build-a-spec.spec`, bundling the built frontend + pywebview/WebView2), Inno Setup installer with its own stable AppId, and the serverless GitHub-Releases updater — `latest.json` manifest fetched https-only (redirect-downgrade guarded), installer **SHA-256-verified before it ever runs**, once-a-day throttle, skip-this-version, and an update pill in the header. `docs/RELEASE_WINDOWS.md` is the runbook; `--version`/`--selfcheck` smoke-test the frozen exe; a version-consistency gate keeps settings/package.json/tag aligned (and runs in pytest).
 - **Session tracing.** The ported Spec Critic tracing core (JSONL spans + events, background writer, credential redaction, prompt-hash dedup, deep mode) records turns, tool dispatches, research runs, audits, and imports — local-only, env-gated (`BUILD_A_SPEC_TRACE`, default on), with the bundled HTML viewer at `GET /api/trace/viewer`.
@@ -349,12 +392,15 @@ Shipped in v0.3.0 (Phase 3) and still current:
 What worked before (Phase 2) and still does:
 
 - Claude-desktop-style UI: streaming chat pane on the left, the **live specification document** on the right, warm dark theme.
-- The model drafts exclusively through the `apply_spec_edits` tool into a server-owned SectionFormat tree (Section → PART 1/2/3 → articles → nested paragraphs, automatic 1.1 / A. / 1. / a. / 1) numbering, stable element ids). Edits are validated server-side and applied transactionally; each turn's changes stream into the panel as they happen, with changed blocks highlighted.
+- The model drafts exclusively through the `apply_spec_edits` tool into a server-owned SectionFormat tree (Section → PART 1/2/3 → articles → nested paragraphs, positional display labels `1.1` / `A.` / `1.` / `a.` / `1)`, stable element ids). Those labels are not Word automatic-numbering definitions. Edits are validated server-side and applied transactionally; each turn's changes stream into the panel as they happen, with changed blocks highlighted.
 - Per-block provenance: `confirmed` / `assumed` / `needs_input`, badged in the panel. `[TBD: …]` markers and needs-input blocks are tracked as open items — listed under the panel (click to jump) and scheduled in the export.
 - Defaults-first interview: every question carries a recommended answer; "I don't know" applies a defensible NFPA 13-2025 / hyperscale-norm default stamped `assumed`; guide-me mode turns open questions into concrete options with tradeoffs.
 - Version stepper: one snapshot per turn that changed the document; undo/redo from the panel header.
 - `.docx` export via python-docx — SectionFormat styling plus an **assumptions schedule** (every `assumed` block with its numbering, for one-pass senior review) and an open-items schedule.
-- Project save/resume: a JSON file bundling the conversation (with tool history) and the full document version history — undo still works after a resume.
+- Project save/resume: a native `.baspec` package bundling the conversation,
+  full document version history, import report, and exact source DOCX when one
+  exists—undo and source-preserving export still work after resume. Legacy JSON
+  projects remain load-compatible but do not contain source bytes.
 - API key management: `ANTHROPIC_API_KEY` env var → OS credential manager (via `keyring`) → key file fallback, same posture as Spec Critic. A banner in the UI stores your key if none is found.
 - Session reset, prompt-cached system prompt, hermetic test suite (no network, no key).
 
@@ -369,12 +415,12 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/draft/full, /api/onboarding/demo,
                          /api/doc (+ undo/redo/edit/diff),
                          /api/export/docx (+ ?redline=master|version),
-                         /api/import/master,
+                         /api/import/master + /api/import/original,
                          /api/research/start|status|stream,
                          /api/qc/start|status|stream|apply|dismiss|export,
                          /api/readiness, /api/audit/* (deprecated),
                          /api/update/check|install,
-                         /api/trace/viewer, /api/project/save + load
+                         /api/trace/viewer, /api/project/save + load/load-file
   qc/
     schema.py            QC lens definitions + submit_qc_findings/verdict strict
                          tools + finding/verdict normalization
@@ -433,18 +479,22 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          transactional edit ops (incl. set_standard_edition /
                          set_project_profile, source_item_id provenance),
                          per-turn version store (undo/redo), open-item extraction
-    importer.py          master-.docx import: Accept-All tracked-changes text,
-                         structure heuristics (labels + auto-numbering), warnings
+    importer.py          master-.docx semantic body extraction + immutable
+                         source mapping, fidelity accounting + warnings
                                                                   [ported from Spec Critic]
+    source_mapping.py    conservative semantic-block ↔ OOXML-body bindings
+    source_patch.py      fail-closed clone-and-patch preserved DOCX export
     linting.py           deterministic lint: stale editions, placeholders, structure
                                                                   [ported from Spec Critic]
     diffing.py           deterministic version diff (uid join, word-level runs,
                          status changes) powering the redline export + compare view
-    docx_export.py       .docx rendering + assumptions/imported/open-items
+    docx_export.py       fresh normalized .docx rendering +
+                         assumptions/imported/open-items
                          schedules + QC/compliance closing + the QC memo +
                          the tracked-changes (redline) body writer
-    project.py           JSON project files: save/resume, chat transcript, module id,
-                         requirements profile, audit result, QC result
+    project.py           semantic project payload + legacy JSON compatibility
+    project_package.py   bounded, hashed native .baspec container carrying the
+                         project payload and optional exact source DOCX
   llm/
     client.py            Anthropic client factory (monkeypatch seam for tests)
     prompts.py           engine prompt protocol + module-rendered system prompt
@@ -605,6 +655,6 @@ Ported so far (adapted, same design): `api_key_store.py`, `app_paths.py`, the he
 3. **Phase 3 — Spec modules.** Registry-validated `SpecModule` (interview playbook, section catalog, code basis, pinned standards editions — NFPA 13-2025 default, jurisdiction-adopted editions override via `set_standard_edition` with the adoption basis recorded, never silently); live deterministic linting of the draft with an issues drawer and standards strip. *(Shipped in v0.3.0.)*
 4. **Phase 4 — Research agents.** Port of the requirements-research fan-out: grounded web-search agents for governing codes, AHJ, client/insurer, and site environment, launched on demand from a conversationally-recorded project profile; accepted-vs-cited citation grounding; results in a panel drawer, spliced into drafting context, linked to provisions via `source_item_id`, and feeding jurisdiction edition overrides. *(Shipped in v0.4.0.)*
 5. **Phase 5 — Ship.** Master-spec import with gap-and-adapt (imported provenance status, Accept-All tracked-changes handling), the compliance audit of the draft against the researched profile (coverage matrix + export closing section), Windows packaging/installer with the SHA-256-verified auto-updater, and session tracing with the bundled viewer. *(Shipped in v0.5.0.)*
-6. **Post-ship batches (v0.6.0 → v1.0.0).** "Sonnet unleashed" no-limits context architecture (v0.6.0); streaming UX + manual editing + settings + cost meter (v0.7.0); full-section draft + keyboard review queue (v0.8.0); Final QC on Fable 5 with adversarial verification + accept/dismiss fix queue (v0.9.0); and the **1.0 release** — genuine tracked-changes redline export (vs the imported master or any version) plus the in-app version-compare view, one diff engine behind both (v1.0.0, this release).
+6. **Post-ship batches (v0.6.0 → v1.0.0).** "Sonnet unleashed" no-limits context architecture (v0.6.0); streaming UX + manual editing + settings + cost meter (v0.7.0); full-section draft + keyboard review queue (v0.8.0); Final QC on Fable 5 with adversarial verification + accept/dismiss fix queue (v0.9.0); and the **1.0 release** — tracked-changes redline export over the normalized imported baseline or any semantic version, plus the in-app version-compare view, one diff engine behind both (v1.0.0).
 
 Build-a-Spec is an AI-assisted drafting aid, not an authority. Its output is advisory and is not a substitute for review by a licensed design professional.

@@ -28,6 +28,7 @@ drives the depth.
 from __future__ import annotations
 
 import re
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,12 +37,20 @@ from docx.opc.exceptions import PackageNotFoundError
 from docx.oxml.ns import qn
 from docx.table import Table as DocxTable
 from docx.text.paragraph import Paragraph as DocxParagraph
+from lxml.etree import XMLSyntaxError
 
 from .model import (
     MAX_PARAGRAPH_DEPTH,
     Article,
     Paragraph,
     SpecSection,
+)
+from .source_mapping import (
+    SourceBodyMap,
+    SourceParagraphBinding,
+    bind_opaque_projection,
+    bind_source_paragraph,
+    build_source_body_map,
 )
 
 # ---------------------------------------------------------------------------
@@ -157,6 +166,9 @@ class ImportResult:
     tracked_changes_detected: bool = False
     imported_block_count: int = 0
     skipped_empty_count: int = 0
+    # Immutable UID -> source-body anchors for P1 source-preserving export.
+    # Kept outside SpecSection/version snapshots and never sent to the model.
+    source_map: SourceBodyMap | None = None
 
 
 class MasterImportError(ValueError):
@@ -177,7 +189,16 @@ def _numbering_level(paragraph: DocxParagraph) -> int | None:
     return int(ilvl) if ilvl is not None else None
 
 
-def _iter_body_texts(document) -> "list[tuple[str, DocxParagraph | None]]":
+@dataclass(frozen=True)
+class _BodyTextEntry:
+    text: str
+    paragraph: DocxParagraph | None
+    body_child_index: int
+    source_element: object
+    opaque_blocker: str = ""
+
+
+def _iter_body_texts(document) -> list[_BodyTextEntry]:
     """Body content in document order: (accept-all text, paragraph or None).
 
     Tables are flattened row by row (cells joined with `` | ``) — spec
@@ -185,12 +206,24 @@ def _iter_body_texts(document) -> "list[tuple[str, DocxParagraph | None]]":
     paragraphs and the caller records a warning. The paragraph object is
     carried for numbering-level access (None for table rows).
     """
-    results: list[tuple[str, DocxParagraph | None]] = []
+    results: list[_BodyTextEntry] = []
     body = document.element.body
+    source_index = 0
     for child in body.iterchildren():
+        if not isinstance(child.tag, str):
+            continue
+        body_child_index = source_index
+        source_index += 1
         if child.tag == qn("w:p"):
             paragraph = DocxParagraph(child, document)
-            results.append((_accept_all_paragraph_text(child), paragraph))
+            results.append(
+                _BodyTextEntry(
+                    _accept_all_paragraph_text(child),
+                    paragraph,
+                    body_child_index,
+                    child,
+                )
+            )
         elif child.tag == qn("w:tbl"):
             table = DocxTable(child, document)
             for row in table.rows:
@@ -202,7 +235,15 @@ def _iter_body_texts(document) -> "list[tuple[str, DocxParagraph | None]]":
                     cells.append(cell_text)
                 text = " | ".join(c for c in cells if c)
                 if text:
-                    results.append((text, None))
+                    results.append(
+                        _BodyTextEntry(
+                            text,
+                            None,
+                            body_child_index,
+                            child,
+                            "table_projection",
+                        )
+                    )
     return results
 
 
@@ -245,7 +286,7 @@ class _TreeBuilder:
         )
         self.article(self.current_part.number, "IMPORTED CONTENT")
 
-    def paragraph(self, depth: int, text: str, line_no: int) -> None:
+    def paragraph(self, depth: int, text: str, line_no: int) -> Paragraph:
         self.ensure_article(line_no)
         if depth >= MAX_PARAGRAPH_DEPTH:
             self.warnings.append(
@@ -277,6 +318,7 @@ class _TreeBuilder:
         siblings.append(paragraph)
         self.stack = self.stack[:depth] + [paragraph]
         self.imported_count += 1
+        return paragraph
 
 
 def parse_master_docx(filepath: str | Path) -> ImportResult:
@@ -288,8 +330,20 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     """
     filepath = Path(filepath)
     try:
+        source_bytes = filepath.read_bytes()
+    except OSError as exc:
+        raise MasterImportError(
+            "That file is not a readable .docx document."
+        ) from exc
+    try:
         document = Document(str(filepath))
-    except PackageNotFoundError as exc:
+    except (
+        PackageNotFoundError,
+        zipfile.BadZipFile,
+        XMLSyntaxError,
+        KeyError,
+        ValueError,
+    ) as exc:
         raise MasterImportError(
             "That file is not a readable .docx document."
         ) from exc
@@ -309,9 +363,12 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     skipped_empty = 0
     saw_table = False
     pending_title = False  # SECTION number seen; next line may be the title
+    source_bindings: list[SourceParagraphBinding] = []
 
     entries = _iter_body_texts(document)
-    for line_no, (raw_text, docx_paragraph) in enumerate(entries, start=1):
+    for line_no, entry in enumerate(entries, start=1):
+        raw_text = entry.text
+        docx_paragraph = entry.paragraph
         text = " ".join(raw_text.split())
         if not text:
             skipped_empty += 1
@@ -322,6 +379,27 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                 "The master contains tables; their rows were flattened into "
                 "paragraphs (cells joined with ' | ') — review formatting."
             )
+
+        def add_mapped_paragraph(depth: int, semantic_text: str) -> None:
+            paragraph = builder.paragraph(depth, semantic_text, line_no)
+            if entry.opaque_blocker:
+                binding = bind_opaque_projection(
+                    uid=paragraph.uid,
+                    body_child_index=entry.body_child_index,
+                    element=entry.source_element,
+                    source_visible_text=raw_text,
+                    baseline_text=semantic_text,
+                    blocker=entry.opaque_blocker,
+                )
+            else:
+                binding = bind_source_paragraph(
+                    uid=paragraph.uid,
+                    body_child_index=entry.body_child_index,
+                    element=entry.source_element,
+                    source_visible_text=raw_text,
+                    baseline_text=semantic_text,
+                )
+            source_bindings.append(binding)
 
         if _END_RE.match(text):
             break
@@ -363,18 +441,20 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                 matched_level = (depth, match.group(2).strip())
                 break
         if matched_level is not None:
-            builder.paragraph(matched_level[0], matched_level[1], line_no)
+            add_mapped_paragraph(matched_level[0], matched_level[1])
             continue
 
         # Auto-numbered masters: the numbering indent level drives depth.
         if docx_paragraph is not None:
             ilvl = _numbering_level(docx_paragraph)
             if ilvl is not None:
-                builder.paragraph(min(ilvl, MAX_PARAGRAPH_DEPTH - 1), text, line_no)
+                add_mapped_paragraph(
+                    min(ilvl, MAX_PARAGRAPH_DEPTH - 1), text
+                )
                 continue
 
         # Unlabeled content: keep as a level-0 paragraph (never drop).
-        builder.paragraph(0, text, line_no)
+        add_mapped_paragraph(0, text)
 
     if builder.imported_count == 0 and builder.section.is_empty():
         raise MasterImportError(
@@ -382,10 +462,23 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             "SectionFormat structure and no body text."
         )
 
+    try:
+        source_map = build_source_body_map(
+            source_bytes=source_bytes,
+            document=document,
+            section=builder.section,
+            bindings=source_bindings,
+        )
+    except (TypeError, ValueError, zipfile.BadZipFile) as exc:
+        raise MasterImportError(
+            "The document body could not be mapped safely for editing."
+        ) from exc
+
     return ImportResult(
         section=builder.section,
         warnings=builder.warnings,
         tracked_changes_detected=tracked,
         imported_block_count=builder.imported_count,
         skipped_empty_count=skipped_empty,
+        source_map=source_map,
     )

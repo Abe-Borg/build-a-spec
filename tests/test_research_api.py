@@ -307,7 +307,7 @@ def test_source_item_id_provenance_round_trips(monkeypatch):
     assert para["source_item_id"] == "r-abc123def456"
 
     # Survives the project round-trip.
-    project = json.loads(client.get("/api/project/save").content)
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     client.post("/api/session/reset")
     loaded = client.post("/api/project/load", json=project).json()
     para = loaded["doc"]["parts"][0]["articles"][0]["paragraphs"][0]
@@ -334,7 +334,7 @@ def test_research_profile_survives_project_round_trip(monkeypatch):
     client.post("/api/research/start")
     _wait_terminal(client)
 
-    project = json.loads(client.get("/api/project/save").content)
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert project["requirements_profile"]["items"]
 
     client.post("/api/session/reset")

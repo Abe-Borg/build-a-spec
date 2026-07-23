@@ -346,7 +346,8 @@ export const TOUR: readonly TourChunk[] = [
         body:
           "Insertions green, deletions struck — the same diff engine " +
           "that produces the Word redline export. With an imported " +
-          "master, \"vs master\" shows exactly what changed.",
+          "DOCX, the baseline is the normalized provision extraction, " +
+          "not the original Word package.",
       },
       {
         id: "import",
@@ -354,10 +355,13 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "The other on-ramp",
         body:
-          "Instead of drafting from scratch, import an office master " +
-          ".docx into a blank session: every block lands stamped " +
-          "imported and the interview pivots to adapting it to this " +
-          "project. It's disabled now because this session has content.",
+          "Instead of drafting from scratch, extract supported body " +
+          "content from an office .docx into a blank session: every " +
+          "block lands stamped imported and the interview pivots to " +
+          "adapting it. The exact source package is retained, and only " +
+          "verified simple body-text edits are allowed through the " +
+          "source-preserving path. It's disabled now " +
+          "because this session has content.",
       },
     ],
   },
@@ -405,9 +409,9 @@ export const TOUR: readonly TourChunk[] = [
         title: "Export",
         body:
           "A clean .docx with the assumptions and open-items schedules — " +
-          "or a genuine Word tracked-changes redline against the " +
-          "imported master, where Accept All reproduces this draft " +
-          "exactly.",
+          "or, after import, a preserved DOCX that clones the master and " +
+          "patches only verified simple body text. Normalized DOCX and the " +
+          "extracted-provision redline remain explicit separate choices.",
       },
       {
         id: "save-open",
@@ -416,8 +420,9 @@ export const TOUR: readonly TourChunk[] = [
         title: "Projects are one file",
         body:
           "Save writes the whole session — conversation, every version, " +
-          "research, QC — to a single JSON file. Open resumes it " +
-          "exactly, undo history included.",
+          "research, QC, and the exact imported source when present — to " +
+          "one .baspec file. Open resumes it exactly, undo and source-export " +
+          "state included.",
       },
       {
         id: "settings",

@@ -379,7 +379,7 @@ def test_figures_survive_project_save_and_load(monkeypatch):
     _patch_client(monkeypatch, _figure_turn(_MERMAID_FIGURE))
     client.post("/api/chat", json={"message": "Draw the riser."})
 
-    project = client.get("/api/project/save").json()
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert project["figures"]["figures"][0]["fid"] == "fig-1"
 
     sessions.reset_session()
@@ -394,5 +394,5 @@ def test_figures_survive_project_save_and_load(monkeypatch):
 
 def test_empty_figure_store_is_omitted_from_the_project_file():
     client = _client()
-    project = client.get("/api/project/save").json()
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert "figures" not in project  # no key when there is nothing to save

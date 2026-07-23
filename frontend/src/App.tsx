@@ -4,6 +4,7 @@ import type {
   EditOp,
   Figure,
   Health,
+  ImportReport,
   LintIssue,
   ModuleInfo,
   OpenItem,
@@ -32,7 +33,7 @@ import {
   getUsage,
   importMaster,
   installUpdate,
-  loadProject,
+  loadProjectFile,
   redoDoc,
   resetSession,
   startQc,
@@ -80,6 +81,9 @@ export default function App() {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
   const [baselineIndex, setBaselineIndex] = useState<number | null>(null);
+  const [importReport, setImportReport] = useState<ImportReport | null>(null);
+  const [sourceAvailable, setSourceAvailable] = useState(false);
+  const [preservationReady, setPreservationReady] = useState(false);
   // Chat-authored figures (diagrams/schematics/tables), keyed for the bubbles.
   const [figures, setFigures] = useState<Figure[]>([]);
   const figuresById = useMemo(
@@ -129,6 +133,9 @@ export default function App() {
         setStandards(payload.standards);
         setProfileComplete(payload.profile_complete);
         setBaselineIndex(payload.baseline_index ?? null);
+        setImportReport(payload.import_report ?? null);
+        setSourceAvailable(payload.source_available ?? false);
+        setPreservationReady(payload.preservation_ready ?? false);
         setFigures(payload.figures ?? []);
         setSuggestions(payload.suggested_prompts ?? []);
       })
@@ -290,9 +297,20 @@ export default function App() {
         const result = await importMaster(file);
         applyDocPayload(result);
         refreshReadiness();
-        const warningLines = result.warnings.length
+        const report = result.import_report;
+        const warnings = report?.warnings ?? result.warnings;
+        const importedCount =
+          report?.imported_block_count ?? result.imported_block_count;
+        const skippedCount =
+          report?.skipped_empty_count ?? result.skipped_empty_count;
+        const trackedChangesDetected =
+          report?.tracked_changes_detected ?? result.tracked_changes_detected;
+        const fidelityNotice =
+          report?.fidelity_notice ??
+          "This import is a normalized extraction of supported body content; it is not a formatting-preserving edit of the original DOCX.";
+        const warningLines = warnings.length
           ? "\n\nImport notes:\n" +
-            result.warnings.map((w) => `- ${w}`).join("\n")
+            warnings.map((w) => `- ${w}`).join("\n")
           : "";
         setMessages((prev) => [
           ...prev,
@@ -300,10 +318,17 @@ export default function App() {
             id: newId(),
             role: "assistant",
             text:
-              `Imported ${result.imported_block_count} provisions from the ` +
+              `Imported ${importedCount} provisions from the ` +
               `master — every block is stamped *imported* until we review ` +
               `it for this project. Tell me about the project and I'll ` +
-              `walk the master article by article.` +
+              `walk the extracted content article by article.\n\n` +
+              `${fidelityNotice}\n\n` +
+              `Import accounting: ${skippedCount} empty body block${
+                skippedCount === 1 ? " was" : "s were"
+              } skipped.` +
+              (trackedChangesDetected
+                ? "\n\nTracked changes were detected and resolved to their Accept-All text view during extraction."
+                : "") +
               warningLines,
           },
         ]);
@@ -631,6 +656,9 @@ export default function App() {
     setChangedIds(new Set());
     setFigures([]);
     setSuggestions([]);
+    setImportReport(null);
+    setSourceAvailable(false);
+    setPreservationReady(false);
     refreshDoc();
     refreshResearch();
     refreshQc();
@@ -684,6 +712,9 @@ export default function App() {
     baseline_index?: number | null;
     figures?: Figure[];
     suggested_prompts?: string[];
+    import_report?: ImportReport | null;
+    source_available?: boolean;
+    preservation_ready?: boolean;
   }) => {
     setDoc(payload.doc);
     setOpenItems(payload.open_questions);
@@ -691,6 +722,9 @@ export default function App() {
     setStandards(payload.standards);
     setProfileComplete(payload.profile_complete);
     setBaselineIndex(payload.baseline_index ?? null);
+    setImportReport(payload.import_report ?? null);
+    setSourceAvailable(payload.source_available ?? false);
+    setPreservationReady(payload.preservation_ready ?? false);
     setFigures(payload.figures ?? []);
     setSuggestions(payload.suggested_prompts ?? []);
     setChangedIds(new Set());
@@ -742,8 +776,7 @@ export default function App() {
     // the tour (the runId guard keeps any in-flight step from advancing).
     onboarding.abort();
     try {
-      const parsed: unknown = JSON.parse(await file.text());
-      const result = await loadProject(parsed);
+      const result = await loadProjectFile(file);
       applyDocPayload(result);
       // A loaded project can switch the module + discipline (project.py
       // resolves both from the file); the Header label and the picker's
@@ -921,6 +954,9 @@ export default function App() {
           usage={usage}
           changedIds={changedIds}
           baselineIndex={baselineIndex}
+          importReport={importReport}
+          sourceAvailable={sourceAvailable}
+          preservationReady={preservationReady}
           busy={busy}
           onUndo={onUndo}
           onRedo={onRedo}

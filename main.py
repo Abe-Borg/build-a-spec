@@ -12,9 +12,9 @@ opening the default browser against the same local server.
 from __future__ import annotations
 
 import io
-import json
 import os
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -173,14 +173,14 @@ class _CloseController:
 
         session = sessions.get_session()
         try:
-            payload = sessions.project_payload(session)
+            payload = sessions.project_package_bytes(session)
             filename = sessions.project_default_filename(session)
         except Exception:
             return False
         target = self._window.create_file_dialog(
             webview.SAVE_DIALOG,
             save_filename=filename,
-            file_types=("Build-a-Spec project (*.json)", "All files (*.*)"),
+            file_types=("Build-a-Spec project (*.baspec)", "All files (*.*)"),
         )
         if not target:
             return False  # user cancelled the Save dialog
@@ -188,11 +188,34 @@ class _CloseController:
         # 1-tuple on others.
         if isinstance(target, (tuple, list)):
             target = target[0]
+        temp_path: str | None = None
         try:
-            with open(target, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, ensure_ascii=False, indent=2)
-        except OSError:
+            # Write beside the selected target, close it, then atomically
+            # replace. A crash or short write cannot leave a half-valid
+            # project under the user's chosen filename.
+            target_path = os.path.abspath(os.fspath(target))
+            target_dir = os.path.dirname(target_path)
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=target_dir,
+                prefix=".buildaspec-save-",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temp_path = handle.name
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, target_path)
+            temp_path = None
+        except (OSError, TypeError, ValueError):
             return False
+        finally:
+            if temp_path is not None:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
         return True
 
 

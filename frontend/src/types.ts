@@ -227,6 +227,24 @@ export interface Figure {
   message_index: number;
 }
 
+/**
+ * Import-fidelity accounting for the current session. An imported DOCX is
+ * normalized into Build-a-Spec's semantic body model; this report keeps that
+ * lossy boundary visible everywhere the document payload is refreshed.
+ */
+export interface ImportReport {
+  filename: string;
+  sha256: string;
+  size_bytes: number;
+  zip_member_count: number;
+  zip_uncompressed_bytes: number;
+  imported_block_count: number;
+  skipped_empty_count: number;
+  warnings: string[];
+  tracked_changes_detected: boolean;
+  fidelity_notice: string;
+}
+
 export interface DocPayload {
   doc: SpecDoc;
   open_questions: OpenItem[];
@@ -240,6 +258,12 @@ export interface DocPayload {
   figures: Figure[];
   /** Suggested reply chips staged by the model (Batch 9); [] when none. */
   suggested_prompts: string[];
+  /** Import fidelity/recovery state; null for a from-scratch document. */
+  import_report: ImportReport | null;
+  /** True when this active session has an exact attached source DOCX. */
+  source_available: boolean;
+  /** True when edits can be exported by cloning and narrowly patching the source. */
+  preservation_ready: boolean;
 }
 
 /* --- Version diff / redline (Batch 5, mirrors backend/spec_doc/diffing.py) --- */
@@ -352,6 +376,7 @@ export interface ImportResultPayload extends DocPayload {
   ok: boolean;
   warnings: string[];
   imported_block_count: number;
+  skipped_empty_count: number;
   tracked_changes_detected: boolean;
 }
 

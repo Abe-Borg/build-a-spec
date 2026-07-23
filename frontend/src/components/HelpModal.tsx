@@ -150,9 +150,11 @@ function HowToUse() {
             t: "Start from a master, or a blank page",
             d: (
               <>
-                Optionally import an office master <Tag>.docx</Tag> to adapt —
-                every block lands stamped <Tag>imported</Tag> until you review
-                it — or draft the section from scratch.
+                Optionally extract supported body content from an office master{" "}
+                <Tag>.docx</Tag> to adapt — every block lands stamped{" "}
+                <Tag>imported</Tag> until you review it — or draft the section
+                from scratch. Build-a-Spec keeps an immutable source copy and
+                only permits source-preserving edits it can prove are safe.
               </>
             ),
           },
@@ -180,7 +182,7 @@ function HowToUse() {
           },
           {
             t: "Export",
-            d: "A clean .docx, or a redline vs the master with genuine Word tracked changes.",
+            d: "Imported drafts can clone the source DOCX and patch verified simple body text, leaving headers, footers, numbering, styles, and unrelated package parts alone. Normalized DOCX and extracted-provision redline exports remain separate, explicit choices.",
           },
         ]}
       />
@@ -212,21 +214,22 @@ function Workflows() {
       />
       <Recipe
         title="From an office master"
-        tagline="Adapt a company master to this project."
+        tagline="Adapt body content inside a deliberately narrow preservation boundary."
         steps={[
-          "Import the master .docx — every block lands imported.",
-          "Tell Claude the project; it walks the master article by article, adapting each block.",
-          "Clear the Review queue of imported and assumed blocks.",
+          "Import the master .docx after reviewing the preservation boundary — every extracted block lands imported.",
+          "Save a native .baspec project; it carries the exact source DOCX with the semantic document and conversation.",
+          "Tell Claude the project; it walks the extracted content article by article, adapting each block.",
+          "P1 source-preserving mode accepts verified simple body-paragraph text replacements and refuses unsafe structural or complex-format edits.",
           "Send to Final QC.",
-          "Export a redline vs the master — the reviewer sees exactly what changed.",
+          "Choose Export preserved DOCX to clone-and-patch the master, or intentionally choose normalized DOCX / extracted-provision redline for the semantic view.",
         ]}
       />
       <Recipe
-        title="Reviewer-ready redline"
-        tagline="When the deliverable is a marked-up master."
+        title="Extracted-provision redline"
+        tagline="Review content changes inside Build-a-Spec's normalized model."
         steps={[
-          "Use Compare in the panel to diff any version against the master or a prior version.",
-          "Export “Redline vs master”: genuine Word tracked changes — Accept All is your draft, Reject All is the original master.",
+          "Use Compare in the panel to diff any version against the imported extraction or a prior version.",
+          "Export “Redline of extracted provisions” for Word tracked changes over normalized provision text. It is not a redline of the uploaded DOCX and cannot restore that file with Reject All.",
         ]}
       />
       <Recipe
@@ -281,6 +284,14 @@ function HowItWorks() {
               </>
             ),
           },
+          {
+            t: "Imported DOCX files have a narrow boundary",
+            d: "Build-a-Spec retains an immutable source package and maps supported main-body content into a semantic tree. Source-preserving export clones the package and replaces text only in unambiguous, simple body paragraphs; unsafe edits are refused. Headers, footers, numbering, styles, relationships, and unrelated package parts are never regenerated in this mode.",
+          },
+          {
+            t: "Numbering depends on export mode",
+            d: "Fresh and normalized exports still write calculated labels such as A., 1., a., and 1) as visible text, not real Word list bindings. A source-preserved export leaves the imported paragraph's existing Word numbering properties untouched, so it does not break numbering that was already present.",
+          },
         ]}
       />
     </div>
@@ -321,8 +332,8 @@ function WhyTrustIt() {
             d: "Every candidate finding faces a panel of independent Fable 5 refuters. A tie goes to the refuters, so plausible-but-wrong noise never reaches you — only real, actionable defects survive.",
           },
           {
-            t: "The redline is exact, and tested",
-            d: "Accept All in Word yields exactly the issued draft; Reject All yields the master’s provisions. That round-trip is a hard test in the suite, not a claim.",
+            t: "The redline scope is explicit",
+            d: "The imported redline compares Build-a-Spec's normalized provision tree with its extracted baseline. It does not compare headers, footers, styles, tables, layout, or other original DOCX package content, and Reject All does not recreate the uploaded master.",
           },
           {
             t: "Standards carry receipts",

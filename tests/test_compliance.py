@@ -375,7 +375,7 @@ def test_audit_api_lifecycle_and_export_and_round_trip(monkeypatch):
     assert "COMPLIANCE AUDIT SUMMARY" in texts
 
     # Project round-trip restores the audit.
-    project = json.loads(client.get("/api/project/save").content)
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert project["audit_result"]["coverage"]
     client.post("/api/session/reset")
     assert client.get("/api/audit/status").json()["status"] == "idle"

@@ -1331,6 +1331,24 @@ new REST route (`GET /api/modules`) + an optional body on the reset route.
   SequencedFakeClient keys that CONTAIN the discipline (routing success ==
   the proof) + the 400 backstop (test_research_api); the lens-message
   discipline block (test_qc).
+- **Post-merge remediation (v1.4.0, after the master merge + review).**
+  Batch 9 landed on top of master's Batch 8 (chat figures, v1.3.0), so it
+  renumbered to Batch 9 / v1.4.0. Five review findings fixed: (1) the stale
+  scan is now punctuation-tolerant for unpinned modules
+  (`_scan_editions(variant_tolerant=unpinned)` builds patterns for a
+  recorded name's hyphen AND space forms) — closes the hole where a
+  recorded standard cited in the other punctuation at a wrong year escaped
+  both rules; pinned modules pass `variant_tolerant=False` → byte-identical.
+  (2) `_scan_unrecorded_editions` binds designations longest-first so a
+  shorter designation's match inside a longer citation is span-deduped, not
+  double-reported. (3) The deprecated audit path threads `discipline` into
+  `build_audit_user_message` (`<project_discipline>`, non-empty only), so
+  the generic `compliance_persona`'s session-discipline reference isn't
+  dangling. (4) `POST /api/onboarding/demo` sets `session.discipline` on an
+  open-catalog session (invariant-gated) so the tour's chosen discipline
+  can't mismatch the PROJECT CONTEXT. (5) `App.onLoadProject` calls
+  `refreshHealth()` so a project that switches module/discipline updates the
+  Header label + picker preselect.
 
 ## Commands
 

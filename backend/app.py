@@ -526,6 +526,12 @@ def create_app() -> FastAPI:
                 },
                 status_code=409,
             )
+        # On an open-catalog session, align the session discipline with the
+        # demo's chosen discipline (honoring the invariant — a curated module
+        # stays ""). Otherwise the demo directive would draft discipline B
+        # while the PROJECT CONTEXT still names an earlier discipline A.
+        if getattr(session.module, "open_catalog", False):
+            session.discipline = sanitize_discipline(body.discipline)
         return JSONResponse(
             {"ok": True, "message": onboarding_demo_directive(body.discipline)}
         )
@@ -943,6 +949,7 @@ def create_app() -> FastAPI:
             model=settings.RESEARCH_MODEL,
             max_tokens=settings.RESEARCH_MAX_TOKENS,
             version_index=session.doc.index,
+            discipline=session.discipline,
             usage_sink=lambda u: session.usage.add("audit", u),
         )
         if not started:

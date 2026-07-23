@@ -172,16 +172,48 @@ def _suppressed(text: str, start: int, end: int) -> bool:
     )
 
 
+def _name_punctuation_variants(name: str) -> tuple[str, ...]:
+    """A designation's hyphen/space spelling variants (dedup, order-stable).
+
+    "CAN/ULC S524" and "CAN/ULC-S524" name the same standard; a recorded
+    edition in one form must still stale-check a citation written in the
+    other (Batch 9). Used only for unpinned modules, where recorded names
+    are free-text and their punctuation need not match the document's.
+    """
+    variants: list[str] = []
+    for form in (name, name.replace("-", " "), name.replace(" ", "-")):
+        if form not in variants:
+            variants.append(form)
+    return tuple(variants)
+
+
 def _scan_editions(
-    text: str, editions: tuple[EffectiveEdition, ...]
+    text: str,
+    editions: tuple[EffectiveEdition, ...],
+    *,
+    variant_tolerant: bool = False,
 ) -> Iterable[dict[str, str]]:
-    """Yield stale-edition hits in ``text`` against the editions in effect."""
+    """Yield stale-edition hits in ``text`` against the editions in effect.
+
+    ``variant_tolerant`` (unpinned modules only) also matches a recorded
+    designation's hyphen/space spelling variant, so a recorded standard
+    cited in the other punctuation form still stale-checks. Pinned modules
+    pass False → byte-identical to the pre-Batch-9 behavior.
+    """
     seen_spans: list[tuple[int, int]] = []
     for eff in editions:
         expected = eff.edition.strip()
         if not expected:
             continue
-        for pattern in _edition_patterns_for(eff.name):
+        names = (
+            _name_punctuation_variants(eff.name)
+            if variant_tolerant
+            else (eff.name,)
+        )
+        patterns = tuple(
+            pattern for name in names for pattern in _edition_patterns_for(name)
+        )
+        for pattern in patterns:
             for match in pattern.finditer(text):
                 year = match.group(1)
                 if year == expected:
@@ -271,7 +303,12 @@ def _scan_unrecorded_editions(
         if raw not in unrecorded:
             unrecorded.append(raw)
     seen_spans: list[tuple[int, int]] = []
-    for raw in unrecorded:
+    # Longest designation first: a longer designation's citation span
+    # ("CAN/ULC-S524-2019") claims its span before a shorter one whose
+    # pattern also matches inside it ("ULC-S524-2019"), so the shorter's
+    # contained inner match is dropped by the span-dedup below instead of
+    # double-reporting the same physical citation (Batch 9).
+    for raw in sorted(unrecorded, key=len, reverse=True):
         for pattern in _edition_patterns_for(raw):
             for match in pattern.finditer(text):
                 year = match.group(1)
@@ -368,7 +405,7 @@ def lint_document(
     # --- per-paragraph text scans -----------------------------------------
     for _part, _article, paragraph, _depth, ref in iter_paragraphs(section):
         text = paragraph.text
-        for hit in _scan_editions(text, editions):
+        for hit in _scan_editions(text, editions, variant_tolerant=unpinned):
             add(
                 RULE_STALE_EDITION,
                 paragraph.uid,

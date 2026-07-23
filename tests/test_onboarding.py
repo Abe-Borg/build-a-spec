@@ -280,3 +280,32 @@ def test_demo_directive_drives_a_small_streaming_turn(monkeypatch):
     undone = client.post("/api/doc/undo")
     assert undone.status_code == 200
     assert undone.json()["doc"]["section"]["number"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Batch 9: the demo aligns an open-catalog session's discipline with the
+# tour's chosen discipline (so PROJECT CONTEXT can't name a stale one).
+# ---------------------------------------------------------------------------
+
+
+def test_demo_sets_discipline_on_a_generic_session():
+    client = _client()
+    # Start a generic session already carrying a different discipline.
+    client.post(
+        "/api/session/reset",
+        json={"module_id": "generic", "discipline": "Electrical"},
+    )
+    resp = client.post("/api/onboarding/demo", json={"discipline": "Plumbing"})
+    assert resp.status_code == 200
+    # The session discipline now matches the demo the tour is about to draft.
+    assert sessions.get_session().discipline == "Plumbing"
+
+
+def test_demo_leaves_a_curated_session_discipline_empty():
+    client = _client()
+    # Default (curated) module — the invariant keeps discipline "".
+    resp = client.post(
+        "/api/onboarding/demo", json={"discipline": "Mechanical (HVAC)"}
+    )
+    assert resp.status_code == 200
+    assert sessions.get_session().discipline == ""

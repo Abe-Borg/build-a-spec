@@ -413,3 +413,35 @@ def test_pinned_module_never_runs_the_unrecorded_rule():
     assert [(i["rule"], i["element_id"]) for i in issues] == [
         ("stale_edition", "pt1.a1.p2")
     ]
+
+
+# ---------------------------------------------------------------------------
+# Batch 9 remediation: the two review-workflow findings on the new rule.
+# ---------------------------------------------------------------------------
+
+
+def test_wrong_year_in_other_punctuation_form_of_recorded_standard_is_stale():
+    # Recorded as the SPACE form; the document cites the HYPHEN form at a
+    # wrong year. The stale scan is punctuation-tolerant for unpinned
+    # modules, so this fires stale_edition (not silence, not unrecorded).
+    doc = _doc_with(
+        _base("Fire alarm wiring per CAN/ULC-S524-2019.")
+        + [_record("CAN/ULC S524", "2022")]
+    )
+    issues = lint_document(doc, _generic())
+    stale = [i for i in issues if i["rule"] == "stale_edition"]
+    assert len(stale) == 1 and "edition in effect is 2022" in stale[0]["message"]
+    # And it is NOT double-counted as unrecorded (the standard IS recorded).
+    assert _unrecorded(issues) == []
+
+
+def test_overlapping_designation_forms_are_not_double_reported():
+    # "ULC-S524" also matches inside "CAN/ULC-S524-2019"; longest-first
+    # binding drops that inner match, so two physical citations → two issues.
+    doc = _doc_with(
+        _base("Tested to ULC-S524-2019 and CAN/ULC-S524-2019 throughout.")
+    )
+    issues = _unrecorded(lint_document(doc, _generic()))
+    assert len(issues) == 2
+    matches = sorted(i["match"] for i in issues)
+    assert matches == ["CAN/ULC-S524-2019", "ULC-S524-2019"]

@@ -62,6 +62,7 @@ from typing import Any, Iterator
 import anthropic
 
 from .. import settings
+from ..figures import CREATE_FIGURE_TOOL, FigureError, FigureStore
 from ..spec_doc import (
     APPLY_SPEC_EDITS_TOOL,
     DocumentStore,
@@ -70,6 +71,7 @@ from ..spec_doc import (
     open_questions,
     outline,
 )
+from ..spec_doc.project import chat_transcript
 from ..compliance import AuditRunner
 from ..qc import QCRunner
 from ..research import ResearchRunner, research_context_block
@@ -78,6 +80,7 @@ from ..research.resend_sanitizer import (
     sanitize_messages_for_resend,
 )
 from ..research.schema import build_web_fetch_tool, build_web_search_tool
+from ..suggestions import SUGGEST_PROMPTS_TOOL, SuggestError, validate_prompts
 from ..tracing import capture as _trace
 from ..spec_modules import SpecModule, get_module
 from ..standards import standards_context_block
@@ -95,17 +98,22 @@ MAX_TOOL_ROUNDS = 50
 
 
 def _chat_tools() -> list[dict[str, Any]]:
-    """The interview tool list: document edits + live web lookups.
+    """The interview tool list: document edits + figures + live web lookups
+    + suggested replies.
 
     Static configuration on purpose — tools precede the system prompt in
     the cached prefix, so anything per-turn here (e.g. a profile-derived
     ``user_location``) would bust the prompt cache for the whole session.
     The model steers search locale through its query text instead.
+    ``suggest_prompts`` is appended LAST so the existing tool bytes stay a
+    stable cached prefix.
     """
     return [
         APPLY_SPEC_EDITS_TOOL,
+        CREATE_FIGURE_TOOL,
         build_web_search_tool(max_uses=settings.CHAT_MAX_SEARCHES),
         build_web_fetch_tool(max_uses=settings.CHAT_MAX_FETCHES),
+        SUGGEST_PROMPTS_TOOL,
     ]
 
 
@@ -130,6 +138,16 @@ class SessionState:
     # Final QC on Fable 5 (Batch 4). Replaced on reset/load like the other
     # runners so an in-flight run settles into the abandoned object.
     qc: QCRunner = field(default_factory=QCRunner)
+    # Chat-authored figures (diagrams/schematics/tables). Like the document
+    # store it is reset in place (never reassigned) so a zombie turn's
+    # commit/rollback settles harmlessly against the cleared store.
+    figures: FigureStore = field(default_factory=FigureStore)
+    # Suggested-reply chips staged by the model (Batch 9). Turn-atomic,
+    # latest-only: each committed turn REPLACES this with what it staged —
+    # including [] when the tool was not called, which is how the bar winds
+    # down as the section nears issue-ready. A failed turn leaves it
+    # untouched (staging is a turn-local in stream_user_turn, not a store).
+    suggested_prompts: list[str] = field(default_factory=list)
     # Session-scoped billed-usage meter (WI4). Reset/load clear it.
     usage: UsageLedger = field(default_factory=UsageLedger)
     # True while a model turn owns the document store (WI2). Manual edits are
@@ -150,6 +168,12 @@ class SessionState:
         self.research = ResearchRunner()
         self.audit = AuditRunner()
         self.qc = QCRunner()
+        # In-place reset (see the field comment): a still-streaming zombie
+        # turn holds this same object; clearing turn state neutralizes it.
+        self.figures.reset()
+        # Clear staged chips (commit is generation-guarded, so a zombie
+        # turn can't repopulate the fresh session).
+        self.suggested_prompts.clear()
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()
@@ -268,6 +292,9 @@ def _turn_context_text(session: SessionState) -> str:
                 f"{item.get('label')} (element {item.get('element_id')})"
             )
         parts.append("\n".join(lines))
+    figure_stubs = session.figures.context_stubs()
+    if figure_stubs:
+        parts.append(figure_stubs)
     return (
         "=== PROJECT CONTEXT (current state — supersedes anything "
         "remembered from earlier turns) ===\n\n"
@@ -314,6 +341,52 @@ def _content_blocks_to_dicts(content: Any) -> list[dict[str, Any]]:
 _TRANSIENT_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
 
 
+def _elide_figure_tool_inputs(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Strip the heavy ``source``/``rows`` out of ``create_figure`` tool_use
+    blocks in committed history (copy-on-write).
+
+    The full figure markup already lives in the figure store; leaving it in
+    the assistant's tool_use block would re-send it as cached history every
+    later turn and balloon the project file. The model never needs the old
+    source (a per-turn FIGURES stub tells it the figure exists) — mirrors the
+    fetched-PDF elision. ``kind``/``title`` are kept so the call stays
+    readable; the tool_result was already compact.
+    """
+    result: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") != "assistant":
+            result.append(message)
+            continue
+        content = message.get("content") or []
+        changed = False
+        new_content: list[dict[str, Any]] = []
+        for block in content:
+            if (
+                block.get("type") == "tool_use"
+                and block.get("name") == "create_figure"
+            ):
+                inp = block.get("input") or {}
+                new_content.append(
+                    {
+                        **block,
+                        "input": {
+                            "kind": inp.get("kind"),
+                            "title": inp.get("title"),
+                            "_elided": "source stored with the figure",
+                        },
+                    }
+                )
+                changed = True
+            else:
+                new_content.append(block)
+        result.append(
+            {**message, "content": new_content} if changed else message
+        )
+    return result
+
+
 def _committed_messages(
     new_messages: list[dict[str, Any]], user_text: str
 ) -> list[dict[str, Any]]:
@@ -326,6 +399,8 @@ def _committed_messages(
       them within the turn that produced them.
     - Fetched-PDF payloads are elided wholesale (see
       :func:`elide_all_pdf_sources`); search results and citations stay.
+    - ``create_figure`` tool inputs shed their heavy source (see
+      :func:`_elide_figure_tool_inputs`) — the figure store holds it.
     """
     committed: list[dict[str, Any]] = [
         {"role": "user", "content": [{"type": "text", "text": user_text}]}
@@ -342,7 +417,7 @@ def _committed_messages(
         if not content:
             content = [{"type": "text", "text": "[Model reasoning omitted.]"}]
         committed.append({"role": "assistant", "content": content})
-    return elide_all_pdf_sources(committed)
+    return _elide_figure_tool_inputs(elide_all_pdf_sources(committed))
 
 
 def _with_tail_cache_breakpoint(
@@ -452,6 +527,8 @@ def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
                 yield {"type": "status", "kind": "writing"}
             elif btype == "tool_use" and bname == "apply_spec_edits":
                 yield {"type": "status", "kind": "drafting", "progress_chars": 0}
+            elif btype == "tool_use" and bname == "create_figure":
+                yield {"type": "status", "kind": "drawing"}
             elif btype == "server_tool_use" and bname == "web_search":
                 yield {"type": "status", "kind": "searching"}
             elif btype == "server_tool_use" and bname == "web_fetch":
@@ -541,8 +618,92 @@ def _enter_stream(
         return manager, manager.__enter__()
 
 
+def _run_create_figure(
+    session: SessionState,
+    block: dict[str, Any],
+    *,
+    message_index: int,
+    trace_handle: Any = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Execute one ``create_figure`` tool_use block.
+
+    On success the tool result echoes only id/kind/title (NOT the source —
+    the source never re-enters the model's context), and a ``figure`` UI
+    event carries the full figure to the chat for inline rendering. A bad
+    payload becomes an ``is_error`` result the model can correct.
+    """
+    try:
+        figure = session.figures.create(
+            block.get("input") or {}, message_index=message_index
+        )
+    except FigureError as exc:
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": f"create_figure rejected (nothing was created): {exc}",
+                "is_error": True,
+            },
+            [],
+        )
+    _trace.note(trace_handle, f"created figure {figure.fid} ({figure.kind})")
+    result = {
+        "type": "tool_result",
+        "tool_use_id": block.get("id"),
+        "content": json.dumps(
+            {
+                "created": {
+                    "fid": figure.fid,
+                    "kind": figure.kind,
+                    "title": figure.title,
+                }
+            },
+            ensure_ascii=False,
+        ),
+    }
+    return result, [{"type": "figure", "figure": figure.to_dict()}]
+
+
+def _run_suggest_prompts(
+    block: dict[str, Any], trace_handle: Any = None
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Execute one ``suggest_prompts`` tool_use block.
+
+    The tool result is deliberately compact (``{"suggested": N}`` — token
+    discipline); the validated list travels in the ``suggested_prompts`` UI
+    event, which ``stream_user_turn`` also stages (committed only on turn
+    success, replacing the previous set). A bad payload becomes an
+    ``is_error`` result the model can correct — never a turn failure.
+    """
+    try:
+        prompts = validate_prompts(block.get("input") or {})
+    except SuggestError as exc:
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": f"suggest_prompts rejected (nothing was staged): {exc}",
+                "is_error": True,
+            },
+            [],
+        )
+    _trace.note(trace_handle, f"staged {len(prompts)} suggested prompt(s)")
+    return (
+        {
+            "type": "tool_result",
+            "tool_use_id": block.get("id"),
+            "content": json.dumps({"suggested": len(prompts)}),
+        },
+        [{"type": "suggested_prompts", "prompts": prompts}],
+    )
+
+
 def _run_tool(
-    session: SessionState, block: dict[str, Any], trace_handle: Any = None
+    session: SessionState,
+    block: dict[str, Any],
+    trace_handle: Any = None,
+    *,
+    message_index: int = 0,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Execute one (serialized) tool_use block.
 
@@ -550,12 +711,19 @@ def _run_tool(
     ``is_error`` results for the model to correct — they never abort the
     turn.
     """
-    if block.get("name") != "apply_spec_edits":
+    name = block.get("name")
+    if name == "create_figure":
+        return _run_create_figure(
+            session, block, message_index=message_index, trace_handle=trace_handle
+        )
+    if name == "suggest_prompts":
+        return _run_suggest_prompts(block, trace_handle)
+    if name != "apply_spec_edits":
         return (
             {
                 "type": "tool_result",
                 "tool_use_id": block.get("id"),
-                "content": f"Unknown tool: {block.get('name')}",
+                "content": f"Unknown tool: {name}",
                 "is_error": True,
             },
             [],
@@ -613,9 +781,11 @@ def stream_user_turn(
     drafting/searching/fetching) and ``thinking_delta`` summaries interleave
     with ``text_delta`` chunks across every continuation round; live
     ``web_search``/``web_fetch`` events fire the instant a server-tool call
-    completes; ``doc_patch`` follows each applied edit batch. Then — on
-    success — ``open_questions`` and ``lint`` (if the document changed) and
-    ``turn_complete``, which carries the turn's aggregated billed usage.
+    completes; ``doc_patch`` follows each applied edit batch and ``figure``
+    each created figure; a ``suggested_prompts`` event carries the reply
+    chips the model staged this turn. Then — on success — ``open_questions``
+    and ``lint`` (if the document changed) and ``turn_complete``, which
+    carries the turn's aggregated billed usage.
     ``status`` frames are transient UI hints, never persisted. Any failure
     yields a single ``error`` event, rolls the document back, and leaves
     history unchanged. A user-initiated stop (``session.stop_requested``) is
@@ -641,7 +811,17 @@ def stream_user_turn(
             ],
         }
     ]
+    # Ordinal of the assistant chat bubble this turn will become — used to
+    # re-inline figures into the right bubble when a saved project reloads
+    # (the transcript merges a turn's assistant text into one bubble, so all
+    # of a turn's figures share this index).
+    message_index = sum(
+        1
+        for entry in chat_transcript(session.history)
+        if entry["role"] == "assistant"
+    )
     session.doc.begin_turn()
+    session.figures.begin_turn()
     session.turn_active = True
     session.stop_requested.clear()
     generation = session.generation
@@ -675,6 +855,12 @@ def stream_user_turn(
     doc_changed = False
     committed = False
     usage_totals: dict[str, int] = {}
+    # Turn-local staging for suggested-reply chips: the dispatch loop records
+    # each suggest_prompts call here (latest wins); a successful turn commits
+    # it into session.suggested_prompts, a failed turn drops it with the
+    # generator. Initializes to [] so a turn that never calls the tool
+    # commits an empty set — that "no call = clear" rule is the wind-down.
+    staged_suggestions: list[str] = []
     try:
         client = get_client()
         resumed_from_pause = False
@@ -774,9 +960,16 @@ def stream_user_turn(
                 if block.get("type") != "tool_use":
                     continue
                 check_session()
-                result, ui_events = _run_tool(session, block, trace_handle)
+                result, ui_events = _run_tool(
+                    session, block, trace_handle, message_index=message_index
+                )
                 tool_results.append(result)
                 for event in ui_events:
+                    if event.get("type") == "suggested_prompts":
+                        # Turn-local staging: committed on turn success only
+                        # (latest call in a turn wins by reassignment; a
+                        # failed turn drops this local untouched).
+                        staged_suggestions = list(event["prompts"])
                     yield event
             new_messages.append({"role": "user", "content": tool_results})
         else:
@@ -818,6 +1011,12 @@ def stream_user_turn(
             return
         session.history.extend(_committed_messages(new_messages, user_text))
         doc_changed = session.doc.commit_turn()
+        session.figures.commit_turn()
+        # Latest-only replace: whatever this turn staged (including [] when
+        # the tool was not called) becomes the current chip set. Failure
+        # paths return before this else block, so there is nothing to roll
+        # back — the previous list is simply never overwritten.
+        session.suggested_prompts = staged_suggestions
         committed = True
     finally:
         # Runs on every exit — including GeneratorExit when the SSE client
@@ -830,6 +1029,7 @@ def stream_user_turn(
             session.usage.add("interview", usage_totals, count_turn=True)
         if not committed:
             session.doc.rollback_turn()
+            session.figures.rollback_turn()
             _trace.turn_end(
                 trace_handle,
                 stop_reason=stop_reason,

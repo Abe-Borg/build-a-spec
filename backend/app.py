@@ -167,6 +167,14 @@ def _doc_payload(session) -> dict[str, Any]:
         # The imported-master version index (Batch 5), for the compare
         # picker's "Master (import)" option; ``None`` for from-scratch.
         "baseline_index": session.doc.baseline_index,
+        # Chat-authored figures (diagrams/schematics/tables) — full source so
+        # the frontend can render + offer downloads. Not part of the doc tree.
+        "figures": session.figures.snapshot(),
+        # Suggested-reply chips staged by the model (Batch 9); [] when none.
+        # Surfaced here so boot, project load, undo/redo, and the failed-turn
+        # refresh all sync the bar one way — a failed turn's refresh returns
+        # the untouched pre-turn list, restoring the bar for free.
+        "suggested_prompts": list(session.suggested_prompts),
     }
 
 
@@ -646,6 +654,58 @@ def create_app() -> FastAPI:
                 "baseline_index": store.baseline_index,
             }
         )
+
+    # --- Chat-authored figures (diagrams / schematics / tables) -------------
+    #
+    # Figures are created by the model through the create_figure tool and ride
+    # the SSE ``figure`` event + every _doc_payload; these routes cover a
+    # standalone snapshot, the CSV download for table figures, and delete.
+    # Diagram (SVG/PNG) downloads are produced client-side from the sanitized
+    # source (the server never serves executable SVG) — see
+    # ``frontend/src/lib/figures.ts``.
+
+    @app.get("/api/figures")
+    def figures_list() -> JSONResponse:
+        session = sessions.get_session()
+        return JSONResponse({"ok": True, "figures": session.figures.snapshot()})
+
+    @app.get("/api/figure/{fid}/csv")
+    def figure_csv(fid: str) -> Response:
+        session = sessions.get_session()
+        figure = session.figures.get(fid)
+        if figure is None:
+            return JSONResponse(
+                {"ok": False, "error": f"No figure {fid!r}."}, status_code=404
+            )
+        if figure.kind != "table":
+            return JSONResponse(
+                {"ok": False, "error": "Only table figures export as CSV."},
+                status_code=400,
+            )
+        return Response(
+            content=figure.to_csv(),
+            media_type="text/csv; charset=utf-8",
+            headers=_attachment_headers(f"{figure.title or figure.fid}.csv"),
+        )
+
+    @app.delete("/api/figure/{fid}")
+    def figure_delete(fid: str) -> JSONResponse:
+        session = sessions.get_session()
+        if session.turn_active:
+            # Deleting mid-turn would shift the list under the turn's
+            # provisional-figure bookkeeping (begin/rollback by index).
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A turn is generating — try again in a moment.",
+                },
+                status_code=409,
+            )
+        if not session.figures.delete(fid):
+            return JSONResponse(
+                {"ok": False, "error": f"No figure {fid!r}."}, status_code=404
+            )
+        return JSONResponse({"ok": True, "figures": session.figures.snapshot()})
 
     # --- Master-spec import (Phase 5) ---------------------------------------
 

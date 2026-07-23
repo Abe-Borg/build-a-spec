@@ -10,6 +10,9 @@ export interface ChatMessage {
   status?: StreamStatus | null;
   /** Accumulated adaptive-thinking summary (WI1), shown collapsed. */
   thinking?: string;
+  /** Ids of figures the model created in this assistant turn (rendered
+   * inline beneath the text). Resolved against the session figure map. */
+  figureIds?: string[];
   /** Terse workflow-event acknowledgment (e.g. research / Final QC kicked
    *  off) — rendered as a compact centered marker, not a model message, so
    *  these never crowd the conversation. */
@@ -23,7 +26,8 @@ export type StatusKind =
   | "writing"
   | "drafting"
   | "searching"
-  | "fetching";
+  | "fetching"
+  | "drawing";
 
 export interface StreamStatus {
   kind: StatusKind;
@@ -189,6 +193,26 @@ export interface StandardInfo {
   reason: string;
 }
 
+/** A chat-authored figure (mirrors backend/figures.py serialization). Source
+ * is model-authored and always sanitized at render — see lib/figures.ts. */
+export type FigureKind = "mermaid" | "svg" | "table";
+
+export interface Figure {
+  fid: string;
+  kind: FigureKind;
+  title: string;
+  caption: string;
+  alt_text: string;
+  /** Mermaid text or SVG markup (kinds mermaid/svg); "" for a table. */
+  source: string;
+  /** Table header cells + body rows (kind table). */
+  columns: string[];
+  rows: string[][];
+  created_at: string;
+  /** Assistant-bubble ordinal that created it (for reload re-inlining). */
+  message_index: number;
+}
+
 export interface DocPayload {
   doc: SpecDoc;
   open_questions: OpenItem[];
@@ -198,6 +222,10 @@ export interface DocPayload {
   research_status: ResearchRunStatus;
   /** Imported-master version index (Batch 5); null for from-scratch. */
   baseline_index: number | null;
+  /** Chat-authored figures (diagrams/schematics/tables); [] when none. */
+  figures: Figure[];
+  /** Suggested reply chips staged by the model (Batch 9); [] when none. */
+  suggested_prompts: string[];
 }
 
 /* --- Version diff / redline (Batch 5, mirrors backend/spec_doc/diffing.py) --- */
@@ -481,6 +509,8 @@ export type StreamEvent =
     }
   | { type: "web_search"; query: string }
   | { type: "web_fetch"; url: string }
+  | { type: "figure"; figure: Figure }
+  | { type: "suggested_prompts"; prompts: string[] }
   | { type: "doc_patch"; ops: DocOp[]; doc: SpecDoc }
   | { type: "doc_snapshot"; doc: SpecDoc }
   | { type: "open_questions"; items: OpenItem[] }

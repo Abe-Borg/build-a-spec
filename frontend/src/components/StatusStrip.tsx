@@ -13,6 +13,7 @@ const LABELS: Record<string, string> = {
   fetching: "Reading a source…",
   drafting: "Writing to the document…",
   writing: "Writing…",
+  drawing: "Creating a figure…",
 };
 
 export default function StatusStrip({ status }: { status: StreamStatus }) {

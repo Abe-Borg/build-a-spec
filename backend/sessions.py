@@ -49,6 +49,8 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         ),
         audit_result=session.audit.result,
         qc_result=session.qc.result.to_dict() if session.qc.result else None,
+        figures=session.figures.to_dict(),
+        suggested_prompts=list(session.suggested_prompts),
     )
 
 

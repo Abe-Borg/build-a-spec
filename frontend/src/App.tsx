@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChatMessage,
   EditOp,
+  Figure,
   Health,
   LintIssue,
   OpenItem,
@@ -16,6 +17,7 @@ import type {
 import {
   applyQc,
   checkUpdate,
+  deleteFigure,
   dismissQc,
   draftFull,
   editDoc,
@@ -50,6 +52,7 @@ import HelpModal, { type HelpTopic } from "./components/HelpModal";
 import OnboardingOverlay from "./components/OnboardingOverlay";
 import { useOnboarding, type DrawerName } from "./lib/useOnboarding";
 import CloseDialog from "./components/CloseDialog";
+import ConfirmDialog from "./components/ConfirmDialog";
 
 let nextId = 0;
 const newId = () => `m${++nextId}`;
@@ -74,6 +77,16 @@ export default function App() {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
   const [baselineIndex, setBaselineIndex] = useState<number | null>(null);
+  // Chat-authored figures (diagrams/schematics/tables), keyed for the bubbles.
+  const [figures, setFigures] = useState<Figure[]>([]);
+  const figuresById = useMemo(
+    () => new Map(figures.map((f) => [f.fid, f])),
+    [figures],
+  );
+  // Model-staged reply chips (Batch 9), shown above the composer. Cleared at
+  // turn start; re-synced from the doc payload on every refresh (so a failed
+  // turn's refresh restores the untouched pre-turn set).
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   // Composer prefill for the review queue's "Ask model" (WI2). The nonce
   // fires the composer's effect even when the same ref is asked twice.
   const [prefill, setPrefill] = useState({ text: "", nonce: 0 });
@@ -109,6 +122,8 @@ export default function App() {
         setStandards(payload.standards);
         setProfileComplete(payload.profile_complete);
         setBaselineIndex(payload.baseline_index ?? null);
+        setFigures(payload.figures ?? []);
+        setSuggestions(payload.suggested_prompts ?? []);
       })
       .catch(() => setDoc(null));
   }, []);
@@ -398,6 +413,22 @@ export default function App() {
     });
   };
 
+  /** Attach a just-created figure to the streaming assistant bubble so it
+   *  renders inline beneath the text (and clears the transient status). */
+  const attachFigureToLast = (fid: string) => {
+    setMessages((prev) => {
+      if (prev.length === 0) return prev;
+      const next = [...prev];
+      const last = next[next.length - 1];
+      next[next.length - 1] = {
+        ...last,
+        figureIds: [...(last.figureIds ?? []), fid],
+        status: null,
+      };
+      return next;
+    });
+  };
+
   /** Append a streamed adaptive-thinking summary; clears the status strip. */
   const appendThinkingToLast = (delta: string) => {
     setMessages((prev) => {
@@ -421,6 +452,9 @@ export default function App() {
     busyRef.current = true;
     setBusy(true);
     setChangedIds(new Set());
+    // Clear the suggestion bar the moment a message (typed or chip-clicked)
+    // goes out; the turn re-populates it (or leaves it empty) as it streams.
+    setSuggestions([]);
     setMessages((prev) => [
       ...prev,
       { id: newId(), role: "user", text },
@@ -452,6 +486,15 @@ export default function App() {
           appendToLast(`\n\n*🔍 Searched the web: "${evt.query}"*\n\n`);
         } else if (evt.type === "web_fetch") {
           appendToLast(`\n\n*📄 Reading: ${evt.url}*\n\n`);
+        } else if (evt.type === "figure") {
+          // A figure the model just created: add it to the session map and
+          // pin it to the current assistant bubble for inline rendering.
+          setFigures((prev) => [...prev, evt.figure]);
+          attachFigureToLast(evt.figure.fid);
+        } else if (evt.type === "suggested_prompts") {
+          // Live-staged reply chips; the commit-authoritative value re-syncs
+          // via refreshDoc on turn_complete (same list) or error (pre-turn).
+          setSuggestions(evt.prompts);
         } else if (evt.type === "doc_patch") {
           setDoc(evt.doc);
           const changed = evt.ops
@@ -560,6 +603,18 @@ export default function App() {
     setPrefill((p) => ({ text, nonce: p.nonce + 1 }));
   };
 
+  /** Remove a figure (the ✕ on a figure card). Resync on a 409/404. */
+  const onDeleteFigure = useCallback(
+    async (fid: string) => {
+      try {
+        setFigures(await deleteFigure(fid));
+      } catch {
+        refreshDoc();
+      }
+    },
+    [refreshDoc],
+  );
+
   const newSession = async () => {
     await resetSession();
     setMessages([]);
@@ -567,6 +622,8 @@ export default function App() {
     setLintIssues([]);
     setStandards([]);
     setChangedIds(new Set());
+    setFigures([]);
+    setSuggestions([]);
     refreshDoc();
     refreshResearch();
     refreshQc();
@@ -580,6 +637,8 @@ export default function App() {
     standards: StandardInfo[];
     profile_complete: boolean;
     baseline_index?: number | null;
+    figures?: Figure[];
+    suggested_prompts?: string[];
   }) => {
     setDoc(payload.doc);
     setOpenItems(payload.open_questions);
@@ -587,6 +646,8 @@ export default function App() {
     setStandards(payload.standards);
     setProfileComplete(payload.profile_complete);
     setBaselineIndex(payload.baseline_index ?? null);
+    setFigures(payload.figures ?? []);
+    setSuggestions(payload.suggested_prompts ?? []);
     setChangedIds(new Set());
   };
 
@@ -642,9 +703,25 @@ export default function App() {
       refreshResearch();
       refreshQc();
       refreshReadiness();
-      setMessages(
-        result.chat.map((m) => ({ id: newId(), role: m.role, text: m.text })),
-      );
+      // Rebuild the transcript and re-inline each figure into the assistant
+      // bubble that created it (matched by its stored message_index — the
+      // ordinal among assistant bubbles).
+      const rebuilt: ChatMessage[] = result.chat.map((m) => ({
+        id: newId(),
+        role: m.role,
+        text: m.text,
+      }));
+      const assistantPositions = rebuilt
+        .map((m, i) => (m.role === "assistant" ? i : -1))
+        .filter((i) => i >= 0);
+      for (const figure of result.figures ?? []) {
+        const at = assistantPositions[figure.message_index];
+        if (at !== undefined) {
+          const msg = rebuilt[at];
+          msg.figureIds = [...(msg.figureIds ?? []), figure.fid];
+        }
+      }
+      setMessages(rebuilt);
     } catch (e) {
       setMessages((prev) => [
         ...prev,
@@ -729,6 +806,26 @@ export default function App() {
         hasContent={hasContent}
         bumpDrawer={bumpDrawer}
       />
+      {/* Closing (✕ / backdrop) any tour popup confirms here first, so the
+          guided tour is never dismissed by accident. Elevated above the
+          overlay's own modals. */}
+      <ConfirmDialog
+        open={onboarding.endConfirm && onboarding.phase.kind !== "idle"}
+        elevated
+        danger
+        title="End the guided tour?"
+        body={
+          <>
+            You can restart it anytime from the{" "}
+            <b className="text-ink">Tour</b> button in the header — the demo
+            section stays on the page either way.
+          </>
+        }
+        confirmLabel="End tour"
+        cancelLabel="Continue tour"
+        onConfirm={onboarding.abort}
+        onCancel={onboarding.cancelEnd}
+      />
       <CloseDialog
         open={closePromptOpen}
         onSave={() => {
@@ -746,9 +843,12 @@ export default function App() {
           messages={messages}
           busy={busy}
           onSend={send}
+          suggestions={suggestions}
           onStartOnboarding={onboarding.start}
           onStop={onStop}
           prefill={prefill}
+          figuresById={figuresById}
+          onDeleteFigure={onDeleteFigure}
         />
         <ArtifactPanel
           doc={doc}

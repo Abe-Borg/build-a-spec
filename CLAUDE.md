@@ -48,7 +48,9 @@ backend/
                            Batch 6 adds POST /api/onboarding/demo (guided-tour
                            demo directive; 409 unless the document is blank);
                            Batch 7 adds POST /api/chat/stop + /api/research/stop
-                           + /api/qc/stop (409 when nothing is running/streaming)
+                           + /api/qc/stop (409 when nothing is running/streaming);
+                           Batch 9 adds suggested_prompts to _doc_payload (no new
+                           endpoint — the suggest_prompts SSE event rides /api/chat)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides −
@@ -126,9 +128,24 @@ backend/
   usage_ledger.py          [Batch 2] session-scoped billed-usage ledger (interview/
                            research/audit), thread-safe, cost estimate from
                            settings.PRICING; not persisted (per-session meter)
+  figures.py               [Batch 8] chat-authored figures: Figure + FigureStore
+                           (per-turn atomic like DocumentStore — begin/commit/
+                           rollback, monotonic never-reused ids, validation, CSV
+                           render, source-free context stubs, project persistence)
+                           + CREATE_FIGURE_TOOL. Figure SOURCE never enters the
+                           re-billed doc context or tool results (PDF-elision
+                           posture) — only id/kind/title do; recurring token cost
+                           is negligible regardless of figure count
+  suggestions.py           [Batch 9] model-driven reply chips: MAX_PROMPTS/
+                           MAX_PROMPT_CHARS, SuggestError, validate_prompts (strict,
+                           fold-whitespace/dedupe/cap; empty list valid) +
+                           restore_prompts (lenient project loader) +
+                           SUGGEST_PROMPTS_TOOL. Latest-only session state, tiny
+                           payload — no store, no elision (rides history verbatim)
   sessions.py              single module-level SessionState (history + DocumentStore
                            + SpecModule + ResearchRunner + AuditRunner + QCRunner
-                           + UsageLedger) + has_unsaved_progress /
+                           + FigureStore + UsageLedger + suggested_prompts) +
+                           has_unsaved_progress /
                            project_payload / project_default_stem /
                            project_default_filename (timestamped
                            buildaspec-<stem>-<YYYY-MM-DD-HHMMSS>.json, so
@@ -178,23 +195,31 @@ backend/
                            + redline_filename
   spec_doc/project.py      JSON project files (save/resume) + chat transcript +
                            module_id + audit_result + qc_result (baseline_index
-                           rides store.to_dict/load — no project.py change)
+                           rides store.to_dict/load — no project.py change); Batch 9
+                           adds an optional suggested_prompts key (omitted when
+                           empty; restore_prompts on load, assigned unconditionally)
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
                            FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message);
                            Batch 6 adds onboarding_demo_directive (discipline-
-                           sanitized) + _ONBOARDING_POLICY in the stable prompt
+                           sanitized) + _ONBOARDING_POLICY in the stable prompt;
+                           Batch 9 adds _SUGGESTED_PROMPTS_POLICY (after
+                           _FIGURE_POLICY) + the demo directive's no-suggest clause
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
                            lint event + standards_payload; Batch 7 adds
                            SessionState.stop_requested (threading.Event) — a
                            user stop ends the round loop early but still
                            commits (current_message_snapshot, not
                            get_final_message(), so the closed request doesn't
-                           drain)
+                           drain); Batch 9 adds the suggest_prompts tool
+                           (_run_suggest_prompts + turn-local staged_suggestions
+                           committed beside doc/figures — latest-only replace) +
+                           SessionState.suggested_prompts
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
-                           baselineIndex, settings-open, closePromptOpen
+                           baselineIndex, suggestions (Batch 9 reply chips),
+                           settings-open, closePromptOpen
                            (window.buildaspecRequestClose hook), send loop (SSE
                            switch incl. status/thinking_delta); QC follow-stream
                            + accept/dismiss; Batch 6: drawerNonces + useOnboarding
@@ -217,9 +242,19 @@ frontend/src/
                            anchorSelector (data-tour / el-* / doc-snapshot resolvers)
   lib/useOnboarding.ts     [Batch 6] tour phase machine: runId zombie guard on
                            every await, key-gate auto-advance, do-this-for-me +
-                           run-it dispatch, fresh-vs-keep resolution
+                           run-it dispatch, fresh-vs-keep resolution; endConfirm
+                           flag (requestEnd/cancelEnd) gates every popup close (✕ /
+                           backdrop) behind an end-or-continue confirmation —
+                           orthogonal to phase, so "Continue" restores the popup
+                           untouched and abort/start clear it
   lib/onboardingStorage.ts [Batch 6] "tour completed" flag — the codebase's first
                            localStorage use; try/caught, cosmetic only
+  lib/figures.ts           [Batch 8] figure render + security helpers: DOMPurify
+                           SVG sanitize, lazy mermaid.render (securityLevel strict,
+                           htmlLabels off), sandbox-iframe srcdoc with a strict CSP
+                           (default-src none), canvas SVG→PNG, SVG/CSV blob
+                           downloads — the render-time sanitization boundary for
+                           model-authored markup (never inline into the bridge DOM)
   components/*             Chat (Batch 6 starter chips in the empty state) /
                            MessageBubble (smoothing + thinking block; renders a
                            ChatMessage.note as a compact centered event marker) /
@@ -255,10 +290,22 @@ frontend/src/
                            / OnboardingOverlay (Batch 6: spotlight cutout + step
                            bubbles + discipline/entry/work-choice dialogs + resume
                            pill; drawers gain an openNonce prop, controls gain
-                           data-tour anchors) / ConfirmDialog (Batch 7: generic
+                           data-tour anchors; every popup close (✕ / backdrop) now
+                           routes to ob.requestEnd, and Escape yields to the confirm
+                           while it's open) / ConfirmDialog (Batch 7: generic
                            title/body/confirm/cancel modal — the lose-progress
                            warnings for stopping research/QC; the Final-QC launch
-                           confirmation stays its own purpose-built modal)
+                           confirmation stays its own purpose-built modal; an
+                           `elevated` prop (z-80) lets App host the tour's
+                           end-or-continue confirm above the overlay's own modals) /
+                           FigureCard (Batch 8: inline figure render — sanitized
+                           SVG/mermaid in a sandbox="" iframe, escaped data table,
+                           SVG/PNG/CSV downloads + a ✕ to remove) /
+                           SuggestedPrompts (Batch 9: model-staged reply-chip bar
+                           between the scroll region and Composer — rounded-full
+                           accent pills, hidden when empty, disabled while
+                           streaming, click sends via onSend; .prompt-chip-in
+                           rise-in, reduced-motion-gated)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
   conftest.py              hermetic env + fresh session per test
@@ -295,6 +342,19 @@ tests/
                            409 once already resolved, the abandoned thread's
                            eventual completion can't clobber the resolved status,
                            immediate restart works)
+  test_figures.py          [Batch 8] FigureStore units (validation, turn atomicity,
+                           monotonic ids, persistence, CSV, source-free stubs) +
+                           create_figure through /api/chat (figure SSE event, the
+                           token-discipline tool result, rollback on failure,
+                           self-correction on a bad payload) + REST (list/CSV/
+                           delete/project round-trip)
+  test_suggested_prompts.py [Batch 9] validate_prompts/restore_prompts units
+                           (fold/dedupe/cap, empty valid, lenient degrade) +
+                           suggest_prompts through /api/chat (SSE event + commit,
+                           token-discipline result + no-elision, not-called clears,
+                           failed turn preserves prior, is_error self-correction,
+                           empty clears, latest-call-wins, reset clears) +
+                           project save/load round-trip + stable-policy/demo pins
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -308,6 +368,8 @@ Each frame is `data: <json>\n\n`. Event types:
 | `thinking_delta` | `text` | streamed adaptive-thinking summary chunk (Batch 2; only when `THINKING_DISPLAY=summarized` and the model streams it). Rendered in a collapsible block; transient, never persisted |
 | `web_search` | `query` | the model ran a server-side web search this round — emitted LIVE (Batch 2) the instant the server-tool block's input completes, not derived post-hoc |
 | `web_fetch` | `url` | the model fetched a page/document server-side this round — emitted live on the block's completion |
+| `figure` | `figure` | the model created a figure (diagram/schematic/table) via `create_figure` this round — the full serialized `Figure` for inline chat rendering + downloads (Batch 8). Emitted live on the tool dispatch. Source is client-sanitized before render; it lives only in the figure store, never in history/traces/the re-billed doc context |
+| `suggested_prompts` | `prompts` | the model staged up to 5 one-tap reply chips via `suggest_prompts` this round (Batch 8→9), shown above the composer; emitted live on the tool dispatch. Latest-only, committed turn-atomically: a committed turn REPLACES the session's set with what it staged (not calling the tool = clear, which is the wind-down; a failed turn keeps the prior set). Tiny payload — rides committed history verbatim (no elision, no PROJECT CONTEXT stub) |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
 | `open_questions` | `items` | open-item list (TBD markers + needs_input blocks); emitted when a turn changed the doc |
@@ -319,8 +381,9 @@ The frontend switch in `App.tsx#send` is the single place events dispatch.
 Snapshots outside a turn travel over REST, not SSE: `GET /api/doc`,
 `POST /api/doc/undo|redo`, and `POST /api/project/load` all return
 `{doc, open_questions, lint, standards, profile_complete, research_status,
-baseline_index}` (load adds `chat`, the rebuilt transcript; `baseline_index`
-is the imported-master version for the redline picker). Patches and snapshots
+baseline_index, figures, suggested_prompts}` (load adds `chat`, the rebuilt
+transcript; `baseline_index` is the imported-master version for the redline
+picker; `suggested_prompts` re-syncs the reply-chip bar, incl. restore-on-error). Patches and snapshots
 always carry the full tree — the frontend never applies ops itself. The
 Batch 3 full-draft pass adds NO SSE event: `POST /api/draft/full` returns the
 canned directive `{ok, message}` over REST (409 while a turn or research runs)
@@ -1091,6 +1154,159 @@ batch: no new SSE event types, no new env vars, no new Python deps.
   replays a fixed script) — sufficient to prove the mechanism (the live SSE
   stream truncates; the turn still commits) without reimplementing the
   SDK's accumulator.
+
+## Batch 8 — implemented notes (v1.3.0: chat figures — diagrams / schematics / tables)
+
+Abraham's ask: the main chat gains the ability to create figures —
+diagrams, schematics, data tables — surfaced to the user as download
+links. Scoped deliberately to **Tier 1 only** (confirmed twice: "we don't
+need tier 2/3 features"): Mermaid diagrams, hand-authored SVG, and CSV
+tables, rendered inline in the chat. NOT in scope (by that decision):
+`.docx` figure embedding, charts as a distinct type, a persistent figure
+gallery panel, and model-side revision of an existing figure. No new
+Python deps; two new frontend deps (`mermaid`, `dompurify`).
+
+- **`create_figure` is a second document-adjacent tool** (peer to
+  `apply_spec_edits`, defined in `backend/figures.py`), kinds
+  `mermaid | svg | table`. It rides the ONE chat/tool loop — no new
+  pipeline: `conversation._run_tool` dispatches it, the store stages the
+  figure, and a live `figure` SSE event carries the full serialized
+  `Figure` to the chat for inline rendering. A `drawing` status hint fires
+  on the tool block's start. Bad input becomes an `is_error` tool result
+  the model self-corrects from, never a turn failure — exactly the
+  `apply_spec_edits` posture.
+- **Token discipline is the design's spine** (the whole point of the
+  feasibility analysis that preceded it). This app re-bills the ENTIRE
+  document context every turn, so figure SOURCE — an SVG is easily
+  thousands of tokens — must never land there. It lives only in the
+  `FigureStore`: the model's tool RESULT echoes just `{fid, kind, title}`,
+  and the per-turn PROJECT CONTEXT carries a one-line stub per figure
+  (`context_stubs`), never the markup. This is the fetched-PDF elision
+  policy applied to a new artifact class; recurring token cost is a
+  rounding error regardless of figure count. Pinned by
+  `test_figure_source_stays_out_of_the_next_turns_context`.
+- **Turn atomicity now spans THREE stores.** `FigureStore.begin_turn`
+  marks the pre-turn size; `commit_turn` keeps the turn's additions;
+  `rollback_turn` truncates them — wired into `stream_user_turn` right
+  beside the document store's begin/commit/rollback, so a failed or
+  abandoned turn leaves no orphan figure. Ids are monotonic and never
+  reused (the document-store philosophy): a rolled-back id is skipped, not
+  recycled. Reset is IN PLACE (never reassigned, like `DocumentStore`) so a
+  zombie turn's commit/rollback settles harmlessly against the cleared
+  store; the generation guard already blocks a stale commit.
+- **Security is render-time, in three independent layers** (the app runs
+  in a pywebview shell with a native `window.pywebview.api` bridge, so an
+  injection here is worse than plain-web XSS). (1) Mermaid runs
+  `securityLevel: 'strict'` + `htmlLabels: false` — diagram text is data,
+  never markup. (2) Every SVG (Mermaid output OR a raw `svg` figure) passes
+  through DOMPurify's SVG profile (`<script>`/`<foreignObject>`/handlers/
+  `javascript:` stripped). (3) The sanitized SVG renders inside a
+  `sandbox=""` iframe (no `allow-scripts` → no execution, no
+  `allow-same-origin` → no bridge reach) whose `srcdoc` carries a strict
+  CSP (`default-src 'none'`) blocking every external resource load. The
+  server NEVER serves executable SVG: SVG/PNG downloads are built
+  client-side from the already-sanitized string (`lib/figures.ts`); only
+  CSV is a server route, emitting `text/csv`. Tables render as plain
+  React-escaped HTML.
+- **Inline in the chat, no gallery** (the Tier-1 scope call). A figure
+  attaches to the assistant bubble that created it (`ChatMessage.figureIds`
+  → `FigureCard`), appearing the instant the `figure` event streams. It
+  persists in the project file (optional `figures` block on the store's
+  `to_dict`, no format bump, graceful-degrade on absence) and re-inlines on
+  reload via a stored `message_index` (the ordinal among assistant bubbles,
+  computed from `chat_transcript` at creation).
+- **REST surface** (all thin): `figures` on every `_doc_payload`,
+  `GET /api/figures` (standalone snapshot), `GET /api/figure/{fid}/csv`
+  (table figures only; 400 non-table, 404 unknown), `DELETE
+  /api/figure/{fid}` (409 while a turn owns the store — a mid-turn delete
+  would shift the index the rollback bookkeeping relies on). No undo of a
+  delete (figures are not version-tracked — a deliberate MVP simplification;
+  the model can regenerate).
+- **`_FIGURE_POLICY`** joins the STABLE prompt after `_WEB_LOOKUP_POLICY`:
+  figures are exhibits, never a substitute for a provision (the enforceable
+  words stay in `apply_spec_edits`); most turns need none; kind selection
+  (mermaid = flow/sequence/decision, svg = spatial schematic, table =
+  schedule); no source pasted into chat. Module-stable, zero session data
+  (the cache rule).
+- **Frontend deps**: `mermaid` is lazy-loaded (`import('mermaid')`) so its
+  large bundle splits into its own chunk and only loads when a figure needs
+  it; `dompurify` ships its own types. The no-vitest convention stands —
+  the figure contract is pinned by `test_figures.py` (24 tests) and the
+  frontend by `npm run build` (tsc).
+
+## Batch 9 — implemented notes (v1.4.0: dynamic suggested-prompts bar)
+
+Abraham's ask: a row of up to 5 pretty, clickable prompt chips just above the
+chat composer, the model choosing the set each turn — direct answers to what
+it just asked, or momentum moves — and the count winding down toward zero as
+the section nears issue-ready. The whole feature is the Batch 8 `create_figure`
+blueprint re-applied: one new chat tool on the ONE chat/tool loop, one live
+SSE event, turn-atomic session state, optional project persistence, one stable
+policy block. No new deps, no new env vars, no new endpoints, no format bump.
+
+- **`suggest_prompts` is a third chat tool** (peer of `apply_spec_edits` /
+  `create_figure`, defined in `backend/suggestions.py`), lenient schema (the
+  create_figure posture, NOT the research strict shape), appended LAST in
+  `_chat_tools()` so the existing tool bytes stay a stable cached prefix. It
+  rides the one tool loop: `conversation._run_tool` dispatches it to
+  `_run_suggest_prompts`, which validates, returns a compact token-discipline
+  result (`{"suggested": N}`), and yields a live `suggested_prompts` UI event
+  with the validated list. A bad payload becomes an `is_error` result the
+  model self-corrects from — never a turn failure (the apply_spec_edits /
+  create_figure posture). No `drawing`-style status hint (payload streams
+  sub-second; the round-top `working` status covers it).
+- **Latest-only, turn-atomic REPLACE semantics.** `stream_user_turn` keeps a
+  turn-local `staged_suggestions` (initialized `[]`); the dispatch loop records
+  each call's list (latest wins) before yielding the event; the success `else:`
+  block assigns `session.suggested_prompts = staged_suggestions` beside the
+  doc/figure commits. A committed turn REPLACES the set — including `[]` when
+  the tool was NOT called, which is the wind-down (silence = clear the bar). A
+  failed turn `return`s before the commit, so the previous list is simply never
+  overwritten — rollback by construction, no begin/rollback bookkeeping, nothing
+  extra for zombie turns (commit is already generation-guarded). A user stop
+  takes the commit path (Batch 7) with whatever was staged; a stop caught
+  mid-`suggest_prompts`-block strips the unexecuted `tool_use` (existing
+  truncation branch) → commits `[]` (bar clears). `SessionState.suggested_prompts`
+  clears in `reset()`.
+- **No elision, no PROJECT CONTEXT stub** (the deliberate contrast with
+  figures). The payload is tiny (≤5 × ≤120 chars), so the `tool_use` input rides
+  committed history verbatim and the model sees last turn's chips naturally —
+  `_elide_figure_tool_inputs` filters on `create_figure` only, so nothing
+  touches the suggest_prompts input. The tool RESULT still stays compact.
+- **Validation** (`suggestions.validate_prompts`, strict → `SuggestError` →
+  `is_error`): dict with `prompts: list`; each entry a string; internal
+  whitespace folds to single spaces; blank-after-cleanup → error; > 120 chars →
+  error; dedupe preserving order; the > 5 check runs AFTER cleanup (so a list
+  that dedupes down to 5 passes). An EMPTY list is VALID — the deliberate
+  "nothing useful to suggest" signal. `restore_prompts` is the lenient project
+  loader (malformed → `[]`, the FigureStore.load posture).
+- **Persistence + one-way sync.** Optional `suggested_prompts` key in the
+  project file (`save_project`, gated on truthy — omitted when empty; no format
+  bump), restored by `load_project` UNCONDITIONALLY (it doesn't call reset(), so
+  a load over a live session must not inherit stale chips). `_doc_payload`
+  carries `suggested_prompts`, so boot, project load (`**_doc_payload`),
+  undo/redo, and the failed-turn `refreshDoc()` all re-sync the bar one way —
+  a failed turn's refresh returns the untouched pre-turn list, restoring the
+  bar for free.
+- **`_SUGGESTED_PROMPTS_POLICY`** joins the STABLE prompt after `_FIGURE_POLICY`:
+  chips in the USER'S voice (complete sendable replies, never fill-in-the-blank /
+  questions / spec text); answers-to-your-questions first (incl. an accept-default
+  / "I don't know" option), then momentum moves; chat-actionable only (research /
+  QC / export / undo / save are panel buttons, never chips); ≤60-char aim,
+  120 hard; wind down near issue-ready; harmonize with the full-draft close (the
+  chips ARE the clickable answers to its 2-3 follow-ups). Module-stable, zero
+  session data (the cache rule). The onboarding demo directive gains an explicit
+  "do NOT call suggest_prompts" clause (the demo mandates no follow-ups; the tour
+  drives what's next).
+- **Frontend**: `SuggestedPrompts.tsx` renders between the chat scroll region
+  and `Composer` (outside `data-tour="composer"`, so tour spotlight rects are
+  untouched) — `rounded-full` accent pills, hidden entirely when empty, disabled
+  while streaming, click → `onSend(label)` (send-immediately, the starter-chip
+  pattern; a prefill variant is a one-call swap). `App` owns `suggestions` state:
+  cleared at turn start, set live from the `suggested_prompts` SSE branch,
+  re-synced authoritatively via `refreshDoc`/`applyDocPayload` from the doc
+  payload. `.prompt-chip-in` rise-in, reduced-motion-gated. No-vitest convention
+  stands — pinned by `test_suggested_prompts.py` (24 tests) + `npm run build`.
 
 ## Standards management — implemented notes (per-document add / delete)
 

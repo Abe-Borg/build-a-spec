@@ -12,7 +12,15 @@ import pytest
 from tools import render_docx_word as renderer
 
 
-def test_powershell_bridge_encodes_hidden_sta_safety_contract():
+def test_powershell_bridge_encodes_hidden_sta_safety_contract(monkeypatch):
+    # The command-hardening contract (flags + the encoded automation script)
+    # is platform-independent; only the actual run needs a real interpreter.
+    # Stub the executable lookup so this safety contract is verified on the
+    # Linux CI too, where Windows PowerShell 5.1 is absent (the assertions
+    # below never inspect command[0], the executable path).
+    monkeypatch.setattr(
+        renderer, "_powershell_executable", lambda: Path("powershell.exe")
+    )
     command = renderer._powershell_command()
     assert command[1:-1] == [
         "-NoLogo",

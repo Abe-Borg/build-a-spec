@@ -342,3 +342,25 @@ def test_open_file_unreadable_path_returns_none(tmp_path, monkeypatch):
     controller = _controller_with(window)
 
     assert controller.open_file("project") is None
+
+
+# pywebview validates every create_file_dialog `file_types` entry through
+# `webview.util.parse_file_type` BEFORE opening the dialog, and its description
+# grammar accepts only word characters and spaces — a hyphen raises ValueError,
+# which the controller turns into "cancelled", silently killing Open/Save/
+# Import. This regex is copied verbatim from pywebview (stable across >=5.3) so
+# the app's filters are pinned parser-valid without importing the GUI package.
+_PYWEBVIEW_FILE_FILTER = r"^([\w ]+)\((\*(?:\.(?:\w+|\*))*(?:;\*(?:\.(?:\w+|\*))*)*)\)$"
+
+
+def test_native_file_filters_are_pywebview_valid():
+    for group in (
+        main._PROJECT_OPEN_FILE_TYPES,
+        main._PROJECT_SAVE_FILE_TYPES,
+        main._DOCX_OPEN_FILE_TYPES,
+    ):
+        for entry in group:
+            assert re.match(_PYWEBVIEW_FILE_FILTER, entry), (
+                f"{entry!r} is not a valid pywebview file filter "
+                "(hyphens in the description make create_file_dialog raise)"
+            )

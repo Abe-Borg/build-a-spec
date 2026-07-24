@@ -24,6 +24,24 @@ import uvicorn
 from backend import settings
 
 
+# Native file-dialog filters. pywebview's ``parse_file_type`` validates every
+# filter BEFORE the dialog opens and its description grammar accepts only word
+# characters and spaces — a hyphen (e.g. in "Build-a-Spec") makes
+# ``create_file_dialog`` raise, which the callers turn into "cancelled", so a
+# bad filter silently kills Open/Import/Save. Keep these descriptions
+# hyphen-free (pinned by ``tests/test_close_prompt.py``). Open accepts legacy
+# ``.json`` projects too; Save writes only the current ``.baspec`` format.
+_PROJECT_OPEN_FILE_TYPES = (
+    "Build a Spec project (*.baspec;*.json)",
+    "All files (*.*)",
+)
+_PROJECT_SAVE_FILE_TYPES = (
+    "Build a Spec project (*.baspec)",
+    "All files (*.*)",
+)
+_DOCX_OPEN_FILE_TYPES = ("Word document (*.docx)", "All files (*.*)")
+
+
 def _ensure_std_streams() -> None:
     """Guarantee ``sys.stdout``/``sys.stderr`` are real streams.
 
@@ -194,13 +212,9 @@ class _CloseController:
 
         if self._window is None:
             return None
-        if kind == "docx":
-            file_types = ("Word document (*.docx)", "All files (*.*)")
-        else:
-            file_types = (
-                "Build-a-Spec project (*.baspec;*.json)",
-                "All files (*.*)",
-            )
+        file_types = (
+            _DOCX_OPEN_FILE_TYPES if kind == "docx" else _PROJECT_OPEN_FILE_TYPES
+        )
         try:
             result = self._window.create_file_dialog(
                 webview.OPEN_DIALOG,
@@ -249,7 +263,7 @@ class _CloseController:
         target = self._window.create_file_dialog(
             webview.SAVE_DIALOG,
             save_filename=filename,
-            file_types=("Build-a-Spec project (*.baspec)", "All files (*.*)"),
+            file_types=_PROJECT_SAVE_FILE_TYPES,
         )
         if not target:
             return False  # user cancelled the Save dialog

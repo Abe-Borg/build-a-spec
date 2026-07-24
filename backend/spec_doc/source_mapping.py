@@ -48,13 +48,11 @@ _W14_PARA_ID = f"{{{_W14_NS}}}paraId"
 _OPC_RELATIONSHIP_NAMESPACES = frozenset(
     {
         "http://schemas.openxmlformats.org/package/2006/relationships",
-        "http://purl.oclc.org/ooxml/package/relationships",
     }
 )
 _OPC_CONTENT_TYPE_NAMESPACES = frozenset(
     {
         "http://schemas.openxmlformats.org/package/2006/content-types",
-        "http://purl.oclc.org/ooxml/package/content-types",
     }
 )
 _SETTINGS_RELATIONSHIP_TYPES = frozenset(
@@ -176,6 +174,9 @@ _ACTIVE_MEMBER_MARKERS = (
 _SOURCE_MAP_KIND = "buildaspec-source-map"
 _SOURCE_MAP_FORMAT = 1
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_MALFORMED_PERCENT_ESCAPE_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+_ENCODED_SEPARATOR_RE = re.compile(r"%(?:2[fF]|5[cC])")
+_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 
 
 def _local_name(tag: Any) -> str:
@@ -712,14 +713,37 @@ def _resolve_internal_target(source_part: str, target: str) -> str:
     """Resolve an internal OPC relationship target to a safe ZIP member."""
     if not isinstance(target, str) or not target.strip() or "\\" in target:
         raise ValueError("Malformed internal OPC relationship target.")
-    parsed = urlsplit(target.strip())
+    target = target.strip()
+    # ``urllib.parse.unquote`` deliberately leaves malformed percent escapes
+    # unchanged.  OPC targets are URI references, so accepting a literal
+    # trailing ``%`` or non-hex escape would let different consumers resolve
+    # the same relationship differently.
+    if _MALFORMED_PERCENT_ESCAPE_RE.search(target):
+        raise ValueError("Malformed internal OPC relationship target.")
+    if _ENCODED_SEPARATOR_RE.search(target):
+        raise ValueError("Malformed internal OPC relationship target.")
+    parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
         raise ValueError("Malformed internal OPC relationship target.")
     try:
         target_path = unquote(parsed.path, errors="strict")
     except UnicodeError as exc:
         raise ValueError("Malformed internal OPC relationship target.") from exc
-    if "\\" in target_path or "\x00" in target_path:
+    raw_segments = parsed.path.split("/")
+    decoded_segments = target_path.split("/")
+    if any(
+        "%" in raw_segment and decoded_segment in {".", ".."}
+        for raw_segment, decoded_segment in zip(raw_segments, decoded_segments)
+    ):
+        raise ValueError("Malformed internal OPC relationship target.")
+    if (
+        "\\" in target_path
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in target_path
+        )
+        or _DRIVE_PREFIX_RE.match(target_path.lstrip("/"))
+    ):
         raise ValueError("Malformed internal OPC relationship target.")
     if target_path.startswith("/"):
         candidate = target_path.lstrip("/")
@@ -740,6 +764,29 @@ def _content_type_part_name(value: str) -> str:
     if not isinstance(value, str) or not value.startswith("/"):
         raise ValueError("Malformed OPC content-type part name.")
     return _resolve_internal_target("", value)
+
+
+def _validate_relationship_target_uri(target: str) -> str:
+    """Return one unambiguous URI-reference spelling for any relationship."""
+    if not isinstance(target, str) or not target.strip():
+        raise ValueError("Malformed OPC relationship target.")
+    target = target.strip()
+    if (
+        _MALFORMED_PERCENT_ESCAPE_RE.search(target)
+        or "\\" in target
+        or any(character.isspace() for character in target)
+    ):
+        raise ValueError("Malformed OPC relationship target.")
+    try:
+        urlsplit(target)
+        decoded = unquote(target, errors="strict")
+    except (UnicodeError, ValueError) as exc:
+        raise ValueError("Malformed OPC relationship target.") from exc
+    if "\\" in decoded or any(
+        ord(character) < 32 or ord(character) == 127 for character in decoded
+    ):
+        raise ValueError("Malformed OPC relationship target.")
+    return target
 
 
 def _parse_content_types(archive: zipfile.ZipFile) -> tuple[
@@ -813,10 +860,12 @@ def _parse_relationship_part(
         rel_type = child.get("Type")
         target = child.get("Target")
         target_mode = child.get("TargetMode", "Internal")
+        normalized_rel_id = rel_id.strip() if isinstance(rel_id, str) else ""
         if (
             not isinstance(rel_id, str)
-            or not rel_id.strip()
-            or rel_id in seen_ids
+            or not normalized_rel_id
+            or rel_id != normalized_rel_id
+            or normalized_rel_id in seen_ids
             or not isinstance(rel_type, str)
             or not rel_type.strip()
             or not isinstance(target, str)
@@ -825,17 +874,18 @@ def _parse_relationship_part(
             or target_mode.casefold() not in {"internal", "external"}
         ):
             raise ValueError("Malformed OPC relationship.")
-        seen_ids.add(rel_id)
+        seen_ids.add(normalized_rel_id)
+        normalized_target = _validate_relationship_target_uri(target)
         external = target_mode.casefold() == "external"
         if not external:
             # Prove every internal target is a safe package path even when the
             # relationship type is not one Build-a-Spec otherwise interprets.
-            _resolve_internal_target(source_part, target)
+            _resolve_internal_target(source_part, normalized_target)
         relationships.append(
             _OpcRelationship(
                 source_part=source_part,
                 rel_type=rel_type.strip(),
-                target=target.strip(),
+                target=normalized_target,
                 external=external,
             )
         )
@@ -872,16 +922,20 @@ def _discover_opc(archive: zipfile.ZipFile) -> _OpcDiscovery:
 
 
 def _on_off_value(element) -> bool | None:
-    values = [
-        value
+    element_namespace = _namespace_name(element.tag)
+    value_attributes = [
+        (name, value)
         for name, value in element.attrib.items()
         if _local_name(name) == "val"
     ]
-    if not values:
+    if not value_attributes:
         return True
-    if len(values) != 1:
+    if len(value_attributes) != 1:
         return None
-    normalized = values[0].strip().casefold()
+    name, value = value_attributes[0]
+    if _namespace_name(name) != element_namespace:
+        return None
+    normalized = value.strip().casefold()
     if normalized in {"1", "on", "true"}:
         return True
     if normalized in {"0", "off", "false"}:
@@ -914,7 +968,10 @@ def _settings_blockers(
         if discovery.content_type_for(target) != _SETTINGS_CONTENT_TYPE.casefold():
             raise ValueError("The related settings part has the wrong content type.")
         settings_root = _parse_xml(archive.read(target))
-        if _local_name(settings_root.tag) != "settings":
+        if (
+            _local_name(settings_root.tag) != "settings"
+            or _namespace_name(settings_root.tag) not in _WML_NAMESPACES
+        ):
             raise ValueError("The related settings part has the wrong root.")
     except (
         KeyError,
@@ -927,7 +984,10 @@ def _settings_blockers(
 
     blockers: list[str] = []
     settings_elements = [
-        element for element in settings_root.iter() if isinstance(element.tag, str)
+        element
+        for element in settings_root.iter()
+        if isinstance(element.tag, str)
+        and _namespace_name(element.tag) in _WML_NAMESPACES
     ]
     if any(
         _local_name(element.tag) in {"documentProtection", "writeProtection"}
@@ -1020,9 +1080,12 @@ def _body_has_non_whitespace_character_data(root) -> bool:
     if len(bodies) != 1:
         return False
     body = bodies[0]
-    if (body.text or "").strip():
+    if any(character not in " \t\r\n" for character in body.text or ""):
         return True
-    return any((child.tail or "").strip() for child in body)
+    return any(
+        any(character not in " \t\r\n" for character in child.tail or "")
+        for child in body
+    )
 
 
 def _global_source_blockers(

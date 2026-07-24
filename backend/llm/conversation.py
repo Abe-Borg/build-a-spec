@@ -56,6 +56,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
@@ -99,7 +100,11 @@ from ..spec_modules import SpecModule, get_module
 from ..standards import standards_context_block
 from ..usage_ledger import UsageLedger
 from .client import MissingApiKeyError, get_client
-from .prompts import render_system_prompt
+from .prompts import (
+    render_system_prompt,
+    sanitize_discipline,
+    sanitize_project_context,
+)
 
 # Ceiling on continuation rounds (tool dispatches + pause_turn resumes)
 # within one user turn. This is a runaway circuit breaker, not a quality
@@ -201,11 +206,156 @@ class SessionState:
     # rejected in this window — a mid-turn manual edit would be swept into the
     # streaming turn's commit or rollback.
     turn_active: bool = False
+    # ``turn_active`` is part of the public session surface (several endpoint
+    # guards read it), but claiming that flag must be atomic. Without a
+    # private owner token two simultaneous /api/chat streams can both call
+    # DocumentStore.begin_turn(); the second begin rolls the first provisional
+    # turn back. The token also prevents a zombie generator invalidated by a
+    # reset/load from releasing or rolling back a newer turn.
+    _turn_state_lock: Any = field(
+        default_factory=threading.RLock,
+        repr=False,
+        compare=False,
+    )
+    _active_turn_token: object | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     # Set by POST /api/chat/stop to ask the in-flight turn to stop generating.
     # Cleared at the start of every turn. Checked between streamed events and
     # between rounds; stopping commits whatever was produced so far (like
     # Claude.ai's stop button) rather than rolling back like a failure.
     stop_requested: threading.Event = field(default_factory=threading.Event)
+
+    def claim_model_turn(self) -> tuple[object, int] | None:
+        """Atomically claim the single streaming-turn slot.
+
+        The returned generation is captured in the same critical section as
+        the claim so a turn cannot accidentally adopt a reset/load that raced
+        with its startup.
+        """
+        with self._turn_state_lock:
+            if self.turn_active:
+                return None
+            # Clear the prior turn's signal before publishing the new owner.
+            # Once the token is visible, a concurrent stop belongs to this
+            # turn and must never be erased later during store startup.
+            self.stop_requested.clear()
+            token = object()
+            self._active_turn_token = token
+            self.turn_active = True
+            return token, self.generation
+
+    def release_model_turn(self, token: object) -> bool:
+        """Release ``token`` iff it still owns the streaming-turn slot."""
+        with self._turn_state_lock:
+            if self._active_turn_token is not token:
+                return False
+            self._active_turn_token = None
+            self.turn_active = False
+            return True
+
+    def request_model_stop(self) -> bool:
+        """Atomically stop whichever model turn currently owns the session."""
+        with self._turn_state_lock:
+            if not self.turn_active or self._active_turn_token is None:
+                return False
+            self.stop_requested.set()
+            return True
+
+    def begin_model_turn_stores(self, token: object, generation: int) -> bool:
+        """Begin both provisional stores if ``token`` is still current."""
+        with self._turn_state_lock:
+            if (
+                self._active_turn_token is not token
+                or self.generation != generation
+            ):
+                return False
+            doc_started = False
+            figure_started = False
+            try:
+                self.doc.begin_turn()
+                doc_started = True
+                self.figures.begin_turn()
+                figure_started = True
+            except Exception:
+                if figure_started:
+                    self.figures.rollback_turn()
+                if doc_started:
+                    self.doc.rollback_turn()
+                raise
+            return True
+
+    def finalize_model_turn(self, token: object, *, committed: bool) -> bool:
+        """Settle owned provisional stores and atomically release the slot."""
+        with self._turn_state_lock:
+            if self._active_turn_token is not token:
+                return False
+            if not committed:
+                self.doc.rollback_turn()
+                self.figures.rollback_turn()
+            self._active_turn_token = None
+            self.turn_active = False
+            return True
+
+    def invalidate_model_turn(self) -> None:
+        """Invalidate any streaming owner and advance the session generation."""
+        with self._turn_state_lock:
+            self._active_turn_token = None
+            self.turn_active = False
+            self.generation += 1
+
+    def add_usage_if_current(
+        self,
+        generation: int,
+        category: str,
+        usage: Any,
+        *,
+        count_turn: bool = False,
+    ) -> bool:
+        """Account background usage only for the session that launched it.
+
+        Reset and project load replace background runners but cannot cancel a
+        provider request already in flight.  A completion from that abandoned
+        runner must not repopulate the freshly-cleared session usage ledger.
+        """
+        with self._turn_state_lock:
+            if self.generation != generation:
+                return False
+            self.usage.add(category, usage, count_turn=count_turn)
+            return True
+
+    def delete_figure_if_idle(
+        self,
+        fid: str,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Atomically delete one figure without crossing a model turn."""
+        with self._turn_state_lock:
+            if self.turn_active:
+                return "active", []
+            if not self.figures.delete(fid):
+                return "missing", []
+            return "deleted", self.figures.snapshot()
+
+    @contextmanager
+    def session_state_guard(self) -> Iterator[None]:
+        """Serialize non-model state access against model-turn ownership."""
+        with self._turn_state_lock:
+            yield
+
+    @contextmanager
+    def owned_model_turn_guard(
+        self,
+        token: object,
+        generation: int,
+    ) -> Iterator[bool]:
+        """Lock live session state and report whether a turn still owns it."""
+        with self._turn_state_lock:
+            yield (
+                self._active_turn_token is token
+                and self.generation == generation
+            )
 
     def ensure_source_patch_context(
         self,
@@ -496,7 +646,41 @@ class SessionState:
             context=context,
         ).to_dict()
 
-    def reset(self) -> None:
+    def reset(
+        self,
+        *,
+        module_id: str | None = None,
+        discipline: str | None = None,
+        project_context: str | None = None,
+    ) -> None:
+        # Keep a new stream from claiming the session while its stores are
+        # only partially reset. Existing streams do not take this lock while
+        # yielding; the generation/token invalidation below remains their
+        # cancellation signal.
+        with self._turn_state_lock:
+            next_module = (
+                get_module(module_id)
+                if module_id is not None and module_id.strip()
+                else self.module
+            )
+            next_discipline = (
+                self.discipline
+                if discipline is None
+                else sanitize_discipline(discipline)
+            )
+            if not getattr(next_module, "open_catalog", False):
+                next_discipline = ""
+            next_project_context = (
+                ""
+                if project_context is None
+                else sanitize_project_context(project_context)
+            )
+            self._reset_while_locked()
+            self.module = next_module
+            self.discipline = next_discipline
+            self.project_context = next_project_context
+
+    def _reset_while_locked(self) -> None:
         self.history.clear()
         self.doc.reset()
         self.source_docx_bytes = None
@@ -521,6 +705,8 @@ class SessionState:
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()
+        self._active_turn_token = None
+        self.turn_active = False
         self.generation += 1
 
 
@@ -1185,7 +1371,21 @@ def stream_user_turn(
     # The PROJECT CONTEXT renders once, at turn start: mid-turn document
     # changes reach the model through tool results, and a frozen block
     # keeps the request prefix byte-stable across continuation rounds.
-    context_text = _turn_context_text(session)
+    claim = session.claim_model_turn()
+    if claim is None:
+        yield {
+            "type": "error",
+            "message": "A model turn is already streaming.",
+        }
+        return
+    turn_token, generation = claim
+
+    try:
+        context_text = _turn_context_text(session)
+    except Exception as exc:  # noqa: BLE001 - startup is transactional
+        session.release_model_turn(turn_token)
+        yield {"type": "error", "message": f"Unexpected error: {exc}"}
+        return
     new_messages: list[dict[str, Any]] = [
         {
             "role": "user",
@@ -1199,27 +1399,48 @@ def stream_user_turn(
     # re-inline figures into the right bubble when a saved project reloads
     # (the transcript merges a turn's assistant text into one bubble, so all
     # of a turn's figures share this index).
-    message_index = sum(
-        1
-        for entry in chat_transcript(session.history)
-        if entry["role"] == "assistant"
-    )
-    session.doc.begin_turn()
-    session.figures.begin_turn()
-    session.turn_active = True
-    session.stop_requested.clear()
-    generation = session.generation
-    trace_handle = _trace.turn_start(
-        model=model or settings.INTERVIEW_MODEL,
-        history_len=len(session.history),
-    )
+    try:
+        message_index = sum(
+            1
+            for entry in chat_transcript(session.history)
+            if entry["role"] == "assistant"
+        )
+    except Exception as exc:  # noqa: BLE001 - startup is transactional
+        session.release_model_turn(turn_token)
+        yield {"type": "error", "message": f"Unexpected error: {exc}"}
+        return
+
+    try:
+        stores_started = session.begin_model_turn_stores(
+            turn_token,
+            generation,
+        )
+        if not stores_started:
+            yield {
+                "type": "error",
+                "message": "The session was reset while this turn was "
+                "starting; the turn was discarded.",
+            }
+            return
+        trace_handle = _trace.turn_start(
+            model=model or settings.INTERVIEW_MODEL,
+            history_len=len(session.history),
+        )
+    except Exception as exc:  # noqa: BLE001 - initialization is transactional
+        session.finalize_model_turn(turn_token, committed=False)
+        yield {"type": "error", "message": f"Unexpected error: {exc}"}
+        return
 
     def check_session() -> None:
-        if session.generation != generation:
-            raise _SessionInvalidated(
-                "The session was reset while this turn was streaming; "
-                "the turn was discarded."
-            )
+        with session.owned_model_turn_guard(
+            turn_token,
+            generation,
+        ) as owns_turn:
+            if not owns_turn:
+                raise _SessionInvalidated(
+                    "The session was reset while this turn was streaming; "
+                    "the turn was discarded."
+                )
 
     def request_kwargs() -> dict[str, Any]:
         messages = sanitize_messages_for_resend(
@@ -1238,6 +1459,7 @@ def stream_user_turn(
     stop_reason: str | None = None
     doc_changed = False
     committed = False
+    post_commit_events: list[dict[str, Any]] = []
     usage_totals: dict[str, int] = {}
     # Turn-local staging for suggested-reply chips: the dispatch loop records
     # each suggest_prompts call here (latest wins); a successful turn commits
@@ -1281,8 +1503,18 @@ def stream_user_turn(
                 "round": _round,
             }
             resumed_from_pause = False
+            with session.owned_model_turn_guard(
+                turn_token,
+                generation,
+            ) as owns_turn:
+                if not owns_turn:
+                    raise _SessionInvalidated(
+                        "The session was reset while this turn was streaming; "
+                        "the turn was discarded."
+                    )
+                request = request_kwargs()
             manager, stream = _enter_stream(
-                client, request_kwargs(), trace_handle
+                client, request, trace_handle
             )
             stopped_mid_stream = False
             try:
@@ -1343,10 +1575,21 @@ def stream_user_turn(
             for block in content:
                 if block.get("type") != "tool_use":
                     continue
-                check_session()
-                result, ui_events = _run_tool(
-                    session, block, trace_handle, message_index=message_index
-                )
+                with session.owned_model_turn_guard(
+                    turn_token,
+                    generation,
+                ) as owns_turn:
+                    if not owns_turn:
+                        raise _SessionInvalidated(
+                            "The session was reset while this turn was "
+                            "streaming; the turn was discarded."
+                        )
+                    result, ui_events = _run_tool(
+                        session,
+                        block,
+                        trace_handle,
+                        message_index=message_index,
+                    )
                 tool_results.append(result)
                 for event in ui_events:
                     if event.get("type") == "suggested_prompts":
@@ -1384,36 +1627,74 @@ def stream_user_turn(
         yield {"type": "error", "message": f"Unexpected error: {exc}"}
         return
     else:
-        if session.generation != generation:
-            # Reset/load won the race after the last round: leave the
-            # fresh session untouched and discard this turn.
+        commit_invalidated = False
+        with session.owned_model_turn_guard(
+            turn_token,
+            generation,
+        ) as owns_turn:
+            if not owns_turn:
+                commit_invalidated = True
+            else:
+                session.history.extend(
+                    _committed_messages(new_messages, user_text)
+                )
+                doc_changed = session.doc.commit_turn()
+                session.figures.commit_turn()
+                # Latest-only replace: whatever this turn staged (including
+                # []) becomes the current chip set. Failure paths never reach
+                # this commit block, so the previous list remains untouched.
+                session.suggested_prompts = staged_suggestions
+                committed = True
+                if doc_changed:
+                    # Freeze the completion payload before releasing turn
+                    # ownership; a concurrent undo/reset/new turn must not
+                    # make this older SSE stream describe newer live state.
+                    post_commit_events = [
+                        {"type": "doc_snapshot", "doc": session.doc.snapshot()},
+                        {
+                            "type": "open_questions",
+                            "items": open_questions(session.doc.doc),
+                        },
+                        {
+                            "type": "lint",
+                            "items": lint_document(
+                                session.doc.doc,
+                                session.module,
+                            ),
+                            "standards": standards_payload(session),
+                        },
+                    ]
+        if commit_invalidated:
+            # Reset/load won the race after the last round: leave the fresh
+            # session untouched and discard this turn.
             yield {
                 "type": "error",
                 "message": "The session was reset while this turn was "
                 "streaming; the turn was discarded.",
             }
             return
-        session.history.extend(_committed_messages(new_messages, user_text))
-        doc_changed = session.doc.commit_turn()
-        session.figures.commit_turn()
-        # Latest-only replace: whatever this turn staged (including [] when
-        # the tool was not called) becomes the current chip set. Failure
-        # paths return before this else block, so there is nothing to roll
-        # back — the previous list is simply never overwritten.
-        session.suggested_prompts = staged_suggestions
-        committed = True
     finally:
         # Runs on every exit — including GeneratorExit when the SSE client
         # disconnects mid-stream, which no except clause above can see.
         # Anything short of a committed turn rolls the document back.
-        session.turn_active = False
         # The spend is real even on a failed turn — record it (unless a
         # reset/load raced in, whose fresh ledger must not inherit it).
-        if session.generation == generation:
-            session.usage.add("interview", usage_totals, count_turn=True)
+        with session.owned_model_turn_guard(
+            turn_token,
+            generation,
+        ) as owns_turn:
+            if owns_turn:
+                session.usage.add("interview", usage_totals, count_turn=True)
+        # Failed/disconnected turns must settle immediately. A committed turn
+        # retains logical ownership through its frozen document-tail events so
+        # a newer model turn cannot start and then be overwritten in the UI by
+        # this older stream. The committed path releases below.
         if not committed:
-            session.doc.rollback_turn()
-            session.figures.rollback_turn()
+            session.finalize_model_turn(
+                turn_token,
+                committed=False,
+            )
+        if not committed:
             _trace.turn_end(
                 trace_handle,
                 stop_reason=stop_reason,
@@ -1429,19 +1710,27 @@ def stream_user_turn(
                 usage=usage_totals,
             )
 
-    if doc_changed:
-        # doc_patch snapshots stream mid-turn, before the version commit;
-        # this snapshot carries the committed version pointer.
-        yield {"type": "doc_snapshot", "doc": session.doc.snapshot()}
-        yield {
-            "type": "open_questions",
-            "items": open_questions(session.doc.doc),
-        }
-        yield {
-            "type": "lint",
-            "items": lint_document(session.doc.doc, session.module),
-            "standards": standards_payload(session),
-        }
+    # doc_patch snapshots stream mid-turn, before the version commit; this
+    # frozen batch carries the committed pointer and same-generation reports.
+    # Reset/load may still invalidate an owner deliberately, so recheck before
+    # every tail event and stop emitting as soon as that happens.
+    try:
+        for event in post_commit_events:
+            with session.owned_model_turn_guard(
+                turn_token,
+                generation,
+            ) as owns_turn:
+                if not owns_turn:
+                    return
+            yield event
+    finally:
+        session.finalize_model_turn(
+            turn_token,
+            committed=True,
+        )
+    with session.session_state_guard():
+        if session.generation != generation:
+            return
     yield {
         "type": "turn_complete",
         "stop_reason": stop_reason,

@@ -199,6 +199,19 @@ class QCLensStatus:
         )
 
 
+def qc_version_fingerprint(section: SpecSection) -> str:
+    """Return a deterministic identity for the exact document QC reviewed."""
+    if not isinstance(section, SpecSection):
+        raise TypeError("section must be a SpecSection")
+    payload = json.dumps(
+        section.to_dict(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 @dataclass
 class QCResult:
     summary: str = ""
@@ -208,6 +221,7 @@ class QCResult:
     started_at: str = ""
     finished_at: str = ""
     version_index: int = 0
+    version_fingerprint: str = ""
     model: str = ""
     usage_totals: dict[str, int] = field(default_factory=dict)
     research_profile_present: bool = False
@@ -228,6 +242,14 @@ class QCResult:
             if f.severity == "critical" and f.status == "open"
         )
 
+    def matches_version(self, version_index: int, section: SpecSection) -> bool:
+        """Whether this result belongs to this exact history version."""
+        return (
+            self.version_index == version_index
+            and bool(self.version_fingerprint)
+            and self.version_fingerprint == qc_version_fingerprint(section)
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "summary": self.summary,
@@ -237,6 +259,7 @@ class QCResult:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "version_index": self.version_index,
+            "version_fingerprint": self.version_fingerprint,
             "model": self.model,
             "usage_totals": dict(self.usage_totals),
             "research_profile_present": self.research_profile_present,
@@ -282,6 +305,9 @@ class QCResult:
                 started_at=str(data.get("started_at", "") or ""),
                 finished_at=str(data.get("finished_at", "") or ""),
                 version_index=int(data.get("version_index", 0) or 0),
+                version_fingerprint=(
+                    str(data.get("version_fingerprint", "") or "").strip().lower()
+                ),
                 model=str(data.get("model", "") or ""),
                 usage_totals={
                     k: int(v)
@@ -1147,6 +1173,7 @@ def run_final_qc(
         started_at=started_at,
         finished_at=finished_at,
         version_index=version_index,
+        version_fingerprint=qc_version_fingerprint(section),
         model=model,
         usage_totals=usage_totals,
         research_profile_present=profile is not None,

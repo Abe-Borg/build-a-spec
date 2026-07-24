@@ -24,6 +24,7 @@ from backend.qc.engine import (
     QCResult,
     _lens_user_message,
     _validate_ops,
+    qc_version_fingerprint,
 )
 from backend.qc.schema import QC_LENSES
 import backend.spec_doc.source_patch as source_patch_module
@@ -680,6 +681,7 @@ def test_api_capabilities_refresh_across_history_project_load_and_qc_apply(
         QCResult(
             findings=[finding],
             version_index=session.doc.index,
+            version_fingerprint=qc_version_fingerprint(session.doc.doc),
         )
     )
     applied = api_client.post(

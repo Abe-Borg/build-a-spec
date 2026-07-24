@@ -14,6 +14,7 @@ import struct
 import unicodedata
 import zipfile
 import xml.etree.ElementTree as ET
+import zlib
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Callable
@@ -33,10 +34,27 @@ _REQUIRED_OPC_PARTS = frozenset(
 )
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 _OFFICE_DOCUMENT_REL_TYPES = frozenset(
     {
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
         "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument",
+    }
+)
+_OPC_RELATIONSHIP_NAMESPACES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/package/2006/relationships",
+    }
+)
+_OPC_CONTENT_TYPE_NAMESPACES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/package/2006/content-types",
+    }
+)
+_WORDPROCESSINGML_NAMESPACES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+        "http://purl.oclc.org/ooxml/wordprocessingml/main",
     }
 )
 
@@ -65,6 +83,10 @@ class DocxPackageInfo:
 
     member_count: int
     uncompressed_bytes: int
+    # True when a bounded non-required member could not be decompressed or
+    # CRC-verified.  The exact artifact remains recoverable, but callers must
+    # not expose a source-backed mutation surface for it.
+    integrity_ambiguous: bool = False
 
 
 async def read_upload_bounded(
@@ -139,13 +161,57 @@ def _safe_member_key(name: str) -> str:
         raise SourcePackageError(
             "The DOCX package contains an unsafe member name."
         )
-    if "\\" in name or name.startswith("/") or _DRIVE_PREFIX_RE.match(name):
+    # OPC part names are URI-like even though ZIP exposes them as decoded
+    # strings.  Validate and decode percent escapes before applying path
+    # rules so encoded traversal, separators, drive prefixes, and equivalent
+    # shadow names cannot bypass the package boundary.  Encoded separators
+    # are rejected outright because consumers disagree on whether they are a
+    # path delimiter or data inside one segment.
+    canonical_bytes = bytearray()
+    index = 0
+    try:
+        while index < len(name):
+            character = name[index]
+            if character != "%":
+                canonical_bytes.extend(character.encode("utf-8"))
+                index += 1
+                continue
+            if (
+                index + 2 >= len(name)
+                or name[index + 1] not in _HEX_DIGITS
+                or name[index + 2] not in _HEX_DIGITS
+            ):
+                raise SourcePackageError(
+                    "The DOCX package contains an unsafe member path."
+                )
+            value = int(name[index + 1 : index + 3], 16)
+            if value in {ord("/"), ord("\\")}:
+                raise SourcePackageError(
+                    "The DOCX package contains an unsafe member path."
+                )
+            canonical_bytes.append(value)
+            index += 3
+        canonical_name = canonical_bytes.decode("utf-8")
+    except UnicodeError as exc:
+        raise SourcePackageError(
+            "The DOCX package contains an unsafe member name."
+        ) from exc
+
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in canonical_name):
+        raise SourcePackageError(
+            "The DOCX package contains an unsafe member name."
+        )
+    if (
+        "\\" in canonical_name
+        or canonical_name.startswith("/")
+        or _DRIVE_PREFIX_RE.match(canonical_name)
+    ):
         raise SourcePackageError(
             "The DOCX package contains an unsafe member path."
         )
 
-    is_directory = name.endswith("/")
-    path = name[:-1] if is_directory else name
+    is_directory = canonical_name.endswith("/")
+    path = canonical_name[:-1] if is_directory else canonical_name
     parts = path.split("/")
     if not path or any(part in {"", ".", ".."} for part in parts):
         raise SourcePackageError(
@@ -154,7 +220,7 @@ def _safe_member_key(name: str) -> str:
 
     # OPC part names are URI-like.  Normalizing for the duplicate check also
     # prevents two names that collide on common case-insensitive filesystems.
-    normalized = unicodedata.normalize("NFC", name).casefold()
+    normalized = unicodedata.normalize("NFC", canonical_name).casefold()
     return normalized
 
 
@@ -174,6 +240,12 @@ def _xml_local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+def _xml_namespace_name(tag: str) -> str:
+    if not tag.startswith("{") or "}" not in tag:
+        return ""
+    return tag[1:].split("}", 1)[0]
+
+
 class _RequiredOpcXmlTarget:
     """Collect only the required facts while Expat streams one OPC part."""
 
@@ -181,6 +253,7 @@ class _RequiredOpcXmlTarget:
         "_child_matcher",
         "_depth",
         "_expected_root_local_name",
+        "_expected_root_namespaces",
         "has_required_child",
         "root_is_valid",
     )
@@ -189,9 +262,11 @@ class _RequiredOpcXmlTarget:
         self,
         *,
         expected_root_local_name: str,
+        expected_root_namespaces: frozenset[str],
         child_matcher: Callable[[str, dict[str, str]], bool] | None = None,
     ) -> None:
         self._expected_root_local_name = expected_root_local_name
+        self._expected_root_namespaces = expected_root_namespaces
         self._child_matcher = child_matcher
         self._depth = 0
         self.root_is_valid = False
@@ -201,6 +276,7 @@ class _RequiredOpcXmlTarget:
         if self._depth == 0:
             self.root_is_valid = (
                 _xml_local_name(tag) == self._expected_root_local_name
+                and _xml_namespace_name(tag) in self._expected_root_namespaces
             )
         elif (
             self._depth == 1
@@ -228,11 +304,13 @@ def _stream_required_opc_xml(
     filename: str,
     *,
     expected_root_local_name: str,
+    expected_root_namespaces: frozenset[str],
     child_matcher: Callable[[str, dict[str, str]], bool] | None = None,
 ) -> _RequiredOpcXmlTarget:
     """Parse one required XML part through explicitly bounded member reads."""
     target = _RequiredOpcXmlTarget(
         expected_root_local_name=expected_root_local_name,
+        expected_root_namespaces=expected_root_namespaces,
         child_matcher=child_matcher,
     )
     parser = ET.XMLParser(target=target)
@@ -248,6 +326,7 @@ def _stream_required_opc_xml(
 def _declares_main_document(tag: str, attributes: dict[str, str]) -> bool:
     return (
         _xml_local_name(tag) == "Override"
+        and _xml_namespace_name(tag) in _OPC_CONTENT_TYPE_NAMESPACES
         and attributes.get("PartName", "").lstrip("/") == "word/document.xml"
     )
 
@@ -255,6 +334,7 @@ def _declares_main_document(tag: str, attributes: dict[str, str]) -> bool:
 def _relates_to_main_document(tag: str, attributes: dict[str, str]) -> bool:
     return (
         _xml_local_name(tag) == "Relationship"
+        and _xml_namespace_name(tag) in _OPC_RELATIONSHIP_NAMESPACES
         and attributes.get("Type") in _OFFICE_DOCUMENT_REL_TYPES
         and attributes.get("Target", "").lstrip("/") == "word/document.xml"
         and attributes.get("TargetMode", "Internal") != "External"
@@ -268,18 +348,21 @@ def _validate_required_opc_xml(archive: zipfile.ZipFile) -> None:
             archive,
             "[Content_Types].xml",
             expected_root_local_name="Types",
+            expected_root_namespaces=_OPC_CONTENT_TYPE_NAMESPACES,
             child_matcher=_declares_main_document,
         )
         relationships = _stream_required_opc_xml(
             archive,
             "_rels/.rels",
             expected_root_local_name="Relationships",
+            expected_root_namespaces=_OPC_RELATIONSHIP_NAMESPACES,
             child_matcher=_relates_to_main_document,
         )
         document = _stream_required_opc_xml(
             archive,
             "word/document.xml",
             expected_root_local_name="document",
+            expected_root_namespaces=_WORDPROCESSINGML_NAMESPACES,
         )
     except (
         ET.ParseError,
@@ -287,6 +370,8 @@ def _validate_required_opc_xml(archive: zipfile.ZipFile) -> None:
         zipfile.BadZipFile,
         RuntimeError,
         NotImplementedError,
+        zlib.error,
+        EOFError,
     ) as exc:
         raise SourcePackageError(
             "The DOCX package contains malformed required Word XML."
@@ -323,12 +408,15 @@ def inspect_docx_package(
     max_total_uncompressed: int = MAX_ZIP_UNCOMPRESSED_BYTES,
     max_member_uncompressed: int = MAX_ZIP_MEMBER_BYTES,
 ) -> DocxPackageInfo:
-    """Validate ZIP/OPC safety limits and force a CRC check of every member.
+    """Validate ZIP/OPC safety limits and readable required Word parts.
 
     The compressed bytes have already passed :func:`read_upload_bounded`.
     Declared sizes are checked before decompression; streamed actual sizes are
-    checked again while every member is read to EOF, which also makes
-    ``zipfile`` verify each member CRC.
+    checked again while readable members are consumed to EOF, which also makes
+    ``zipfile`` verify their CRCs.  A non-required member whose raw ZIP layout
+    is ambiguous may be retained under its already-bounded declared size; the
+    stricter raw index will then narrow preservation to exact-original
+    pass-through.  Required OPC parts still must be readable and valid below.
     """
     max_members = _validated_limit(max_members, "max_members")
     max_total_uncompressed = _validated_limit(
@@ -354,16 +442,14 @@ def inspect_docx_package(
                 f"The DOCX package has too many ZIP members (maximum {max_members})."
             )
 
-        names: set[str] = set()
         exact_names: set[str] = set()
         declared_total = 0
         for info in infos:
-            key = _safe_member_key(info.filename)
-            if key in names:
-                raise SourcePackageError(
-                    "The DOCX package contains duplicate member names."
-                )
-            names.add(key)
+            # Validate every spelling, including duplicate/normalized aliases.
+            # Collisions are raw-layout ambiguity rather than an extraction
+            # path here: no member is materialized onto a filesystem, and the
+            # raw-preserving mutation boundary rejects the ambiguity later.
+            _safe_member_key(info.filename)
             exact_names.add(info.filename)
 
             unix_mode = (info.external_attr >> 16) & 0xFFFF
@@ -371,10 +457,15 @@ def inspect_docx_package(
                 raise SourcePackageError(
                     "The DOCX package contains an unsafe symbolic-link member."
                 )
-            if (
-                info.flag_bits & _ENCRYPTED_FLAG
-                or _local_header_flags(data, info) & _ENCRYPTED_FLAG
-            ):
+            try:
+                local_flags = _local_header_flags(data, info)
+            except SourcePackageError:
+                # A central entry may point at an unsupported/overlapping raw
+                # record.  Keep inspecting through zipfile so readable OPC can
+                # still be imported as exact-original-only.  If this is a
+                # required part, _validate_required_opc_xml will reject it.
+                local_flags = 0
+            if info.flag_bits & _ENCRYPTED_FLAG or local_flags & _ENCRYPTED_FLAG:
                 raise SourcePackageError(
                     "Encrypted DOCX package members are not supported."
                 )
@@ -399,6 +490,7 @@ def inspect_docx_package(
             )
 
         actual_total = 0
+        integrity_ambiguous = False
         for info in infos:
             member_total = 0
             try:
@@ -419,10 +511,25 @@ def inspect_docx_package(
                                 "The DOCX package exceeds the total uncompressed "
                                 "size limit."
                             )
-            except (zipfile.BadZipFile, RuntimeError, NotImplementedError) as exc:
-                raise SourcePackageError(
-                    "The DOCX package failed ZIP integrity validation."
-                ) from exc
+            except (
+                zipfile.BadZipFile,
+                RuntimeError,
+                NotImplementedError,
+                zlib.error,
+                EOFError,
+            ) as exc:
+                # Preserve an unreadable non-required raw record only by its
+                # bounded central-directory declaration.  Required Word parts
+                # are independently reopened and parsed below, so they remain
+                # hard failures.  The strict raw index records this ambiguity
+                # as unsupported_raw_zip_layout and disables every mutation.
+                if member_total > info.file_size:
+                    raise SourcePackageError(
+                        "The DOCX package contains inconsistent member sizes."
+                    ) from exc
+                actual_total += info.file_size - member_total
+                member_total = info.file_size
+                integrity_ambiguous = True
             if member_total != info.file_size:
                 raise SourcePackageError(
                     "The DOCX package contains inconsistent member sizes."
@@ -431,7 +538,9 @@ def inspect_docx_package(
         _validate_required_opc_xml(archive)
 
         return DocxPackageInfo(
-            member_count=len(infos), uncompressed_bytes=actual_total
+            member_count=len(infos),
+            uncompressed_bytes=actual_total,
+            integrity_ambiguous=integrity_ambiguous,
         )
     finally:
         archive.close()

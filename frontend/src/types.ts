@@ -547,6 +547,7 @@ export interface QcResultView {
   started_at: string;
   finished_at: string;
   version_index: number;
+  version_fingerprint?: string;
   model: string;
   usage_totals: Record<string, number>;
   research_profile_present: boolean;
@@ -574,6 +575,7 @@ export interface QcSnapshot {
   error: string;
   events: QcEvent[];
   result?: QcResultView;
+  stale?: boolean;
 }
 
 export interface QcApplyResult extends DocPayload {

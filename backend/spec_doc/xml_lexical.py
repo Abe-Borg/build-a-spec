@@ -317,15 +317,19 @@ def _utf8_character_length(first: int) -> int:
     raise _unsafe("source XML contains invalid UTF-8")
 
 
-def _decode_text_with_boundaries(
+def _iter_decoded_text(
     raw: bytes,
     *,
     absolute_start: int,
     attribute: bool = False,
-) -> tuple[str, tuple[int, ...]]:
-    """Decode ordinary XML character data and retain each raw boundary."""
-    decoded: list[str] = []
-    boundaries = [absolute_start]
+) -> Iterable[tuple[str, int]]:
+    """Yield decoded XML characters with each character's raw end offset.
+
+    Keeping this iterator streaming is important for large ``w:t`` nodes.  A
+    boundary table containing one Python integer per source character can be
+    many times larger than the XML part itself, while callers generally need
+    either no offsets or only the two ends of one approved semantic slice.
+    """
     position = 0
     while position < len(raw):
         value = raw[position]
@@ -359,9 +363,43 @@ def _decode_text_with_boundaries(
             if len(character) != 1 or not _xml_character_allowed(ord(character)):
                 raise _unsafe("source XML contains an illegal XML character")
             position = end
-        decoded.append(character)
-        boundaries.append(absolute_start + position)
-    return "".join(decoded), tuple(boundaries)
+        yield character, absolute_start + position
+
+
+def _decode_text(
+    raw: bytes,
+    *,
+    absolute_start: int,
+    attribute: bool = False,
+) -> str:
+    return "".join(
+        character
+        for character, _boundary in _iter_decoded_text(
+            raw,
+            absolute_start=absolute_start,
+            attribute=attribute,
+        )
+    )
+
+
+def _raw_text_matches(
+    raw: bytes,
+    expected: str,
+    *,
+    absolute_start: int,
+) -> bool:
+    """Compare decoded character data without materializing another string."""
+    decoded_index = 0
+    for character, _boundary in _iter_decoded_text(
+        raw, absolute_start=absolute_start
+    ):
+        if (
+            decoded_index >= len(expected)
+            or expected[decoded_index] != character
+        ):
+            return False
+        decoded_index += 1
+    return decoded_index == len(expected)
 
 
 def _parse_declaration(
@@ -630,9 +668,10 @@ def _scanner(document_xml: bytes, bom: bytes) -> _ScanResult:
             next_markup = document_xml.find(b"<", position)
             if next_markup < 0:
                 next_markup = len(document_xml)
-            _decode_text_with_boundaries(
+            for _character, _boundary in _iter_decoded_text(
                 document_xml[position:next_markup], absolute_start=position
-            )
+            ):
+                pass
             position = next_markup
             continue
 
@@ -689,11 +728,11 @@ def _scanner(document_xml: bytes, bom: bytes) -> _ScanResult:
         )
         local_namespaces: dict[str, str] = {}
         decoded_attribute_values = [
-            _decode_text_with_boundaries(
+            _decode_text(
                 attribute.raw_value,
                 absolute_start=attribute.value_start,
                 attribute=True,
-            )[0]
+            )
             for attribute in attributes
         ]
         for attribute, uri in zip(attributes, decoded_attribute_values):
@@ -939,13 +978,13 @@ def build_source_xml_index(
         decoded_text = lxml_text[key]
         blocker: str | None = None
         if raw_node.mutable_content:
-            decoded, _boundaries = _decode_text_with_boundaries(
+            if not _raw_text_matches(
                 document_xml[
                     raw_node.content_span.start : raw_node.content_span.end
                 ],
+                decoded_text,
                 absolute_start=raw_node.content_span.start,
-            )
-            if decoded != decoded_text:
+            ):
                 raise _unsafe("the lexical and semantic Word text values disagree")
         else:
             blocker = "unsupported_source_text_lexical_form"
@@ -1035,15 +1074,34 @@ def decoded_slice_byte_span(
             "text_anchor_mismatch", "the mapped decoded text offsets are invalid"
         )
     raw = document_xml[node.content_span.start : node.content_span.end]
-    decoded, boundaries = _decode_text_with_boundaries(
+    raw_start = node.content_span.start if start == 0 else None
+    raw_end = node.content_span.start if end == 0 else None
+    decoded_index = 0
+    mismatch = False
+    for character, boundary in _iter_decoded_text(
         raw, absolute_start=node.content_span.start
-    )
-    if decoded != node.decoded_text or len(boundaries) != len(decoded) + 1:
+    ):
+        if (
+            decoded_index >= len(node.decoded_text)
+            or node.decoded_text[decoded_index] != character
+        ):
+            mismatch = True
+        decoded_index += 1
+        if decoded_index == start:
+            raw_start = boundary
+        if decoded_index == end:
+            raw_end = boundary
+    if (
+        mismatch
+        or decoded_index != len(node.decoded_text)
+        or raw_start is None
+        or raw_end is None
+    ):
         raise XmlLexicalError(
             "text_anchor_mismatch",
             "the mapped Word text no longer matches its lexical byte span",
         )
-    return XmlByteSpan(boundaries[start], boundaries[end])
+    return XmlByteSpan(raw_start, raw_end)
 
 
 def xml_gap_is_whitespace(document_xml: bytes, span: XmlByteSpan) -> bool:
@@ -1057,10 +1115,12 @@ def xml_gap_is_whitespace(document_xml: bytes, span: XmlByteSpan) -> bool:
         raise XmlLexicalError(
             "unsafe_document_xml", "an XML gap extends beyond the source bytes"
         )
-    decoded, _boundaries = _decode_text_with_boundaries(
-        document_xml[span.start : span.end], absolute_start=span.start
+    return all(
+        character in " \t\r\n"
+        for character, _boundary in _iter_decoded_text(
+            document_xml[span.start : span.end], absolute_start=span.start
+        )
     )
-    return all(character in " \t\r\n" for character in decoded)
 
 
 def encode_word_text(

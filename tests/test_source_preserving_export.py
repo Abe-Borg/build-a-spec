@@ -15,7 +15,12 @@ from fastapi.testclient import TestClient
 
 from backend import sessions
 from backend.app import create_app
-from backend.qc.engine import QCFinding, QCLensStatus, QCResult
+from backend.qc.engine import (
+    QCFinding,
+    QCLensStatus,
+    QCResult,
+    qc_version_fingerprint,
+)
 from tests.fakes import FakeClient, text_turn, tool_turn
 from tests.docx_render_harness import (
     DocxRenderHarness,
@@ -359,6 +364,9 @@ def test_qc_apply_path_uses_the_same_source_guard(tmp_path):
             )
         ],
         version_index=sessions.get_session().doc.index,
+        version_fingerprint=qc_version_fingerprint(
+            sessions.get_session().doc.doc
+        ),
     )
     sessions.get_session().qc.restore(result)
 

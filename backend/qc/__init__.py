@@ -6,7 +6,14 @@ accept/dismiss queue. The ``code_compliance`` + ``completeness`` lenses
 strictly supersede the Phase 5 compliance audit (deprecated; endpoints
 retained). See ``engine.py`` for the pipeline notes.
 """
-from .engine import QCFanoutError, QCFinding, QCResult, QCVerdict, run_final_qc
+from .engine import (
+    QCFanoutError,
+    QCFinding,
+    QCResult,
+    QCVerdict,
+    qc_version_fingerprint,
+    run_final_qc,
+)
 from .runner import QCRunner
 
 __all__ = [
@@ -15,5 +22,6 @@ __all__ = [
     "QCResult",
     "QCRunner",
     "QCVerdict",
+    "qc_version_fingerprint",
     "run_final_qc",
 ]

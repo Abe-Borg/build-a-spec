@@ -64,14 +64,15 @@ def test_chat_stop_endpoint_409s_when_idle_and_signals_an_active_turn():
     assert resp.status_code == 409
 
     session = sessions.get_session()
-    session.turn_active = True
+    claim = session.claim_model_turn()
+    assert claim is not None
+    token, _generation = claim
     try:
         resp = client.post("/api/chat/stop")
         assert resp.json()["ok"] is True
         assert session.stop_requested.is_set()
     finally:
-        session.turn_active = False
-        session.stop_requested.clear()
+        session.finalize_model_turn(token, committed=False)
 
 
 def test_chat_stop_mid_stream_truncates_the_live_events_but_commits():

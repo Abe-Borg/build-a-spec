@@ -617,9 +617,12 @@ def _meaningful_children(element) -> list:
 
 
 def _has_non_whitespace_direct_character_data(element) -> bool:
-    if (element.text or "").strip():
+    if any(character not in " \t\r\n" for character in element.text or ""):
         return True
-    return any((child.tail or "").strip() for child in element.iterchildren())
+    return any(
+        any(character not in " \t\r\n" for character in child.tail or "")
+        for child in element.iterchildren()
+    )
 
 
 def _read_document_xml(source_bytes: bytes) -> bytes:
@@ -1237,7 +1240,7 @@ def build_source_patch_context(
             "the exact imported DOCX bytes are unavailable",
         )
     try:
-        inspect_docx_package(source_bytes)
+        package_info = inspect_docx_package(source_bytes)
     except (SourcePackageError, TypeError, ValueError) as exc:
         raise SourcePatchError("source", "unsafe_package", str(exc)) from exc
     if hashlib.sha256(source_bytes).hexdigest() != source_map.source_sha256:
@@ -1385,16 +1388,26 @@ def build_source_patch_context(
         )
 
     raw_zip_archive: RawZipArchive | None
-    try:
-        raw_zip_archive = parse_raw_zip_archive(
-            source_bytes,
-            mutable_member=_DOCUMENT_PART,
-        )
-    except RawZipError as exc:
+    if package_info.integrity_ambiguous:
         raw_zip_archive = None
         runtime_mutation_issues.append(
-            SourcePatchIssue("source", exc.blocker, exc.detail)
+            SourcePatchIssue(
+                "source",
+                "unsupported_raw_zip_layout",
+                "a retained ZIP member failed decompression or CRC validation",
+            )
         )
+    else:
+        try:
+            raw_zip_archive = parse_raw_zip_archive(
+                source_bytes,
+                mutable_member=_DOCUMENT_PART,
+            )
+        except RawZipError as exc:
+            raw_zip_archive = None
+            runtime_mutation_issues.append(
+                SourcePatchIssue("source", exc.blocker, exc.detail)
+            )
 
     paragraph_templates: dict[int, SourceParagraphTemplate] = {}
     if xml_index is not None:

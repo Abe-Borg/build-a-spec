@@ -351,4 +351,4 @@ def load_project(data: Any, session) -> None:
     if hasattr(session, "source_docx_map"):
         session.source_docx_map = restored_source_docx_map
     # Invalidate any turn that was still streaming against the old state.
-    session.generation += 1
+    session.invalidate_model_turn()

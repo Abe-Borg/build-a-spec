@@ -127,7 +127,9 @@ export default function QCDrawer({
   const openFindings = findings.filter((f) => f.status === "open");
   const openCriticals = openFindings.filter((f) => f.severity === "critical");
   const stale =
-    result != null && doc != null && result.version_index !== doc.version.index;
+    result != null &&
+    ((qc?.stale ?? false) ||
+      (doc != null && result.version_index !== doc.version.index));
   const applyStateStale = result != null && (doc == null || stale);
   const findingDecisions = new Map(
     findings.map((finding) => [

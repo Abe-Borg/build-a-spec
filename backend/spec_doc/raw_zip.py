@@ -63,6 +63,7 @@ _STRUCTURAL_SIGNATURES = (
     _DESCRIPTOR_SIGNATURE,
 )
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 
 class RawZipError(ValueError):
@@ -186,13 +187,50 @@ def _safe_member_key(name: str) -> str:
         for character in name
     ):
         raise _unsupported("a ZIP member has an unsafe name")
-    if "\\" in name or name.startswith("/") or _DRIVE_PREFIX_RE.match(name):
+    # ZIP member names in an OPC package are URI-like.  Normalize valid
+    # percent escapes before collision and traversal checks, and reject
+    # encoded separators because different consumers can interpret them as
+    # either path syntax or segment data.
+    canonical_bytes = bytearray()
+    index = 0
+    try:
+        while index < len(name):
+            character = name[index]
+            if character != "%":
+                canonical_bytes.extend(character.encode("utf-8"))
+                index += 1
+                continue
+            if (
+                index + 2 >= len(name)
+                or name[index + 1] not in _HEX_DIGITS
+                or name[index + 2] not in _HEX_DIGITS
+            ):
+                raise _unsupported("a ZIP member has an unsafe path")
+            value = int(name[index + 1 : index + 3], 16)
+            if value in {ord("/"), ord("\\")}:
+                raise _unsupported("a ZIP member has an unsafe path")
+            canonical_bytes.append(value)
+            index += 3
+        canonical_name = canonical_bytes.decode("utf-8")
+    except UnicodeError as exc:
+        raise _unsupported("a ZIP member has an unsafe name") from exc
+
+    if any(
+        ord(character) < 32 or ord(character) == 127
+        for character in canonical_name
+    ):
+        raise _unsupported("a ZIP member has an unsafe name")
+    if (
+        "\\" in canonical_name
+        or canonical_name.startswith("/")
+        or _DRIVE_PREFIX_RE.match(canonical_name)
+    ):
         raise _unsupported("a ZIP member has an unsafe path")
-    path = name[:-1] if name.endswith("/") else name
+    path = canonical_name[:-1] if canonical_name.endswith("/") else canonical_name
     parts = path.split("/")
     if not path or any(part in {"", ".", ".."} for part in parts):
         raise _unsupported("a ZIP member has an unsafe path")
-    return unicodedata.normalize("NFC", name).casefold()
+    return unicodedata.normalize("NFC", canonical_name).casefold()
 
 
 def _validate_extra(

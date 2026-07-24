@@ -93,11 +93,10 @@ from .llm.prompts import (
     FULL_DRAFT_DIRECTIVE,
     onboarding_demo_directive,
     sanitize_discipline,
-    sanitize_project_context,
 )
 from .project_profile import ProjectProfile
 from .qc.engine import QCSourceGuard
-from .spec_modules import AVAILABLE_MODULES, DEFAULT_MODULE, get_module
+from .spec_modules import AVAILABLE_MODULES, DEFAULT_MODULE
 from .spec_doc import SpecEditError, diff_sections, lint_document, open_questions
 from .spec_doc.docx_export import (
     build_docx,
@@ -441,14 +440,16 @@ def _readiness_payload(session) -> dict[str, Any]:
     research_ok = session.research.status == "complete"
 
     qc_result = session.qc.result
-    qc_current = (
+    qc_matches_version = bool(
         qc_result is not None
-        and qc_result.version_index == session.doc.index
-        and qc_result.open_critical_count() == 0
+        and qc_result.matches_version(session.doc.index, session.doc.doc)
+    )
+    qc_current = bool(
+        qc_matches_version and qc_result.open_critical_count() == 0
     )
     if qc_result is None:
         qc_detail = "Final QC has not been run."
-    elif qc_result.version_index != session.doc.index:
+    elif not qc_matches_version:
         qc_detail = "Final QC is stale — the document has changed since it ran."
     elif qc_result.open_critical_count() > 0:
         qc_detail = (
@@ -516,6 +517,17 @@ def _readiness_payload(session) -> dict[str, Any]:
     ]
     ready = all(c["ok"] for c in checks if not c["advisory"])
     return {"checks": checks, "ready": ready}
+
+
+def _qc_snapshot_payload(session) -> dict[str, Any]:
+    """QC runner state plus server-authoritative document staleness."""
+    payload = session.qc.snapshot()
+    result = session.qc.result
+    payload["stale"] = bool(
+        result is not None
+        and not result.matches_version(session.doc.index, session.doc.doc)
+    )
+    return payload
 
 
 def create_app() -> FastAPI:
@@ -612,20 +624,16 @@ def create_app() -> FastAPI:
     @app.post("/api/session/reset")
     def reset(body: SessionResetRequest | None = Body(default=None)) -> dict:
         session = sessions.get_session()
-        session.reset()
-        if body is not None:
-            if body.module_id.strip():
-                session.module = get_module(body.module_id)
-            # Invariant: discipline is non-empty only while an open-catalog
-            # module is active. A curated module always clears it.
-            if getattr(session.module, "open_catalog", False):
-                session.discipline = sanitize_discipline(body.discipline)
-            else:
-                session.discipline = ""
-            # Priming text applies to any module (not gated by open_catalog);
-            # reset() already cleared it, so a bodyless reset leaves it "".
-            session.project_context = sanitize_project_context(
-                body.project_context
+        if body is None:
+            session.reset()
+        else:
+            # Reset and its replacement configuration share the turn-state
+            # lock, so a new model stream cannot capture the half-configured
+            # fresh session between these writes.
+            session.reset(
+                module_id=body.module_id,
+                discipline=body.discipline,
+                project_context=body.project_context,
             )
         return {
             "ok": True,
@@ -693,12 +701,11 @@ def create_app() -> FastAPI:
         streaming (it likely just finished on its own); safe to ignore.
         """
         session = sessions.get_session()
-        if not session.turn_active:
+        if not session.request_model_stop():
             return JSONResponse(
                 {"ok": False, "error": "No turn is streaming."},
                 status_code=409,
             )
-        session.stop_requested.set()
         return JSONResponse({"ok": True})
 
     @app.post("/api/draft/full")
@@ -792,38 +799,40 @@ def create_app() -> FastAPI:
     @app.post("/api/doc/undo")
     def undo_doc() -> JSONResponse:
         session = sessions.get_session()
-        if session.turn_active:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "A model turn is streaming — try undo again "
-                    "once it finishes.",
-                },
-                status_code=409,
-            )
-        if not session.doc.undo():
-            return JSONResponse(
-                {"ok": False, "error": "Nothing to undo."}, status_code=409
-            )
-        return JSONResponse({"ok": True, **_doc_payload(session)})
+        with session.session_state_guard():
+            if session.turn_active:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "A model turn is streaming — try undo again "
+                        "once it finishes.",
+                    },
+                    status_code=409,
+                )
+            if not session.doc.undo():
+                return JSONResponse(
+                    {"ok": False, "error": "Nothing to undo."}, status_code=409
+                )
+            return JSONResponse({"ok": True, **_doc_payload(session)})
 
     @app.post("/api/doc/redo")
     def redo_doc() -> JSONResponse:
         session = sessions.get_session()
-        if session.turn_active:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "A model turn is streaming — try redo again "
-                    "once it finishes.",
-                },
-                status_code=409,
-            )
-        if not session.doc.redo():
-            return JSONResponse(
-                {"ok": False, "error": "Nothing to redo."}, status_code=409
-            )
-        return JSONResponse({"ok": True, **_doc_payload(session)})
+        with session.session_state_guard():
+            if session.turn_active:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "A model turn is streaming — try redo again "
+                        "once it finishes.",
+                    },
+                    status_code=409,
+                )
+            if not session.doc.redo():
+                return JSONResponse(
+                    {"ok": False, "error": "Nothing to redo."}, status_code=409
+                )
+            return JSONResponse({"ok": True, **_doc_payload(session)})
 
     @app.post("/api/doc/edit")
     def edit_doc(body: EditDocRequest) -> JSONResponse:
@@ -836,38 +845,28 @@ def create_app() -> FastAPI:
         that turn's commit/rollback.
         """
         session = sessions.get_session()
-        if session.turn_active:
+        with session.session_state_guard():
+            if session.turn_active:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "A model turn is streaming — try the edit "
+                        "again once it finishes.",
+                    },
+                    status_code=409,
+                )
+            session.doc.begin_turn()
+            try:
+                applied = session.apply_doc_edits(body.ops)
+            except SpecEditError as exc:
+                session.doc.rollback_turn()
+                return JSONResponse(
+                    {"ok": False, "error": str(exc)}, status_code=400
+                )
+            session.doc.commit_turn()
             return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "A model turn is streaming — try the edit again "
-                    "once it finishes.",
-                },
-                status_code=409,
+                {"ok": True, "applied": applied, **_doc_payload(session)}
             )
-        generation = session.generation
-        session.doc.begin_turn()
-        try:
-            applied = session.apply_doc_edits(body.ops)
-        except SpecEditError as exc:
-            session.doc.rollback_turn()
-            return JSONResponse(
-                {"ok": False, "error": str(exc)}, status_code=400
-            )
-        if session.generation != generation:
-            # Reset/load raced in between begin and commit: discard the edit
-            # so the fresh/loaded session stays exactly as the user made it.
-            session.doc.rollback_turn()
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "The session changed while the edit was "
-                    "applying; the edit was discarded.",
-                },
-                status_code=409,
-            )
-        session.doc.commit_turn()
-        return JSONResponse({"ok": True, "applied": applied, **_doc_payload(session)})
 
     def _redline_for_export(
         store, redline: str | None, base: int | None
@@ -1081,7 +1080,8 @@ def create_app() -> FastAPI:
     @app.delete("/api/figure/{fid}")
     def figure_delete(fid: str) -> JSONResponse:
         session = sessions.get_session()
-        if session.turn_active:
+        delete_status, figures = session.delete_figure_if_idle(fid)
+        if delete_status == "active":
             # Deleting mid-turn would shift the list under the turn's
             # provisional-figure bookkeeping (begin/rollback by index).
             return JSONResponse(
@@ -1091,11 +1091,11 @@ def create_app() -> FastAPI:
                 },
                 status_code=409,
             )
-        if not session.figures.delete(fid):
+        if delete_status == "missing":
             return JSONResponse(
                 {"ok": False, "error": f"No figure {fid!r}."}, status_code=404
             )
-        return JSONResponse({"ok": True, "figures": session.figures.snapshot()})
+        return JSONResponse({"ok": True, "figures": figures})
 
     # --- Master-spec import (Phase 5) ---------------------------------------
 
@@ -1157,7 +1157,6 @@ def create_app() -> FastAPI:
                 source_map=result.source_map,
                 baseline=result.section,
             )
-            session.doc.adopt_imported(result.section)
         except (MasterImportError, SourcePatchError, ValueError) as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
@@ -1167,14 +1166,40 @@ def create_app() -> FastAPI:
         # Adopt the recovery artifact only after validation, parsing, and the
         # document-store transaction all succeed. Failed imports leave the
         # active session untouched.
-        session.source_docx_bytes = source_bytes
-        session.source_docx_filename = safe_filename
-        session.source_docx_map = result.source_map
-        session.source_patch_context = source_context
-        session.import_report = report
-        # The import counts as session-changing work: invalidate any turn
-        # that was streaming against the empty document.
-        session.generation += 1
+        try:
+            with session.session_state_guard():
+                if session.turn_active:
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": "A model turn is streaming — import "
+                            "again once it finishes.",
+                        },
+                        status_code=409,
+                    )
+                if not session.doc.doc.is_empty():
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": "The document changed while the master "
+                            "was being inspected. Start a new session before "
+                            "importing it.",
+                        },
+                        status_code=409,
+                    )
+                session.doc.adopt_imported(result.section)
+                session.source_docx_bytes = source_bytes
+                session.source_docx_filename = safe_filename
+                session.source_docx_map = result.source_map
+                session.source_patch_context = source_context
+                session.import_report = report
+                # The import counts as session-changing work: invalidate any
+                # turn that was streaming against the empty document.
+                session.invalidate_model_turn()
+        except ValueError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400
+            )
         from .tracing import capture as _trace_capture
 
         _trace_capture.import_event(
@@ -1238,7 +1263,13 @@ def create_app() -> FastAPI:
     @app.post("/api/research/start")
     def research_start() -> JSONResponse:
         session = sessions.get_session()
-        profile = ProjectProfile.from_dict(session.doc.doc.project_profile)
+        with session.session_state_guard():
+            run_generation = session.generation
+            runner = session.research
+            module = session.module
+            discipline = session.discipline
+            profile_data = dict(session.doc.doc.project_profile)
+        profile = ProjectProfile.from_dict(profile_data)
         if profile is None or not profile.is_complete():
             return JSONResponse(
                 {
@@ -1249,7 +1280,7 @@ def create_app() -> FastAPI:
                 },
                 status_code=400,
             )
-        if not session.module.research_dimensions:
+        if not module.research_dimensions:
             return JSONResponse(
                 {
                     "ok": False,
@@ -1261,9 +1292,7 @@ def create_app() -> FastAPI:
         # Batch 10 backstop: an open-catalog session researches "{discipline}
         # work" — without a stated discipline the templates have nothing to
         # research. The session-start picker normally guarantees this.
-        if getattr(session.module, "open_catalog", False) and not (
-            session.discipline
-        ):
+        if getattr(module, "open_catalog", False) and not discipline:
             return JSONResponse(
                 {
                     "ok": False,
@@ -1278,15 +1307,29 @@ def create_app() -> FastAPI:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
-        started = session.research.start(
-            module=session.module,
-            project_profile=profile,
-            client=client,
-            model=settings.RESEARCH_MODEL,
-            max_tokens=settings.RESEARCH_MAX_TOKENS,
-            discipline=session.discipline,
-            usage_sink=lambda u: session.usage.add("research", u),
-        )
+        with session.session_state_guard():
+            if (
+                session.generation != run_generation
+                or session.research is not runner
+            ):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "The session changed while research was starting.",
+                    },
+                    status_code=409,
+                )
+            started = runner.start(
+                module=module,
+                project_profile=profile,
+                client=client,
+                model=settings.RESEARCH_MODEL,
+                max_tokens=settings.RESEARCH_MAX_TOKENS,
+                discipline=discipline,
+                usage_sink=lambda u, g=run_generation: (
+                    session.add_usage_if_current(g, "research", u)
+                ),
+            )
         if not started:
             return JSONResponse(
                 {"ok": False, "error": "Research is already running."},
@@ -1334,7 +1377,18 @@ def create_app() -> FastAPI:
     @app.post("/api/audit/start")
     def audit_start() -> JSONResponse:
         session = sessions.get_session()
-        profile = session.research.profile_result
+        # Capture every session-derived input beside its owning runner and
+        # generation. A reset after this point abandons the old runner and its
+        # generation-bound usage sink instead of feeding old inputs into the
+        # fresh session.
+        with session.session_state_guard():
+            profile = session.research.profile_result
+            snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
+            module = session.module
+            discipline = session.discipline
+            version_index = session.doc.index
+            run_generation = session.generation
+            runner = session.audit
         if profile is None:
             return JSONResponse(
                 {
@@ -1345,7 +1399,7 @@ def create_app() -> FastAPI:
                 },
                 status_code=400,
             )
-        if session.doc.doc.is_empty():
+        if snapshot.is_empty():
             return JSONResponse(
                 {"ok": False, "error": "There is no draft to audit yet."},
                 status_code=400,
@@ -1356,22 +1410,28 @@ def create_app() -> FastAPI:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
-        # Audit a snapshot: a turn streaming mid-audit must not mutate the
-        # tree under the call.
-        from .spec_doc.model import SpecSection
-
-        snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
-        started = session.audit.start(
-            section=snapshot,
-            profile=profile,
-            module=session.module,
-            client=client,
-            model=settings.RESEARCH_MODEL,
-            max_tokens=settings.RESEARCH_MAX_TOKENS,
-            version_index=session.doc.index,
-            discipline=session.discipline,
-            usage_sink=lambda u: session.usage.add("audit", u),
-        )
+        with session.session_state_guard():
+            if session.generation != run_generation or session.audit is not runner:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "The session changed while the audit was starting.",
+                    },
+                    status_code=409,
+                )
+            started = runner.start(
+                section=snapshot,
+                profile=profile,
+                module=module,
+                client=client,
+                model=settings.RESEARCH_MODEL,
+                max_tokens=settings.RESEARCH_MAX_TOKENS,
+                version_index=version_index,
+                discipline=discipline,
+                usage_sink=lambda u, g=run_generation: (
+                    session.add_usage_if_current(g, "audit", u)
+                ),
+            )
         if not started:
             return JSONResponse(
                 {"ok": False, "error": "An audit is already running."},
@@ -1395,54 +1455,60 @@ def create_app() -> FastAPI:
         streaming (a QC of a mid-turn tree would review a moving target).
         """
         session = sessions.get_session()
-        if session.turn_active:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "A model turn is streaming — let it finish before "
-                    "running Final QC.",
-                },
-                status_code=409,
+        with session.session_state_guard():
+            if session.turn_active:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "A model turn is streaming — let it finish "
+                        "before running Final QC.",
+                    },
+                    status_code=409,
+                )
+            if session.doc.doc.is_empty():
+                return JSONResponse(
+                    {"ok": False, "error": "There is no draft to review yet."},
+                    status_code=400,
+                )
+            try:
+                client = get_client()
+            except MissingApiKeyError as exc:
+                return JSONResponse(
+                    {"ok": False, "error": str(exc)}, status_code=400
+                )
+            # Snapshot the tree while model-turn claiming is excluded; capture
+            # dismiss memory before start() clears the previous result.
+            snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
+            source_guard = _qc_source_guard(session)
+            remembered = session.qc.remembered_dismissed()
+            run_generation = session.generation
+            started = session.qc.start(
+                section=snapshot,
+                profile=session.research.profile_result,
+                module=session.module,
+                client=client,
+                model=settings.QC_MODEL,
+                max_tokens=settings.QC_MAX_TOKENS,
+                version_index=session.doc.index,
+                discipline=session.discipline,
+                source_guard=source_guard,
+                remembered_dismissed=remembered,
+                usage_sink=lambda u, g=run_generation: session.add_usage_if_current(
+                    g, "qc", u
+                ),
             )
-        if session.doc.doc.is_empty():
-            return JSONResponse(
-                {"ok": False, "error": "There is no draft to review yet."},
-                status_code=400,
-            )
-        try:
-            client = get_client()
-        except MissingApiKeyError as exc:
-            return JSONResponse(
-                {"ok": False, "error": str(exc)}, status_code=400
-            )
-        # Snapshot the tree so a turn streaming mid-QC can't mutate it under
-        # the call; capture dismiss memory before start() clears the result.
-        snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
-        source_guard = _qc_source_guard(session)
-        remembered = session.qc.remembered_dismissed()
-        started = session.qc.start(
-            section=snapshot,
-            profile=session.research.profile_result,
-            module=session.module,
-            client=client,
-            model=settings.QC_MODEL,
-            max_tokens=settings.QC_MAX_TOKENS,
-            version_index=session.doc.index,
-            discipline=session.discipline,
-            source_guard=source_guard,
-            remembered_dismissed=remembered,
-            usage_sink=lambda u: session.usage.add("qc", u),
-        )
-        if not started:
-            return JSONResponse(
-                {"ok": False, "error": "Final QC is already running."},
-                status_code=409,
-            )
-        return JSONResponse({"ok": True})
+            if not started:
+                return JSONResponse(
+                    {"ok": False, "error": "Final QC is already running."},
+                    status_code=409,
+                )
+            return JSONResponse({"ok": True})
 
     @app.get("/api/qc/status")
     def qc_status() -> dict:
-        return sessions.get_session().qc.snapshot()
+        session = sessions.get_session()
+        with session.session_state_guard():
+            return _qc_snapshot_payload(session)
 
     @app.post("/api/qc/stop")
     def qc_stop() -> JSONResponse:
@@ -1476,30 +1542,50 @@ def create_app() -> FastAPI:
     def qc_apply(body: QcApplyRequest) -> JSONResponse:
         """Apply accepted findings' validated ops as ONE undoable version.
 
-        Re-dry-runs each finding against the CURRENT doc first (it may have
-        moved since QC ran): a finding whose ops no longer apply is reported
-        ``stale`` and skipped, never partially applied. Rejected (409) while a
-        model turn streams.
+        The result must match the current version index and deterministic
+        document fingerprint; stale results are rejected before any dry-run.
+        Each selected finding is then re-dry-run and the accepted set commits
+        atomically. Rejected (409) while a model turn streams.
         """
         session = sessions.get_session()
-        if session.turn_active:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "A model turn is streaming — apply the fix once it "
-                    "finishes.",
-                },
-                status_code=409,
-            )
-        result = session.qc.result
-        if result is None:
-            return JSONResponse(
-                {"ok": False, "error": "No QC result to apply from."},
-                status_code=409,
-            )
-        # Validate each finding onto an ACCUMULATING working copy so the
-        # combined batch is guaranteed to replay cleanly on the live tree.
-        working = SpecSection.from_dict(session.doc.doc.to_dict())
+        with session.session_state_guard():
+            if session.turn_active:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "A model turn is streaming — apply the fix "
+                        "once it finishes.",
+                    },
+                    status_code=409,
+                )
+            result = session.qc.result
+            if result is None:
+                return JSONResponse(
+                    {"ok": False, "error": "No QC result to apply from."},
+                    status_code=409,
+                )
+            if not result.matches_version(session.doc.index, session.doc.doc):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Final QC is stale; re-run it before applying fixes."
+                        ),
+                    },
+                    status_code=409,
+                )
+            result_record = result.to_dict()
+            # Capture a coherent working copy and identity. The validated ops
+            # are committed only if this exact session/version/result still
+            # owns the live state below.
+            generation = session.generation
+            version_index = session.doc.index
+            # Keep the immutable history record itself as the version token.
+            # An index alone is ABA-prone: undo followed by a new branch can
+            # return to the same numeric index with different content while
+            # the potentially expensive QC dry-run below is in progress.
+            version_record = session.doc.versions[version_index]
+            working = SpecSection.from_dict(version_record)
         combined_ops: list[dict[str, Any]] = []
         applied_ids: list[str] = []
         outcomes: dict[str, str] = {}
@@ -1524,27 +1610,34 @@ def create_app() -> FastAPI:
             outcomes[finding_id] = "applied"
 
         if combined_ops:
-            generation = session.generation
-            session.doc.begin_turn()
-            try:
-                session.apply_doc_edits(combined_ops)
-            except SpecEditError as exc:  # pragma: no cover — validated above
-                session.doc.rollback_turn()
-                return JSONResponse(
-                    {"ok": False, "error": str(exc)}, status_code=400
-                )
-            if session.generation != generation:
-                session.doc.rollback_turn()
-                return JSONResponse(
-                    {
-                        "ok": False,
-                        "error": "The session changed while applying; nothing "
-                        "was applied.",
-                    },
-                    status_code=409,
-                )
-            session.doc.commit_turn()
-            session.qc.mark_applied(applied_ids)
+            with session.session_state_guard():
+                if (
+                    session.turn_active
+                    or session.generation != generation
+                    or session.doc.index != version_index
+                    or session.doc.versions[version_index] is not version_record
+                    or session.doc.doc.to_dict() != version_record
+                    or session.qc.result is not result
+                    or result.to_dict() != result_record
+                ):
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": "The session changed while validating "
+                            "the QC fixes; nothing was applied.",
+                        },
+                        status_code=409,
+                    )
+                session.doc.begin_turn()
+                try:
+                    session.apply_doc_edits(combined_ops)
+                except SpecEditError as exc:  # pragma: no cover — validated above
+                    session.doc.rollback_turn()
+                    return JSONResponse(
+                        {"ok": False, "error": str(exc)}, status_code=400
+                    )
+                session.doc.commit_turn()
+                session.qc.mark_applied(applied_ids)
 
         return JSONResponse(
             {"ok": True, "outcomes": outcomes, **_doc_payload(session)}
@@ -1553,25 +1646,29 @@ def create_app() -> FastAPI:
     @app.post("/api/qc/dismiss")
     def qc_dismiss(body: QcDismissRequest) -> JSONResponse:
         session = sessions.get_session()
-        if not session.qc.dismiss(body.finding_id, body.reason or ""):
-            return JSONResponse(
-                {"ok": False, "error": "No such finding to dismiss."},
-                status_code=404,
-            )
-        return JSONResponse({"ok": True, "qc": session.qc.snapshot()})
+        with session.session_state_guard():
+            if not session.qc.dismiss(body.finding_id, body.reason or ""):
+                return JSONResponse(
+                    {"ok": False, "error": "No such finding to dismiss."},
+                    status_code=404,
+                )
+            return JSONResponse({"ok": True, "qc": _qc_snapshot_payload(session)})
 
     @app.get("/api/qc/export")
     def qc_export() -> Response:
         session = sessions.get_session()
-        if session.qc.result is None:
-            return JSONResponse(
-                {"ok": False, "error": "Run Final QC first."}, status_code=409
-            )
-        stale = session.qc.result.version_index != session.doc.index
-        payload = build_qc_memo(
-            session.qc.result.to_dict(), session.doc.doc, stale=stale
-        )
-        stem = session.doc.doc.number.replace(" ", "") or "draft"
+        with session.session_state_guard():
+            result = session.qc.result
+            if result is None:
+                return JSONResponse(
+                    {"ok": False, "error": "Run Final QC first."},
+                    status_code=409,
+                )
+            section = SpecSection.from_dict(session.doc.doc.to_dict())
+            stale = not result.matches_version(session.doc.index, section)
+            result_payload = result.to_dict()
+            stem = section.number.replace(" ", "") or "draft"
+        payload = build_qc_memo(result_payload, section, stale=stale)
         return Response(
             content=payload,
             media_type=(
@@ -1586,7 +1683,9 @@ def create_app() -> FastAPI:
     @app.get("/api/readiness")
     def readiness() -> dict:
         """The "can it go out the door" checklist — pure functions of state."""
-        return _readiness_payload(sessions.get_session())
+        session = sessions.get_session()
+        with session.session_state_guard():
+            return _readiness_payload(session)
 
     # --- Usage & cost meter (WI4) -------------------------------------------
 
@@ -1623,11 +1722,12 @@ def create_app() -> FastAPI:
         """Legacy format-1 JSON load (source-less compatibility endpoint)."""
         session = sessions.get_session()
         try:
-            load_project(body, session)
-            # JSON has no binary source member. Never retain or claim a map
-            # that cannot be checked against exact source bytes.
-            session.source_docx_map = None
-            session.source_patch_context = None
+            with session.session_state_guard():
+                load_project(body, session)
+                # JSON has no binary source member. Never retain or claim a
+                # map that cannot be checked against exact source bytes.
+                session.source_docx_map = None
+                session.source_patch_context = None
         except ValueError as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
@@ -1753,15 +1853,16 @@ def create_app() -> FastAPI:
         # The same semantic payload was fully staged above, so these writes
         # are the commit point. A rejected package never reaches them.
         session = sessions.get_session()
-        load_project(parsed.project, session)
-        session.source_docx_bytes = parsed.source_docx_bytes
-        session.source_docx_filename = (
-            parsed.source_docx_filename if parsed.source_docx_bytes else ""
-        )
-        session.source_docx_map = typed_map
-        session.source_patch_context = (
-            source_context if parsed.source_docx_bytes is not None else None
-        )
+        with session.session_state_guard():
+            load_project(parsed.project, session)
+            session.source_docx_bytes = parsed.source_docx_bytes
+            session.source_docx_filename = (
+                parsed.source_docx_filename if parsed.source_docx_bytes else ""
+            )
+            session.source_docx_map = typed_map
+            session.source_patch_context = (
+                source_context if parsed.source_docx_bytes is not None else None
+            )
         return JSONResponse(
             {
                 "ok": True,

@@ -232,7 +232,7 @@ def test_package_inspection_rejects_each_missing_required_part(required_member):
         inspect_docx_package(payload)
 
 
-def test_package_inspection_rejects_traversal_duplicate_and_encryption():
+def test_package_inspection_rejects_traversal_and_encryption_but_retains_duplicate():
     original = _master_docx_bytes()
     with zipfile.ZipFile(io.BytesIO(original)) as package:
         document_xml = package.read("word/document.xml")
@@ -243,9 +243,13 @@ def test_package_inspection_rejects_traversal_duplicate_and_encryption():
     )
     encrypted = _mark_zip_members_encrypted(original)
 
-    for unsafe in (traversal, duplicate, encrypted):
+    for unsafe in (traversal, encrypted):
         with pytest.raises(SourcePackageError):
             inspect_docx_package(unsafe)
+
+    # A readable duplicate is bounded and retained for exact recovery.  The
+    # strict raw-ZIP index separately narrows it to pass-through-only.
+    assert inspect_docx_package(duplicate).member_count > 0
 
 
 @pytest.mark.parametrize(

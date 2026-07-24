@@ -620,7 +620,7 @@ def test_qc_start_gates_and_apply_is_one_undo_step(monkeypatch):
     assert "2019" in reverted["parts"][0]["articles"][0]["paragraphs"][0]["text"]
 
 
-def test_qc_apply_reports_stale_when_doc_moved(monkeypatch):
+def test_qc_apply_rejects_result_when_doc_moved(monkeypatch):
     client = _client()
     _seed_doc(client, monkeypatch)
     monkeypatch.setattr(
@@ -635,8 +635,9 @@ def test_qc_apply_reports_stale_when_doc_moved(monkeypatch):
         "/api/doc/edit",
         json={"ops": [{"action": "delete", "target_id": "pt1.a1.p1"}]},
     )
-    resp = client.post("/api/qc/apply", json={"finding_ids": [fid]}).json()
-    assert resp["outcomes"][fid] == "stale"
+    response = client.post("/api/qc/apply", json={"finding_ids": [fid]})
+    assert response.status_code == 409
+    assert "stale" in response.json()["error"].lower()
 
 
 def test_qc_dismiss_and_project_round_trip_and_staleness(monkeypatch):

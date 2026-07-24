@@ -758,6 +758,7 @@ export default function App() {
       const payload = await editDoc(ops);
       applyDocPayload(payload);
       refreshReadiness();
+      refreshQc();
       // Flash the blocks the user just touched (deletes have nothing to flash).
       const touched = ops
         .filter((op) => op.action !== "delete")
@@ -783,6 +784,7 @@ export default function App() {
     if (payload) {
       applyDocPayload(payload);
       refreshReadiness();
+      refreshQc();
     }
   };
 
@@ -791,6 +793,7 @@ export default function App() {
     if (payload) {
       applyDocPayload(payload);
       refreshReadiness();
+      refreshQc();
     }
   };
 

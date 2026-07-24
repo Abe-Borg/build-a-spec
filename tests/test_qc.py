@@ -1,5 +1,5 @@
 """Final QC (Batch 4): lens fan-out, adversarial verification, ops
-validation, and the accept/dismiss/readiness/memo API — hermetic against
+validation, and the accept/dismiss/readiness/report API — hermetic against
 the sequenced fake client."""
 from __future__ import annotations
 
@@ -13,7 +13,13 @@ from fastapi.testclient import TestClient
 
 from backend import sessions
 from backend.app import create_app
-from backend.qc.engine import QCFanoutError, QCResult, run_final_qc
+from backend.qc.engine import (
+    QCFanoutError,
+    QCResult,
+    qc_version_fingerprint,
+    run_final_qc,
+)
+from backend.qc.runner import QCRunner
 from backend.qc.schema import QC_LENSES
 from backend.spec_doc.model import DocumentStore
 from backend.spec_modules import DEFAULT_MODULE
@@ -267,14 +273,16 @@ def test_dead_verifier_counts_as_refuted():
             )
         ],
     )
-    # low → 2-panel. One uphold, one dead verifier → 1 of 2 → refuted.
+    # low → 2-panel. One uphold plus one dead verifier is infrastructure-
+    # inconclusive, not evidence that substantively refutes the candidate.
     scripts["Risky assumed block"] = [
         qc_verdict_response(True),
         RuntimeError("verifier died"),
     ]
     result = _run(SequencedFakeClient(scripts), store)
     assert result.findings == []
-    assert len(result.refuted) == 1
+    assert result.refuted == []
+    assert len(result.inconclusive) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +512,15 @@ def test_dismiss_memory_survives_a_rerun():
     scripts["Persistent finding"] = [qc_verdict_response(True) for _ in range(2)]
     first = _run(SequencedFakeClient(scripts), store)
     fid = first.findings[0].finding_id
+    runner = QCRunner()
+    runner.restore(first)
+    assert runner.dismiss(
+        fid,
+        "Reviewed with the engineer of record.",
+        document_version=store.index,
+        document_fingerprint=qc_version_fingerprint(store.doc),
+    )
+    remembered = runner.remembered_dismissals()
 
     scripts2 = _qc_scripts(
         code_compliance=[
@@ -515,7 +532,7 @@ def test_dismiss_memory_survives_a_rerun():
     )
     scripts2["Persistent finding"] = [qc_verdict_response(True) for _ in range(2)]
     second = _run(
-        SequencedFakeClient(scripts2), store, remembered={fid}
+        SequencedFakeClient(scripts2), store, remembered=remembered
     )
     assert second.findings[0].finding_id == fid
     assert second.findings[0].status == "dismissed"
@@ -727,7 +744,7 @@ def test_qc_apply_and_start_reject_while_turn_active(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Readiness + memo export + usage
+# Readiness + report export + usage
 # ---------------------------------------------------------------------------
 
 
@@ -745,7 +762,7 @@ def test_readiness_reflects_state(monkeypatch):
     assert checks["profile_complete"]["advisory"] is True
 
 
-def test_qc_memo_export_smoke(monkeypatch):
+def test_qc_report_export_smoke(monkeypatch):
     client = _client()
     _seed_doc(client, monkeypatch)
     # No QC yet → 409.
@@ -759,7 +776,7 @@ def test_qc_memo_export_smoke(monkeypatch):
     resp = client.get("/api/qc/export")
     assert resp.status_code == 200
     texts = [p.text for p in Document(io.BytesIO(resp.content)).paragraphs]
-    assert any("FINAL QC REVIEW MEMORANDUM" in t for t in texts)
+    assert any("FINAL QC AUDIT REPORT" in t for t in texts)
     assert any("Edition fix" in t for t in texts)
 
 

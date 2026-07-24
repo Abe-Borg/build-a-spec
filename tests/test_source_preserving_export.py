@@ -17,11 +17,13 @@ from backend import sessions
 from backend.app import create_app
 from backend.qc.engine import (
     QCFinding,
-    QCLensStatus,
-    QCResult,
-    qc_version_fingerprint,
 )
-from tests.fakes import FakeClient, text_turn, tool_turn
+from tests.fakes import (
+    audit_grade_qc_result,
+    FakeClient,
+    text_turn,
+    tool_turn,
+)
 from tests.docx_render_harness import (
     DocxRenderHarness,
     RENDERER_SKIP_REASON,
@@ -339,8 +341,10 @@ def test_qc_apply_path_uses_the_same_source_guard(tmp_path):
     _import_master(client, source)
     before = client.get("/api/doc").json()["doc"]
     finding_id = "qc-source-guard"
-    result = QCResult(
-        findings=[
+    session = sessions.get_session()
+    result = audit_grade_qc_result(
+        session,
+        [
             QCFinding(
                 finding_id=finding_id,
                 lens_id="constructability",
@@ -355,20 +359,8 @@ def test_qc_apply_path_uses_the_same_source_guard(tmp_path):
                 ops_valid=True,
             )
         ],
-        lens_statuses=[
-            QCLensStatus(
-                lens_id="constructability",
-                title="Constructability",
-                status="completed",
-                finding_count=1,
-            )
-        ],
-        version_index=sessions.get_session().doc.index,
-        version_fingerprint=qc_version_fingerprint(
-            sessions.get_session().doc.doc
-        ),
     )
-    sessions.get_session().qc.restore(result)
+    session.qc.restore(result)
 
     rejected = client.post(
         "/api/qc/apply", json={"finding_ids": [finding_id]}
@@ -376,7 +368,7 @@ def test_qc_apply_path_uses_the_same_source_guard(tmp_path):
     assert rejected.status_code == 400
     assert "source-backed edit rejected" in rejected.json()["error"].lower()
     assert client.get("/api/doc").json()["doc"] == before
-    assert sessions.get_session().qc.result.finding(finding_id).status == "open"
+    assert session.qc.result.finding(finding_id).status == "open"
     assert _source_export(client).content == source
 
 

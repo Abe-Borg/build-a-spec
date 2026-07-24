@@ -389,7 +389,7 @@ export async function startQc(): Promise<void> {
   }
 }
 
-/** Stop the running Final QC pass. Discards whatever it found so far. */
+/** Request a stop; the worker may continue briefly to preserve paid partial activity. */
 export async function stopQc(): Promise<void> {
   const resp = await fetch("/api/qc/stop", { method: "POST" });
   if (!resp.ok && resp.status !== 409) {
@@ -428,12 +428,12 @@ export async function applyQc(findingIds: string[]): Promise<QcApplyResult> {
 /** Dismiss a finding (remembered across re-runs). */
 export async function dismissQc(
   findingId: string,
-  reason?: string,
+  reason: string,
 ): Promise<QcSnapshot> {
   const resp = await fetch("/api/qc/dismiss", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ finding_id: findingId, reason: reason ?? null }),
+    body: JSON.stringify({ finding_id: findingId, reason }),
   });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {

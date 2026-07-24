@@ -11,9 +11,9 @@ from backend import sessions
 from backend.app import create_app
 from backend.llm import conversation
 from backend.llm.conversation import SessionState, stream_user_turn
-from backend.qc.engine import QCFinding, QCResult, qc_version_fingerprint
+from backend.qc.engine import QCFinding
 from backend.spec_doc.model import apply_edits as apply_spec_edits
-from tests.fakes import FakeClient, text_turn, tool_turn
+from tests.fakes import audit_grade_qc_result, FakeClient, text_turn, tool_turn
 
 
 _SEED_EDITS = {
@@ -482,8 +482,9 @@ def test_qc_apply_rejects_same_index_replacement_branch_aba(monkeypatch):
     reviewed_record = session.doc.versions[session.doc.index]
     finding_id = "qc-index-aba"
     session.qc.restore(
-        QCResult(
-            findings=[
+        audit_grade_qc_result(
+            session,
+            [
                 QCFinding(
                     finding_id=finding_id,
                     lens_id="constructability",
@@ -503,8 +504,6 @@ def test_qc_apply_rejects_same_index_replacement_branch_aba(monkeypatch):
                     ops_valid=True,
                 )
             ],
-            version_index=session.doc.index,
-            version_fingerprint=qc_version_fingerprint(session.doc.doc),
         )
     )
 
@@ -560,8 +559,9 @@ def test_completed_qc_is_stale_after_same_index_branch_replacement():
     session = sessions.get_session()
     finding_id = "qc-completed-index-aba"
     session.qc.restore(
-        QCResult(
-            findings=[
+        audit_grade_qc_result(
+            session,
+            [
                 QCFinding(
                     finding_id=finding_id,
                     lens_id="constructability",
@@ -581,8 +581,6 @@ def test_completed_qc_is_stale_after_same_index_branch_replacement():
                     ops_valid=True,
                 )
             ],
-            version_index=session.doc.index,
-            version_fingerprint=qc_version_fingerprint(session.doc.doc),
         )
     )
     current_check = next(

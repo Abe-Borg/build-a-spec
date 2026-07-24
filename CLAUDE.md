@@ -42,7 +42,8 @@ backend/
                            /api/draft/full (Batch 3 directive); doc/undo/redo/edit,
                            docx export, project save/load endpoints; Batch 4 adds
                            /api/qc/start|status|stream|apply|dismiss|export +
-                           /api/readiness (audit endpoints kept, deprecated); Batch 5
+                           /api/qc/export.json + /api/readiness (audit endpoints
+                           kept, deprecated); Batch 5
                            adds GET /api/doc/diff + ?redline=master|version on
                            /api/export/docx (+ baseline_index in _doc_payload);
                            Batch 6 adds POST /api/onboarding/demo (guided-tour
@@ -109,13 +110,17 @@ backend/
   qc/schema.py             [Batch 4] QCLens defs (5 lenses) + submit_qc_findings /
                            submit_qc_verdict strict tools (strict conventions from
                            research/schema; Fable added to _STRICT_CAPABLE_MODELS) +
-                           findings/verdict normalization + median-severity math
+                           observable reviewed-check/finding/verdict normalization
+                           (no hidden reasoning) + median-severity math
   qc/engine.py             [Batch 4, pattern: research/engine.py] run_final_qc:
                            lens fan-out (ThreadPool cap 4, pause_turn loop, 2×
                            search ceiling, PDF elision, retry policy, grounding) →
                            adversarial verification panel (tie→refuters) → ops
-                           dry-run validation → QCResult (content-addressed
-                           findings, dismiss memory); Batch 7 threads should_stop
+                           dry-run validation → audit-grade QCResult (versioned
+                           run/input identity; complete lens, source, verifier-seat,
+                           ops/disposition, usage/cost and limitation evidence;
+                           content-addressed findings + dismiss memory); Batch 7
+                           threads should_stop
                            into _run_lens/_verify_one (same cooperative pattern
                            as research/engine.py); Batch 10 threads discipline into
                            the lens user message (<project_discipline>, only when
@@ -136,7 +141,7 @@ backend/
   api_key_store.py         [PORT: Spec Critic src/core/api_key_store.py + save_api_key]
                            Batch 2 adds key_status (masked, never leaks) + delete_api_key
   usage_ledger.py          [Batch 2] session-scoped billed-usage ledger (interview/
-                           research/audit), thread-safe, cost estimate from
+                           research/audit/qc), thread-safe, cost estimate from
                            settings.PRICING; not persisted (per-session meter)
   figures.py               [Batch 8] chat-authored figures: Figure + FigureStore
                            (per-turn atomic like DocumentStore — begin/commit/
@@ -208,7 +213,8 @@ backend/
                            publisher-grammar discovery, then the same four
                            citation shapes/suppression as the stale rule)
   spec_doc/docx_export.py  python-docx rendering + assumptions/open-items schedules;
-                           Batch 4 adds build_qc_memo (standalone QC memo) + a QC
+                           Batch 4 adds build_qc_memo (full standalone Final QC
+                           Word report) + a QC
                            closing that supersedes the audit closing in build_docx;
                            Batch 5 adds the redline body writer (build_docx(...,
                            redline=SectionDiff): w:ins/w:del/w:delText + para-mark
@@ -274,6 +280,9 @@ frontend/src/
   lib/reviewQueue.ts       [Batch 3] pure buildQueue(doc, mode) — the review
                            queue as a document-order walk (port of iter_paragraphs);
                            reviewCounts (outstanding imported/assumed)
+  lib/qcReport.ts          pure audit-report helpers: coverage/limitations,
+                           safe source links, formatting for identity, lens/seat
+                           telemetry, operations/dispositions, usage and cost
   lib/tour.ts              [Batch 6] the guided tour as pure data: STARTER_PROMPTS,
                            DISCIPLINES, DEMO_PROFILE, 22 steps in 4 chunks,
                            anchorSelector (data-tour / el-* / doc-snapshot resolvers)
@@ -315,9 +324,11 @@ frontend/src/
                            per-dimension telemetry + full item detail; the same
                            profile already rides the chat model's per-turn context)
                            / QCDrawer (Batch 4: readiness
-                           checklist, lens progress, accept/dismiss fix queue,
-                           hold-to-apply-criticals, refuted appendix; Batch 7 adds a
+                           checklist, lens progress, compact accept/dismiss fix
+                           queue, hold-to-apply-criticals; Batch 7 adds a
                            Stop button while running, gated by ConfirmDialog) /
+                           QCReportModal (complete read-only Final QC audit report,
+                           no content truncation, DOCX + JSON downloads) /
                            SpecDocument (paper rendering + inline manual-edit
                            affordances; Batch 5 read-only diff render via `diff` prop)
                            / Header (spend ticker; Batch 6 Tour button) / ApiKeyBanner /
@@ -362,7 +373,17 @@ tests/
   test_qc.py               [Batch 4] lens fan-out, adversarial verification (tie
                            kills, median severity), ops validation, apply (one undo
                            step + stale skip), dismiss memory, runner lifecycle,
-                           readiness, memo export, Fable-priced usage
+                           coverage-blocked readiness, full Word + JSON reports,
+                           audit-record persistence, Fable-priced usage
+  test_qc_audit_report.py  [Batch 4] audit-grade identity/evidence/coverage,
+                           full Word + JSON fidelity, failed-latest vs retained
+                           success, persistence hardening, dispositions and cost
+  test_qc_runner_audit_integrity.py
+                           [Batch 4] coherent runner snapshots, terminal partial
+                           records, restoration and dismissal audit invariants
+  test_qc_manifest_integrity.py
+                           [Batch 4] source bytes/map/baseline/patch-context
+                           constituent invalidation for full-input identity
   test_diffing.py          [Batch 5] diff_sections units: identical/insert/delete/
                            text-edit (byte-exact run invariants) / nested / article
                            title / move-not-marked / status-only / section header /
@@ -468,18 +489,31 @@ streams or QC runs — research is NOT required), `GET /api/qc/status`
 follow + `stream_end`; event types `qc_started`, `lens_complete`,
 `lens_failed`, `verify_progress` {done,total}, `qc_complete`, `qc_failed`),
 `POST /api/qc/apply` (`{finding_ids}` → one undoable version; per-finding
-`applied`/`stale`/`no_ops`/`unknown` outcomes; 409 while a turn streams),
-`POST /api/qc/dismiss` (`{finding_id, reason?}` → remembered by
-content-addressed id across re-runs), and `GET /api/qc/export` (the
-standalone QC memo `.docx`). `GET /api/readiness` is a deterministic
-checklist (no model call): `{checks: [{id, ok, detail, advisory}], ready}`
-— `ready` = all non-advisory checks ok (no open items, no unreviewed
-imported/assumed, lint clean, research complete, QC current with no open
-criticals; `profile_complete` is advisory).
+`applied`/`stale`/`no_ops`/`not_open`/`unknown` outcomes; duplicate ids are
+deduplicated; 409 while a turn or QC run is active),
+`POST /api/qc/dismiss` (`{finding_id, reason}` with a required nonblank audit
+rationale → remembered by
+content-addressed id across re-runs; 409 while QC runs),
+`GET /api/qc/export` (the full standalone Final QC Word report, including the
+selected report/latest-attempt state and any distinct retained-success
+identity), and `GET /api/qc/export.json` (the lossless
+machine-readable audit envelope: canonical `report` plus a generated
+`current_state` containing current document/input identity, runner and latest
+attempt state, full-input staleness, and readiness; a different retained last
+success is included separately). `GET /api/readiness` is a
+deterministic checklist (no model call):
+`{checks: [{id, ok, detail, advisory}], ready}` — `ready` = all non-advisory
+checks ok (no open items, no unreviewed imported/assumed, lint clean, research
+complete, `qc_current` exact-input/latest-attempt identity,
+`qc_audit_complete` current schema/protocol plus complete lens/verifier
+coverage and no open criticals; `profile_complete` is advisory). Any
+failed/missing lens or verifier seat makes the QC result partial and blocks
+readiness even when the available verifier votes reach a majority.
 
 `POST /api/research/stop` / `POST /api/qc/stop` (Batch 7) stop a running
-fan-out — unlike the chat stop, this one IS lossy (the drawer's confirm
-dialog says so): `ResearchRunner.stop()` / `QCRunner.stop()` resolve the run
+fan-out. Research stop remains lossy; QC preserves the latest attempt's
+identity/error and any terminal partial record made available by the engine.
+`ResearchRunner.stop()` / `QCRunner.stop()` resolve the run
 as `failed` immediately via a lock-guarded compare-and-set
 (`_try_resolve`), so the UI never waits on the background thread, and set a
 per-run `cancel_event` the engine's `should_stop` callback polls before each
@@ -821,8 +855,9 @@ Interview policy (decided 2026-07-21, conversation w/ Abraham):
   in `Header`): key source/replace-with-test-then-save/remove (env keys
   read-only), usage table, about + forced update check.
 - **Cost meter (WI4).** `UsageLedger` on `SessionState` accumulates billed
-  usage by category (interview/research/audit), thread-safe (research and
-  audit fold run totals in from daemon threads — they meter BEFORE the
+  usage by category (interview/research/audit, with `qc` added in Batch 4),
+  thread-safe (research, audit, and QC fold run totals in from daemon threads
+  — they meter BEFORE the
   status flip so a poller that sees `complete` finds the ledger updated).
   Reset/load clear it; not persisted. `settings.PRICING` (`VERIFY`-checked
   2026-07: Sonnet 5 at post-intro $3/$15, cache read 0.1×, cache write
@@ -901,6 +936,121 @@ QC requests state `thinking: {type: adaptive}` + `output_config.effort`
 would 400; the engine never sends it). Pricing was already in the Batch 2
 table ($10/$50; VERIFIED against the claude-api reference 2026-07).
 
+### Audit-grade Final QC report extension (implemented 2026-07-24)
+
+This work promotes Final QC from a memo-plus-fix-queue feature to two explicit
+surfaces backed by one canonical result: `QCReportModal` is the complete,
+read-only audit report, while `QCDrawer` remains the compact action queue.
+`GET /api/qc/export` produces the human sign-off `.docx`;
+`GET /api/qc/export.json` produces the lossless machine-readable audit envelope
+(`report` + generated `current_state`).
+Do not add report-only facts in the frontend or exporter: all three projections
+must come from serialized `QCResult` data, with a current/stale comparison
+against the live session.
+
+The reporting boundary is observable work product, never hidden reasoning.
+Allowed evidence includes input/config identity, lens-submitted concise
+`reviewed_checks`, server-tool queries and retrieval results, grounding
+verdicts, model-submitted findings/verdict notes, errors, usage, and
+deterministic validation/disposition events. Prompts and UI copy must not ask
+for, promise, serialize, or display private chain-of-thought.
+
+- **Versioned run/input envelope.** `QCResult` carries
+  `schema_version=2`, `protocol_version="final-qc/2"`, a UUID `run_id`,
+  `execution_status` (`complete|partial|failed|cancelled`),
+  start/finish/duration, reviewed
+  `version_index` + `version_fingerprint`, and a deterministic
+  `input_manifest` + `input_fingerprint`. The manifest covers material review
+  inputs (document, research/profile presence, module/discipline and standards
+  context, source guard, model and request configuration) so staleness is not
+  reduced to a mutable history index. It also records model, effort,
+  max-tokens, request/response counts, run usage, and estimated cost.
+- **Complete lens records.** `QCLensStatus` persists the lens id/title/brief,
+  status (`completed|failed|cancelled`) and error, summary,
+  finding/grounding counts,
+  `reviewed_checks` (`passed|finding|not_applicable`, notes, element ids and
+  per-check `source_checks`), exact server-tool `search_queries`,
+  `retrieved_sources`, per-lens `usage_totals`, and request/response counts. A
+  completed lens with zero findings therefore still shows its tested coverage;
+  a failed lens is not dropped. Accepted final-attempt queries/sources are the
+  only records eligible for grounding; `attempted_search_queries` and
+  `attempted_sources` separately preserve every billed attempt (including
+  failed fetches and abandoned retries) for operational traceability.
+- **Per-source grounding.** `QCSourceRecord` carries the requested URL,
+  normalized URL, title, retrieval method(s), accepted/rejected/not-cited
+  state, and grounding reason. Findings and reviewed checks retain their own
+  source records. Grounding means the cited URL matches retrieved evidence; it
+  does not claim that a URL proves every word of the model's rationale.
+- **Every expected verifier seat.** `QCVerdict` records stable
+  `reviewer_index`, `status` (`completed|failed|cancelled`), error, uphold,
+  revised severity, concise note, `search_queries`, `retrieved_sources`,
+  `usage_totals`, and request/response counts. Seats are allocated in the
+  result even when calls fail. A failed/cancelled/missing seat makes the whole
+  candidate `inconclusive`; it is neither actionable nor substantively
+  refuted, and the report becomes partial. Majority adjudication is performed
+  only for a fully completed panel.
+- **Full finding adjudication.** `QCFinding` retains `original_severity` and
+  final `severity`, all seat records, persisted `verification_panel_size`,
+  `verification_threshold`, `verification_outcome`, model-supplied element id,
+  saved `reviewed_ref`/`reviewed_text`, `element_resolved`, rationale,
+  cited/accepted URLs and per-source checks. Unresolved anchors are preserved
+  and disclosed as limitations rather than treated as verified locations.
+  Refuted candidates keep the same detail in the report's full appendix.
+  Infrastructure-inconclusive candidates occupy a separate collection and
+  appendix with their failed/cancelled seat evidence; only verified survivors
+  enter the compact action queue.
+- **Full fix and disposition record.** Exact `proposed_ops`, snapshot dry-run
+  validity/error, status and dismiss reason persist. `QCDispositionEvent`
+  records apply/dismiss/stale/no-op outcomes with time, reason, and document
+  identity where available. Revalidation against the current document remains
+  authoritative; audit display of raw proposed ops never makes invalid or
+  stale operations executable. Refuted operations are preserved but do not
+  enter survivor-only validation; report surfaces label them "not evaluated,"
+  not "invalid."
+- **Usage, cost, and limitations.** The report renders aggregate and per-call
+  token/cache/search usage plus API/model counts and estimated cost from the
+  configured pricing table (`estimated_cost_usd`). `cost_basis` persists the
+  rate-model/fallback decision, per-token rates, web-tool rates, thinking-token
+  treatment, and pricing authority used when the estimate was calculated.
+  Limitations are derived
+  from recorded facts: missing research, legacy report schema, partial
+  lens/seat coverage, failed or cancelled calls, retrieval/grounding gaps,
+  unresolved element anchors, source-preservation limits, and stale input
+  identity. An estimate is labeled as such, not represented as an invoice.
+- **Coverage is a hard readiness condition.** `QCResult.coverage_complete()`,
+  `verification_complete()`, and `is_complete()` keep coverage separate from
+  finding votes. Readiness requires a complete, current result in addition to
+  the existing document checks and no open criticals. One failed/missing lens
+  or verifier seat blocks readiness, including when the remaining seats reach
+  a majority or refute every candidate.
+- **Latest attempt is distinct from last success.** `QCRunner` owns each worker
+  with an unforgeable run token so a stopped daemon cannot emit into or resolve
+  a replacement run. It retains a structured latest-attempt record (including
+  partial/all-failed paid activity) separately from the last successful
+  `result`; failed/cancelled/running latest attempts block readiness, persist in
+  `.baspec`, and appear in exports without deleting the earlier success.
+  Terminal status/result/event publication is one runner-lock transaction;
+  readiness, persistence, and exports consume `audit_record_snapshot()` once
+  rather than sampling mutable fields separately. SSE is bound to its starting
+  run token and closes `superseded` before exposing a replacement run's events.
+  Restore accepts only an audit-complete report into the actionable retained
+  slot; partial/failed/cancelled reports remain latest-attempt evidence. Apply
+  and dismiss independently enforce that invariant and stay blocked during
+  worker settling.
+- **Surfaces and safety.** `QCReportModal` shows run/document identity,
+  readiness, methodology/input manifest, every lens/check/query/source/error,
+  metrics, complete surviving and refuted records, raw proposed-op JSON,
+  dispositions, usage/operations, and limitations without content truncation.
+  It downloads both report formats, pinning each request to the run id shown in
+  the snapshot so a changed backend selection returns a conflict. Non-HTTP or
+  unsafe source strings render
+  as inert text, never clickable links. `QCDrawer` stays compact and optimized
+  for apply/dismiss work. The Word artifact stamps Build-a-Spec title/subject,
+  author, last-modifier, and current creation/modification metadata. Its
+  masthead and sign-off treat a failed/cancelled/partial/running latest attempt
+  or blocked `qc_current`/`qc_audit_complete` check as controlling; any retained
+  prior success is labeled historical and cannot produce a complete sign-off.
+
 - **`backend/qc/` is a structural clone of `research/`** (the port plan is
   complete; QC is native Build-a-Spec, not a Spec Critic port). `engine.py`
   lifts the streaming shape from `research/engine._run_dimension`
@@ -918,23 +1068,37 @@ table ($10/$50; VERIFIED against the claude-api reference 2026-07).
   brief; only `code_compliance` gets web tools (the big search allowance) —
   the rest reason from the document. One lens failing never cancels the
   others; all five failing raises `QCFanoutError` (run fails clean).
-  Findings are grounded against retrieved URLs (`validate_cited_sources`,
-  same trust model as research). (2) Every finding faces a panel of
+  Findings retain per-URL grounding decisions against retrieved sources
+  (`validate_cited_sources`, same trust model as research). Completed lenses
+  retain their summary, observable reviewed checks, queries/retrievals, and
+  usage; failed lenses retain their error. (2) Every finding faces a panel of
   independent refuters (`QC_VERIFIERS_STANDARD` 2 for medium/low,
-  `QC_VERIFIERS_CRITICAL` 3 for critical/high); survives iff `upholds >=
-  size//2 + 1` (**a tie goes to the refuters**; a dead verifier counts as a
-  non-uphold — default-refuted). Verifications for all findings flatten into
+  `QC_VERIFIERS_CRITICAL` 3 for critical/high); a fully completed panel
+  survives iff `upholds >= size//2 + 1` (**a tie goes to the refuters**).
+  A dead/cancelled/missing verifier makes the candidate infrastructure-
+  inconclusive and the run partial; it is never treated as substantive
+  refutation evidence. Verifications for all findings flatten into
   ONE thread pool (per-`(finding, verifier)` task); `verify_progress`
   {done,total} fires as each finding's panel resolves. Surviving severity =
-  `median_severity([original, *upheld revisions])`. Refuted findings are
-  retained under `QCResult.refuted` (transparency, never shown as issues).
+  `median_severity([original, *upheld revisions])`; both original and final
+  severity persist. Refuted findings are retained under `QCResult.refuted`;
+  incomplete panels under `QCResult.inconclusive`, both with full
+  evidence/seat/fix detail (transparency, excluded from the compact issue
+  queue).
   (3) Deterministic ops validation: each surviving finding's `proposed_ops`
   is dry-run via `apply_edits(deepcopy(snapshot))` (copy per finding — they
   never see each other's effects); invalid → `ops_valid=False` +
   `ops_invalid_reason`, kept advisory, never trusted raw.
-- **Content-addressed findings + dismiss memory.** `finding_id = qc- +
-  sha256((lens, element_id, title, issue))[:12]`. The runner captures the
-  prior result's `dismissed_ids` before `start()` clears it and threads them
+- **Content-addressed findings + dismiss memory.** `finding_id` is `qc-` plus
+  the first 12 characters of a canonical-JSON SHA-256 over every material fact
+  a carried disposition relies on: lens and element ids; normalized title,
+  issue, rationale and submitted severity; normalized cited URLs; exact
+  proposed operations; reviewed text; final severity; verification outcome;
+  the reviewer-index-sorted panel projection (`reviewer_index`, `status`,
+  `upholds`, `revised_severity`); normalized/sorted grounding decisions
+  (`source`, `accepted`, `reason`); and normalized accepted sources. The
+  runner captures the prior result's `dismissed_ids` before `start()` clears
+  it and threads them
   as `remembered_dismissed`; a re-generated finding whose id matches
   auto-marks `dismissed`. Dismiss decisions survive re-runs and the project
   file.
@@ -947,8 +1111,9 @@ table ($10/$50; VERIFIED against the claude-api reference 2026-07).
   whole accept-set); a generation-race after begin rolls back.
 - **QC audits a SNAPSHOT** (`SpecSection.from_dict(doc.to_dict())` at start)
   so a streaming turn can't mutate the tree under the call — the audit's
-  anti-mutation pattern. `version_index` stamps the reviewed version →
-  staleness marker in the drawer / memo / readiness gate.
+  anti-mutation pattern. History index, document fingerprint, and the broader
+  input-manifest fingerprint stamp the reviewed input → staleness markers in
+  the drawer, full report, both downloads, and readiness gate.
 - **Migration — the compliance audit is deprecated.** The `code_compliance`
   + `completeness` lenses supersede it. The audit BUTTON is retired from the
   UI (`ResearchDrawer` is research-only; the frontend no longer calls
@@ -958,7 +1123,8 @@ table ($10/$50; VERIFIED against the claude-api reference 2026-07).
 - **Persistence + serialization.** `QCResult.to_dict`/`from_dict` round-trip
   the full result; `spec_doc/project.py` gains a `qc_result` field restored
   via `QCRunner.restore` (same as the audit's). `usage_ledger` gains a `qc`
-  category priced on `QC_MODEL`.
+  category priced on `QC_MODEL`; report-level and per-lens/seat usage stay in
+  the canonical QC record together with the labeled cost estimate.
 - **Tracing.** A `qc` span (`KIND_QC`) with mirrored `qc_progress` events;
   hooks never raise (`capture.qc_start/qc_event/qc_end`).
 - **Deliberate non-ports.** Server-side refusal `fallbacks` (recommended for

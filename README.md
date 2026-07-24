@@ -198,12 +198,15 @@ This is the **1.0 release milestone**. Cut the first Windows build per
 
 ## Shipped in v0.9.0 (Batch 4: Final QC on Fable 5) and still current
 
-**One button, a fleet of Fable 5 reviewers, an accept/dismiss fix queue, and
-a signed-off QC memo.** The one place a model other than Sonnet 5 appears:
-a user-triggered, spare-no-expense last quality-control pass before a section
-goes out the door. The output isn't a report to read — it's a set of
-*verified* findings, each with a ready-to-apply fix, in an accept/dismiss
-queue.
+**One button, a fleet of Fable 5 reviewers, a full audit-grade report, and a
+compact accept/dismiss action queue.** The one place a model other than Sonnet
+5 appears: a user-triggered, spare-no-expense last quality-control pass before
+a section goes out the door. The report is a first-class product surface, not
+an incidental memo: it shows what was reviewed, which evidence was retrieved,
+how every candidate finding was challenged, what the run could not establish,
+and exactly what happened to every proposed fix. The compact queue remains
+beside it for fast remediation without making the user mine the report for
+actions.
 
 - **Five lenses, in parallel, on the strongest model.** "Send to Final QC"
   fans out five independent Fable 5 reviews of the whole section: **code
@@ -216,33 +219,107 @@ queue.
   **provenance hygiene** (risky `assumed` blocks, surviving TBD/imported,
   provisions citing `[UNVERIFIED]` items). One lens failing never cancels the
   others; all five failing fails clean.
-- **Adversarial verification — no plausible-but-wrong noise reaches you.**
-  Every candidate finding faces a panel of independent Fable 5 refuters
-  prompted to *refute* it (2 for medium/low, 3 for critical/high). A tie goes
-  to the refuters — only real, actionable defects survive; refuted findings
-  are kept in a collapsed appendix for transparency, never shown as issues.
+- **The report identifies the exact run and exact input.** It records report
+  schema/protocol versions, a unique run id, reviewed document version and
+  content/input fingerprints, input manifest, model, effective QC
+  configuration, start/finish timestamps and duration, research-profile
+  availability, and current/stale status. A later document edit cannot be
+  mistaken for the version that was reviewed.
+- **Each lens leaves an observable work record, including failures.** The
+  report keeps the lens title, completion status or error, summary, explicit
+  coverage checks and outcomes, search queries, retrieved sources, finding and
+  grounding counts, and billed usage. Checks that passed or were not
+  applicable remain visible; a zero-finding lens is therefore not a blank
+  assertion that everything was fine. These are concise records of work and
+  results, not private model chain-of-thought.
+  Accepted final-attempt queries/retrievals are kept separate from all billed
+  attempts, so failed fetches and evidence from an abandoned retry remain
+  visible for cost/accountability without being allowed to ground a finding.
+- **Adversarial verification is seat-by-seat and auditable.** Every candidate
+  finding faces a panel of independent Fable 5 refuters prompted to *refute*
+  it (2 for medium/low, 3 for critical/high). The report preserves every
+  expected verifier seat, including its success, verdict, severity revision,
+  note, usage, or failure. A tie on a fully completed panel goes to the
+  refuters. A failed or cancelled seat remains visible and makes the candidate
+  infrastructure-inconclusive; missing infrastructure is never presented as
+  substantive evidence against a finding.
   This is the "as many agents as necessary" clause: total calls = 5 lenses +
   Σ panel sizes, with no cap on findings count (the runaway guards are
   per-call).
+- **Sources are traceable one by one.** For every check and finding, the report
+  distinguishes URLs the lens cited from URLs the run actually retrieved and
+  accepted after grounding validation. It preserves source-level grounding
+  results and the query/retrieval trail, so a reviewer can reopen the evidence
+  and see which claims remain ungrounded rather than relying on a single
+  aggregate "grounded" badge.
+- **Every finding carries its whole adjudication history.** Surviving findings
+  show their lens and element anchor (or explicit section-level scope), the
+  saved reference/text from the reviewed snapshot and whether the model's
+  anchor actually resolved, issue, rationale, original severity, every
+  verifier record, and final computed severity. An unresolved anchor remains
+  visible as a limitation rather than being presented as a verified location.
+  Refuted candidates receive the same treatment in a detailed appendix: the
+  original case, source grounding, complete panel record, and the reason they
+  did not reach the action queue. A separate infrastructure-inconclusive
+  appendix retains candidates with failed or cancelled seats without calling
+  them refuted. No candidate is deleted from the audit trail.
 - **Accept the fix, or dismiss it — and dismiss decisions survive re-runs.**
-  Each surviving finding whose fix is a clean mechanical edit carries
-  `apply_spec_edits` ops, dry-run-validated against a document snapshot.
-  **Apply fix** edits the document exactly as previewed, in **one undo step**
-  (re-validated against the *current* doc first — a fix whose target moved is
-  reported `stale` and skipped, never partially applied). **Dismiss** (with an
-  optional reason) is remembered by content-addressed id, so a re-run that
-  regenerates the same finding auto-marks it dismissed. An "Apply all
+  The report preserves the full proposed `apply_spec_edits` operation payload,
+  snapshot dry-run result and validation error, if any. **Apply fix** edits the
+  document exactly as previewed, in **one undo step** after validation against
+  the current document; a moved target is recorded `stale` and skipped, never
+  partially applied. **Dismiss** requires and preserves a reviewer rationale
+  (blank/whitespace reasons are rejected) and is
+  remembered by content-addressed id, so a re-run that regenerates the same
+  finding auto-marks it dismissed. Open, applied, dismissed, advisory,
+  invalid, no-op, and stale outcomes remain in the report. An "Apply all
   criticals" press-and-hold handles the urgent set at once.
 - **Issue readiness — the "can it go out the door" screenshot moment.** A
   deterministic checklist (no model call) at the top of the QC drawer goes
   green exactly when: no open items, no unreviewed imported/assumed blocks,
-  lint clean, research complete, and QC current with no open criticals.
-- **The QC memo a reviewer signs off on.** A standalone `.docx` export:
-  project/section header, model + date + document version (with a staleness
-  note when the draft has moved on), findings by severity with element refs /
-  rationale / sources / disposition, and the refuted appendix. The main spec
-  export's closing section now shows the QC summary when one exists (falling
-  back to the compliance audit otherwise).
+  lint clean, research complete, QC current, and the audit contract complete
+  with no open criticals. Freshness and audit sufficiency are shown as
+  separate checks: users can tell whether a failure means stale inputs, a
+  failed/latest attempt, legacy data, incomplete lens/verifier coverage, or an
+  unresolved critical. Any lens failure or missing or failed verifier seat
+  makes the report explicitly partial and blocks readiness; a majority verdict
+  never converts partial execution into a full sign-off.
+- **Read it in-app or file the same record.** **View full report** opens the
+  complete report in the app while the drawer keeps a compact, severity-sorted
+  action queue. Word (`.docx`) and machine-readable JSON downloads carry the
+  run/input identity, configuration, per-lens work, verifier seats,
+  source-grounding detail, findings and fix operations, refuted appendix,
+  usage, estimated cost, limitations, coverage status, and staleness warning.
+  Download controls pin the run id displayed in the snapshot; if another run
+  changes the backend selection before the click completes, the server rejects
+  the request instead of silently returning a different report.
+  The Word document is the human sign-off artifact, ending with a reviewer
+  checklist and signature page; JSON is the lossless audit and
+  downstream-integration artifact. The software records the review but does
+  not itself approve or seal the specification. The main spec export includes
+  the QC closing only when the export-time `qc_current` and
+  `qc_audit_complete` readiness checks both pass; otherwise it omits that
+  closing and falls back to the compliance audit when one exists.
+- **A failed rerun never erases either side of the history.** The latest
+  attempt has its own run id, status, timing, error and report/activity record;
+  the last successful report is retained separately. Readiness turns red when
+  the latest attempt is running, cancelled, partial, or failed. Both identities
+  travel through project save/load and exports, preventing an older success
+  from being presented as the latest paid review. Runner completion, project
+  persistence, readiness, and both downloads consume one lock-coherent audit
+  snapshot, so report bytes cannot mix old results with new attempt metadata.
+  Partial/failed records restore only as read-only attempt evidence, never as
+  the actionable retained queue; apply and dismiss independently recheck a
+  current audit-complete result and remain locked while a stopped worker is
+  still settling billable output.
+- **Spend and limits are part of the evidence.** The report breaks out billed
+  token/cache/search usage, API/model response counts, and estimated cost for
+  the run, with attribution to lenses and verifier seats where captured. It
+  saves the exact pricing-rate snapshot and fallback basis used for the
+  estimate, and also states material
+  limitations — such as absent research context, failed calls, incomplete web
+  retrieval or grounding, and document staleness — so the user can tell the
+  difference between "no defect found" and "not fully checked."
 - **No dead air — a QC run takes minutes and shows it.** The drawer streams
   lens-by-lens status and a live "Verifying findings… (7/12)" counter over the
   same SSE machinery the research phase uses; the header spend ticker moves as
@@ -424,15 +501,19 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/export/docx (+ ?redline=master|version),
                          /api/import/master + /api/import/original,
                          /api/research/start|status|stream,
-                         /api/qc/start|status|stream|apply|dismiss|export,
+                         /api/qc/start|status|stream|apply|dismiss|export +
+                         /api/qc/export.json,
                          /api/readiness, /api/audit/* (deprecated),
                          /api/update/check|install,
                          /api/trace/viewer, /api/project/save + load/load-file
   qc/
     schema.py            QC lens definitions + submit_qc_findings/verdict strict
-                         tools + finding/verdict normalization
+                         tools + observable reviewed-check and finding/verdict
+                         normalization (never chain-of-thought)
     engine.py            run_final_qc: lens fan-out -> adversarial verification
-                         -> ops validation -> QCResult  [pattern: research/engine.py]
+                         -> ops validation -> audit-grade QCResult with versioned
+                         input/run identity, evidence and seat telemetry
+                                                        [pattern: research/engine.py]
     runner.py            session-bound QC lifecycle: daemon thread, event log,
                          SSE follow                       [pattern: research/runner.py]
   settings.py            models (interview + research), ports, env overrides,
@@ -503,7 +584,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          status changes) powering the redline export + compare view
     docx_export.py       fresh normalized .docx rendering +
                          assumptions/imported/open-items
-                         schedules + QC/compliance closing + the QC memo +
+                         schedules + QC/compliance closing + the full Final QC
+                         Word report +
                          the tracked-changes (redline) body writer
     project.py           semantic project payload + legacy JSON compatibility
     project_package.py   bounded, hashed native .baspec container carrying the
@@ -525,6 +607,8 @@ frontend/                Vite + React + TypeScript + Tailwind v4
                          update calls
   src/lib/reviewQueue.ts buildQueue(doc, mode): the review queue as a pure
                          document-order walk (port of iter_paragraphs)
+  src/lib/qcReport.ts    pure Final QC report formatting, coverage, source-link,
+                         operation, usage, and limitations helpers
   src/lib/tour.ts        the guided tour as pure data: starter prompts,
                          disciplines, 22 steps in 4 chunks, anchor resolvers
   src/lib/useOnboarding.ts  the tour's phase machine (runId zombie guard,
@@ -540,8 +624,10 @@ frontend/                Vite + React + TypeScript + Tailwind v4
                          ReviewDrawer (keyboard review walk),
                          IssuesDrawer (lint + standards strip),
                          ResearchDrawer (profile + research),
-                         QCDrawer (readiness checklist, lens progress, accept/dismiss
-                         fix queue), SpecDocument (SectionFormat rendering + ◆ chips
+                         QCDrawer (readiness checklist, lens progress, compact
+                         accept/dismiss fix queue), QCReportModal (complete
+                         audit-grade in-app report + Word/JSON downloads),
+                         SpecDocument (SectionFormat rendering + ◆ chips
                          + the read-only compare/diff render)
 packaging/windows/       build-a-spec.spec (PyInstaller), installer.iss (Inno),
                          app_entry.py (--version/--selfcheck), make_manifest.py,
@@ -677,6 +763,6 @@ Ported so far (adapted, same design): `api_key_store.py`, `app_paths.py`, the he
 3. **Phase 3 — Spec modules.** Registry-validated `SpecModule` (interview playbook, section catalog, code basis, pinned standards editions — NFPA 13-2025 default, jurisdiction-adopted editions override via `set_standard_edition` with the adoption basis recorded, never silently); live deterministic linting of the draft with an issues drawer and standards strip. *(Shipped in v0.3.0.)*
 4. **Phase 4 — Research agents.** Port of the requirements-research fan-out: grounded web-search agents for governing codes, AHJ, client/insurer, and site environment, launched on demand from a conversationally-recorded project profile; accepted-vs-cited citation grounding; results in a panel drawer, spliced into drafting context, linked to provisions via `source_item_id`, and feeding jurisdiction edition overrides. *(Shipped in v0.4.0.)*
 5. **Phase 5 — Ship.** Master-spec import with gap-and-adapt (imported provenance status, Accept-All tracked-changes handling), the compliance audit of the draft against the researched profile (coverage matrix + export closing section), Windows packaging/installer with the SHA-256-verified auto-updater, and session tracing with the bundled viewer. *(Shipped in v0.5.0.)*
-6. **Post-ship batches (v0.6.0 → v1.0.0).** "Sonnet unleashed" no-limits context architecture (v0.6.0); streaming UX + manual editing + settings + cost meter (v0.7.0); full-section draft + keyboard review queue (v0.8.0); Final QC on Fable 5 with adversarial verification + accept/dismiss fix queue (v0.9.0); and the **1.0 release** — tracked-changes redline export over the normalized imported baseline or any semantic version, plus the in-app version-compare view, one diff engine behind both (v1.0.0).
+6. **Post-ship batches (v0.6.0 → v1.0.0).** "Sonnet unleashed" no-limits context architecture (v0.6.0); streaming UX + manual editing + settings + cost meter (v0.7.0); full-section draft + keyboard review queue (v0.8.0); Final QC on Fable 5 with adversarial verification, a full audit-grade in-app/Word/JSON report, and a compact accept/dismiss action queue (v0.9.0); and the **1.0 release** — tracked-changes redline export over the normalized imported baseline or any semantic version, plus the in-app version-compare view, one diff engine behind both (v1.0.0).
 
 Build-a-Spec is an AI-assisted drafting aid, not an authority. Its output is advisory and is not a substitute for review by a licensed design professional.

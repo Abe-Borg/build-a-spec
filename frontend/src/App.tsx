@@ -241,7 +241,7 @@ export default function App() {
     }
   }, [followQc, addNote]);
 
-  /** Stop the running Final QC pass (confirmed in the drawer — loses progress). */
+  /** Stop Final QC while its worker preserves any completed paid activity. */
   const onStopQc = useCallback(async () => {
     try {
       await stopQc();
@@ -255,8 +255,8 @@ export default function App() {
 
   // A page load during a running QC (or a resumed project) picks it back up.
   useEffect(() => {
-    if (qc?.status === "running") void followQc();
-  }, [qc?.status, followQc]);
+    if (qc?.status === "running" || qc?.settling) void followQc();
+  }, [qc?.status, qc?.settling, followQc]);
 
   // The native shell calls this when the user tries to close the window and
   // the session holds unsaved work; show the save-before-leaving dialog. The
@@ -275,6 +275,27 @@ export default function App() {
         applyDocPayload(payload);
         refreshQc();
         refreshReadiness();
+        const outcomeLabels: Record<string, string> = {
+          applied: "applied",
+          already_applied: "not changed (already applied)",
+          no_ops: "not changed (no validated mechanical fix)",
+          stale: "not changed (operation no longer applied cleanly)",
+          unknown: "not changed (finding not found)",
+        };
+        const lines = Object.entries(payload.outcomes).map(
+          ([findingId, outcome]) =>
+            `- ${findingId}: ${outcomeLabels[outcome] ?? outcome}`,
+        );
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: newId(),
+            role: "assistant",
+            text:
+              "Final QC application result (also recorded in the QC report):\n" +
+              (lines.length ? lines.join("\n") : "- No findings were selected."),
+          },
+        ]);
       } catch (e) {
         refreshDoc();
         setMessages((prev) => [
@@ -296,13 +317,25 @@ export default function App() {
   );
 
   const onDismissQc = useCallback(
-    async (findingId: string, reason?: string) => {
+    async (findingId: string, reason: string) => {
       try {
         const snapshot = await dismissQc(findingId, reason);
         setQc(snapshot);
         refreshReadiness();
-      } catch {
+      } catch (e) {
         refreshQc();
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: newId(),
+            role: "assistant",
+            text: `Could not record the QC dismissal: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+            error: true,
+          },
+        ]);
+        throw e;
       }
     },
     [refreshQc, refreshReadiness],

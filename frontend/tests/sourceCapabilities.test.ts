@@ -13,6 +13,10 @@ import {
   sourceCapabilityTitle,
   sourceEditOpDecision,
 } from "../src/lib/sourceCapabilities.ts";
+import {
+  SOURCE_CAPABILITY_GUIDANCE,
+  SOURCE_OUTPUT_GUIDANCE,
+} from "../src/lib/sourceOutputGuidance.ts";
 import type {
   SourceCapabilitiesState,
   SourceOperationCapability,
@@ -22,6 +26,34 @@ const headingMessage =
   "Source-preserving mode does not patch section, part, or article headings.";
 const complexMessage =
   "This paragraph contains a field and cannot be patched safely.";
+
+test("source-output help distinguishes all five preservation concepts", () => {
+  assert.deepEqual(
+    SOURCE_OUTPUT_GUIDANCE.map((item) => item.id),
+    [
+      "exact-original",
+      "source-preserving",
+      "normalized",
+      "normalized-redline",
+      "pass-through-only",
+    ],
+  );
+  const descriptions = SOURCE_OUTPUT_GUIDANCE.map(
+    (item) => item.description,
+  ).join(" ");
+  assert.match(descriptions, /byte for byte/i);
+  assert.match(descriptions, /server-approved body changes/i);
+  assert.match(descriptions, /newly generated DOCX/i);
+  assert.match(descriptions, /not a redline of the uploaded Word package/i);
+  assert.match(descriptions, /source-body mutations are disabled/i);
+});
+
+test("source-output help makes server capabilities authoritative and fail closed", () => {
+  assert.match(SOURCE_CAPABILITY_GUIDANCE, /server decides/i);
+  assert.match(SOURCE_CAPABILITY_GUIDANCE, /exact reason/i);
+  assert.match(SOURCE_CAPABILITY_GUIDANCE, /fails closed/i);
+  assert.match(SOURCE_CAPABILITY_GUIDANCE, /recomputed after edits, QC fixes, undo, and redo/i);
+});
 
 const headingDenied: SourceOperationCapability = {
   allowed: false,

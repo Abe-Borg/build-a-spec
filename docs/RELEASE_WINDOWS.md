@@ -62,6 +62,39 @@ installer runs, and the new version launches. The download is
 SHA-256-verified against the manifest before it ever executes; a tampered
 or truncated download refuses to run.
 
+## DOCX fidelity release gate
+
+Before tagging, verify the contract in
+[DOCX_FIDELITY.md](DOCX_FIDELITY.md), not only that a DOCX opens. At minimum:
+
+```powershell
+& '.\venv\Scripts\python.exe' -m pytest -q -p no:cacheprovider
+Push-Location .\frontend
+npm test
+npm run build
+Pop-Location
+& '.\venv\Scripts\python.exe' -m tests.docx_corpus .\artifacts\docx-corpus
+```
+
+The backend gate includes exact-original/no-op, source patch locality,
+pass-through-only blockers, project compatibility, adversarial OPC/ZIP/XML,
+limits/history, and concurrency. The frontend test covers source capability and
+output-guidance behavior. Corpus materialization verifies fixture checksums and
+provenance metadata.
+
+Run the optional renderer-backed suite with Microsoft Word and/or LibreOffice
+when those applications are available; follow
+[DOCX_RENDERER_WINDOWS.md](DOCX_RENDERER_WINDOWS.md). Record the exact
+renderer/version used. A package-only pass must not be reported as a Word or
+LibreOffice visual pass.
+
+Review any new external fixture using the privacy process in
+[DOCX_FIDELITY_CORPUS.md](DOCX_FIDELITY_CORPUS.md). Do not attach local trace
+directories to a release: traces can contain document text and prompts. Any
+optional aggregate fidelity diagnostic may contain coarse blocker codes/counts
+only, never document text, raw OOXML, source bytes, filenames, paths, or free
+form exception details.
+
 ---
 
 ## Manual release (on a Windows machine)

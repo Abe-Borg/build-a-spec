@@ -1,8 +1,9 @@
 # DOCX fidelity corpus
 
-Chunk 7 adds a provenance-explicit, sanitized DOCX corpus for structural,
-source-preservation, and producer-interoperability testing. The committed
-source of truth is:
+This is the provenance-explicit, sanitized DOCX corpus for structural,
+source-preservation, and producer-interoperability testing. It supplies
+evidence for the contracts in [DOCX_FIDELITY.md](DOCX_FIDELITY.md); it does not
+expand the supported edit surface by itself. The committed source of truth is:
 
 - `tests/fixtures/docx_corpus/manifest.json` — provenance, category coverage,
   checksums, and expected source-preservation behavior.
@@ -97,6 +98,30 @@ All cases must:
 7. contain no local usernames, workspace paths, client data, or proprietary
    template content.
 
+## Adversarial complements
+
+The manifest corpus emphasizes provenance, representative package shapes, and
+repeatable renderer evidence. Smaller generated fixtures exercise malformed or
+near-limit boundaries without checking hostile binaries into the repository:
+
+- `tests/test_chunk8_opc_adversarial.py`: malformed relationship targets,
+  duplicate declarations/IDs, mixed-case MIME types, strict namespaces,
+  foreign revision-like names, conflict revisions, and external relationships;
+- `tests/test_chunk8_raw_zip_paths.py`: overlap, duplicate central-directory
+  names, normalized aliases, encoded traversal/separators, and exact retained
+  no-op behavior;
+- `tests/test_chunk8_lexical_adversarial.py`: comments/PIs, direct body data,
+  encodings, entities, and long text nodes;
+- `tests/test_chunk8_limits_history.py`: exact upload/member/package limits and
+  long retained histories; and
+- `tests/test_chunk8_stress_concurrency.py`: model/QC/manual/history/reset race
+  barriers and atomicity.
+
+These generated cases follow the same result taxonomy as the manifest corpus:
+safe supported mutation, safe exact pass-through-only retention, or atomic
+import rejection. “Import rejected” and “pass-through-only” are intentionally
+different outcomes and must not be conflated.
+
 ## Deliberate gaps
 
 The following evidence is still not available locally and is not implied by
@@ -111,6 +136,11 @@ this corpus:
 New real-producer samples must be separate cases with their actual
 producer/version, production method, modified-part list, privacy review, and
 sanitization procedure recorded; synthetic cases must not be relabeled.
+
+Fixture content and local render traces are not privacy-safe diagnostics. Never
+publish document text, raw OOXML, source packages, paths, or producer-local
+metadata as telemetry. Optional aggregate diagnostics are limited to coarse
+status/blocker counts as defined in [DOCX_FIDELITY.md](DOCX_FIDELITY.md).
 
 ## Safety rule
 

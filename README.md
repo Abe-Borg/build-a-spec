@@ -6,47 +6,48 @@ First curated domain: **Division 21 fire suppression for hyperscale data centers
 
 Build-a-Spec is the drafting-side complement to Spec Critic: **Build-a-Spec writes specs through dialogue; Spec Critic reviews finished specs.** Large parts of this codebase are ports of Spec Critic's domain-neutral machinery (see "Relationship to Spec Critic" below).
 
-## DOCX fidelity boundary (P1 source-preserving editing)
+## DOCX fidelity boundary
 
 > **Important:** Build-a-Spec edits a deliberately narrow semantic view of an
-> imported `.docx`; it is not a general-purpose Word formatting editor.
+> imported `.docx`; it is not a general-purpose Word editor.
 
-- Import retains the exact validated DOCX as an immutable source artifact and
-  separately extracts supported main-body content into Build-a-Spec's
-  SectionFormat tree. Headers, footers, section/page layout, styles, fields,
-  drawings, and other unsupported OOXML never become editable claims.
-- **Export preserved DOCX** clones that source package and applies only edits
-  the preservation gate can prove safe. It accepts unambiguous text replacement
-  in a simple, directly mapped body paragraph. Bounded add/delete/reorder is
-  allowed only in a source run of at least two contiguous, flat, leaf body
-  paragraphs with the same direct `w:numPr` binding. That binding must be
-  wired through the document's internal relationship and content type to a
-  supported automatic-numbering definition, and its `numId` cannot be used
-  outside the island. Existing paragraph/run properties and numbering
-  definitions are retained. An addition is allowed only while a source item
-  survives to anchor the insertion and every source item offers the same
-  unambiguous `pPr`/`rPr` formatting template.
-- Unsafe mutations fail closed. Cross-parent moves, nested or manually labeled
-  structural changes, table-derived blocks, fields, hyperlinks, drawings,
-  content controls, tracked-revision targets, complex multi-run formatting,
-  and ambiguous mappings are refused in source-preserving mode. Signed,
-  protected, revision-bearing, and active-content packages are
-  pass-through-only: exact no-op export is allowed, but mutation is not.
-  Build-a-Spec does not flatten the source as a fallback.
-- A no-op source export—including status/profile/standards-only changes or an
-  undo back to the imported baseline—returns the exact original DOCX bytes.
-- Native `.baspec` project files carry the semantic project and the exact source
-  DOCX together, with manifest hashes and bounded package validation. Legacy
-  JSON projects still load, but are source-less and can only use normalized
-  export.
-- **Export normalized DOCX** remains an explicit separate choice. It generates a
-  new document from the semantic tree and still uses positional display labels,
-  not real Word automatic-numbering bindings. “Redline of extracted provisions”
-  likewise remains a semantic redline, not a source-package redline.
+Import retains the exact validated upload as an immutable source artifact and
+separately extracts supported main-body content into the SectionFormat tree.
+Headers, footers, page/section layout, styles, fields, drawings, content
+controls, and other opaque OOXML are preserved but do not become editable
+claims.
 
-This remains deliberately smaller than a Word editor. Future preservation work
-can expand proven-safe islands without expanding the product into headers,
-footers, or general Word formatting.
+The export choices have different contracts:
+
+| Choice | Contract |
+|---|---|
+| **Exact original** | Returns the retained upload byte-for-byte. A semantic no-op through source mode returns these same bytes. |
+| **Source-preserving patched DOCX** | Starts from the retained package and applies only a final-state patch proven safe. Unchanged payloads and local records remain exact; ZIP metadata changes only for the replacement and required offsets. There is no normalized fallback. |
+| **Normalized DOCX** | Generates a new DOCX from the semantic tree, with genuine Word automatic numbering. It makes no source-package fidelity claim. |
+| **Normalized redline** | Generates Word tracked-change markup between two semantic versions. It is not a redline of the uploaded package and does not author revisions into that source. |
+| **Pass-through-only document** | Keeps exact-original/no-op download available while disabling source-backed body mutation. Metadata and status operations may remain available. |
+
+Simple mapped text and bounded add/delete/reorder inside a proven, isolated,
+directly Word-numbered body island are the only source-backed mutation surface.
+Ambiguity always narrows that surface. Signed, protected, revision-bearing,
+active-content, unsupported-encoding, and unsupported-raw-ZIP-layout packages
+that are safe enough to retain remain pass-through-only; uploads that fail the
+initial package-safety boundary are rejected atomically. Build-a-Spec never
+flattens or normalizes an imported package as an implicit recovery path.
+
+Full Strict OOXML semantic import is a current compatibility limitation. The
+package scanner recognizes Strict relationship and Word namespaces for safety
+checks, but a fully Strict `word/document.xml` main part is rejected atomically
+rather than retained, converted, or partially imported.
+
+Native `.baspec` files carry the semantic project and the exact source DOCX as
+separate, hashed members. Derived lexical byte indexes and patch contexts are
+recomputed after load, not persisted. Legacy JSON projects remain loadable but
+contain no source bytes and therefore offer normalized export only.
+
+See [DOCX fidelity and compatibility](docs/DOCX_FIDELITY.md) for the complete
+export, API payload, blocker-code, persistence, diagnostics, and test-fixture
+contracts.
 
 ## Current Status — v1.5.0 (Batch 10: Generic any-discipline module)
 
@@ -398,7 +399,7 @@ Shipped in v0.3.0 (Phase 3) and still current:
 What worked before (Phase 2) and still does:
 
 - Claude-desktop-style UI: streaming chat pane on the left, the **live specification document** on the right, warm dark theme.
-- The model drafts exclusively through the `apply_spec_edits` tool into a server-owned SectionFormat tree (Section → PART 1/2/3 → articles → nested paragraphs, positional display labels `1.1` / `A.` / `1.` / `a.` / `1)`, stable element ids). Those labels are not Word automatic-numbering definitions. Edits are validated server-side and applied transactionally; each turn's changes stream into the panel as they happen, with changed blocks highlighted.
+- The model drafts exclusively through the `apply_spec_edits` tool into a server-owned SectionFormat tree (Section → PART 1/2/3 → articles → nested paragraphs, positional display labels `1.1` / `A.` / `1.` / `a.` / `1)`, stable element ids). Those semantic labels are not themselves Word numbering definitions; clean normalized export renders them with genuine Word automatic numbering. Edits are validated server-side and applied transactionally; each turn's changes stream into the panel as they happen, with changed blocks highlighted.
 - Per-block provenance: `confirmed` / `assumed` / `needs_input`, badged in the panel. `[TBD: …]` markers and needs-input blocks are tracked as open items — listed under the panel (click to jump) and scheduled in the export.
 - Defaults-first interview: every question carries a recommended answer; "I don't know" applies a defensible NFPA 13-2025 / hyperscale-norm default stamped `assumed`; guide-me mode turns open questions into concrete options with tradeoffs.
 - Version stepper: one snapshot per turn that changed the document; undo/redo from the panel header.
@@ -485,11 +486,17 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          transactional edit ops (incl. set_standard_edition /
                          set_project_profile, source_item_id provenance),
                          per-turn version store (undo/redo), open-item extraction
+    source_package.py    bounded DOCX upload + defensive ZIP/OPC inspection
     importer.py          master-.docx semantic body extraction + immutable
                          source mapping, fidelity accounting + warnings
                                                                   [ported from Spec Critic]
     source_mapping.py    conservative semantic-block ↔ OOXML-body bindings
-    source_patch.py      fail-closed clone-and-patch preserved DOCX export
+                         + canonical source blocker messages
+    xml_lexical.py       encoding-aware lexical index + byte-local XML patches
+    raw_zip.py           strict raw-record clone + document-part replacement
+    source_audit.py      bounded package-preservation comparison
+    source_patch.py      capability probes + shared final-state gate +
+                         fail-closed clone-and-patch preserved DOCX export
     linting.py           deterministic lint: stale editions, placeholders, structure
                                                                   [ported from Spec Critic]
     diffing.py           deterministic version diff (uid join, word-level runs,
@@ -540,6 +547,9 @@ packaging/windows/       build-a-spec.spec (PyInstaller), installer.iss (Inno),
                          app_entry.py (--version/--selfcheck), make_manifest.py,
                          check_release_version.py       [cloned from Spec Critic]
 docs/
+  DOCX_FIDELITY.md         export/API/blocker/compatibility contract
+  DOCX_FIDELITY_CORPUS.md  fixture provenance and evidence boundary
+  DOCX_RENDERER_WINDOWS.md optional Word/LibreOffice visual-test setup
   standards_provenance.md  receipts for every pinned edition
   RELEASE_WINDOWS.md       the release runbook
 tests/                   hermetic pytest suite; fakes.py scripts multi-round
@@ -634,8 +644,8 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_MAX_FETCHES_LENS` | `4` | web_fetch allowance for the other lenses + verifiers. |
 | `BUILD_A_SPEC_PORT` | `8756` | Backend port (127.0.0.1 only). |
 | `BUILD_A_SPEC_DEV` | off | Point the window at the Vite dev server. |
-| `BUILD_A_SPEC_TRACE` | on | Session tracing (JSONL spans/events, local-only). `0` disables. |
-| `BUILD_A_SPEC_TRACE_DEEP` | off | Inline prompts in traces (implies trace on). |
+| `BUILD_A_SPEC_TRACE` | on | Session tracing (JSONL spans/events, local-only). Traces may contain document text; treat them as sensitive project data. `0` disables. |
+| `BUILD_A_SPEC_TRACE_DEEP` | off | Inline prompts in traces (implies trace on and is especially sensitive). |
 | `BUILD_A_SPEC_TRACE_DIR` | state dir | Where trace runs are written. |
 | `BUILD_A_SPEC_UPDATE_URL` | GitHub latest | Override the update-manifest URL. |
 | `BUILD_A_SPEC_DISABLE_UPDATE_CHECK` | off | Truthy disables update checks entirely. |
@@ -645,8 +655,14 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 Hermetic by default — no API key, no network. `tests/conftest.py` injects a placeholder key; API-touching tests monkeypatch a fake streaming client (the same convention as Spec Critic's suite).
 
 ```
-.venv\Scripts\python -m pytest -q
+venv\Scripts\python -m pytest -q
 ```
+
+The DOCX fidelity contract, fixture layers, frontend checks, and release
+verification commands are documented in
+[`docs/DOCX_FIDELITY.md`](docs/DOCX_FIDELITY.md). Renderer-backed visual tests
+must be reported by the renderer/version actually exercised; their absence is
+not equivalent to a visual pass.
 
 ## Relationship to Spec Critic
 

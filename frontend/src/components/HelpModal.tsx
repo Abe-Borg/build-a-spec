@@ -1,6 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Health } from "../types";
 import { checkUpdate } from "../lib/api";
+import {
+  SOURCE_CAPABILITY_GUIDANCE,
+  SOURCE_OUTPUT_GUIDANCE,
+} from "../lib/sourceOutputGuidance";
 
 /** The five info dialogs reachable from the header help nav. */
 export type HelpTopic =
@@ -112,6 +116,35 @@ function Recipe({
   );
 }
 
+/** The five similar-looking, but intentionally distinct, source concepts. */
+function SourceOutputGuide() {
+  return (
+    <div className="rounded-xl border border-edge bg-raised/40 p-4">
+      <h4 className="font-[family-name:var(--font-display)] text-[15px] font-semibold text-ink">
+        Know what each source option means
+      </h4>
+      <p className="mt-1 text-xs leading-relaxed text-ink-faint">
+        Importing creates a semantic working document without changing the
+        retained upload. These labels are different guarantees, not synonyms.
+      </p>
+      <dl className="mt-3 space-y-2.5">
+        {SOURCE_OUTPUT_GUIDANCE.map((item) => (
+          <div key={item.id}>
+            <dt className="text-sm font-medium text-ink">{item.label}</dt>
+            <dd className="mt-0.5 text-xs leading-relaxed text-ink-dim">
+              {item.description}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-3 border-t border-edge pt-3 text-xs leading-relaxed text-ink-dim">
+        <span className="font-medium text-ink">Server capabilities:</span>{" "}
+        {SOURCE_CAPABILITY_GUIDANCE}
+      </p>
+    </div>
+  );
+}
+
 /* --- per-topic content --- */
 
 function HowToUse() {
@@ -185,10 +218,11 @@ function HowToUse() {
           },
           {
             t: "Export",
-            d: "Imported drafts can clone the source DOCX and patch verified simple body text. Bounded add, delete, and reorder work only in proven flat body islands with isolated direct Word list bindings; controls are enabled per operation and disabled controls show the server's exact reason. The retained exact original remains downloadable, while normalized DOCX and extracted-provision redline exports remain separate, explicit choices.",
+            d: "Choose the guarantee you need: exact original, a server-approved source-preserving patch, a newly generated normalized DOCX, or a normalized redline. A pass-through-only source permits exact-original download but no Word-body mutation.",
           },
         ]}
       />
+      <SourceOutputGuide />
       <p className="text-xs text-ink-faint">
         Every phase — research, QC, export — is something you trigger. Nothing
         runs on its own.
@@ -225,7 +259,7 @@ function Workflows() {
           "Source-preserving controls are enabled per block and operation. Verified simple text edits and bounded numbered-island structure can remain available while headings, tables, fields, hyperlinks, content controls, and complex runs stay read-only; hover a disabled action for the server's reason.",
           "Review status, research provenance, standards, and project metadata remain editable when the imported Word body is pass-through-only.",
           "Send to Final QC.",
-          "Choose Export preserved DOCX to clone-and-patch the master, or intentionally choose normalized DOCX / extracted-provision redline for the semantic view.",
+          "Choose the exact-original download for unchanged upload bytes; Export preserved DOCX for a server-approved clone-and-patch; or intentionally choose normalized DOCX / normalized redline for the semantic view.",
         ]}
       />
       <Recipe
@@ -290,11 +324,11 @@ function HowItWorks() {
           },
           {
             t: "Imported DOCX files have a narrow boundary",
-            d: "Build-a-Spec retains an immutable source package and maps supported main-body content into a semantic tree. The server reports permissions per element and operation: safe simple text and proven numbered-island actions stay enabled, while headings, tables, fields, hyperlinks, content controls, and complex paragraphs stay visibly read-only with the exact reason. Status and project metadata remain independent. The final-state validator still checks every submitted edit, and the exact original remains available even when all Word-body mutations are disabled.",
+            d: `Build-a-Spec retains an immutable source package and maps supported main-body content into a semantic tree. ${SOURCE_CAPABILITY_GUIDANCE} The final-state validator checks every submitted edit, and exact-original download remains available even when all Word-body mutations are disabled.`,
           },
           {
             t: "Numbering depends on export mode",
-            d: "Fresh and normalized exports still write calculated labels such as A., 1., a., and 1) as visible text, not real Word list bindings. A source-preserved export retains existing Word numbering definitions and bindings; when a proven numbered island is edited structurally, Word's real list numbering handles the new order.",
+            d: "Fresh and normalized exports generate genuine Word numbering definitions and bindings. A source-preserving patched export retains the source's existing numbering; bounded structural edits are allowed only inside a server-proven numbered island, where Word's own list numbering handles the new order.",
           },
         ]}
       />

@@ -658,6 +658,16 @@ export default function OnboardingOverlay({
           onClose={ob.requestEnd}
         />
         <p className="mt-1 text-sm leading-relaxed text-ink-dim">{step.body}</p>
+        {step.details && (
+          <dl className="mt-3 space-y-1.5 border-t border-edge pt-2.5">
+            {step.details.map((item) => (
+              <div key={item.id} className="text-[11px] leading-snug">
+                <dt className="inline font-medium text-ink">{item.label}: </dt>
+                <dd className="inline text-ink-dim">{item.description}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
         <StepActions
           step={step}
           ob={ob}

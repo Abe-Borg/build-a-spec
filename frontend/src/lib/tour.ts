@@ -9,6 +9,11 @@
  */
 import type { SpecDoc, DocParagraph } from "../types";
 import { buildQueue } from "./reviewQueue";
+import {
+  SOURCE_CAPABILITY_GUIDANCE,
+  SOURCE_OUTPUT_GUIDANCE,
+  type SourceOutputGuidance,
+} from "./sourceOutputGuidance";
 
 /* --- Starter prompts (the empty-chat chips) --- */
 
@@ -120,6 +125,8 @@ export interface TourStep {
   drawer?: "review" | "research" | "qc" | "openItems";
   title: string;
   body: string;
+  /** Optional compact definitions rendered below the main teaching copy. */
+  details?: readonly SourceOutputGuidance[];
   /** Preferred bubble side; the overlay flips it when out of room. */
   placement?: "top" | "bottom" | "left" | "right";
   /** Label for the Continue button (e.g. "Skip for now" on run-it steps). */
@@ -362,8 +369,8 @@ export const TOUR: readonly TourChunk[] = [
           "block lands stamped imported and the interview pivots to " +
           "adapting it. The exact source package is retained, and only " +
           "server-proven operations are enabled through the source-preserving " +
-          "path. Disabled controls show the exact reason, metadata/status can " +
-          "remain editable, and exact-original download stays available. " +
+          "path. " + SOURCE_CAPABILITY_GUIDANCE + " Exact-original download " +
+          "stays available even if the package is pass-through-only. " +
           "Bounded structural edits require a proven flat island with isolated " +
           "direct Word list bindings. It's disabled now " +
           "because this session has content.",
@@ -413,13 +420,10 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Export",
         body:
-          "A clean .docx with the assumptions and open-items schedules — " +
-          "or, after import, a preserved DOCX that clones the master and " +
-          "patches verified simple body text, with bounded add, delete, or " +
-          "reorder only in proven isolated Word-list body islands. The exact " +
-          "original remains a separate recovery download. Normalized " +
-          "DOCX and the " +
-          "extracted-provision redline remain explicit separate choices.",
+          "After an import, the Export area presents distinct guarantees. " +
+          "Choose deliberately; a source-preserving option is never silently " +
+          "substituted with a normalized one.",
+        details: SOURCE_OUTPUT_GUIDANCE,
       },
       {
         id: "save-open",

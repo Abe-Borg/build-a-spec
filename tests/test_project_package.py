@@ -180,10 +180,14 @@ def test_saved_baspec_has_bounded_manifest_and_stores_exact_source(tmp_path):
         assert archive.getinfo(SOURCE_ENTRY).compress_type == zipfile.ZIP_STORED
         assert archive.read(SOURCE_ENTRY) == source
         project_bytes = archive.read(PROJECT_ENTRY)
+        project = json.loads(project_bytes)
 
     manifest = package_manifest(saved.content)
     assert manifest["kind"] == PROJECT_PACKAGE_KIND
     assert manifest["format"] == PROJECT_PACKAGE_FORMAT
+    assert project["format"] == 1
+    assert project["source_map"]["kind"] == "buildaspec-source-map"
+    assert project["source_map"]["format"] == 1
     assert manifest["project"] == {
         "path": PROJECT_ENTRY,
         "size_bytes": len(project_bytes),
@@ -416,6 +420,54 @@ def _assert_rejected_load_is_atomic(client: TestClient, payload: bytes, source: 
     original_after = client.get("/api/import/original")
     assert original_after.status_code == 200
     assert original_after.content == source
+    return rejected
+
+
+def test_project_load_rejects_future_package_format_atomically(tmp_path):
+    client = _client()
+    source = make_fidelity_master(tmp_path)
+    _import_master(client, source)
+    package = client.get("/api/project/save").content
+    parts = _outer_parts(package)
+    manifest = json.loads(parts[MANIFEST_ENTRY])
+    manifest["format"] = PROJECT_PACKAGE_FORMAT + 1
+    tampered = rewrite_zip_members(
+        package,
+        replacements={
+            MANIFEST_ENTRY: json.dumps(
+                manifest, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+        },
+    )
+
+    rejected = _assert_rejected_load_is_atomic(client, tampered, source)
+    assert "unsupported" in rejected.json()["error"].lower()
+
+
+def test_project_load_rejects_future_inner_project_format_atomically(tmp_path):
+    client = _client()
+    source = make_fidelity_master(tmp_path)
+    _import_master(client, source)
+    package = client.get("/api/project/save").content
+    project = json.loads(_outer_parts(package)[PROJECT_ENTRY])
+    project["format"] += 1
+    tampered = _rebuild_consistent_outer(package, project=project)
+
+    rejected = _assert_rejected_load_is_atomic(client, tampered, source)
+    assert "unsupported project format" in rejected.json()["error"].lower()
+
+
+def test_project_load_rejects_future_source_map_format_atomically(tmp_path):
+    client = _client()
+    source = make_fidelity_master(tmp_path)
+    _import_master(client, source)
+    package = client.get("/api/project/save").content
+    project = json.loads(_outer_parts(package)[PROJECT_ENTRY])
+    project["source_map"]["format"] += 1
+    tampered = _rebuild_consistent_outer(package, project=project)
+
+    rejected = _assert_rejected_load_is_atomic(client, tampered, source)
+    assert "unsupported source map format" in rejected.json()["error"].lower()
 
 
 def test_project_load_rejects_source_hash_tamper_atomically(tmp_path):

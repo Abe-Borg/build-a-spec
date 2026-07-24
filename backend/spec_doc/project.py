@@ -131,7 +131,14 @@ def sanitize_source_map(value: Any) -> dict[str, Any] | None:
 
     try:
         return SourceBodyMap.from_dict(cloned).to_dict()
-    except (TypeError, ValueError, KeyError) as exc:
+    except ValueError as exc:
+        # Keep the compatibility boundary visible to callers. A project from
+        # a newer build must fail closed as an unsupported format, rather than
+        # looking like arbitrary corruption and inviting a lossy fallback.
+        if str(exc) == "Unsupported source map format.":
+            raise
+        raise ValueError("Malformed source map.") from exc
+    except (TypeError, KeyError) as exc:
         raise ValueError("Malformed source map.") from exc
 
 

@@ -75,7 +75,11 @@ from ..spec_doc import (
 )
 from ..spec_doc.model import apply_edits
 from ..spec_doc.project import chat_transcript
-from ..spec_doc.source_mapping import SourceBodyMap, semantic_body_projection
+from ..spec_doc.source_mapping import (
+    SourceBodyMap,
+    semantic_body_projection,
+    semantic_body_projection_sha256,
+)
 from ..spec_doc.source_patch import (
     SourceCapabilityReport,
     SourcePatchContext,
@@ -163,6 +167,14 @@ class SessionState:
     # from the exact source after import/load. ``repr=False`` avoids dumping
     # retained source bytes through dataclass diagnostics.
     source_patch_context: SourcePatchContext | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    # Memoized ``source_edit_capabilities`` result, keyed on the source,
+    # baseline and current semantic body it was derived from. Purely derived
+    # state: never serialized, cleared on reset/load with the source fields.
+    _capability_cache: tuple[tuple[Any, ...], Any] | None = field(
         default=None,
         repr=False,
         compare=False,
@@ -520,10 +532,97 @@ class SessionState:
         current semantic document so undo, redo, model edits, manual edits,
         and QC applications all receive current decisions, while the costly
         immutable package index is reused through ``source_patch_context``.
+
+        Recomputation is memoized on the exact inputs the report is derived
+        from — the retained source, the active baseline, and the current
+        semantic body. The sweep probes every element against the real gate,
+        so it is expensive in body size, and it sits on paths the UI hits
+        repeatedly for one user action (the import response, every
+        ``_doc_payload`` refresh, the readiness checklist, the QC snapshot,
+        and every turn's PROJECT CONTEXT). Those calls all asked the same
+        question of the same document and re-derived the same answer. Any
+        change to the source, the baseline or the body text/order changes the
+        key, so the cache can never outlive the state it describes; a change
+        to provenance metadata deliberately does not, exactly as
+        ``semantic_body_projection`` excludes it from the source gate itself.
         """
         if not self._active_source_scope():
             return None
 
+        source_bytes = self.source_docx_bytes
+        source_map = self.source_docx_map
+        baseline_index = self.doc.baseline_index
+        try:
+            projection = semantic_body_projection_sha256(self.doc.doc)
+        except Exception:  # noqa: BLE001 - an unkeyable document is never cached
+            return self._compute_source_edit_capabilities()
+
+        # Identity, not declared identity: the retained bytes/map/context are
+        # compared with ``is`` against the exact objects the cached report was
+        # derived from, and the key holds them alive so identity stays sound.
+        # Keying on the map's *claimed* source hash would miss a swapped or
+        # mutated artifact, which must still fail closed.
+        #
+        # The version index is deliberately NOT part of the key. A metadata
+        # edit (``set_status``/``set_provenance``) commits a new version while
+        # leaving the semantic body — and therefore every source capability —
+        # untouched, and confirming blocks one at a time is exactly what the
+        # review walk does on an imported master. Keying on the index made
+        # each of those confirmations pay for a full sweep. What the report
+        # actually depends on is covered: ``_active_source_scope`` above
+        # rejects a branch that undid past the import, ``baseline_index``
+        # pins which version is the baseline, and ``DocumentStore`` never
+        # rewrites a retained version in place (``commit_turn`` only appends,
+        # truncates the redo tail, and drops ``baseline_index`` when that
+        # truncation would discard the version it points at).
+        cached = self._capability_cache
+        if cached is not None:
+            cached_key, cached_report = cached
+            if (
+                cached_key[0] is source_bytes
+                and cached_key[1] is source_map
+                and cached_key[2] is self.source_patch_context
+                and cached_key[3] == baseline_index
+                and cached_key[4] == projection
+            ):
+                return cached_report
+
+        report = self._compute_source_edit_capabilities()
+
+        # Read paths are not serialized against a streaming turn (``GET
+        # /api/doc`` takes no session guard), so a long sweep can be overtaken
+        # by a model turn's provisional edits. Publish only when the state the
+        # sweep actually analyzed is still the state it was keyed on;
+        # otherwise return the report but leave the cache alone, so a
+        # subsequent rollback cannot resurrect it against the wrong document.
+        # ``source_patch_context`` is read after the sweep on purpose — the
+        # sweep builds and attaches it on first use.
+        try:
+            settled = semantic_body_projection_sha256(self.doc.doc)
+        except Exception:  # noqa: BLE001 - unverifiable state is never cached
+            return report
+        if (
+            settled == projection
+            and self.source_docx_bytes is source_bytes
+            and self.source_docx_map is source_map
+            and self.doc.baseline_index == baseline_index
+        ):
+            self._capability_cache = (
+                (
+                    source_bytes,
+                    source_map,
+                    self.source_patch_context,
+                    baseline_index,
+                    projection,
+                ),
+                report,
+            )
+        return report
+
+    def _compute_source_edit_capabilities(
+        self,
+    ) -> SourceCapabilityReport | None:
+        """Derive the capability report from scratch (see the caller)."""
         baseline_index = self.doc.baseline_index
         if baseline_index is None:
             return None
@@ -687,6 +786,7 @@ class SessionState:
         self.source_docx_filename = ""
         self.source_docx_map = None
         self.source_patch_context = None
+        self._capability_cache = None
         self.import_report = None
         # Per-project priming text does not survive a reset (see the field
         # comment). Module and discipline are kept; this is not.

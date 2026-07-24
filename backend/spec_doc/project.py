@@ -190,6 +190,7 @@ def save_project(
     requirements_profile: dict[str, Any] | None = None,
     audit_result: dict[str, Any] | None = None,
     qc_result: dict[str, Any] | None = None,
+    qc_latest_attempt: dict[str, Any] | None = None,
     discipline: str = "",
     project_context: str = "",
     figures: dict[str, Any] | None = None,
@@ -213,6 +214,8 @@ def save_project(
         payload["audit_result"] = audit_result
     if qc_result:
         payload["qc_result"] = qc_result
+    if qc_latest_attempt:
+        payload["qc_latest_attempt"] = qc_latest_attempt
     # Chat-authored figures ride the file the same way (optional field, no
     # format bump — old readers ignore it, new readers tolerate absence).
     if figures and figures.get("figures"):
@@ -281,6 +284,19 @@ def load_project(data: Any, session) -> None:
 
         restored_source_docx_map = SourceBodyMap.from_dict(staged.source_map)
 
+    # Parse and reconcile both QC records before touching the live session.
+    # The retained successful result and the newer attempt form one state
+    # machine; staging a complete runner also guarantees that an unexpected
+    # parser failure cannot leave history/document from the incoming project
+    # mixed with QC state from the old project.
+    from ..qc import QCResult, QCRunner
+
+    restored_qc_runner = QCRunner()
+    restored_qc = QCResult.from_dict(data.get("qc_result"))
+    if restored_qc is not None:
+        restored_qc_runner.restore(restored_qc)
+    restored_qc_runner.restore_attempt(data.get("qc_latest_attempt"))
+
     session.history.clear()
     session.history.extend(history)
     session.doc.load(doc_data)
@@ -315,7 +331,6 @@ def load_project(data: Any, session) -> None:
     # degrades to "not researched" rather than failing the load (the doc
     # and history are the load-bearing content).
     from ..compliance import AuditRunner
-    from ..qc import QCResult, QCRunner
     from ..research import RequirementsProfile, ResearchRunner
 
     session.research = ResearchRunner()
@@ -328,10 +343,7 @@ def load_project(data: Any, session) -> None:
         session.audit.restore(audit_result)
     # A completed Final-QC result rides the project file the same way; a
     # malformed one degrades to "not run" rather than failing the load.
-    session.qc = QCRunner()
-    restored_qc = QCResult.from_dict(data.get("qc_result"))
-    if restored_qc is not None:
-        session.qc.restore(restored_qc)
+    session.qc = restored_qc_runner
     # Chat-authored figures ride the file too; a malformed block degrades to
     # "no figures" (load() resets then restores) rather than failing the load.
     session.figures.load(data.get("figures"))

@@ -505,10 +505,47 @@ export type QcRunStatus = "idle" | "running" | "complete" | "failed";
 export type Severity = "critical" | "high" | "medium" | "low";
 export type QcFindingStatus = "open" | "applied" | "dismissed";
 
+export interface QcSourceRecord {
+  url: string;
+  title: string;
+  methods: string[];
+  normalized: string;
+  accepted: boolean | null;
+  reason: string;
+}
+
+export interface QcReviewedCheck {
+  check: string;
+  outcome: "passed" | "finding" | "not_applicable" | string;
+  notes: string;
+  element_ids: string[];
+  source_urls: string[];
+  source_checks: QcSourceRecord[];
+}
+
+export interface QcDispositionEvent {
+  action: string;
+  at: string;
+  reason: string;
+  document_version?: number;
+  document_fingerprint: string;
+}
+
 export interface QcVerdict {
   upholds: boolean;
   revised_severity: string;
   note: string;
+  status: "completed" | "failed" | "cancelled" | string;
+  error: string;
+  reviewer_index: number;
+  search_queries: string[];
+  retrieved_sources: QcSourceRecord[];
+  attempted_search_queries?: string[];
+  attempted_sources?: QcSourceRecord[];
+  usage_totals: Record<string, number>;
+  estimated_cost_usd?: number;
+  api_request_count: number;
+  model_response_count: number;
 }
 
 export interface QcFinding {
@@ -519,37 +556,78 @@ export interface QcFinding {
   title: string;
   issue: string;
   rationale: string;
+  original_severity: string;
+  reviewed_ref: string;
+  reviewed_text: string;
+  element_resolved: boolean;
   source_urls: string[];
   accepted_sources: string[];
   grounded: boolean;
+  source_checks: QcSourceRecord[];
   proposed_ops: Record<string, unknown>[];
   ops_valid: boolean;
   ops_invalid_reason: string;
   verdicts: QcVerdict[];
+  verification_outcome:
+    | "upheld"
+    | "refuted"
+    | "default_refuted"
+    | "inconclusive"
+    | string;
+  verification_panel_size: number;
+  verification_threshold: number;
   status: QcFindingStatus;
   dismiss_reason: string;
+  disposition_events: QcDispositionEvent[];
 }
 
 export interface QcLensStatus {
   lens_id: string;
   title: string;
   status: string;
+  brief: string;
+  summary: string;
   finding_count: number;
   grounded_count: number;
+  reviewed_checks: QcReviewedCheck[];
+  search_queries: string[];
+  retrieved_sources: QcSourceRecord[];
+  attempted_search_queries?: string[];
+  attempted_sources?: QcSourceRecord[];
+  usage_totals: Record<string, number>;
+  estimated_cost_usd?: number;
+  api_request_count: number;
+  model_response_count: number;
   error: string;
 }
 
 export interface QcResultView {
+  schema_version: number;
+  protocol_version: string;
+  run_id: string;
+  execution_status: "complete" | "partial" | string;
   summary: string;
   findings: QcFinding[];
   refuted: QcFinding[];
+  /** Candidates lacking enough completed verifier seats for a substantive
+   *  uphold/refute decision. Infrastructure-inconclusive, never open issues. */
+  inconclusive: QcFinding[];
   lens_statuses: QcLensStatus[];
   started_at: string;
   finished_at: string;
   version_index: number;
   version_fingerprint?: string;
+  input_fingerprint: string;
+  input_manifest: Record<string, unknown>;
   model: string;
+  effort: string;
+  max_tokens: number;
+  duration_ms: number;
   usage_totals: Record<string, number>;
+  estimated_cost_usd: number;
+  cost_basis?: Record<string, unknown>;
+  api_request_count: number;
+  model_response_count: number;
   research_profile_present: boolean;
   dismissed_ids: string[];
 }
@@ -568,14 +646,35 @@ export interface QcEvent {
   lenses?: { lens_id: string; title: string }[];
   open_criticals?: number;
   status?: QcRunStatus;
+  run_id?: string;
+  protocol_version?: string;
+  execution_status?: string;
 }
 
 export interface QcSnapshot {
   status: QcRunStatus;
   error: string;
+  /** Stop was requested but the worker is still attaching paid activity. */
+  settling?: boolean;
   events: QcEvent[];
+  /** Retained result that owns the actionable apply/dismiss queue. */
   result?: QcResultView;
   stale?: boolean;
+  /** Backend-selected primary audit report: latest attempt report when
+   * available, otherwise the retained actionable result. */
+  report?: QcResultView;
+  report_stale?: boolean;
+  report_is_latest_attempt?: boolean;
+  latest_attempt?: QcAttemptSnapshot | null;
+}
+
+export interface QcAttemptSnapshot {
+  run_id: string;
+  status: string;
+  error: string;
+  started_at: string;
+  finished_at: string;
+  report_available: boolean;
 }
 
 export interface QcApplyResult extends DocPayload {

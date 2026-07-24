@@ -12,14 +12,16 @@
  * grouped by severity, each with a jump-to-element ref, collapsible
  * rationale, an Apply fix (with an ops preview) / Dismiss action, an "Apply
  * all criticals" hold-to-confirm, and the refuted findings collapsed for
- * transparency. A staleness banner shows when the document has moved on from
- * the version QC reviewed.
+ * transparency, while infrastructure-inconclusive candidates stay in their
+ * own non-actionable warning bucket. A staleness banner shows when the
+ * document has moved on from the version QC reviewed.
  *
  * Reuses Batch 2's status machinery (no dead air — a QC run takes minutes and
  * the drawer shows lens-by-lens progress the whole time) and Batch 3's
  * hold-to-confirm affordance.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import type {
   QcFinding,
   QcSnapshot,
@@ -34,7 +36,17 @@ import {
   qcBatchDecision,
   sourceCapabilityTitle,
 } from "../lib/sourceCapabilities";
+import {
+  qcInconclusiveCandidates,
+  qcPrimaryReport,
+  qcReportExportUrl,
+  qcSubstantivelyRefutedCandidates,
+  qcSurvivingCandidates,
+  safeHttpUrl,
+} from "../lib/qcReport";
+import { useDialogFocus } from "../lib/dialogFocus";
 import ConfirmDialog from "./ConfirmDialog";
+import QCReportModal from "./QCReportModal";
 
 interface Props {
   qc: QcSnapshot | null;
@@ -47,7 +59,7 @@ interface Props {
   onStart: () => void;
   onStop: () => void;
   onApply: (findingIds: string[]) => void;
-  onDismiss: (findingId: string, reason?: string) => void;
+  onDismiss: (findingId: string, reason: string) => Promise<void>;
   onJump: (elementId: string) => void;
   /** Guided-tour "ensure open" (Batch 6): a bump expands the drawer. */
   openNonce?: number;
@@ -109,9 +121,16 @@ export default function QCDrawer({
   }, [openNonce]);
   const [openRationale, setOpenRationale] = useState<Record<string, boolean>>({});
   const [showRefuted, setShowRefuted] = useState(false);
+  const [showInconclusive, setShowInconclusive] = useState(false);
   const [holding, setHolding] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [dismissTarget, setDismissTarget] = useState<QcFinding | null>(null);
+  const [dismissReason, setDismissReason] = useState("");
+  const [dismissPending, setDismissPending] = useState(false);
+  const [dismissError, setDismissError] = useState("");
+  const drawerToggleRef = useRef<HTMLButtonElement>(null);
   const holdTimer = useRef<number | undefined>(undefined);
   const latestApplyAll = useRef({
     busy: true,
@@ -122,8 +141,13 @@ export default function QCDrawer({
 
   const status = qc?.status ?? "idle";
   const running = status === "running";
+  const settling = qc?.settling ?? false;
+  const interactionBusy = busy || settling;
   const result = qc?.result;
-  const findings = result?.findings ?? [];
+  const primaryReport = qcPrimaryReport(qc);
+  const findings = result ? qcSurvivingCandidates(result) : [];
+  const refuted = result ? qcSubstantivelyRefutedCandidates(result) : [];
+  const inconclusive = result ? qcInconclusiveCandidates(result) : [];
   const openFindings = findings.filter((f) => f.status === "open");
   const openCriticals = openFindings.filter((f) => f.severity === "critical");
   const stale =
@@ -149,7 +173,7 @@ export default function QCDrawer({
     .map((finding) => findingDecisions.get(finding.finding_id))
     .find((decision) => decision && !decision.allowed);
   latestApplyAll.current = {
-    busy,
+    busy: interactionBusy,
     findingIds: applicableCriticals.map((finding) => finding.finding_id),
     onApply,
   };
@@ -169,7 +193,7 @@ export default function QCDrawer({
   }, [qc?.events]);
 
   const startHoldApplyCriticals = () => {
-    if (busy || applicableCriticals.length === 0) return;
+    if (interactionBusy || applicableCriticals.length === 0) return;
     setHolding(true);
     holdTimer.current = window.setTimeout(() => {
       setHolding(false);
@@ -196,20 +220,24 @@ export default function QCDrawer({
       ? `This session's Final QC has cost ≈ $${observedCost.toFixed(2)} so far; expect a few dollars for another pass.`
       : "Expect a few dollars per pass.";
 
-  const startLabel = running
-    ? "Reviewing…"
-    : result
+  const startLabel = settling
+    ? "Preserving report…"
+    : running
+      ? "Reviewing…"
+    : primaryReport
       ? "Re-run Final QC"
       : "Send to Final QC";
 
-  const applyAllDisabled = busy || applicableCriticals.length === 0;
+  const applyAllDisabled = interactionBusy || applicableCriticals.length === 0;
   const applyAllTitle =
     applicableCriticals.length === 0 && firstCriticalDenial
       ? sourceCapabilityTitle(
           firstCriticalDenial,
           "Apply currently applicable critical findings",
         )
-      : busy
+      : settling
+        ? "Stop requested; wait while paid Final QC activity is preserved."
+        : busy
         ? QC_BUSY_MESSAGE
         : "Press and hold to apply only the critical findings that are currently applicable; the server validates the combined batch again.";
 
@@ -228,21 +256,29 @@ export default function QCDrawer({
     >
       <div className="flex items-baseline gap-2">
         <button
+          ref={drawerToggleRef}
           className="flex min-w-0 flex-1 items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
           onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          aria-controls="final-qc-drawer-body"
           title="Final QC — a fleet of Fable 5 reviewers before the section goes out the door"
         >
           <span className="shrink-0 font-medium tracking-wide uppercase">
             Final QC
           </span>
           <span className="truncate">
-            {running && verify
+            {settling
+              ? "stop requested · preserving paid activity…"
+              : running && verify
               ? `verifying findings… (${verify.done}/${verify.total})`
               : running
                 ? "reviewing…"
                 : result
                   ? `${openFindings.length} open finding${openFindings.length === 1 ? "" : "s"}` +
-                    (openCriticals.length ? ` · ${openCriticals.length} critical` : "")
+                    (openCriticals.length ? ` · ${openCriticals.length} critical` : "") +
+                    (inconclusive.length ? ` · ${inconclusive.length} inconclusive` : "")
+                  : primaryReport
+                    ? `${primaryReport.execution_status || "preserved"} report available · no action queue`
                   : readiness?.ready
                     ? "ready to issue"
                     : "not yet reviewed"}
@@ -251,13 +287,13 @@ export default function QCDrawer({
         </button>
         <button
           className={`shrink-0 rounded-md border px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none disabled:opacity-40 ${
-            result
+            primaryReport
               ? "border-edge bg-raised text-ink-dim hover:border-accent hover:text-accent"
               : "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25"
           }`}
           onClick={() => setConfirmOpen(true)}
-          disabled={running || busy}
-          title="Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Fable 5 (uses your API key)"
+          disabled={running || interactionBusy}
+          title={settling ? "Stop requested; the paid partial audit record is still being preserved." : "Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Fable 5 (uses your API key)"}
         >
           {startLabel}
         </button>
@@ -272,7 +308,17 @@ export default function QCDrawer({
         )}
       </div>
 
-      {status === "failed" && qc?.error && (
+      {settling && (
+        <p
+          className="status-shimmer mt-1 rounded border border-warn/40 bg-warn/10 px-2 py-1 text-[11px] font-medium text-warn"
+          role="status"
+        >
+          Stop requested; preserving completed and billed Final QC activity…
+          Re-run and disposition controls will unlock after the worker settles.
+        </p>
+      )}
+
+      {status === "failed" && qc?.error && !settling && (
         <p className="mt-1 text-[11px] text-err">Final QC: {qc.error}</p>
       )}
 
@@ -283,11 +329,12 @@ export default function QCDrawer({
           <p>
             This stops the Final QC pass now in progress.{" "}
             <strong className="text-ink">
-              Any progress made so far will be lost
+              Completed and billed activity will be preserved in a partial,
+              read-only audit report when the worker can return it
             </strong>{" "}
-            — findings already reviewed won&apos;t be saved, and the Fable 5
-            spend already incurred is not refunded. You&apos;ll need to
-            re-run the whole pass.
+            — it cannot establish issue readiness or create an actionable
+            finding queue, and the Fable 5 spend already incurred is not
+            refunded. You&apos;ll need a complete re-run before issue.
           </p>
         }
         confirmLabel="Stop Final QC"
@@ -300,7 +347,10 @@ export default function QCDrawer({
       />
 
       {expanded && (
-        <div className="mt-1.5 max-h-[28rem] space-y-3 overflow-y-auto pb-1">
+        <div
+          id="final-qc-drawer-body"
+          className="mt-1.5 max-h-[28rem] space-y-3 overflow-y-auto pb-1"
+        >
           {/* Issue readiness */}
           {readiness && (
             <div
@@ -343,7 +393,7 @@ export default function QCDrawer({
           )}
 
           {/* Cost expectation (idle only) */}
-          {status !== "running" && !result && (
+          {status !== "running" && !settling && !result && (
             <p className="text-[11px] text-ink-faint italic">{costLine}</p>
           )}
 
@@ -383,6 +433,23 @@ export default function QCDrawer({
             </div>
           )}
 
+          {primaryReport && !running && !result && (
+            <div className="rounded-lg border border-warn/40 bg-warn/10 p-2.5 text-[11px] text-warn">
+              <p className="leading-relaxed">
+                A paid {primaryReport.execution_status || "partial"} audit
+                report was preserved for run {primaryReport.run_id || "ID not recorded"},
+                but there is no retained actionable finding queue. Review or
+                download that exact report before re-running.
+              </p>
+              <div className="mt-2">
+                <QCReportActions
+                  reportRunId={primaryReport.run_id}
+                  onView={() => setReportOpen(true)}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Complete: findings */}
           {result && !running && (
             <>
@@ -399,6 +466,29 @@ export default function QCDrawer({
                   first for full completeness coverage.
                 </p>
               )}
+              {result.execution_status !== "complete" && (
+                <p className="rounded border border-warn/40 bg-warn/10 px-2 py-1 text-[11px] font-medium text-warn">
+                  This is a partial QC record. One or more lens checks or
+                  verifier seats did not complete; it cannot establish issue
+                  readiness.
+                </p>
+              )}
+              {qc?.latest_attempt?.run_id &&
+                qc.latest_attempt.run_id !== result.run_id && (
+                  <p className="rounded border border-err/40 bg-err/10 px-2 py-1 text-[11px] font-medium text-err">
+                    Latest attempt {qc.latest_attempt.run_id} is{" "}
+                    {qc.latest_attempt.status || "not recorded"}. The action
+                    queue below remains retained run {result.run_id || "ID not recorded"};
+                    the report controls target backend-selected run {primaryReport?.run_id || result.run_id || "ID not recorded"}.
+                    {qc.latest_attempt.error
+                      ? ` ${qc.latest_attempt.error}`
+                      : ""}
+                  </p>
+                )}
+              <QCReportActions
+                reportRunId={primaryReport?.run_id ?? result.run_id}
+                onView={() => setReportOpen(true)}
+              />
               {result.summary && (
                 <p className="text-[11px] text-ink-dim">{result.summary}</p>
               )}
@@ -435,9 +525,21 @@ export default function QCDrawer({
                 </span>
               )}
 
-              {openFindings.length === 0 && (
+              {openFindings.length === 0 && findings.length === 0 && inconclusive.length === 0 && (
                 <p className="text-[11px] text-ok">
-                  No open findings — everything is applied or dismissed. ✓
+                  No findings survived adversarial verification. Review the
+                  full report for lens coverage and substantively refuted candidates.
+                </p>
+              )}
+              {openFindings.length === 0 && findings.length === 0 && inconclusive.length > 0 && (
+                <p className="rounded border border-warn/40 bg-warn/10 px-2 py-1 text-[11px] text-warn">
+                  No findings survived into the action queue, but {inconclusive.length} candidate{inconclusive.length === 1 ? " is" : "s are"} infrastructure-inconclusive. {inconclusive.length === 1 ? "It has" : "They have"} no substantive uphold/refute determination; inspect the failed or cancelled verifier seats in the full report.
+                </p>
+              )}
+              {openFindings.length === 0 && findings.length > 0 && (
+                <p className="text-[11px] text-ok">
+                  No open findings — every surviving finding is applied or
+                  dismissed. Review the disposition trail in the full report.
                 </p>
               )}
 
@@ -453,7 +555,7 @@ export default function QCDrawer({
                       <FindingCard
                         key={f.finding_id}
                         finding={f}
-                        busy={busy}
+                        busy={interactionBusy}
                         decision={findingDecisions.get(f.finding_id)!}
                         open={!!openRationale[f.finding_id]}
                         onToggle={() =>
@@ -469,10 +571,14 @@ export default function QCDrawer({
                             sourceExpected,
                             stale: applyStateStale,
                           });
-                          if (busy || !decision.allowed) return;
+                          if (interactionBusy || !decision.allowed) return;
                           onApply([f.finding_id]);
                         }}
-                        onDismiss={() => onDismiss(f.finding_id)}
+                        onDismiss={() => {
+                          setDismissTarget(f);
+                          setDismissReason("");
+                          setDismissError("");
+                        }}
                         onJump={onJump}
                       />
                     ))}
@@ -480,18 +586,47 @@ export default function QCDrawer({
                 );
               })}
 
-              {result.refuted.length > 0 && (
+              {inconclusive.length > 0 && (
+                <div className="rounded border border-warn/35 bg-warn/5 px-2 py-1.5">
+                  <button
+                    className="text-left text-[11px] font-medium text-warn hover:underline"
+                    onClick={() => setShowInconclusive((value) => !value)}
+                    aria-expanded={showInconclusive}
+                    aria-controls="qc-inconclusive-candidates"
+                  >
+                    {showInconclusive ? "▾" : "▸"} Infrastructure-inconclusive (
+                    {inconclusive.length}) — no substantive refutation
+                  </button>
+                  {showInconclusive && (
+                    <ul id="qc-inconclusive-candidates" className="mt-1.5 space-y-1">
+                      {inconclusive.map((finding) => (
+                        <li
+                          key={finding.finding_id}
+                          className="text-[11px] text-ink-dim"
+                        >
+                          <span className="font-medium text-warn">[{finding.severity}]</span>{" "}
+                          {finding.title} — verification infrastructure incomplete
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {refuted.length > 0 && (
                 <div>
                   <button
                     className="text-[11px] text-ink-faint hover:text-ink-dim"
                     onClick={() => setShowRefuted((v) => !v)}
+                    aria-expanded={showRefuted}
+                    aria-controls="qc-refuted-candidates"
                   >
-                    {showRefuted ? "▾" : "▸"} Refuted in verification (
-                    {result.refuted.length}) — not open issues
+                    {showRefuted ? "▾" : "▸"} Substantively refuted in verification (
+                    {refuted.length}) — not open issues
                   </button>
                   {showRefuted && (
-                    <ul className="mt-1 space-y-0.5">
-                      {result.refuted.map((f) => (
+                    <ul id="qc-refuted-candidates" className="mt-1 space-y-0.5">
+                      {refuted.map((f) => (
                         <li
                           key={f.finding_id}
                           className="text-[11px] text-ink-faint line-through"
@@ -511,14 +646,198 @@ export default function QCDrawer({
 
     {confirmOpen && (
       <ConfirmQCModal
-        isRerun={!!result}
+        isRerun={!!primaryReport}
         costEstimate={costEstimate}
-        busy={busy}
+        busy={interactionBusy}
         onConfirm={confirmStart}
         onCancel={() => setConfirmOpen(false)}
       />
     )}
+    <QCReportModal
+      open={reportOpen}
+      snapshot={qc}
+      retainedStale={stale}
+      currentVersion={doc?.version.index}
+      readiness={readiness}
+      onClose={() => setReportOpen(false)}
+    />
+    <DismissQCModal
+      finding={dismissTarget}
+      reason={dismissReason}
+      busy={interactionBusy}
+      pending={dismissPending}
+      error={dismissError}
+      restoreFocusRef={drawerToggleRef}
+      onReasonChange={(value) => {
+        setDismissReason(value);
+        if (dismissError) setDismissError("");
+      }}
+      onConfirm={async () => {
+        if (!dismissTarget || !dismissReason.trim()) return;
+        setDismissPending(true);
+        setDismissError("");
+        try {
+          await onDismiss(dismissTarget.finding_id, dismissReason.trim());
+          setDismissTarget(null);
+          setDismissReason("");
+        } catch (error) {
+          setDismissError(
+            error instanceof Error ? error.message : String(error),
+          );
+        } finally {
+          setDismissPending(false);
+        }
+      }}
+      onCancel={() => {
+        if (dismissPending) return;
+        setDismissTarget(null);
+        setDismissReason("");
+        setDismissError("");
+      }}
+    />
     </>
+  );
+}
+
+function QCReportActions({
+  reportRunId,
+  onView,
+}: {
+  reportRunId: string | undefined;
+  onView: () => void;
+}) {
+  const target = reportRunId || "ID not recorded";
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <button
+        className="rounded-md border border-accent/60 bg-accent/10 px-2 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/20"
+        onClick={onView}
+        aria-haspopup="dialog"
+      >
+        View full QC report
+      </button>
+      <a
+        className="rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent"
+        href={qcReportExportUrl("docx", reportRunId)}
+        download
+        title={`Download the backend-selected human-readable report (snapshot target ${target})`}
+      >
+        Download DOCX
+      </a>
+      <a
+        className="rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent"
+        href={qcReportExportUrl("json", reportRunId)}
+        download
+        title={`Download the backend-selected machine-readable report (snapshot target ${target})`}
+      >
+        Download JSON
+      </a>
+      <span className="break-all font-mono text-[9px] text-ink-faint">
+        snapshot report target: {target}
+      </span>
+    </div>
+  );
+}
+
+function DismissQCModal({
+  finding,
+  reason,
+  busy,
+  pending,
+  error,
+  restoreFocusRef,
+  onReasonChange,
+  onConfirm,
+  onCancel,
+}: {
+  finding: QcFinding | null;
+  reason: string;
+  busy: boolean;
+  pending: boolean;
+  error: string;
+  restoreFocusRef: RefObject<HTMLElement>;
+  onReasonChange: (value: string) => void;
+  onConfirm: () => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const reasonRef = useRef<HTMLTextAreaElement>(null);
+  useDialogFocus(Boolean(finding), dialogRef, reasonRef, () => {
+    if (!pending) onCancel();
+  }, restoreFocusRef);
+
+  if (!finding) return null;
+  const canConfirm = !busy && !pending && reason.trim().length > 0;
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-6"
+      onClick={() => {
+        if (!pending) onCancel();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="w-full max-w-lg rounded-2xl border border-edge bg-surface shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dismiss-qc-title"
+        aria-describedby="dismiss-qc-description"
+        aria-busy={pending}
+      >
+        <div className="px-6 pt-5 pb-4">
+          <h2 id="dismiss-qc-title" className="font-[family-name:var(--font-display)] text-lg font-semibold text-ink">
+            Dismiss QC finding?
+          </h2>
+          <p id="dismiss-qc-description" className="mt-2 text-sm leading-relaxed text-ink-dim">
+            <span className="font-medium text-ink">{finding.title}</span> will
+            remain in the report as dismissed. Record why so another reviewer
+            can audit the decision later.
+          </p>
+          <label className="mt-4 block text-[11px] font-semibold tracking-wide text-ink-faint uppercase">
+            Dismissal rationale (required)
+            <textarea
+              ref={reasonRef}
+              rows={4}
+              value={reason}
+              onChange={(event) => onReasonChange(event.target.value)}
+              disabled={pending}
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? "dismiss-qc-error" : undefined}
+              placeholder="Explain why the finding is accepted as-is, out of scope, or otherwise not being applied."
+              className="mt-1.5 w-full resize-y rounded-lg border border-edge bg-bg px-3 py-2 text-sm font-normal tracking-normal text-ink outline-none normal-case focus:border-accent"
+            />
+          </label>
+          {error && (
+            <p
+              id="dismiss-qc-error"
+              role="alert"
+              className="mt-2 whitespace-pre-wrap break-words rounded border border-err/40 bg-err/10 px-2.5 py-2 text-[11px] text-err"
+            >
+              Dismissal was not recorded. Your rationale is preserved so you
+              can retry. {error}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-edge px-6 py-3">
+          <button
+            className="rounded-lg px-3 py-1.5 text-sm text-ink-dim transition-colors hover:text-ink"
+            onClick={onCancel}
+            disabled={pending}
+          >
+            Cancel
+          </button>
+          <button
+            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
+            disabled={!canConfirm}
+            onClick={() => void onConfirm()}
+          >
+            {pending ? "Recording…" : "Record dismissal"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -666,6 +985,7 @@ function FindingCard({
   onDismiss: () => void;
   onJump: (elementId: string) => void;
 }) {
+  const rationaleId = useId();
   const dimmed = finding.status !== "open";
   const cardBtn =
     "rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
@@ -715,26 +1035,39 @@ function FindingCard({
       <button
         className="mt-1 text-[10px] text-ink-faint hover:text-ink-dim"
         onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={rationaleId}
       >
         {open ? "▾ hide rationale" : "▸ rationale"}
       </button>
       {open && (
-        <div className="mt-1 space-y-1">
+        <div id={rationaleId} className="mt-1 space-y-1">
           <p className="text-[11px] text-ink-faint">{finding.rationale}</p>
           {finding.accepted_sources.length > 0 && (
             <p className="text-[11px]">
-              {finding.accepted_sources.map((url) => (
-                <a
-                  key={url}
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mr-1 text-accent hover:underline"
-                  title={url}
-                >
-                  [src]
-                </a>
-              ))}
+              {finding.accepted_sources.map((url, index) => {
+                const safe = safeHttpUrl(url);
+                return safe ? (
+                  <a
+                    key={`${url}-${index}`}
+                    href={safe}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mr-1 text-accent hover:underline"
+                    title={url}
+                  >
+                    [src]
+                  </a>
+                ) : (
+                  <span
+                    key={`${url}-${index}`}
+                    className="mr-1 break-all text-warn"
+                    title="Stored source is not a safe credential-free HTTP(S) URL and is intentionally not clickable"
+                  >
+                    [unsafe source: {url || "empty value"}]
+                  </span>
+                );
+              })}
             </p>
           )}
           {finding.source_urls.length > 0 &&

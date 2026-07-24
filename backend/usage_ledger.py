@@ -71,6 +71,50 @@ def _rates(model: str) -> dict[str, float]:
     return settings.PRICING.get(model, settings.PRICING[settings.MODEL_SONNET_5])
 
 
+def estimate_usage_cost(model: str, usage: dict[str, int]) -> float:
+    """Estimate one recorded run's cost from its model and usage snapshot.
+
+    The result is deliberately labeled an estimate everywhere it is exposed:
+    it uses the app's list-price table, while the provider invoice remains the
+    authority. Thinking tokens already live inside ``output_tokens`` and are
+    therefore not added a second time.
+    """
+    rates = _rates(model)
+    return round(
+        usage.get("input_tokens", 0) * rates["input"]
+        + usage.get("output_tokens", 0) * rates["output"]
+        + usage.get("cache_read_input_tokens", 0) * rates["cache_read"]
+        + usage.get("cache_creation_input_tokens", 0) * rates["cache_write"]
+        + usage.get("web_search_requests", 0) * settings.WEB_SEARCH_COST,
+        6,
+    )
+
+
+def usage_pricing_snapshot(model: str) -> dict[str, Any]:
+    """Return the exact configured rates used to estimate a run's cost."""
+    rate_model = (
+        model if model in settings.PRICING else settings.MODEL_SONNET_5
+    )
+    rates = _rates(model)
+    return {
+        "currency": "USD",
+        "requested_model": model,
+        "rate_model": rate_model,
+        "used_fallback_rate": rate_model != model,
+        "rates_per_token": dict(rates),
+        "web_search_per_request": settings.WEB_SEARCH_COST,
+        "web_fetch_per_request": 0.0,
+        "thinking_token_treatment": (
+            "Thinking tokens are included in output_tokens and are not "
+            "charged a second time."
+        ),
+        "authority": (
+            "Application list-price estimate; provider billing records are "
+            "authoritative."
+        ),
+    }
+
+
 @dataclass
 class UsageLedger:
     """Per-category billed-usage accumulator + a turn counter.
@@ -111,13 +155,8 @@ class UsageLedger:
         return out
 
     def _estimate_category(self, category: str, bucket: dict[str, int]) -> float:
-        rates = _rates(_category_models().get(category, settings.INTERVIEW_MODEL))
-        return (
-            bucket.get("input_tokens", 0) * rates["input"]
-            + bucket.get("output_tokens", 0) * rates["output"]
-            + bucket.get("cache_read_input_tokens", 0) * rates["cache_read"]
-            + bucket.get("cache_creation_input_tokens", 0) * rates["cache_write"]
-            + bucket.get("web_search_requests", 0) * settings.WEB_SEARCH_COST
+        return estimate_usage_cost(
+            _category_models().get(category, settings.INTERVIEW_MODEL), bucket
         )
 
     def _estimated_cost(self) -> dict[str, Any]:

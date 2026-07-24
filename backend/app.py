@@ -40,11 +40,13 @@ Endpoints (all JSON unless noted):
 - ``POST /api/qc/start``       → launch Final QC on Fable 5 (Batch 4).
 - ``GET  /api/qc/status``      → QC state + event log + result view.
 - ``GET  /api/qc/stream``      → SSE follow of the active/last QC run.
-- ``POST /api/qc/stop``        → stop the running Final QC pass (discards
-  whatever it found so far; 409 if none is running).
+- ``POST /api/qc/stop``        → stop the running Final QC pass; preserves the
+  cancelled attempt identity and any partial audit record that settles (409
+  if none is running).
 - ``POST /api/qc/apply``       → apply accepted findings' fixes (one undo step).
 - ``POST /api/qc/dismiss``     → dismiss a finding (remembered across re-runs).
-- ``GET  /api/qc/export``      → the QC memo as a standalone ``.docx``.
+- ``GET  /api/qc/export``      → the detailed QC report as ``.docx``.
+- ``GET  /api/qc/export.json`` → the same auditable record as JSON.
 - ``GET  /api/readiness``      → deterministic "can it go out the door" checklist.
 - ``GET  /api/project/save``  → native ``.baspec`` package (semantic state +
   exact source DOCX when available).
@@ -59,6 +61,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import quote
@@ -95,7 +98,14 @@ from .llm.prompts import (
     sanitize_discipline,
 )
 from .project_profile import ProjectProfile
-from .qc.engine import QCSourceGuard
+from .qc.engine import (
+    QC_PROTOCOL_VERSION,
+    QC_REPORT_SCHEMA_VERSION,
+    QCSourceGuard,
+    build_qc_input_manifest,
+    qc_input_fingerprint,
+    qc_version_fingerprint,
+)
 from .spec_modules import AVAILABLE_MODULES, DEFAULT_MODULE
 from .spec_doc import SpecEditError, diff_sections, lint_document, open_questions
 from .spec_doc.docx_export import (
@@ -176,7 +186,7 @@ class QcApplyRequest(BaseModel):
 
 class QcDismissRequest(BaseModel):
     finding_id: str
-    reason: str | None = None
+    reason: str
 
 
 class TestKeyRequest(BaseModel):
@@ -288,6 +298,87 @@ def _qc_source_guard(session) -> QCSourceGuard | None:
         context=context,
         capability_summary=capability_summary,
     )
+
+
+def _qc_matches_current_inputs(session, result) -> bool:
+    """Server-authoritative freshness over document + all QC inputs."""
+    return bool(
+        result is not None
+        and result.matches_inputs(
+            session.doc.index,
+            session.doc.doc,
+            session.research.profile_result,
+            session.module,
+            session.discipline,
+            _qc_source_guard(session),
+            model=settings.QC_MODEL,
+            max_tokens=settings.QC_MAX_TOKENS,
+        )
+    )
+
+
+def _qc_result_is_audit_complete(result) -> bool:
+    """Whether a retained result meets the actionable Final-QC contract."""
+    return bool(
+        result is not None
+        and result.schema_version == QC_REPORT_SCHEMA_VERSION
+        and result.protocol_version == QC_PROTOCOL_VERSION
+        and result.input_fingerprint
+        and result.input_manifest
+        and result.execution_status == "complete"
+        and result.is_complete()
+    )
+
+
+def _qc_export_current_state(
+    session,
+    result,
+    *,
+    qc_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Canonical export-time context shared by JSON and Word reports."""
+    if qc_record is None:
+        qc_record = session.qc.audit_record_snapshot()
+    current_manifest = build_qc_input_manifest(
+        session.doc.doc,
+        session.research.profile_result,
+        session.module,
+        version_index=session.doc.index,
+        discipline=session.discipline,
+        source_guard=_qc_source_guard(session),
+        model=settings.QC_MODEL,
+        max_tokens=settings.QC_MAX_TOKENS,
+    )
+    matches = _qc_matches_current_inputs(session, result)
+    state = {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "document_version": session.doc.index,
+        "document_fingerprint": qc_version_fingerprint(session.doc.doc),
+        "current_input_fingerprint": qc_input_fingerprint(current_manifest),
+        "current_input_manifest": current_manifest,
+        "report_matches_current_inputs": matches,
+        "stale": not matches,
+        "runner": dict(qc_record.get("runner") or {}),
+        "latest_attempt": qc_record.get("latest_attempt"),
+        "readiness": _readiness_payload(session, qc_record=qc_record),
+    }
+    retained = qc_record.get("result")
+    if (
+        isinstance(retained, dict)
+        and str(retained.get("run_id") or "")
+        and str(retained.get("run_id") or "") != result.run_id
+    ):
+        state["last_successful_report"] = {
+            "run_id": retained.get("run_id"),
+            "execution_status": retained.get("execution_status"),
+            "started_at": retained.get("started_at"),
+            "finished_at": retained.get("finished_at"),
+            "version_index": retained.get("version_index"),
+            "version_fingerprint": retained.get("version_fingerprint"),
+            "input_fingerprint": retained.get("input_fingerprint"),
+            "summary": retained.get("summary"),
+        }
+    return state
 
 
 def _source_preservation_payload(
@@ -416,7 +507,9 @@ def _doc_payload(session) -> dict[str, Any]:
     }
 
 
-def _readiness_payload(session) -> dict[str, Any]:
+def _readiness_payload(
+    session, *, qc_record: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """The deterministic issue-readiness checklist.
 
     Non-advisory checks gate ``ready`` (the "can it go out the door" bar,
@@ -439,25 +532,210 @@ def _readiness_payload(session) -> dict[str, Any]:
     profile_ok = bool(profile and profile.is_complete())
     research_ok = session.research.status == "complete"
 
-    qc_result = session.qc.result
-    qc_matches_version = bool(
+    if qc_record is None:
+        qc_record = session.qc.audit_record_snapshot()
+    qc_result = qc_record.get("result_model")
+    runner_state = qc_record.get("runner") or {}
+    runner_status = str(runner_state.get("status") or "idle")
+    qc_matches_inputs = _qc_matches_current_inputs(session, qc_result)
+    latest_attempt = qc_record.get("latest_attempt")
+    latest_status = (
+        str(latest_attempt.get("status") or "").lower()
+        if isinstance(latest_attempt, dict)
+        else ""
+    )
+    latest_report = (
+        latest_attempt.get("report")
+        if isinstance(latest_attempt, dict)
+        else None
+    )
+    latest_has_report = bool(
+        isinstance(latest_attempt, dict)
+        and latest_attempt.get("report_available")
+        and isinstance(latest_report, dict)
+    )
+    settling = bool(runner_state.get("settling", False))
+    qc_audit_grade = bool(
         qc_result is not None
-        and qc_result.matches_version(session.doc.index, session.doc.doc)
+        and qc_result.schema_version == QC_REPORT_SCHEMA_VERSION
+        and qc_result.protocol_version == QC_PROTOCOL_VERSION
+        and qc_result.input_fingerprint
+        and qc_result.input_manifest
     )
-    qc_current = bool(
-        qc_matches_version and qc_result.open_critical_count() == 0
+    latest_attempt_matches = bool(
+        qc_result is not None
+        and runner_status == "complete"
+        and not settling
+        and isinstance(latest_attempt, dict)
+        and latest_status == "complete"
+        and latest_attempt.get("run_id") == qc_result.run_id
+        and latest_has_report
+        and latest_report.get("run_id") == qc_result.run_id
+        and latest_report.get("execution_status") == "complete"
     )
+    # Freshness and audit sufficiency are intentionally separate readiness
+    # checks.  "Current" answers only whether the retained report belongs to
+    # the live review inputs and is also the latest completed attempt;
+    # "audit complete" answers whether that current report carries the full
+    # v2 coverage/verifier contract and has no unresolved critical findings.
+    # Keeping the predicates distinct makes a failed gate diagnosable instead
+    # of collapsing provenance, completeness, and severity into one boolean.
+    qc_current = bool(qc_matches_inputs and latest_attempt_matches)
+    qc_audit_complete = bool(
+        qc_result is not None
+        and qc_audit_grade
+        and qc_result.is_complete()
+        and qc_result.open_critical_count() == 0
+    )
+    evidence_detail = (
+        "Its paid report is preserved in QC status and export."
+        if latest_has_report
+        else "Its attempt metadata is preserved, but no report was recovered."
+    )
+    if settling:
+        qc_current_detail = (
+            "The stopped Final QC attempt is still settling while already-paid "
+            "work is attached to its audit record; wait for settlement before "
+            "relying on readiness."
+        )
+    elif qc_result is None:
+        if latest_status == "partial":
+            qc_current_detail = (
+                "The latest Final QC attempt settled partial, not complete. "
+                f"{evidence_detail} No audit-complete retained result is available."
+            )
+        elif latest_status == "cancelled":
+            qc_current_detail = (
+                "The latest Final QC attempt was cancelled. "
+                f"{evidence_detail} No audit-complete retained result is available."
+            )
+        elif latest_status == "failed":
+            qc_current_detail = (
+                "The latest Final QC attempt failed. "
+                f"{evidence_detail} No audit-complete retained result is available."
+            )
+        elif latest_status == "running":
+            qc_current_detail = "Final QC is running and has not settled."
+        elif latest_status == "complete":
+            qc_current_detail = (
+                "The latest attempt is labeled complete, but no validated "
+                "audit-complete retained result is available."
+            )
+        else:
+            qc_current_detail = "Final QC has not been run."
+    elif not latest_attempt_matches:
+        if latest_status == "partial":
+            qc_current_detail = (
+                "The latest Final QC rerun settled partial. "
+                f"{evidence_detail} The retained complete report is not the "
+                "latest completed attempt."
+            )
+        elif latest_status == "cancelled":
+            qc_current_detail = (
+                "The latest Final QC rerun was cancelled. "
+                f"{evidence_detail} The retained complete report is not the "
+                "latest completed attempt."
+            )
+        elif latest_status == "failed":
+            qc_current_detail = (
+                "The latest Final QC rerun failed. "
+                f"{evidence_detail} The retained complete report is not the "
+                "latest completed attempt."
+            )
+        elif latest_status == "running":
+            qc_current_detail = (
+                "A newer Final QC attempt is running; the retained complete "
+                "report is not the latest attempt."
+            )
+        else:
+            qc_current_detail = (
+                "The retained Final QC report does not match a validated latest "
+                "complete attempt; re-run Final QC."
+            )
+    elif not qc_matches_inputs:
+        qc_current_detail = (
+            "Final QC is stale — the document or another review input "
+            "(research, standards, module, or source policy) has changed."
+        )
+    else:
+        qc_current_detail = (
+            "Final QC belongs to the current document and complete review "
+            "input set."
+        )
+
     if qc_result is None:
-        qc_detail = "Final QC has not been run."
-    elif not qc_matches_version:
-        qc_detail = "Final QC is stale — the document has changed since it ran."
+        if settling:
+            qc_audit_detail = (
+                "No actionable audit-complete report is available while the "
+                "stopped attempt is still settling."
+            )
+        elif latest_status in {"partial", "cancelled", "failed"}:
+            qc_audit_detail = (
+                f"The {latest_status} attempt evidence is preserved, but no "
+                "actionable audit-complete retained report is available."
+            )
+        else:
+            qc_audit_detail = "No retained Final QC report is available."
+    elif not qc_audit_grade:
+        qc_audit_detail = (
+            "The saved Final QC result is a legacy or unsupported record "
+            "without the current full-input audit contract; re-run Final QC."
+        )
+    elif not qc_result.is_complete():
+        failed_lenses = sum(
+            1 for status in qc_result.lens_statuses if status.status != "completed"
+        )
+        missing_lens_records = sum(
+            1
+            for status in qc_result.lens_statuses
+            if status.status == "completed" and not status.reviewed_checks
+        )
+        failed_seats = sum(
+            1
+            for finding in [
+                *qc_result.findings,
+                *qc_result.refuted,
+                *qc_result.inconclusive,
+            ]
+            for verdict in finding.verdicts
+            if verdict.status != "completed"
+        )
+        missing_seats = sum(
+            max(
+                0,
+                (
+                    finding.verification_panel_size
+                    or (
+                        max(1, settings.QC_VERIFIERS_CRITICAL)
+                        if (finding.original_severity or finding.severity)
+                        in ("critical", "high")
+                        else max(1, settings.QC_VERIFIERS_STANDARD)
+                    )
+                )
+                - len(finding.verdicts),
+            )
+            for finding in [
+                *qc_result.findings,
+                *qc_result.refuted,
+                *qc_result.inconclusive,
+            ]
+        )
+        qc_audit_detail = (
+            "Final QC has incomplete coverage "
+            f"({failed_lenses} failed lens(es), {missing_lens_records} lens "
+            f"record(s) missing, {failed_seats} failed and {missing_seats} "
+            "missing verifier seat(s)); re-run before issue."
+        )
     elif qc_result.open_critical_count() > 0:
-        qc_detail = (
+        qc_audit_detail = (
             f"{qc_result.open_critical_count()} open critical finding(s) — "
             "resolve or dismiss them."
         )
     else:
-        qc_detail = "Final QC is current with no open criticals."
+        qc_audit_detail = (
+            "Audit-grade lens coverage and verifier panels are complete, "
+            "with no open critical findings."
+        )
 
     checks = [
         {
@@ -511,7 +789,13 @@ def _readiness_payload(session) -> dict[str, Any]:
         {
             "id": "qc_current",
             "ok": qc_current,
-            "detail": qc_detail,
+            "detail": qc_current_detail,
+            "advisory": False,
+        },
+        {
+            "id": "qc_audit_complete",
+            "ok": qc_audit_complete,
+            "detail": qc_audit_detail,
             "advisory": False,
         },
     ]
@@ -520,12 +804,36 @@ def _readiness_payload(session) -> dict[str, Any]:
 
 
 def _qc_snapshot_payload(session) -> dict[str, Any]:
-    """QC runner state plus server-authoritative document staleness."""
-    payload = session.qc.snapshot()
-    result = session.qc.result
+    """Coherent runner, action-result, and export-report status snapshot."""
+    qc_record = session.qc.audit_record_snapshot()
+    runner = qc_record.get("runner") or {}
+    result = qc_record.get("result_model")
+    report = qc_record.get("report_for_export_model")
+    latest_attempt = qc_record.get("latest_attempt")
+    payload: dict[str, Any] = {
+        "status": runner.get("status", "idle"),
+        "error": runner.get("error", ""),
+        "settling": bool(runner.get("settling", False)),
+        "events": qc_record.get("events") or [],
+        "latest_attempt": latest_attempt,
+    }
+    if qc_record.get("result") is not None:
+        payload["result"] = qc_record["result"]
+    if qc_record.get("report_for_export") is not None:
+        payload["report"] = qc_record["report_for_export"]
     payload["stale"] = bool(
         result is not None
-        and not result.matches_version(session.doc.index, session.doc.doc)
+        and not _qc_matches_current_inputs(session, result)
+    )
+    payload["report_stale"] = bool(
+        report is not None
+        and not _qc_matches_current_inputs(session, report)
+    )
+    payload["report_is_latest_attempt"] = bool(
+        report is not None
+        and isinstance(latest_attempt, dict)
+        and latest_attempt.get("report_available")
+        and latest_attempt.get("run_id") == report.run_id
     )
     return payload
 
@@ -905,13 +1213,12 @@ def create_app() -> FastAPI:
         base_section = SpecSection.from_dict(store.versions[base_index])
         return diff_sections(base_section, store.doc), None
 
-    @app.get("/api/export/docx")
-    def export_docx(
+    def _export_docx_locked(
+        session,
         redline: str | None = None,
         base: int | None = None,
         mode: str | None = None,
     ) -> Response:
-        session = sessions.get_session()
         store = session.doc
         if mode not in (None, "source", "normalized"):
             return JSONResponse(
@@ -987,7 +1294,23 @@ def create_app() -> FastAPI:
                 headers=_attachment_headers(export_filename(store.doc)),
             )
 
-        qc_result = session.qc.result.to_dict() if session.qc.result else None
+        qc_record = session.qc.audit_record_snapshot()
+        readiness = _readiness_payload(session, qc_record=qc_record)
+        readiness_by_id = {
+            str(check.get("id") or ""): bool(check.get("ok"))
+            for check in readiness.get("checks", [])
+            if isinstance(check, dict)
+        }
+        qc_is_issue_grade = bool(
+            readiness_by_id.get("qc_current")
+            and readiness_by_id.get("qc_audit_complete")
+        )
+        retained_report = qc_record.get("result")
+        qc_result = (
+            retained_report
+            if isinstance(retained_report, dict) and qc_is_issue_grade
+            else None
+        )
         payload = build_docx(
             store.doc,
             audit_result=session.audit.result,
@@ -1007,6 +1330,19 @@ def create_app() -> FastAPI:
             ),
             headers=_attachment_headers(filename),
         )
+
+    @app.get("/api/export/docx")
+    def export_docx(
+        redline: str | None = None,
+        base: int | None = None,
+        mode: str | None = None,
+    ) -> Response:
+        session = sessions.get_session()
+        # Export one coherent snapshot. This intentionally holds the session
+        # guard through generation so a concurrent edit, rerun completion, or
+        # disposition cannot mix document bytes with a different QC closing.
+        with session.session_state_guard():
+            return _export_docx_locked(session, redline, base, mode)
 
     @app.get("/api/doc/diff")
     def doc_diff(base: int, cur: int | None = None) -> JSONResponse:
@@ -1264,6 +1600,15 @@ def create_app() -> FastAPI:
     def research_start() -> JSONResponse:
         session = sessions.get_session()
         with session.session_state_guard():
+            if session.qc.status == "running":
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Final QC is running — let it finish before "
+                        "changing the requirements-research input.",
+                    },
+                    status_code=409,
+                )
             run_generation = session.generation
             runner = session.research
             module = session.module
@@ -1465,6 +1810,15 @@ def create_app() -> FastAPI:
                     },
                     status_code=409,
                 )
+            if session.research.status == "running":
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Requirements research is running — let it "
+                        "finish before taking the Final QC snapshot.",
+                    },
+                    status_code=409,
+                )
             if session.doc.doc.is_empty():
                 return JSONResponse(
                     {"ok": False, "error": "There is no draft to review yet."},
@@ -1476,11 +1830,11 @@ def create_app() -> FastAPI:
                 return JSONResponse(
                     {"ok": False, "error": str(exc)}, status_code=400
                 )
-            # Snapshot the tree while model-turn claiming is excluded; capture
-            # dismiss memory before start() clears the previous result.
+            # Snapshot the tree while model-turn claiming is excluded; carry
+            # prior dismiss decisions into content-identical findings.
             snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
             source_guard = _qc_source_guard(session)
-            remembered = session.qc.remembered_dismissed()
+            remembered = session.qc.remembered_dismissals()
             run_generation = session.generation
             started = session.qc.start(
                 section=snapshot,
@@ -1498,8 +1852,17 @@ def create_app() -> FastAPI:
                 ),
             )
             if not started:
+                runner_state = session.qc.audit_record_snapshot().get("runner") or {}
                 return JSONResponse(
-                    {"ok": False, "error": "Final QC is already running."},
+                    {
+                        "ok": False,
+                        "error": (
+                            "The stopped Final QC attempt is still settling; "
+                            "wait for its paid partial report to be preserved."
+                            if runner_state.get("settling")
+                            else "Final QC is already running."
+                        ),
+                    },
                     status_code=409,
                 )
             return JSONResponse({"ok": True})
@@ -1512,7 +1875,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/qc/stop")
     def qc_stop() -> JSONResponse:
-        """Stop the running Final QC pass. Discards whatever it found.
+        """Stop the running pass while preserving its eventual partial record.
 
         Resolves immediately as a failed run (the UI never waits on the
         background thread to notice); a 409 means nothing is running.
@@ -1527,9 +1890,14 @@ def create_app() -> FastAPI:
     @app.get("/api/qc/stream")
     def qc_stream() -> StreamingResponse:
         runner = sessions.get_session().qc
+        # Bind ownership now, while handling this request. Calling
+        # ``sse_events`` inside the response iterator would defer the binding
+        # until Starlette begins streaming and could silently attach a queued
+        # response to a replacement run.
+        bound_events = runner.sse_events()
 
         def event_stream() -> Iterator[str]:
-            for event in runner.sse_events():
+            for event in bound_events:
                 yield _sse(event)
 
         return StreamingResponse(
@@ -1558,18 +1926,46 @@ def create_app() -> FastAPI:
                     },
                     status_code=409,
                 )
+            if session.qc.status == "running" or session.qc.is_settling:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Final QC is still settling its stopped attempt — "
+                            "wait for paid audit evidence to attach before "
+                            "applying a retained report."
+                            if session.qc.is_settling
+                            else "Final QC is running — wait for the active "
+                            "attempt before applying an older report."
+                        ),
+                    },
+                    status_code=409,
+                )
             result = session.qc.result
             if result is None:
                 return JSONResponse(
                     {"ok": False, "error": "No QC result to apply from."},
                     status_code=409,
                 )
-            if not result.matches_version(session.doc.index, session.doc.doc):
+            if not _qc_result_is_audit_complete(result):
                 return JSONResponse(
                     {
                         "ok": False,
                         "error": (
-                            "Final QC is stale; re-run it before applying fixes."
+                            "The retained Final QC result is not an "
+                            "audit-complete current-schema report; re-run "
+                            "Final QC before applying findings."
+                        ),
+                    },
+                    status_code=409,
+                )
+            if not _qc_matches_current_inputs(session, result):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Final QC is stale because the document or another "
+                            "review input changed; re-run it before applying fixes."
                         ),
                     },
                     status_code=409,
@@ -1589,30 +1985,81 @@ def create_app() -> FastAPI:
         combined_ops: list[dict[str, Any]] = []
         applied_ids: list[str] = []
         outcomes: dict[str, str] = {}
-        for finding_id in body.finding_ids:
+        skipped_events: list[tuple[str, str, str]] = []
+        selected_ids = list(dict.fromkeys(body.finding_ids))
+        for finding_id in selected_ids:
             finding = result.finding(finding_id)
             if finding is None:
                 outcomes[finding_id] = "unknown"
                 continue
             if not finding.ops_valid or not finding.proposed_ops:
                 outcomes[finding_id] = "no_ops"
+                skipped_events.append(
+                    (
+                        finding_id,
+                        "apply_no_ops",
+                        "No validated mechanical operations were available.",
+                    )
+                )
                 continue
             if finding.status == "applied":
                 outcomes[finding_id] = "already_applied"
+                skipped_events.append(
+                    (
+                        finding_id,
+                        "apply_already_applied",
+                        "Finding was already marked applied.",
+                    )
+                )
+                continue
+            if finding.status != "open":
+                outcomes[finding_id] = "not_open"
+                skipped_events.append(
+                    (
+                        finding_id,
+                        "apply_not_open",
+                        f"Finding disposition is {finding.status!r}; only open "
+                        "findings may be applied.",
+                    )
+                )
                 continue
             try:
                 working, _applied = apply_edits(working, finding.proposed_ops)
             except SpecEditError:
                 outcomes[finding_id] = "stale"
+                skipped_events.append(
+                    (
+                        finding_id,
+                        "apply_stale",
+                        "The proposed operations no longer applied cleanly in the "
+                        "selected batch; nothing from this finding was applied.",
+                    )
+                )
                 continue
             combined_ops.extend(finding.proposed_ops)
             applied_ids.append(finding_id)
             outcomes[finding_id] = "applied"
 
+        def record_skipped_outcomes() -> None:
+            """Append outcome events while ``session_state_guard`` is held."""
+            outcome_version = session.doc.index
+            outcome_fingerprint = qc_version_fingerprint(session.doc.doc)
+            for finding_id, action, reason in skipped_events:
+                session.qc.record_disposition_outcome(
+                    finding_id,
+                    action=action,
+                    reason=reason,
+                    document_version=outcome_version,
+                    document_fingerprint=outcome_fingerprint,
+                )
+
         if combined_ops:
             with session.session_state_guard():
                 if (
                     session.turn_active
+                    or session.qc.status == "running"
+                    or session.qc.is_settling
+                    or not _qc_result_is_audit_complete(result)
                     or session.generation != generation
                     or session.doc.index != version_index
                     or session.doc.versions[version_index] is not version_record
@@ -1637,7 +2084,46 @@ def create_app() -> FastAPI:
                         {"ok": False, "error": str(exc)}, status_code=400
                     )
                 session.doc.commit_turn()
-                session.qc.mark_applied(applied_ids)
+                session.qc.mark_applied(
+                    applied_ids,
+                    document_version=session.doc.index,
+                    document_fingerprint=qc_version_fingerprint(
+                        session.doc.doc
+                    ),
+                )
+                # Applied findings and skipped outcomes are one disposition
+                # transaction.  Releasing the lock between these steps could
+                # let a new QC run start, producing a 409 response after the
+                # document had already committed.
+                record_skipped_outcomes()
+        else:
+            # No document mutation occurred, but outcome events still belong
+            # only to the exact result/version validated above.
+            with session.session_state_guard():
+                if (
+                    session.qc.status == "running"
+                    or session.qc.is_settling
+                    or not _qc_result_is_audit_complete(result)
+                    or session.generation != generation
+                    or session.doc.index != version_index
+                    or session.doc.versions[session.doc.index]
+                    is not version_record
+                    or session.doc.doc.to_dict() != version_record
+                    or session.qc.result is not result
+                    or result.to_dict() != result_record
+                ):
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": (
+                                "The session or QC result changed while "
+                                "recording application outcomes; no stale "
+                                "outcome was recorded."
+                            ),
+                        },
+                        status_code=409,
+                    )
+                record_skipped_outcomes()
 
         return JSONResponse(
             {"ok": True, "outcomes": outcomes, **_doc_payload(session)}
@@ -1647,26 +2133,113 @@ def create_app() -> FastAPI:
     def qc_dismiss(body: QcDismissRequest) -> JSONResponse:
         session = sessions.get_session()
         with session.session_state_guard():
-            if not session.qc.dismiss(body.finding_id, body.reason or ""):
+            if session.qc.status == "running" or session.qc.is_settling:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Final QC is still settling its stopped attempt — "
+                            "wait for paid audit evidence to attach before "
+                            "recording a disposition."
+                            if session.qc.is_settling
+                            else "Final QC is running — wait for the active "
+                            "attempt before recording a disposition."
+                        ),
+                    },
+                    status_code=409,
+                )
+            reason = body.reason.strip()
+            if not reason:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "A dismissal rationale is required for the "
+                            "Final QC audit record."
+                        ),
+                    },
+                    status_code=400,
+                )
+            result = session.qc.result
+            if result is not None and not _qc_result_is_audit_complete(result):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "The retained Final QC result is not an "
+                            "audit-complete current-schema report; re-run "
+                            "Final QC before dismissing findings."
+                        ),
+                    },
+                    status_code=409,
+                )
+            finding = (
+                result.finding(body.finding_id) if result is not None else None
+            )
+            if finding is None:
                 return JSONResponse(
                     {"ok": False, "error": "No such finding to dismiss."},
                     status_code=404,
                 )
+            if finding.status == "applied":
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "This finding is already applied and cannot be "
+                            "rewritten as dismissed."
+                        ),
+                    },
+                    status_code=409,
+                )
+            if not session.qc.dismiss(
+                body.finding_id,
+                reason,
+                document_version=session.doc.index,
+                document_fingerprint=qc_version_fingerprint(session.doc.doc),
+            ):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "The finding disposition could not be changed.",
+                    },
+                    status_code=409,
+                )
             return JSONResponse({"ok": True, "qc": _qc_snapshot_payload(session)})
 
     @app.get("/api/qc/export")
-    def qc_export() -> Response:
+    def qc_export(run_id: str = "") -> Response:
         session = sessions.get_session()
         with session.session_state_guard():
-            result = session.qc.result
-            if result is None:
+            qc_record = session.qc.audit_record_snapshot()
+            result = qc_record.get("report_for_export_model")
+            result_payload = qc_record.get("report_for_export")
+            if result is None or not isinstance(result_payload, dict):
                 return JSONResponse(
                     {"ok": False, "error": "Run Final QC first."},
                     status_code=409,
                 )
+            expected_run_id = run_id.strip()
+            selected_run_id = str(result_payload.get("run_id") or "")
+            if expected_run_id and selected_run_id != expected_run_id:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "The selected Final QC report changed before "
+                            "download; refresh QC status and try again."
+                        ),
+                        "expected_run_id": expected_run_id,
+                        "selected_run_id": selected_run_id,
+                    },
+                    status_code=409,
+                )
             section = SpecSection.from_dict(session.doc.doc.to_dict())
-            stale = not result.matches_version(session.doc.index, section)
-            result_payload = result.to_dict()
+            current_state = _qc_export_current_state(
+                session, result, qc_record=qc_record
+            )
+            stale = bool(current_state["stale"])
+            result_payload["export_current_state"] = current_state
             stem = section.number.replace(" ", "") or "draft"
         payload = build_qc_memo(result_payload, section, stale=stale)
         return Response(
@@ -1675,7 +2248,56 @@ def create_app() -> FastAPI:
                 "application/vnd.openxmlformats-officedocument"
                 ".wordprocessingml.document"
             ),
-            headers=_attachment_headers(f"QC MEMO {stem}.docx"),
+            headers=_attachment_headers(f"FINAL QC REPORT {stem}.docx"),
+        )
+
+    @app.get("/api/qc/export.json")
+    def qc_export_json(run_id: str = "") -> Response:
+        """Machine-readable twin of the detailed Word Final QC report."""
+        session = sessions.get_session()
+        with session.session_state_guard():
+            qc_record = session.qc.audit_record_snapshot()
+            result = qc_record.get("report_for_export_model")
+            report_payload = qc_record.get("report_for_export")
+            if result is None or not isinstance(report_payload, dict):
+                return JSONResponse(
+                    {"ok": False, "error": "Run Final QC first."},
+                    status_code=409,
+                )
+            expected_run_id = run_id.strip()
+            selected_run_id = str(report_payload.get("run_id") or "")
+            if expected_run_id and selected_run_id != expected_run_id:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "The selected Final QC report changed before "
+                            "download; refresh QC status and try again."
+                        ),
+                        "expected_run_id": expected_run_id,
+                        "selected_run_id": selected_run_id,
+                    },
+                    status_code=409,
+                )
+            section = session.doc.doc
+            stem = section.number.replace(" ", "") or "draft"
+            current_state = _qc_export_current_state(
+                session, result, qc_record=qc_record
+            )
+            payload = {
+                "report": report_payload,
+                "current_state": current_state,
+            }
+            retained_payload = qc_record.get("result")
+            if (
+                isinstance(retained_payload, dict)
+                and retained_payload.get("run_id") != report_payload.get("run_id")
+            ):
+                payload["last_successful_report"] = retained_payload
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+            media_type="application/json",
+            headers=_attachment_headers(f"FINAL QC REPORT {stem}.json"),
         )
 
     # --- Readiness gate (deterministic; no model call) ----------------------
@@ -1705,12 +2327,13 @@ def create_app() -> FastAPI:
     def project_save() -> Response:
         session = sessions.get_session()
         try:
-            payload = sessions.project_package_bytes(session)
+            with session.session_state_guard():
+                payload = sessions.project_package_bytes(session)
+                filename = sessions.project_default_filename(session)
         except ProjectPackageError as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=409
             )
-        filename = sessions.project_default_filename(session)
         return Response(
             content=payload,
             media_type=PACKAGE_MEDIA_TYPE,

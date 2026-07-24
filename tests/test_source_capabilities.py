@@ -21,10 +21,8 @@ from backend.app import _qc_source_guard, create_app
 from backend.llm.conversation import _source_editing_boundary_block
 from backend.qc.engine import (
     QCFinding,
-    QCResult,
     _lens_user_message,
     _validate_ops,
-    qc_version_fingerprint,
 )
 from backend.qc.schema import QC_LENSES
 import backend.spec_doc.source_patch as source_patch_module
@@ -50,6 +48,7 @@ from tests.docx_fidelity_helpers import (
     make_table_projection_master,
     rewrite_zip_members,
 )
+from tests.fakes import audit_grade_qc_result
 
 
 _DOCUMENT_PART = "word/document.xml"
@@ -678,11 +677,7 @@ def test_api_capabilities_refresh_across_history_project_load_and_qc_apply(
     )
     session = sessions.get_session()
     session.qc.restore(
-        QCResult(
-            findings=[finding],
-            version_index=session.doc.index,
-            version_fingerprint=qc_version_fingerprint(session.doc.doc),
-        )
+        audit_grade_qc_result(session, [finding])
     )
     applied = api_client.post(
         "/api/qc/apply",

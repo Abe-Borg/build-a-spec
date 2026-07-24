@@ -87,6 +87,7 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         if source_docx_map is not None and hasattr(source_docx_map, "to_dict")
         else source_docx_map
     )
+    qc_record = session.qc.audit_record_snapshot()
     return save_project(
         session.history,
         session.doc,
@@ -95,7 +96,8 @@ def project_payload(session: SessionState) -> dict[str, Any]:
             research_profile.to_dict() if research_profile else None
         ),
         audit_result=session.audit.result,
-        qc_result=session.qc.result.to_dict() if session.qc.result else None,
+        qc_result=qc_record["result"],
+        qc_latest_attempt=qc_record["latest_attempt"],
         discipline=session.discipline,
         project_context=session.project_context,
         figures=session.figures.to_dict(),

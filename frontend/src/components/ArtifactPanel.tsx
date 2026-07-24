@@ -57,7 +57,7 @@ interface Props {
   onStartQc: () => void;
   onStopQc: () => void;
   onApplyQc: (findingIds: string[]) => void;
-  onDismissQc: (findingId: string, reason?: string) => void;
+  onDismissQc: (findingId: string, reason: string) => Promise<void>;
   onDraftFull: () => void;
   onAskModel: (text: string) => void;
   onFetchDiff: (base: number, cur?: number) => Promise<SectionDiffPayload>;
@@ -474,6 +474,29 @@ export default function ArtifactPanel({
                   >
                     Redline vs version…
                   </span>
+                )}
+                {(qc?.report ?? qc?.result) && (
+                  <>
+                    <span className="my-1 block border-t border-edge" />
+                    <a
+                      className="block px-3 py-1.5 font-medium text-accent hover:bg-surface hover:text-accent-hover"
+                      href="/api/qc/export"
+                      download
+                      onClick={() => setExportMenuOpen(false)}
+                      title="Complete human-readable Final QC report with findings, evidence, verification, and disposition history"
+                    >
+                      Final QC report (DOCX)
+                    </a>
+                    <a
+                      className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
+                      href="/api/qc/export.json"
+                      download
+                      onClick={() => setExportMenuOpen(false)}
+                      title="Complete machine-readable Final QC record"
+                    >
+                      Final QC record (JSON)
+                    </a>
+                  </>
                 )}
               </div>
             )}

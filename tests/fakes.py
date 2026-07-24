@@ -14,6 +14,114 @@ from types import SimpleNamespace
 from typing import Any
 
 
+def audit_grade_qc_result(session: Any, findings: list[Any]):
+    """Build a current, complete QC result for non-QC endpoint tests.
+
+    A few concurrency/source-preservation tests need a trusted QC result only
+    to reach the later guard they actually exercise.  Keep those fixtures on
+    the same v2 identity, lens, verifier, and pricing contract as production
+    instead of weakening the endpoint's audit-completeness gate.
+    """
+    import uuid
+
+    from backend import settings
+    from backend.app import _qc_source_guard
+    from backend.qc.engine import (
+        QC_PROTOCOL_VERSION,
+        QC_REPORT_SCHEMA_VERSION,
+        QCLensStatus,
+        QCResult,
+        QCReviewedCheck,
+        QCVerdict,
+        build_qc_input_manifest,
+        qc_input_fingerprint,
+        qc_version_fingerprint,
+    )
+    from backend.qc.schema import QC_LENSES
+    from backend.usage_ledger import usage_pricing_snapshot
+
+    profile = session.research.profile_result
+    source_guard = _qc_source_guard(session)
+    manifest = build_qc_input_manifest(
+        session.doc.doc,
+        profile,
+        session.module,
+        version_index=session.doc.index,
+        discipline=session.discipline,
+        source_guard=source_guard,
+        model=settings.QC_MODEL,
+        max_tokens=settings.QC_MAX_TOKENS,
+    )
+    lens_ids = {lens.lens_id for lens in QC_LENSES}
+    default_lens_id = "coordination_consistency"
+    for finding in findings:
+        if finding.lens_id not in lens_ids:
+            finding.lens_id = default_lens_id
+        original_severity = finding.original_severity or finding.severity
+        finding.original_severity = original_severity
+        panel_size = (
+            settings.QC_VERIFIERS_CRITICAL
+            if original_severity in {"critical", "high"}
+            else settings.QC_VERIFIERS_STANDARD
+        )
+        panel_size = max(1, panel_size)
+        finding.verification_panel_size = panel_size
+        finding.verification_threshold = (panel_size // 2) + 1
+        finding.verification_outcome = "upheld"
+        finding.verdicts = [
+            QCVerdict(
+                upholds=True,
+                note="Audit-grade endpoint test fixture upheld the finding.",
+                reviewer_index=index,
+            )
+            for index in range(1, panel_size + 1)
+        ]
+
+    lens_statuses = []
+    for lens in QC_LENSES:
+        lens_findings = [f for f in findings if f.lens_id == lens.lens_id]
+        lens_statuses.append(
+            QCLensStatus(
+                lens_id=lens.lens_id,
+                title=lens.title,
+                brief=lens.brief,
+                status="completed",
+                finding_count=len(lens_findings),
+                grounded_count=sum(1 for f in lens_findings if f.grounded),
+                reviewed_checks=[
+                    QCReviewedCheck(
+                        check=f"Test coverage for {lens.title}",
+                        outcome="finding" if lens_findings else "passed",
+                        element_ids=[
+                            f.element_id for f in lens_findings if f.element_id
+                        ],
+                    )
+                ],
+            )
+        )
+
+    return QCResult(
+        schema_version=QC_REPORT_SCHEMA_VERSION,
+        protocol_version=QC_PROTOCOL_VERSION,
+        run_id=f"qc-test-{uuid.uuid4().hex}",
+        execution_status="complete",
+        summary="Audit-grade endpoint test fixture.",
+        findings=findings,
+        lens_statuses=lens_statuses,
+        started_at="2026-07-24T10:00:00+00:00",
+        finished_at="2026-07-24T10:00:01+00:00",
+        version_index=session.doc.index,
+        version_fingerprint=qc_version_fingerprint(session.doc.doc),
+        input_fingerprint=qc_input_fingerprint(manifest),
+        input_manifest=manifest,
+        model=settings.QC_MODEL,
+        effort=settings.QC_EFFORT,
+        max_tokens=settings.QC_MAX_TOKENS,
+        cost_basis=usage_pricing_snapshot(settings.QC_MODEL),
+        research_profile_present=profile is not None,
+    )
+
+
 def text_block(text: str) -> SimpleNamespace:
     return SimpleNamespace(type="text", text=text)
 
@@ -428,6 +536,7 @@ def qc_findings_response(
     *,
     findings: list[dict] | None = None,
     summary: str = "",
+    reviewed_checks: list[dict] | None = None,
     searched_urls: list[str] | None = None,
     stop_reason: str = "tool_use",
     searches: int | None = None,
@@ -443,11 +552,29 @@ def qc_findings_response(
     if searched_urls:
         content.append(search_result_block(searched_urls))
     if findings is not None:
+        checks = reviewed_checks
+        if checks is None:
+            checks = [
+                {
+                    "check": f"{lens} full-scope review",
+                    "outcome": "finding" if findings else "passed",
+                    "notes": (
+                        f"Reviewed the {lens} scope and recorded "
+                        f"{len(findings)} candidate finding(s)."
+                    ),
+                    "element_ids": [],
+                    "source_urls": [],
+                }
+            ]
         content.append(
             tool_use_block(
                 "toolu_qc_findings",
                 "submit_qc_findings",
-                {"summary": summary, "findings": findings},
+                {
+                    "summary": summary,
+                    "reviewed_checks": checks,
+                    "findings": findings,
+                },
             )
         )
     return SimpleNamespace(

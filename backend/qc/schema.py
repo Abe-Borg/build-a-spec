@@ -26,6 +26,7 @@ QC_FINDINGS_TOOL_NAME = "submit_qc_findings"
 QC_VERDICT_TOOL_NAME = "submit_qc_verdict"
 
 SEVERITIES: tuple[str, ...] = ("critical", "high", "medium", "low")
+QC_CHECK_OUTCOMES: tuple[str, ...] = ("passed", "finding", "not_applicable")
 # Rank for the median-severity math (higher = more severe).
 SEVERITY_RANK: dict[str, int] = {"critical": 3, "high": 2, "medium": 1, "low": 0}
 _RANK_SEVERITY: dict[int, str] = {v: k for k, v in SEVERITY_RANK.items()}
@@ -210,11 +211,59 @@ _QC_OP_SCHEMA: dict[str, Any] = {
 QC_FINDINGS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["summary", "findings"],
+    "required": ["summary", "reviewed_checks", "findings"],
     "properties": {
         "summary": {
             "type": "string",
             "description": "One or two sentences on what this lens found overall.",
+        },
+        "reviewed_checks": {
+            "type": "array",
+            "description": (
+                "A concise audit trail of the substantive checks this lens "
+                "actually performed, including checks that passed or were "
+                "not applicable. This is observable work, not hidden reasoning."
+            ),
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "check",
+                    "outcome",
+                    "notes",
+                    "element_ids",
+                    "source_urls",
+                ],
+                "properties": {
+                    "check": {
+                        "type": "string",
+                        "description": "What was checked, stated as a review task.",
+                    },
+                    "outcome": {
+                        "type": "string",
+                        "enum": list(QC_CHECK_OUTCOMES),
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": (
+                            "Short result note. Do not include private reasoning or "
+                            "chain-of-thought."
+                        ),
+                    },
+                    "element_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Relevant specification element ids, else [].",
+                    },
+                    "source_urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "URLs actually retrieved for this check, else []."
+                        ),
+                    },
+                },
+            },
         },
         "findings": {
             "type": "array",
@@ -373,6 +422,36 @@ def normalize_findings(payload: dict) -> dict[str, Any]:
     (or ``[]`` when the model supplied none / an unclean set). The engine
     dry-runs the ops later — this only shapes them.
     """
+    reviewed_checks: list[dict[str, Any]] = []
+    for raw in payload.get("reviewed_checks") or []:
+        if not isinstance(raw, dict):
+            continue
+        check = str(raw.get("check") or "").strip()
+        if not check:
+            continue
+        outcome = str(raw.get("outcome") or "").strip().lower()
+        if outcome not in QC_CHECK_OUTCOMES:
+            # A malformed outcome is not evidence of a passed review task.
+            # Drop it so v2 coverage fails closed when no valid checks remain.
+            continue
+        reviewed_checks.append(
+            {
+                "check": check,
+                "outcome": outcome,
+                "notes": str(raw.get("notes") or "").strip(),
+                "element_ids": [
+                    str(value).strip()
+                    for value in (raw.get("element_ids") or [])
+                    if str(value).strip()
+                ],
+                "source_urls": [
+                    value.strip()
+                    for value in (raw.get("source_urls") or [])
+                    if isinstance(value, str) and value.strip()
+                ],
+            }
+        )
+
     findings: list[dict[str, Any]] = []
     for raw in payload.get("findings") or []:
         if not isinstance(raw, dict):
@@ -409,17 +488,21 @@ def normalize_findings(payload: dict) -> dict[str, Any]:
         )
     return {
         "summary": str(payload.get("summary") or "").strip(),
+        "reviewed_checks": reviewed_checks,
         "findings": findings,
     }
 
 
 def normalize_verdict(payload: dict) -> dict[str, Any]:
     """Clamp a ``submit_qc_verdict`` payload; unknown severity → keep original."""
+    upholds = payload.get("upholds")
+    if not isinstance(upholds, bool):
+        raise ValueError("QC verdict 'upholds' must be a JSON boolean.")
     revised = str(payload.get("revised_severity") or "").strip().lower()
     if revised not in SEVERITIES:
         revised = ""
     return {
-        "upholds": bool(payload.get("upholds")),
+        "upholds": upholds,
         "revised_severity": revised,
         "note": str(payload.get("note") or "").strip(),
     }

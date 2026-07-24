@@ -51,6 +51,10 @@ interface Props {
   onRedo: () => void;
   onEditDoc: (ops: EditOp[]) => void;
   onLoadProject: (file: File) => void;
+  /** Native pywebview Open dialog (Open / Import). Resolves to a File when
+   *  the user picked one, null when cancelled, or undefined when there is no
+   *  native bridge — the caller then falls back to the hidden file input. */
+  nativeOpenFile: (kind: "project" | "docx") => Promise<File | null | undefined>;
   onImportMaster: (file: File) => void;
   onStartResearch: () => void;
   onStopResearch: () => void;
@@ -131,6 +135,7 @@ export default function ArtifactPanel({
   onRedo,
   onEditDoc,
   onLoadProject,
+  nativeOpenFile,
   onImportMaster,
   onStartResearch,
   onStopResearch,
@@ -146,6 +151,20 @@ export default function ArtifactPanel({
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const [pendingImport, setPendingImport] = useState<File | null>(null);
+
+  // Open / Import: prefer the native pywebview dialog (the HTML file input
+  // silently yields no bytes inside the webview); fall back to the hidden
+  // <input type="file"> in a plain browser (undefined = no native bridge).
+  const handleOpenClick = async () => {
+    const file = await nativeOpenFile("project");
+    if (file === undefined) fileRef.current?.click();
+    else if (file) onLoadProject(file);
+  };
+  const handleImportClick = async () => {
+    const file = await nativeOpenFile("docx");
+    if (file === undefined) importRef.current?.click();
+    else if (file) setPendingImport(file);
+  };
   // Open-items list collapses like the Review / Final QC drawers; the count
   // stays visible in the bar, so nothing is lost at a glance when collapsed.
   const [openItemsExpanded, setOpenItemsExpanded] = useState(false);
@@ -492,7 +511,7 @@ export default function ArtifactPanel({
           </a>
           <button
             className={actionButton}
-            onClick={() => fileRef.current?.click()}
+            onClick={handleOpenClick}
             disabled={busy}
             title="Open a saved project file"
           >
@@ -520,7 +539,7 @@ export default function ArtifactPanel({
           >
             <button
               className={actionButton}
-              onClick={() => importRef.current?.click()}
+              onClick={handleImportClick}
               disabled={busy || hasContent}
               data-tour="import-master"
             >

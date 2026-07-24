@@ -658,6 +658,14 @@ declare global {
          *  gate); resolves true when a file was written, false if the native
          *  Save dialog was cancelled. */
         save_project?: () => Promise<boolean>;
+        /** Native Open dialog (the panel's Open / Import buttons). HTML file
+         *  inputs don't reliably deliver bytes to JS in the webview, so the
+         *  shell reads the picked file and returns it for the normal upload
+         *  path. Resolves to the file's name + base64 bytes, or null when the
+         *  dialog was cancelled. `kind` picks the file filter. */
+        open_file?: (
+          kind: "project" | "docx",
+        ) => Promise<{ name: string; data_b64: string } | null>;
       };
     };
     buildaspecRequestClose?: () => void;

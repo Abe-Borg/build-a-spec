@@ -215,6 +215,7 @@ def test_discard_and_close_closes_without_saving():
 def _fake_webview(monkeypatch) -> None:
     module = types.ModuleType("webview")
     module.SAVE_DIALOG = 20  # sentinel; the fake window ignores it
+    module.OPEN_DIALOG = 10  # sentinel; the fake window ignores it
     monkeypatch.setitem(sys.modules, "webview", module)
 
 
@@ -273,3 +274,71 @@ def test_save_project_cancelled_dialog_returns_false(monkeypatch):
     assert controller.save_project() is False
     assert window.dialog_calls, "the Save dialog should have been offered"
     assert window.destroyed is False
+
+
+# --- native Open (open_file): HTML file inputs are unreliable in the webview --
+
+
+def test_open_file_returns_name_and_bytes(tmp_path, monkeypatch):
+    # The Open/Import buttons in the native shell read the picked file here and
+    # hand its exact bytes to JS (base64) for the ordinary upload path.
+    import base64
+
+    _fake_webview(monkeypatch)
+    project = tmp_path / "buildaspec-prev.baspec"
+    payload = b"PK\x03\x04 pretend .baspec bytes \x00\x01\x02"
+    project.write_bytes(payload)
+    window = _FakeWindow(dialog_path=str(project))
+    controller = _controller_with(window)
+
+    result = controller.open_file("project")
+
+    assert result is not None
+    assert result["name"] == "buildaspec-prev.baspec"
+    assert base64.b64decode(result["data_b64"]) == payload
+    # The Open dialog (not the Save dialog) was used.
+    (args, kwargs), = window.dialog_calls
+    assert args[0] == sys.modules["webview"].OPEN_DIALOG
+    assert kwargs.get("allow_multiple") is False
+
+
+def test_open_file_project_vs_docx_filter(tmp_path, monkeypatch):
+    _fake_webview(monkeypatch)
+    target = tmp_path / "x.docx"
+    target.write_bytes(b"docx")
+    window = _FakeWindow(dialog_path=str(target))
+    controller = _controller_with(window)
+
+    controller.open_file("docx")
+    (_, kwargs), = window.dialog_calls
+    joined = " ".join(kwargs.get("file_types", ()))
+    assert ".docx" in joined and ".baspec" not in joined
+
+
+def test_open_file_cancelled_returns_none(monkeypatch):
+    _fake_webview(monkeypatch)
+    window = _FakeWindow(dialog_path=None)  # user backed out of the Open dialog
+    controller = _controller_with(window)
+
+    assert controller.open_file("project") is None
+
+
+def test_open_file_tuple_result_is_supported(tmp_path, monkeypatch):
+    # Some pywebview backends return a 1-tuple of paths rather than a string.
+    _fake_webview(monkeypatch)
+    project = tmp_path / "p.baspec"
+    project.write_bytes(b"data")
+    window = _FakeWindow(dialog_path=(str(project),))
+    controller = _controller_with(window)
+
+    result = controller.open_file("project")
+    assert result is not None and result["name"] == "p.baspec"
+
+
+def test_open_file_unreadable_path_returns_none(tmp_path, monkeypatch):
+    _fake_webview(monkeypatch)
+    missing = tmp_path / "does-not-exist.baspec"
+    window = _FakeWindow(dialog_path=str(missing))
+    controller = _controller_with(window)
+
+    assert controller.open_file("project") is None

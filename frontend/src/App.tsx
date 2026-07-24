@@ -920,6 +920,35 @@ export default function App() {
     else void doLoadProject(file);
   };
 
+  /**
+   * Open a file through the native pywebview dialog, when the shell is
+   * present. HTML `<input type="file">` is unreliable inside the webview
+   * (the dialog opens and a file can be picked, but `input.files` arrives
+   * empty, so Open/Import silently did nothing) — mirroring the native Save
+   * dialog, the shell reads the picked file and hands its bytes back here.
+   *
+   * Resolves to a File when the user picked one, `null` when they cancelled,
+   * or `undefined` when there is no native bridge — the caller then falls
+   * back to the hidden HTML `<input type="file">` (dev / plain browser),
+   * where the input works normally.
+   */
+  const nativeOpenFile = async (
+    kind: "project" | "docx",
+  ): Promise<File | null | undefined> => {
+    const api = window.pywebview?.api;
+    if (!api?.open_file) return undefined; // browser/dev → HTML input
+    try {
+      const picked = await api.open_file(kind);
+      if (!picked) return null; // cancelled
+      const binary = atob(picked.data_b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return new File([bytes], picked.name);
+    } catch {
+      return null; // dialog/read error — treat as a no-op, never throw
+    }
+  };
+
   // --- Guided tour (Batch 6) ---
   const hasContent =
     !!doc &&
@@ -1084,6 +1113,7 @@ export default function App() {
           onRedo={onRedo}
           onEditDoc={onEditDoc}
           onLoadProject={onLoadProject}
+          nativeOpenFile={nativeOpenFile}
           onImportMaster={onImportMaster}
           onStartResearch={onStartResearch}
           onStopResearch={onStopResearch}

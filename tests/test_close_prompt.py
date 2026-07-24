@@ -8,6 +8,7 @@ the unsaved-progress predicate, the shared save-payload helpers, and the
 """
 from __future__ import annotations
 
+import enum
 import re
 import sys
 import time
@@ -212,10 +213,17 @@ def test_discard_and_close_closes_without_saving():
     assert window.dialog_calls == []  # no save dialog
 
 
+class _FakeFileDialog(enum.IntEnum):
+    """Mirrors pywebview's ``FileDialog`` enum; values are sentinels only."""
+
+    OPEN = 10
+    FOLDER = 20
+    SAVE = 30
+
+
 def _fake_webview(monkeypatch) -> None:
     module = types.ModuleType("webview")
-    module.SAVE_DIALOG = 20  # sentinel; the fake window ignores it
-    module.OPEN_DIALOG = 10  # sentinel; the fake window ignores it
+    module.FileDialog = _FakeFileDialog
     monkeypatch.setitem(sys.modules, "webview", module)
 
 
@@ -298,7 +306,7 @@ def test_open_file_returns_name_and_bytes(tmp_path, monkeypatch):
     assert base64.b64decode(result["data_b64"]) == payload
     # The Open dialog (not the Save dialog) was used.
     (args, kwargs), = window.dialog_calls
-    assert args[0] == sys.modules["webview"].OPEN_DIALOG
+    assert args[0] == sys.modules["webview"].FileDialog.OPEN
     assert kwargs.get("allow_multiple") is False
 
 

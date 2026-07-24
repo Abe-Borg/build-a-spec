@@ -217,7 +217,7 @@ class _CloseController:
         )
         try:
             result = self._window.create_file_dialog(
-                webview.OPEN_DIALOG,
+                webview.FileDialog.OPEN,
                 allow_multiple=False,
                 file_types=file_types,
             )
@@ -226,7 +226,7 @@ class _CloseController:
         if not result:
             return None  # user cancelled the Open dialog
         # create_file_dialog returns a path string on some backends, a
-        # 1-tuple/list on others (mirrors the SAVE_DIALOG handling).
+        # 1-tuple/list on others (mirrors the FileDialog.SAVE handling).
         target = result[0] if isinstance(result, (tuple, list)) else result
         try:
             with open(os.fspath(target), "rb") as handle:
@@ -261,7 +261,7 @@ class _CloseController:
         except Exception:
             return False
         target = self._window.create_file_dialog(
-            webview.SAVE_DIALOG,
+            webview.FileDialog.SAVE,
             save_filename=filename,
             file_types=_PROJECT_SAVE_FILE_TYPES,
         )

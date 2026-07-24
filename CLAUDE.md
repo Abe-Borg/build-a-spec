@@ -32,7 +32,8 @@ main.py                    entry point: uvicorn thread + pywebview window;
                            _CloseController offers to save progress on window
                            close (closing-event veto → off-thread frontend
                            prompt → js_api save_and_close/discard_and_close,
-                           native save via SAVE_DIALOG; never traps the user)
+                           native save via webview.FileDialog.SAVE; never traps
+                           the user)
 backend/
   settings.py              models (claude-sonnet-5 default), effort levels
                            (interview high / research xhigh), max_tokens at
@@ -1715,7 +1716,7 @@ new deps, no project-file format bump; one thin REST route + one js_api method.
   (`{kind:"new-session"} | {kind:"open-project"; file} | null`) — the pending
   File rides the state so the load runs after the gate resolves.
 - **The save mechanism.** `_CloseController.save_project()` (main.py) reuses
-  `_save_project_file()` (native `webview.SAVE_DIALOG`) but never
+  `_save_project_file()` (native `webview.FileDialog.SAVE`) but never
   `_force_close()` — auto-exposed to JS as `window.pywebview.api.save_project`,
   returning True on write / False on a cancelled Save-As. The frontend proceeds
   to the reset/load ONLY on True, so a cancelled save keeps the session.

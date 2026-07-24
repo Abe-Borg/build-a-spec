@@ -2,7 +2,8 @@
 
 Office-style SectionFormat layout: centered section header, PART headings,
 ``1.1  TITLE`` articles, hanging-indent paragraph levels (A. / 1. / a. /
-1)), END OF SECTION — followed on a new page by the **assumptions
+1)) backed by genuine Word multilevel numbering in clean exports, END OF
+SECTION — followed on a new page by the **assumptions
 schedule**: every ``assumed`` block listed with its numbering so a senior
 reviewer can audit each model default in one pass, plus the open-item
 schedule ([TBD: ...] markers and ``needs_input`` blocks).
@@ -24,10 +25,10 @@ from .. import settings
 from .diffing import ElementDiff, SectionDiff
 from .model import (
     SpecSection,
-    _paragraph_label,
     iter_paragraphs,
     open_questions,
 )
+from .word_numbering import SectionFormatNumbering
 
 _LEVEL_INDENT = Inches(0.45)
 
@@ -48,18 +49,6 @@ def _centered(document, text: str, *, bold: bool = True):
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run(text)
     run.bold = bold
-    return p
-
-
-def _labelled(document, label: str, text: str, level: int):
-    """A hanging-indent paragraph: label at the level's indent, text after."""
-    p = document.add_paragraph()
-    pf = p.paragraph_format
-    pf.left_indent = _LEVEL_INDENT * (level + 1)
-    pf.first_line_indent = -_LEVEL_INDENT
-    pf.tab_stops.add_tab_stop(_LEVEL_INDENT * (level + 1), WD_TAB_ALIGNMENT.LEFT)
-    pf.space_after = Pt(6)
-    p.add_run(f"{label}\t{text}")
     return p
 
 
@@ -100,12 +89,13 @@ def build_docx(
     ``w:delText``, deleted/inserted paragraph marks) instead of the plain
     tree. **Accept All** reproduces ``section`` (the cur tree) exactly,
     numbering included; **Reject All** reproduces the diff's base tree's
-    provision *text*. Display numbering (A. / 1.1 / a.) is positional and
-    recomputes to the rendered view — it is written as a plain literal so a
-    survivor whose position shifted keeps the current label, never a tracked
-    mark (the frozen "moves are not marked" decision). The schedules below are
-    always rendered plainly from ``section`` (the current document), never
-    redlined. ``redline_date`` overrides the ISO-8601 ``w:date`` stamp.
+    provision *text*. Unlike the clean renderer's genuine Word numbering,
+    redline display numbering (A. / 1. / a.) remains a plain positional
+    literal so a survivor whose position shifted keeps the current label,
+    never a tracked mark (the frozen "moves are not marked" decision). The
+    schedules below are always rendered plainly from ``section`` (the current
+    document), never redlined. ``redline_date`` overrides the ISO-8601
+    ``w:date`` stamp.
     """
     document = Document()
     _style_base(document)
@@ -227,7 +217,8 @@ def build_docx(
 
 
 def _render_clean_body(document, section: SpecSection) -> None:
-    """The plain SectionFormat body: header, parts/articles, END OF SECTION."""
+    """SectionFormat body with genuine Word-numbered provision levels."""
+    numbering = SectionFormatNumbering(document)
     _centered(document, f"SECTION {section.number or '[TBD]'}")
     _centered(document, section.title or "[TBD: SECTION TITLE]")
     document.add_paragraph()
@@ -239,6 +230,9 @@ def _render_clean_body(document, section: SpecSection) -> None:
         if not part.articles:
             document.add_paragraph("(Not used.)")
         for a_idx, article in enumerate(part.articles):
+            # A separate w:num per article is the restart boundary for A.;
+            # even an empty article receives its deterministic instance.
+            article_num_id = numbering.new_article()
             ap = document.add_paragraph()
             apf = ap.paragraph_format
             apf.space_before = Pt(10)
@@ -248,12 +242,13 @@ def _render_clean_body(document, section: SpecSection) -> None:
             ).bold = True
 
             def walk(paragraphs, depth: int) -> None:
-                for i, para in enumerate(paragraphs):
-                    _labelled(
-                        document,
-                        _paragraph_label(depth, i),
-                        para.text,
-                        depth,
+                for para in paragraphs:
+                    provision = document.add_paragraph(para.text)
+                    provision.paragraph_format.space_after = Pt(6)
+                    numbering.apply(
+                        provision,
+                        num_id=article_num_id,
+                        level=depth,
                     )
                     walk(para.children, depth + 1)
 

@@ -7,6 +7,7 @@ import io
 import json
 
 from docx import Document
+from docx.oxml.ns import qn
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
@@ -439,7 +440,16 @@ def test_docx_export_smoke(monkeypatch):
     texts = [p.text for p in document.paragraphs]
     assert "SECTION 21 13 13" in texts
     assert "WET-PIPE SPRINKLER SYSTEMS" in texts
-    assert any(t.startswith("A.\t") for t in texts)
+    provision = next(
+        p
+        for p in document.paragraphs
+        if p.text == "Section includes wet-pipe systems per NFPA 13-2025."
+    )
+    assert provision._p.pPr is not None
+    num_pr = provision._p.pPr.find(qn("w:numPr"))
+    assert num_pr is not None
+    assert num_pr.find(qn("w:ilvl")).get(qn("w:val")) == "0"
+    assert int(num_pr.find(qn("w:numId")).get(qn("w:val"))) > 0
     assert "ASSUMPTIONS SCHEDULE" in texts
 
     # The assumed block is scheduled with its numbering; the TBD is an

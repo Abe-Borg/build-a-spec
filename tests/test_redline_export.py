@@ -31,6 +31,8 @@ _W_TAB = qn("w:tab")
 _W_P = qn("w:p")
 _W_PPR = qn("w:pPr")
 _W_RPR = qn("w:rPr")
+_W_NUMPR = qn("w:numPr")
+_W_IND = qn("w:ind")
 _DATE = "2026-07-21T12:00:00Z"
 
 
@@ -165,6 +167,46 @@ def _body_texts(docx_bytes: bytes, mode: str) -> list[str]:
     return out
 
 
+def _semantic_body_texts(docx_bytes: bytes, mode: str) -> list[str]:
+    """Body text independent of clean versus redline list representation.
+
+    Clean exports carry provision labels in ``w:numPr`` and only semantic
+    content in ``w:t``. Redlines deliberately retain their established
+    literal labels beside tracked runs. Strip only those literal labels,
+    identified by the redline provision's direct hanging indent.
+    """
+    document = Document(io.BytesIO(docx_bytes))
+    out: list[str] = []
+    for child in document.element.body.iterchildren():
+        if child.tag != _W_P:
+            continue
+        if mode == "reject":
+            if _para_mark(child, _W_INS):
+                continue
+            parts: list[str] = []
+            _reject_walk(child, parts)
+            text = "".join(parts)
+        else:
+            text = _accept_all_paragraph_text(child)
+        text = " ".join(text.split())
+        if text.upper().startswith("END OF SECTION"):
+            break
+        if not text:
+            continue
+        properties = child.find(_W_PPR)
+        literal_redline_provision = (
+            properties is not None
+            and properties.find(_W_IND) is not None
+            and properties.find(_W_NUMPR) is None
+        )
+        if literal_redline_provision:
+            _label, separator, semantic_text = text.partition(" ")
+            if separator:
+                text = semantic_text
+        out.append(text)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # The killer round-trip invariant
 # ---------------------------------------------------------------------------
@@ -178,32 +220,33 @@ def test_accept_all_reproduces_current_reject_all_reproduces_base():
 
     redline = build_docx(cur, redline=diff_sections(base, cur), redline_date=_DATE)
 
-    # Accept All (real importer resolver) == a clean export of the current doc.
-    assert _body_texts(redline, "accept") == _body_texts(build_docx(cur), "accept")
-    # Reject All == a clean export of the base doc.
-    assert _body_texts(redline, "reject") == _body_texts(build_docx(base), "accept")
+    clean_cur = build_docx(cur)
+    clean_base = build_docx(base)
+    # Redlines deliberately keep literal labels; clean exports now carry the
+    # same display labels as genuine Word numbering outside their w:t text.
+    assert any(
+        line.startswith("A. Section includes")
+        for line in _body_texts(redline, "accept")
+    )
+    assert (
+        "Section includes wet-pipe automatic sprinkler systems per "
+        "NFPA 13-2025."
+    ) in _body_texts(clean_cur, "accept")
+    # Across that intentional representation boundary, Accept/Reject still
+    # reproduce the current/base semantic bodies respectively.
+    assert _semantic_body_texts(redline, "accept") == _semantic_body_texts(
+        clean_cur, "accept"
+    )
+    assert _semantic_body_texts(redline, "reject") == _semantic_body_texts(
+        clean_base, "accept"
+    )
 
 
-def _provision_texts(docx_bytes: bytes, mode: str) -> list[str]:
-    """Body texts with the leading positional label token stripped.
-
-    Display numbering (A. / 1.1 / a.) is positional and recomputes to the
-    rendered view — it is NOT tracked content (the frozen "moves are not
-    marked" decision). Stripping the first token uniformly on both sides
-    compares provision *content*, which is what Reject-All must reproduce.
-    """
-    stripped = []
-    for line in _body_texts(docx_bytes, mode):
-        parts = line.split(None, 1)
-        stripped.append(parts[1] if len(parts) == 2 else line)
-    return stripped
-
-
-def test_position_shift_accept_exact_reject_text_faithful():
+def test_position_shift_accept_and_reject_are_text_faithful():
     """When a survivor's position shifts (a preceding sibling was deleted),
-    Accept-All still reproduces the current document exactly (current
-    numbering included); Reject-All reproduces the baseline's provision TEXT,
-    with numbering positional (it recomputes to the rendered view). This is
+    Accept-All still reproduces the current semantic document; Reject-All
+    reproduces the baseline provision text. Redline numbering remains literal
+    and positional while clean numbering is genuine Word numbering. This is
     the case the shipped round-trip fixture did not exercise — both Codex and
     the batch's own review flagged it."""
     store = _populated_store()
@@ -216,17 +259,18 @@ def test_position_shift_accept_exact_reject_text_faithful():
     cur = store.doc
     redline = build_docx(cur, redline=diff_sections(base, cur), redline_date=_DATE)
 
-    # Accept-All is exact, numbering included.
-    assert _body_texts(redline, "accept") == _body_texts(build_docx(cur), "accept")
-    # Reject-All reproduces the baseline PROVISION TEXT (labels are positional).
-    assert _provision_texts(redline, "reject") == _provision_texts(
+    assert "A. Related sections: 21 13 19." in _body_texts(redline, "accept")
+    assert _semantic_body_texts(redline, "accept") == _semantic_body_texts(
+        build_docx(cur), "accept"
+    )
+    assert _semantic_body_texts(redline, "reject") == _semantic_body_texts(
         build_docx(base), "accept"
     )
 
 
 def test_part_emptying_tracks_not_used_placeholder():
     """Deleting every article in a part must track its '(Not used.)' line so
-    Accept-All still equals a clean export of cur (and Reject-All the base)."""
+    Accept-All still matches clean-cur content (and Reject-All clean-base)."""
     store = _populated_store()
     base = SpecSection.from_dict(store.doc.to_dict())
     # PART 3 (INSTALLATION) has exactly one article; delete it, emptying PART 3.
@@ -237,8 +281,12 @@ def test_part_emptying_tracks_not_used_placeholder():
     cur = store.doc
     redline = build_docx(cur, redline=diff_sections(base, cur), redline_date=_DATE)
     assert "(Not used.)" in _body_texts(redline, "accept")
-    assert _body_texts(redline, "accept") == _body_texts(build_docx(cur), "accept")
-    assert _body_texts(redline, "reject") == _body_texts(build_docx(base), "accept")
+    assert _semantic_body_texts(redline, "accept") == _semantic_body_texts(
+        build_docx(cur), "accept"
+    )
+    assert _semantic_body_texts(redline, "reject") == _semantic_body_texts(
+        build_docx(base), "accept"
+    )
 
 
 def test_from_scratch_redline_vs_empty_round_trips():
@@ -262,8 +310,13 @@ def test_from_scratch_redline_vs_empty_round_trips():
     store.commit_turn()
     empty = SpecSection.empty()
     redline = build_docx(store.doc, redline=diff_sections(empty, store.doc), redline_date=_DATE)
-    assert _body_texts(redline, "accept") == _body_texts(build_docx(store.doc), "accept")
-    assert _body_texts(redline, "reject") == _body_texts(build_docx(empty), "accept")
+    assert "A. Provide widgets." in _body_texts(redline, "accept")
+    assert _semantic_body_texts(redline, "accept") == _semantic_body_texts(
+        build_docx(store.doc), "accept"
+    )
+    assert _semantic_body_texts(redline, "reject") == _semantic_body_texts(
+        build_docx(empty), "accept"
+    )
 
 
 def test_accept_all_via_real_importer_matches_current_tree(tmp_path):

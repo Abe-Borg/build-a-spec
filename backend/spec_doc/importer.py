@@ -401,6 +401,33 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                 )
             source_bindings.append(binding)
 
+        # Direct Word numbering is structural metadata, so it must win over
+        # text-pattern heuristics. Normalized exports deliberately keep the
+        # generated A./1./a./1) marker out of w:t; their semantic text may
+        # therefore begin with strings such as "END OF SECTION", "PART 2",
+        # "1.2", or "A." without becoming a false heading or manual label on
+        # re-import. A numbered line also cannot serve as the pending section
+        # title.
+        if docx_paragraph is not None:
+            ilvl = _numbering_level(docx_paragraph)
+            if ilvl is not None:
+                pending_title = False
+                add_mapped_paragraph(
+                    min(ilvl, MAX_PARAGRAPH_DEPTH - 1), text
+                )
+                continue
+
+        # The normalized renderer emits this exact line only to show that a
+        # PART has no articles. It is presentation, not a semantic provision;
+        # recognizing it here prevents an export/re-import round trip from
+        # manufacturing an ``IMPORTED CONTENT`` article in an empty part.
+        if (
+            text.casefold() == "(not used.)"
+            and builder.current_part is not None
+            and builder.current_article is None
+        ):
+            continue
+
         if _END_RE.match(text):
             break
 
@@ -443,15 +470,6 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
         if matched_level is not None:
             add_mapped_paragraph(matched_level[0], matched_level[1])
             continue
-
-        # Auto-numbered masters: the numbering indent level drives depth.
-        if docx_paragraph is not None:
-            ilvl = _numbering_level(docx_paragraph)
-            if ilvl is not None:
-                add_mapped_paragraph(
-                    min(ilvl, MAX_PARAGRAPH_DEPTH - 1), text
-                )
-                continue
 
         # Unlabeled content: keep as a level-0 paragraph (never drop).
         add_mapped_paragraph(0, text)

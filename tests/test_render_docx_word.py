@@ -12,8 +12,19 @@ import pytest
 from tools import render_docx_word as renderer
 
 
-def test_powershell_bridge_encodes_hidden_sta_safety_contract():
+def test_powershell_bridge_encodes_hidden_sta_safety_contract(monkeypatch):
+    # The command-encoding contract (flags + the encoded safety directives)
+    # is platform-independent; only the executable *lookup* is Windows-only
+    # (real powershell.exe lives under %SystemRoot%, absent on the Linux CI
+    # runner). Stub just that lookup so the security contract is verified on
+    # every platform instead of erroring where powershell.exe doesn't exist.
+    fake_powershell = Path(
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    )
+    monkeypatch.setattr(renderer, "_powershell_executable", lambda: fake_powershell)
+
     command = renderer._powershell_command()
+    assert command[0] == str(fake_powershell)
     assert command[1:-1] == [
         "-NoLogo",
         "-NoProfile",

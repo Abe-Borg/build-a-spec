@@ -364,6 +364,10 @@ def load_project(data: Any, session) -> None:
     session.source_docx_filename = ""
     if hasattr(session, "source_patch_context"):
         session.source_patch_context = None
+    if hasattr(session, "_capability_cache"):
+        # Derived from the outgoing source/baseline/body; never carry it into
+        # the loaded project (the key would not match anyway — belt and braces).
+        session._capability_cache = None
     session.import_report = restored_import_report
     # Keep the assignment conditional so format-1 compatibility callers with
     # an older/lightweight session object continue to load unchanged.

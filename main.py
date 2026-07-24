@@ -24,6 +24,24 @@ import uvicorn
 from backend import settings
 
 
+# Native file-dialog filters. pywebview's ``parse_file_type`` validates every
+# filter BEFORE the dialog opens and its description grammar accepts only word
+# characters and spaces — a hyphen (e.g. in "Build-a-Spec") makes
+# ``create_file_dialog`` raise, which the callers turn into "cancelled", so a
+# bad filter silently kills Open/Import/Save. Keep these descriptions
+# hyphen-free (pinned by ``tests/test_close_prompt.py``). Open accepts legacy
+# ``.json`` projects too; Save writes only the current ``.baspec`` format.
+_PROJECT_OPEN_FILE_TYPES = (
+    "Build a Spec project (*.baspec;*.json)",
+    "All files (*.*)",
+)
+_PROJECT_SAVE_FILE_TYPES = (
+    "Build a Spec project (*.baspec)",
+    "All files (*.*)",
+)
+_DOCX_OPEN_FILE_TYPES = ("Word document (*.docx)", "All files (*.*)")
+
+
 def _ensure_std_streams() -> None:
     """Guarantee ``sys.stdout``/``sys.stderr`` are real streams.
 
@@ -91,8 +109,10 @@ class _CloseController:
     from a worker thread; by the time it runs, the vetoed close has returned
     and the UI thread is free.
 
-    Only the two ``js_api`` methods are public; everything else is
-    underscore-prefixed so pywebview does not expose it to JavaScript.
+    The bridge also exposes ``save_project`` (the in-app save gate) and
+    ``open_file`` (native Open/Import, since HTML file inputs are unreliable
+    in the webview). Only these ``js_api`` methods are public; everything else
+    is underscore-prefixed so pywebview does not expose it to JavaScript.
     """
 
     # The frontend hook the prompt calls; returns whether it was handled so a
@@ -167,6 +187,57 @@ class _CloseController:
         """
         return self._save_project_file()
 
+    def open_file(self, kind: str = "project") -> dict[str, str] | None:
+        """Frontend's Open / Import buttons (native shell): show a native
+        Open dialog and hand the chosen file's bytes back to JS.
+
+        An HTML ``<input type="file">`` does not reliably deliver the selected
+        file's *contents* to JavaScript across pywebview's webview backends —
+        the dialog opens and a file can be picked, but ``input.files`` arrives
+        empty, so the upload silently uploads nothing. The native shell
+        therefore opens files the same way it saves them, through
+        ``create_file_dialog``; the frontend uploads the returned bytes down
+        the ordinary ``/api/project/load-file`` (or import) path, so every
+        validation and UI-update step stays shared with the browser flow.
+
+        ``kind`` selects the dialog's file filter (``"project"`` for
+        ``.baspec``/``.json``, ``"docx"`` for a master import). Returns
+        ``{"name", "data_b64"}`` for the picked file, or ``None`` when the
+        dialog is cancelled or the read fails — the frontend then does
+        nothing, exactly like a cancelled HTML picker.
+        """
+        import base64
+
+        import webview
+
+        if self._window is None:
+            return None
+        file_types = (
+            _DOCX_OPEN_FILE_TYPES if kind == "docx" else _PROJECT_OPEN_FILE_TYPES
+        )
+        try:
+            result = self._window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=file_types,
+            )
+        except Exception:
+            return None
+        if not result:
+            return None  # user cancelled the Open dialog
+        # create_file_dialog returns a path string on some backends, a
+        # 1-tuple/list on others (mirrors the SAVE_DIALOG handling).
+        target = result[0] if isinstance(result, (tuple, list)) else result
+        try:
+            with open(os.fspath(target), "rb") as handle:
+                payload = handle.read()
+        except (OSError, TypeError, ValueError):
+            return None
+        return {
+            "name": os.path.basename(os.fspath(target)),
+            "data_b64": base64.b64encode(payload).decode("ascii"),
+        }
+
     # --- internals ---------------------------------------------------------
     def _force_close(self) -> None:
         self._allow_close = True
@@ -192,7 +263,7 @@ class _CloseController:
         target = self._window.create_file_dialog(
             webview.SAVE_DIALOG,
             save_filename=filename,
-            file_types=("Build-a-Spec project (*.baspec)", "All files (*.*)"),
+            file_types=_PROJECT_SAVE_FILE_TYPES,
         )
         if not target:
             return False  # user cancelled the Save dialog

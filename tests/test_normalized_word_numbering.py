@@ -353,7 +353,7 @@ def test_provision_runs_contain_text_only_without_literal_labels_or_tabs():
         )
 
 
-def test_child_levels_restart_after_their_immediate_parent():
+def test_child_levels_use_interoperable_default_restart_behavior():
     payload = build_docx(_numbered_section())
     refs = _provision_refs(payload)
     _numbering_root, abstract = _shared_abstract(
@@ -361,9 +361,10 @@ def test_child_levels_restart_after_their_immediate_parent():
         {num_id for num_id, _depth in refs.values()},
     )
 
-    # Explicit lvlRestart is one-based, so ilvl N names N to restart after
-    # its immediate parent.  The deterministic definition also owns the tab
-    # suffix and the legacy 0.45-inch hanging-indent geometry at every level.
+    # Omitting lvlRestart has the exact desired immediate-parent restart
+    # semantics and is the representation Microsoft Word renders reliably.
+    # The deterministic definition also owns the tab suffix and the legacy
+    # 0.45-inch hanging-indent geometry at every level.
     level_zero = abstract.xpath("./w:lvl[@w:ilvl='0']", namespaces=_NS)
     assert len(level_zero) == 1
     assert level_zero[0].find("w:lvlRestart", namespaces=_NS) is None
@@ -374,8 +375,7 @@ def test_child_levels_restart_after_their_immediate_parent():
             ilvl=str(depth),
         )
         assert len(matches) == 1
-        restart = matches[0].find("w:lvlRestart", namespaces=_NS)
-        assert restart is not None and restart.get(_W_VAL) == str(depth)
+        assert matches[0].find("w:lvlRestart", namespaces=_NS) is None
 
     for depth in range(4):
         level = abstract.xpath(

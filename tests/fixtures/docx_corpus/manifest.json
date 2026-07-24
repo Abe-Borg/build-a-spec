@@ -1,0 +1,319 @@
+{
+  "schema_version": 1,
+  "corpus_kind": "provenance_explicit",
+  "generator": "tests.docx_corpus",
+  "cases": [
+    {
+      "id": "word_like_rich",
+      "filename": "word-like-rich.docx",
+      "recipe": "word_like_rich",
+      "description": "Word-like rich package with multipage content, default/first/even headers and footers, a PAGE field, header and body images, a table, custom styles, an SDT, and custom OPC parts.",
+      "categories": ["microsoft-word-like", "multipage", "default-first-even-headers", "page-field", "header-image", "table-heavy", "custom-styles"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Microsoft Word-like extended-properties metadata",
+        "generator_stack": ["python-docx", "lxml", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally; never opened or saved by Microsoft Word."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "libreoffice_like_metadata",
+      "filename": "libreoffice-like-metadata.docx",
+      "recipe": "libreoffice_like_metadata",
+      "description": "Rich package carrying a synthetic LibreOffice-like Application metadata profile.",
+      "categories": ["libreoffice-like", "producer-metadata"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "LibreOffice-like extended-properties metadata",
+        "generator_stack": ["python-docx", "lxml", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally; never opened or saved by LibreOffice."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "older_conversion_like",
+      "filename": "older-conversion-like.docx",
+      "recipe": "older_conversion_like",
+      "description": "Synthetic older-conversion profile with Word 2007-era application metadata and compatibilityMode 12.",
+      "categories": ["older-doc-conversion-like", "compatibility-mode", "producer-metadata"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Older Word conversion-like compatibility metadata",
+        "generator_stack": ["python-docx", "lxml", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally from OOXML; no binary .doc conversion was performed."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "consultant_template",
+      "filename": "consultant-template.docx",
+      "recipe": "consultant_template",
+      "description": "Synthetic consultant-template profile with branded page furniture, custom paragraph style, custom properties, custom XML, table, hyperlink, image, and SDT.",
+      "categories": ["consultant-template-like", "custom-styles", "custom-properties", "custom-xml", "table-heavy"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Sanitized consultant-template-like package",
+        "generator_stack": ["python-docx", "lxml", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated from non-client placeholder content; no proprietary template was used."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "mixed_section_layout",
+      "filename": "mixed-section-layout.docx",
+      "recipe": "mixed_section_layout",
+      "description": "Two-section package with portrait and landscape sections, different margins and header/footer geometry, and an opaque second-section appendix.",
+      "categories": ["multiple-sections", "mixed-orientation", "mixed-margins", "section-breaks", "headers-footers"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Mixed-layout OOXML",
+        "generator_stack": ["python-docx", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally with explicit section geometry."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "custom_numbering",
+      "filename": "custom-numbering.docx",
+      "recipe": "custom_numbering",
+      "description": "Direct automatic-numbering island with dedicated numbering instances and custom local paragraph/run formatting.",
+      "categories": ["custom-numbering", "direct-numpr", "numbered-island", "custom-styles"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Word-like direct numbering",
+        "generator_stack": ["python-docx", "lxml", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally to exercise proven numbering islands."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "relocated_numbering_opc",
+      "filename": "relocated-numbering-opc.docx",
+      "recipe": "relocated_numbering_opc",
+      "description": "Custom-numbered package whose numbering part is relocated and reached only through its OPC relationship.",
+      "categories": ["relocated-opc-part", "custom-numbering", "relationship-resolution"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Manually relocated OPC numbering part",
+        "generator_stack": ["python-docx", "lxml", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally by relationship-safe OPC relocation."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "unusual_utf8_declaration",
+      "filename": "unusual-utf8-declaration.docx",
+      "recipe": "unusual_utf8_declaration",
+      "description": "UTF-8 document.xml with BOM, single-quoted declaration, CRLF prolog, comment, and processing instruction.",
+      "categories": ["unusual-xml-declaration", "utf8-bom", "comments-processing-instructions", "manual-ooxml"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Manually edited lexical XML",
+        "generator_stack": ["python-docx", "zipfile", "manual-byte-splice"],
+        "sanitized": true,
+        "statement": "Generated locally; lexical differences are deliberate and documented."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "utf16_pass_through",
+      "filename": "utf16-pass-through.docx",
+      "recipe": "utf16_pass_through",
+      "description": "Valid UTF-16 document.xml demonstrating the intentional unsupported mutation boundary.",
+      "categories": ["unusual-xml-declaration", "utf16", "pass-through-only"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "UTF-16 OOXML boundary fixture",
+        "generator_stack": ["python-docx", "lxml", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally to prove unsupported encodings stay exact-original only."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "pass_through_only", "mutation_blockers": ["unsupported_source_xml_encoding"]}
+    },
+    {
+      "id": "large_media",
+      "filename": "large-media.docx",
+      "recipe": "large_media",
+      "description": "Rich package with a deterministic valid PNG larger than two MiB replacing a referenced media member.",
+      "categories": ["large-media", "header-image", "bounded-streaming"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Large deterministic media package",
+        "generator_stack": ["python-docx", "hashlib", "zlib", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally from deterministic pseudorandom pixels; contains no user image."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "zip_comment_and_extra",
+      "filename": "zip-comment-and-extra.docx",
+      "recipe": "zip_comment_and_extra",
+      "description": "Valid DOCX carrying a deterministic archive comment and a private, well-formed ZIP extra field.",
+      "categories": ["zip-comment", "zip-extra-field", "raw-zip-layout"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Manually annotated ZIP envelope",
+        "generator_stack": ["python-docx", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally with a documented private ZIP extra field."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "manual_comments_ooxml",
+      "filename": "manual-comments-ooxml.docx",
+      "recipe": "manual_comments_ooxml",
+      "description": "Rich package with a manually wired comments part and comment range in opaque appendix content.",
+      "categories": ["manual-ooxml", "comments", "relationship-resolution", "content-types"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Manually edited OOXML comments plumbing",
+        "generator_stack": ["python-docx", "lxml", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally with fixed synthetic author/date and no review content."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "manual_notes_ooxml",
+      "filename": "manual-footnotes-endnotes-ooxml.docx",
+      "recipe": "manual_notes_ooxml",
+      "description": "Rich package with manually wired footnotes and endnotes parts, special separator notes, and referentially matched body anchors in opaque appendix content.",
+      "categories": ["manual-ooxml", "footnotes", "endnotes", "relationship-resolution", "content-types", "referential-integrity"],
+      "provenance": {
+        "kind": "synthetic",
+        "actual_producer": null,
+        "producer_profile": "Manually edited OOXML footnote and endnote plumbing",
+        "generator_stack": ["python-docx", "lxml", "zipfile"],
+        "sanitized": true,
+        "statement": "Generated locally with fixed synthetic note text and no source document content."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "actual_word_16_rich",
+      "filename": "actual-word-16-rich.docx",
+      "fixture": "external/microsoft-word-16-rich.docx",
+      "sha256": "ffcb964a938fd33962258baba9598e8599919f755c764d399c43d2b8aea0206c",
+      "description": "Sanitized placeholder-only rich document actually opened and saved as DOCX by Microsoft Word 16, retaining real producer package behavior after a targeted core-properties privacy rewrite.",
+      "categories": ["actual-microsoft-word", "multipage", "default-first-even-headers", "page-field", "header-image", "table-heavy", "custom-styles", "producer-saved"],
+      "provenance": {
+        "kind": "external_sanitized",
+        "actual_producer": {
+          "product": "Microsoft Office Word",
+          "version": "16.0.20131.20152",
+          "platform": "Windows x86-64",
+          "production_method": "Opened the synthetic sanitized word_like_rich recipe and saved as DOCX with SaveAs2 format 16 in a hidden STA automation instance."
+        },
+        "sanitization": {
+          "tool": "tests/fixtures/docx_corpus/sanitize_external_fixtures.py",
+          "procedure": "Source content was sanitized by construction. After the producer save, only docProps/core.xml identity fields were rewritten through the raw ZIP member-preservation API; all decompressed package surfaces were then scanned.",
+          "privacy_review": "Automated member-name, member-data, member-comment, member-extra, archive-comment, local-path, and known-identity scan passed on 2026-07-23; placeholder content only.",
+          "modified_parts": ["docProps/core.xml"]
+        },
+        "sanitized": true,
+        "statement": "Actually saved by Microsoft Word; source content is synthetic and contains no client or proprietary template data."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "actual_word_16_consultant_template",
+      "filename": "actual-word-16-consultant-template.docx",
+      "fixture": "external/microsoft-word-16-consultant-template.docx",
+      "sha256": "168ca567b24e4ec660facffe27d4a5c0455540aba548a922c9e05fd2fd497fe7",
+      "description": "Consultant-template-shaped placeholder document actually saved by Microsoft Word 16, with branded furniture and package features but no real consultant or client content.",
+      "categories": ["actual-microsoft-word", "consultant-template-like", "custom-styles", "custom-properties", "custom-xml", "table-heavy", "producer-saved"],
+      "provenance": {
+        "kind": "external_sanitized",
+        "actual_producer": {
+          "product": "Microsoft Office Word",
+          "version": "16.0.20131.20152",
+          "platform": "Windows x86-64",
+          "production_method": "Opened the synthetic sanitized consultant_template recipe and saved as DOCX with SaveAs2 format 16 in a hidden STA automation instance."
+        },
+        "sanitization": {
+          "tool": "tests/fixtures/docx_corpus/sanitize_external_fixtures.py",
+          "procedure": "The template-shaped source was generated from non-client placeholders. After the producer save, only docProps/core.xml identity fields were rewritten through the raw ZIP member-preservation API; all decompressed package surfaces were then scanned.",
+          "privacy_review": "Automated member-name, member-data, member-comment, member-extra, archive-comment, local-path, and known-identity scan passed on 2026-07-23; no proprietary consultant template was used.",
+          "modified_parts": ["docProps/core.xml"]
+        },
+        "sanitized": true,
+        "statement": "Actually saved by Microsoft Word from a consultant-template-like synthetic source; it is not represented as an authentic consultant template."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "actual_word_16_legacy_doc_conversion",
+      "filename": "actual-word-16-legacy-doc-conversion.docx",
+      "fixture": "external/microsoft-word-16-converted-legacy-doc.docx",
+      "sha256": "07193609b6fc8f0514ca478b4ae41ffb61ac5a8a0ce7f3fa47d004c0423b68e5",
+      "description": "Placeholder-only document genuinely round-tripped through the binary Word 97-2003 .doc format and converted back to DOCX by Microsoft Word 16.",
+      "categories": ["actual-microsoft-word", "actual-legacy-doc-conversion", "word-97-2003-binary-roundtrip", "compatibility-workflow", "producer-saved"],
+      "provenance": {
+        "kind": "external_sanitized",
+        "actual_producer": {
+          "product": "Microsoft Office Word",
+          "version": "16.0.20131.20152",
+          "platform": "Windows x86-64",
+          "production_method": "Opened the sanitized older_conversion_like DOCX, saved it as binary Word 97-2003 .doc with format 0, reopened that .doc, and saved the converted result as DOCX with format 16."
+        },
+        "sanitization": {
+          "tool": "tests/fixtures/docx_corpus/sanitize_external_fixtures.py",
+          "procedure": "Source content was sanitized by construction before the binary .doc round-trip. After DOCX conversion, only docProps/core.xml identity fields were rewritten through the raw ZIP member-preservation API; all decompressed package surfaces were then scanned.",
+          "privacy_review": "Automated member-name, member-data, member-comment, member-extra, archive-comment, local-path, and known-identity scan passed on 2026-07-23; the transient .doc contained only placeholder content and is not committed.",
+          "modified_parts": ["docProps/core.xml"]
+        },
+        "sanitized": true,
+        "statement": "This is an actual Word conversion from a real binary .doc intermediate generated solely from sanitized placeholder content."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    },
+    {
+      "id": "actual_libreoffice_26_rich",
+      "filename": "actual-libreoffice-26-rich.docx",
+      "fixture": "external/libreoffice-26-rich.docx",
+      "sha256": "82bcfc1788c33e2afc00ec9bae31e0d1d98096615289f35246063cdf640042cf",
+      "description": "Sanitized placeholder-only rich document actually converted to ODT and then saved as DOCX by LibreOffice 26.2.4.2.",
+      "categories": ["actual-libreoffice", "odt-docx-conversion", "producer-saved", "interoperability"],
+      "provenance": {
+        "kind": "external_sanitized",
+        "actual_producer": {
+          "product": "LibreOffice",
+          "version": "26.2.4.2 (0229ac93fcf0d7cbc6376066c6f35021cef002dc)",
+          "platform": "Windows x86-64",
+          "production_method": "Converted the sanitized libreoffice_like_metadata recipe to ODT, then converted that ODT to DOCX with the Office Open XML Text filter using isolated headless soffice."
+        },
+        "sanitization": {
+          "tool": "tests/test_docx_corpus.py decompressed package-surface scanner",
+          "procedure": "The source was sanitized by construction before LibreOffice conversion. No package member was modified after the producer save; every decompressed package surface was scanned.",
+          "privacy_review": "Automated member-name, member-data, member-comment, member-extra, archive-comment, local-path, and known-identity scan passed on 2026-07-23; placeholder content only.",
+          "modified_parts": []
+        },
+        "sanitized": true,
+        "statement": "Actually saved by LibreOffice from sanitized synthetic content; no post-producer ZIP canonicalization or member rewrite was performed."
+      },
+      "expectations": {"importable": true, "exact_noop": true, "source_mode": "ready", "mutation_blockers": []}
+    }
+  ]
+}

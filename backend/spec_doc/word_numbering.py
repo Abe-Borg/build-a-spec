@@ -44,10 +44,11 @@ def _level(ilvl: int, number_format: str, level_text: str):
     level.set(qn("w:ilvl"), str(ilvl))
     level.append(_decimal_child("w:start", 1))
     level.append(_string_child("w:numFmt", number_format))
-    if ilvl:
-        # lvlRestart is one-based: 1 means ilvl 0, 2 means ilvl 1, etc.
-        # Making this explicit keeps each child sequence local to its parent.
-        level.append(_decimal_child("w:lvlRestart", ilvl))
+    # Do not emit w:lvlRestart for the ordinary immediate-parent behavior.
+    # Its specified omission semantics already restart a child after the
+    # preceding level.  Word 16 ignores our otherwise-valid child definitions
+    # when the redundant explicit value is present, while LibreOffice accepts
+    # them, so omission is the interoperable representation of the same rule.
     level.append(_string_child("w:suff", "tab"))
     level.append(_string_child("w:lvlText", level_text))
     level.append(_string_child("w:lvlJc", "left"))

@@ -8,9 +8,6 @@ version history. The normalized renderer remains an explicit separate mode.
 from __future__ import annotations
 
 import io
-import os
-import subprocess
-import sys
 
 import pytest
 from docx import Document
@@ -20,6 +17,11 @@ from backend import sessions
 from backend.app import create_app
 from backend.qc.engine import QCFinding, QCLensStatus, QCResult
 from tests.fakes import FakeClient, text_turn, tool_turn
+from tests.docx_render_harness import (
+    DocxRenderHarness,
+    RENDERER_SKIP_REASON,
+    renderer_is_configured,
+)
 from tests.docx_fidelity_helpers import (
     DOCX_MEDIA_TYPE,
     TARGET_EDITED_SOURCE_TEXT,
@@ -475,11 +477,8 @@ def test_source_mode_without_an_import_never_silently_normalizes():
 
 
 @pytest.mark.skipif(
-    not os.environ.get("BUILD_A_SPEC_DOCX_RENDERER"),
-    reason=(
-        "Set BUILD_A_SPEC_DOCX_RENDERER to the documents-skill "
-        "render_docx.py path to run visual fidelity regression"
-    ),
+    not renderer_is_configured(),
+    reason=RENDERER_SKIP_REASON,
 )
 def test_rendered_edit_keeps_page_furniture_and_limits_visual_change(tmp_path):
     """Optional same-renderer visual regression for the surgical fixture.
@@ -489,10 +488,8 @@ def test_rendered_edit_keeps_page_furniture_and_limits_visual_change(tmp_path):
     relationships, numbering, or custom parts survived.
     """
 
-    image_module = pytest.importorskip("PIL.Image")
-    image_chops = pytest.importorskip("PIL.ImageChops")
-    renderer = os.environ["BUILD_A_SPEC_DOCX_RENDERER"]
-    render_python = os.environ.get("BUILD_A_SPEC_RENDER_PYTHON", sys.executable)
+    pytest.importorskip("PIL.Image")
+    renderer = DocxRenderHarness.from_environment()
 
     client = _client()
     source = make_fidelity_master(tmp_path)
@@ -500,67 +497,23 @@ def test_rendered_edit_keeps_page_furniture_and_limits_visual_change(tmp_path):
     assert _replace_target(client).status_code == 200
     edited = _source_export(client).content
 
-    source_path = tmp_path / "render-source.docx"
-    edited_path = tmp_path / "render-edited.docx"
-    source_path.write_bytes(source)
-    edited_path.write_bytes(edited)
-    source_out = tmp_path / "source-render"
-    edited_out = tmp_path / "edited-render"
-
-    for document_path, output_dir in (
-        (source_path, source_out),
-        (edited_path, edited_out),
-    ):
-        completed = subprocess.run(
-            [
-                render_python,
-                renderer,
-                str(document_path),
-                "--output_dir",
-                str(output_dir),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        assert completed.returncode == 0, completed.stdout + completed.stderr
-
-    source_pages = sorted(source_out.glob("page-*.png"))
-    edited_pages = sorted(edited_out.glob("page-*.png"))
-    assert source_pages
-    assert len(edited_pages) == len(source_pages)
-
-    changed_page_count = 0
-    for page_index, (source_page, edited_page) in enumerate(
-        zip(source_pages, edited_pages)
-    ):
-        with image_module.open(source_page).convert("RGB") as before_image:
-            with image_module.open(edited_page).convert("RGB") as after_image:
-                assert after_image.size == before_image.size
-                difference = image_chops.difference(before_image, after_image)
-                bbox = difference.getbbox()
-                if bbox is None:
-                    continue
-                changed_page_count += 1
-                width, height = before_image.size
-                # Page furniture sits entirely inside these deliberately
-                # conservative bands in the fixture.
-                assert image_chops.difference(
-                    before_image.crop((0, 0, width, int(height * 0.10))),
-                    after_image.crop((0, 0, width, int(height * 0.10))),
-                ).getbbox() is None
-                assert image_chops.difference(
-                    before_image.crop((0, int(height * 0.90), width, height)),
-                    after_image.crop((0, int(height * 0.90), width, height)),
-                ).getbbox() is None
-                assert bbox[1] >= int(height * 0.10)
-                assert bbox[3] <= int(height * 0.90)
-                # A same-length edition change should affect a tiny body area,
-                # never trigger page-wide reflow.
-                changed_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
-                assert changed_area / (width * height) < 0.02, (
-                    f"Unexpectedly broad visual diff on page {page_index + 1}: {bbox}"
-                )
-
-    assert changed_page_count == 1
+    source_rendered = renderer.render_bytes(
+        source,
+        work_dir=tmp_path,
+        stem="render-source",
+    )
+    edited_rendered = renderer.render_bytes(
+        edited,
+        work_dir=tmp_path,
+        stem="render-edited",
+    )
+    comparison = renderer.compare(source_rendered, edited_rendered)
+    comparison.assert_changed_pages({1})
+    comparison.assert_page_furniture_unchanged()
+    comparison.assert_changes_within_body()
+    # A same-length edition change should affect a tiny body area, never
+    # trigger page-wide reflow.
+    comparison.assert_diff_budget(
+        max_changed_pixel_fraction=0.01,
+        max_bbox_area_fraction=0.02,
+    )

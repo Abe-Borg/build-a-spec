@@ -6,6 +6,7 @@ pydantic>=2.10
 platformdirs>=4.3
 pywebview>=5.3
 python-docx>=1.1
+lxml>=5
 pypdf>=4
 python-multipart>=0.0.9
 

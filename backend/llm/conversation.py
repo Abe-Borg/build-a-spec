@@ -542,57 +542,81 @@ class SessionState:
         and every turn's PROJECT CONTEXT). Those calls all asked the same
         question of the same document and re-derived the same answer. Any
         change to the source, the baseline or the body text/order changes the
-        key, so the cache can never outlive the state it describes; provenance
-        metadata deliberately does not, exactly as
-        ``semantic_body_projection`` excludes it from the source gate.
+        key, so the cache can never outlive the state it describes; a change
+        to provenance metadata deliberately does not, exactly as
+        ``semantic_body_projection`` excludes it from the source gate itself.
         """
         if not self._active_source_scope():
             return None
 
+        source_bytes = self.source_docx_bytes
+        source_map = self.source_docx_map
+        baseline_index = self.doc.baseline_index
         try:
             projection = semantic_body_projection_sha256(self.doc.doc)
         except Exception:  # noqa: BLE001 - an unkeyable document is never cached
             return self._compute_source_edit_capabilities()
+
         # Identity, not declared identity: the retained bytes/map/context are
         # compared with ``is`` against the exact objects the cached report was
         # derived from, and the key holds them alive so identity stays sound.
         # Keying on the map's *claimed* source hash would miss a swapped or
         # mutated artifact, which must still fail closed.
-        key = (
-            self.source_docx_bytes,
-            self.source_docx_map,
-            self.source_patch_context,
-            self.doc.baseline_index,
-            self.doc.index,
-            projection,
-        )
+        #
+        # The version index is deliberately NOT part of the key. A metadata
+        # edit (``set_status``/``set_provenance``) commits a new version while
+        # leaving the semantic body — and therefore every source capability —
+        # untouched, and confirming blocks one at a time is exactly what the
+        # review walk does on an imported master. Keying on the index made
+        # each of those confirmations pay for a full sweep. What the report
+        # actually depends on is covered: ``_active_source_scope`` above
+        # rejects a branch that undid past the import, ``baseline_index``
+        # pins which version is the baseline, and ``DocumentStore`` never
+        # rewrites a retained version in place (``commit_turn`` only appends,
+        # truncates the redo tail, and drops ``baseline_index`` when that
+        # truncation would discard the version it points at).
         cached = self._capability_cache
         if cached is not None:
             cached_key, cached_report = cached
             if (
-                cached_key[0] is key[0]
-                and cached_key[1] is key[1]
-                and cached_key[2] is key[2]
-                and cached_key[3] == key[3]
-                and cached_key[4] == key[4]
-                and cached_key[5] == key[5]
+                cached_key[0] is source_bytes
+                and cached_key[1] is source_map
+                and cached_key[2] is self.source_patch_context
+                and cached_key[3] == baseline_index
+                and cached_key[4] == projection
             ):
                 return cached_report
 
         report = self._compute_source_edit_capabilities()
-        # Re-read the artifacts: computing the report can build and attach the
-        # patch context, so the key must describe the state it actually used.
-        self._capability_cache = (
-            (
-                self.source_docx_bytes,
-                self.source_docx_map,
-                self.source_patch_context,
-                self.doc.baseline_index,
-                self.doc.index,
-                projection,
-            ),
-            report,
-        )
+
+        # Read paths are not serialized against a streaming turn (``GET
+        # /api/doc`` takes no session guard), so a long sweep can be overtaken
+        # by a model turn's provisional edits. Publish only when the state the
+        # sweep actually analyzed is still the state it was keyed on;
+        # otherwise return the report but leave the cache alone, so a
+        # subsequent rollback cannot resurrect it against the wrong document.
+        # ``source_patch_context`` is read after the sweep on purpose — the
+        # sweep builds and attaches it on first use.
+        try:
+            settled = semantic_body_projection_sha256(self.doc.doc)
+        except Exception:  # noqa: BLE001 - unverifiable state is never cached
+            return report
+        if (
+            settled == projection
+            and self.source_docx_bytes is source_bytes
+            and self.source_docx_map is source_map
+            and self.doc.baseline_index == baseline_index
+        ):
+            self._capability_cache = (
+                (
+                    source_bytes,
+                    source_map,
+                    self.source_patch_context,
+                    baseline_index,
+                    projection,
+                ),
+                report,
+            )
         return report
 
     def _compute_source_edit_capabilities(

@@ -1124,3 +1124,116 @@ def test_capability_memo_never_outlives_its_source_artifacts(
     assert denied.operations["replace_text"].allowed is False
     assert denied.operations["replace_text"].blocker == "source_hash_mismatch"
     assert denied.operations["set_status"].allowed is True
+
+
+def test_metadata_only_edits_do_not_resweep(
+    tmp_path,
+    api_client,
+    monkeypatch,
+):
+    """Confirming a block must not re-derive every source capability.
+
+    ``set_status``/``set_provenance`` commit a new document version but leave
+    the semantic body projection untouched — the same exclusion the source
+    gate itself relies on — so no capability can have changed.  The review
+    walk confirms blocks one at a time, so keying the memo on the version
+    index made every single confirmation on an imported master pay for a full
+    sweep, which is the delay this memo exists to remove.
+    """
+    source = make_numbered_island_master(
+        tmp_path,
+        filename="capability-metadata-edit.docx",
+    )
+    _import_api(api_client, source, filename="capability-metadata-edit.docx")
+    counts = _count_capability_probes(monkeypatch)
+
+    for uid in ("pt1.a1.p1", "pt1.a1.p2"):
+        confirmed = api_client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {
+                        "action": "set_status",
+                        "target_id": uid,
+                        "status": "confirmed",
+                    }
+                ]
+            },
+        )
+        assert confirmed.status_code == 200, confirmed.text
+
+    provenance = api_client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": "pt1.a1.p1",
+                    "text": document_paragraph_text(api_client, "pt1.a1.p1"),
+                    "source_item_id": "req-1",
+                }
+            ]
+        },
+    )
+    assert provenance.status_code == 200, provenance.text
+
+    assert counts["probes"] == 0, (
+        "metadata-only edits leave the semantic body identical; the cached "
+        "report still describes it"
+    )
+
+
+def document_paragraph_text(client: TestClient, uid: str) -> str:
+    """Current text of ``uid`` (a same-text replace is a metadata-only edit)."""
+    doc = client.get("/api/doc").json()["doc"]
+    stack = [
+        paragraph
+        for part in doc["parts"]
+        for article in part["articles"]
+        for paragraph in article["paragraphs"]
+    ]
+    while stack:
+        node = stack.pop()
+        if node["id"] == uid:
+            return node["text"]
+        stack.extend(node.get("children", ()))
+    raise AssertionError(f"no paragraph {uid}")
+
+
+def test_cache_is_not_published_when_the_document_moves_mid_sweep(
+    tmp_path,
+    api_client,
+    monkeypatch,
+):
+    """A sweep overtaken by a concurrent edit must not be published.
+
+    ``GET /api/doc`` takes no session guard, so a long sweep can race a
+    streaming turn's provisional edits.  Caching that report under the
+    pre-sweep key would survive a rollback and answer for the wrong document.
+    """
+    source = make_numbered_island_master(
+        tmp_path,
+        filename="capability-midsweep.docx",
+    )
+    _import_api(api_client, source, filename="capability-midsweep.docx")
+    session = sessions.get_session()
+    session._capability_cache = None
+
+    real_sweep = source_patch_module.source_edit_capabilities
+
+    def sweep_then_move(**kwargs):
+        report = real_sweep(**kwargs)
+        # The document moves while the sweep is in flight.
+        session.doc.doc.parts[0].articles[0].paragraphs[0].text = (
+            "Overtaken by a concurrent edit."
+        )
+        return report
+
+    monkeypatch.setattr(
+        source_patch_module, "source_edit_capabilities", sweep_then_move
+    )
+    assert session.source_edit_capabilities() is not None
+    assert session._capability_cache is None, (
+        "a report analyzed against a document that then moved must not be "
+        "published under the pre-sweep key"
+    )

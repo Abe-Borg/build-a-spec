@@ -323,3 +323,112 @@ def test_import_endpoint_gates_and_gap_adapt_context(tmp_path, monkeypatch):
     # Undo steps back to the blank page.
     undone = client.post("/api/doc/undo").json()
     assert undone["doc"]["section"]["number"] == ""
+
+
+def test_import_allowed_over_project_setup_and_preserves_it(tmp_path):
+    """Project setup entered before importing must not block the import.
+
+    Regression: the import button gates on *body* content (frontend
+    ``hasContent``), but the backend used to reject any non-empty document —
+    and ``is_empty`` also counts project profile / edition overrides /
+    excluded standards. A user who filled in the project profile first got an
+    enabled button but a silent 409, so nothing landed in the document panel.
+    Importing over body-less project setup now succeeds and carries that
+    setup onto the imported tree.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+
+    client = TestClient(create_app())
+
+    # Body-less project setup: profile + an edition override + a suppression.
+    assert client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_project_profile",
+                    "target_id": "sec",
+                    "city": "Phoenix",
+                    "state": "Arizona",
+                    "country": "USA",
+                    "client": "Acme",
+                }
+            ]
+        },
+    ).status_code == 200
+    assert client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_standard_edition",
+                    "target_id": "sec",
+                    "standard": "NFPA 13",
+                    "edition": "2019",
+                    "basis": "local amendment",
+                    "title": "Installation of Sprinkler Systems",
+                }
+            ]
+        },
+    ).status_code == 200
+    assert client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_standard_suppressed",
+                    "target_id": "sec",
+                    "standard": "NFPA 291",
+                    "suppressed": True,
+                    "basis": "out of scope",
+                }
+            ]
+        },
+    ).status_code == 200
+
+    path = _write_docx(tmp_path, _MASTER_LINES)
+    with open(path, "rb") as fh:
+        resp = client.post(
+            "/api/import/master",
+            files={
+                "file": (
+                    "master.docx",
+                    fh.read(),
+                    "application/vnd.openxmlformats-officedocument"
+                    ".wordprocessingml.document",
+                )
+            },
+        )
+    assert resp.status_code == 200, resp.json()
+    doc = resp.json()["doc"]
+    # The master landed...
+    assert doc["section"]["number"] == "21 13 13"
+    assert any(part["articles"] for part in doc["parts"])
+    # ...and the pre-import project setup survived the tree replacement.
+    assert doc["project_profile"]["city"] == "Phoenix"
+    assert doc["project_profile"]["client_name"] == "Acme"
+    assert {k.lower() for k in doc["edition_overrides"]} == {"nfpa 13"}
+    assert doc["suppressed_standards"]  # NFPA 291 excluded, still excluded
+
+    # Undo returns to the pre-import setup (not a blank page), and re-import
+    # is now blocked because real body content exists.
+    undone = client.post("/api/doc/undo").json()
+    assert undone["doc"]["section"]["number"] == ""
+    assert undone["doc"]["project_profile"]["city"] == "Phoenix"
+
+    client.post("/api/doc/redo")
+    with open(path, "rb") as fh:
+        blocked = client.post(
+            "/api/import/master",
+            files={
+                "file": (
+                    "master.docx",
+                    fh.read(),
+                    "application/vnd.openxmlformats-officedocument"
+                    ".wordprocessingml.document",
+                )
+            },
+        )
+    assert blocked.status_code == 409

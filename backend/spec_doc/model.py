@@ -136,6 +136,24 @@ class SpecSection:
             and not any(part.articles for part in self.parts)
         )
 
+    def has_body_content(self) -> bool:
+        """True when the section carries body/heading content.
+
+        Deliberately narrower than :meth:`is_empty` (which also counts
+        project-setup metadata — profile, edition overrides, excluded
+        standards). This is the master-import precondition and mirrors the
+        frontend's ``hasContent`` gate: importing a master *replaces* the
+        tree, so it must be blocked once real body content exists, but a
+        document that only holds project setup the user entered up front is
+        a valid import target — ``adopt_imported`` carries that metadata
+        across.
+        """
+        return bool(
+            self.number
+            or self.title
+            or any(part.articles for part in self.parts)
+        )
+
     # -- serialization ------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
@@ -988,13 +1006,29 @@ class DocumentStore:
         """Adopt a master-spec import as the document, as one version.
 
         The caller (the import endpoint) enforces that the current document
-        is empty — an import is a *starting point*, never a merge. The
-        empty version stays at index 0, so one undo steps back to the
-        blank page. Refuses mid-turn adoption (an in-flight turn owns the
-        tree until it commits or rolls back).
+        has no *body* content — an import is a *starting point*, never a
+        merge. Project setup the user already entered (profile, edition
+        overrides, excluded standards) is not body content and is carried
+        onto the imported tree so it survives the replacement; those fields
+        do not affect the source body projection, so a just-built source map
+        stays valid. One undo steps back to the pre-import state (a blank
+        page, or the project setup on its own). Refuses mid-turn adoption
+        (an in-flight turn owns the tree until it commits or rolls back).
         """
         if self._turn_backup is not None:
             raise ValueError("Cannot import while a turn is in progress.")
+        # Carry the pre-import project setup across the tree replacement. The
+        # importer never populates these, so an empty check just future-proofs
+        # against a master that ever does.
+        if not section.project_profile:
+            section.project_profile = dict(self.doc.project_profile)
+        if not section.edition_overrides:
+            section.edition_overrides = {
+                name: dict(override)
+                for name, override in self.doc.edition_overrides.items()
+            }
+        if not section.suppressed_standards:
+            section.suppressed_standards = dict(self.doc.suppressed_standards)
         # Validate before adopting anything (from_dict runs integrity).
         snapshot = section.to_dict()
         SpecSection.from_dict(snapshot)

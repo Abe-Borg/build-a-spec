@@ -1102,12 +1102,13 @@ def create_app() -> FastAPI:
     @app.post("/api/import/master")
     async def import_master(file: UploadFile) -> JSONResponse:
         session = sessions.get_session()
-        if not session.doc.doc.is_empty():
+        if session.doc.doc.has_body_content():
             return JSONResponse(
                 {
                     "ok": False,
-                    "error": "The document is not empty — a master import "
-                    "is a starting point. Start a new session first.",
+                    "error": "The document already has content — a master "
+                    "import is a starting point, not a merge. Start a new "
+                    "session first.",
                 },
                 status_code=409,
             )
@@ -1177,7 +1178,7 @@ def create_app() -> FastAPI:
                         },
                         status_code=409,
                     )
-                if not session.doc.doc.is_empty():
+                if session.doc.doc.has_body_content():
                     return JSONResponse(
                         {
                             "ok": False,

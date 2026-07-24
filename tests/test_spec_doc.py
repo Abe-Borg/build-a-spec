@@ -797,6 +797,45 @@ def _importable_section() -> SpecSection:
     return section
 
 
+def test_has_body_content_ignores_project_setup_metadata():
+    # is_empty() also counts project setup; has_body_content() (the import
+    # precondition) is narrower — only real body/heading content blocks it.
+    section = SpecSection.empty()
+    assert section.is_empty() and not section.has_body_content()
+
+    section.project_profile = {"city": "Phoenix"}
+    assert not section.is_empty()  # profile counts as "not empty"...
+    assert not section.has_body_content()  # ...but is not body content
+
+    section.edition_overrides = {"NFPA 13": {"edition": "2019", "basis": "x"}}
+    section.suppressed_standards = {"NFPA 291": "out of scope"}
+    assert not section.has_body_content()
+
+    section.number = "21 13 13"  # a section heading is body content
+    assert section.has_body_content()
+
+
+def test_adopt_imported_carries_project_setup_across_the_replacement():
+    store = DocumentStore()
+    store.doc.project_profile = {"city": "Phoenix", "client_name": "Acme"}
+    store.doc.edition_overrides = {
+        "NFPA 13": {"edition": "2019", "basis": "local amendment"}
+    }
+    store.doc.suppressed_standards = {"NFPA 291": "out of scope"}
+    # The imported section (from the importer) never carries project setup.
+    imported = _importable_section()
+    assert not imported.project_profile
+    store.adopt_imported(imported)
+    # The master replaced the tree, but the project setup survived onto it.
+    assert store.doc.number == "21 13 13"
+    assert store.doc.title == "WET-PIPE SPRINKLER SYSTEMS"
+    assert store.doc.project_profile == {"city": "Phoenix", "client_name": "Acme"}
+    assert store.doc.edition_overrides == {
+        "NFPA 13": {"edition": "2019", "basis": "local amendment"}
+    }
+    assert store.doc.suppressed_standards == {"NFPA 291": "out of scope"}
+
+
 def test_adopt_import_sets_baseline_index():
     store = DocumentStore()
     assert store.baseline_index is None

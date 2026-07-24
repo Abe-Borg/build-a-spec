@@ -27,7 +27,6 @@ import ReviewDrawer from "./ReviewDrawer";
 import SpecDocument from "./SpecDocument";
 import { sourceCapabilitiesExpected } from "../lib/sourceCapabilities";
 import Tip from "./Tip";
-import ConfirmDialog from "./ConfirmDialog";
 
 interface Props {
   doc: SpecDoc | null;
@@ -150,11 +149,11 @@ export default function ArtifactPanel({
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
-  const [pendingImport, setPendingImport] = useState<File | null>(null);
-
   // Open / Import: prefer the native pywebview dialog (the HTML file input
   // silently yields no bytes inside the webview); fall back to the hidden
   // <input type="file"> in a plain browser (undefined = no native bridge).
+  // Import goes straight to onImportMaster — the confirmation modal was
+  // removed on master, so both paths import directly.
   const handleOpenClick = async () => {
     const file = await nativeOpenFile("project");
     if (file === undefined) fileRef.current?.click();
@@ -163,7 +162,7 @@ export default function ArtifactPanel({
   const handleImportClick = async () => {
     const file = await nativeOpenFile("docx");
     if (file === undefined) importRef.current?.click();
-    else if (file) setPendingImport(file);
+    else if (file) onImportMaster(file);
   };
   // Open-items list collapses like the Review / Final QC drawers; the count
   // stays visible in the bar, so nothing is lost at a glance when collapsed.
@@ -576,7 +575,7 @@ export default function ArtifactPanel({
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) setPendingImport(file);
+              if (file) onImportMaster(file);
               e.target.value = "";
             }}
           />
@@ -684,42 +683,6 @@ export default function ArtifactPanel({
           </div>
         </div>
       )}
-
-      <ConfirmDialog
-        open={pendingImport !== null}
-        danger
-        title="Import with a protected source copy?"
-        body={
-          <div className="space-y-2">
-            <p>
-              Build-a-Spec will extract supported body text from{" "}
-              <b className="text-ink">{pendingImport?.name}</b> into its own
-              SectionFormat model and retain an exact, immutable source copy.
-            </p>
-            <p>
-              Preserved export clones that source and can replace text in
-              verified simple body paragraphs. Add, delete, and reorder are
-              limited to proven flat body islands with isolated direct Word
-              list bindings. Headers, footers, numbering definitions, styles,
-              section layout, and unrelated package parts remain untouched.
-              Unsupported edits are refused instead of flattening the file.
-            </p>
-            <p className="text-ink-faint">
-              A separate normalized export remains available when you
-              intentionally want a newly generated document. Native .baspec
-              saves carry the exact source copy with the project.
-            </p>
-          </div>
-        }
-        confirmLabel="Import DOCX"
-        cancelLabel="Cancel"
-        onConfirm={() => {
-          const file = pendingImport;
-          setPendingImport(null);
-          if (file) onImportMaster(file);
-        }}
-        onCancel={() => setPendingImport(null)}
-      />
 
       {compareMode && (
         <div className="flex flex-wrap items-center gap-3 border-b border-edge bg-bg/40 px-5 py-2 text-[11px]">

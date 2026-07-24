@@ -1008,3 +1008,119 @@ def test_session_llm_and_qc_use_compact_capability_summary_without_mutation(
     assert "<source_preserving_body_permissions>" in qc_message
     assert session.doc.snapshot() == before_history
     assert session.source_docx_bytes == before_source == source
+
+
+def _count_capability_probes(monkeypatch) -> dict[str, int]:
+    """Count authoritative probe runs performed by the capability sweep."""
+    counts = {"probes": 0}
+    real_probe = source_patch_module._run_capability_probe
+
+    def counting(**kwargs):
+        counts["probes"] += 1
+        return real_probe(**kwargs)
+
+    monkeypatch.setattr(
+        source_patch_module, "_run_capability_probe", counting
+    )
+    return counts
+
+
+def test_capability_sweep_is_not_repeated_for_unchanged_state(
+    tmp_path,
+    api_client,
+    monkeypatch,
+):
+    """One sweep per document state — not one per response that reports it.
+
+    The sweep probes every element against the real gate, so its cost grows
+    with body size.  It sits on paths the UI hits several times for a single
+    user action (the import response, every document refresh, readiness, the
+    QC snapshot, and every turn's PROJECT CONTEXT).  Recomputing the same
+    answer for the same state made a large imported master unusable: the
+    document panel and the first token of every chat turn both waited on a
+    fresh full sweep.  This pins the memoization, so a regression shows up
+    here as work performed rather than only as a stopwatch reading.
+    """
+    source = make_numbered_island_master(
+        tmp_path,
+        filename="capability-sweep-memo.docx",
+    )
+    _import_api(api_client, source, filename="capability-sweep-memo.docx")
+
+    counts = _count_capability_probes(monkeypatch)
+    session = sessions.get_session()
+
+    first = api_client.get("/api/doc")
+    assert first.status_code == 200
+    assert first.json()["source_capabilities"] is not None
+    assert counts["probes"] == 0, (
+        "the import response already swept this exact state; refreshing the "
+        "document must not sweep it again"
+    )
+
+    # Every other reader of the same state is free too.
+    assert api_client.get("/api/readiness").status_code == 200
+    assert _source_editing_boundary_block(session) is not None
+    assert session.source_edit_capabilities() is not None
+    assert counts["probes"] == 0
+
+
+def test_capability_sweep_reruns_when_the_document_changes(
+    tmp_path,
+    api_client,
+    monkeypatch,
+):
+    """The memo is keyed on state, so a real change must re-derive it."""
+    source = make_numbered_island_master(
+        tmp_path,
+        filename="capability-sweep-invalidate.docx",
+    )
+    _import_api(
+        api_client, source, filename="capability-sweep-invalidate.docx"
+    )
+    counts = _count_capability_probes(monkeypatch)
+
+    edited = api_client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": "pt1.a1.p1",
+                    "text": "Revised provision text.",
+                }
+            ]
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert counts["probes"] > 0, "a changed body must be swept again"
+
+    after_edit = counts["probes"]
+    assert api_client.get("/api/doc").status_code == 200
+    assert counts["probes"] == after_edit, "the new state is swept once too"
+
+
+def test_capability_memo_never_outlives_its_source_artifacts(
+    tmp_path,
+    api_client,
+):
+    """Swapping a retained artifact must not return the cached permission.
+
+    The memo is keyed on artifact identity rather than on the source map's
+    own declared hash, so a mutated or replaced artifact fails closed instead
+    of inheriting the previous report's answers.
+    """
+    source = make_numbered_island_master(
+        tmp_path,
+        filename="capability-memo-identity.docx",
+    )
+    _import_api(api_client, source, filename="capability-memo-identity.docx")
+    session = sessions.get_session()
+    allowed = session.source_edit_capabilities().elements["pt1.a1.p1"]
+    assert allowed.operations["replace_text"].allowed is True
+
+    session.source_docx_bytes = session.source_docx_bytes + b"tampered"
+    denied = session.source_edit_capabilities().elements["pt1.a1.p1"]
+    assert denied.operations["replace_text"].allowed is False
+    assert denied.operations["replace_text"].blocker == "source_hash_mismatch"
+    assert denied.operations["set_status"].allowed is True

@@ -603,6 +603,30 @@ class _ValidatedPatch:
     prepared_output: bytes | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _BoundInputs:
+    """One identity-bound ``(source_bytes, source_map, baseline)`` triple.
+
+    Everything here is derived purely from inputs the capability sweep holds
+    fixed for its whole run, so binding once and reusing it is equivalent to
+    re-deriving it per probe — just not quadratic. Deliberately private: the
+    public gates keep validating from scratch on every call.
+    """
+
+    context: SourcePatchContext
+    baseline_projection: tuple[tuple[str, ...], ...]
+    baseline_paragraphs: dict[str, "_ProjectedParagraph"]
+    baseline_children: dict[str, tuple[str, ...]]
+    baseline_headings: tuple[tuple[str, ...], ...]
+    # Exactly what _build_numbered_islands returns for this baseline.
+    islands: tuple[
+        dict[str, "_NumberedIsland"],
+        dict[str, "_NumberedIsland"],
+        dict[str, tuple["_NumberedIsland", ...]],
+        dict[str, str],
+    ]
+
+
 def _xml_parser() -> etree.XMLParser:
     return etree.XMLParser(
         resolve_entities=False,
@@ -741,6 +765,8 @@ def _projection_paragraphs(
 def _validate_fixed_projection(
     baseline: SpecSection,
     current: SpecSection,
+    *,
+    bound_inputs: "_BoundInputs | None" = None,
 ) -> tuple[
     dict[str, _ProjectedParagraph],
     dict[str, tuple[str, ...]],
@@ -748,7 +774,12 @@ def _validate_fixed_projection(
     dict[str, tuple[str, ...]],
 ]:
     """Reject every body-structure change outside flat article provisions."""
-    base, base_children, base_headings = _projection_paragraphs(baseline)
+    if bound_inputs is not None:
+        base = bound_inputs.baseline_paragraphs
+        base_children = bound_inputs.baseline_children
+        base_headings = bound_inputs.baseline_headings
+    else:
+        base, base_children, base_headings = _projection_paragraphs(baseline)
     cur, cur_children, cur_headings = _projection_paragraphs(current)
     if base_headings != cur_headings:
         cur_by_identity = {(row[0], row[1], row[2]): row for row in cur_headings}
@@ -1716,16 +1747,25 @@ def _plan_projection_changes(
     source_map: SourceBodyMap,
     baseline_section: SpecSection,
     current_section: SpecSection,
+    bound_inputs: _BoundInputs | None = None,
 ) -> _PatchPlan:
     baseline, base_children, current, current_children = _validate_fixed_projection(
-        baseline_section, current_section
+        baseline_section,
+        current_section,
+        bound_inputs=bound_inputs,
     )
-    _islands_by_key, island_by_uid, islands_by_article, diagnostics = _build_numbered_islands(
-        context=context,
-        source_map=source_map,
-        baseline=baseline,
-        base_children=base_children,
-    )
+    if bound_inputs is not None:
+        # Islands are a function of (context, source_map, baseline) only.
+        _islands_by_key, island_by_uid, islands_by_article, diagnostics = (
+            bound_inputs.islands
+        )
+    else:
+        _islands_by_key, island_by_uid, islands_by_article, diagnostics = _build_numbered_islands(
+            context=context,
+            source_map=source_map,
+            baseline=baseline,
+            base_children=base_children,
+        )
 
     desired_by_island: dict[str, list[_DesiredParagraph]] = {
         island.key: []
@@ -1958,15 +1998,30 @@ def _validate_source_and_plan(
     baseline: SpecSection,
     current: SpecSection,
     context: SourcePatchContext | None = None,
+    bound_inputs: _BoundInputs | None = None,
 ) -> _ValidatedPatch:
-    bound_context = _context_for_inputs(
-        source_bytes=source_bytes,
-        source_map=source_map,
-        baseline=baseline,
-        context=context,
-    )
+    """Prove one complete candidate document against the immutable source.
 
-    baseline_projection = semantic_body_projection(baseline)
+    ``bound_inputs`` is the capability sweep's re-entry path: identity binding
+    and the baseline projection are properties of ``(source_bytes, source_map,
+    baseline)``, which the sweep holds fixed across every probe. Re-deriving
+    them per probe made the sweep quadratic in body size (each probe re-walked
+    the baseline tree, re-hashed its projection, compared the whole source map,
+    and re-checked every body anchor). The caller binds once and passes the
+    result; every other entry point still validates from scratch.
+    """
+    if bound_inputs is not None:
+        bound_context = bound_inputs.context
+        baseline_projection = bound_inputs.baseline_projection
+    else:
+        bound_context = _context_for_inputs(
+            source_bytes=source_bytes,
+            source_map=source_map,
+            baseline=baseline,
+            context=context,
+        )
+        baseline_projection = semantic_body_projection(baseline)
+
     current_projection = semantic_body_projection(current)
     mutation_blocker = (
         bound_context.global_blockers[0]
@@ -2008,6 +2063,7 @@ def _validate_source_and_plan(
         source_map=source_map,
         baseline_section=baseline,
         current_section=current,
+        bound_inputs=bound_inputs,
     )
 
     # Exact semantic no-ops return the original bytes even for signed,
@@ -2244,6 +2300,7 @@ def _run_capability_probe(
     source_map: SourceBodyMap,
     baseline: SpecSection,
     candidate: SpecSection,
+    bound_inputs: _BoundInputs | None = None,
 ) -> tuple[_ValidatedPatch | None, SourcePatchError | None]:
     try:
         validated = _validate_source_and_plan(
@@ -2252,6 +2309,7 @@ def _run_capability_probe(
             baseline=baseline,
             current=candidate,
             context=context,
+            bound_inputs=bound_inputs,
         )
     except SourcePatchError as exc:
         return None, exc
@@ -2286,12 +2344,14 @@ def _probe_heading_capability(
     source_map: SourceBodyMap,
     baseline: SpecSection,
     current: SpecSection,
+    bound_inputs: _BoundInputs | None = None,
 ) -> SourceOperationCapability:
     _validated, error = _run_capability_probe(
         context=context,
         source_map=source_map,
         baseline=baseline,
         candidate=_heading_probe_candidate(current, uid),
+        bound_inputs=bound_inputs,
     )
     return _capability_from_error(error) if error else _allowed_capability()
 
@@ -2303,6 +2363,7 @@ def _probe_edit_capability(
     source_map: SourceBodyMap,
     baseline: SpecSection,
     current: SpecSection,
+    bound_inputs: _BoundInputs | None = None,
 ) -> SourceOperationCapability:
     candidate, _applied = apply_edits(current, [operation])
     _validated, error = _run_capability_probe(
@@ -2310,6 +2371,7 @@ def _probe_edit_capability(
         source_map=source_map,
         baseline=baseline,
         candidate=candidate,
+        bound_inputs=bound_inputs,
     )
     return _capability_from_error(error) if error else _allowed_capability()
 
@@ -2334,6 +2396,7 @@ def _probe_add_capability(
     source_map: SourceBodyMap,
     baseline: SpecSection,
     current: SpecSection,
+    bound_inputs: _BoundInputs | None = None,
 ) -> SourceOperationCapability:
     positions_by_island: dict[str, list[int]] = {}
     first_error: SourcePatchError | None = None
@@ -2364,6 +2427,7 @@ def _probe_add_capability(
             source_map=source_map,
             baseline=baseline,
             candidate=candidate,
+            bound_inputs=bound_inputs,
         )
         if error is not None:
             if first_error is None:
@@ -2409,6 +2473,7 @@ def _probe_move_capability(
     source_map: SourceBodyMap,
     baseline: SpecSection,
     current: SpecSection,
+    bound_inputs: _BoundInputs | None = None,
 ) -> SourceOperationCapability:
     allowed_positions: list[int] = []
     island_keys: set[str] = set()
@@ -2425,6 +2490,7 @@ def _probe_move_capability(
             source_map=source_map,
             baseline=baseline,
             candidate=candidate,
+            bound_inputs=bound_inputs,
         )
         if error is not None:
             if first_error is None:
@@ -2482,12 +2548,36 @@ def source_edit_capabilities(
         baseline=baseline,
         context=context,
     )
+    # Bind the fixed inputs once for the whole sweep. Every probe below runs
+    # the same authoritative gate on the same source/map/baseline; only the
+    # candidate differs. Re-deriving the baseline projection, its paragraph
+    # tree and the numbered islands inside every probe made the sweep
+    # quadratic in body size for no added assurance (see
+    # _validate_source_and_plan and _plan_projection_changes).
+    baseline_paragraphs, baseline_children, baseline_headings = (
+        _projection_paragraphs(baseline)
+    )
+    islands = _build_numbered_islands(
+        context=bound_context,
+        source_map=source_map,
+        baseline=baseline_paragraphs,
+        base_children=baseline_children,
+    )
+    bound_inputs = _BoundInputs(
+        context=bound_context,
+        baseline_projection=semantic_body_projection(baseline),
+        baseline_paragraphs=baseline_paragraphs,
+        baseline_children=baseline_children,
+        baseline_headings=baseline_headings,
+        islands=islands,
+    )
     current_validated = _validate_source_and_plan(
         source_bytes=bound_context.source_bytes,
         source_map=source_map,
         baseline=baseline,
         current=current,
         context=bound_context,
+        bound_inputs=bound_inputs,
     )
     status = (
         "pass_through_only"
@@ -2496,21 +2586,11 @@ def source_edit_capabilities(
         else "ready"
     )
 
-    baseline_paragraphs, baseline_children, _base_headings = (
-        _projection_paragraphs(baseline)
-    )
     current_paragraphs, current_children, _current_headings = (
         _projection_paragraphs(current)
     )
     current_nodes = _paragraph_nodes(current)
-    _by_key, baseline_island_by_uid, _by_article, _diagnostics = (
-        _build_numbered_islands(
-            context=bound_context,
-            source_map=source_map,
-            baseline=baseline_paragraphs,
-            base_children=baseline_children,
-        )
-    )
+    _by_key, baseline_island_by_uid, _by_article, _diagnostics = islands
     current_island_by_uid = {
         uid: island.key for uid, island in baseline_island_by_uid.items()
     }
@@ -2537,6 +2617,7 @@ def source_edit_capabilities(
                 source_map=source_map,
                 baseline=baseline,
                 current=current,
+                bound_inputs=bound_inputs,
             ),
             "set_project_profile": _allowed_capability(),
             "set_standard_edition": _allowed_capability(),
@@ -2553,6 +2634,7 @@ def source_edit_capabilities(
                     source_map=source_map,
                     baseline=baseline,
                     current=current,
+                    bound_inputs=bound_inputs,
                 )
             }
         )
@@ -2565,6 +2647,7 @@ def source_edit_capabilities(
                         source_map=source_map,
                         baseline=baseline,
                         current=current,
+                        bound_inputs=bound_inputs,
                     ),
                     "add_paragraph": _probe_add_capability(
                         target_uid=article.uid,
@@ -2573,6 +2656,7 @@ def source_edit_capabilities(
                         source_map=source_map,
                         baseline=baseline,
                         current=current,
+                        bound_inputs=bound_inputs,
                     ),
                     "delete": _probe_edit_capability(
                         operation={"action": "delete", "target_id": article.uid},
@@ -2580,6 +2664,7 @@ def source_edit_capabilities(
                         source_map=source_map,
                         baseline=baseline,
                         current=current,
+                        bound_inputs=bound_inputs,
                     ),
                 }
             )
@@ -2618,6 +2703,7 @@ def source_edit_capabilities(
             source_map=source_map,
             baseline=baseline,
             current=current,
+            bound_inputs=bound_inputs,
         )
         if delete_capability.allowed:
             delete_capability = _allowed_capability(
@@ -2635,6 +2721,7 @@ def source_edit_capabilities(
                     source_map=source_map,
                     baseline=baseline,
                     current=current,
+                    bound_inputs=bound_inputs,
                 ),
                 "delete": delete_capability,
                 "move": _probe_move_capability(
@@ -2648,6 +2735,7 @@ def source_edit_capabilities(
                     source_map=source_map,
                     baseline=baseline,
                     current=current,
+                    bound_inputs=bound_inputs,
                 ),
                 "add_paragraph": _probe_add_capability(
                     target_uid=uid,
@@ -2656,6 +2744,7 @@ def source_edit_capabilities(
                     source_map=source_map,
                     baseline=baseline,
                     current=current,
+                    bound_inputs=bound_inputs,
                 ),
                 "set_status": _probe_edit_capability(
                     operation={
@@ -2667,6 +2756,7 @@ def source_edit_capabilities(
                     source_map=source_map,
                     baseline=baseline,
                     current=current,
+                    bound_inputs=bound_inputs,
                 ),
                 "set_provenance": _probe_edit_capability(
                     operation={
@@ -2678,6 +2768,7 @@ def source_edit_capabilities(
                     source_map=source_map,
                     baseline=baseline,
                     current=current,
+                    bound_inputs=bound_inputs,
                 ),
             }
         )

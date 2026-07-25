@@ -376,9 +376,13 @@ def test_import_reports_pending_permissions_without_sweeping_inline(monkeypatch)
     release = threading.Event()
     real_sweep = SessionState._sweep_and_publish
 
-    def held_sweep(self, key):
+    # ``*args`` deliberately: the sweep is reached from a blocking caller and
+    # from the warm thread, and its parameter list has already changed once.
+    # A fixed arity here fails inside a background thread, which surfaces as
+    # a confusing assertion on the *next* line rather than as itself.
+    def held_sweep(self, *args, **kwargs):
         release.wait(_BLOCK_SECONDS)
-        return real_sweep(self, key)
+        return real_sweep(self, *args, **kwargs)
 
     monkeypatch.setattr(SessionState, "_sweep_and_publish", held_sweep)
 

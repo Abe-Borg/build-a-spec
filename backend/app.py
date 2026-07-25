@@ -1579,6 +1579,14 @@ def create_app() -> FastAPI:
     @app.post("/api/import/master")
     async def import_master(file: UploadFile) -> JSONResponse:
         session = sessions.get_session()
+        # The session this upload was chosen for. Reading the master now
+        # yields the event loop, so "New session" / a project load can land
+        # in between — and a fresh session is blank, so the body-content
+        # check below would happily let this master drop into a session the
+        # user deliberately started over (possibly on another module or
+        # discipline). Generation is the app's existing answer to "was the
+        # session replaced out from under this work".
+        entry_generation = session.generation
         if session.doc.doc.has_body_content():
             return JSONResponse(
                 {
@@ -1627,6 +1635,16 @@ def create_app() -> FastAPI:
         # active session untouched.
         try:
             with session.session_state_guard():
+                if session.generation != entry_generation:
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": "The session was replaced while the "
+                            "master was being read — import it again into "
+                            "the current session.",
+                        },
+                        status_code=409,
+                    )
                 if session.turn_active:
                     return JSONResponse(
                         {
@@ -2500,6 +2518,11 @@ def create_app() -> FastAPI:
         source map, and current preservation plan are validated against a
         throwaway session before the live session is touched.
         """
+        # The session the user chose this file for. Staging yields the event
+        # loop for seconds, so "New session" can complete in between — and
+        # this commit replaces everything, so a stale load would silently
+        # discard the session the user just deliberately started.
+        entry_generation = sessions.get_session().generation
         try:
             payload = await read_project_upload_bounded(file)
             # Staging re-parses and re-indexes the attached master, which is
@@ -2523,6 +2546,16 @@ def create_app() -> FastAPI:
         # are the commit point. A rejected package never reaches them.
         session = sessions.get_session()
         with session.session_state_guard():
+            if session.generation != entry_generation:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "The session was replaced while the project "
+                        "was being read — open it again from the current "
+                        "session.",
+                    },
+                    status_code=409,
+                )
             load_project(parsed.project, session)
             session.source_docx_bytes = parsed.source_docx_bytes
             session.source_docx_filename = (

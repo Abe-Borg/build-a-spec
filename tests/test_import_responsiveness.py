@@ -17,7 +17,7 @@ import time
 from docx import Document
 from fastapi.testclient import TestClient
 
-from backend import app as app_module
+from backend import app as app_module, sessions
 
 # How long a stalled request is allowed to hold the server before the test
 # gives up on it. A blocked event loop cannot honour an asyncio timeout — the
@@ -149,6 +149,112 @@ def _document_xml(source: bytes) -> bytes:
 
     with zipfile.ZipFile(io.BytesIO(source)) as archive:
         return archive.read("word/document.xml")
+
+
+def test_import_refuses_to_land_in_a_session_started_while_it_was_read(
+    monkeypatch,
+):
+    """A "New session" during the read must not receive the old master.
+
+    Serving requests during the read is the whole point of the offload, and
+    ``/api/session/reset`` is one of them. A fresh session is blank, so the
+    handler's body-content check would wave this master straight into a
+    session the user deliberately started over — possibly on a different
+    module or discipline. The generation stamp is what catches it.
+    """
+    real_prepare = app_module._prepare_master_import
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_prepare(source_bytes: bytes, safe_filename: str):
+        entered.set()
+        release.wait(_BLOCK_SECONDS)
+        return real_prepare(source_bytes, safe_filename)
+
+    monkeypatch.setattr(app_module, "_prepare_master_import", blocking_prepare)
+    source = _master_bytes()
+
+    with TestClient(app_module.create_app()) as client:
+        outcome: dict = {}
+
+        def run_import() -> None:
+            outcome["response"] = client.post(
+                "/api/import/master", files=_upload(source)
+            )
+
+        worker = threading.Thread(target=run_import, daemon=True)
+        worker.start()
+        assert entered.wait(_BLOCK_SECONDS + 5), "import never started"
+        assert client.post("/api/session/reset").status_code == 200
+        release.set()
+        worker.join(_BLOCK_SECONDS + 10)
+
+    response = outcome["response"]
+    assert response.status_code == 409
+    assert "session was replaced" in response.json()["error"]
+    # The new session is untouched: no master, no imported content.
+    session = sessions.get_session()
+    assert session.source_docx_bytes is None
+    assert session.import_report is None
+    assert not session.doc.doc.has_body_content()
+
+
+def test_project_load_refuses_to_overwrite_a_session_started_while_it_was_read(
+    monkeypatch,
+):
+    """Same guarantee for opening a project — it replaces the whole session."""
+    real_stage = app_module._stage_project_load
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_stage(payload: bytes):
+        entered.set()
+        release.wait(_BLOCK_SECONDS)
+        return real_stage(payload)
+
+    with TestClient(app_module.create_app()) as client:
+        saved = client.get("/api/project/save")
+        assert saved.status_code == 200
+        monkeypatch.setattr(app_module, "_stage_project_load", blocking_stage)
+
+        outcome: dict = {}
+
+        def run_load() -> None:
+            outcome["response"] = client.post(
+                "/api/project/load-file",
+                files={
+                    "file": ("session.baspec", saved.content, "application/zip")
+                },
+            )
+
+        worker = threading.Thread(target=run_load, daemon=True)
+        worker.start()
+        assert entered.wait(_BLOCK_SECONDS + 5), "load never started"
+        # The reviewer's scenario exactly: start a new session, then do work
+        # in it, while the earlier open is still being read.
+        assert client.post("/api/session/reset").status_code == 200
+        edit = client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {
+                        "action": "replace",
+                        "target_id": "sec",
+                        "text": "WORK DONE IN THE NEW SESSION",
+                        "numbering": "23 05 00",
+                    }
+                ]
+            },
+        )
+        assert edit.status_code == 200
+        release.set()
+        worker.join(_BLOCK_SECONDS + 10)
+
+    response = outcome["response"]
+    assert response.status_code == 409
+    assert "session was replaced" in response.json()["error"]
+    # The work done in the new session survives — the stale load never replayed.
+    assert sessions.get_session().doc.doc.title == "WORK DONE IN THE NEW SESSION"
 
 
 def test_a_real_import_keeps_the_server_answering():

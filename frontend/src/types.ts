@@ -829,7 +829,7 @@ declare global {
          *  path. Resolves to the file's name + base64 bytes, or null when the
          *  dialog was cancelled. `kind` picks the file filter. */
         open_file?: (
-          kind: "project" | "docx",
+          kind: "project" | "docx" | "reference",
         ) => Promise<{ name: string; data_b64: string } | null>;
       };
     };

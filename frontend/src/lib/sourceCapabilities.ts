@@ -29,6 +29,20 @@ const ALLOWED_WITHOUT_SOURCE: SourceOperationCapability = Object.freeze({
   allowed: true,
 });
 
+/**
+ * Whether the server is still deriving this document state's permissions.
+ *
+ * The sweep probes every element against the real gate, so it runs in the
+ * background and the report says `pending` until it lands. Body operations
+ * are denied throughout (each carries the server's own explanation), so this
+ * only ever changes wording — never whether something is permitted.
+ */
+export function sourceCapabilitiesPending(
+  report: SourceCapabilitiesState | null,
+): boolean {
+  return report?.status === "pending";
+}
+
 /** Match the server's active imported-history boundary without freezing legacy JSON. */
 export function sourceCapabilitiesExpected(
   report: SourceCapabilitiesState | null,

@@ -14,6 +14,7 @@ import type {
   ResearchEvent,
   ResearchSnapshot,
   SectionDiffPayload,
+  SourceCapabilitiesState,
   StreamEvent,
   UpdateCheckPayload,
   UsageSummary,
@@ -121,6 +122,20 @@ export async function getDoc(): Promise<DocPayload> {
   const resp = await fetch("/api/doc");
   if (!resp.ok) throw new Error(`doc ${resp.status}`);
   return resp.json();
+}
+
+/**
+ * Just the imported-source permission report.
+ *
+ * The per-element sweep runs in the background after an import or a body
+ * change, so the panel polls this until the status stops being `pending`.
+ * Deliberately narrower than `getDoc`, whose payload also rebuilds the
+ * outline, the lint report and the source-readiness plan.
+ */
+export async function getDocCapabilities(): Promise<SourceCapabilitiesState | null> {
+  const resp = await fetch("/api/doc/capabilities");
+  if (!resp.ok) throw new Error(`capabilities ${resp.status}`);
+  return (await resp.json()).source_capabilities ?? null;
 }
 
 /* --- Chat-authored figures (diagrams / schematics / tables) --- */

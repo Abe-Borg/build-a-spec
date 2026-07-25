@@ -18,6 +18,8 @@ interface Props {
   onStartOnboarding: () => void;
   /** Stop the in-flight turn, forwarded to the composer. */
   onStop: () => void;
+  /** A file upload is in flight; the composer holds sending and says so. */
+  uploading?: boolean;
   /** WI2 "Ask model" prefill, forwarded to the composer. */
   prefill?: { text: string; nonce: number };
   /** Session figures, keyed by id, for inline rendering in the bubbles. */
@@ -34,6 +36,7 @@ export default function Chat({
   discipline,
   onStartOnboarding,
   onStop,
+  uploading,
   prefill,
   figuresById,
   onDeleteFigure,
@@ -148,7 +151,13 @@ export default function Chat({
         )}
       </div>
       <SuggestedPrompts prompts={suggestions} busy={busy} onSend={onSend} />
-      <Composer disabled={busy} onSend={onSend} onStop={onStop} prefill={prefill} />
+      <Composer
+        disabled={busy}
+        onSend={onSend}
+        onStop={onStop}
+        uploading={uploading}
+        prefill={prefill}
+      />
     </section>
   );
 }

@@ -18,6 +18,11 @@ from docx import Document
 from fastapi.testclient import TestClient
 
 from backend import app as app_module, sessions
+from backend.llm.conversation import (
+    _source_editing_boundary_block,
+    _turn_context_text,
+)
+from tests.conftest import settle_capability_sweep
 
 # How long a stalled request is allowed to hold the server before the test
 # gives up on it. A blocked event loop cannot honour an asyncio timeout — the
@@ -301,6 +306,140 @@ def test_a_real_import_keeps_the_server_answering():
         f"slowest health check during a real import was {max(health_times):.2f}s "
         f"over {len(health_times)} samples — the server stalls while importing"
     )
+
+
+def test_import_reports_pending_permissions_without_sweeping_inline():
+    """The import response must not wait on the per-element permission sweep.
+
+    That sweep probes every element against the real source gate — O(document)
+    work per probe, ~5 probes per paragraph — so waiting for it made the
+    upload take minutes on a real master. It now runs in the background and
+    the response says so.
+    """
+    source = _master_bytes(articles=2, paragraphs=3)
+
+    with TestClient(app_module.create_app()) as client:
+        response = client.post("/api/import/master", files=_upload(source))
+        assert response.status_code == 200, response.text
+        capabilities = response.json()["source_capabilities"]
+        assert capabilities is not None
+        assert capabilities["status"] == "pending"
+        # Pending is fail-closed: an undecided permission is denied, never
+        # granted. Workspace-only metadata stays available because it does
+        # not touch the retained Word body.
+        operations = capabilities["elements"]["pt1.a1.p1"]
+        assert operations["replace_text"]["allowed"] is False
+        assert operations["replace_text"]["blocker"] == "capabilities_pending"
+        assert operations["delete"]["allowed"] is False
+        assert operations["set_status"]["allowed"] is True
+
+        # ...and the background sweep settles into a real report, which the
+        # panel picks up from the dedicated polling route.
+        settle_capability_sweep()
+        settled = client.get("/api/doc/capabilities")
+        assert settled.status_code == 200, settled.text
+        report = settled.json()["source_capabilities"]
+        assert report["status"] == "ready"
+        assert report["elements"]["pt1.a1.p1"]["replace_text"]["allowed"] is True
+
+
+def test_a_pending_report_still_refuses_a_forged_body_edit():
+    """Fail-closed survives the async window.
+
+    The report is guidance, never authorization, so the point is not that
+    ``pending`` denies the operation in the payload — it is that the real
+    gate refuses the edit anyway. Here the edit is one the gate rejects on
+    its own merits; the capability report never gets a vote either way.
+    """
+    source = _master_bytes(articles=4, paragraphs=4)
+
+    with TestClient(app_module.create_app()) as client:
+        assert client.post(
+            "/api/import/master", files=_upload(source)
+        ).status_code == 200
+        # A heading change is outside the source-preserving boundary.
+        forged = client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {
+                        "action": "replace",
+                        "target_id": "sec",
+                        "text": "FORGED SECTION HEADING",
+                    }
+                ]
+            },
+        )
+        assert forged.status_code == 400, forged.text
+        assert "source-backed edit rejected" in forged.json()["error"].lower()
+
+
+def test_the_model_is_told_permissions_are_pending_not_read_only():
+    """The boundary block must not describe a pending sweep as read-only.
+
+    Every operation is denied while the sweep runs, so rendering the report
+    the ordinary way would tell the model the whole imported document is
+    permanently read-only — and the model would repeat that to the user.
+    """
+    source = _master_bytes(articles=6, paragraphs=8)
+
+    with TestClient(app_module.create_app()) as client:
+        assert client.post(
+            "/api/import/master", files=_upload(source)
+        ).status_code == 200
+        session = sessions.get_session()
+        assert not session.capability_warm_settled(0.0), (
+            "the fixture is too small to still be sweeping — raise its size"
+        )
+        pending_block = _source_editing_boundary_block(session)
+        assert pending_block is not None
+        assert "still being derived" in pending_block
+        # The claim that would be false and that the model would repeat.
+        assert "All other imported body IDs are read-only" not in pending_block
+        assert "Text-editable IDs" not in pending_block
+
+        settle_capability_sweep()
+        settled_block = _source_editing_boundary_block(session)
+
+    assert settled_block is not None
+    assert "still being derived" not in settled_block
+    assert "Text-editable IDs" in settled_block
+
+
+def test_a_chat_turn_starts_promptly_on_a_freshly_imported_master():
+    """The reported symptom: chat froze after importing a spec.
+
+    Every turn renders the imported-source editing boundary into its PROJECT
+    CONTEXT, and that used to derive the permission report inline — before
+    ``stream_user_turn`` yielded a single SSE frame. On a freshly imported
+    master the memo is cold, so the user watched an empty chat for as long as
+    the sweep took. The turn must now start while the sweep is still running.
+    """
+    source = _master_bytes(articles=6, paragraphs=8)
+
+    with TestClient(app_module.create_app()) as client:
+        assert client.post(
+            "/api/import/master", files=_upload(source)
+        ).status_code == 200
+
+        session = sessions.get_session()
+        # Deliberately do NOT settle: the sweep for this state is in flight,
+        # which is exactly the window the freeze used to live in.
+        assert not session.capability_warm_settled(0.0), (
+            "the fixture is too small to still be sweeping — raise its size"
+        )
+
+        started = time.perf_counter()
+        context = _turn_context_text(session)
+        elapsed = time.perf_counter() - started
+
+    assert elapsed < _RESPONSIVE_SECONDS, (
+        f"building a turn's PROJECT CONTEXT took {elapsed:.2f}s on a freshly "
+        "imported master — the turn is waiting on the capability sweep again"
+    )
+    # The model is still told the boundary exists; it just says the exact
+    # per-element map is still being derived. The real gate remains authority.
+    assert "IMPORTED DOCX EDITING BOUNDARY" in context
 
 
 def test_anchor_lookups_never_rescan_the_element_table():

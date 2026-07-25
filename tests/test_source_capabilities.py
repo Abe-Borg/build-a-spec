@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import sessions
+from tests.conftest import settle_capability_sweep
 from backend.app import _qc_source_guard, create_app
 from backend.llm.conversation import _source_editing_boundary_block
 from backend.qc.engine import (
@@ -145,18 +146,44 @@ def api_client():
     sessions.reset_session()
 
 
+def _settled_doc(client: TestClient) -> dict:
+    """``GET /api/doc`` with the permission sweep for that state settled.
+
+    The first read of a state the memo does not cover starts the background
+    sweep and reports ``pending``; the second read, after it lands, carries
+    the derived report.
+    """
+    first = client.get("/api/doc")
+    assert first.status_code == 200, first.text
+    settle_capability_sweep()
+    second = client.get("/api/doc")
+    assert second.status_code == 200, second.text
+    return second.json()
+
+
 def _import_api(
     client: TestClient,
     source: bytes,
     *,
     filename: str = "capability-master.docx",
 ) -> dict:
+    """Import a master and let its permission sweep settle.
+
+    The returned payload is the import response with ``source_capabilities``
+    refreshed from the settled report, which is what the panel shows a
+    moment after the upload finishes.
+    """
     response = client.post(
         "/api/import/master",
         files={"file": (filename, source, DOCX_MEDIA_TYPE)},
     )
     assert response.status_code == 200, response.text
-    return response.json()
+    payload = response.json()
+    settle_capability_sweep()
+    settled = client.get("/api/doc/capabilities")
+    assert settled.status_code == 200, settled.text
+    payload["source_capabilities"] = settled.json()["source_capabilities"]
+    return payload
 
 
 def test_report_is_deeply_immutable_deterministic_and_does_not_mutate_inputs(
@@ -616,12 +643,17 @@ def test_api_capabilities_refresh_across_history_project_load_and_qc_apply(
         "replace_text"
     ]["blocker"] == "heading_change"
 
+    # Every mutating response below reports the permissions of the state it
+    # produced, but the sweep that derives them runs in the background — so
+    # the assertions read the settled report rather than the immediate one.
     pre_import = api_client.post("/api/doc/undo")
     assert pre_import.status_code == 200
+    # Undoing past the import leaves no active source branch at all, which is
+    # decided without a sweep and so is already final in the response.
     assert pre_import.json()["source_capabilities"] is None
     restored_import = api_client.post("/api/doc/redo")
     assert restored_import.status_code == 200
-    assert restored_import.json()["source_capabilities"]["status"] == "ready"
+    assert _settled_doc(api_client)["source_capabilities"]["status"] == "ready"
 
     added = api_client.post(
         "/api/doc/edit",
@@ -639,14 +671,17 @@ def test_api_capabilities_refresh_across_history_project_load_and_qc_apply(
     assert added.status_code == 200, added.text
     added_uid = added.json()["applied"][0]["id"]
     assert added_uid == "pt1.a1.p4"
-    assert added_uid in added.json()["source_capabilities"]["elements"]
+    assert added_uid in _settled_doc(api_client)["source_capabilities"]["elements"]
 
     undone = api_client.post("/api/doc/undo")
     assert undone.status_code == 200
-    assert added_uid not in undone.json()["source_capabilities"]["elements"]
+    assert (
+        added_uid
+        not in _settled_doc(api_client)["source_capabilities"]["elements"]
+    )
     redone = api_client.post("/api/doc/redo")
     assert redone.status_code == 200
-    assert added_uid in redone.json()["source_capabilities"]["elements"]
+    assert added_uid in _settled_doc(api_client)["source_capabilities"]["elements"]
 
     saved = api_client.get("/api/project/save")
     assert saved.status_code == 200, saved.text
@@ -662,7 +697,7 @@ def test_api_capabilities_refresh_across_history_project_load_and_qc_apply(
         },
     )
     assert loaded.status_code == 200, loaded.text
-    assert added_uid in loaded.json()["source_capabilities"]["elements"]
+    assert added_uid in _settled_doc(api_client)["source_capabilities"]["elements"]
 
     finding = QCFinding(
         finding_id="qc-capability-delete",
@@ -685,7 +720,7 @@ def test_api_capabilities_refresh_across_history_project_load_and_qc_apply(
     )
     assert applied.status_code == 200, applied.text
     assert applied.json()["outcomes"][finding.finding_id] == "applied"
-    refreshed = applied.json()["source_capabilities"]
+    refreshed = _settled_doc(api_client)["source_capabilities"]
     assert "pt1.a1.p2" not in refreshed["elements"]
     assert refreshed["elements"]["pt1.a1"]["add_paragraph"][
         "allowed_positions"
@@ -885,9 +920,7 @@ def test_incomplete_source_scope_denies_body_but_allows_metadata_everywhere(
     session = sessions.get_session()
     corrupt(session)
 
-    blocked = api_client.get("/api/doc")
-    assert blocked.status_code == 200
-    operations = blocked.json()["source_capabilities"]["elements"][
+    operations = _settled_doc(api_client)["source_capabilities"]["elements"][
         "pt1.a1.p1"
     ]
     assert operations["replace_text"]["allowed"] is False
@@ -1093,6 +1126,9 @@ def test_capability_sweep_reruns_when_the_document_changes(
         },
     )
     assert edited.status_code == 200, edited.text
+    # The re-sweep is asynchronous now: the edit response reports ``pending``
+    # and the background warm derives the new state.
+    settle_capability_sweep()
     assert counts["probes"] > 0, "a changed body must be swept again"
 
     after_edit = counts["probes"]
@@ -1116,11 +1152,11 @@ def test_capability_memo_never_outlives_its_source_artifacts(
     )
     _import_api(api_client, source, filename="capability-memo-identity.docx")
     session = sessions.get_session()
-    allowed = session.source_edit_capabilities().elements["pt1.a1.p1"]
+    allowed = session.source_edit_capabilities(block=True).elements["pt1.a1.p1"]
     assert allowed.operations["replace_text"].allowed is True
 
     session.source_docx_bytes = session.source_docx_bytes + b"tampered"
-    denied = session.source_edit_capabilities().elements["pt1.a1.p1"]
+    denied = session.source_edit_capabilities(block=True).elements["pt1.a1.p1"]
     assert denied.operations["replace_text"].allowed is False
     assert denied.operations["replace_text"].blocker == "source_hash_mismatch"
     assert denied.operations["set_status"].allowed is True

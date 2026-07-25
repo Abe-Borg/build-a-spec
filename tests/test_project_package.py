@@ -15,6 +15,7 @@ import zipfile
 from fastapi.testclient import TestClient
 
 from backend import sessions
+from tests.conftest import settle_capability_sweep
 from backend.app import create_app
 from backend.spec_doc.source_package import inspect_docx_package
 from tests.docx_fidelity_helpers import (
@@ -407,6 +408,10 @@ def test_legacy_format_one_json_loads_without_claiming_source_fidelity(tmp_path)
 
 
 def _assert_rejected_load_is_atomic(client: TestClient, payload: bytes, source: bytes):
+    # Let the background permission sweep land first, so the "unchanged"
+    # comparison below is against a settled report rather than a transient
+    # ``pending`` one.
+    settle_capability_sweep()
     before = client.get("/api/doc").json()
     original_before = client.get("/api/import/original")
     assert original_before.status_code == 200

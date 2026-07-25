@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import sessions
+from tests.conftest import settle_capability_sweep
 from backend.app import create_app
 from backend.spec_doc.model import DocumentStore, SpecSection
 from tests.docx_fidelity_helpers import (
@@ -34,6 +35,9 @@ def _import_master(client: TestClient, source: bytes) -> None:
         files={"file": ("history-master.docx", source, DOCX_MEDIA_TYPE)},
     )
     assert response.status_code == 200, response.text
+    # Let the background permission sweep land, so a document snapshot taken
+    # afterwards is stable rather than a transient ``pending`` report.
+    settle_capability_sweep()
 
 
 def _load_package(client: TestClient, payload: bytes):

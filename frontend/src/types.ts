@@ -35,6 +35,14 @@ export interface StreamStatus {
   progress_chars?: number;
 }
 
+/** An upload the app is waiting on: a master DOCX import or a project open.
+ *  Non-null while the request is in flight, so the panel can say so instead
+ *  of sitting silently on an unchanged document. */
+export type FileLoading = {
+  kind: "import" | "open";
+  name: string;
+} | null;
+
 export interface Health {
   status: string;
   app: string;

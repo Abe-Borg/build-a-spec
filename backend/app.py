@@ -77,6 +77,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from . import settings, sessions
 from .api_key_store import (
@@ -211,6 +212,146 @@ def _attachment_headers(filename: str) -> dict[str, str]:
             f"filename*=UTF-8''{quote(filename, safe='')}"
         )
     }
+
+
+def _prepare_master_import(
+    source_bytes: bytes, safe_filename: str
+) -> tuple[Any, dict[str, Any], Any]:
+    """Inspect, parse and index an uploaded master — the blocking half.
+
+    Pure CPU work over the uploaded bytes: no session state is read or
+    written, so it is safe to run on a worker thread while the event loop
+    keeps serving the chat stream and every other request. Errors keep the
+    exact types the endpoint maps to responses, and the temp file is always
+    removed on the thread that created it.
+    """
+    package_info = inspect_docx_package(source_bytes)
+    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as handle:
+        handle.write(source_bytes)
+        temp_path = Path(handle.name)
+    try:
+        result = parse_master_docx(temp_path)
+        report = build_import_report(
+            filename=safe_filename,
+            source_bytes=source_bytes,
+            package_info=package_info,
+            imported_block_count=result.imported_block_count,
+            skipped_empty_count=result.skipped_empty_count,
+            warnings=result.warnings,
+            tracked_changes_detected=result.tracked_changes_detected,
+        )
+        if result.source_map is None:
+            raise MasterImportError(
+                "The source document could not be mapped safely for "
+                "preserving export."
+            )
+        source_context = source_patch_module.build_source_patch_context(
+            source_bytes=source_bytes,
+            source_map=result.source_map,
+            baseline=result.section,
+        )
+    finally:
+        temp_path.unlink(missing_ok=True)
+    return result, report, source_context
+
+
+def _stage_project_load(
+    payload: bytes,
+) -> tuple[Any, SessionState, SourceBodyMap | None, Any]:
+    """Validate a project upload against a throwaway session — blocking half.
+
+    Everything here runs against ``payload`` and a staged
+    :class:`SessionState`; the live session is never touched, so this is safe
+    on a worker thread. Re-parsing the attached master costs the same seconds
+    of CPU as an import, which is exactly why it must not run on the event
+    loop. Raises the same ``ProjectPackageError`` / ``ValueError`` types the
+    endpoint maps to a 400, and ``ProjectPackageTooLargeError`` to a 413.
+    """
+    parsed = parse_project_file(payload)
+
+    staged = SessionState()
+    load_project(parsed.project, staged)
+    typed_map: SourceBodyMap | None = None
+    source_context = None
+    if parsed.source_docx_bytes is not None:
+        if parsed.source_map is None:
+            raise ProjectPackageError(
+                "The project source DOCX has no preservation map."
+            )
+        try:
+            stored_map = SourceBodyMap.from_dict(parsed.source_map)
+        except ValueError as exc:
+            raise ProjectPackageError(str(exc)) from exc
+
+        # Rebuild anchors from the attached source instead of trusting
+        # serialized indices/hashes. The stored map is an integrity record;
+        # the recomputed map is the authority used by the live session.
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as handle:
+            handle.write(parsed.source_docx_bytes)
+            source_path = Path(handle.name)
+        try:
+            reparsed = parse_master_docx(source_path)
+        except MasterImportError as exc:
+            raise ProjectPackageError(
+                "The attached source DOCX cannot be re-imported safely."
+            ) from exc
+        finally:
+            source_path.unlink(missing_ok=True)
+        if reparsed.source_map is None:
+            raise ProjectPackageError(
+                "The attached source DOCX cannot be remapped safely."
+            )
+        if stored_map.to_dict() != reparsed.source_map.to_dict():
+            raise ProjectPackageError(
+                "The project source map does not match a fresh parse "
+                "of the attached DOCX."
+            )
+        typed_map = reparsed.source_map
+        staged.source_docx_bytes = parsed.source_docx_bytes
+        staged.source_docx_filename = parsed.source_docx_filename
+        staged.source_docx_map = typed_map
+        baseline = _source_baseline(staged)
+        if baseline is None:
+            raise ProjectPackageError(
+                "The project source has no imported semantic baseline."
+            )
+        source_context = parsed.source_patch_context
+        if source_context is None:
+            source_context = source_patch_module.build_source_patch_context(
+                source_bytes=parsed.source_docx_bytes,
+                source_map=typed_map,
+                baseline=baseline,
+            )
+        staged.source_patch_context = source_context
+        # Every retained state on the source-backed side of history must fit
+        # the preservation boundary. Checking only the active index would let
+        # an unsafe forged redo/undo version enter the session and become
+        # active later without another package validation pass.
+        baseline_index = staged.doc.baseline_index
+        for version_index in range(baseline_index, len(staged.doc.versions)):
+            retained = SpecSection.from_dict(staged.doc.versions[version_index])
+            preservation = source_patch_readiness(
+                source_bytes=staged.source_docx_bytes,
+                source_map=typed_map,
+                baseline=baseline,
+                current=retained,
+                context=source_context,
+            )
+            if preservation is None or not preservation.ready:
+                detail = (
+                    preservation.blockers[0].message
+                    if preservation and preservation.blockers
+                    else "the current body exceeds the preservation boundary"
+                )
+                raise ProjectPackageError(
+                    "The project source cannot restore retained "
+                    f"version {version_index} safely: {detail}"
+                )
+    elif parsed.source_map is not None and not parsed.legacy_json:
+        raise ProjectPackageError(
+            "The project contains a source map without its source DOCX."
+        )
+    return parsed, staged, typed_map, source_context
 
 
 def _source_baseline(session) -> SpecSection | None:
@@ -1438,6 +1579,14 @@ def create_app() -> FastAPI:
     @app.post("/api/import/master")
     async def import_master(file: UploadFile) -> JSONResponse:
         session = sessions.get_session()
+        # The session this upload was chosen for. Reading the master now
+        # yields the event loop, so "New session" / a project load can land
+        # in between — and a fresh session is blank, so the body-content
+        # check below would happily let this master drop into a session the
+        # user deliberately started over (possibly on another module or
+        # discipline). Generation is the app's existing answer to "was the
+        # session replaced out from under this work".
+        entry_generation = session.generation
         if session.doc.doc.has_body_content():
             return JSONResponse(
                 {
@@ -1459,7 +1608,6 @@ def create_app() -> FastAPI:
         safe_filename = sanitize_source_filename(submitted_name)
         try:
             source_bytes = await read_upload_bounded(file)
-            package_info = inspect_docx_package(source_bytes)
         except UploadTooLargeError as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=413
@@ -1468,43 +1616,35 @@ def create_app() -> FastAPI:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
-        with tempfile.NamedTemporaryFile(
-            suffix=".docx", delete=False
-        ) as handle:
-            handle.write(source_bytes)
-            temp_path = Path(handle.name)
+        # Inspecting, parsing and lexically indexing a master is seconds of
+        # blocking CPU on a large section. Running it inline on the event loop
+        # froze the whole server for the duration — a streaming chat turn could
+        # not deliver a single SSE frame until the import finished. It belongs
+        # on a worker thread; the request still awaits it, so the endpoint's
+        # contract is unchanged.
         try:
-            result = parse_master_docx(temp_path)
-            report = build_import_report(
-                filename=safe_filename,
-                source_bytes=source_bytes,
-                package_info=package_info,
-                imported_block_count=result.imported_block_count,
-                skipped_empty_count=result.skipped_empty_count,
-                warnings=result.warnings,
-                tracked_changes_detected=result.tracked_changes_detected,
-            )
-            if result.source_map is None:
-                raise MasterImportError(
-                    "The source document could not be mapped safely for "
-                    "preserving export."
-                )
-            source_context = source_patch_module.build_source_patch_context(
-                source_bytes=source_bytes,
-                source_map=result.source_map,
-                baseline=result.section,
+            result, report, source_context = await run_in_threadpool(
+                _prepare_master_import, source_bytes, safe_filename
             )
         except (MasterImportError, SourcePatchError, ValueError) as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
-        finally:
-            temp_path.unlink(missing_ok=True)
         # Adopt the recovery artifact only after validation, parsing, and the
         # document-store transaction all succeed. Failed imports leave the
         # active session untouched.
         try:
             with session.session_state_guard():
+                if session.generation != entry_generation:
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": "The session was replaced while the "
+                            "master was being read — import it again into "
+                            "the current session.",
+                        },
+                        status_code=409,
+                    )
                 if session.turn_active:
                     return JSONResponse(
                         {
@@ -1544,6 +1684,12 @@ def create_app() -> FastAPI:
             warnings=len(result.warnings),
             tracked_changes=result.tracked_changes_detected,
         )
+        # Building the payload is itself expensive on a freshly imported
+        # master: it runs the first source-capability sweep, which probes
+        # every element against the real gate. Every other endpoint reaches
+        # ``_doc_payload`` through a plain ``def`` handler, i.e. already on a
+        # worker thread — this async handler is the one that has to say so.
+        payload = await run_in_threadpool(_doc_payload, session)
         return JSONResponse(
             {
                 "ok": True,
@@ -1553,7 +1699,7 @@ def create_app() -> FastAPI:
                 "tracked_changes_detected": report[
                     "tracked_changes_detected"
                 ],
-                **_doc_payload(session),
+                **payload,
             }
         )
 
@@ -2372,99 +2518,21 @@ def create_app() -> FastAPI:
         source map, and current preservation plan are validated against a
         throwaway session before the live session is touched.
         """
+        # The session the user chose this file for. Staging yields the event
+        # loop for seconds, so "New session" can complete in between — and
+        # this commit replaces everything, so a stale load would silently
+        # discard the session the user just deliberately started.
+        entry_generation = sessions.get_session().generation
         try:
             payload = await read_project_upload_bounded(file)
-            parsed = parse_project_file(payload)
-
-            staged = SessionState()
-            load_project(parsed.project, staged)
-            typed_map: SourceBodyMap | None = None
-            if parsed.source_docx_bytes is not None:
-                if parsed.source_map is None:
-                    raise ProjectPackageError(
-                        "The project source DOCX has no preservation map."
-                    )
-                try:
-                    stored_map = SourceBodyMap.from_dict(parsed.source_map)
-                except ValueError as exc:
-                    raise ProjectPackageError(str(exc)) from exc
-
-                # Rebuild anchors from the attached source instead of
-                # trusting serialized indices/hashes. The stored map is an
-                # integrity record; the recomputed map is the authority used
-                # by the live session.
-                with tempfile.NamedTemporaryFile(
-                    suffix=".docx", delete=False
-                ) as handle:
-                    handle.write(parsed.source_docx_bytes)
-                    source_path = Path(handle.name)
-                try:
-                    reparsed = parse_master_docx(source_path)
-                except MasterImportError as exc:
-                    raise ProjectPackageError(
-                        "The attached source DOCX cannot be re-imported safely."
-                    ) from exc
-                finally:
-                    source_path.unlink(missing_ok=True)
-                if reparsed.source_map is None:
-                    raise ProjectPackageError(
-                        "The attached source DOCX cannot be remapped safely."
-                    )
-                if stored_map.to_dict() != reparsed.source_map.to_dict():
-                    raise ProjectPackageError(
-                        "The project source map does not match a fresh parse "
-                        "of the attached DOCX."
-                    )
-                typed_map = reparsed.source_map
-                staged.source_docx_bytes = parsed.source_docx_bytes
-                staged.source_docx_filename = parsed.source_docx_filename
-                staged.source_docx_map = typed_map
-                baseline = _source_baseline(staged)
-                if baseline is None:
-                    raise ProjectPackageError(
-                        "The project source has no imported semantic baseline."
-                    )
-                source_context = parsed.source_patch_context
-                if source_context is None:
-                    source_context = source_patch_module.build_source_patch_context(
-                        source_bytes=parsed.source_docx_bytes,
-                        source_map=typed_map,
-                        baseline=baseline,
-                    )
-                staged.source_patch_context = source_context
-                # Every retained state on the source-backed side of history
-                # must fit the preservation boundary. Checking only the
-                # active index would let an unsafe forged redo/undo version
-                # enter the session and become active later without another
-                # package validation pass.
-                baseline_index = staged.doc.baseline_index
-                for version_index in range(
-                    baseline_index, len(staged.doc.versions)
-                ):
-                    retained = SpecSection.from_dict(
-                        staged.doc.versions[version_index]
-                    )
-                    preservation = source_patch_readiness(
-                        source_bytes=staged.source_docx_bytes,
-                        source_map=typed_map,
-                        baseline=baseline,
-                        current=retained,
-                        context=source_context,
-                    )
-                    if preservation is None or not preservation.ready:
-                        detail = (
-                            preservation.blockers[0].message
-                            if preservation and preservation.blockers
-                            else "the current body exceeds the preservation boundary"
-                        )
-                        raise ProjectPackageError(
-                            "The project source cannot restore retained "
-                            f"version {version_index} safely: {detail}"
-                        )
-            elif parsed.source_map is not None and not parsed.legacy_json:
-                raise ProjectPackageError(
-                    "The project contains a source map without its source DOCX."
-                )
+            # Staging re-parses and re-indexes the attached master, which is
+            # the same seconds-of-CPU work the import path does. Keep it off
+            # the event loop so an open never freezes a streaming turn.
+            # ``_staged`` is the throwaway session the package was validated
+            # against; the live commit below replays the same payload.
+            parsed, _staged, typed_map, source_context = await run_in_threadpool(
+                _stage_project_load, payload
+            )
         except ProjectPackageTooLargeError as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=413
@@ -2478,6 +2546,16 @@ def create_app() -> FastAPI:
         # are the commit point. A rejected package never reaches them.
         session = sessions.get_session()
         with session.session_state_guard():
+            if session.generation != entry_generation:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "The session was replaced while the project "
+                        "was being read — open it again from the current "
+                        "session.",
+                    },
+                    status_code=409,
+                )
             load_project(parsed.project, session)
             session.source_docx_bytes = parsed.source_docx_bytes
             session.source_docx_filename = (
@@ -2487,11 +2565,14 @@ def create_app() -> FastAPI:
             session.source_patch_context = (
                 source_context if parsed.source_docx_bytes is not None else None
             )
+        # Same reason as the import response: a source-backed project pays for
+        # the first capability sweep here, which must not run on the loop.
+        payload = await run_in_threadpool(_doc_payload, session)
         return JSONResponse(
             {
                 "ok": True,
                 "chat": chat_transcript(session.history),
-                **_doc_payload(session),
+                **payload,
             }
         )
 

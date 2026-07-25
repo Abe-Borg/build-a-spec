@@ -1746,6 +1746,86 @@ new deps, no project-file format bump; one thin REST route + one js_api method.
   `test_figures.py` (`/api/session/unsaved` reflects work). Frontend pinned by
   `npm run build` (tsc) — the no-vitest convention stands.
 
+## Upload responsiveness — implemented notes (import / open never freeze the app)
+
+Reported symptom: choosing a spec froze the app while it uploaded, and the chat
+stalled — the user could type, but the model could not answer until the import
+finished. Two independent causes, both fixed; no new endpoints, no new deps.
+
+- **The event-loop rule (the invariant to keep).** `POST /api/import/master`
+  and `POST /api/project/load-file` were the app's only two `async def`
+  handlers, and each did its parsing/indexing inline — i.e. on the asyncio
+  loop. For the whole import the server answered *nothing*: no SSE frame, no
+  REST call, no health poll. Every other endpoint is a plain `def`, which
+  FastAPI already runs in a threadpool, which is why nothing else showed this.
+  The blocking halves are now module-level `_prepare_master_import` /
+  `_stage_project_load`, invoked through `run_in_threadpool`. Both touch only
+  their arguments (a throwaway `SessionState` for the load), so nothing
+  session-owned crosses the thread boundary; the commit still happens on the
+  loop thread inside `session_state_guard()`, and its re-checks
+  (`turn_active`, `has_body_content`) were already written for exactly this
+  "the document changed while the master was being inspected" race. The
+  **response payload** is offloaded the same way (`await
+  run_in_threadpool(_doc_payload, session)` in both handlers): on an imported
+  master `_doc_payload` runs the first source-capability sweep, which is by
+  far the most expensive thing either request does. Every other endpoint
+  reaches `_doc_payload` through a plain `def` handler — i.e. already on a
+  worker thread — so these two were the only ones that had to say it out
+  loud. **An `async def` handler in this app must never do seconds of CPU
+  inline — make it `def`, or push the work through `run_in_threadpool`.**
+- **The import was also quadratic.** `SourceXmlIndex.body_child` /
+  `word_text` / `element_for_span` / `direct_children` each scanned the full
+  element tuple, and anchor binding calls them once per body child: a
+  5,854-paragraph master spent **12.6s** in `build_source_patch_context`
+  alone. They now build a lookup dict on first use (fields declared
+  `init=False, compare=False, repr=False`, populated via
+  `object.__setattr__` — the frozen-dataclass memoization escape hatch, so
+  equality/hashing/serialization are untouched), preserving first-match and
+  the typed `XmlLexicalError` misses. Same master: **2.0s**, and roughly
+  linear from there.
+- **The UI now says it is working.** `App.fileLoading`
+  (`{kind:"import"|"open", name}` + a ref as the double-submit guard) drives:
+  a chat marker note on import (`addNote`, the research/QC convention), an
+  accent progress line under the panel actions reusing the existing
+  `.status-dots`/`.status-shimmer` language, `Importing…`/`Opening…` button
+  labels with both file actions disabled, and a `LoadingState` sheet in the
+  document area (the `EmptyState` paper with staggered `.skeleton-line`
+  pulses, reduced-motion gated). The open path deliberately posts no chat
+  note — `doLoadProject` replaces the transcript wholesale, so a note there
+  would vanish on success.
+- **KNOWN, NOT FIXED: `source_edit_capabilities` is quadratic, and it now
+  dominates import cost.** `source_patch.source_edit_capabilities` derives
+  each element's permissions by probing the authoritative final gate, and
+  every non-no-op probe runs `_validate_source_and_plan` end to end — which
+  composes the full patched `word/document.xml`, reparses it, rebuilds the
+  whole lexical index, and does a complete raw-ZIP rebuild preflight. That is
+  O(document) work, run ~5× per paragraph, so the sweep is O(n²) in body
+  size. Measured end-to-end through `POST /api/import/master` after
+  everything above: **86 blocks 1.6s · 164 blocks 6.0s · 218 blocks 10.7s ·
+  332 blocks 28.4s**, and a 4,685-paragraph master extrapolates to *hours*.
+  The result is cached (keyed on source/baseline/body projection, so a
+  status-only edit is free), but any body change re-arms it — and
+  `_source_editing_boundary_block` calls it in **every turn's PROJECT
+  CONTEXT**, so on an imported master the model waits for a fresh sweep after
+  each turn that edits the body. Fixing it means changing how permissions are
+  derived (deriving them per island analytically, probing only what the UI
+  needs, or reusing plan state across probes) inside the most safety-critical
+  subsystem in the repo — a deliberate design decision, not a tuning pass, so
+  it was left for its own change. Until then the offload above is what keeps
+  the app usable: the work is slow, but nothing else is blocked and the user
+  can see it happening.
+- **Tests**: `tests/test_import_responsiveness.py`. The two responsiveness
+  tests drive `TestClient` from two real threads (a blocked event loop cannot
+  honour an `asyncio` timeout — the loop is the thing that is stuck, which is
+  why an `asyncio.wait_for` version of this test passes against the bug) and
+  assert an unrelated `/api/health` returns in well under the time the upload
+  is held. The complexity test counts full scans of the element table rather
+  than timing anything, so it pins the O(1) lookup contract without flaking.
+  `test_a_real_import_keeps_the_server_answering` is the end-to-end guard: no
+  monkeypatching, a 164-block master, `/api/health` polled throughout, every
+  sample required to return promptly (it reports a 5.8s stall the moment any
+  phase goes back on the loop). All five fail against the pre-fix code.
+
 ## Commands
 
 ```

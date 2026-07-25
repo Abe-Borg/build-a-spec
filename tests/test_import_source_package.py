@@ -48,6 +48,7 @@ IMPORT_REPORT_KEYS = {
     "skipped_empty_count",
     "warnings",
     "tracked_changes_detected",
+    "spec_shape_detected",
     "fidelity_notice",
 }
 

@@ -257,6 +257,13 @@ export interface ImportReport {
   skipped_empty_count: number;
   warnings: string[];
   tracked_changes_detected: boolean;
+  /**
+   * False when the import found no SECTION number, PART heading, or numbered
+   * article — i.e. the spec scaffolding around the content is the importer's,
+   * not the file's. Projects saved before shape detection omit it; treat a
+   * missing value as true so their presentation is unchanged.
+   */
+  spec_shape_detected?: boolean;
   fidelity_notice: string;
 }
 

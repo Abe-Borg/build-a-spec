@@ -1034,6 +1034,7 @@ export default function SpecDocument({
   sourceCapabilities = null,
   onEdit = () => {},
   diff = null,
+  unstructuredImport = false,
 }: {
   doc: SpecDoc;
   changedIds: ReadonlySet<string>;
@@ -1043,6 +1044,8 @@ export default function SpecDocument({
   sourceCapabilities?: SourceCapabilitiesState | null;
   onEdit?: (ops: EditOp[]) => void;
   diff?: SectionDiff | null;
+  /** The import found no SectionFormat structure (see ImportReport). */
+  unstructuredImport?: boolean;
 }) {
   if (diff) {
     return <DiffDocument diff={diff} />;
@@ -1053,38 +1056,68 @@ export default function SpecDocument({
     "sec",
     "replace_text",
   );
+  // An unstructured import has no header to show — printing "SECTION [TBD]"
+  // over a memo asserts a section the file never had. The placeholders are
+  // still right for a spec being drafted from scratch, and they come back the
+  // moment a header exists, so this turns on the document's own state rather
+  // than latching at import.
+  const hasHeader = Boolean(doc.section.number || doc.section.title);
+  const bareImport = unstructuredImport && !hasHeader;
+  // Empty parts are pure scaffolding for such a document; once it is being
+  // turned into a spec, "(No articles yet.)" is a useful drafting cue again.
+  const visibleParts = bareImport
+    ? doc.parts.filter((part) => part.articles.length > 0)
+    : doc.parts;
   return (
     <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
-      <div
-        id="el-sec"
-        className={`text-center ${
-          sourceExpected && !sectionReplaceCapability.allowed
-            ? "rounded border-l-2 border-paper-edge bg-paper-edge/15 py-1"
-            : ""
-        }`}
-      >
-        <p
-          className={`rounded text-[13px] font-semibold tracking-wide ${
-            changedIds.has("sec") ? "changed-block" : ""
+      {/* `el-sec` stays on whichever block renders — it is the tour's section
+          anchor and the target of a header edit. */}
+      {bareImport ? (
+        <div
+          id="el-sec"
+          className="rounded border border-dashed border-paper-edge bg-paper-edge/10 px-3 py-2 text-[12px] leading-snug text-paper-dim"
+        >
+          <span className="font-semibold text-paper-ink">
+            Imported document — no spec structure found.
+          </span>{" "}
+          No SECTION number, PART heading, or numbered article was found in
+          this file, so none is shown. The content below is in document order
+          under a placeholder article; your original file is kept exactly and
+          can be downloaded unchanged. Ask the assistant to turn it into a spec
+          section when you are ready.
+        </div>
+      ) : (
+        <div
+          id="el-sec"
+          className={`text-center ${
+            sourceExpected && !sectionReplaceCapability.allowed
+              ? "rounded border-l-2 border-paper-edge bg-paper-edge/15 py-1"
+              : ""
           }`}
         >
-          SECTION {doc.section.number || "[TBD]"}
-        </p>
-        <p
-          className={`mt-1 rounded text-[13px] font-semibold tracking-wide uppercase ${
-            changedIds.has("sec") ? "changed-block" : ""
-          }`}
-        >
-          {doc.section.title || "[TBD: section title]"}
-          <ReadOnlyBadge
-            capability={sectionReplaceCapability}
-            sourceExpected={sourceExpected}
-          />
-        </p>
-      </div>
+          <p
+            className={`rounded text-[13px] font-semibold tracking-wide ${
+              changedIds.has("sec") ? "changed-block" : ""
+            }`}
+          >
+            SECTION {doc.section.number || "[TBD]"}
+          </p>
+          <p
+            className={`mt-1 rounded text-[13px] font-semibold tracking-wide uppercase ${
+              changedIds.has("sec") ? "changed-block" : ""
+            }`}
+          >
+            {doc.section.title || "[TBD: section title]"}
+            <ReadOnlyBadge
+              capability={sectionReplaceCapability}
+              sourceExpected={sourceExpected}
+            />
+          </p>
+        </div>
+      )}
 
       <div className="mt-10 space-y-8">
-        {doc.parts.map((part) => (
+        {visibleParts.map((part) => (
           <PartBlock
             key={part.id}
             part={part}
@@ -1098,9 +1131,11 @@ export default function SpecDocument({
         ))}
       </div>
 
-      <p className="mt-10 text-center text-[13px] font-semibold tracking-wide">
-        END OF SECTION {doc.section.number || ""}
-      </p>
+      {!bareImport && (
+        <p className="mt-10 text-center text-[13px] font-semibold tracking-wide">
+          END OF SECTION {doc.section.number || ""}
+        </p>
+      )}
     </div>
   );
 }

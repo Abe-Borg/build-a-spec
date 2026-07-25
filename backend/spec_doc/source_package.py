@@ -555,6 +555,7 @@ def build_import_report(
     skipped_empty_count: int,
     warnings: list[str],
     tracked_changes_detected: bool,
+    spec_shape_detected: bool = True,
 ) -> dict[str, Any]:
     """Build the whitelist-only report persisted with a project."""
     report = {
@@ -567,6 +568,7 @@ def build_import_report(
         "skipped_empty_count": skipped_empty_count,
         "warnings": list(warnings),
         "tracked_changes_detected": bool(tracked_changes_detected),
+        "spec_shape_detected": bool(spec_shape_detected),
         "fidelity_notice": FIDELITY_NOTICE,
     }
     # Route application-created metadata through the same caps/whitelist as
@@ -632,6 +634,13 @@ def sanitize_import_report(value: Any) -> dict[str, Any] | None:
             if cleaned:
                 warnings.append(cleaned[:4_000])
 
+    # Optional and non-fatal: a project written before shape detection existed
+    # simply has no opinion, and the conservative reading is "assume it was a
+    # spec" — that keeps the historical presentation for files we cannot
+    # re-examine. Only an explicit ``False`` suppresses the spec chrome.
+    shape = value.get("spec_shape_detected")
+    spec_shape_detected = True if not isinstance(shape, bool) else shape
+
     return {
         "filename": sanitize_source_filename(value.get("filename")),
         "sha256": sha256.lower(),
@@ -642,6 +651,7 @@ def sanitize_import_report(value: Any) -> dict[str, Any] | None:
         "skipped_empty_count": skipped,
         "warnings": warnings,
         "tracked_changes_detected": tracked,
+        "spec_shape_detected": spec_shape_detected,
         # Never trust persisted prose to overstate fidelity; this build's
         # canonical notice describes what its current exporter actually does.
         "fidelity_notice": FIDELITY_NOTICE,

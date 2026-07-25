@@ -248,6 +248,9 @@ export default function ArtifactPanel({
       doc.section.title !== "" ||
       doc.parts.some((p) => p.articles.length > 0));
   const importedMode = importReport !== null || baselineIndex !== null;
+  // Only an explicit false suppresses the spec chrome: projects saved before
+  // shape detection omit the field and keep their original presentation.
+  const unstructuredImport = importReport?.spec_shape_detected === false;
   const passThroughOnly =
     sourcePreservation?.status === "pass_through_only";
   // Retained source bytes may live only in an undone redo tail. Match the
@@ -824,6 +827,7 @@ export default function ArtifactPanel({
             sourceExpected={activeSourceExpected}
             sourceCapabilities={sourceCapabilities}
             onEdit={onEditDoc}
+            unstructuredImport={unstructuredImport}
           />
         ) : fileLoading ? (
           <LoadingState fileLoading={fileLoading} />

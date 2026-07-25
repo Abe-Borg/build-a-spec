@@ -240,6 +240,21 @@ class SessionState:
     # Claude.ai's stop button) rather than rolling back like a failure.
     stop_requested: threading.Event = field(default_factory=threading.Event)
 
+    def import_is_unstructured(self) -> bool:
+        """True when this session's import found no SectionFormat structure.
+
+        The document tree is SectionFormat regardless — the whole edit / lint
+        / diff / QC machinery is typed to it. This says only that the section
+        header, the three parts, and the synthetic article around the content
+        were supplied by the importer rather than by the file, so the app must
+        not present them as the document's own. A session with no import, or a
+        legacy project written before shape detection, reads False.
+        """
+        report = self.import_report
+        if not isinstance(report, dict):
+            return False
+        return report.get("spec_shape_detected") is False
+
     def claim_model_turn(self) -> tuple[object, int] | None:
         """Atomically claim the single streaming-turn slot.
 
@@ -899,6 +914,7 @@ def _turn_context_text(session: SessionState) -> str:
     state block, never a stale one.
     """
     doc = session.doc.doc
+    unstructured = session.import_is_unstructured()
     parts = []
     # Session discipline (Batch 10): renders only for open-catalog sessions
     # (never for curated modules — their request bytes are unchanged).
@@ -935,12 +951,31 @@ def _turn_context_text(session: SessionState) -> str:
     if research_profile is not None:
         block, _dropped = research_context_block(research_profile)
         parts.append(block)
+    # Without this the outline below reads as a spec with an unset header, and
+    # the model reliably "fixes" it by inventing a section number for a file
+    # that was never a spec section.
+    if unstructured:
+        parts.append(
+            "IMPORTED DOCUMENT IS NOT A SPEC SECTION: the file the user "
+            "imported carried no SECTION number, PART heading, or numbered "
+            "article. The section header, the three PART headings, and the "
+            "placeholder article in the outline below are this app's "
+            "scaffolding, NOT content from their document — do not describe "
+            "them as something the file contained, and do not invent a "
+            "section number or title to fill the gap. Ask what the user wants "
+            "to do with this content: turn it into a spec section (then agree "
+            "the section number/title with them first), mine it for "
+            "requirements, or keep it as reference. Their original file is "
+            "retained exactly and can still be downloaded unchanged."
+        )
     parts.append(
         "Current specification document (full text; element ids in "
         "[id: …], provenance chips as ◆item-id):\n"
         + outline(doc, max_text=None)
     )
-    lint_items = lint_document(doc, session.module)
+    lint_items = lint_document(
+        doc, session.module, unstructured_import=unstructured
+    )
     if lint_items:
         lines = [
             "LINT REPORT (deterministic, advisory — stale-edition findings "
@@ -1760,6 +1795,9 @@ def stream_user_turn(
                             "items": lint_document(
                                 session.doc.doc,
                                 session.module,
+                                unstructured_import=(
+                                    session.import_is_unstructured()
+                                ),
                             ),
                             "standards": standards_payload(session),
                         },

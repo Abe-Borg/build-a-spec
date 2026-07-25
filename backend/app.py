@@ -239,6 +239,7 @@ def _prepare_master_import(
             skipped_empty_count=result.skipped_empty_count,
             warnings=result.warnings,
             tracked_changes_detected=result.tracked_changes_detected,
+            spec_shape_detected=result.spec_shape_detected,
         )
         if result.source_map is None:
             raise MasterImportError(
@@ -619,7 +620,11 @@ def _doc_payload(session) -> dict[str, Any]:
     return {
         "doc": session.doc.snapshot(),
         "open_questions": open_questions(session.doc.doc),
-        "lint": lint_document(session.doc.doc, session.module),
+        "lint": lint_document(
+            session.doc.doc,
+            session.module,
+            unstructured_import=session.import_is_unstructured(),
+        ),
         "standards": standards_payload(session),
         "profile_complete": bool(profile and profile.is_complete()),
         "research_status": session.research.status,
@@ -668,7 +673,11 @@ def _readiness_payload(
             imported += 1
         elif p.status == "assumed":
             assumed += 1
-    lint_items = lint_document(doc, session.module)
+    lint_items = lint_document(
+        doc,
+        session.module,
+        unstructured_import=session.import_is_unstructured(),
+    )
     profile = ProjectProfile.from_dict(doc.project_profile)
     profile_ok = bool(profile and profile.is_complete())
     research_ok = session.research.status == "complete"

@@ -19,6 +19,23 @@ and normalized redline. Extraction does not make headers, footers, tables,
 fields, hyperlinks, drawings, content controls, styles, page layout, or
 arbitrary OOXML editable.
 
+Because the tree is always SectionFormat, importing a file that is not a spec
+section necessarily wraps it in scaffolding it never had. The parse therefore
+records `spec_shape_detected` — false when it found no SECTION number, PART
+heading, or numbered article — and the app must not present that scaffolding
+as the document's own: the section header and empty parts are not rendered,
+`missing_section_header` is suppressed, and the model is told the structure is
+the app's. Nothing about extraction, retention, or export changes; this is a
+presentation contract, and it lapses as soon as a real section header exists.
+Projects saved before the field existed read as spec-shaped.
+
+A **reference document** (`POST /api/reference/upload`) is not an import at
+all. Its text is attached to the session as background for the model to read
+and is never part of the specification: no tree, no source retention, no
+capabilities, no effect on lint, compare, QC, readiness, or any export mode.
+Uploads pass the same bounded ZIP/OPC inspection as a master because they are
+the same attack surface, but nothing is retained beyond the extracted text.
+
 The governing invariant is fail-closed: ambiguity may remove a body-editing
 capability, but it must never create one. Build-a-Spec never silently converts
 a failed source-preserving export into a normalized document.
@@ -196,6 +213,9 @@ allowed when body operations are blocked.
 
 | Endpoint | Contract |
 |---|---|
+| `POST /api/reference/upload` | Bounded DOCX text extraction attached as model context. Not an import: no tree, no retained source, no blank-document precondition, and no effect on any export. Rejects a non-`.docx`, an unreadable package, a document with no text, and an attachment past the per-session cap. |
+| `GET /api/references` | Attached reference documents, metadata only — bodies are read by the model through its own tool, never shipped with a payload. |
+| `DELETE /api/reference/{rid}` | Detach one reference document; 404 when unknown. |
 | `POST /api/import/master` | Bounded, atomic DOCX import. On success, returns import counts/warnings plus the full document payload. A failed import leaves the live session unchanged. Parsing and indexing run on a worker thread, so a long master never blocks the chat stream or any other request; the session is still adopted on the event-loop thread under `session_state_guard()`, which re-checks that the document is still blank. |
 | `GET /api/import/original` | Exact retained source with `Cache-Control: no-store`. Returns 409 for a source-less resumed legacy import and 404 when no import exists. |
 | `GET /api/export/docx` | Imported projects default to `mode=source`; fresh projects default to normalized. It never silently falls back from source mode. |

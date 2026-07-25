@@ -17,6 +17,13 @@ Headers, footers, page/section layout, styles, fields, drawings, content
 controls, and other opaque OOXML are preserved but do not become editable
 claims.
 
+Because that tree is always SectionFormat, a file that is not a spec section
+gets wrapped in structure it never had. The import says so plainly and the app
+stops drawing the parts your file did not contain — see the status section
+below. If you only want the assistant to *read* a document rather than edit
+it, attach it as a reference instead of importing it; reference documents sit
+outside all of the contracts below.
+
 The export choices have different contracts:
 
 | Choice | Contract |
@@ -49,7 +56,46 @@ See [DOCX fidelity and compatibility](docs/DOCX_FIDELITY.md) for the complete
 export, API payload, blocker-code, persistence, diagnostics, and test-fixture
 contracts.
 
-## Current Status — v1.5.0 (Batch 10: Generic any-discipline module)
+## Current Status — non-spec uploads: honest framing + reference documents
+
+**Uploading something that is not a spec section no longer dresses it as
+one.** Import always builds a SectionFormat tree — that is what makes editing,
+lint, compare, Final QC, and export work — but the app used to draw the
+scaffolding around your content as though the file had come with it: a
+`SECTION [TBD]` header, three PART headings, and a lint finding telling you to
+name a section your memo does not have.
+
+- **The import now says what it found.** If a file carries no SECTION number,
+  PART heading, or numbered article, the import leads with that in plain
+  words, the panel shows a short explanation instead of an invented header,
+  empty parts are hidden, and the bogus "missing section header" finding is
+  gone. Everything else still applies — a stale edition citation is worth
+  flagging in any document. Your original file is retained exactly and
+  downloads unchanged, as always.
+- **It is a view, not a decision.** The moment a section number and title
+  exist — you set them, or you ask the assistant to turn the content into a
+  spec section — the normal spec presentation comes back. Nothing is
+  suppressed permanently, and a genuine master is unaffected.
+
+**Attach reference documents instead of importing them.** There is now a third
+way to hand the app a `.docx`: **Attach reference** in the document panel,
+for an owner's design standard, a basis-of-design narrative, a product data
+sheet, a previous project's section, or meeting notes.
+
+- **Background, never the spec.** A reference document is never added to the
+  section, never edited, and never appears in lint, compare, Final QC,
+  readiness, or any export. It is material for the assistant to read.
+- **Read on request, so it stays cheap.** The assistant sees a one-line
+  summary of each attachment every turn and opens the full text only when it
+  actually needs it — so attaching a long standard does not inflate the cost
+  of every later message. Ask it to "use the attached standard" and it will.
+- **It is your content, so it is saved.** Attachments ride the project file
+  and count as unsaved work, so a session whose only work is an attached
+  standard still offers to save before you start over.
+- Attach at any point in a session (unlike a master import, which needs a
+  blank document), remove one with the ✕, up to 20 per session.
+
+## Shipped in v1.5.0 (Batch 10: Generic any-discipline module)
 
 **Any discipline, any project type, anywhere in the USA and Canada.** The
 "New session" button now opens a module picker: the curated hyperscale-fire

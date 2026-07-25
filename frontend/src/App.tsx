@@ -6,6 +6,7 @@ import type {
   FileLoading,
   Health,
   ImportReport,
+  ReferenceDocMeta,
   LintIssue,
   ModuleInfo,
   OpenItem,
@@ -37,6 +38,8 @@ import {
   getResearchStatus,
   getUsage,
   importMaster,
+  uploadReference,
+  deleteReference,
   installUpdate,
   loadProjectFile,
   redoDoc,
@@ -87,6 +90,8 @@ export default function App() {
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
   const [baselineIndex, setBaselineIndex] = useState<number | null>(null);
   const [importReport, setImportReport] = useState<ImportReport | null>(null);
+  const [referenceDocs, setReferenceDocs] = useState<ReferenceDocMeta[]>([]);
+  const [referenceBusy, setReferenceBusy] = useState(false);
   const [sourceAvailable, setSourceAvailable] = useState(false);
   const [preservationReady, setPreservationReady] = useState(false);
   const [sourcePreservation, setSourcePreservation] =
@@ -164,6 +169,7 @@ export default function App() {
         setSourceCapabilities(payload.source_capabilities ?? null);
         setFigures(payload.figures ?? []);
         setSuggestions(payload.suggested_prompts ?? []);
+        setReferenceDocs(payload.reference_docs ?? []);
       })
       .catch(() => setDoc(null));
   }, []);
@@ -423,6 +429,60 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [addNote],
   );
+
+  // Attaching background material is deliberately lighter than importing a
+  // master: it never touches the document, so there is no blank-document
+  // gate, no LoadingState sheet, and no doc payload to apply — just the list.
+  const onAttachReference = useCallback(async (file: File) => {
+    setReferenceBusy(true);
+    try {
+      const { reference_docs, warnings } = await uploadReference(file);
+      setReferenceDocs(reference_docs);
+      const attached = reference_docs[reference_docs.length - 1];
+      const notes = warnings.length
+        ? "\n\n" + warnings.map((w) => `- ${w}`).join("\n")
+        : "";
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          role: "assistant",
+          text:
+            `Attached **${attached?.title ?? file.name}** as reference ` +
+            `(${attached?.rid ?? "ref"}). I'll read it when it's relevant — ` +
+            `it stays background material and never becomes part of the ` +
+            `section itself. Tell me what you'd like me to take from it.` +
+            notes,
+        },
+      ]);
+    } catch (e) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          role: "assistant",
+          text: `Could not attach that document: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+          error: true,
+        },
+      ]);
+    } finally {
+      setReferenceBusy(false);
+    }
+  }, []);
+
+  const onRemoveReference = useCallback(async (rid: string) => {
+    setReferenceBusy(true);
+    try {
+      setReferenceDocs(await deleteReference(rid));
+    } catch {
+      // The list is authoritative from the server; a failed remove simply
+      // leaves it as it was. Nothing was lost, so nothing needs saying.
+    } finally {
+      setReferenceBusy(false);
+    }
+  }, []);
 
   const onInstallUpdate = useCallback(async () => {
     try {
@@ -728,6 +788,7 @@ export default function App() {
     setChangedIds(new Set());
     setFigures([]);
     setSuggestions([]);
+    setReferenceDocs([]);
     setImportReport(null);
     setSourceAvailable(false);
     setPreservationReady(false);
@@ -786,6 +847,7 @@ export default function App() {
     baseline_index?: number | null;
     figures?: Figure[];
     suggested_prompts?: string[];
+    reference_docs?: ReferenceDocMeta[];
     import_report?: ImportReport | null;
     source_available?: boolean;
     preservation_ready?: boolean;
@@ -805,6 +867,7 @@ export default function App() {
     setSourceCapabilities(payload.source_capabilities ?? null);
     setFigures(payload.figures ?? []);
     setSuggestions(payload.suggested_prompts ?? []);
+    setReferenceDocs(payload.reference_docs ?? []);
     setChangedIds(new Set());
   };
 
@@ -1167,6 +1230,10 @@ export default function App() {
           changedIds={changedIds}
           baselineIndex={baselineIndex}
           importReport={importReport}
+          referenceDocs={referenceDocs}
+          onAttachReference={onAttachReference}
+          onRemoveReference={onRemoveReference}
+          referenceBusy={referenceBusy}
           sourceAvailable={sourceAvailable}
           preservationReady={preservationReady}
           sourcePreservation={sourcePreservation}

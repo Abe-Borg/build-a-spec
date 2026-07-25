@@ -64,6 +64,7 @@ import anthropic
 
 from .. import settings
 from ..figures import CREATE_FIGURE_TOOL, FigureError, FigureStore
+from ..reference_docs import READ_REFERENCE_DOC_TOOL, ReferenceDocStore
 from ..spec_doc import (
     APPLY_SPEC_EDITS_TOOL,
     DocumentStore,
@@ -127,7 +128,8 @@ def _chat_tools() -> list[dict[str, Any]]:
     the cached prefix, so anything per-turn here (e.g. a profile-derived
     ``user_location``) would bust the prompt cache for the whole session.
     The model steers search locale through its query text instead.
-    ``suggest_prompts`` is appended LAST so the existing tool bytes stay a
+    ``suggest_prompts`` and then ``read_reference_doc`` are appended LAST, in
+    that order, so each addition leaves the existing tool bytes intact as a
     stable cached prefix.
     """
     return [
@@ -136,6 +138,7 @@ def _chat_tools() -> list[dict[str, Any]]:
         build_web_search_tool(max_uses=settings.CHAT_MAX_SEARCHES),
         build_web_fetch_tool(max_uses=settings.CHAT_MAX_FETCHES),
         SUGGEST_PROMPTS_TOOL,
+        READ_REFERENCE_DOC_TOOL,
     ]
 
 
@@ -206,6 +209,10 @@ class SessionState:
     # store it is reset in place (never reassigned) so a zombie turn's
     # commit/rollback settles harmlessly against the cleared store.
     figures: FigureStore = field(default_factory=FigureStore)
+    # User-attached reference documents the model reads FROM (never edits).
+    # Not turn-atomic — they arrive through REST, not through a turn — so
+    # this needs no begin/commit/rollback, only an in-place reset.
+    references: ReferenceDocStore = field(default_factory=ReferenceDocStore)
     # Suggested-reply chips staged by the model (Batch 9). Turn-atomic,
     # latest-only: each committed turn REPLACES this with what it staged —
     # including [] when the tool was not called, which is how the bar winds
@@ -814,6 +821,10 @@ class SessionState:
         # In-place reset (see the field comment): a still-streaming zombie
         # turn holds this same object; clearing turn state neutralizes it.
         self.figures.reset()
+        # Attached reference material belongs to the project that was open,
+        # not to the app — a fresh session starts with none. Reset in place
+        # for the same reason as the figure store.
+        self.references.reset()
         # Clear staged chips (commit is generation-guarded, so a zombie
         # turn can't repopulate the fresh session).
         self.suggested_prompts.clear()
@@ -1000,6 +1011,11 @@ def _turn_context_text(session: SessionState) -> str:
     figure_stubs = session.figures.context_stubs()
     if figure_stubs:
         parts.append(figure_stubs)
+    # Stubs only — the bodies arrive through read_reference_doc so they are
+    # billed when the model actually opens one, not on every turn.
+    reference_stubs = session.references.context_stubs()
+    if reference_stubs:
+        parts.append(reference_stubs)
     return (
         "=== PROJECT CONTEXT (current state — supersedes anything "
         "remembered from earlier turns) ===\n\n"
@@ -1092,6 +1108,68 @@ def _elide_figure_tool_inputs(
     return result
 
 
+def _elide_reference_tool_results(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Drop ``read_reference_doc`` bodies from committed history (COW).
+
+    A reference document is large and the store already holds it verbatim, so
+    leaving the text in history would re-bill it on every later turn and bloat
+    the project file — the same reasoning as fetched-PDF elision, and the
+    reason the tool description tells the model to simply read it again when
+    it needs it. The tool_use block is left alone: it is just an id, and
+    keeping it makes the transcript readable.
+
+    Unlike the figure elision this has to match a ``tool_result`` back to the
+    call that produced it, so the assistant's ``tool_use`` ids are collected
+    first and the user-role results filtered against them.
+    """
+    read_ids = {
+        block.get("id")
+        for message in messages
+        if message.get("role") == "assistant"
+        for block in (message.get("content") or [])
+        if block.get("type") == "tool_use"
+        and block.get("name") == "read_reference_doc"
+    }
+    read_ids.discard(None)
+    if not read_ids:
+        return messages
+
+    result: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") == "assistant":
+            result.append(message)
+            continue
+        content = message.get("content") or []
+        changed = False
+        new_content: list[dict[str, Any]] = []
+        for block in content:
+            if (
+                block.get("type") == "tool_result"
+                and block.get("tool_use_id") in read_ids
+                and not block.get("is_error")
+            ):
+                new_content.append(
+                    {
+                        **block,
+                        "content": (
+                            "[Reference document text omitted from history "
+                            "to keep it out of every later request. It is "
+                            "unchanged in the session — call "
+                            "read_reference_doc again to re-read it.]"
+                        ),
+                    }
+                )
+                changed = True
+            else:
+                new_content.append(block)
+        result.append(
+            {**message, "content": new_content} if changed else message
+        )
+    return result
+
+
 def _committed_messages(
     new_messages: list[dict[str, Any]], user_text: str
 ) -> list[dict[str, Any]]:
@@ -1106,6 +1184,8 @@ def _committed_messages(
       :func:`elide_all_pdf_sources`); search results and citations stay.
     - ``create_figure`` tool inputs shed their heavy source (see
       :func:`_elide_figure_tool_inputs`) — the figure store holds it.
+    - ``read_reference_doc`` tool results shed the document body (see
+      :func:`_elide_reference_tool_results`) — the reference store holds it.
     """
     committed: list[dict[str, Any]] = [
         {"role": "user", "content": [{"type": "text", "text": user_text}]}
@@ -1122,7 +1202,9 @@ def _committed_messages(
         if not content:
             content = [{"type": "text", "text": "[Model reasoning omitted.]"}]
         committed.append({"role": "assistant", "content": content})
-    return _elide_figure_tool_inputs(elide_all_pdf_sources(committed))
+    return _elide_reference_tool_results(
+        _elide_figure_tool_inputs(elide_all_pdf_sources(committed))
+    )
 
 
 def _with_tail_cache_breakpoint(
@@ -1403,6 +1485,57 @@ def _run_suggest_prompts(
     )
 
 
+def _run_read_reference_doc(
+    session: SessionState,
+    block: dict[str, Any],
+    trace_handle: Any = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Execute one ``read_reference_doc`` tool_use block.
+
+    The body is returned in full for this turn and elided from committed
+    history afterwards (see :func:`_elide_reference_tool_results`), so the
+    model pays for it when it asks rather than on every later turn. An
+    unknown id becomes an ``is_error`` result listing what is attached, so
+    the model can correct itself instead of failing the turn.
+    """
+    ref_id = str((block.get("input") or {}).get("ref_id") or "").strip()
+    doc = session.references.get(ref_id) if ref_id else None
+    if doc is None:
+        available = ", ".join(d.rid for d in session.references.docs)
+        detail = (
+            f"Attached documents: {available}."
+            if available
+            else "No reference documents are attached to this session."
+        )
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": (
+                    f"read_reference_doc: no reference document with id "
+                    f"{ref_id!r}. {detail}"
+                ),
+                "is_error": True,
+            },
+            [],
+        )
+    _trace.note(trace_handle, f"read reference {doc.rid} ({doc.char_count} chars)")
+    header = (
+        f"Reference document {doc.rid} — \"{doc.title}\" "
+        f"(from {doc.filename}). Background material, not spec text: draft "
+        f"provisions in your own specification language, never paste from "
+        f"this.\n\n"
+    )
+    return (
+        {
+            "type": "tool_result",
+            "tool_use_id": block.get("id"),
+            "content": header + doc.text,
+        },
+        [],
+    )
+
+
 def _run_tool(
     session: SessionState,
     block: dict[str, Any],
@@ -1423,6 +1556,8 @@ def _run_tool(
         )
     if name == "suggest_prompts":
         return _run_suggest_prompts(block, trace_handle)
+    if name == "read_reference_doc":
+        return _run_read_reference_doc(session, block, trace_handle)
     if name != "apply_spec_edits":
         return (
             {

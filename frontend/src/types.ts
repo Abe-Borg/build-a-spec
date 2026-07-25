@@ -339,6 +339,24 @@ export interface SourceCapabilitiesState {
   elements: Record<string, SourceElementCapabilities>;
 }
 
+/**
+ * One attached reference document, as the API reports it. The body is
+ * deliberately absent: it is read by the model through its own tool, never
+ * shipped with the document payload.
+ */
+export interface ReferenceDocMeta {
+  rid: string;
+  filename: string;
+  title: string;
+  /** Characters of extracted text BEFORE any truncation. */
+  char_count: number;
+  block_count: number;
+  truncated: boolean;
+  tracked_changes: boolean;
+  added_at: string;
+  excerpt: string;
+}
+
 export interface DocPayload {
   doc: SpecDoc;
   open_questions: OpenItem[];
@@ -352,6 +370,8 @@ export interface DocPayload {
   figures: Figure[];
   /** Suggested reply chips staged by the model (Batch 9); [] when none. */
   suggested_prompts: string[];
+  /** Attached reference documents (metadata only); [] when none. */
+  reference_docs: ReferenceDocMeta[];
   /** Import fidelity/recovery state; null for a from-scratch document. */
   import_report: ImportReport | null;
   /** True when this active session has an exact attached source DOCX. */

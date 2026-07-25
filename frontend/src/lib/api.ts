@@ -11,6 +11,7 @@ import type {
   QcEvent,
   QcSnapshot,
   ReadinessPayload,
+  ReferenceDocMeta,
   ResearchEvent,
   ResearchSnapshot,
   SectionDiffPayload,
@@ -377,6 +378,37 @@ export async function importMaster(file: File): Promise<ImportResultPayload> {
     throw new Error(data.error ?? `import failed (${resp.status})`);
   }
   return data;
+}
+
+/* --- Reference documents (read-only background material) --- */
+
+export async function uploadReference(
+  file: File,
+): Promise<{ reference_docs: ReferenceDocMeta[]; warnings: string[] }> {
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetch("/api/reference/upload", {
+    method: "POST",
+    body: form,
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `attach failed (${resp.status})`);
+  }
+  return { reference_docs: data.reference_docs, warnings: data.warnings ?? [] };
+}
+
+export async function deleteReference(
+  rid: string,
+): Promise<ReferenceDocMeta[]> {
+  const resp = await fetch(`/api/reference/${encodeURIComponent(rid)}`, {
+    method: "DELETE",
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `remove failed (${resp.status})`);
+  }
+  return data.reference_docs;
 }
 
 /* --- Final QC on Fable 5 (Batch 4) --- */

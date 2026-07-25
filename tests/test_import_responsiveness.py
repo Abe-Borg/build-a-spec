@@ -101,6 +101,53 @@ def test_import_does_not_block_concurrent_requests(monkeypatch):
     )
 
 
+def test_reference_upload_does_not_block_concurrent_requests(monkeypatch):
+    """Attaching a reference document is the third ``async def`` upload path.
+
+    Extracting text from a long document is the same kind of multi-second CPU
+    as a master parse, so it is subject to the same rule: it belongs on a
+    worker thread, never inline on the loop.
+    """
+    real_prepare = app_module._prepare_reference_upload
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_prepare(source_bytes: bytes):
+        entered.set()
+        release.wait(_BLOCK_SECONDS)
+        return real_prepare(source_bytes)
+
+    monkeypatch.setattr(
+        app_module, "_prepare_reference_upload", blocking_prepare
+    )
+    source = _master_bytes()
+
+    with TestClient(app_module.create_app()) as client:
+        worker_outcome: dict = {}
+
+        def run_upload() -> None:
+            worker_outcome["response"] = client.post(
+                "/api/reference/upload",
+                files={"file": ("standard.docx", source, _DOCX_MEDIA_TYPE)},
+            )
+
+        worker = threading.Thread(target=run_upload, daemon=True)
+        worker.start()
+        assert entered.wait(_BLOCK_SECONDS + 5), "upload never started"
+        started = time.perf_counter()
+        health = client.get("/api/health")
+        elapsed = time.perf_counter() - started
+        release.set()
+        worker.join(_BLOCK_SECONDS + 10)
+
+    assert health.status_code == 200
+    assert worker_outcome["response"].status_code == 200
+    assert elapsed < _RESPONSIVE_SECONDS, (
+        f"an unrelated request waited {elapsed:.2f}s for a reference upload — "
+        "the extraction is back on the event loop"
+    )
+
+
 def test_project_load_does_not_block_concurrent_requests(monkeypatch):
     """The same guarantee for opening a project (it re-parses the master)."""
     real_stage = app_module._stage_project_load

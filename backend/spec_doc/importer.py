@@ -268,6 +268,51 @@ def _iter_body_texts(document) -> list[_BodyTextEntry]:
     return results
 
 
+@dataclass(frozen=True)
+class ReferenceExtraction:
+    """Plain readable text pulled out of a ``.docx`` for model context.
+
+    The counterpart to :func:`parse_master_docx` for files that are *not*
+    becoming the document: no tree, no source map, no structural heuristics —
+    just the body text in document order, resolved through the same
+    Accept-All revision handling and table flattening so a reference file
+    reads the way it does in Word.
+    """
+
+    text: str
+    block_count: int
+    tracked_changes: bool
+
+
+def extract_reference_text(filepath: str | Path) -> ReferenceExtraction:
+    """Extract a reference ``.docx``'s body text. Raises
+    :class:`MasterImportError` for anything unreadable."""
+    filepath = Path(filepath)
+    try:
+        document = Document(str(filepath))
+    except (
+        PackageNotFoundError,
+        zipfile.BadZipFile,
+        XMLSyntaxError,
+        KeyError,
+        ValueError,
+    ) as exc:
+        raise MasterImportError(
+            "That file is not a readable .docx document."
+        ) from exc
+
+    lines: list[str] = []
+    for entry in _iter_body_texts(document):
+        text = " ".join(entry.text.split())
+        if text:
+            lines.append(text)
+    return ReferenceExtraction(
+        text="\n".join(lines),
+        block_count=len(lines),
+        tracked_changes=_element_has_tracked_changes(document.element.body),
+    )
+
+
 class _TreeBuilder:
     """Builds the SpecSection with the same uid/seq discipline as apply."""
 

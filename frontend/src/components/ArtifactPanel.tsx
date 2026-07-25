@@ -13,6 +13,7 @@ import type {
   OpenItem,
   QcSnapshot,
   ReadinessPayload,
+  ReferenceDocMeta,
   ResearchSnapshot,
   SectionDiff,
   SectionDiffPayload,
@@ -66,6 +67,10 @@ interface Props {
    *  native bridge — the caller then falls back to the hidden file input. */
   nativeOpenFile: (kind: "project" | "docx") => Promise<File | null | undefined>;
   onImportMaster: (file: File) => void;
+  referenceDocs: ReferenceDocMeta[];
+  onAttachReference: (file: File) => void;
+  onRemoveReference: (rid: string) => void;
+  referenceBusy: boolean;
   onStartResearch: () => void;
   onStopResearch: () => void;
   onStartQc: () => void;
@@ -201,6 +206,10 @@ export default function ArtifactPanel({
   onLoadProject,
   nativeOpenFile,
   onImportMaster,
+  referenceDocs,
+  onAttachReference,
+  onRemoveReference,
+  referenceBusy,
   onStartResearch,
   onStopResearch,
   onStartQc,
@@ -214,6 +223,7 @@ export default function ArtifactPanel({
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  const referenceRef = useRef<HTMLInputElement>(null);
   // Open / Import: prefer the native pywebview dialog (the HTML file input
   // silently yields no bytes inside the webview); fall back to the hidden
   // <input type="file"> in a plain browser (undefined = no native bridge).
@@ -230,6 +240,14 @@ export default function ArtifactPanel({
     const file = await nativeOpenFile("docx");
     if (file === undefined) importRef.current?.click();
     else if (file) onImportMaster(file);
+  };
+  // Attaching reference material takes the same native-first path, but has no
+  // blank-document precondition: it never touches the spec.
+  const handleAttachClick = async () => {
+    if (referenceBusy) return;
+    const file = await nativeOpenFile("docx");
+    if (file === undefined) referenceRef.current?.click();
+    else if (file) onAttachReference(file);
   };
   // Open-items list collapses like the Review / Final QC drawers; the count
   // stays visible in the bar, so nothing is lost at a glance when collapsed.
@@ -257,6 +275,9 @@ export default function ArtifactPanel({
       doc.section.title !== "" ||
       doc.parts.some((p) => p.articles.length > 0));
   const importedMode = importReport !== null || baselineIndex !== null;
+  // Only an explicit false suppresses the spec chrome: projects saved before
+  // shape detection omit the field and keep their original presentation.
+  const unstructuredImport = importReport?.spec_shape_detected === false;
   const passThroughOnly =
     sourcePreservation?.status === "pass_through_only";
   // Retained source bytes may live only in an undone redo tail. Match the
@@ -684,8 +705,71 @@ export default function ArtifactPanel({
               e.target.value = "";
             }}
           />
+          <Tip tip="Attach a .docx as background for the assistant to read — an owner's design standard, a basis-of-design narrative, a data sheet. It is never added to the spec and never edited.">
+            <button
+              className={actionButton}
+              onClick={handleAttachClick}
+              disabled={referenceBusy}
+              data-tour="attach-reference"
+            >
+              {referenceBusy ? "Attaching…" : "Attach reference"}
+            </button>
+          </Tip>
+          <input
+            ref={referenceRef}
+            type="file"
+            accept=".docx"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onAttachReference(file);
+              e.target.value = "";
+            }}
+          />
         </div>
       </div>
+
+      {referenceDocs.length > 0 && (
+        <div className="border-b border-line bg-surface-2/40 px-5 py-3">
+          <p className="text-[11px] font-semibold tracking-wide text-ink-dim uppercase">
+            Reference documents ({referenceDocs.length})
+          </p>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-ink-faint">
+            Background only — read by the assistant on request, never part of
+            the spec or its export.
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {referenceDocs.map((ref) => (
+              <li
+                key={ref.rid}
+                className="flex items-start justify-between gap-3 text-[11px] leading-relaxed"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-ink-dim">
+                    {ref.title}
+                  </p>
+                  <p className="text-ink-faint">
+                    {ref.block_count} block{ref.block_count === 1 ? "" : "s"}
+                    {ref.truncated && (
+                      <span className="text-warn"> · truncated</span>
+                    )}
+                    {ref.tracked_changes && <span> · Accept-All view</span>}
+                  </p>
+                </div>
+                <button
+                  className="shrink-0 text-ink-faint hover:text-danger"
+                  onClick={() => onRemoveReference(ref.rid)}
+                  disabled={referenceBusy}
+                  title={`Remove ${ref.title}`}
+                  aria-label={`Remove ${ref.title}`}
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {fileLoading && (
         <div
@@ -737,11 +821,12 @@ export default function ArtifactPanel({
                 (importNotice.tone === "error" ? "text-err" : "text-warn")
               }
             >
-              {importNotice.tone === "error"
-                ? `Import failed — ${importNotice.name}`
-                : `${importNotice.lines.length} import note${
-                    importNotice.lines.length === 1 ? "" : "s"
-                  } — content the extraction could not carry across`}
+              {importNotice.title ??
+                (importNotice.tone === "error"
+                  ? `Import failed — ${importNotice.name}`
+                  : `${importNotice.lines.length} import note${
+                      importNotice.lines.length === 1 ? "" : "s"
+                    } — content the extraction could not carry across`)}
             </summary>
             <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-[11px] leading-relaxed text-ink-dim">
               {importNotice.lines.map((line, index) => (
@@ -830,6 +915,7 @@ export default function ArtifactPanel({
             sourceExpected={activeSourceExpected}
             sourceCapabilities={sourceCapabilities}
             onEdit={onEditDoc}
+            unstructuredImport={unstructuredImport}
           />
         ) : fileLoading ? (
           <LoadingState fileLoading={fileLoading} />

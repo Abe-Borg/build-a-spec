@@ -157,6 +157,20 @@ _LEVEL_RES = (
 )
 
 
+# Said once, at the top of the warning list, when a file carries none of the
+# three SectionFormat markers. The tree is still SectionFormat underneath (the
+# whole editing/lint/diff/QC machinery is typed to it), so this states plainly
+# what the app did rather than letting the panel imply the document always had
+# a section header and three parts.
+UNSTRUCTURED_IMPORT_WARNING = (
+    "This file does not look like a SectionFormat spec section — no SECTION "
+    "number, PART heading, or numbered article was found. Its content was "
+    "imported in document order under a placeholder article, and the original "
+    "file is retained exactly. Set a section number and title when you are "
+    "ready to turn it into a spec section."
+)
+
+
 @dataclass
 class ImportResult:
     """A parsed master: the tree plus the parse's honesty trail."""
@@ -169,6 +183,13 @@ class ImportResult:
     # Immutable UID -> source-body anchors for P1 source-preserving export.
     # Kept outside SpecSection/version snapshots and never sent to the model.
     source_map: SourceBodyMap | None = None
+    # True when the parse recognized at least one SectionFormat marker (a
+    # SECTION line, a PART heading, or an ``N.M`` article). False means the
+    # spec scaffolding around the content — section header, empty parts, the
+    # synthetic article — is entirely the importer's, so the UI must not
+    # present it as something the source document carried. Defaults True so a
+    # caller that never sets it keeps the historical posture.
+    spec_shape_detected: bool = True
 
 
 class MasterImportError(ValueError):
@@ -245,6 +266,51 @@ def _iter_body_texts(document) -> list[_BodyTextEntry]:
                         )
                     )
     return results
+
+
+@dataclass(frozen=True)
+class ReferenceExtraction:
+    """Plain readable text pulled out of a ``.docx`` for model context.
+
+    The counterpart to :func:`parse_master_docx` for files that are *not*
+    becoming the document: no tree, no source map, no structural heuristics —
+    just the body text in document order, resolved through the same
+    Accept-All revision handling and table flattening so a reference file
+    reads the way it does in Word.
+    """
+
+    text: str
+    block_count: int
+    tracked_changes: bool
+
+
+def extract_reference_text(filepath: str | Path) -> ReferenceExtraction:
+    """Extract a reference ``.docx``'s body text. Raises
+    :class:`MasterImportError` for anything unreadable."""
+    filepath = Path(filepath)
+    try:
+        document = Document(str(filepath))
+    except (
+        PackageNotFoundError,
+        zipfile.BadZipFile,
+        XMLSyntaxError,
+        KeyError,
+        ValueError,
+    ) as exc:
+        raise MasterImportError(
+            "That file is not a readable .docx document."
+        ) from exc
+
+    lines: list[str] = []
+    for entry in _iter_body_texts(document):
+        text = " ".join(entry.text.split())
+        if text:
+            lines.append(text)
+    return ReferenceExtraction(
+        text="\n".join(lines),
+        block_count=len(lines),
+        tracked_changes=_element_has_tracked_changes(document.element.body),
+    )
 
 
 class _TreeBuilder:
@@ -363,6 +429,12 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     skipped_empty = 0
     saw_table = False
     pending_title = False  # SECTION number seen; next line may be the title
+    # Any one of these means the file carried real SectionFormat structure.
+    # Deliberately the same three signals the parse itself acts on, so the
+    # verdict can never disagree with the tree that was built: a paragraph
+    # consumed by the direct-numbering branch below never reaches the heading
+    # patterns, and therefore never counts as a marker.
+    saw_spec_marker = False
     source_bindings: list[SourceParagraphBinding] = []
 
     entries = _iter_body_texts(document)
@@ -433,6 +505,7 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
 
         section_match = _SECTION_RE.match(text)
         if section_match:
+            saw_spec_marker = True
             g1, g2, g3, g4, remainder = section_match.groups()
             number = f"{g1} {g2} {g3}" + (f".{g4}" if g4 else "")
             builder.section.number = number
@@ -450,11 +523,13 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
 
         part_match = _PART_RE.match(text)
         if part_match:
+            saw_spec_marker = True
             builder.part(int(part_match.group(1)))
             continue
 
         article_match = _ARTICLE_RE.match(text)
         if article_match:
+            saw_spec_marker = True
             part_digit, _article_no, title = article_match.groups()
             builder.article(int(part_digit), title.strip())
             continue
@@ -480,6 +555,12 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             "SectionFormat structure and no body text."
         )
 
+    # Lead with the verdict so it reads before the per-line parse notes it
+    # explains. Those notes are kept: they say *where* the content landed,
+    # which stays useful once the user starts working with it.
+    if not saw_spec_marker:
+        builder.warnings.insert(0, UNSTRUCTURED_IMPORT_WARNING)
+
     try:
         source_map = build_source_body_map(
             source_bytes=source_bytes,
@@ -499,4 +580,5 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
         imported_block_count=builder.imported_count,
         skipped_empty_count=skipped_empty,
         source_map=source_map,
+        spec_shape_detected=saw_spec_marker,
     )

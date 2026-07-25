@@ -27,18 +27,21 @@ def reset_session() -> None:
 def has_unsaved_progress(session: SessionState) -> bool:
     """True when the session holds work worth saving before it is discarded.
 
-    Any conversation history, document content, chat-authored figure, or
-    imported source counts. Deliberately coarse — there is no since-last-save
-    dirty flag, so a fresh, untouched session never prompts, and anything else
-    always offers the save. Figures are counted explicitly so a session whose
-    only work is a diagram/schematic/table still offers to save (they must not
-    merely ride the chat history that produced them — the New-session / Open
-    save gate depends on this being true).
+    Any conversation history, document content, chat-authored figure,
+    attached reference document, or imported source counts. Deliberately
+    coarse — there is no since-last-save dirty flag, so a fresh, untouched
+    session never prompts, and anything else always offers the save. Figures
+    and reference documents are counted explicitly so a session whose only
+    work is a diagram or an attached standard still offers to save (neither
+    merely rides the chat history — a reference document can be attached
+    before a single message is sent, and the New-session / Open save gate
+    depends on this being true).
     """
     return (
         bool(session.history)
         or not session.doc.doc.is_empty()
         or bool(session.figures.figures)
+        or bool(session.references.docs)
         or session.import_report is not None
         or session.source_docx_bytes is not None
     )
@@ -102,6 +105,7 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         project_context=session.project_context,
         figures=session.figures.to_dict(),
         suggested_prompts=list(session.suggested_prompts),
+        reference_docs=session.references.to_dict(),
         import_report=session.import_report,
         source_map=source_map_payload,
     )

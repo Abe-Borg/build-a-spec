@@ -356,6 +356,8 @@ def lint_document(
     section: SpecSection,
     module: Any,
     overrides: Mapping[str, Mapping[str, str]] | None = None,
+    *,
+    unstructured_import: bool = False,
 ) -> list[dict[str, Any]]:
     """Lint the tree against ``module``; returns advisory issue dicts.
 
@@ -363,6 +365,14 @@ def lint_document(
     ``edition_overrides``. Issue shape: ``{id, rule, severity, element_id,
     ref, message, match}`` — ids are stable for a given tree (rule +
     element + occurrence index), so the frontend can key on them.
+
+    ``unstructured_import`` suppresses :data:`RULE_MISSING_SECTION_HEADER`.
+    That rule reads "you are drafting articles but have not named the
+    section", which is a real drafting slip in a spec — but a document that
+    was never a spec section has no header to be missing, and the only
+    "article" is the importer's own placeholder. Reporting it there invents a
+    defect. Every other rule still applies: stale editions and placeholder
+    markers are worth flagging in any text.
     """
     if overrides is None:
         overrides = getattr(section, "edition_overrides", {}) or {}
@@ -469,7 +479,11 @@ def lint_document(
             elif key:
                 titles_seen[key] = number
 
-    if any_articles and (not section.number or not section.title):
+    if (
+        any_articles
+        and not unstructured_import
+        and (not section.number or not section.title)
+    ):
         add(
             RULE_MISSING_SECTION_HEADER,
             "sec",

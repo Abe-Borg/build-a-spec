@@ -158,10 +158,20 @@ backend/
                            restore_prompts (lenient project loader) +
                            SUGGEST_PROMPTS_TOOL. Latest-only session state, tiny
                            payload — no store, no elision (rides history verbatim)
+  reference_docs.py        user-attached background documents the model reads FROM
+                           and never edits: ReferenceDoc + ReferenceDocStore
+                           (monotonic ids, loud truncation at MAX_TEXT_CHARS,
+                           body-free metadata()/context_stubs(), lenient project
+                           load) + READ_REFERENCE_DOC_TOOL. NOT turn-atomic (they
+                           arrive over REST, not in a turn) — reset in place only.
+                           The body never enters PROJECT CONTEXT and is elided
+                           from committed history (PDF posture); the model re-reads
+                           on demand
   sessions.py              single module-level SessionState (history + DocumentStore
                            + SpecModule + discipline (Batch 10, session-level
                            like module) + ResearchRunner + AuditRunner + QCRunner
-                           + FigureStore + UsageLedger + suggested_prompts) +
+                           + FigureStore + ReferenceDocStore + UsageLedger +
+                           suggested_prompts) +
                            has_unsaved_progress /
                            project_payload / project_default_stem /
                            project_default_filename (timestamped
@@ -204,11 +214,20 @@ backend/
   spec_doc/importer.py     [PORT: Spec Critic src/input/extractor.py mechanics]
                            Accept-All tracked-changes text, content-loss
                            warning; native SectionFormat tree builder (labels
-                           OR w:numPr ilvl); keep-everything-warn-loudly
+                           OR w:numPr ilvl); keep-everything-warn-loudly.
+                           spec_shape_detected: True iff the parse recognized a
+                           SECTION line / PART heading / N.M article (the same
+                           three signals it acts on, so the verdict can never
+                           disagree with the tree) — False prepends
+                           UNSTRUCTURED_IMPORT_WARNING and rides the persisted
+                           import_report. extract_reference_text() is the
+                           no-tree counterpart for attached reference documents
   spec_doc/linting.py      [PORT: Spec Critic src/input/preprocessor.py logic]
                            deterministic advisory lint: stale editions vs effective
                            pins (negation suppression), placeholders/markers,
-                           empty/duplicate articles, unset header; Batch 10 adds
+                           empty/duplicate articles, unset header (suppressed via
+                           unstructured_import= for a non-spec import — nothing
+                           else is gated); Batch 10 adds
                            unrecorded_edition (unpinned modules ONLY: designation
                            cited w/ a year but absent from effective_editions —
                            publisher-grammar discovery, then the same four
@@ -1948,6 +1967,89 @@ No new deps, no new SSE event, one new REST route.
   sweep. `tests/fakes.py::audit_grade_qc_result` builds its input manifest
   with `block=True` for the same reason a real QC run does. The snapshot rule
   is pinned by `test_a_sweep_describes_the_tree_it_was_keyed_on_not_the_live_one`.
+
+## Non-spec uploads — implemented notes (honest framing + reference documents)
+
+Reported symptom: importing a file that is not a spec section still produced a
+`SECTION [TBD]` header, three PART headings, and a "you forgot the section
+number" lint finding — the app dressing a memo as a spec. Investigation split
+it into a framing bug and a genuinely missing feature, fixed in that order.
+No new SSE events, no new deps, no project-format bump.
+
+- **The tree stays SectionFormat, deliberately.** Every edit, lint, diff, QC,
+  readiness and export path is typed to it, and the exact source bytes were
+  already retained, so this was never data loss — the panel was simply
+  *asserting* scaffolding the file never had. The fix stops the assertions; it
+  does not add a second document model. (The "real document mode" option was
+  considered and rejected: roughly half the app's value — 5 QC lenses, every
+  lint rule, readiness, research dimensions, standards, export schedules — is
+  spec-shaped by construction, so it would be a second product, plus a
+  permanent "does this apply in document mode?" tax on every future batch.)
+- **Detection uses the parse's own signals.** `parse_master_docx` sets
+  `spec_shape_detected` from whether `_SECTION_RE` / `_PART_RE` / `_ARTICLE_RE`
+  ever matched — the same three branches it acts on, so the verdict can never
+  claim structure the tree does not have. A paragraph consumed by the
+  direct-numbering (`w:numPr`) branch never reaches the heading patterns and
+  so never counts (pinned). It rides the existing sanitized `import_report`,
+  which is already persisted; legacy files lacking the key, and any malformed
+  value, degrade to `True` (conservative — a project we cannot re-examine
+  keeps its original presentation and never fails to load).
+- **What gets suppressed, and only while it is true.** `SessionState.
+  import_is_unstructured()` is the one predicate. Lint drops
+  `missing_section_header` (`lint_document(..., unstructured_import=)`; every
+  other rule still applies — a stale edition is real in any prose). The panel
+  swaps the invented header for a short explanation, hides empty parts, and
+  drops `END OF SECTION`; `el-sec` moves to whichever block renders so the
+  tour anchor and header edit still resolve. All of it turns back **on** the
+  moment `section.number`/`title` exist, so converting the file into a spec
+  behaves normally from that point — the gate reads document state, it does
+  not latch at import.
+- **The model is told too.** PROJECT CONTEXT gains an `IMPORTED DOCUMENT IS
+  NOT A SPEC SECTION` block (never the stable prompt — the cache rule) saying
+  the scaffolding is the app's, not to invent a section number, and to ask
+  what the user wants done with the content. Without it the model reliably
+  "fixed" the empty header on its own.
+- **Reference documents are the feature the symptom was hiding.** The only
+  ways to get a `.docx` in were `import/master` (becomes THE document) and
+  `project/load-file` — so "here is the owner's standard, draft from it" had
+  to masquerade as an import. `backend/reference_docs.py` adds the third
+  path: text attached as *context*, never in the tree, never edited, invisible
+  to lint / diff / QC / readiness / export.
+- **Token discipline is the design's spine** (same reasoning as figures and
+  fetched PDFs). The body never renders into PROJECT CONTEXT — only a stub
+  line per document (id, title, block count, estimated tokens, TRUNCATED /
+  Accept-All marks). The model opens one with `read_reference_doc`, whose
+  result is elided from committed history by
+  `_elide_reference_tool_results` (matches `tool_result` blocks back to their
+  `read_reference_doc` `tool_use` ids; `is_error` results are kept — a
+  correction the model should learn from is small). The tool description and
+  the elision placeholder both say re-reading is expected and cheap to ask
+  for. `READ_REFERENCE_DOC_TOOL` is appended LAST in `_chat_tools()`, after
+  `suggest_prompts`, so existing tool bytes stay a stable cached prefix.
+- **Upload path mirrors master import** minus the retention: bounded read,
+  the same `inspect_docx_package` safety pass (same attack surface), then
+  `extract_reference_text` on a **worker thread** — `POST
+  /api/reference/upload` is a third `async def` upload handler and is bound by
+  the event-loop rule above. Nothing is retained: text out, bytes dropped.
+  There is no blank-document precondition (it never touches the spec), so it
+  works at any point in a session. Truncation at `MAX_TEXT_CHARS` is loud in
+  three places (the record, the stored text's own marker, the upload warning).
+- **REST**: `POST /api/reference/upload`, `GET /api/references`, `DELETE
+  /api/reference/{rid}`; `reference_docs` (metadata only — bodies would cost a
+  full copy per poll) rides `_doc_payload`. Persisted as an optional
+  `reference_docs` project key (no format bump, `load()` resets first so a
+  project without them clears a live session's), and counted in
+  `has_unsaved_progress` — a reference can be the only work in a session.
+  `_REFERENCE_DOC_POLICY` joins the stable prompt after
+  `_SUGGESTED_PROMPTS_POLICY`: read before drafting, never paste wording into
+  a provision, never cite a reference as authority for a code requirement.
+- **Tests**: `test_import_shape_detection.py` (detection incl. the
+  numbering-branch agreement case, lint gating both ways, sanitize
+  round-trip + legacy/malformed degrade, e2e + context block + the cache
+  rule, exact-source export unaffected) and `test_reference_docs.py` (store
+  units, endpoints, the three token-discipline invariants, persistence and
+  lifecycle), plus a reference-upload case in
+  `test_import_responsiveness.py`. Frontend pinned by `npm run build`.
 
 ## Commands
 

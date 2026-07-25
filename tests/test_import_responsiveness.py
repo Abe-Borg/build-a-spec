@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from backend import app as app_module, sessions
 from backend.llm.conversation import (
+    SessionState,
     _source_editing_boundary_block,
     _turn_context_text,
 )
@@ -103,6 +104,53 @@ def test_import_does_not_block_concurrent_requests(monkeypatch):
     assert elapsed < _RESPONSIVE_SECONDS, (
         f"an unrelated request waited {elapsed:.2f}s for the import — the "
         "blocking work is back on the event loop"
+    )
+
+
+def test_reference_upload_does_not_block_concurrent_requests(monkeypatch):
+    """Attaching a reference document is the third ``async def`` upload path.
+
+    Extracting text from a long document is the same kind of multi-second CPU
+    as a master parse, so it is subject to the same rule: it belongs on a
+    worker thread, never inline on the loop.
+    """
+    real_prepare = app_module._prepare_reference_upload
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_prepare(source_bytes: bytes):
+        entered.set()
+        release.wait(_BLOCK_SECONDS)
+        return real_prepare(source_bytes)
+
+    monkeypatch.setattr(
+        app_module, "_prepare_reference_upload", blocking_prepare
+    )
+    source = _master_bytes()
+
+    with TestClient(app_module.create_app()) as client:
+        worker_outcome: dict = {}
+
+        def run_upload() -> None:
+            worker_outcome["response"] = client.post(
+                "/api/reference/upload",
+                files={"file": ("standard.docx", source, _DOCX_MEDIA_TYPE)},
+            )
+
+        worker = threading.Thread(target=run_upload, daemon=True)
+        worker.start()
+        assert entered.wait(_BLOCK_SECONDS + 5), "upload never started"
+        started = time.perf_counter()
+        health = client.get("/api/health")
+        elapsed = time.perf_counter() - started
+        release.set()
+        worker.join(_BLOCK_SECONDS + 10)
+
+    assert health.status_code == 200
+    assert worker_outcome["response"].status_code == 200
+    assert elapsed < _RESPONSIVE_SECONDS, (
+        f"an unrelated request waited {elapsed:.2f}s for a reference upload — "
+        "the extraction is back on the event loop"
     )
 
 
@@ -308,15 +356,31 @@ def test_a_real_import_keeps_the_server_answering():
     )
 
 
-def test_import_reports_pending_permissions_without_sweeping_inline():
+def test_import_reports_pending_permissions_without_sweeping_inline(monkeypatch):
     """The import response must not wait on the per-element permission sweep.
 
     That sweep probes every element against the real source gate — O(document)
     work per probe, ~5 probes per paragraph — so waiting for it made the
     upload take minutes on a real master. It now runs in the background and
     the response says so.
+
+    The sweep is held for the duration of the assertions rather than raced
+    against: this fixture is small enough that a fast runner can finish
+    sweeping before the response is even read, which made the ``pending``
+    assertion fail intermittently (green on 3.11, red on 3.12, same commit).
+    Blocking the worker is the technique the tests above already use, and it
+    sharpens what is being tested — with the sweep provably unfinished, a
+    response reporting anything but ``pending`` can only mean it waited.
     """
     source = _master_bytes(articles=2, paragraphs=3)
+    release = threading.Event()
+    real_sweep = SessionState._sweep_and_publish
+
+    def held_sweep(self, key):
+        release.wait(_BLOCK_SECONDS)
+        return real_sweep(self, key)
+
+    monkeypatch.setattr(SessionState, "_sweep_and_publish", held_sweep)
 
     with TestClient(app_module.create_app()) as client:
         response = client.post("/api/import/master", files=_upload(source))
@@ -333,8 +397,9 @@ def test_import_reports_pending_permissions_without_sweeping_inline():
         assert operations["delete"]["allowed"] is False
         assert operations["set_status"]["allowed"] is True
 
-        # ...and the background sweep settles into a real report, which the
-        # panel picks up from the dedicated polling route.
+        # ...and once released, the background sweep settles into a real
+        # report, which the panel picks up from the dedicated polling route.
+        release.set()
         settle_capability_sweep()
         settled = client.get("/api/doc/capabilities")
         assert settled.status_code == 200, settled.text

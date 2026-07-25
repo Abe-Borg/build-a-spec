@@ -47,10 +47,17 @@ export type FileLoading = {
  *  action that produced it rather than as a fabricated chat message. A clean
  *  import produces none: `error` when it failed, `warn` when it succeeded but
  *  could not carry some content across. */
+/**
+ * A dismissible panel notice about a file the user handed over. Uploads are
+ * panel actions, so they report in the panel, never in the chat. `title`
+ * overrides the default import wording (a reference attachment is not an
+ * import); omitting it leaves the import instance exactly as it was.
+ */
 export type ImportNotice = {
   tone: "error" | "warn";
   name: string;
   lines: string[];
+  title?: string;
 } | null;
 
 export interface Health {
@@ -267,6 +274,13 @@ export interface ImportReport {
   skipped_empty_count: number;
   warnings: string[];
   tracked_changes_detected: boolean;
+  /**
+   * False when the import found no SECTION number, PART heading, or numbered
+   * article — i.e. the spec scaffolding around the content is the importer's,
+   * not the file's. Projects saved before shape detection omit it; treat a
+   * missing value as true so their presentation is unchanged.
+   */
+  spec_shape_detected?: boolean;
   fidelity_notice: string;
 }
 
@@ -351,6 +365,24 @@ export interface SourceCapabilitiesState {
   elements: Record<string, SourceElementCapabilities>;
 }
 
+/**
+ * One attached reference document, as the API reports it. The body is
+ * deliberately absent: it is read by the model through its own tool, never
+ * shipped with the document payload.
+ */
+export interface ReferenceDocMeta {
+  rid: string;
+  filename: string;
+  title: string;
+  /** Characters of extracted text BEFORE any truncation. */
+  char_count: number;
+  block_count: number;
+  truncated: boolean;
+  tracked_changes: boolean;
+  added_at: string;
+  excerpt: string;
+}
+
 export interface DocPayload {
   doc: SpecDoc;
   open_questions: OpenItem[];
@@ -364,6 +396,8 @@ export interface DocPayload {
   figures: Figure[];
   /** Suggested reply chips staged by the model (Batch 9); [] when none. */
   suggested_prompts: string[];
+  /** Attached reference documents (metadata only); [] when none. */
+  reference_docs: ReferenceDocMeta[];
   /** Import fidelity/recovery state; null for a from-scratch document. */
   import_report: ImportReport | null;
   /** True when this active session has an exact attached source DOCX. */

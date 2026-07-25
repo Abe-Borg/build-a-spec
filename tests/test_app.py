@@ -116,12 +116,15 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
     assert request["system"][0]["cache_control"] == {"type": "ephemeral"}
     context = request_context_text(request)
     assert "document" in context
+    # Order is the cached-prefix contract: additions go on the end so the
+    # existing tool bytes stay a stable prefix.
     assert [t["name"] for t in request["tools"]] == [
         "apply_spec_edits",
         "create_figure",
         "web_search",
         "web_fetch",
         "suggest_prompts",
+        "read_reference_doc",
     ]
     # Adaptive thinking with the summarized-display opt-in (the "see what
     # the model is thinking" stream) at the configured effort.

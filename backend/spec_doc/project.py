@@ -195,6 +195,7 @@ def save_project(
     project_context: str = "",
     figures: dict[str, Any] | None = None,
     suggested_prompts: list[str] | None = None,
+    reference_docs: dict[str, Any] | None = None,
     import_report: dict[str, Any] | None = None,
     source_map: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -224,6 +225,10 @@ def save_project(
     # empty, which is the common case once a section is finished).
     if suggested_prompts:
         payload["suggested_prompts"] = list(suggested_prompts)
+    # Attached reference material is user content: whatever they added must
+    # come back when they reopen the project. Same optional shape as figures.
+    if reference_docs and reference_docs.get("reference_docs"):
+        payload["reference_docs"] = reference_docs
     # The small, sanitized honesty trail stays in semantic JSON. Exact source
     # bytes live only in the separate binary member of a .baspec container.
     if import_report:
@@ -347,6 +352,10 @@ def load_project(data: Any, session) -> None:
     # Chat-authored figures ride the file too; a malformed block degrades to
     # "no figures" (load() resets then restores) rather than failing the load.
     session.figures.load(data.get("figures"))
+    # Attached reference documents restore the same lenient way. ``load()``
+    # resets first, so a project without them correctly clears any left over
+    # from the session being replaced.
+    session.references.load(data.get("reference_docs"))
     # Suggested-reply chips restore the same lenient way. Assign
     # UNCONDITIONALLY (load_project does not call session.reset()): loading
     # over a live session must not inherit the previous session's chips, so

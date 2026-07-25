@@ -64,6 +64,11 @@ import anthropic
 
 from .. import settings
 from ..figures import CREATE_FIGURE_TOOL, FigureError, FigureStore
+from ..reference_docs import (
+    READ_REFERENCE_DOC_TOOL,
+    ReferenceDocStore,
+    TurnReferenceBudget,
+)
 from ..spec_doc import (
     APPLY_SPEC_EDITS_TOOL,
     DocumentStore,
@@ -128,7 +133,8 @@ def _chat_tools() -> list[dict[str, Any]]:
     the cached prefix, so anything per-turn here (e.g. a profile-derived
     ``user_location``) would bust the prompt cache for the whole session.
     The model steers search locale through its query text instead.
-    ``suggest_prompts`` is appended LAST so the existing tool bytes stay a
+    ``suggest_prompts`` and then ``read_reference_doc`` are appended LAST, in
+    that order, so each addition leaves the existing tool bytes intact as a
     stable cached prefix.
     """
     return [
@@ -137,6 +143,7 @@ def _chat_tools() -> list[dict[str, Any]]:
         build_web_search_tool(max_uses=settings.CHAT_MAX_SEARCHES),
         build_web_fetch_tool(max_uses=settings.CHAT_MAX_FETCHES),
         SUGGEST_PROMPTS_TOOL,
+        READ_REFERENCE_DOC_TOOL,
     ]
 
 
@@ -267,6 +274,10 @@ class SessionState:
     # store it is reset in place (never reassigned) so a zombie turn's
     # commit/rollback settles harmlessly against the cleared store.
     figures: FigureStore = field(default_factory=FigureStore)
+    # User-attached reference documents the model reads FROM (never edits).
+    # Not turn-atomic — they arrive through REST, not through a turn — so
+    # this needs no begin/commit/rollback, only an in-place reset.
+    references: ReferenceDocStore = field(default_factory=ReferenceDocStore)
     # Suggested-reply chips staged by the model (Batch 9). Turn-atomic,
     # latest-only: each committed turn REPLACES this with what it staged —
     # including [] when the tool was not called, which is how the bar winds
@@ -300,6 +311,40 @@ class SessionState:
     # between rounds; stopping commits whatever was produced so far (like
     # Claude.ai's stop button) rather than rolling back like a failure.
     stop_requested: threading.Event = field(default_factory=threading.Event)
+
+    def import_is_unstructured(self) -> bool:
+        """True when the ACTIVE document came from an import with no
+        SectionFormat structure.
+
+        The document tree is SectionFormat regardless — the whole edit / lint
+        / diff / QC machinery is typed to it. This says only that the section
+        header, the three parts, and the synthetic article around the content
+        were supplied by the importer rather than by the file, so the app must
+        not present them as the document's own. A session with no import, or a
+        legacy project written before shape detection, reads False.
+
+        Scoped to the imported baseline still being live, because the verdict
+        describes *that* tree. Undoing past the import and editing truncates
+        it — ``DocumentStore.commit_turn`` drops ``baseline_index`` when the
+        version it points at is abandoned — and what remains is a from-scratch
+        draft that must get the normal spec presentation back: its ``[TBD]``
+        header placeholders, its missing-header lint, and no claim to the
+        model that it was ever a non-spec upload. ``import_report`` itself is
+        deliberately retained through all of that as the session's honesty
+        trail, so it cannot answer this question alone.
+        """
+        report = self.import_report
+        if not isinstance(report, dict):
+            return False
+        if report.get("spec_shape_detected") is not False:
+            return False
+        # Same liveness test as sessions._portable_source_attachment.
+        baseline_index = self.doc.baseline_index
+        if isinstance(baseline_index, bool) or not isinstance(
+            baseline_index, int
+        ):
+            return False
+        return 0 <= baseline_index < len(self.doc.versions)
 
     def claim_model_turn(self) -> tuple[object, int] | None:
         """Atomically claim the single streaming-turn slot.
@@ -1104,6 +1149,10 @@ class SessionState:
         # In-place reset (see the field comment): a still-streaming zombie
         # turn holds this same object; clearing turn state neutralizes it.
         self.figures.reset()
+        # Attached reference material belongs to the project that was open,
+        # not to the app — a fresh session starts with none. Reset in place
+        # for the same reason as the figure store.
+        self.references.reset()
         # Clear staged chips (commit is generation-guarded, so a zombie
         # turn can't repopulate the fresh session).
         self.suggested_prompts.clear()
@@ -1204,6 +1253,7 @@ def _turn_context_text(session: SessionState) -> str:
     state block, never a stale one.
     """
     doc = session.doc.doc
+    unstructured = session.import_is_unstructured()
     parts = []
     # Session discipline (Batch 10): renders only for open-catalog sessions
     # (never for curated modules — their request bytes are unchanged).
@@ -1240,12 +1290,31 @@ def _turn_context_text(session: SessionState) -> str:
     if research_profile is not None:
         block, _dropped = research_context_block(research_profile)
         parts.append(block)
+    # Without this the outline below reads as a spec with an unset header, and
+    # the model reliably "fixes" it by inventing a section number for a file
+    # that was never a spec section.
+    if unstructured:
+        parts.append(
+            "IMPORTED DOCUMENT IS NOT A SPEC SECTION: the file the user "
+            "imported carried no SECTION number, PART heading, or numbered "
+            "article. The section header, the three PART headings, and the "
+            "placeholder article in the outline below are this app's "
+            "scaffolding, NOT content from their document — do not describe "
+            "them as something the file contained, and do not invent a "
+            "section number or title to fill the gap. Ask what the user wants "
+            "to do with this content: turn it into a spec section (then agree "
+            "the section number/title with them first), mine it for "
+            "requirements, or keep it as reference. Their original file is "
+            "retained exactly and can still be downloaded unchanged."
+        )
     parts.append(
         "Current specification document (full text; element ids in "
         "[id: …], provenance chips as ◆item-id):\n"
         + outline(doc, max_text=None)
     )
-    lint_items = lint_document(doc, session.module)
+    lint_items = lint_document(
+        doc, session.module, unstructured_import=unstructured
+    )
     if lint_items:
         lines = [
             "LINT REPORT (deterministic, advisory — stale-edition findings "
@@ -1270,6 +1339,11 @@ def _turn_context_text(session: SessionState) -> str:
     figure_stubs = session.figures.context_stubs()
     if figure_stubs:
         parts.append(figure_stubs)
+    # Stubs only — the bodies arrive through read_reference_doc so they are
+    # billed when the model actually opens one, not on every turn.
+    reference_stubs = session.references.context_stubs()
+    if reference_stubs:
+        parts.append(reference_stubs)
     return (
         "=== PROJECT CONTEXT (current state — supersedes anything "
         "remembered from earlier turns) ===\n\n"
@@ -1362,6 +1436,68 @@ def _elide_figure_tool_inputs(
     return result
 
 
+def _elide_reference_tool_results(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Drop ``read_reference_doc`` bodies from committed history (COW).
+
+    A reference document is large and the store already holds it verbatim, so
+    leaving the text in history would re-bill it on every later turn and bloat
+    the project file — the same reasoning as fetched-PDF elision, and the
+    reason the tool description tells the model to simply read it again when
+    it needs it. The tool_use block is left alone: it is just an id, and
+    keeping it makes the transcript readable.
+
+    Unlike the figure elision this has to match a ``tool_result`` back to the
+    call that produced it, so the assistant's ``tool_use`` ids are collected
+    first and the user-role results filtered against them.
+    """
+    read_ids = {
+        block.get("id")
+        for message in messages
+        if message.get("role") == "assistant"
+        for block in (message.get("content") or [])
+        if block.get("type") == "tool_use"
+        and block.get("name") == "read_reference_doc"
+    }
+    read_ids.discard(None)
+    if not read_ids:
+        return messages
+
+    result: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") == "assistant":
+            result.append(message)
+            continue
+        content = message.get("content") or []
+        changed = False
+        new_content: list[dict[str, Any]] = []
+        for block in content:
+            if (
+                block.get("type") == "tool_result"
+                and block.get("tool_use_id") in read_ids
+                and not block.get("is_error")
+            ):
+                new_content.append(
+                    {
+                        **block,
+                        "content": (
+                            "[Reference document text omitted from history "
+                            "to keep it out of every later request. It is "
+                            "unchanged in the session — call "
+                            "read_reference_doc again to re-read it.]"
+                        ),
+                    }
+                )
+                changed = True
+            else:
+                new_content.append(block)
+        result.append(
+            {**message, "content": new_content} if changed else message
+        )
+    return result
+
+
 def _committed_messages(
     new_messages: list[dict[str, Any]], user_text: str
 ) -> list[dict[str, Any]]:
@@ -1376,6 +1512,8 @@ def _committed_messages(
       :func:`elide_all_pdf_sources`); search results and citations stay.
     - ``create_figure`` tool inputs shed their heavy source (see
       :func:`_elide_figure_tool_inputs`) — the figure store holds it.
+    - ``read_reference_doc`` tool results shed the document body (see
+      :func:`_elide_reference_tool_results`) — the reference store holds it.
     """
     committed: list[dict[str, Any]] = [
         {"role": "user", "content": [{"type": "text", "text": user_text}]}
@@ -1392,7 +1530,9 @@ def _committed_messages(
         if not content:
             content = [{"type": "text", "text": "[Model reasoning omitted.]"}]
         committed.append({"role": "assistant", "content": content})
-    return _elide_figure_tool_inputs(elide_all_pdf_sources(committed))
+    return _elide_reference_tool_results(
+        _elide_figure_tool_inputs(elide_all_pdf_sources(committed))
+    )
 
 
 def _with_tail_cache_breakpoint(
@@ -1673,12 +1813,95 @@ def _run_suggest_prompts(
     )
 
 
+def _run_read_reference_doc(
+    session: SessionState,
+    block: dict[str, Any],
+    trace_handle: Any = None,
+    *,
+    budget: TurnReferenceBudget | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Execute one ``read_reference_doc`` tool_use block.
+
+    The body is returned in full for this turn and elided from committed
+    history afterwards (see :func:`_elide_reference_tool_results`), so the
+    model pays for it when it asks rather than on every later turn. An
+    unknown id becomes an ``is_error`` result listing what is attached, so
+    the model can correct itself instead of failing the turn.
+
+    ``budget`` bounds the reference text this ONE turn may pull in across all
+    of its calls. Elision runs at commit, so every body read this turn is
+    still in the continuation request; without a cumulative ceiling a model
+    comparing several large attachments could overrun the context window and
+    fail the turn on an opaque API error. Overrunning the budget is reported
+    the same correctable way as a bad id.
+    """
+    ref_id = str((block.get("input") or {}).get("ref_id") or "").strip()
+    doc = session.references.get(ref_id) if ref_id else None
+    if doc is None:
+        available = ", ".join(d.rid for d in session.references.docs)
+        detail = (
+            f"Attached documents: {available}."
+            if available
+            else "No reference documents are attached to this session."
+        )
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": (
+                    f"read_reference_doc: no reference document with id "
+                    f"{ref_id!r}. {detail}"
+                ),
+                "is_error": True,
+            },
+            [],
+        )
+    if budget is not None and not budget.take(len(doc.text)):
+        _trace.note(
+            trace_handle,
+            f"reference {doc.rid} refused: turn budget spent "
+            f"({budget.spent}/{budget.limit} chars)",
+        )
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": (
+                    f"read_reference_doc: this turn has already read "
+                    f"{budget.spent:,} characters of reference material and "
+                    f"{doc.rid} ({len(doc.text):,} characters) does not fit in "
+                    f"the {budget.limit:,}-character per-turn budget. Nothing "
+                    "was read. Work with the documents you have already read "
+                    "this turn, or reply and read this one next turn."
+                ),
+                "is_error": True,
+            },
+            [],
+        )
+    _trace.note(trace_handle, f"read reference {doc.rid} ({doc.char_count} chars)")
+    header = (
+        f"Reference document {doc.rid} — \"{doc.title}\" "
+        f"(from {doc.filename}). Background material, not spec text: draft "
+        f"provisions in your own specification language, never paste from "
+        f"this.\n\n"
+    )
+    return (
+        {
+            "type": "tool_result",
+            "tool_use_id": block.get("id"),
+            "content": header + doc.text,
+        },
+        [],
+    )
+
+
 def _run_tool(
     session: SessionState,
     block: dict[str, Any],
     trace_handle: Any = None,
     *,
     message_index: int = 0,
+    reference_budget: TurnReferenceBudget | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Execute one (serialized) tool_use block.
 
@@ -1693,6 +1916,10 @@ def _run_tool(
         )
     if name == "suggest_prompts":
         return _run_suggest_prompts(block, trace_handle)
+    if name == "read_reference_doc":
+        return _run_read_reference_doc(
+            session, block, trace_handle, budget=reference_budget
+        )
     if name != "apply_spec_edits":
         return (
             {
@@ -1872,6 +2099,10 @@ def stream_user_turn(
     # generator. Initializes to [] so a turn that never calls the tool
     # commits an empty set — that "no call = clear" rule is the wind-down.
     staged_suggestions: list[str] = []
+    # Bounds the reference text this turn can pull into its request across
+    # every read_reference_doc call (commit-time elision does not help the
+    # continuation rounds). Turn-local, discarded with the turn.
+    reference_budget = TurnReferenceBudget()
     try:
         client = get_client()
         resumed_from_pause = False
@@ -1994,6 +2225,7 @@ def stream_user_turn(
                         block,
                         trace_handle,
                         message_index=message_index,
+                        reference_budget=reference_budget,
                     )
                 tool_results.append(result)
                 for event in ui_events:
@@ -2065,6 +2297,9 @@ def stream_user_turn(
                             "items": lint_document(
                                 session.doc.doc,
                                 session.module,
+                                unstructured_import=(
+                                    session.import_is_unstructured()
+                                ),
                             ),
                             "standards": standards_payload(session),
                         },

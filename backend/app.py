@@ -32,6 +32,12 @@ Endpoints (all JSON unless noted):
   edits require a proven flat island with isolated direct Word list bindings);
   ``?redline=master`` or ``?redline=version&base=N`` remains a normalized
   semantic tracked-changes export.
+- ``POST /api/reference/upload`` → attach a ``.docx`` as background context
+  for the model to read. Never touches the document tree, so unlike a master
+  import it has no blank-document precondition; the bytes are inspected and
+  discarded, only extracted text is kept.
+- ``GET  /api/references``    → attached reference documents (metadata only).
+- ``DELETE /api/reference/{rid}`` → detach one (404 when unknown).
 - ``POST /api/research/start``  → launch the requirements-research fan-out
   (requires a complete project profile; 409 while one runs).
 - ``GET  /api/usage``         → this session's billed usage + est. cost.
@@ -117,7 +123,13 @@ from .spec_doc.docx_export import (
     export_filename,
     redline_filename,
 )
-from .spec_doc.importer import MasterImportError, parse_master_docx
+from .reference_docs import ReferenceDocError
+from .spec_doc.importer import (
+    MasterImportError,
+    ReferenceExtraction,
+    extract_reference_text,
+    parse_master_docx,
+)
 from .spec_doc.model import SpecSection, apply_edits, iter_paragraphs
 from .spec_doc.project import chat_transcript, load_project
 from .spec_doc.project_package import (
@@ -241,6 +253,7 @@ def _prepare_master_import(
             skipped_empty_count=result.skipped_empty_count,
             warnings=result.warnings,
             tracked_changes_detected=result.tracked_changes_detected,
+            spec_shape_detected=result.spec_shape_detected,
         )
         if result.source_map is None:
             raise MasterImportError(
@@ -255,6 +268,28 @@ def _prepare_master_import(
     finally:
         temp_path.unlink(missing_ok=True)
     return result, report, source_context
+
+
+def _prepare_reference_upload(
+    source_bytes: bytes,
+) -> "ReferenceExtraction":
+    """Inspect and extract an uploaded reference ``.docx`` — the blocking half.
+
+    Same event-loop rule as ``_prepare_master_import``: this is pure CPU over
+    the uploaded bytes and must never run inline on the loop. It touches no
+    session state, so it is safe on a worker thread. The package goes through
+    the same bounded ZIP/OPC inspection as a master — a reference upload is
+    the same attack surface — but nothing is retained: the text is extracted
+    and the bytes are dropped.
+    """
+    inspect_docx_package(source_bytes)
+    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as handle:
+        handle.write(source_bytes)
+        temp_path = Path(handle.name)
+    try:
+        return extract_reference_text(temp_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def _stage_project_load(
@@ -658,7 +693,11 @@ def _doc_payload(session) -> dict[str, Any]:
     return {
         "doc": session.doc.snapshot(),
         "open_questions": open_questions(session.doc.doc),
-        "lint": lint_document(session.doc.doc, session.module),
+        "lint": lint_document(
+            session.doc.doc,
+            session.module,
+            unstructured_import=session.import_is_unstructured(),
+        ),
         "standards": standards_payload(session),
         "profile_complete": bool(profile and profile.is_complete()),
         "research_status": session.research.status,
@@ -668,6 +707,9 @@ def _doc_payload(session) -> dict[str, Any]:
         # Chat-authored figures (diagrams/schematics/tables) — full source so
         # the frontend can render + offer downloads. Not part of the doc tree.
         "figures": session.figures.snapshot(),
+        # Attached reference material — metadata only; the bodies are read on
+        # demand through the model's tool, never shipped with every payload.
+        "reference_docs": session.references.snapshot(),
         # Suggested-reply chips staged by the model (Batch 9); [] when none.
         # Surfaced here so boot, project load, undo/redo, and the failed-turn
         # refresh all sync the bar one way — a failed turn's refresh returns
@@ -707,7 +749,11 @@ def _readiness_payload(
             imported += 1
         elif p.status == "assumed":
             assumed += 1
-    lint_items = lint_document(doc, session.module)
+    lint_items = lint_document(
+        doc,
+        session.module,
+        unstructured_import=session.import_is_unstructured(),
+    )
     profile = ProjectProfile.from_dict(doc.project_profile)
     profile_ok = bool(profile and profile.is_complete())
     research_ok = session.research.status == "complete"
@@ -1632,6 +1678,109 @@ def create_app() -> FastAPI:
                 {"ok": False, "error": f"No figure {fid!r}."}, status_code=404
             )
         return JSONResponse({"ok": True, "figures": figures})
+
+    # --- Reference documents ------------------------------------------------
+
+    @app.get("/api/references")
+    def references_list() -> JSONResponse:
+        session = sessions.get_session()
+        return JSONResponse(
+            {"ok": True, "reference_docs": session.references.snapshot()}
+        )
+
+    @app.post("/api/reference/upload")
+    async def reference_upload(file: UploadFile) -> JSONResponse:
+        """Attach a ``.docx`` as background context for the model.
+
+        Deliberately unlike ``/api/import/master``: this never touches the
+        document tree, so it has no blank-document precondition and stays
+        available at any point in a session.
+        """
+        session = sessions.get_session()
+        entry_generation = session.generation
+        submitted_name = (
+            (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+        )
+        if not submitted_name.lower().endswith(".docx"):
+            return JSONResponse(
+                {"ok": False, "error": "Attach a .docx document."},
+                status_code=400,
+            )
+        safe_filename = sanitize_source_filename(submitted_name)
+        try:
+            source_bytes = await read_upload_bounded(file)
+        except UploadTooLargeError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=413
+            )
+        except SourcePackageError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400
+            )
+        # Extraction is seconds of CPU on a long document — off the loop, or
+        # it blocks the chat stream (see _prepare_master_import).
+        try:
+            extraction = await run_in_threadpool(
+                _prepare_reference_upload, source_bytes
+            )
+        except (MasterImportError, SourcePackageError, ValueError) as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400
+            )
+        with session.session_state_guard():
+            if session.generation != entry_generation:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "The session was replaced while the "
+                        "document was being read — attach it again.",
+                    },
+                    status_code=409,
+                )
+            try:
+                doc = session.references.add(
+                    filename=safe_filename,
+                    text=extraction.text,
+                    block_count=extraction.block_count,
+                    tracked_changes=extraction.tracked_changes,
+                )
+            except ReferenceDocError as exc:
+                return JSONResponse(
+                    {"ok": False, "error": str(exc)}, status_code=400
+                )
+            snapshot = session.references.snapshot()
+        warnings: list[str] = []
+        if doc.truncated:
+            warnings.append(
+                f"Only the first {len(doc.text):,} characters were kept "
+                f"(the document holds {doc.char_count:,}). The model is told "
+                "the tail was not read."
+            )
+        if doc.tracked_changes:
+            warnings.append(
+                "The document carries pending tracked changes; it was read "
+                "as the Accept-All-Changes view."
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "reference_doc": doc.metadata(),
+                "reference_docs": snapshot,
+                "warnings": warnings,
+            }
+        )
+
+    @app.delete("/api/reference/{rid}")
+    def reference_delete(rid: str) -> JSONResponse:
+        session = sessions.get_session()
+        with session.session_state_guard():
+            if not session.references.delete(rid):
+                return JSONResponse(
+                    {"ok": False, "error": f"No reference document {rid!r}."},
+                    status_code=404,
+                )
+            snapshot = session.references.snapshot()
+        return JSONResponse({"ok": True, "reference_docs": snapshot})
 
     # --- Master-spec import (Phase 5) ---------------------------------------
 

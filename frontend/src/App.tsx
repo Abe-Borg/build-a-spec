@@ -968,6 +968,18 @@ export default function App() {
     try {
       const result = await loadProjectFile(file);
       applyDocPayload(result);
+      // The .baspec carries the original import's content-loss warnings, and
+      // with the imported-DOCX banner gone this is the only place they can
+      // still surface. Without it, reopening a project silently drops the
+      // one honest signal that the extraction left something behind.
+      const restored = result.import_report?.warnings ?? [];
+      if (restored.length) {
+        setImportNotice({
+          tone: "warn",
+          name: result.import_report?.filename ?? file.name,
+          lines: restored,
+        });
+      }
       // A loaded project can switch the module + discipline (project.py
       // resolves both from the file); the Header label and the picker's
       // preselect read them from health, so resync it.

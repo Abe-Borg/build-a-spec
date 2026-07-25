@@ -166,10 +166,14 @@ class _CapabilityWarm:
     on it — most importantly the first frame of a chat turn.
     """
 
-    __slots__ = ("key", "done")
+    __slots__ = ("key", "section", "done")
 
-    def __init__(self, key: tuple[Any, ...]) -> None:
+    def __init__(self, key: tuple[Any, ...], section: SpecSection) -> None:
         self.key = key
+        # The immutable tree this sweep analyzes. Reading the live document
+        # instead would let a streaming turn's provisional edits be swept and
+        # then, if that turn rolled back, published under this key.
+        self.section = section
         self.done = threading.Event()
 
 
@@ -230,11 +234,7 @@ class SessionState:
         repr=False,
         compare=False,
     )
-    _capability_warm_next: tuple[Any, ...] | None = field(
-        default=None,
-        repr=False,
-        compare=False,
-    )
+    _capability_warm_next: Any = field(default=None, repr=False, compare=False)
     _capability_warm_lock: Any = field(
         default_factory=threading.Lock,
         repr=False,
@@ -633,7 +633,7 @@ class SessionState:
         """
         if not self._active_source_scope():
             return None
-        state_key = self._capability_state_key()
+        state_key = self._capability_lookup_key()
         if state_key is None:
             # An unkeyable document is never cached and never warmed; derive
             # it inline so the answer is still correct.
@@ -644,7 +644,7 @@ class SessionState:
             return hit
 
         if not block:
-            self.start_capability_warm(state_key)
+            self.start_capability_warm()
             return self._pending_capability_report(state_key)
 
         # Blocking caller: join an in-flight warm for this exact state rather
@@ -656,7 +656,10 @@ class SessionState:
         hit = self._capability_memo_hit(state_key)
         if hit is not None:
             return hit
-        return self._sweep_and_publish(state_key)
+        work = self._capability_work()
+        if work is None:
+            return self._compute_source_edit_capabilities()
+        return self._sweep_and_publish(*work)
 
     def _capability_memo_hit(
         self,
@@ -723,17 +726,24 @@ class SessionState:
     def _sweep_and_publish(
         self,
         state_key: tuple[Any, ...],
+        section: SpecSection | None = None,
     ) -> SourceCapabilityReport | None:
-        """Run one full sweep and memoize it if the state has not moved."""
+        """Run one full sweep of ``section`` and memoize it if it still fits.
+
+        ``section`` is the tree ``state_key`` describes; the sweep analyzes
+        exactly that, so the published report can never describe a different
+        one. The guard below then answers a separate question: is that state
+        still the live state, i.e. is it worth caching?
+        """
         source_bytes, source_map, baseline_index, projection = state_key
-        report = self._compute_source_edit_capabilities()
+        report = self._compute_source_edit_capabilities(section)
 
         # Read paths are not serialized against a streaming turn (``GET
         # /api/doc`` takes no session guard), so a long sweep can be overtaken
         # by a model turn's provisional edits. Publish only when the state the
-        # sweep actually analyzed is still the state it was keyed on;
-        # otherwise return the report but leave the cache alone, so a
-        # subsequent rollback cannot resurrect it against the wrong document.
+        # sweep analyzed is still the live one; otherwise return the report
+        # but leave the cache alone, so a subsequent rollback cannot resurrect
+        # it against a document it was not derived from.
         # ``source_patch_context`` is read after the sweep on purpose — the
         # sweep builds and attaches it on first use.
         try:
@@ -758,11 +768,8 @@ class SessionState:
             )
         return report
 
-    def start_capability_warm(
-        self,
-        state_key: tuple[Any, ...] | None = None,
-    ) -> None:
-        """Ensure a background sweep is running for ``state_key``.
+    def start_capability_warm(self) -> None:
+        """Ensure a background sweep is running for the current state.
 
         **At most one sweep runs at a time.** The sweep cannot be interrupted
         — it is one opaque call into the source gate — so a superseded one
@@ -780,23 +787,27 @@ class SessionState:
         themselves on a memo miss, and directly by the import handler so the
         sweep starts while the response is still being written.
         """
-        if state_key is None:
-            state_key = self._capability_state_key()
-            if state_key is None:
-                return
+        work = self._capability_work()
+        if work is None:
+            return
+        state_key, section = work
         with self._capability_warm_lock:
             warm = self._capability_warm
             if warm is not None and not warm.done.is_set():
                 # A sweep is in flight. Queue this state (newest wins) unless
                 # it is the one already being swept.
                 if not _same_capability_state(warm.key, state_key):
-                    self._capability_warm_next = state_key
+                    self._capability_warm_next = work
                 return
-            self._start_capability_warm_locked(state_key)
+            self._start_capability_warm_locked(work)
 
-    def _start_capability_warm_locked(self, state_key: tuple[Any, ...]) -> None:
+    def _start_capability_warm_locked(
+        self,
+        work: tuple[tuple[Any, ...], SpecSection],
+    ) -> None:
         """Publish a new warm and its thread. Caller holds the warm lock."""
-        warm = _CapabilityWarm(state_key)
+        state_key, section = work
+        warm = _CapabilityWarm(state_key, section)
         self._capability_warm = warm
         self._capability_warm_next = None
         threading.Thread(
@@ -806,13 +817,19 @@ class SessionState:
             daemon=True,
         ).start()
 
-    def _capability_state_key(self) -> tuple[Any, ...] | None:
-        """The state a sweep would analyze, or ``None`` if there is none."""
+    def _capability_lookup_key(self) -> tuple[Any, ...] | None:
+        """The live state's key, for memo lookups only — no tree copy.
+
+        A reader only needs this to ask "is there already a report for what
+        the document is right now". A sweep needs more (see
+        ``_capability_work``): the tree it analyzes must be pinned, or the
+        key it publishes under could describe a different one.
+        """
         if not self._active_source_scope():
             return None
         try:
             projection = semantic_body_projection_sha256(self.doc.doc)
-        except Exception:  # noqa: BLE001 - an unkeyable document is never warmed
+        except Exception:  # noqa: BLE001 - an unkeyable document is never cached
             return None
         return (
             self.source_docx_bytes,
@@ -821,10 +838,36 @@ class SessionState:
             projection,
         )
 
+    def _capability_work(
+        self,
+    ) -> tuple[tuple[Any, ...], SpecSection] | None:
+        """A tree to sweep and the key that exactly describes it.
+
+        Both come from ONE snapshot, so the key can never describe a
+        different tree than the one analyzed — the snapshot is taken first
+        and the projection hashed from it, not from the live document.
+        """
+        if not self._active_source_scope():
+            return None
+        section = SpecSection.from_dict(self.doc.doc.to_dict())
+        try:
+            projection = semantic_body_projection_sha256(section)
+        except Exception:  # noqa: BLE001 - an unkeyable document is never warmed
+            return None
+        return (
+            (
+                self.source_docx_bytes,
+                self.source_docx_map,
+                self.doc.baseline_index,
+                projection,
+            ),
+            section,
+        )
+
     def _run_capability_warm(self, warm: "_CapabilityWarm") -> None:
         """Body of the background sweep thread; never raises."""
         try:
-            self._sweep_and_publish(warm.key)
+            self._sweep_and_publish(warm.key, warm.section)
         except Exception:  # noqa: BLE001 - a warm failure must not kill the app
             # ``_compute_source_edit_capabilities`` already fails closed for
             # every analysis error; anything reaching here is unexpected and
@@ -865,8 +908,19 @@ class SessionState:
 
     def _compute_source_edit_capabilities(
         self,
+        current: SpecSection | None = None,
     ) -> SourceCapabilityReport | None:
-        """Derive the capability report from scratch (see the caller)."""
+        """Derive the capability report from scratch (see the caller).
+
+        ``current`` is the exact tree to analyze. A background sweep passes
+        the immutable snapshot its key describes: reading the live document
+        instead would let a streaming turn's provisional edits be analyzed
+        and then, if that turn rolled back, published under the ORIGINAL key
+        — a report describing a tree that never committed, memoized against
+        one that did. This is the same anti-mutation snapshot the audit and
+        Final QC passes take, for the same reason.
+        """
+        analyzed = self.doc.doc if current is None else current
         baseline_index = self.doc.baseline_index
         if baseline_index is None:
             return None
@@ -876,7 +930,7 @@ class SessionState:
             or not 0 <= baseline_index < len(self.doc.versions)
         ):
             return blocked_source_edit_capabilities(
-                self.doc.doc,
+                analyzed,
                 blocker="baseline_unavailable",
                 message="the imported semantic baseline is unavailable",
             )
@@ -884,7 +938,7 @@ class SessionState:
             baseline = SpecSection.from_dict(self.doc.versions[baseline_index])
         except (TypeError, ValueError):
             return blocked_source_edit_capabilities(
-                self.doc.doc,
+                analyzed,
                 blocker="baseline_unavailable",
                 message="the imported semantic baseline is unavailable",
             )
@@ -894,7 +948,7 @@ class SessionState:
             or not isinstance(self.source_docx_map, SourceBodyMap)
         ):
             return blocked_source_edit_capabilities(
-                self.doc.doc,
+                analyzed,
                 blocker="source_unavailable",
                 message=(
                     "the exact imported DOCX and source map are unavailable"
@@ -905,7 +959,7 @@ class SessionState:
             context = self.ensure_source_patch_context(baseline=baseline)
             if context is None:
                 return blocked_source_edit_capabilities(
-                    self.doc.doc,
+                    analyzed,
                     blocker="source_unavailable",
                     message=(
                         "the exact imported DOCX and source map are unavailable"
@@ -926,11 +980,11 @@ class SessionState:
                 context=context,
                 source_map=self.source_docx_map,
                 baseline=baseline,
-                current=self.doc.doc,
+                current=analyzed,
             )
         except SourcePatchError as exc:
             return blocked_source_edit_capabilities(
-                self.doc.doc,
+                analyzed,
                 blocker=exc.blocker,
                 message=exc.detail,
             )
@@ -941,7 +995,7 @@ class SessionState:
             # the real edit gate, which will still report its precise error
             # if a forged request is submitted.
             return blocked_source_edit_capabilities(
-                self.doc.doc,
+                analyzed,
                 blocker="output_validation_failed",
             )
 

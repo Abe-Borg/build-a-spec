@@ -1851,6 +1851,18 @@ No new deps, no new SSE event, one new REST route.
   state key (`_pending_capability_cache`) — it is a complete per-element map,
   and rebuilding it per poll tick would allocate thousands of records a
   second and steal CPU from the sweep being waited on.
+- **A sweep analyzes the tree its key describes, never the live one.**
+  `_capability_work()` snapshots the document and hashes the projection FROM
+  that snapshot, so key and tree are consistent by construction, and
+  `_compute_source_edit_capabilities(current=…)` analyzes exactly it. Reading
+  live state instead was a latent correctness hole that the move to a
+  background thread widened from microseconds to minutes: a streaming turn's
+  provisional edits would be swept, and if that turn then rolled back to the
+  state the sweep was keyed on, the publish guard would pass and memoize a
+  report describing a tree that never committed. This is the same
+  anti-mutation snapshot the audit and Final QC passes already take. The
+  publish guard survives, answering a different question — is this state
+  still live, i.e. worth caching.
 - **The model is told "pending", not "read-only".** Every operation is denied
   while the sweep runs, so `source_capability_summary` rendered the ordinary
   way would tell the model the whole imported document is permanently
@@ -1930,8 +1942,12 @@ No new deps, no new SSE event, one new REST route.
   survives the async window — the gate refuses regardless of the report) and
   `test_the_model_is_told_permissions_are_pending_not_read_only`. Tests
   that assert what permissions ARE now call `settle_capability_sweep()`
-  (`tests/conftest.py`); `tests/fakes.py::audit_grade_qc_result` builds its
-  input manifest with `block=True` for the same reason a real QC run does.
+  (`tests/conftest.py`), which DERIVES the report (`block=True`) rather than
+  only waiting on a warm — waiting alone is a race: with nothing in flight it
+  returns instantly and the test's next read is the one that starts the
+  sweep. `tests/fakes.py::audit_grade_qc_result` builds its input manifest
+  with `block=True` for the same reason a real QC run does. The snapshot rule
+  is pinned by `test_a_sweep_describes_the_tree_it_was_keyed_on_not_the_live_one`.
 
 ## Commands
 

@@ -42,17 +42,47 @@ def _restore_default_module():
 
 
 def settle_capability_sweep(timeout: float = 120.0) -> None:
-    """Wait for the background imported-source permission sweep to land.
+    """Make the imported-source permission report current for this state.
 
     The sweep probes every element against the real gate, so it is O(document)
     per probe and no longer runs inline anywhere — a response taken the moment
     an import or a body edit returns reports ``pending`` capabilities. Tests
     that assert what the permissions ARE call this first; tests about the
     asynchrony itself deliberately do not.
+
+    This derives the report rather than only waiting on a warm. Waiting alone
+    is not enough and fails intermittently: if nothing has read capabilities
+    since the last change there is no warm in flight, so the wait returns
+    immediately and the test's next read is the one that starts the sweep —
+    and gets ``pending``. ``block=True`` joins an in-flight warm instead of
+    duplicating it, then publishes the memo every later reader hits.
+
+    The derivation runs on its own thread so ``timeout`` actually bounds it.
+    ``block=True`` waits without a deadline — correct in production, where a
+    QC run must get a real answer however long it takes — so calling it
+    inline would let a stalled sweep hang the whole suite instead of failing
+    this assertion. The daemon thread is abandoned on timeout, exactly like
+    the session's own abandoned warms.
     """
+    import threading
+
     from backend import sessions
 
-    assert sessions.get_session().capability_warm_settled(timeout), (
+    session = sessions.get_session()
+    derived = threading.Event()
+
+    def _derive() -> None:
+        try:
+            session.source_edit_capabilities(block=True)
+        finally:
+            derived.set()
+
+    threading.Thread(
+        target=_derive,
+        name="settle-capability-sweep",
+        daemon=True,
+    ).start()
+    assert derived.wait(timeout), (
         "the background capability sweep did not settle"
     )
 

@@ -1136,6 +1136,59 @@ def test_capability_sweep_reruns_when_the_document_changes(
     assert counts["probes"] == after_edit, "the new state is swept once too"
 
 
+def test_a_sweep_describes_the_tree_it_was_keyed_on_not_the_live_one(
+    tmp_path,
+    api_client,
+):
+    """A background sweep must analyze the snapshot its key describes.
+
+    The sweep runs off-thread for minutes, so the live document can move
+    under it. If it read the live tree instead, a streaming turn's
+    provisional edits would be analyzed and — when that turn rolled back to
+    the state the sweep was keyed on — published under the ORIGINAL key: a
+    report describing a tree that never committed, memoized against one that
+    did, with the wrong element ids and permissions.
+    """
+    source = make_numbered_island_master(
+        tmp_path,
+        filename="capability-snapshot.docx",
+    )
+    _import_api(api_client, source, filename="capability-snapshot.docx")
+    session = sessions.get_session()
+    settled = session.source_edit_capabilities(block=True)
+    assert settled is not None
+    keyed_uids = set(settled.elements)
+
+    # Sweep the state that is live now, but mutate the tree the moment the
+    # sweep starts reading — the transient extra provision must not appear.
+    work = session._capability_work()
+    assert work is not None
+    state_key, snapshot = work
+    session._capability_cache = None
+    added, applied = apply_edits(
+        session.doc.doc,
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "A provisional block from a turn that will roll back.",
+            }
+        ],
+    )
+    assert applied
+    session.doc.doc.parts[0].articles[0].paragraphs = added.parts[0].articles[
+        0
+    ].paragraphs
+
+    report = session._sweep_and_publish(state_key, snapshot)
+
+    assert report is not None
+    assert set(report.elements) == keyed_uids, (
+        "the sweep analyzed the live tree instead of the snapshot its key "
+        "describes"
+    )
+
+
 def test_capability_memo_never_outlives_its_source_artifacts(
     tmp_path,
     api_client,

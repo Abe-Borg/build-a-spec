@@ -15,7 +15,6 @@ import type {
   ReadinessPayload,
   ResearchSnapshot,
   SourceCapabilitiesState,
-  SourcePreservationState,
   SpecDoc,
   StandardInfo,
   UpdateCheckPayload,
@@ -98,8 +97,6 @@ export default function App() {
   const [referenceBusy, setReferenceBusy] = useState(false);
   const [sourceAvailable, setSourceAvailable] = useState(false);
   const [preservationReady, setPreservationReady] = useState(false);
-  const [sourcePreservation, setSourcePreservation] =
-    useState<SourcePreservationState | null>(null);
   const [sourceCapabilities, setSourceCapabilities] =
     useState<SourceCapabilitiesState | null>(null);
   // Chat-authored figures (diagrams/schematics/tables), keyed for the bubbles.
@@ -175,7 +172,6 @@ export default function App() {
         setImportReport(payload.import_report ?? null);
         setSourceAvailable(payload.source_available ?? false);
         setPreservationReady(payload.preservation_ready ?? false);
-        setSourcePreservation(payload.source_preservation ?? null);
         setSourceCapabilities(payload.source_capabilities ?? null);
         setFigures(payload.figures ?? []);
         setSuggestions(payload.suggested_prompts ?? []);
@@ -830,7 +826,6 @@ export default function App() {
     setImportReport(null);
     setSourceAvailable(false);
     setPreservationReady(false);
-    setSourcePreservation(null);
     setSourceCapabilities(null);
     refreshDoc();
     refreshResearch();
@@ -889,7 +884,6 @@ export default function App() {
     import_report?: ImportReport | null;
     source_available?: boolean;
     preservation_ready?: boolean;
-    source_preservation?: SourcePreservationState | null;
     source_capabilities?: SourceCapabilitiesState | null;
   }) => {
     setDoc(payload.doc);
@@ -901,7 +895,6 @@ export default function App() {
     setImportReport(payload.import_report ?? null);
     setSourceAvailable(payload.source_available ?? false);
     setPreservationReady(payload.preservation_ready ?? false);
-    setSourcePreservation(payload.source_preservation ?? null);
     setSourceCapabilities(payload.source_capabilities ?? null);
     setFigures(payload.figures ?? []);
     setSuggestions(payload.suggested_prompts ?? []);
@@ -1289,7 +1282,6 @@ export default function App() {
           referenceBusy={referenceBusy}
           sourceAvailable={sourceAvailable}
           preservationReady={preservationReady}
-          sourcePreservation={sourcePreservation}
           sourceCapabilities={sourceCapabilities}
           busy={busy}
           fileLoading={fileLoading}

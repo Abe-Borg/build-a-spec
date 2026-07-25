@@ -18,7 +18,6 @@ import type {
   SectionDiff,
   SectionDiffPayload,
   SourceCapabilitiesState,
-  SourcePreservationState,
   SpecDoc,
   StandardInfo,
   UsageSummary,
@@ -49,7 +48,6 @@ interface Props {
   importReport: ImportReport | null;
   sourceAvailable: boolean;
   preservationReady: boolean;
-  sourcePreservation: SourcePreservationState | null;
   sourceCapabilities: SourceCapabilitiesState | null;
   busy: boolean;
   /** A master import / project open the server is still working through.
@@ -196,7 +194,6 @@ export default function ArtifactPanel({
   importReport,
   sourceAvailable,
   preservationReady,
-  sourcePreservation,
   sourceCapabilities,
   busy,
   fileLoading = null,
@@ -282,8 +279,6 @@ export default function ArtifactPanel({
   // Only an explicit false suppresses the spec chrome: projects saved before
   // shape detection omit the field and keep their original presentation.
   const unstructuredImport = importReport?.spec_shape_detected === false;
-  const passThroughOnly =
-    sourcePreservation?.status === "pass_through_only";
   // Retained source bytes may live only in an undone redo tail. Match the
   // backend's active-branch boundary so that pre-import history remains an
   // ordinary source-less document while an active imported branch fails
@@ -520,15 +515,9 @@ export default function ArtifactPanel({
                         href="/api/export/docx?mode=source"
                         download
                         onClick={() => setExportMenuOpen(false)}
-                        title={
-                          passThroughOnly
-                            ? "Return the retained source DOCX exactly; body edits are disabled for this package"
-                            : "Clone the original DOCX and apply only verified body edits, including bounded structural edits in eligible isolated Word-list islands"
-                        }
+                        title="Clone the original DOCX and apply only verified body edits, including bounded structural edits in eligible isolated Word-list islands"
                       >
-                        {passThroughOnly
-                          ? "Export exact original DOCX"
-                          : "Export preserved DOCX"}
+                        Export preserved DOCX
                       </a>
                     ) : (
                       <span
@@ -594,32 +583,6 @@ export default function ArtifactPanel({
                   >
                     Redline vs version…
                   </span>
-                )}
-                {/* The retained upload, byte-for-byte. This lived in the
-                    imported-DOCX notice above the document until that notice
-                    was removed; it belongs with the other downloads anyway. */}
-                {importedMode && (
-                  <>
-                    <span className="my-1 block border-t border-edge" />
-                    {sourceAvailable ? (
-                      <a
-                        className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
-                        href="/api/import/original"
-                        download
-                        onClick={() => setExportMenuOpen(false)}
-                        title="The exact DOCX that was uploaded, unmodified — carried by native .baspec saves"
-                      >
-                        Download original upload
-                      </a>
-                    ) : (
-                      <span
-                        className="block cursor-default px-3 py-1.5 text-ink-faint"
-                        title="This project carries only the normalized extraction; the original upload is not retained in it"
-                      >
-                        Original upload unavailable
-                      </span>
-                    )}
-                  </>
                 )}
                 {(qc?.report ?? qc?.result) && (
                   <>

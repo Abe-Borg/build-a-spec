@@ -368,6 +368,14 @@ def load_project(data: Any, session) -> None:
         # Derived from the outgoing source/baseline/body; never carry it into
         # the loaded project (the key would not match anyway — belt and braces).
         session._capability_cache = None
+    if hasattr(session, "_pending_capability_cache"):
+        session._pending_capability_cache = None
+    if hasattr(session, "_capability_warm"):
+        # A background sweep of the outgoing document settles into the
+        # abandoned object; its publish guard refuses a stale memo write, and
+        # dropping the queued state stops it starting a successor.
+        session._capability_warm = None
+        session._capability_warm_next = None
     session.import_report = restored_import_report
     # Keep the assignment conditional so format-1 compatibility callers with
     # an older/lightweight session object continue to load unchanged.

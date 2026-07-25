@@ -8,9 +8,20 @@ interface Props {
   /** External prefill (WI2 "Ask model"): sets the text and focuses. The
    *  nonce fires the effect even when the same text is requested twice. */
   prefill?: { text: string; nonce: number };
+  /** A master import / project open is in flight. A turn started now would
+   *  make the upload fail its own guard once it finished parsing, so sending
+   *  is held — say so rather than swallowing the click. Distinct from
+   *  `disabled`, which means a turn is streaming and offers Stop. */
+  uploading?: boolean;
 }
 
-export default function Composer({ disabled, onSend, onStop, prefill }: Props) {
+export default function Composer({
+  disabled,
+  onSend,
+  onStop,
+  prefill,
+  uploading = false,
+}: Props) {
   const [value, setValue] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -39,7 +50,7 @@ export default function Composer({ disabled, onSend, onStop, prefill }: Props) {
 
   const send = () => {
     const text = value.trim();
-    if (!text || disabled) return;
+    if (!text || disabled || uploading) return;
     setValue("");
     onSend(text);
   };
@@ -58,8 +69,13 @@ export default function Composer({ disabled, onSend, onStop, prefill }: Props) {
               send();
             }
           }}
-          placeholder="Describe the project, or answer the last question… (Enter to send)"
-          className="max-h-[220px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[0.925rem] leading-relaxed outline-none placeholder:text-ink-faint"
+          disabled={uploading}
+          placeholder={
+            uploading
+              ? "Reading the file… sending is held until it finishes."
+              : "Describe the project, or answer the last question… (Enter to send)"
+          }
+          className="max-h-[220px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[0.925rem] leading-relaxed outline-none placeholder:text-ink-faint disabled:opacity-60"
         />
         {disabled ? (
           <button
@@ -74,8 +90,8 @@ export default function Composer({ disabled, onSend, onStop, prefill }: Props) {
         ) : (
           <button
             onClick={send}
-            disabled={!value.trim()}
-            title="Send"
+            disabled={!value.trim() || uploading}
+            title={uploading ? "Waiting for the file to finish loading" : "Send"}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white transition-colors hover:bg-accent-hover disabled:opacity-30"
           >
             <svg

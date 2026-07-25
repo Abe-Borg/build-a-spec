@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import sessions
+from tests.conftest import settle_capability_sweep
 from backend.app import create_app
 from backend.spec_doc.model import SpecSection, apply_edits
 from backend.spec_doc.source_package import (
@@ -288,6 +289,9 @@ def test_many_source_versions_restore_exactly_and_reject_late_unsafe_tail(
     assert client.post("/api/doc/redo").status_code == 200
     assert client.get("/api/export/docx", params={"mode": "source"}).content == source
 
+    # Settle the background permission sweep so the "unchanged" comparison
+    # below is against a derived report, not a transient ``pending`` one.
+    settle_capability_sweep()
     before_doc = client.get("/api/doc").json()
     before_versions = copy.deepcopy(session.doc.versions)
     before_index = session.doc.index

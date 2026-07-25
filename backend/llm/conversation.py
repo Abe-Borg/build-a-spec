@@ -81,6 +81,7 @@ from ..spec_doc.source_mapping import (
     semantic_body_projection_sha256,
 )
 from ..spec_doc.source_patch import (
+    CAPABILITY_STATUS_PENDING,
     SourceCapabilityReport,
     SourcePatchContext,
     SourcePatchError,
@@ -139,6 +140,39 @@ def _chat_tools() -> list[dict[str, Any]]:
     ]
 
 
+def _same_capability_state(a: tuple[Any, ...], b: tuple[Any, ...]) -> bool:
+    """Whether two capability state keys describe the same document state.
+
+    ``(source_bytes, source_map, baseline_index, projection)``. The retained
+    artifacts are compared by IDENTITY, not by their declared hashes: keying
+    on the source map's *claimed* source hash would miss a swapped or mutated
+    artifact, which must still fail closed. Holding the objects in the key
+    keeps that identity sound for as long as the key lives.
+    """
+    return (
+        a[0] is b[0]
+        and a[1] is b[1]
+        and a[2] == b[2]
+        and a[3] == b[3]
+    )
+
+
+class _CapabilityWarm:
+    """One in-flight background capability sweep and the state it analyzes.
+
+    The sweep probes every element against the real gate, so it is expensive
+    in body size (see ``SessionState.source_edit_capabilities``). Running it
+    on a background thread keeps it off the request paths that used to wait
+    on it — most importantly the first frame of a chat turn.
+    """
+
+    __slots__ = ("key", "done")
+
+    def __init__(self, key: tuple[Any, ...]) -> None:
+        self.key = key
+        self.done = threading.Event()
+
+
 @dataclass
 class SessionState:
     """One conversation's accumulated state: history + document + module.
@@ -176,6 +210,33 @@ class SessionState:
     # state: never serialized, cleared on reset/load with the source fields.
     _capability_cache: tuple[tuple[Any, ...], Any] | None = field(
         default=None,
+        repr=False,
+        compare=False,
+    )
+    # The fail-closed report served while a sweep is running, memoized on the
+    # same state key so the panel's poll does not rebuild a per-element map
+    # every second. Derived state, like the memo above.
+    _pending_capability_cache: tuple[tuple[Any, ...], Any] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    # The background sweep that fills ``_capability_cache`` for a state the
+    # memo does not cover yet, and the single state queued behind it (newest
+    # request wins — see ``start_capability_warm``). Derived, process-local,
+    # never serialized; cleared with the memo on reset/load.
+    _capability_warm: "_CapabilityWarm | None" = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    _capability_warm_next: tuple[Any, ...] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    _capability_warm_lock: Any = field(
+        default_factory=threading.Lock,
         repr=False,
         compare=False,
     )
@@ -518,7 +579,11 @@ class SessionState:
             return False
         return True
 
-    def source_edit_capabilities(self) -> SourceCapabilityReport | None:
+    def source_edit_capabilities(
+        self,
+        *,
+        block: bool = False,
+    ) -> SourceCapabilityReport | None:
         """Return current per-operation source permissions, or ``None``.
 
         ``None`` means the active branch is not source-backed: this is a fresh
@@ -545,48 +610,122 @@ class SessionState:
         key, so the cache can never outlive the state it describes; a change
         to provenance metadata deliberately does not, exactly as
         ``semantic_body_projection`` excludes it from the source gate itself.
+
+        A memo MISS no longer sweeps inline. The sweep is O(document) work
+        per probe and runs ~5 probes per paragraph, so on a large imported
+        master it takes minutes; every caller that waited on it made the
+        whole app look hung — most visibly ``_source_editing_boundary_block``,
+        which runs before a chat turn emits its first SSE frame. A miss now
+        starts (or joins) ONE background sweep for that state and returns a
+        ``pending`` report immediately. Pending denies every body operation,
+        so the fail-closed rule is kept: an uncomputed permission can only
+        make the UI more restrictive, never more permissive. Nothing is
+        authorized by this report in any case —
+        :meth:`apply_doc_edits` re-validates every complete proposed final
+        state through the real source gate.
+
+        ``block=True`` is for the callers that ACT on the answer rather than
+        display it — starting a Final QC run, applying its fixes, and its two
+        exports — which must reason from real permissions. It joins an
+        in-flight warm rather than sweeping the same document twice. Those
+        endpoints call it through ``app._settle_source_capabilities`` before
+        taking the session guard, so no lock is ever held across a sweep.
         """
         if not self._active_source_scope():
             return None
-
-        source_bytes = self.source_docx_bytes
-        source_map = self.source_docx_map
-        baseline_index = self.doc.baseline_index
-        try:
-            projection = semantic_body_projection_sha256(self.doc.doc)
-        except Exception:  # noqa: BLE001 - an unkeyable document is never cached
+        state_key = self._capability_state_key()
+        if state_key is None:
+            # An unkeyable document is never cached and never warmed; derive
+            # it inline so the answer is still correct.
             return self._compute_source_edit_capabilities()
 
-        # Identity, not declared identity: the retained bytes/map/context are
-        # compared with ``is`` against the exact objects the cached report was
-        # derived from, and the key holds them alive so identity stays sound.
-        # Keying on the map's *claimed* source hash would miss a swapped or
-        # mutated artifact, which must still fail closed.
-        #
-        # The version index is deliberately NOT part of the key. A metadata
-        # edit (``set_status``/``set_provenance``) commits a new version while
-        # leaving the semantic body — and therefore every source capability —
-        # untouched, and confirming blocks one at a time is exactly what the
-        # review walk does on an imported master. Keying on the index made
-        # each of those confirmations pay for a full sweep. What the report
-        # actually depends on is covered: ``_active_source_scope`` above
-        # rejects a branch that undid past the import, ``baseline_index``
-        # pins which version is the baseline, and ``DocumentStore`` never
-        # rewrites a retained version in place (``commit_turn`` only appends,
-        # truncates the redo tail, and drops ``baseline_index`` when that
-        # truncation would discard the version it points at).
-        cached = self._capability_cache
-        if cached is not None:
-            cached_key, cached_report = cached
-            if (
-                cached_key[0] is source_bytes
-                and cached_key[1] is source_map
-                and cached_key[2] is self.source_patch_context
-                and cached_key[3] == baseline_index
-                and cached_key[4] == projection
-            ):
-                return cached_report
+        hit = self._capability_memo_hit(state_key)
+        if hit is not None:
+            return hit
 
+        if not block:
+            self.start_capability_warm(state_key)
+            return self._pending_capability_report(state_key)
+
+        # Blocking caller: join an in-flight warm for this exact state rather
+        # than sweeping the same document twice, then re-read the memo it
+        # published. A warm that finished against a state which has since
+        # moved leaves the memo untouched, so the fall-through below still
+        # derives the current answer.
+        self.capability_warm_settled(state_key=state_key)
+        hit = self._capability_memo_hit(state_key)
+        if hit is not None:
+            return hit
+        return self._sweep_and_publish(state_key)
+
+    def _capability_memo_hit(
+        self,
+        state_key: tuple[Any, ...],
+    ) -> SourceCapabilityReport | None:
+        """The memoized report for exactly ``state_key``, else ``None``.
+
+        The stored key carries ``source_patch_context`` as well, compared by
+        identity against the live one: the sweep builds and attaches it on
+        first use, so a report derived against a different context must not
+        be reused. See :func:`_same_capability_state` for why the retained
+        artifacts are compared by identity rather than by declared hash.
+
+        The version index is deliberately NOT part of the key. A metadata
+        edit (``set_status``/``set_provenance``) commits a new version while
+        leaving the semantic body — and therefore every source capability —
+        untouched, and confirming blocks one at a time is exactly what the
+        review walk does on an imported master. Keying on the index made each
+        of those confirmations pay for a full sweep. What the report actually
+        depends on is covered: ``_active_source_scope`` rejects a branch that
+        undid past the import, ``baseline_index`` pins which version is the
+        baseline, and ``DocumentStore`` never rewrites a retained version in
+        place (``commit_turn`` only appends, truncates the redo tail, and
+        drops ``baseline_index`` when that truncation would discard the
+        version it points at).
+        """
+        cached = self._capability_cache
+        if cached is None:
+            return None
+        cached_key, cached_report = cached
+        if cached_key[2] is not self.source_patch_context:
+            return None
+        stored_state = (
+            cached_key[0],
+            cached_key[1],
+            cached_key[3],
+            cached_key[4],
+        )
+        return cached_report if _same_capability_state(stored_state, state_key) else None
+
+    def _pending_capability_report(
+        self,
+        state_key: tuple[Any, ...],
+    ) -> SourceCapabilityReport:
+        """The fail-closed report served while the sweep is still running.
+
+        Memoized on the same state key as the real report. It is a complete
+        per-element map, so rebuilding it on every reader — the panel polls
+        once a second while pending — would allocate thousands of records per
+        request and steal CPU from the sweep being waited on. It depends only
+        on the document's structure, which the key already pins.
+        """
+        cached = self._pending_capability_cache
+        if cached is not None and _same_capability_state(cached[0], state_key):
+            return cached[1]
+        report = blocked_source_edit_capabilities(
+            self.doc.doc,
+            blocker="capabilities_pending",
+            status=CAPABILITY_STATUS_PENDING,
+        )
+        self._pending_capability_cache = (state_key, report)
+        return report
+
+    def _sweep_and_publish(
+        self,
+        state_key: tuple[Any, ...],
+    ) -> SourceCapabilityReport | None:
+        """Run one full sweep and memoize it if the state has not moved."""
+        source_bytes, source_map, baseline_index, projection = state_key
         report = self._compute_source_edit_capabilities()
 
         # Read paths are not serialized against a streaming turn (``GET
@@ -618,6 +757,111 @@ class SessionState:
                 report,
             )
         return report
+
+    def start_capability_warm(
+        self,
+        state_key: tuple[Any, ...] | None = None,
+    ) -> None:
+        """Ensure a background sweep is running for ``state_key``.
+
+        **At most one sweep runs at a time.** The sweep cannot be interrupted
+        — it is one opaque call into the source gate — so a superseded one
+        would run to completion regardless, and its result is guaranteed to
+        be discarded by the publish guard. Starting a thread per state would
+        therefore stack minutes-long, useless O(n²) work: a streaming turn
+        that commits ten provisional bodies while the panel polls once a
+        second would leave ten sweeps fighting over one GIL, slowing the only
+        one that can still publish. Instead a newer request replaces the
+        *pending* one and is picked up when the running sweep finishes, so
+        superseded states are skipped rather than swept.
+
+        Idempotent for the same state, so the "one sweep per document state"
+        invariant holds no matter how many readers ask. Called by the readers
+        themselves on a memo miss, and directly by the import handler so the
+        sweep starts while the response is still being written.
+        """
+        if state_key is None:
+            state_key = self._capability_state_key()
+            if state_key is None:
+                return
+        with self._capability_warm_lock:
+            warm = self._capability_warm
+            if warm is not None and not warm.done.is_set():
+                # A sweep is in flight. Queue this state (newest wins) unless
+                # it is the one already being swept.
+                if not _same_capability_state(warm.key, state_key):
+                    self._capability_warm_next = state_key
+                return
+            self._start_capability_warm_locked(state_key)
+
+    def _start_capability_warm_locked(self, state_key: tuple[Any, ...]) -> None:
+        """Publish a new warm and its thread. Caller holds the warm lock."""
+        warm = _CapabilityWarm(state_key)
+        self._capability_warm = warm
+        self._capability_warm_next = None
+        threading.Thread(
+            target=self._run_capability_warm,
+            args=(warm,),
+            name="bas-capability-warm",
+            daemon=True,
+        ).start()
+
+    def _capability_state_key(self) -> tuple[Any, ...] | None:
+        """The state a sweep would analyze, or ``None`` if there is none."""
+        if not self._active_source_scope():
+            return None
+        try:
+            projection = semantic_body_projection_sha256(self.doc.doc)
+        except Exception:  # noqa: BLE001 - an unkeyable document is never warmed
+            return None
+        return (
+            self.source_docx_bytes,
+            self.source_docx_map,
+            self.doc.baseline_index,
+            projection,
+        )
+
+    def _run_capability_warm(self, warm: "_CapabilityWarm") -> None:
+        """Body of the background sweep thread; never raises."""
+        try:
+            self._sweep_and_publish(warm.key)
+        except Exception:  # noqa: BLE001 - a warm failure must not kill the app
+            # ``_compute_source_edit_capabilities`` already fails closed for
+            # every analysis error; anything reaching here is unexpected and
+            # simply leaves the memo empty, so the next reader warms again.
+            pass
+        finally:
+            # Release waiters first, then pick up whatever queued behind this
+            # sweep. Setting ``done`` last would let a waiter observe the
+            # replacement warm and wait on the wrong sweep.
+            warm.done.set()
+            with self._capability_warm_lock:
+                queued = self._capability_warm_next
+                if queued is not None and self._capability_warm is warm:
+                    self._start_capability_warm_locked(queued)
+
+    def capability_warm_settled(
+        self,
+        timeout: float | None = None,
+        *,
+        state_key: tuple[Any, ...] | None = None,
+    ) -> bool:
+        """Wait for the in-flight sweep to finish. False on timeout.
+
+        With ``state_key``, waits only if the running sweep covers that exact
+        state (the blocking readers' path — there is nothing to gain from
+        waiting on a sweep of a document state nobody asked about). Without
+        it, waits for whatever is running, which is what a caller that just
+        wants a quiet session needs.
+        """
+        with self._capability_warm_lock:
+            warm = self._capability_warm
+            if warm is None or (
+                state_key is not None
+                and not _same_capability_state(warm.key, state_key)
+            ):
+                return True
+        return warm.done.wait(timeout)
 
     def _compute_source_edit_capabilities(
         self,
@@ -787,6 +1031,13 @@ class SessionState:
         self.source_docx_map = None
         self.source_patch_context = None
         self._capability_cache = None
+        self._pending_capability_cache = None
+        # A warm still sweeping the old session settles into the abandoned
+        # object (the zombie-runner pattern); its publish guard already
+        # refuses to write a memo whose source artifacts have been cleared.
+        # Dropping the queued state stops it starting a successor, too.
+        self._capability_warm = None
+        self._capability_warm_next = None
         self.import_report = None
         # Per-project priming text does not survive a reset (see the field
         # comment). Module and discipline are kept; this is not.

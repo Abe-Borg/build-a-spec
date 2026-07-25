@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   EditOp,
   FileLoading,
+  ImportNotice,
   ImportReport,
   LintIssue,
   OpenItem,
@@ -26,7 +27,10 @@ import QCDrawer from "./QCDrawer";
 import ResearchDrawer from "./ResearchDrawer";
 import ReviewDrawer from "./ReviewDrawer";
 import SpecDocument from "./SpecDocument";
-import { sourceCapabilitiesExpected } from "../lib/sourceCapabilities";
+import {
+  sourceCapabilitiesExpected,
+  sourceCapabilitiesPending,
+} from "../lib/sourceCapabilities";
 import Tip from "./Tip";
 
 interface Props {
@@ -50,6 +54,9 @@ interface Props {
   /** A master import / project open the server is still working through.
    *  Drives the progress line and keeps both file actions disabled. */
   fileLoading?: FileLoading;
+  /** What to say about the last import; null for a clean one. */
+  importNotice?: ImportNotice;
+  onDismissImportNotice?: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onEditDoc: (ops: EditOp[]) => void;
@@ -186,6 +193,8 @@ export default function ArtifactPanel({
   sourceCapabilities,
   busy,
   fileLoading = null,
+  importNotice = null,
+  onDismissImportNotice,
   onUndo,
   onRedo,
   onEditDoc,
@@ -262,6 +271,16 @@ export default function ArtifactPanel({
   );
   const bodyEditingDisabled =
     activeSourceExpected && sourceCapabilities?.status !== "ready";
+  // Denied because the answer is not derived yet, as opposed to denied
+  // because the package forbids it. Same restriction, different sentence.
+  const capabilitiesPending =
+    activeSourceExpected && sourceCapabilitiesPending(sourceCapabilities);
+  // The server's own sentence for the pending denial, so the strip below, the
+  // draft tooltip, and every per-row control in SpecDocument all say the same
+  // thing (lib/sourceCapabilities.ts: never add client prose to a denial).
+  const pendingReason =
+    sourceCapabilities?.elements.sec?.replace_text?.message ??
+    "Imported-source permissions for this document state are still being checked.";
 
   // Full-draft affordance (WI1): offered while the document is empty-or-sparse
   // (fewer than 3 articles) — past that, a wholesale draft is the wrong tool.
@@ -551,6 +570,32 @@ export default function ArtifactPanel({
                     Redline vs version…
                   </span>
                 )}
+                {/* The retained upload, byte-for-byte. This lived in the
+                    imported-DOCX notice above the document until that notice
+                    was removed; it belongs with the other downloads anyway. */}
+                {importedMode && (
+                  <>
+                    <span className="my-1 block border-t border-edge" />
+                    {sourceAvailable ? (
+                      <a
+                        className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
+                        href="/api/import/original"
+                        download
+                        onClick={() => setExportMenuOpen(false)}
+                        title="The exact DOCX that was uploaded, unmodified — carried by native .baspec saves"
+                      >
+                        Download original upload
+                      </a>
+                    ) : (
+                      <span
+                        className="block cursor-default px-3 py-1.5 text-ink-faint"
+                        title="This project carries only the normalized extraction; the original upload is not retained in it"
+                      >
+                        Original upload unavailable
+                      </span>
+                    )}
+                  </>
+                )}
                 {(qc?.report ?? qc?.result) && (
                   <>
                     <span className="my-1 block border-t border-edge" />
@@ -663,112 +708,73 @@ export default function ArtifactPanel({
             </p>
             <p className="mt-0.5 text-[11px] leading-relaxed text-ink-dim">
               Extracting body content and indexing the source package. A long
-              master can take several seconds — the chat stays available while
-              this finishes.
+              master can take several seconds; the rest of the app keeps
+              working while this finishes.
             </p>
           </div>
         </div>
       )}
 
-      {importedMode && (
+      {/* Whatever the last import has to say — a failure, or the content it
+          could not carry across — reported beside the buttons that started
+          it. Both used to go into the chat, which put machine-written notices
+          in the middle of the conversation. A clean import shows nothing. */}
+      {importNotice && (
         <div
-          className="border-b border-warn/40 bg-warn/10 px-5 py-3 text-[11px] leading-relaxed text-ink-dim"
-          role="status"
+          className={
+            "flex items-start justify-between gap-3 border-b px-5 py-3 " +
+            (importNotice.tone === "error"
+              ? "border-err/40 bg-err/10"
+              : "border-warn/40 bg-warn/10")
+          }
+          role={importNotice.tone === "error" ? "alert" : "status"}
+          data-testid="import-notice"
         >
-          <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
-            <div className="min-w-0 flex-1">
-              <p className="font-semibold text-warn">
-                {passThroughOnly
-                  ? "Imported DOCX — pass-through only"
-                  : preservationReady
-                    ? "Imported DOCX — source-preserving mode"
-                    : sourceAvailable
-                      ? "Imported DOCX — preservation currently blocked"
-                      : "Imported DOCX — normalized-content mode"}
-              </p>
-              <p className="mt-0.5">
-                {sourceAvailable
-                  ? passThroughOnly
-                    ? "The exact original is retained and remains available byte-for-byte. This package contains features that make any DOCX body mutation unsafe, so body edit and fix controls are disabled. Use normalized export only when you intentionally want a newly generated document."
-                    : preservationReady
-                    ? importReport?.fidelity_notice ||
-                      "Build-a-Spec retained the exact source package. Preserved export patches verified simple body text and permits bounded add, delete, or reorder only in eligible flat body islands with isolated direct Word list bindings. Other structural or complex-format edits are refused."
-                    : "The exact source is retained, but the current document state cannot be represented inside the source-preserving boundary. Restore a compatible version or choose normalized export explicitly."
-                  : "This source-less legacy project contains only the normalized semantic extraction. Preserved export is unavailable."}
-              </p>
-              {passThroughOnly && sourcePreservation.blockers.length > 0 && (
-                <p className="mt-1 text-ink-faint">
-                  Mutation blocked because:{" "}
-                  {sourcePreservation.blockers
-                    .map((blocker) => blocker.message)
-                    .join("; ")}
-                  .
-                </p>
-              )}
-              {importReport ? (
-                <>
-                  <p className="mt-1 text-ink-faint">
-                    {importReport.imported_block_count} provisions imported
-                    from{" "}
-                    <span className="font-medium text-ink-dim">
-                      {importReport.filename}
-                    </span>
-                    ; {importReport.skipped_empty_count} empty body block
-                    {importReport.skipped_empty_count === 1 ? "" : "s"}{" "}
-                    skipped
-                    {importReport.warnings.length
-                      ? `; ${importReport.warnings.length} import note${
-                          importReport.warnings.length === 1 ? "" : "s"
-                        }`
-                      : ""}
-                    .
-                  </p>
-                  {importReport.tracked_changes_detected && (
-                    <p className="mt-1 text-ink-faint">
-                      Tracked changes were detected and resolved to their
-                      Accept-All text view during extraction.
-                    </p>
-                  )}
-                </>
-              ) : (
-                <p className="mt-1 text-ink-faint">
-                  This legacy project has no detailed import-fidelity report.
-                </p>
-              )}
-              {(importReport?.warnings.length ?? 0) > 0 && (
-                <details className="mt-1.5">
-                  <summary className="cursor-pointer text-ink-dim hover:text-ink">
-                    Review import notes
-                  </summary>
-                  <ul className="mt-1 list-disc space-y-0.5 pl-5 text-ink-faint">
-                    {importReport?.warnings.map((warning, index) => (
-                      <li key={`${index}-${warning}`}>{warning}</li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-            <div className="shrink-0 text-right">
-              {sourceAvailable ? (
-                <a
-                  className="font-medium text-accent hover:text-accent-hover"
-                  href="/api/import/original"
-                  download
-                >
-                  Download original upload
-                </a>
-              ) : (
-                <p className="font-medium text-warn">
-                  Original upload unavailable in this session
-                </p>
-              )}
-              <p className="mt-0.5 max-w-56 text-ink-faint">
-                {sourceAvailable
-                  ? "The exact original is carried by native .baspec saves."
-                  : "Legacy source-less projects can only use normalized export."}
-              </p>
-            </div>
-          </div>
+          <details className="min-w-0" open={importNotice.tone === "error"}>
+            <summary
+              className={
+                "cursor-pointer truncate text-xs font-semibold " +
+                (importNotice.tone === "error" ? "text-err" : "text-warn")
+              }
+            >
+              {importNotice.tone === "error"
+                ? `Import failed — ${importNotice.name}`
+                : `${importNotice.lines.length} import note${
+                    importNotice.lines.length === 1 ? "" : "s"
+                  } — content the extraction could not carry across`}
+            </summary>
+            <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-[11px] leading-relaxed text-ink-dim">
+              {importNotice.lines.map((line, index) => (
+                <li key={`${index}-${line}`}>{line}</li>
+              ))}
+            </ul>
+          </details>
+          <button
+            className="shrink-0 text-[11px] text-ink-faint hover:text-ink"
+            onClick={onDismissImportNotice}
+            title="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* The per-element permission sweep runs in the background after an
+          import or a body change; body edits stay disabled until it lands
+          (fail-closed), so say that it is working rather than leaving every
+          control inertly greyed out. */}
+      {capabilitiesPending && (
+        <div
+          className="flex items-center gap-2 border-b border-edge bg-bg/40 px-5 py-2 text-[11px] text-ink-dim"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="status-dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          <span>{pendingReason}</span>
         </div>
       )}
 

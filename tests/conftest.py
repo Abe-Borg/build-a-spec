@@ -41,6 +41,22 @@ def _restore_default_module():
     session.discipline = ""
 
 
+def settle_capability_sweep(timeout: float = 120.0) -> None:
+    """Wait for the background imported-source permission sweep to land.
+
+    The sweep probes every element against the real gate, so it is O(document)
+    per probe and no longer runs inline anywhere — a response taken the moment
+    an import or a body edit returns reports ``pending`` capabilities. Tests
+    that assert what the permissions ARE call this first; tests about the
+    asynchrony itself deliberately do not.
+    """
+    from backend import sessions
+
+    assert sessions.get_session().capability_warm_settled(timeout), (
+        "the background capability sweep did not settle"
+    )
+
+
 @pytest.fixture(autouse=True)
 def _fresh_session():
     from backend import sessions

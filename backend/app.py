@@ -19,6 +19,8 @@ Endpoints (all JSON unless noted):
   for the frontend to send through the normal chat path (409 while a turn
   or research runs, or when the document is not blank).
 - ``GET  /api/doc``           → current document snapshot + open questions.
+- ``GET  /api/doc/capabilities`` → just the imported-source permission
+  report, for polling while the background sweep derives it.
 - ``POST /api/doc/undo``      → step to the previous per-turn version.
 - ``POST /api/doc/redo``      → step forward again.
 - ``POST /api/doc/edit``      → apply a manual edit batch (one undoable
@@ -387,18 +389,43 @@ def _source_readiness(session):
     )
 
 
-def _qc_source_guard(session) -> QCSourceGuard | None:
+def _settle_source_capabilities(session) -> None:
+    """Derive the imported-source permission report before taking the guard.
+
+    The QC endpoints below reason from real permissions (``block=True``), and
+    the sweep that derives them is minutes of work on a large master. Doing it
+    inside ``session_state_guard()`` would hold ``_turn_state_lock`` for that
+    whole time — the same lock ``claim_model_turn`` needs — so a chat turn
+    could not even start. Settle first, then take the guard and re-check,
+    exactly as the import handler does with its parse. A body change landing
+    in that window just costs one more sweep behind the lock, which needs a
+    manual edit inside the gap; an audit-grade result reasoning from real
+    permissions is worth that.
+    """
+    session.source_edit_capabilities(block=True)
+
+
+def _qc_source_guard(session, *, block: bool = False) -> QCSourceGuard | None:
     """Capture immutable source inputs for the exact QC document snapshot.
 
     Presence means the runner must enforce source preservation. An active
     source-backed session with malformed or missing context still returns a
     required, incomplete guard so proposal validation fails closed.
+
+    ``block`` is set only when starting a run, which must reason from real
+    permissions. The freshness comparisons that reach here from the hot
+    ``/api/readiness`` and ``/api/qc/status`` polls leave it False: they must
+    never wait on the sweep, and a not-yet-derived capability summary simply
+    reads as "the recorded inputs no longer match", i.e. stale. That is the
+    conservative answer, and after an import (which requires an empty
+    document) or a body change (which makes a prior QC stale anyway) it is
+    also the correct one.
     """
     # Use the same active-branch/source-less boundary as manual/model edits
     # and the capability payload. In particular, a legacy JSON project may
     # retain an import baseline while intentionally carrying neither source
     # bytes nor a source map; QC for that project remains semantic-only.
-    capability_report = session.source_edit_capabilities()
+    capability_report = session.source_edit_capabilities(block=block)
     if capability_report is None:
         return None
 
@@ -441,8 +468,18 @@ def _qc_source_guard(session) -> QCSourceGuard | None:
     )
 
 
-def _qc_matches_current_inputs(session, result) -> bool:
-    """Server-authoritative freshness over document + all QC inputs."""
+def _qc_matches_current_inputs(session, result, *, block: bool = False) -> bool:
+    """Server-authoritative freshness over document + all QC inputs.
+
+    ``block`` decides whether the imported-source half of the comparison may
+    wait for the background permission sweep. Set it on paths that ACT on the
+    answer — applying fixes, producing an export — because a not-yet-derived
+    capability summary reads as a mismatch, i.e. "stale", and refusing a fix
+    for a sweep that simply has not finished would be wrong. Leave it False
+    on the hot ``/api/readiness`` and ``/api/qc/status`` polls, where waiting
+    minutes on a large master is exactly the freeze this design removes and
+    the conservative "assume stale" answer is harmless.
+    """
     return bool(
         result is not None
         and result.matches_inputs(
@@ -451,7 +488,7 @@ def _qc_matches_current_inputs(session, result) -> bool:
             session.research.profile_result,
             session.module,
             session.discipline,
-            _qc_source_guard(session),
+            _qc_source_guard(session, block=block),
             model=settings.QC_MODEL,
             max_tokens=settings.QC_MAX_TOKENS,
         )
@@ -480,17 +517,19 @@ def _qc_export_current_state(
     """Canonical export-time context shared by JSON and Word reports."""
     if qc_record is None:
         qc_record = session.qc.audit_record_snapshot()
+    # An export is an audit artifact, so its staleness verdict must come from
+    # real permissions rather than from a sweep that has not finished yet.
     current_manifest = build_qc_input_manifest(
         session.doc.doc,
         session.research.profile_result,
         session.module,
         version_index=session.doc.index,
         discipline=session.discipline,
-        source_guard=_qc_source_guard(session),
+        source_guard=_qc_source_guard(session, block=True),
         model=settings.QC_MODEL,
         max_tokens=settings.QC_MAX_TOKENS,
     )
-    matches = _qc_matches_current_inputs(session, result)
+    matches = _qc_matches_current_inputs(session, result, block=True)
     state = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "document_version": session.doc.index,
@@ -1245,6 +1284,26 @@ def create_app() -> FastAPI:
     def get_doc() -> dict:
         return _doc_payload(sessions.get_session())
 
+    @app.get("/api/doc/capabilities")
+    def get_doc_capabilities() -> dict:
+        """Just the imported-source permission report, for polling.
+
+        The per-element sweep runs in the background, so the panel needs a
+        way to notice it finished. This route exists instead of re-polling
+        ``GET /api/doc`` because that payload also rebuilds the outline, the
+        lint report and the source-readiness plan — all O(document) work the
+        poller does not need. ``status`` is ``pending`` while the sweep is
+        still running; anything else is settled and the client refreshes the
+        document once.
+        """
+        session = sessions.get_session()
+        capabilities = session.source_edit_capabilities()
+        return {
+            "source_capabilities": (
+                capabilities.to_dict() if capabilities is not None else None
+            ),
+        }
+
     @app.post("/api/doc/undo")
     def undo_doc() -> JSONResponse:
         session = sessions.get_session()
@@ -1684,11 +1743,16 @@ def create_app() -> FastAPI:
             warnings=len(result.warnings),
             tracked_changes=result.tracked_changes_detected,
         )
-        # Building the payload is itself expensive on a freshly imported
-        # master: it runs the first source-capability sweep, which probes
-        # every element against the real gate. Every other endpoint reaches
-        # ``_doc_payload`` through a plain ``def`` handler, i.e. already on a
-        # worker thread — this async handler is the one that has to say so.
+        # The per-element permission sweep is the most expensive thing this
+        # app does (O(document) per probe, ~5 probes per paragraph). It no
+        # longer runs inline anywhere: start it here so it is already working
+        # while this response is written, and report ``pending`` capabilities
+        # until it lands. The panel polls ``GET /api/doc/capabilities``.
+        session.start_capability_warm()
+        # ``_doc_payload`` still costs one source-readiness plan on a freshly
+        # imported master. Every other endpoint reaches it through a plain
+        # ``def`` handler, i.e. already on a worker thread — this async
+        # handler is the one that has to say so.
         payload = await run_in_threadpool(_doc_payload, session)
         return JSONResponse(
             {
@@ -1947,6 +2011,7 @@ def create_app() -> FastAPI:
         streaming (a QC of a mid-turn tree would review a moving target).
         """
         session = sessions.get_session()
+        _settle_source_capabilities(session)
         with session.session_state_guard():
             if session.turn_active:
                 return JSONResponse(
@@ -1980,7 +2045,7 @@ def create_app() -> FastAPI:
             # Snapshot the tree while model-turn claiming is excluded; carry
             # prior dismiss decisions into content-identical findings.
             snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
-            source_guard = _qc_source_guard(session)
+            source_guard = _qc_source_guard(session, block=True)
             remembered = session.qc.remembered_dismissals()
             run_generation = session.generation
             started = session.qc.start(
@@ -2063,6 +2128,7 @@ def create_app() -> FastAPI:
         atomically. Rejected (409) while a model turn streams.
         """
         session = sessions.get_session()
+        _settle_source_capabilities(session)
         with session.session_state_guard():
             if session.turn_active:
                 return JSONResponse(
@@ -2106,7 +2172,7 @@ def create_app() -> FastAPI:
                     },
                     status_code=409,
                 )
-            if not _qc_matches_current_inputs(session, result):
+            if not _qc_matches_current_inputs(session, result, block=True):
                 return JSONResponse(
                     {
                         "ok": False,
@@ -2357,6 +2423,7 @@ def create_app() -> FastAPI:
     @app.get("/api/qc/export")
     def qc_export(run_id: str = "") -> Response:
         session = sessions.get_session()
+        _settle_source_capabilities(session)
         with session.session_state_guard():
             qc_record = session.qc.audit_record_snapshot()
             result = qc_record.get("report_for_export_model")
@@ -2402,6 +2469,7 @@ def create_app() -> FastAPI:
     def qc_export_json(run_id: str = "") -> Response:
         """Machine-readable twin of the detailed Word Final QC report."""
         session = sessions.get_session()
+        _settle_source_capabilities(session)
         with session.session_state_guard():
             qc_record = session.qc.audit_record_snapshot()
             result = qc_record.get("report_for_export_model")

@@ -41,7 +41,11 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
     from backend.usage_ledger import usage_pricing_snapshot
 
     profile = session.research.profile_result
-    source_guard = _qc_source_guard(session)
+    # ``block=True`` mirrors what ``POST /api/qc/start`` does: a real run
+    # settles the background permission sweep before it records its input
+    # manifest, so a fixture built from a still-``pending`` capability
+    # summary would look stale to every later freshness check.
+    source_guard = _qc_source_guard(session, block=True)
     manifest = build_qc_input_manifest(
         session.doc.doc,
         profile,

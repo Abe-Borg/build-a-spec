@@ -2268,6 +2268,14 @@ def _blocked_element_operations(
     return SourceElementCapabilities(operations)
 
 
+#: Report status while the per-element sweep for the current document state
+#: is still running in the background. Distinct from ``blocked`` so a client
+#: can say "checking" instead of "read-only", but identical in effect: every
+#: body operation is denied, because a permission that has not been derived
+#: must never be granted. See ``SessionState.source_edit_capabilities``.
+CAPABILITY_STATUS_PENDING = "pending"
+
+
 def blocked_source_edit_capabilities(
     current: SpecSection,
     *,
@@ -2781,6 +2789,22 @@ def source_capability_summary(
     current: SpecSection,
 ) -> str:
     """Render compact model/QC guidance without OOXML or package internals."""
+    if report.status == CAPABILITY_STATUS_PENDING:
+        # Every operation is denied while the sweep runs, so the normal
+        # rendering below would read as "this document is permanently
+        # read-only" — which the model would repeat to the user. Say what is
+        # actually true: the analysis has not finished yet.
+        return (
+            "Source-preserving body permissions: still being derived for the "
+            "current document state.\n"
+            "- Do not assume any imported body ID is editable or read-only "
+            "yet; the per-element permissions are not available.\n"
+            "- Status, research provenance, and project metadata may still "
+            "be changed.\n"
+            "- Every proposed final state is validated server-side, so a body "
+            "edit attempted now is refused with its exact reason rather than "
+            "applied unsafely."
+        )
     paragraph_order = [
         row[1]
         for row in semantic_body_projection(current)
@@ -3806,6 +3830,7 @@ def build_source_preserving_docx(
 
 
 __all__ = [
+    "CAPABILITY_STATUS_PENDING",
     "SourceBodyInventoryItem",
     "SourceCapabilityPlacement",
     "SourceCapabilityReport",

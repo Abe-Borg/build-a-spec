@@ -36,9 +36,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from .reference_extract import REFERENCE_KIND_LABELS
+
 # Anti-abuse bounds. The stored text is what a tool result can return, so
-# this caps one model-visible payload rather than the upload itself (the
-# upload is separately bounded by the DOCX package limits).
+# this caps one model-visible payload rather than the upload itself (every
+# supported type is separately bounded by the upload read limit).
 MAX_REFERENCE_DOCS = 20
 MAX_TEXT_CHARS = 400_000
 MAX_TITLE = 200
@@ -112,6 +114,13 @@ class ReferenceDoc:
     truncated: bool = False
     tracked_changes: bool = False
     added_at: str = ""
+    # Which extractor produced the text (``reference_extract.REFERENCE_KINDS``).
+    # Defaults to Word: it was the only supported type when the store shipped,
+    # so a project file without the field can only hold Word attachments.
+    kind: str = "docx"
+
+    def kind_label(self) -> str:
+        return REFERENCE_KIND_LABELS.get(self.kind, self.kind or "file")
 
     def excerpt(self) -> str:
         head = self.text[:_EXCERPT_CHARS].strip()
@@ -128,6 +137,7 @@ class ReferenceDoc:
             "truncated": self.truncated,
             "tracked_changes": self.tracked_changes,
             "added_at": self.added_at,
+            "kind": self.kind,
         }
 
     def metadata(self) -> dict[str, Any]:
@@ -146,6 +156,8 @@ class ReferenceDoc:
             "truncated": self.truncated,
             "tracked_changes": self.tracked_changes,
             "added_at": self.added_at,
+            "kind": self.kind,
+            "kind_label": self.kind_label(),
             "excerpt": self.excerpt(),
         }
 
@@ -163,6 +175,7 @@ class ReferenceDoc:
             truncated=bool(data.get("truncated", False)),
             tracked_changes=bool(data.get("tracked_changes", False)),
             added_at=str(data.get("added_at", "")),
+            kind=str(data.get("kind", "") or "docx"),
         )
 
 
@@ -186,6 +199,7 @@ class ReferenceDocStore:
         block_count: int,
         title: str = "",
         tracked_changes: bool = False,
+        kind: str = "docx",
     ) -> ReferenceDoc:
         """Attach one document. Raises :class:`ReferenceDocError`."""
         if len(self.docs) >= MAX_REFERENCE_DOCS:
@@ -215,6 +229,7 @@ class ReferenceDocStore:
             truncated=truncated,
             tracked_changes=tracked_changes,
             added_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            kind=kind or "docx",
         )
         self._next_seq += 1
         self.docs.append(doc)
@@ -260,9 +275,14 @@ class ReferenceDocStore:
                 marks.append("TRUNCATED")
             if doc.tracked_changes:
                 marks.append("was tracked-changes, read as Accept-All")
+            if doc.kind == "pdf":
+                # Worth one clause: it is what lets the model answer "where
+                # does the standard say that?" with a page.
+                marks.append("page markers [page N] in the text")
             suffix = f" [{'; '.join(marks)}]" if marks else ""
             lines.append(
-                f"- {doc.rid} \"{doc.title}\" — {doc.block_count} blocks, "
+                f"- {doc.rid} \"{doc.title}\" — {doc.kind_label()}, "
+                f"{doc.block_count} blocks, "
                 f"~{max(1, doc.char_count // 4):,} tokens{suffix}"
             )
         return "\n".join(lines)

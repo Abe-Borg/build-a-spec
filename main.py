@@ -40,6 +40,19 @@ _PROJECT_SAVE_FILE_TYPES = (
     "All files (*.*)",
 )
 _DOCX_OPEN_FILE_TYPES = ("Word document (*.docx)", "All files (*.*)")
+# A reference document is never the spec, so it is not Word-only (see
+# ``backend/reference_extract.REFERENCE_KINDS``). The native dialog needs its
+# own filter or the packaged app hides every non-Word attachment behind the
+# generic "All files" entry — the HTML ``accept`` list only covers dev/browser.
+_REFERENCE_OPEN_FILE_TYPES = (
+    "Reference document (*.docx;*.pdf;*.txt;*.xml;*.csv)",
+    "All files (*.*)",
+)
+_OPEN_FILE_TYPES_BY_KIND = {
+    "docx": _DOCX_OPEN_FILE_TYPES,
+    "reference": _REFERENCE_OPEN_FILE_TYPES,
+    "project": _PROJECT_OPEN_FILE_TYPES,
+}
 
 
 def _ensure_std_streams() -> None:
@@ -201,10 +214,12 @@ class _CloseController:
         validation and UI-update step stays shared with the browser flow.
 
         ``kind`` selects the dialog's file filter (``"project"`` for
-        ``.baspec``/``.json``, ``"docx"`` for a master import). Returns
-        ``{"name", "data_b64"}`` for the picked file, or ``None`` when the
-        dialog is cancelled or the read fails — the frontend then does
-        nothing, exactly like a cancelled HTML picker.
+        ``.baspec``/``.json``, ``"docx"`` for a master import, ``"reference"``
+        for an attachment, which accepts several types); an unknown kind
+        degrades to the project filter. Returns ``{"name", "data_b64"}`` for
+        the picked file, or ``None`` when the dialog is cancelled or the read
+        fails — the frontend then does nothing, exactly like a cancelled HTML
+        picker.
         """
         import base64
 
@@ -212,9 +227,7 @@ class _CloseController:
 
         if self._window is None:
             return None
-        file_types = (
-            _DOCX_OPEN_FILE_TYPES if kind == "docx" else _PROJECT_OPEN_FILE_TYPES
-        )
+        file_types = _OPEN_FILE_TYPES_BY_KIND.get(kind, _PROJECT_OPEN_FILE_TYPES)
         try:
             result = self._window.create_file_dialog(
                 webview.FileDialog.OPEN,

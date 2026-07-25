@@ -378,8 +378,13 @@ export interface ReferenceDocMeta {
   char_count: number;
   block_count: number;
   truncated: boolean;
+  /** Word only: the file carried pending revisions and was read Accept-All. */
   tracked_changes: boolean;
   added_at: string;
+  /** Which extractor read it: docx | pdf | txt | xml | csv. */
+  kind: string;
+  /** That kind's display name — "Word", "PDF", "CSV". */
+  kind_label: string;
   excerpt: string;
 }
 
@@ -824,7 +829,7 @@ declare global {
          *  path. Resolves to the file's name + base64 bytes, or null when the
          *  dialog was cancelled. `kind` picks the file filter. */
         open_file?: (
-          kind: "project" | "docx",
+          kind: "project" | "docx" | "reference",
         ) => Promise<{ name: string; data_b64: string } | null>;
       };
     };

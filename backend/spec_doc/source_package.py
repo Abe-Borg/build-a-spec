@@ -94,12 +94,15 @@ async def read_upload_bounded(
     *,
     max_bytes: int = MAX_UPLOAD_BYTES,
     chunk_bytes: int = UPLOAD_CHUNK_BYTES,
+    label: str = "DOCX",
 ) -> bytes:
     """Read an async upload without ever accepting more than ``max_bytes``.
 
     One extra byte is requested after an exactly-at-limit upload so an
     oversized stream cannot masquerade as a valid prefix.  The keyword limits
-    are injectable to keep boundary behavior cheap to test.
+    are injectable to keep boundary behavior cheap to test.  ``label`` names
+    the upload in the too-large message — reference attachments are not
+    DOCX-only, and the limit is the same for every type.
     """
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
         raise ValueError("max_bytes must be a positive integer")
@@ -122,12 +125,25 @@ async def read_upload_bounded(
         if len(payload) > max_bytes:
             break
     raise UploadTooLargeError(
-        f"The DOCX upload is too large (maximum {max_bytes // (1024 * 1024)} MiB)."
+        f"The {label} upload is too large "
+        f"(maximum {max_bytes // (1024 * 1024)} MiB)."
     )
 
 
-def sanitize_source_filename(value: Any) -> str:
-    """Return a path-free, header-safe display filename for retained bytes."""
+def sanitize_source_filename(
+    value: Any,
+    *,
+    extension: str = ".docx",
+    fallback: str = "imported-master.docx",
+) -> str:
+    """Return a path-free, header-safe display filename for retained bytes.
+
+    The defaults are the imported-master case.  ``extension`` and ``fallback``
+    are parameterized for reference-document uploads, which are not DOCX-only
+    and must keep their own type in the name (see
+    ``backend/reference_extract.py``); passing neither is byte-identical to the
+    original behavior.
+    """
     if not isinstance(value, str):
         value = ""
     # Browsers normally send only a basename, but older clients can send a
@@ -136,14 +152,14 @@ def sanitize_source_filename(value: Any) -> str:
     name = "".join(ch for ch in name if ch >= " " and ch != "\x7f").strip()
     name = name.strip(". ")
     if not name:
-        return "imported-master.docx"
+        return fallback
     # Keep Unicode names for the RFC 5987 download header, but bound metadata
     # stored in memory/project JSON.  Preserve the extension when truncating.
     if len(name) > 240:
-        suffix = ".docx" if name.lower().endswith(".docx") else ""
+        suffix = extension if name.lower().endswith(extension) else ""
         name = name[: 240 - len(suffix)].rstrip(". ") + suffix
-    if not name.lower().endswith(".docx"):
-        name += ".docx"
+    if not name.lower().endswith(extension):
+        name += extension
     return name
 
 

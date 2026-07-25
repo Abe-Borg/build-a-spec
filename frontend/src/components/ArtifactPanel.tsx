@@ -65,7 +65,9 @@ interface Props {
   /** Native pywebview Open dialog (Open / Import). Resolves to a File when
    *  the user picked one, null when cancelled, or undefined when there is no
    *  native bridge — the caller then falls back to the hidden file input. */
-  nativeOpenFile: (kind: "project" | "docx") => Promise<File | null | undefined>;
+  nativeOpenFile: (
+    kind: "project" | "docx" | "reference",
+  ) => Promise<File | null | undefined>;
   onImportMaster: (file: File) => void;
   referenceDocs: ReferenceDocMeta[];
   onAttachReference: (file: File) => void;
@@ -242,10 +244,12 @@ export default function ArtifactPanel({
     else if (file) onImportMaster(file);
   };
   // Attaching reference material takes the same native-first path, but has no
-  // blank-document precondition: it never touches the spec.
+  // blank-document precondition: it never touches the spec. Its own dialog
+  // kind, because an attachment is not Word-only — the "docx" filter would
+  // hide every PDF/text/XML/CSV in the packaged app's picker.
   const handleAttachClick = async () => {
     if (referenceBusy) return;
-    const file = await nativeOpenFile("docx");
+    const file = await nativeOpenFile("reference");
     if (file === undefined) referenceRef.current?.click();
     else if (file) onAttachReference(file);
   };
@@ -705,7 +709,7 @@ export default function ArtifactPanel({
               e.target.value = "";
             }}
           />
-          <Tip tip="Attach a .docx as background for the assistant to read — an owner's design standard, a basis-of-design narrative, a data sheet. It is never added to the spec and never edited.">
+          <Tip tip="Attach a .docx, .pdf, .txt, .xml, or .csv as background for the assistant to read — an owner's design standard, a basis-of-design narrative, a data sheet, an equipment schedule. It is never added to the spec and never edited.">
             <button
               className={actionButton}
               onClick={handleAttachClick}
@@ -718,7 +722,7 @@ export default function ArtifactPanel({
           <input
             ref={referenceRef}
             type="file"
-            accept=".docx"
+            accept=".docx,.pdf,.txt,.xml,.csv"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -749,7 +753,8 @@ export default function ArtifactPanel({
                     {ref.title}
                   </p>
                   <p className="text-ink-faint">
-                    {ref.block_count} block{ref.block_count === 1 ? "" : "s"}
+                    {ref.kind_label} · {ref.block_count} block
+                    {ref.block_count === 1 ? "" : "s"}
                     {ref.truncated && (
                       <span className="text-warn"> · truncated</span>
                     )}

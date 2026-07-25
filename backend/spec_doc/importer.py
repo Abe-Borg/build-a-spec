@@ -270,18 +270,27 @@ def _iter_body_texts(document) -> list[_BodyTextEntry]:
 
 @dataclass(frozen=True)
 class ReferenceExtraction:
-    """Plain readable text pulled out of a ``.docx`` for model context.
+    """Plain readable text pulled out of an attachment for model context.
 
     The counterpart to :func:`parse_master_docx` for files that are *not*
     becoming the document: no tree, no source map, no structural heuristics —
-    just the body text in document order, resolved through the same
-    Accept-All revision handling and table flattening so a reference file
-    reads the way it does in Word.
+    just the readable text in document order. For a ``.docx`` that means the
+    body resolved through the same Accept-All revision handling and table
+    flattening a master import uses, so a reference file reads the way it does
+    in Word.
+
+    The type is shared with the non-Word extractors in
+    ``backend/reference_extract.py`` (PDF, text, XML, CSV), which set ``kind``
+    and may report ``warnings`` about what the read left out — a truncated
+    page range, undecodable pages, a non-UTF-8 encoding. ``tracked_changes``
+    is meaningful only for Word.
     """
 
     text: str
     block_count: int
     tracked_changes: bool
+    kind: str = "docx"
+    warnings: tuple[str, ...] = ()
 
 
 def extract_reference_text(filepath: str | Path) -> ReferenceExtraction:

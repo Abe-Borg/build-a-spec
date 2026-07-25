@@ -118,10 +118,10 @@ def test_reference_upload_does_not_block_concurrent_requests(monkeypatch):
     entered = threading.Event()
     release = threading.Event()
 
-    def blocking_prepare(source_bytes: bytes):
+    def blocking_prepare(source_bytes: bytes, *, filename: str):
         entered.set()
         release.wait(_BLOCK_SECONDS)
-        return real_prepare(source_bytes)
+        return real_prepare(source_bytes, filename=filename)
 
     monkeypatch.setattr(
         app_module, "_prepare_reference_upload", blocking_prepare

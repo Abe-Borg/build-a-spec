@@ -323,6 +323,44 @@ def test_open_file_project_vs_docx_filter(tmp_path, monkeypatch):
     assert ".docx" in joined and ".baspec" not in joined
 
 
+def test_open_file_reference_filter_offers_every_supported_type(
+    tmp_path, monkeypatch
+):
+    """The packaged app's picker is the real one — an HTML ``accept`` list
+    only covers the browser fallback. A Word-only filter here would hide every
+    PDF/text/XML/CSV attachment behind the generic "All files" entry."""
+    from backend.reference_extract import REFERENCE_KINDS
+
+    _fake_webview(monkeypatch)
+    target = tmp_path / "standard.pdf"
+    target.write_bytes(b"pdf")
+    window = _FakeWindow(dialog_path=str(target))
+    controller = _controller_with(window)
+
+    controller.open_file("reference")
+    (_, kwargs), = window.dialog_calls
+    joined = " ".join(kwargs.get("file_types", ()))
+
+    for extension in REFERENCE_KINDS:
+        assert extension in joined, extension
+    assert ".baspec" not in joined
+
+
+def test_open_file_unknown_kind_degrades_to_the_project_filter(
+    tmp_path, monkeypatch
+):
+    _fake_webview(monkeypatch)
+    target = tmp_path / "p.baspec"
+    target.write_bytes(b"data")
+    window = _FakeWindow(dialog_path=str(target))
+    controller = _controller_with(window)
+
+    controller.open_file("something-new")
+    (_, kwargs), = window.dialog_calls
+
+    assert kwargs.get("file_types") == main._PROJECT_OPEN_FILE_TYPES
+
+
 def test_open_file_cancelled_returns_none(monkeypatch):
     _fake_webview(monkeypatch)
     window = _FakeWindow(dialog_path=None)  # user backed out of the Open dialog
@@ -366,6 +404,7 @@ def test_native_file_filters_are_pywebview_valid():
         main._PROJECT_OPEN_FILE_TYPES,
         main._PROJECT_SAVE_FILE_TYPES,
         main._DOCX_OPEN_FILE_TYPES,
+        main._REFERENCE_OPEN_FILE_TYPES,
     ):
         for entry in group:
             assert re.match(_PYWEBVIEW_FILE_FILTER, entry), (

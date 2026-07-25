@@ -1105,7 +1105,7 @@ export default function App() {
    * where the input works normally.
    */
   const nativeOpenFile = async (
-    kind: "project" | "docx",
+    kind: "project" | "docx" | "reference",
   ): Promise<File | null | undefined> => {
     const api = window.pywebview?.api;
     if (!api?.open_file) return undefined; // browser/dev → HTML input

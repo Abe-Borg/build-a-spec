@@ -159,7 +159,7 @@ backend/
                            SUGGEST_PROMPTS_TOOL. Latest-only session state, tiny
                            payload — no store, no elision (rides history verbatim)
   reference_docs.py        user-attached background documents the model reads FROM
-                           and never edits: ReferenceDoc + ReferenceDocStore
+                           and never edits: ReferenceDoc (+ kind) + ReferenceDocStore
                            (monotonic ids, loud truncation at MAX_TEXT_CHARS,
                            body-free metadata()/context_stubs(), lenient project
                            load) + READ_REFERENCE_DOC_TOOL. NOT turn-atomic (they
@@ -167,6 +167,17 @@ backend/
                            The body never enters PROJECT CONTEXT and is elided
                            from committed history (PDF posture); the model re-reads
                            on demand
+  reference_extract.py     the attachment → text boundary: REFERENCE_KINDS
+                           (.docx/.pdf/.txt/.xml/.csv) + labels, kind-for-filename,
+                           sanitize_reference_filename (keeps the file's own
+                           extension — the shared sanitizer appends .docx),
+                           extract_reference_document dispatch. docx delegates to
+                           the importer behind inspect_docx_package; pdf is pypdf
+                           per page with [page N] markers (page cap, owner-password
+                           unlock, no-text-layer refusal); txt/xml/csv decode
+                           through a BOM/UTF-8/cp1252/latin-1 ladder with a NUL
+                           binary guard, structure kept verbatim. Blocking — worker
+                           thread only
   sessions.py              single module-level SessionState (history + DocumentStore
                            + SpecModule + discipline (Batch 10, session-level
                            like module) + ResearchRunner + AuditRunner + QCRunner
@@ -2027,13 +2038,41 @@ No new SSE events, no new deps, no project-format bump.
   for. `READ_REFERENCE_DOC_TOOL` is appended LAST in `_chat_tools()`, after
   `suggest_prompts`, so existing tool bytes stay a stable cached prefix.
 - **Upload path mirrors master import** minus the retention: bounded read,
-  the same `inspect_docx_package` safety pass (same attack surface), then
-  `extract_reference_text` on a **worker thread** — `POST
+  the same `inspect_docx_package` safety pass for a `.docx` (same attack
+  surface), then extraction on a **worker thread** — `POST
   /api/reference/upload` is a third `async def` upload handler and is bound by
-  the event-loop rule above. Nothing is retained: text out, bytes dropped.
-  There is no blank-document precondition (it never touches the spec), so it
-  works at any point in a session. Truncation at `MAX_TEXT_CHARS` is loud in
-  three places (the record, the stored text's own marker, the upload warning).
+  the event-loop rule above. Nothing is retained for any type: text out, bytes
+  dropped. There is no blank-document precondition (it never touches the
+  spec), so it works at any point in a session. Truncation at
+  `MAX_TEXT_CHARS` is loud in three places (the record, the stored text's own
+  marker, the upload warning).
+- **Five file types, because none of it becomes the document.** An import must
+  build a SectionFormat tree, so it is `.docx`-only; a reference is just text,
+  so it accepts `.docx`, `.pdf`, `.txt`, `.xml`, and `.csv` —
+  `reference_extract.REFERENCE_KINDS` is the one table (extension → kind →
+  extractor → label → the user-facing "or .csv" phrase, so a rejection message
+  can never drift from the set actually accepted). The extension chooses the
+  extractor only; every extractor still validates the bytes it gets. Design
+  calls: a PDF is read per page with `[page N]` markers (worth the ~4 tokens a
+  page — it is what lets the model answer "where does the standard say that?";
+  `MAX_PDF_PAGES` is a runaway breaker, reported in both the warning and the
+  text), a PDF with **no text layer is refused with the reason** rather than
+  attached as an empty document the model would be told it holds, an
+  owner-password-only PDF is unlocked with the empty user password (the common
+  circulated-standard case) and a real user password is refused, and CSV/XML
+  are kept **verbatim** — rows and tags are the content for a schedule or an
+  export, so nothing is parsed away. Text decoding is a ladder (BOM UTF-16 →
+  UTF-8 → cp1252 → latin-1) because Windows is the primary platform and an
+  Excel CSV export is routinely not UTF-8; latin-1 cannot fail, so the NUL
+  check is the only place a renamed binary is caught. `kind` rides the record
+  (defaulting to `docx` — the store shipped Word-only, so a pre-existing
+  project entry can only be Word), the panel row, the context stub, and the
+  tool-result header, because how a reference should be read depends on what
+  it is. Two shared helpers gained keyword-only parameters with byte-identical
+  defaults: `read_upload_bounded(label=)` (the too-large message said "DOCX")
+  and `sanitize_source_filename(extension=, fallback=)` (it appends `.docx` to
+  anything else, which would rename `acme.pdf` and then send it to the Word
+  extractor).
 - **REST**: `POST /api/reference/upload`, `GET /api/references`, `DELETE
   /api/reference/{rid}`; `reference_docs` (metadata only — bodies would cost a
   full copy per poll) rides `_doc_payload`. Persisted as an optional
@@ -2042,14 +2081,23 @@ No new SSE events, no new deps, no project-format bump.
   `has_unsaved_progress` — a reference can be the only work in a session.
   `_REFERENCE_DOC_POLICY` joins the stable prompt after
   `_SUGGESTED_PROMPTS_POLICY`: read before drafting, never paste wording into
-  a provision, never cite a reference as authority for a code requirement.
+  a provision, never cite a reference as authority for a code requirement,
+  what the file types mean (cite a PDF's `[page N]` markers, never quote one
+  as content; a CSV/XML is data).
 - **Tests**: `test_import_shape_detection.py` (detection incl. the
   numbering-branch agreement case, lint gating both ways, sanitize
   round-trip + legacy/malformed degrade, e2e + context block + the cache
   rule, exact-source export unaffected) and `test_reference_docs.py` (store
   units, endpoints, the three token-discipline invariants, persistence and
-  lifecycle), plus a reference-upload case in
-  `test_import_responsiveness.py`. Frontend pinned by `npm run build`.
+  lifecycle, plus every file type end-to-end: all five attach and read back,
+  CSV/XML structure survives, PDF page markers and the page cap, no-text-layer
+  and password-protected and renamed-binary refusals, the encoding fallbacks,
+  extension preservation, kind through panel/stub/tool header and the project
+  round-trip, legacy entries reading as Word). The PDF fixture (`_pdf_bytes`)
+  is a hand-built minimal PDF — the repo has no PDF writer and pypdf cannot
+  draw text, and a test-only dependency was not worth it. Plus a
+  reference-upload case in `test_import_responsiveness.py`. Frontend pinned by
+  `npm run build`.
 
 ## Commands
 

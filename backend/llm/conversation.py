@@ -64,7 +64,11 @@ import anthropic
 
 from .. import settings
 from ..figures import CREATE_FIGURE_TOOL, FigureError, FigureStore
-from ..reference_docs import READ_REFERENCE_DOC_TOOL, ReferenceDocStore
+from ..reference_docs import (
+    READ_REFERENCE_DOC_TOOL,
+    ReferenceDocStore,
+    TurnReferenceBudget,
+)
 from ..spec_doc import (
     APPLY_SPEC_EDITS_TOOL,
     DocumentStore,
@@ -309,7 +313,8 @@ class SessionState:
     stop_requested: threading.Event = field(default_factory=threading.Event)
 
     def import_is_unstructured(self) -> bool:
-        """True when this session's import found no SectionFormat structure.
+        """True when the ACTIVE document came from an import with no
+        SectionFormat structure.
 
         The document tree is SectionFormat regardless — the whole edit / lint
         / diff / QC machinery is typed to it. This says only that the section
@@ -317,11 +322,29 @@ class SessionState:
         were supplied by the importer rather than by the file, so the app must
         not present them as the document's own. A session with no import, or a
         legacy project written before shape detection, reads False.
+
+        Scoped to the imported baseline still being live, because the verdict
+        describes *that* tree. Undoing past the import and editing truncates
+        it — ``DocumentStore.commit_turn`` drops ``baseline_index`` when the
+        version it points at is abandoned — and what remains is a from-scratch
+        draft that must get the normal spec presentation back: its ``[TBD]``
+        header placeholders, its missing-header lint, and no claim to the
+        model that it was ever a non-spec upload. ``import_report`` itself is
+        deliberately retained through all of that as the session's honesty
+        trail, so it cannot answer this question alone.
         """
         report = self.import_report
         if not isinstance(report, dict):
             return False
-        return report.get("spec_shape_detected") is False
+        if report.get("spec_shape_detected") is not False:
+            return False
+        # Same liveness test as sessions._portable_source_attachment.
+        baseline_index = self.doc.baseline_index
+        if isinstance(baseline_index, bool) or not isinstance(
+            baseline_index, int
+        ):
+            return False
+        return 0 <= baseline_index < len(self.doc.versions)
 
     def claim_model_turn(self) -> tuple[object, int] | None:
         """Atomically claim the single streaming-turn slot.
@@ -1740,6 +1763,8 @@ def _run_read_reference_doc(
     session: SessionState,
     block: dict[str, Any],
     trace_handle: Any = None,
+    *,
+    budget: TurnReferenceBudget | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Execute one ``read_reference_doc`` tool_use block.
 
@@ -1748,6 +1773,13 @@ def _run_read_reference_doc(
     model pays for it when it asks rather than on every later turn. An
     unknown id becomes an ``is_error`` result listing what is attached, so
     the model can correct itself instead of failing the turn.
+
+    ``budget`` bounds the reference text this ONE turn may pull in across all
+    of its calls. Elision runs at commit, so every body read this turn is
+    still in the continuation request; without a cumulative ceiling a model
+    comparing several large attachments could overrun the context window and
+    fail the turn on an opaque API error. Overrunning the budget is reported
+    the same correctable way as a bad id.
     """
     ref_id = str((block.get("input") or {}).get("ref_id") or "").strip()
     doc = session.references.get(ref_id) if ref_id else None
@@ -1765,6 +1797,28 @@ def _run_read_reference_doc(
                 "content": (
                     f"read_reference_doc: no reference document with id "
                     f"{ref_id!r}. {detail}"
+                ),
+                "is_error": True,
+            },
+            [],
+        )
+    if budget is not None and not budget.take(len(doc.text)):
+        _trace.note(
+            trace_handle,
+            f"reference {doc.rid} refused: turn budget spent "
+            f"({budget.spent}/{budget.limit} chars)",
+        )
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": (
+                    f"read_reference_doc: this turn has already read "
+                    f"{budget.spent:,} characters of reference material and "
+                    f"{doc.rid} ({len(doc.text):,} characters) does not fit in "
+                    f"the {budget.limit:,}-character per-turn budget. Nothing "
+                    "was read. Work with the documents you have already read "
+                    "this turn, or reply and read this one next turn."
                 ),
                 "is_error": True,
             },
@@ -1793,6 +1847,7 @@ def _run_tool(
     trace_handle: Any = None,
     *,
     message_index: int = 0,
+    reference_budget: TurnReferenceBudget | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Execute one (serialized) tool_use block.
 
@@ -1808,7 +1863,9 @@ def _run_tool(
     if name == "suggest_prompts":
         return _run_suggest_prompts(block, trace_handle)
     if name == "read_reference_doc":
-        return _run_read_reference_doc(session, block, trace_handle)
+        return _run_read_reference_doc(
+            session, block, trace_handle, budget=reference_budget
+        )
     if name != "apply_spec_edits":
         return (
             {
@@ -1988,6 +2045,10 @@ def stream_user_turn(
     # generator. Initializes to [] so a turn that never calls the tool
     # commits an empty set — that "no call = clear" rule is the wind-down.
     staged_suggestions: list[str] = []
+    # Bounds the reference text this turn can pull into its request across
+    # every read_reference_doc call (commit-time elision does not help the
+    # continuation rounds). Turn-local, discarded with the turn.
+    reference_budget = TurnReferenceBudget()
     try:
         client = get_client()
         resumed_from_pause = False
@@ -2110,6 +2171,7 @@ def stream_user_turn(
                         block,
                         trace_handle,
                         message_index=message_index,
+                        reference_budget=reference_budget,
                     )
                 tool_results.append(result)
                 for event in ui_events:

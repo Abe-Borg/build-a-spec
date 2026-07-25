@@ -28,6 +28,7 @@ from backend.reference_docs import (
     MAX_TEXT_CHARS,
     ReferenceDocError,
     ReferenceDocStore,
+    TurnReferenceBudget,
 )
 from backend.spec_doc.project import load_project
 
@@ -260,6 +261,116 @@ def test_the_tool_returns_the_full_text():
 
     assert not result.get("is_error")
     assert BODY_MARKER in result["content"]
+
+
+def test_one_turn_cannot_pull_in_unbounded_reference_text():
+    """Elision runs at commit, so every body read this turn stays in the
+    continuation request. Without a cumulative ceiling a model comparing
+    several large attachments overruns the context and fails the turn on an
+    opaque API error instead of something it can act on."""
+    session = sessions.get_session()
+    for i in range(3):
+        session.references.add(
+            filename=f"doc{i}.docx", text="x" * 400, block_count=1
+        )
+    # Explicit arithmetic: two 400-char reads fit in 1000, the third cannot.
+    budget = TurnReferenceBudget(limit=1_000)
+
+    results = [
+        _run_tool(
+            session,
+            {
+                "name": "read_reference_doc",
+                "id": f"tu{i}",
+                "input": {"ref_id": f"ref-{i + 1}"},
+            },
+            reference_budget=budget,
+        )[0]
+        for i in range(3)
+    ]
+
+    assert not results[0].get("is_error")
+    assert not results[1].get("is_error")
+    # The third is refused, and told what to do instead — not a turn failure.
+    assert results[2]["is_error"] is True
+    assert "per-turn budget" in results[2]["content"]
+    assert "Nothing was read" in results[2]["content"]
+    assert budget.spent <= budget.limit
+
+
+def test_the_shipped_budget_stops_two_maximal_documents_in_one_turn():
+    """The case that motivated the ceiling: several huge attachments read in a
+    single turn. The default limits must actually prevent it, while still
+    letting one full-size document through."""
+    session = sessions.get_session()
+    for i in range(2):
+        session.references.add(
+            filename=f"huge{i}.docx", text="x" * MAX_TEXT_CHARS, block_count=1
+        )
+    budget = TurnReferenceBudget()
+
+    first = _run_tool(
+        session,
+        {"name": "read_reference_doc", "id": "a", "input": {"ref_id": "ref-1"}},
+        reference_budget=budget,
+    )[0]
+    second = _run_tool(
+        session,
+        {"name": "read_reference_doc", "id": "b", "input": {"ref_id": "ref-2"}},
+        reference_budget=budget,
+    )[0]
+
+    assert not first.get("is_error"), "one full-size document must still read"
+    assert second["is_error"] is True
+
+
+def test_the_turn_budget_is_per_turn_not_per_session():
+    """A refusal must not poison later turns — each gets a fresh allowance."""
+    client = TestClient(create_app())
+    session = sessions.get_session()
+    session.references.add(
+        filename="big.docx", text="x" * (MAX_TEXT_CHARS - 1), block_count=1
+    )
+
+    spent = TurnReferenceBudget()
+    spent.take(spent.limit)
+    refused = _run_tool(
+        session,
+        {"name": "read_reference_doc", "id": "t", "input": {"ref_id": "ref-1"}},
+        reference_budget=spent,
+    )[0]
+    fresh = _run_tool(
+        session,
+        {"name": "read_reference_doc", "id": "t", "input": {"ref_id": "ref-1"}},
+        reference_budget=TurnReferenceBudget(),
+    )[0]
+
+    assert refused["is_error"] is True
+    assert not fresh.get("is_error")
+
+
+def test_a_refused_read_charges_nothing():
+    """A document that does not fit must not consume budget on its way out."""
+    session = sessions.get_session()
+    session.references.add(
+        filename="big.docx", text="x" * (MAX_TEXT_CHARS - 1), block_count=1
+    )
+    session.references.add(filename="small.docx", text="tiny", block_count=1)
+    budget = TurnReferenceBudget(limit=1_000)
+
+    refused = _run_tool(
+        session,
+        {"name": "read_reference_doc", "id": "a", "input": {"ref_id": "ref-1"}},
+        reference_budget=budget,
+    )[0]
+    assert refused["is_error"] is True
+    assert budget.spent == 0
+    # The small one still fits afterwards.
+    assert not _run_tool(
+        session,
+        {"name": "read_reference_doc", "id": "b", "input": {"ref_id": "ref-2"}},
+        reference_budget=budget,
+    )[0].get("is_error")
 
 
 def test_an_unknown_id_is_a_correctable_tool_error_not_a_turn_failure():

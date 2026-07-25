@@ -310,6 +310,45 @@ def test_a_session_with_no_import_is_never_unstructured():
     assert sessions.get_session().import_is_unstructured() is False
 
 
+def test_undoing_past_the_import_restores_the_normal_spec_presentation():
+    """The verdict describes the imported baseline, so it must not outlive it.
+
+    Undoing to before the import and editing truncates the imported version —
+    ``commit_turn`` drops ``baseline_index`` — leaving a from-scratch draft.
+    ``import_report`` is deliberately retained as the session's honesty trail,
+    so the flag cannot be read from it alone: the draft would keep hiding its
+    header placeholders, keep suppressing the missing-header lint, and keep
+    telling the model it was a non-spec upload.
+    """
+    client = TestClient(create_app())
+    _import(client, "memo.docx", MEMO)
+    session = sessions.get_session()
+    assert session.import_is_unstructured() is True
+
+    # Back to the blank page the import landed on top of...
+    client.post("/api/doc/undo")
+    # ...then a fresh edit, which abandons the imported redo tail.
+    edit = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"}
+            ]
+        },
+    )
+    assert edit.status_code == 200, edit.text
+
+    assert session.doc.baseline_index is None
+    assert session.import_report is not None  # honesty trail is kept
+    assert session.import_is_unstructured() is False
+    # ...so the from-scratch draft gets its header nudge back.
+    body = client.get("/api/doc").json()
+    assert RULE_MISSING_SECTION_HEADER in {i["rule"] for i in body["lint"]}
+    assert "IMPORTED DOCUMENT IS NOT A SPEC SECTION" not in _turn_context_text(
+        session
+    )
+
+
 def test_the_framing_lives_in_project_context_not_the_cached_prompt():
     """The cache rule: nothing session-varying may enter the stable block."""
     from backend.llm.prompts import render_system_prompt

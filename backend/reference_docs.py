@@ -44,6 +44,20 @@ MAX_TEXT_CHARS = 400_000
 MAX_TITLE = 200
 _EXCERPT_CHARS = 280
 
+# Cumulative ceiling on reference text returned within ONE turn, across every
+# read_reference_doc call in it. Per-document caps are not enough on their own:
+# commit-time elision only trims *committed history*, so every body read this
+# turn stays in the continuation request until the turn ends. Twenty maximal
+# attachments read in one turn would be ~8M characters ahead of the document
+# context, blowing the model's window and failing the turn on an opaque API
+# error instead of something the model can act on.
+#
+# A runaway circuit breaker, not a quality limit (the MAX_TOOL_ROUNDS posture):
+# sized so no legitimate turn meets it — one full-size document plus most of a
+# second — and reported to the model as a correctable tool error so it can
+# work with what it already read.
+MAX_TURN_TEXT_CHARS = 600_000
+
 # Appended to the stored text when a document exceeds MAX_TEXT_CHARS. The
 # truncation is also flagged structurally (``truncated``) and surfaced in the
 # stub and the tool result — silent loss would be the one unacceptable
@@ -57,6 +71,30 @@ TRUNCATION_MARKER = (
 
 class ReferenceDocError(ValueError):
     """A rejected reference-document operation."""
+
+
+class TurnReferenceBudget:
+    """How much reference text one turn has already pulled into its request.
+
+    Turn-scoped and single-threaded (the tool loop dispatches serially), so it
+    needs no locking. Created fresh per turn and discarded with it: the ceiling
+    is about one request's size, not a session-long allowance.
+    """
+
+    def __init__(self, limit: int = MAX_TURN_TEXT_CHARS) -> None:
+        self.limit = limit
+        self.spent = 0
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.limit - self.spent)
+
+    def take(self, amount: int) -> bool:
+        """Charge ``amount`` to the turn; False when it would overrun."""
+        if self.spent + amount > self.limit:
+            return False
+        self.spent += amount
+        return True
 
 
 @dataclass

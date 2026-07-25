@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from backend import app as app_module, sessions
 from backend.llm.conversation import (
+    SessionState,
     _source_editing_boundary_block,
     _turn_context_text,
 )
@@ -355,15 +356,31 @@ def test_a_real_import_keeps_the_server_answering():
     )
 
 
-def test_import_reports_pending_permissions_without_sweeping_inline():
+def test_import_reports_pending_permissions_without_sweeping_inline(monkeypatch):
     """The import response must not wait on the per-element permission sweep.
 
     That sweep probes every element against the real source gate — O(document)
     work per probe, ~5 probes per paragraph — so waiting for it made the
     upload take minutes on a real master. It now runs in the background and
     the response says so.
+
+    The sweep is held for the duration of the assertions rather than raced
+    against: this fixture is small enough that a fast runner can finish
+    sweeping before the response is even read, which made the ``pending``
+    assertion fail intermittently (green on 3.11, red on 3.12, same commit).
+    Blocking the worker is the technique the tests above already use, and it
+    sharpens what is being tested — with the sweep provably unfinished, a
+    response reporting anything but ``pending`` can only mean it waited.
     """
     source = _master_bytes(articles=2, paragraphs=3)
+    release = threading.Event()
+    real_sweep = SessionState._sweep_and_publish
+
+    def held_sweep(self, key):
+        release.wait(_BLOCK_SECONDS)
+        return real_sweep(self, key)
+
+    monkeypatch.setattr(SessionState, "_sweep_and_publish", held_sweep)
 
     with TestClient(app_module.create_app()) as client:
         response = client.post("/api/import/master", files=_upload(source))
@@ -380,8 +397,9 @@ def test_import_reports_pending_permissions_without_sweeping_inline():
         assert operations["delete"]["allowed"] is False
         assert operations["set_status"]["allowed"] is True
 
-        # ...and the background sweep settles into a real report, which the
-        # panel picks up from the dedicated polling route.
+        # ...and once released, the background sweep settles into a real
+        # report, which the panel picks up from the dedicated polling route.
+        release.set()
         settle_capability_sweep()
         settled = client.get("/api/doc/capabilities")
         assert settled.status_code == 200, settled.text

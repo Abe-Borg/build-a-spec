@@ -705,7 +705,7 @@ export default function ArtifactPanel({
               e.target.value = "";
             }}
           />
-          <Tip tip="Attach a .docx as background for the assistant to read — an owner's design standard, a basis-of-design narrative, a data sheet. It is never added to the spec and never edited.">
+          <Tip tip="Attach a .docx, .pdf, .txt, .xml, or .csv as background for the assistant to read — an owner's design standard, a basis-of-design narrative, a data sheet, an equipment schedule. It is never added to the spec and never edited.">
             <button
               className={actionButton}
               onClick={handleAttachClick}
@@ -718,7 +718,7 @@ export default function ArtifactPanel({
           <input
             ref={referenceRef}
             type="file"
-            accept=".docx"
+            accept=".docx,.pdf,.txt,.xml,.csv"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -749,7 +749,8 @@ export default function ArtifactPanel({
                     {ref.title}
                   </p>
                   <p className="text-ink-faint">
-                    {ref.block_count} block{ref.block_count === 1 ? "" : "s"}
+                    {ref.kind_label} · {ref.block_count} block
+                    {ref.block_count === 1 ? "" : "s"}
                     {ref.truncated && (
                       <span className="text-warn"> · truncated</span>
                     )}

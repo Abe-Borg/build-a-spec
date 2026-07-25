@@ -78,10 +78,16 @@ name a section your memo does not have.
   suppressed permanently, and a genuine master is unaffected.
 
 **Attach reference documents instead of importing them.** There is now a third
-way to hand the app a `.docx`: **Attach reference** in the document panel,
+way to hand the app a file: **Attach reference** in the document panel,
 for an owner's design standard, a basis-of-design narrative, a product data
 sheet, a previous project's section, or meeting notes.
 
+- **Whatever format you already have it in.** Word (`.docx`), PDF, plain text,
+  XML, and CSV. A PDF is read page by page and the assistant can tell you
+  which page something came from; a CSV or XML keeps its rows and tags,
+  because for a schedule or an export that structure *is* the content. A
+  scanned PDF with no text layer is refused with the reason rather than
+  attached as something the assistant cannot actually read.
 - **Background, never the spec.** A reference document is never added to the
   section, never edited, and never appears in lint, compare, Final QC,
   readiness, or any export. It is material for the assistant to read.

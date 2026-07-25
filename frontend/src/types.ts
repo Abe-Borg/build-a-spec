@@ -378,8 +378,13 @@ export interface ReferenceDocMeta {
   char_count: number;
   block_count: number;
   truncated: boolean;
+  /** Word only: the file carried pending revisions and was read Accept-All. */
   tracked_changes: boolean;
   added_at: string;
+  /** Which extractor read it: docx | pdf | txt | xml | csv. */
+  kind: string;
+  /** That kind's display name — "Word", "PDF", "CSV". */
+  kind_label: string;
   excerpt: string;
 }
 

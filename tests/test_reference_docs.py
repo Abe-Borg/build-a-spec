@@ -16,7 +16,7 @@ import io
 from docx import Document
 from fastapi.testclient import TestClient
 
-from backend import sessions
+from backend import reference_extract, sessions
 from backend.app import create_app
 from backend.llm.conversation import (
     _committed_messages,
@@ -57,6 +57,73 @@ def _docx_bytes(lines: list[str]) -> bytes:
     return buffer.getvalue()
 
 
+def _pdf_bytes(pages: list[list[str]]) -> bytes:
+    """A minimal, valid, text-bearing PDF — no new test dependency.
+
+    Hand-built because the repo has no PDF writer and pypdf cannot draw text:
+    one Helvetica font, one content stream per page, a real xref table. Enough
+    for ``extract_text`` to return exactly the lines handed in.
+    """
+    objects: list[bytes] = []
+
+    def add(body: bytes) -> int:
+        objects.append(body)
+        return len(objects)
+
+    font_id = add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    content_ids = []
+    for lines in pages:
+        parts = [b"BT", b"/F1 12 Tf", b"72 720 Td"]
+        for line in lines:
+            escaped = (
+                line.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+            ).encode("latin-1", "replace")
+            parts += [b"(" + escaped + b") Tj", b"0 -14 Td"]
+        parts.append(b"ET")
+        stream = b"\n".join(parts)
+        content_ids.append(
+            add(b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream))
+        )
+    # The page objects have to name their parent, which is written after them.
+    pages_id = len(objects) + len(pages) + 1
+    page_ids = [
+        add(
+            b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>"
+            % (pages_id, font_id, content_id)
+        )
+        for content_id in content_ids
+    ]
+    add(
+        b"<< /Type /Pages /Kids [%s] /Count %d >>"
+        % (b" ".join(b"%d 0 R" % pid for pid in page_ids), len(page_ids))
+    )
+    catalog_id = add(b"<< /Type /Catalog /Pages %d 0 R >>" % pages_id)
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % index + body + b"\nendobj\n"
+    xref_at = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    for offset in offsets:
+        out += b"%010d 00000 n \n" % offset
+    out += b"trailer\n<< /Size %d /Root %d 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        catalog_id,
+        xref_at,
+    )
+    return bytes(out)
+
+
+def _upload(client: TestClient, name: str, payload: bytes):
+    return client.post(
+        "/api/reference/upload",
+        files={"file": (name, payload, "application/octet-stream")},
+    )
+
+
 def _attach(client: TestClient, name: str = "acme.docx", lines=None):
     # `is None`, not falsy: an explicit [] is the empty-document case.
     body = _docx_bytes(STANDARD if lines is None else lines)
@@ -64,6 +131,10 @@ def _attach(client: TestClient, name: str = "acme.docx", lines=None):
         "/api/reference/upload",
         files={"file": (name, body, DOCX_MEDIA_TYPE)},
     )
+
+
+def _attach_pdf(client: TestClient, name: str = "acme.pdf", pages=None):
+    return _upload(client, name, _pdf_bytes([STANDARD] if pages is None else pages))
 
 
 def _read_tool(session, ref_id: str):
@@ -186,20 +257,36 @@ def test_the_document_payload_lists_references_without_bodies():
     assert "text" not in payload["reference_docs"][0]
 
 
-def test_non_docx_and_unreadable_uploads_are_refused():
+def test_an_unsupported_type_is_refused_and_names_what_is_accepted():
+    client = TestClient(create_app())
+
+    refused = client.post(
+        "/api/reference/upload",
+        files={"file": ("slides.pptx", b"anything", "application/octet-stream")},
+    )
+
+    assert refused.status_code == 400
+    error = refused.json()["error"]
+    for extension in (".docx", ".pdf", ".txt", ".xml", ".csv"):
+        assert extension in error
+
+
+def test_an_unreadable_file_of_a_supported_type_is_refused():
+    """The extension only chooses the extractor; the bytes still have to be
+    what they claim."""
     client = TestClient(create_app())
 
     assert (
         client.post(
             "/api/reference/upload",
-            files={"file": ("notes.txt", b"hello", "text/plain")},
+            files={"file": ("broken.docx", b"not a zip", DOCX_MEDIA_TYPE)},
         ).status_code
         == 400
     )
     assert (
         client.post(
             "/api/reference/upload",
-            files={"file": ("broken.docx", b"not a zip", DOCX_MEDIA_TYPE)},
+            files={"file": ("broken.pdf", b"not a pdf", "application/pdf")},
         ).status_code
         == 400
     )
@@ -222,12 +309,191 @@ def test_remove_and_list():
     assert client.delete("/api/reference/ref-404").status_code == 404
 
 
+def test_the_attachment_keeps_its_own_extension():
+    """The shared filename sanitizer defaults to the imported-master case and
+    appends ``.docx`` to anything else — which would rename a PDF and then
+    send it to the Word extractor."""
+    client = TestClient(create_app())
+
+    body = _attach_pdf(client, "acme-standard.pdf").json()
+
+    assert body["reference_doc"]["filename"] == "acme-standard.pdf"
+
+
 def test_tracked_changes_are_reported_as_an_accept_all_read():
     client = TestClient(create_app())
     body = _attach(client).json()
     # No revisions in this fixture, so nothing should be claimed.
     assert body["reference_doc"]["tracked_changes"] is False
     assert body["warnings"] == []
+
+
+# ---------------------------------------------------------------------------
+# File types — background material arrives in whatever the office already has
+# ---------------------------------------------------------------------------
+
+
+def test_every_supported_type_attaches_and_keeps_its_text():
+    client = TestClient(create_app())
+    uploads = [
+        ("acme.docx", _docx_bytes(STANDARD), "docx"),
+        ("acme.pdf", _pdf_bytes([STANDARD]), "pdf"),
+        ("acme.txt", "\n".join(STANDARD).encode(), "txt"),
+        ("acme.csv", b"system,supply temp\nchilled water,44 degrees F", "csv"),
+        (
+            "acme.xml",
+            b"<standard><chw>44 degrees F at design.</chw></standard>",
+            "xml",
+        ),
+    ]
+
+    for index, (name, payload, kind) in enumerate(uploads, start=1):
+        response = client.post(
+            "/api/reference/upload",
+            files={"file": (name, payload, "application/octet-stream")},
+        )
+        assert response.status_code == 200, (name, response.json())
+        assert response.json()["reference_doc"]["kind"] == kind
+        # Every one of them is readable in full through the tool.
+        result = _read_tool(sessions.get_session(), f"ref-{index}")
+        assert not result.get("is_error")
+        assert BODY_MARKER in result["content"], name
+
+
+def test_structure_is_the_content_for_csv_and_xml():
+    """Neither is flattened or parsed away: a CSV's rows and an XML's tags are
+    exactly what make the file worth reading."""
+    client = TestClient(create_app())
+    csv = b"system,supply temp,redundancy\nchilled water,44 F,N+1\n"
+    xml = b'<plant type="chilled-water">\n  <supply>44 F</supply>\n</plant>\n'
+
+    _upload(client, "schedule.csv", csv)
+    _upload(client, "plant.xml", xml)
+    session = sessions.get_session()
+
+    assert "system,supply temp,redundancy" in _read_tool(session, "ref-1")["content"]
+    assert '<plant type="chilled-water">' in _read_tool(session, "ref-2")["content"]
+
+
+def test_a_pdf_is_read_page_by_page_with_page_markers():
+    """The markers are what let the model answer "where does it say that?"
+    with a page number."""
+    client = TestClient(create_app())
+    _attach_pdf(
+        client, pages=[["ACME STANDARD", BODY_MARKER], ["Second page text."]]
+    )
+
+    text = _read_tool(sessions.get_session(), "ref-1")["content"]
+
+    assert "[page 1]" in text
+    assert "[page 2]" in text
+    assert text.index("[page 1]") < text.index(BODY_MARKER) < text.index("[page 2]")
+
+
+def test_a_pdf_with_no_text_layer_is_refused_with_the_reason():
+    """A scan attached silently as an empty document is worse than an error:
+    the model would be told it holds material it cannot read."""
+    client = TestClient(create_app())
+
+    refused = _attach_pdf(client, pages=[[]])
+
+    assert refused.status_code == 400
+    assert "scanned" in refused.json()["error"].lower()
+
+
+def test_a_password_protected_pdf_is_refused_with_the_reason():
+    from pypdf import PdfWriter
+
+    client = TestClient(create_app())
+    writer = PdfWriter(clone_from=io.BytesIO(_pdf_bytes([STANDARD])))
+    writer.encrypt(user_password="secret")
+    buffer = io.BytesIO()
+    writer.write(buffer)
+
+    refused = _upload(client, "locked.pdf", buffer.getvalue())
+
+    assert refused.status_code == 400
+    assert "password-protected" in refused.json()["error"]
+
+
+def test_binary_content_behind_a_text_extension_is_refused():
+    """The decode ladder ends in Latin-1, which never raises, so this is the
+    only place a renamed binary can be caught."""
+    client = TestClient(create_app())
+
+    refused = _upload(client, "sneaky.txt", b"\x89PNG\r\n\x1a\n\x00\x00\x00rest")
+
+    assert refused.status_code == 400
+    assert "readable text" in refused.json()["error"]
+
+
+def test_a_non_utf8_text_file_is_read_and_the_fallback_is_reported():
+    """Windows is the primary platform: a hand-saved .txt or an Excel .csv
+    export is routinely Windows-1252 or UTF-16, and refusing them would be
+    refusing files the user can plainly read."""
+    client = TestClient(create_app())
+
+    latin = _upload(
+        client, "notes.txt", "Chilled water — 44 degrees F".encode("cp1252")
+    )
+    utf16 = _upload(client, "export.csv", "system,44 degrees F".encode("utf-16"))
+
+    assert latin.status_code == 200
+    assert utf16.status_code == 200
+    assert any("Windows-1252" in w for w in latin.json()["warnings"])
+    assert any("UTF-16" in w for w in utf16.json()["warnings"])
+    session = sessions.get_session()
+    assert "—" in _read_tool(session, "ref-1")["content"]
+    assert BODY_MARKER in _read_tool(session, "ref-2")["content"]
+
+
+def test_a_long_pdf_is_bounded_and_says_so():
+    client = TestClient(create_app())
+    pages = [[f"page {n} body text"] for n in range(reference_extract.MAX_PDF_PAGES + 3)]
+
+    body = _attach_pdf(client, pages=pages).json()
+
+    assert any("pages were read" in w for w in body["warnings"])
+    text = _read_tool(sessions.get_session(), "ref-1")["content"]
+    assert f"[page {reference_extract.MAX_PDF_PAGES}]" in text
+    assert f"[page {reference_extract.MAX_PDF_PAGES + 1}]" not in text
+    # The model must be told, not left to infer it from a missing page.
+    assert "were not read" in text
+
+
+def test_the_type_reaches_the_panel_the_stub_and_the_tool_header():
+    """How a reference should be read depends on what it is — a CSV is data,
+    a PDF carries page markers, a Word standard is prose."""
+    client = TestClient(create_app())
+    _attach_pdf(client, "acme.pdf")
+    session = sessions.get_session()
+
+    metadata = client.get("/api/references").json()["reference_docs"][0]
+    assert metadata["kind"] == "pdf"
+    assert metadata["kind_label"] == "PDF"
+    assert "PDF" in session.references.context_stubs()
+    assert "page markers" in session.references.context_stubs()
+    assert "PDF" in _read_tool(session, "ref-1")["content"]
+
+
+def test_a_project_saved_before_types_existed_reads_as_word():
+    """The store shipped Word-only, so an entry without a kind can only be a
+    Word attachment."""
+    store = ReferenceDocStore()
+    store.load({"reference_docs": [{"rid": "ref-1", "text": "body"}]})
+
+    assert store.docs[0].kind == "docx"
+    assert store.docs[0].kind_label() == "Word"
+
+
+def test_the_type_survives_a_project_round_trip():
+    client = TestClient(create_app())
+    _attach_pdf(client)
+    session = sessions.get_session()
+
+    load_project(sessions.project_payload(session), session)
+
+    assert session.references.docs[0].kind == "pdf"
 
 
 # ---------------------------------------------------------------------------

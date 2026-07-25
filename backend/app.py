@@ -124,10 +124,15 @@ from .spec_doc.docx_export import (
     redline_filename,
 )
 from .reference_docs import ReferenceDocError
+from .reference_extract import (
+    extract_reference_document,
+    reference_kind_for_filename,
+    sanitize_reference_filename,
+    supported_extensions_phrase,
+)
 from .spec_doc.importer import (
     MasterImportError,
     ReferenceExtraction,
-    extract_reference_text,
     parse_master_docx,
 )
 from .spec_doc.model import SpecSection, apply_edits, iter_paragraphs
@@ -271,25 +276,19 @@ def _prepare_master_import(
 
 
 def _prepare_reference_upload(
-    source_bytes: bytes,
+    source_bytes: bytes, *, filename: str
 ) -> "ReferenceExtraction":
-    """Inspect and extract an uploaded reference ``.docx`` — the blocking half.
+    """Extract an uploaded reference file's text — the blocking half.
 
     Same event-loop rule as ``_prepare_master_import``: this is pure CPU over
     the uploaded bytes and must never run inline on the loop. It touches no
-    session state, so it is safe on a worker thread. The package goes through
-    the same bounded ZIP/OPC inspection as a master — a reference upload is
-    the same attack surface — but nothing is retained: the text is extracted
-    and the bytes are dropped.
+    session state, so it is safe on a worker thread. Which extractor runs, and
+    the safety pass each type gets, is ``reference_extract``'s business; a
+    ``.docx`` still goes through the same bounded ZIP/OPC inspection as a
+    master because it is the same attack surface. Nothing is retained for any
+    type: the text is extracted and the bytes are dropped.
     """
-    inspect_docx_package(source_bytes)
-    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as handle:
-        handle.write(source_bytes)
-        temp_path = Path(handle.name)
-    try:
-        return extract_reference_text(temp_path)
-    finally:
-        temp_path.unlink(missing_ok=True)
+    return extract_reference_document(source_bytes, filename=filename)
 
 
 def _stage_project_load(
@@ -1690,7 +1689,11 @@ def create_app() -> FastAPI:
 
     @app.post("/api/reference/upload")
     async def reference_upload(file: UploadFile) -> JSONResponse:
-        """Attach a ``.docx`` as background context for the model.
+        """Attach a document as background context for the model.
+
+        Accepts every type in ``reference_extract.REFERENCE_KINDS`` (Word,
+        PDF, text, XML, CSV) — background material arrives in whatever format
+        the office already has it in, and none of it becomes the spec.
 
         Deliberately unlike ``/api/import/master``: this never touches the
         document tree, so it has no blank-document precondition and stays
@@ -1701,14 +1704,21 @@ def create_app() -> FastAPI:
         submitted_name = (
             (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
         )
-        if not submitted_name.lower().endswith(".docx"):
+        kind = reference_kind_for_filename(submitted_name)
+        if kind is None:
             return JSONResponse(
-                {"ok": False, "error": "Attach a .docx document."},
+                {
+                    "ok": False,
+                    "error": (
+                        f"That file type is not supported as a reference. "
+                        f"Attach a {supported_extensions_phrase()} file."
+                    ),
+                },
                 status_code=400,
             )
-        safe_filename = sanitize_source_filename(submitted_name)
+        safe_filename = sanitize_reference_filename(submitted_name, kind=kind)
         try:
-            source_bytes = await read_upload_bounded(file)
+            source_bytes = await read_upload_bounded(file, label="reference")
         except UploadTooLargeError as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=413
@@ -1721,7 +1731,9 @@ def create_app() -> FastAPI:
         # it blocks the chat stream (see _prepare_master_import).
         try:
             extraction = await run_in_threadpool(
-                _prepare_reference_upload, source_bytes
+                _prepare_reference_upload,
+                source_bytes,
+                filename=safe_filename,
             )
         except (MasterImportError, SourcePackageError, ValueError) as exc:
             return JSONResponse(
@@ -1743,13 +1755,17 @@ def create_app() -> FastAPI:
                     text=extraction.text,
                     block_count=extraction.block_count,
                     tracked_changes=extraction.tracked_changes,
+                    kind=extraction.kind,
                 )
             except ReferenceDocError as exc:
                 return JSONResponse(
                     {"ok": False, "error": str(exc)}, status_code=400
                 )
             snapshot = session.references.snapshot()
-        warnings: list[str] = []
+        # Whatever the read itself left out (pages past the cap, undecodable
+        # pages, a non-UTF-8 encoding) comes first: it is the part the user
+        # cannot see from the row that just appeared in the panel.
+        warnings: list[str] = list(extraction.warnings)
         if doc.truncated:
             warnings.append(
                 f"Only the first {len(doc.text):,} characters were kept "

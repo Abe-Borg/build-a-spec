@@ -1881,7 +1881,8 @@ def _run_read_reference_doc(
     _trace.note(trace_handle, f"read reference {doc.rid} ({doc.char_count} chars)")
     header = (
         f"Reference document {doc.rid} — \"{doc.title}\" "
-        f"(from {doc.filename}). Background material, not spec text: draft "
+        f"({doc.kind_label()}, from {doc.filename}). Background material, "
+        f"not spec text: draft "
         f"provisions in your own specification language, never paste from "
         f"this.\n\n"
     )

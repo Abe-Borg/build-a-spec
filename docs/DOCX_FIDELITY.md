@@ -33,8 +33,12 @@ A **reference document** (`POST /api/reference/upload`) is not an import at
 all. Its text is attached to the session as background for the model to read
 and is never part of the specification: no tree, no source retention, no
 capabilities, no effect on lint, compare, QC, readiness, or any export mode.
-Uploads pass the same bounded ZIP/OPC inspection as a master because they are
-the same attack surface, but nothing is retained beyond the extracted text.
+Because none of it becomes the document, the accepted types are wider than an
+import's: Word, PDF, plain text, XML, and CSV (`backend/reference_extract.py`
+owns the extension→extractor table and every extractor). A `.docx` attachment
+passes the same bounded ZIP/OPC inspection as a master because it is the same
+attack surface; every type is bounded by the same upload limit, and nothing is
+retained beyond the extracted text.
 
 The governing invariant is fail-closed: ambiguity may remove a body-editing
 capability, but it must never create one. Build-a-Spec never silently converts
@@ -233,7 +237,7 @@ allowed when body operations are blocked.
 
 | Endpoint | Contract |
 |---|---|
-| `POST /api/reference/upload` | Bounded DOCX text extraction attached as model context. Not an import: no tree, no retained source, no blank-document precondition, and no effect on any export. Rejects a non-`.docx`, an unreadable package, a document with no text, and an attachment past the per-session cap. |
+| `POST /api/reference/upload` | Bounded text extraction attached as model context, from a `.docx`, `.pdf`, `.txt`, `.xml`, or `.csv`. Not an import: no tree, no retained source, no blank-document precondition, and no effect on any export. Rejects an unsupported extension, a file that is not what its extension claims (an unreadable package, a non-PDF, binary content behind a text extension), a password-protected PDF, a document with no readable text, and an attachment past the per-session cap. |
 | `GET /api/references` | Attached reference documents, metadata only — bodies are read by the model through its own tool, never shipped with a payload. |
 | `DELETE /api/reference/{rid}` | Detach one reference document; 404 when unknown. |
 | `POST /api/import/master` | Bounded, atomic DOCX import. On success, returns import counts/warnings plus the full document payload. A failed import leaves the live session unchanged. Parsing and indexing run on a worker thread, so a long master never blocks the chat stream or any other request; the session is still adopted on the event-loop thread under `session_state_guard()`, which re-checks that the document is still blank. |

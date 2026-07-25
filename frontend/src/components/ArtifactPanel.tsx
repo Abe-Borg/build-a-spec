@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   EditOp,
+  FileLoading,
   ImportReport,
   LintIssue,
   OpenItem,
@@ -46,6 +47,9 @@ interface Props {
   sourcePreservation: SourcePreservationState | null;
   sourceCapabilities: SourceCapabilitiesState | null;
   busy: boolean;
+  /** A master import / project open the server is still working through.
+   *  Drives the progress line and keeps both file actions disabled. */
+  fileLoading?: FileLoading;
   onUndo: () => void;
   onRedo: () => void;
   onEditDoc: (ops: EditOp[]) => void;
@@ -71,6 +75,57 @@ interface Props {
     qc: number;
     openItems: number;
   };
+}
+
+/** The paper while a file is being read server-side. Same sheet as the empty
+ *  state, so the panel reads as "filling in", with skeleton lines sweeping to
+ *  say the work is live rather than stalled. */
+function LoadingState({ fileLoading }: { fileLoading: NonNullable<FileLoading> }) {
+  const importing = fileLoading.kind === "import";
+  return (
+    <div
+      className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="text-center">
+        <p className="text-[13px] font-semibold tracking-wide">
+          {importing ? "READING THE MASTER" : "OPENING THE PROJECT"}
+        </p>
+        <p className="mt-1 truncate text-[13px] font-semibold tracking-wide text-paper-dim">
+          {fileLoading.name}
+        </p>
+      </div>
+
+      <div className="mt-10 space-y-8 select-none" aria-hidden="true">
+        {["PART 1 - GENERAL", "PART 2 - PRODUCTS", "PART 3 - EXECUTION"].map(
+          (part, partIndex) => (
+            <div key={part}>
+              <p className="text-[13px] font-semibold">{part}</p>
+              <div className="mt-3 space-y-2.5">
+                {[11, 9, 10].map((width, lineIndex) => (
+                  <div
+                    key={width}
+                    className="skeleton-line h-2 rounded bg-paper-edge/80"
+                    style={{
+                      width: `${(width / 12) * 100}%`,
+                      animationDelay: `${(partIndex * 3 + lineIndex) * 0.12}s`,
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          ),
+        )}
+      </div>
+
+      <p className="mt-12 text-center text-xs leading-relaxed text-paper-dim">
+        {importing
+          ? "Extracting supported body content and indexing the exact source package. Every imported block lands stamped imported until it is reviewed."
+          : "Restoring the document, its history and any attached source package."}
+      </p>
+    </div>
+  );
 }
 
 function EmptyState() {
@@ -130,6 +185,7 @@ export default function ArtifactPanel({
   sourcePreservation,
   sourceCapabilities,
   busy,
+  fileLoading = null,
   onUndo,
   onRedo,
   onEditDoc,
@@ -155,11 +211,13 @@ export default function ArtifactPanel({
   // Import goes straight to onImportMaster — the confirmation modal was
   // removed on master, so both paths import directly.
   const handleOpenClick = async () => {
+    if (fileLoading) return;
     const file = await nativeOpenFile("project");
     if (file === undefined) fileRef.current?.click();
     else if (file) onLoadProject(file);
   };
   const handleImportClick = async () => {
+    if (fileLoading) return;
     const file = await nativeOpenFile("docx");
     if (file === undefined) importRef.current?.click();
     else if (file) onImportMaster(file);
@@ -534,10 +592,10 @@ export default function ArtifactPanel({
           <button
             className={actionButton}
             onClick={handleOpenClick}
-            disabled={busy}
+            disabled={busy || !!fileLoading}
             title="Open a saved project file"
           >
-            Open
+            {fileLoading?.kind === "open" ? "Opening…" : "Open"}
           </button>
           <input
             ref={fileRef}
@@ -552,20 +610,22 @@ export default function ArtifactPanel({
           />
           <Tip
             tip={
-              hasContent
-                ? "Import needs a blank document — start a new session first (New session)."
-                : busy
-                  ? "Finish the current turn first."
-                  : "Import supported body content while retaining the exact source package for narrowly scoped, source-preserving export."
+              fileLoading
+                ? "Reading the file — this can take a few seconds for a long master."
+                : hasContent
+                  ? "Import needs a blank document — start a new session first (New session)."
+                  : busy
+                    ? "Finish the current turn first."
+                    : "Import supported body content while retaining the exact source package for narrowly scoped, source-preserving export."
             }
           >
             <button
               className={actionButton}
               onClick={handleImportClick}
-              disabled={busy || hasContent}
+              disabled={busy || hasContent || !!fileLoading}
               data-tour="import-master"
             >
-              Import master
+              {fileLoading?.kind === "import" ? "Importing…" : "Import master"}
             </button>
           </Tip>
           <input
@@ -581,6 +641,34 @@ export default function ArtifactPanel({
           />
         </div>
       </div>
+
+      {fileLoading && (
+        <div
+          className="flex items-start gap-3 border-b border-accent/30 bg-accent/[0.06] px-5 py-3"
+          role="status"
+          aria-live="polite"
+          data-testid="file-loading"
+        >
+          <span className="status-dots mt-1.5" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-xs font-semibold">
+              <span className="status-shimmer">
+                {fileLoading.kind === "import" ? "Importing" : "Opening"}{" "}
+                {fileLoading.name}
+              </span>
+            </p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-ink-dim">
+              Extracting body content and indexing the source package. A long
+              master can take several seconds — the chat stays available while
+              this finishes.
+            </p>
+          </div>
+        </div>
+      )}
 
       {importedMode && (
         <div
@@ -737,6 +825,8 @@ export default function ArtifactPanel({
             sourceCapabilities={sourceCapabilities}
             onEdit={onEditDoc}
           />
+        ) : fileLoading ? (
+          <LoadingState fileLoading={fileLoading} />
         ) : (
           <EmptyState />
         )}

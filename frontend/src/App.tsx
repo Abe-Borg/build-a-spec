@@ -3,6 +3,7 @@ import type {
   ChatMessage,
   EditOp,
   Figure,
+  FileLoading,
   Health,
   ImportReport,
   LintIssue,
@@ -123,6 +124,14 @@ export default function App() {
   const [saveGate, setSaveGate] = useState<
     { kind: "new-session" } | { kind: "open-project"; file: File } | null
   >(null);
+  // A file upload in flight (master import / project open). Reading, parsing
+  // and indexing a big master takes real seconds on the server, and until it
+  // lands nothing in the panel changes — without this the app just looked
+  // frozen. Non-null drives the panel's progress line and the disabled
+  // Import/Open buttons; the ref is the double-submit guard (state updates
+  // are async, a fast second click would slip past it).
+  const [fileLoading, setFileLoading] = useState<FileLoading>(null);
+  const fileLoadingRef = useRef(false);
   const busyRef = useRef(false);
   const researchFollowRef = useRef(false);
   const qcFollowRef = useRef(false);
@@ -343,6 +352,16 @@ export default function App() {
 
   const onImportMaster = useCallback(
     async (file: File) => {
+      // One upload at a time: the endpoint rejects a second import anyway
+      // (the document is no longer blank), and a queued duplicate would only
+      // produce a confusing error after a long wait.
+      if (fileLoadingRef.current) return;
+      fileLoadingRef.current = true;
+      setFileLoading({ kind: "import", name: file.name });
+      // Say so in the chat too — the panel button is not where the user is
+      // looking once they have handed the file over, and a big master keeps
+      // the page unchanged for seconds.
+      addNote(`Importing ${file.name}…`);
       try {
         const result = await importMaster(file);
         applyDocPayload(result);
@@ -394,12 +413,15 @@ export default function App() {
             error: true,
           },
         ]);
+      } finally {
+        fileLoadingRef.current = false;
+        setFileLoading(null);
       }
     },
     // applyDocPayload is stable in practice (defined per render but only
     // touches setters); listing setMessages deps is unnecessary noise.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [addNote],
   );
 
   const onInstallUpdate = useCallback(async () => {
@@ -902,6 +924,11 @@ export default function App() {
   /** The actual project load (after the save gate). Rebuilds the transcript
    *  and re-inlines each figure by its stored message_index. */
   const doLoadProject = async (file: File) => {
+    if (fileLoadingRef.current) return;
+    fileLoadingRef.current = true;
+    // A project carrying a master re-parses and re-indexes it server-side,
+    // so opening one is as slow as importing — say so the same way.
+    setFileLoading({ kind: "open", name: file.name });
     try {
       const result = await loadProjectFile(file);
       applyDocPayload(result);
@@ -943,6 +970,9 @@ export default function App() {
           error: true,
         },
       ]);
+    } finally {
+      fileLoadingRef.current = false;
+      setFileLoading(null);
     }
   };
 
@@ -1142,6 +1172,7 @@ export default function App() {
           sourcePreservation={sourcePreservation}
           sourceCapabilities={sourceCapabilities}
           busy={busy}
+          fileLoading={fileLoading}
           onUndo={onUndo}
           onRedo={onRedo}
           onEditDoc={onEditDoc}

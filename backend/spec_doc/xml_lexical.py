@@ -12,7 +12,7 @@ and recoverable through exact-original export, but are mutation blockers.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Iterable
 from xml.parsers import expat
@@ -112,47 +112,96 @@ class SourceXmlIndex:
     word_text_nodes: tuple[WordTextByteSpan, ...]
     body_gaps: tuple[XmlByteSpan, ...]
     body_namespace_bindings: tuple[tuple[str, str], ...]
+    # Lazily built lookup tables over the immutable tuples above. Every anchor
+    # resolution used to be a linear scan of ``elements`` (tens of thousands of
+    # records) performed once per body child, so binding one master's anchors
+    # was quadratic: a ~6k-paragraph section spent ~12s of blocking CPU here.
+    # These caches are pure derived state — excluded from init/compare/repr so
+    # identity, equality and hashing stay exactly what the frozen record
+    # promised, and populated through ``object.__setattr__`` (the standard
+    # frozen-dataclass memoization escape hatch).
+    _body_child_index_map: dict[int, BodyChildByteSpan] | None = field(
+        default=None, init=False, compare=False, repr=False
+    )
+    _word_text_map: dict[tuple[int, int], WordTextByteSpan] | None = field(
+        default=None, init=False, compare=False, repr=False
+    )
+    _element_span_map: dict[XmlByteSpan, XmlElementByteSpan] | None = field(
+        default=None, init=False, compare=False, repr=False
+    )
+    _children_map: dict[int, tuple[XmlElementByteSpan, ...]] | None = field(
+        default=None, init=False, compare=False, repr=False
+    )
 
     def body_child(self, body_child_index: int) -> BodyChildByteSpan:
-        for child in self.body_children:
-            if child.body_child_index == body_child_index:
-                return child
-        raise XmlLexicalError(
-            "body_anchor_mismatch",
-            f"body child {body_child_index} has no proven lexical span",
-        )
+        table = self._body_child_index_map
+        if table is None:
+            table = {}
+            # First record wins, matching the original scan's first-match.
+            for child in self.body_children:
+                table.setdefault(child.body_child_index, child)
+            object.__setattr__(self, "_body_child_index_map", table)
+        child = table.get(body_child_index)
+        if child is None:
+            raise XmlLexicalError(
+                "body_anchor_mismatch",
+                f"body child {body_child_index} has no proven lexical span",
+            )
+        return child
 
     def word_text(
         self, body_child_index: int, text_node_ordinal: int
     ) -> WordTextByteSpan:
-        for node in self.word_text_nodes:
-            if (
-                node.body_child_index == body_child_index
-                and node.text_node_ordinal == text_node_ordinal
-            ):
-                return node
-        raise XmlLexicalError(
-            "text_anchor_mismatch",
-            "the mapped Word text node has no proven lexical span",
-        )
+        table = self._word_text_map
+        if table is None:
+            table = {}
+            for node in self.word_text_nodes:
+                table.setdefault(
+                    (node.body_child_index, node.text_node_ordinal), node
+                )
+            object.__setattr__(self, "_word_text_map", table)
+        node = table.get((body_child_index, text_node_ordinal))
+        if node is None:
+            raise XmlLexicalError(
+                "text_anchor_mismatch",
+                "the mapped Word text node has no proven lexical span",
+            )
+        return node
 
     def element_for_span(self, span: XmlByteSpan) -> XmlElementByteSpan:
-        for element in self.elements:
-            if element.element_span == span:
-                return element
-        raise XmlLexicalError(
-            "body_anchor_mismatch",
-            "the mapped XML element has no proven lexical record",
-        )
+        table = self._element_span_map
+        if table is None:
+            table = {}
+            for element in self.elements:
+                table.setdefault(element.element_span, element)
+            object.__setattr__(self, "_element_span_map", table)
+        element = table.get(span)
+        if element is None:
+            raise XmlLexicalError(
+                "body_anchor_mismatch",
+                "the mapped XML element has no proven lexical record",
+            )
+        return element
 
     def direct_children(
         self, element: XmlElementByteSpan
     ) -> tuple[XmlElementByteSpan, ...]:
-        return tuple(
-            candidate
-            for candidate in self.elements
-            if candidate.parent_start == element.element_span.start
-        )
+        table = self._children_map
+        if table is None:
+            grouped: dict[int, list[XmlElementByteSpan]] = {}
+            # Document order is preserved: ``elements`` is scanned once, in
+            # order, exactly as the per-parent filter used to walk it.
+            for candidate in self.elements:
+                if candidate.parent_start is not None:
+                    grouped.setdefault(candidate.parent_start, []).append(
+                        candidate
+                    )
+            table = {
+                parent: tuple(children)
+                for parent, children in grouped.items()
+            }
+            object.__setattr__(self, "_children_map", table)
+        return table.get(element.element_span.start, ())
 
 
 @dataclass(slots=True)

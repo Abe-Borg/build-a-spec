@@ -56,12 +56,33 @@ def settle_capability_sweep(timeout: float = 120.0) -> None:
     immediately and the test's next read is the one that starts the sweep —
     and gets ``pending``. ``block=True`` joins an in-flight warm instead of
     duplicating it, then publishes the memo every later reader hits.
+
+    The derivation runs on its own thread so ``timeout`` actually bounds it.
+    ``block=True`` waits without a deadline — correct in production, where a
+    QC run must get a real answer however long it takes — so calling it
+    inline would let a stalled sweep hang the whole suite instead of failing
+    this assertion. The daemon thread is abandoned on timeout, exactly like
+    the session's own abandoned warms.
     """
+    import threading
+
     from backend import sessions
 
     session = sessions.get_session()
-    session.source_edit_capabilities(block=True)
-    assert session.capability_warm_settled(timeout), (
+    derived = threading.Event()
+
+    def _derive() -> None:
+        try:
+            session.source_edit_capabilities(block=True)
+        finally:
+            derived.set()
+
+    threading.Thread(
+        target=_derive,
+        name="settle-capability-sweep",
+        daemon=True,
+    ).start()
+    assert derived.wait(timeout), (
         "the background capability sweep did not settle"
     )
 

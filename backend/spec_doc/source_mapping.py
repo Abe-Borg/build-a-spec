@@ -1286,6 +1286,10 @@ _BLOCKER_MESSAGES = {
     "automatic_numbering_required": (
         "structural edits require a genuine direct Word-numbered source provision"
     ),
+    "capabilities_pending": (
+        "imported-source permissions for this document state are still being "
+        "checked; body edits are held until that check finishes"
+    ),
     "complex_paragraph_markup": "the source paragraph contains unsupported paragraph-level markup",
     "complex_run_markup": "the source paragraph contains multiple or unsupported inline runs",
     "cross_island_move": (

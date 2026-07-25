@@ -5,6 +5,7 @@ import type {
   Figure,
   FileLoading,
   Health,
+  ImportNotice,
   ImportReport,
   ReferenceDocMeta,
   LintIssue,
@@ -30,6 +31,7 @@ import {
   draftFull,
   editDoc,
   getDoc,
+  getDocCapabilities,
   getDocDiff,
   getHealth,
   getModules,
@@ -62,6 +64,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import HelpModal, { type HelpTopic } from "./components/HelpModal";
 import OnboardingOverlay from "./components/OnboardingOverlay";
 import ModulePickerDialog from "./components/ModulePickerDialog";
+import { sourceCapabilitiesPending } from "./lib/sourceCapabilities";
 import { useOnboarding, type DrawerName } from "./lib/useOnboarding";
 import CloseDialog from "./components/CloseDialog";
 import ConfirmDialog from "./components/ConfirmDialog";
@@ -136,6 +139,12 @@ export default function App() {
   // Import/Open buttons; the ref is the double-submit guard (state updates
   // are async, a fast second click would slip past it).
   const [fileLoading, setFileLoading] = useState<FileLoading>(null);
+  // What the panel says about the last import: a failure, or the content-loss
+  // warnings of a lossy one. Both used to be announced in the chat, which put
+  // machine-generated notices in the middle of the conversation; they now
+  // report where the action was taken. Null for a clean import, which is the
+  // normal case — the panel then says nothing about the import at all.
+  const [importNotice, setImportNotice] = useState<ImportNotice>(null);
   const fileLoadingRef = useRef(false);
   const busyRef = useRef(false);
   const researchFollowRef = useRef(false);
@@ -222,6 +231,59 @@ export default function App() {
     refreshReadiness,
     refreshUsage,
   ]);
+
+  /**
+   * Poll for the imported-source permission sweep while it is still running.
+   *
+   * The sweep probes every element against the real gate, so it happens in
+   * the background and the report arrives as `pending` first. Editing
+   * affordances stay disabled (fail-closed) until it lands; this is what
+   * turns them back on. One cheap capabilities-only request per tick, then a
+   * single full document refresh on the transition — polling `getDoc` would
+   * rebuild the outline, lint and readiness plan every second for nothing.
+   */
+  useEffect(() => {
+    if (!sourceCapabilitiesPending(sourceCapabilities)) return;
+    let cancelled = false;
+    let timer = 0;
+    // A self-scheduling chain rather than setInterval: the sweep takes
+    // minutes on a large master, so ticks must never stack up behind a slow
+    // response — each one is scheduled only after the previous settles. The
+    // backoff keeps a long wait cheap without making a short one feel slow.
+    let delay = 750;
+    const tick = () => {
+      getDocCapabilities()
+        .then((report) => {
+          if (cancelled) return;
+          if (report?.status === "pending") {
+            delay = Math.min(delay * 1.5, 5000);
+            timer = window.setTimeout(tick, delay);
+            return;
+          }
+          // Settled. One writer for this state: refreshDoc re-reads the whole
+          // payload (the document can have moved while the sweep ran) and
+          // sets source_capabilities from the same response.
+          refreshDoc();
+          // QC freshness and readiness both compare against the imported-
+          // source permissions, so while those were pending they answered
+          // "stale" / "not ready". Nothing else re-asks them, so a project
+          // opened with a retained master and a retained QC result would sit
+          // on a wrong "re-run Final QC" until some other action refreshed.
+          refreshQc();
+          refreshReadiness();
+        })
+        .catch(() => {
+          if (cancelled) return;
+          delay = Math.min(delay * 1.5, 5000);
+          timer = window.setTimeout(tick, delay);
+        });
+    };
+    timer = window.setTimeout(tick, delay);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [sourceCapabilities, refreshDoc, refreshQc, refreshReadiness]);
 
   /** Follow the QC run's SSE stream, snapshotting + metering as it streams. */
   const followQc = useCallback(async () => {
@@ -363,110 +425,72 @@ export default function App() {
       // produce a confusing error after a long wait.
       if (fileLoadingRef.current) return;
       fileLoadingRef.current = true;
+      setImportNotice(null);
       setFileLoading({ kind: "import", name: file.name });
-      // Say so in the chat too — the panel button is not where the user is
-      // looking once they have handed the file over, and a big master keeps
-      // the page unchanged for seconds.
-      addNote(`Importing ${file.name}…`);
+      // Nothing is written to the chat for an import — not progress, not a
+      // summary, not a failure. The chat is the conversation with the model;
+      // an upload is a panel action, and the panel reports it (progress line,
+      // button label, skeleton sheet, and the error slot below).
       try {
         const result = await importMaster(file);
         applyDocPayload(result);
         refreshReadiness();
-        const report = result.import_report;
-        const warnings = report?.warnings ?? result.warnings;
-        const importedCount =
-          report?.imported_block_count ?? result.imported_block_count;
-        const skippedCount =
-          report?.skipped_empty_count ?? result.skipped_empty_count;
-        const trackedChangesDetected =
-          report?.tracked_changes_detected ?? result.tracked_changes_detected;
-        const fidelityNotice =
-          report?.fidelity_notice ??
-          "This import is a normalized extraction of supported body content; it is not a formatting-preserving edit of the original DOCX.";
-        const warningLines = warnings.length
-          ? "\n\nImport notes:\n" +
-            warnings.map((w) => `- ${w}`).join("\n")
-          : "";
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: newId(),
-            role: "assistant",
-            text:
-              `Imported ${importedCount} provisions from the ` +
-              `master — every block is stamped *imported* until we review ` +
-              `it for this project. Tell me about the project and I'll ` +
-              `walk the extracted content article by article.\n\n` +
-              `${fidelityNotice}\n\n` +
-              `Import accounting: ${skippedCount} empty body block${
-                skippedCount === 1 ? " was" : "s were"
-              } skipped.` +
-              (trackedChangesDetected
-                ? "\n\nTracked changes were detected and resolved to their Accept-All text view during extraction."
-                : "") +
-              warningLines,
-          },
-        ]);
+        // A clean import says nothing at all. A lossy one still has to warn
+        // loudly (the importer's keep-everything-warn-loudly rule) — as a
+        // dismissible panel notice, not a permanent strip and not chat.
+        const warnings =
+          result.import_report?.warnings ?? result.warnings ?? [];
+        if (warnings.length) {
+          setImportNotice({ tone: "warn", name: file.name, lines: warnings });
+        }
       } catch (e) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: newId(),
-            role: "assistant",
-            text: `Import failed: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
-            error: true,
-          },
-        ]);
+        setImportNotice({
+          tone: "error",
+          name: file.name,
+          lines: [e instanceof Error ? e.message : String(e)],
+        });
       } finally {
         fileLoadingRef.current = false;
         setFileLoading(null);
       }
     },
     // applyDocPayload is stable in practice (defined per render but only
-    // touches setters); listing setMessages deps is unnecessary noise.
+    // touches setters); listing setters here is unnecessary noise.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [addNote],
+    [refreshReadiness],
   );
 
   // Attaching background material is deliberately lighter than importing a
   // master: it never touches the document, so there is no blank-document
   // gate, no LoadingState sheet, and no doc payload to apply — just the list.
+  // Nothing is written to the chat for an attachment, for the same reason an
+  // import writes nothing: the chat is the conversation with the model, and an
+  // upload is a panel action the panel reports. A clean attach says nothing at
+  // all — the new row in the reference list is the confirmation. A lossy or
+  // failed one still has to say so, in the same dismissible notice slot.
   const onAttachReference = useCallback(async (file: File) => {
     setReferenceBusy(true);
+    setImportNotice(null);
     try {
       const { reference_docs, warnings } = await uploadReference(file);
       setReferenceDocs(reference_docs);
-      const attached = reference_docs[reference_docs.length - 1];
-      const notes = warnings.length
-        ? "\n\n" + warnings.map((w) => `- ${w}`).join("\n")
-        : "";
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: newId(),
-          role: "assistant",
-          text:
-            `Attached **${attached?.title ?? file.name}** as reference ` +
-            `(${attached?.rid ?? "ref"}). I'll read it when it's relevant — ` +
-            `it stays background material and never becomes part of the ` +
-            `section itself. Tell me what you'd like me to take from it.` +
-            notes,
-        },
-      ]);
+      if (warnings.length) {
+        setImportNotice({
+          tone: "warn",
+          name: file.name,
+          lines: warnings,
+          title: `${warnings.length} note${
+            warnings.length === 1 ? "" : "s"
+          } attaching ${file.name}`,
+        });
+      }
     } catch (e) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: newId(),
-          role: "assistant",
-          text: `Could not attach that document: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
-          error: true,
-        },
-      ]);
+      setImportNotice({
+        tone: "error",
+        name: file.name,
+        lines: [e instanceof Error ? e.message : String(e)],
+        title: `Could not attach ${file.name}`,
+      });
     } finally {
       setReferenceBusy(false);
     }
@@ -476,9 +500,13 @@ export default function App() {
     setReferenceBusy(true);
     try {
       setReferenceDocs(await deleteReference(rid));
-    } catch {
-      // The list is authoritative from the server; a failed remove simply
-      // leaves it as it was. Nothing was lost, so nothing needs saying.
+    } catch (e) {
+      setImportNotice({
+        tone: "error",
+        name: rid,
+        lines: [e instanceof Error ? e.message : String(e)],
+        title: "Could not remove that reference document",
+      });
     } finally {
       setReferenceBusy(false);
     }
@@ -613,6 +641,10 @@ export default function App() {
   // Existing callers ignore the value.
   const send = async (text: string): Promise<boolean> => {
     if (busyRef.current) return false;
+    // A turn started mid-upload would be rejected by the import's own guard
+    // once the file finished parsing — a 409 arriving long after the click,
+    // blaming the upload. Refuse it here instead.
+    if (fileLoadingRef.current) return false;
     busyRef.current = true;
     setBusy(true);
     setChangedIds(new Set());
@@ -990,7 +1022,9 @@ export default function App() {
     if (fileLoadingRef.current) return;
     fileLoadingRef.current = true;
     // A project carrying a master re-parses and re-indexes it server-side,
-    // so opening one is as slow as importing — say so the same way.
+    // so opening one is as slow as importing — say so the same way. Any
+    // import notice describes the document this replaces, so it goes.
+    setImportNotice(null);
     setFileLoading({ kind: "open", name: file.name });
     try {
       const result = await loadProjectFile(file);
@@ -1213,6 +1247,7 @@ export default function App() {
           discipline={health?.discipline}
           onStartOnboarding={onboarding.start}
           onStop={onStop}
+          uploading={fileLoading !== null}
           prefill={prefill}
           figuresById={figuresById}
           onDeleteFigure={onDeleteFigure}
@@ -1240,6 +1275,8 @@ export default function App() {
           sourceCapabilities={sourceCapabilities}
           busy={busy}
           fileLoading={fileLoading}
+          importNotice={importNotice}
+          onDismissImportNotice={() => setImportNotice(null)}
           onUndo={onUndo}
           onRedo={onRedo}
           onEditDoc={onEditDoc}

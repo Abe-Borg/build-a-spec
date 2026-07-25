@@ -178,13 +178,33 @@ canonical server `message`.
 
 `source_capabilities` is `null` outside an active imported-source scope.
 Otherwise its `status` is independent of `source_preservation.status` and has
-three values:
+four values:
 
 | Status | Meaning |
 |---|---|
 | `ready` | Source capability analysis completed without a package-wide mutation blocker. Individual body operations may still be denied; consult each operation record. |
 | `pass_through_only` | Exact source no-op can remain available, but a package-wide or runtime blocker denies source-body mutations. |
 | `blocked` | Required source identity, mapping, baseline, or capability analysis is unavailable or invalid. Body operations fail closed. |
+| `pending` | Capability analysis for this exact document state is still running. Body operations fail closed with the `capabilities_pending` blocker; workspace-only metadata operations remain allowed. |
+
+`pending` is a transient state, not a defect. Capability analysis probes every
+element against the authoritative final gate, so it is derived once per
+document state on a background worker rather than inline on a request. An
+import response, and the first read after any body change, therefore report
+`pending` until that analysis lands. Clients poll `GET /api/doc/capabilities`
+— which returns only `{"source_capabilities": …}` — and refresh the full
+document payload once the status settles.
+
+`pending` never widens the edit surface. It denies exactly what `blocked`
+denies; the distinction exists only so an interface can say the analysis is
+still running instead of describing an undecided permission as permanently
+unavailable. This follows directly from the rule that capability reports are
+guidance rather than authorization: every body mutation is still validated as
+a complete proposed final state before commit, so an operation attempted
+against a `pending` report is refused by the gate, never silently accepted.
+Operations that act on the analysis rather than merely display it — starting
+Final QC, applying QC fixes, and generating QC exports — wait for it instead
+of reading `pending`.
 
 `source_capabilities.elements[uid][operation]` is server-derived and has this
 shape:

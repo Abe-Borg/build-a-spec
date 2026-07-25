@@ -43,6 +43,23 @@ export type FileLoading = {
   name: string;
 } | null;
 
+/** What the panel has to say about the last import, reported next to the
+ *  action that produced it rather than as a fabricated chat message. A clean
+ *  import produces none: `error` when it failed, `warn` when it succeeded but
+ *  could not carry some content across. */
+/**
+ * A dismissible panel notice about a file the user handed over. Uploads are
+ * panel actions, so they report in the panel, never in the chat. `title`
+ * overrides the default import wording (a reference attachment is not an
+ * import); omitting it leaves the import instance exactly as it was.
+ */
+export type ImportNotice = {
+  tone: "error" | "warn";
+  name: string;
+  lines: string[];
+  title?: string;
+} | null;
+
 export interface Health {
   status: string;
   app: string;
@@ -333,9 +350,18 @@ export interface SourceElementCapabilities {
   [operation: string]: SourceOperationCapability | undefined;
 }
 
+/**
+ * Capability reports carry one status the preservation payload cannot:
+ * `pending`, meaning the server's per-element sweep for this document state
+ * is still running. It denies every body operation exactly like `blocked`
+ * — an underived permission is never granted — but it is temporary, so the
+ * UI says "checking" rather than "read-only".
+ */
+export type SourceCapabilityStatus = SourcePreservationStatus | "pending";
+
 /** Per-element imported-source permissions, recomputed for each document state. */
 export interface SourceCapabilitiesState {
-  status: SourcePreservationStatus;
+  status: SourceCapabilityStatus;
   elements: Record<string, SourceElementCapabilities>;
 }
 

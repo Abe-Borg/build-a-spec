@@ -1812,27 +1812,20 @@ finished. Two independent causes, both fixed; no new endpoints, no new deps.
   pulses, reduced-motion gated). The open path deliberately posts no chat
   note — `doLoadProject` replaces the transcript wholesale, so a note there
   would vanish on success.
-- **KNOWN, NOT FIXED: `source_edit_capabilities` is quadratic, and it now
-  dominates import cost.** `source_patch.source_edit_capabilities` derives
-  each element's permissions by probing the authoritative final gate, and
-  every non-no-op probe runs `_validate_source_and_plan` end to end — which
-  composes the full patched `word/document.xml`, reparses it, rebuilds the
-  whole lexical index, and does a complete raw-ZIP rebuild preflight. That is
-  O(document) work, run ~5× per paragraph, so the sweep is O(n²) in body
-  size. Measured end-to-end through `POST /api/import/master` after
-  everything above: **86 blocks 1.6s · 164 blocks 6.0s · 218 blocks 10.7s ·
-  332 blocks 28.4s**, and a 4,685-paragraph master extrapolates to *hours*.
-  The result is cached (keyed on source/baseline/body projection, so a
-  status-only edit is free), but any body change re-arms it — and
-  `_source_editing_boundary_block` calls it in **every turn's PROJECT
-  CONTEXT**, so on an imported master the model waits for a fresh sweep after
-  each turn that edits the body. Fixing it means changing how permissions are
-  derived (deriving them per island analytically, probing only what the UI
-  needs, or reusing plan state across probes) inside the most safety-critical
-  subsystem in the repo — a deliberate design decision, not a tuning pass, so
-  it was left for its own change. Until then the offload above is what keeps
-  the app usable: the work is slow, but nothing else is blocked and the user
-  can see it happening.
+- **STILL QUADRATIC, no longer on any critical path (see the next section).**
+  `source_patch.source_edit_capabilities` derives each element's permissions
+  by probing the authoritative final gate, and every non-no-op probe runs
+  `_validate_source_and_plan` end to end — which composes the full patched
+  `word/document.xml`, reparses it, rebuilds the whole lexical index, and
+  does a complete raw-ZIP rebuild preflight. That is O(document) work, run
+  ~5× per paragraph, so the sweep is O(n²) in body size. Measured end-to-end
+  through `POST /api/import/master`: **86 blocks 1.6s · 164 blocks 6.0s ·
+  218 blocks 10.7s · 332 blocks 28.4s**, and a 4,685-paragraph master
+  extrapolates to *hours*. Making the derivation itself cheap (per-island
+  analytically, probing only what the UI needs, or reusing plan state across
+  probes) means changing the most safety-critical subsystem in the repo — a
+  deliberate design decision, not a tuning pass, so it is still its own
+  future change. What DID change is that nothing waits for it any more.
 - **Tests**: `tests/test_import_responsiveness.py`. The two responsiveness
   tests drive `TestClient` from two real threads (a blocked event loop cannot
   honour an `asyncio` timeout — the loop is the thing that is stuck, which is
@@ -1844,6 +1837,120 @@ finished. Two independent causes, both fixed; no new endpoints, no new deps.
   monkeypatching, a 164-block master, `/api/health` polled throughout, every
   sample required to return promptly (it reports a 5.8s stall the moment any
   phase goes back on the loop). All five fail against the pre-fix code.
+
+## Chat responsiveness on an imported master — implemented notes
+
+Reported symptom: the chat still froze on a DOCX import, a successful import
+posted a model-looking message into the chat, and an explanatory banner sat
+at the top of the document panel. The offload above had unblocked the event
+loop but nothing had been done about the thing the chat actually waited on.
+No new deps, no new SSE event, one new REST route.
+
+- **The sweep never runs inline any more.** `SessionState.source_edit_
+  capabilities()` gained `block: bool = False`. A memo hit is unchanged
+  (still zero probes). A memo MISS no longer sweeps on the caller's thread:
+  it starts — or joins — ONE background sweep for that state
+  (`start_capability_warm`, a daemon thread on the session, modelled on the
+  runners' zombie-abandonment pattern) and returns a **`pending`** report
+  immediately. `_sweep_and_publish` holds the old publish guard verbatim, so
+  a warm whose state moved under it still refuses to write the memo. The
+  warm is cleared with the memo on reset (`_reset_while_locked`) and project
+  load (`project.py`); an abandoned one settles harmlessly because its
+  publish guard compares the retained artifacts by identity.
+- **At most one sweep runs at a time (`_capability_warm_next`).** The sweep
+  is one opaque call into the source gate and cannot be interrupted, so a
+  superseded one would run to completion anyway and have its result thrown
+  away by the publish guard. A thread per state would therefore stack
+  minutes-long useless O(n²) work — a streaming turn committing ten
+  provisional bodies while the panel polls would leave ten sweeps fighting
+  over one GIL, starving the only one that can still publish. A newer
+  request instead replaces the single *queued* state (newest wins) and is
+  picked up when the running sweep finishes, so superseded states are
+  skipped rather than swept. The `pending` report is memoized on the same
+  state key (`_pending_capability_cache`) — it is a complete per-element map,
+  and rebuilding it per poll tick would allocate thousands of records a
+  second and steal CPU from the sweep being waited on.
+- **The model is told "pending", not "read-only".** Every operation is denied
+  while the sweep runs, so `source_capability_summary` rendered the ordinary
+  way would tell the model the whole imported document is permanently
+  read-only, which it would then repeat to the user. It gets an explicit
+  pending branch that says the analysis has not finished and that the gate
+  will refuse (with its exact reason) anything attempted meanwhile.
+- **`pending` is fail-closed, and that is what makes it safe.**
+  `blocked_source_edit_capabilities` already took a `status`, so
+  `CAPABILITY_STATUS_PENDING` reuses it: every body operation is denied with
+  the `capabilities_pending` blocker, while the workspace-only metadata ops
+  stay allowed (they do not touch the retained Word body — so the review
+  walk's confirmations keep working while the sweep runs). An underived
+  permission can only make the UI *more* restrictive. Authority never moved:
+  `apply_doc_edits` still runs `validate_source_transition` over the complete
+  proposed final state on every body change, exactly as
+  `docs/DOCX_FIDELITY.md` says ("capability reports are UI guidance, not
+  authorization").
+- **Who blocks and who does not.** `_source_editing_boundary_block` (every
+  turn's PROJECT CONTEXT) and `_doc_payload` never block — this is the fix
+  for the freeze, since `_turn_context_text` runs BEFORE `stream_user_turn`
+  yields its first SSE frame. The hot `/api/readiness` and `/api/qc/status`
+  polls never block either; a pending capability summary simply reads as "the
+  recorded inputs no longer match", i.e. stale, which is conservative and,
+  after an import (empty document required) or a body change (QC stale
+  anyway), also correct. The paths that ACT on the answer — `POST
+  /api/qc/start`, `POST /api/qc/apply`, and both QC exports — pass
+  `block=True`, and all four call `_settle_source_capabilities(session)`
+  **before** taking `session_state_guard()` so they never hold
+  `_turn_state_lock` across a sweep (that lock is what `claim_model_turn`
+  needs, so holding it was a second, independent way to freeze the chat).
+  When the sweep settles, the panel's poll also re-asks QC status and
+  readiness: both compare against the capability summary, so while it was
+  pending they answered "stale"/"not ready", and nothing else would have
+  re-asked — a project opened with a retained master and a retained QC
+  result would otherwise sit on a wrong "re-run Final QC" indefinitely.
+- **Import returns without the sweep.** `POST /api/import/master` calls
+  `session.start_capability_warm()` right after the commit and reports
+  `pending`; `_doc_payload` then costs only one source-readiness plan (O(n)).
+  New route `GET /api/doc/capabilities` returns just the report, so the panel
+  can poll it while pending without rebuilding the outline, lint and
+  readiness plan every tick. The poll is a self-scheduling `setTimeout` chain
+  with backoff (750ms → 5s cap), never `setInterval`: the sweep takes minutes
+  on a large master, so ticks must not stack behind a slow response. `App.send()`
+  is now also gated on `fileLoading`, and the composer says so (a `uploading`
+  prop, distinct from `disabled`, which means a turn is streaming and offers
+  Stop) rather than swallowing the click — a turn started mid-upload would
+  make the import fail its own `turn_active` guard after a long parse.
+- **Nothing about an import goes into the chat.** `onImportMaster` lost all
+  three writes: the `addNote("Importing …")` marker, the hand-written
+  *assistant* bubble ("Imported N provisions … Tell me about the project"),
+  and the `Import failed:` error bubble. `addNote` itself stays for research
+  and Final QC. Both outcomes now render in the panel beside the progress
+  line that already lived there, as ONE dismissible `importNotice`
+  (`{tone: "error" | "warn", name, lines}`) — they are mutually exclusive by
+  construction, so modelling them as two states would have been two
+  near-identical strips that drift. A clean import shows nothing at all, but
+  the importer's keep-everything-warn-loudly rule still has a surface. The
+  project-open path is deliberately untouched (it was not part of the ask),
+  though opening a project clears the notice, which described the document
+  being replaced.
+- **The imported-DOCX banner is gone** (the warn strip above the document).
+  `Download original upload` moved into the Export menu, which was already
+  the `importedMode` branch; nothing else it carried was load-bearing —
+  `passThroughOnly`/`preservationReady` still drive that menu, and the
+  "why is this disabled" text was already per-control via `draftTip`,
+  `CapabilityButton` and `ReadOnlyBadge`, which render the server's own
+  message. The one thing that replaces it is the pending line described
+  above, which disappears when the sweep lands — and it renders that same
+  server message rather than a third hand-written wording of it
+  (`lib/sourceCapabilities.ts`: never add client prose to a denial).
+- **Tests**: `test_import_reports_pending_permissions_without_sweeping_inline`
+  and `test_a_chat_turn_starts_promptly_on_a_freshly_imported_master` in
+  `tests/test_import_responsiveness.py` — the second builds a turn's PROJECT
+  CONTEXT while the warm is deliberately still in flight and requires it
+  under 1.5s; the same fixture costs 9.3s if you let the sweep block. Also
+  `test_a_pending_report_still_refuses_a_forged_body_edit` (fail-closed
+  survives the async window — the gate refuses regardless of the report) and
+  `test_the_model_is_told_permissions_are_pending_not_read_only`. Tests
+  that assert what permissions ARE now call `settle_capability_sweep()`
+  (`tests/conftest.py`); `tests/fakes.py::audit_grade_qc_result` builds its
+  input manifest with `block=True` for the same reason a real QC run does.
 
 ## Non-spec uploads — implemented notes (honest framing + reference documents)
 

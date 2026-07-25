@@ -1,6 +1,7 @@
 import type {
   QcFinding,
   QcLensStatus,
+  QcOpsSemanticStatus,
   QcResultView,
   QcSnapshot,
   QcVerdict,
@@ -71,7 +72,11 @@ export interface QcDispositionEventRecord {
   document_fingerprint?: string;
 }
 
-export type QcReportVerdict = QcVerdict & {
+export type QcReportVerdict = Omit<QcVerdict, "ops_adequate" | "ops_note"> & {
+  /** Absent on historical schema-v2 verifier records. */
+  ops_adequate?: boolean;
+  /** Absent on historical schema-v2 verifier records. */
+  ops_note?: string;
   status?: string;
   error?: string;
   reviewer_index?: number;
@@ -85,8 +90,15 @@ export type QcReportVerdict = QcVerdict & {
   model_response_count?: number;
 };
 
-export type QcReportFinding = Omit<QcFinding, "verdicts"> & {
+export type QcReportFinding = Omit<
+  QcFinding,
+  "verdicts" | "ops_semantic_status" | "ops_semantic_reason"
+> & {
   verdicts: QcReportVerdict[];
+  /** Absent on historical schema-v2 finding records. */
+  ops_semantic_status?: QcOpsSemanticStatus | string;
+  /** Absent on historical schema-v2 finding records. */
+  ops_semantic_reason?: string;
   original_severity?: string;
   reviewed_ref?: string;
   reviewed_text?: string;
@@ -194,6 +206,8 @@ export interface QcReportMetrics {
   unevaluatedInconclusiveOperations: number;
   findingsWithValidOperations: number;
   findingsWithInvalidOperations: number;
+  findingsWithRejectedOperations: number;
+  findingsWithUnevaluatedOperations: number;
   apiRequests: number;
   modelResponses: number;
   severity: SeverityCounts;
@@ -226,8 +240,22 @@ export interface QcOperationRecord {
   operationIndex: number;
   opsValid: boolean;
   invalidReason: string;
+  semanticStatus: QcOperationSemanticStatus;
+  semanticReason: string;
   validationStatus: "valid" | "invalid" | "not_evaluated";
   operation: Record<string, unknown>;
+}
+
+export type QcOperationSemanticStatus =
+  | QcOpsSemanticStatus
+  | "legacy_unrecorded";
+
+export interface QcOperationEvaluation {
+  semanticStatus: QcOperationSemanticStatus;
+  semanticReason: string;
+  mechanicalStatus: "valid" | "invalid" | "not_evaluated";
+  mechanicallyValid: boolean;
+  actionable: boolean;
 }
 
 export interface QcVerifierSeatCoverage {
@@ -269,6 +297,62 @@ function schemaVersionNumber(value: unknown): number | undefined {
 
 function arrayOrEmpty<T>(value: T[] | undefined): T[] {
   return Array.isArray(value) ? value : [];
+}
+
+const QC_OPS_SEMANTIC_STATUSES = new Set<QcOpsSemanticStatus>([
+  "not_proposed",
+  "not_evaluated",
+  "approved",
+  "rejected",
+]);
+
+/**
+ * Keep semantic reviewer approval separate from the deterministic operation
+ * dry-run. Schema-v2 reports did not record semantic approval and therefore
+ * must remain readable but non-actionable.
+ */
+export function qcOperationEvaluation(
+  finding: Pick<
+    QcReportFinding,
+    | "ops_semantic_status"
+    | "ops_semantic_reason"
+    | "ops_valid"
+    | "proposed_ops"
+  >,
+  schemaVersion?: unknown,
+  findingKind: "surviving" | "refuted" | "inconclusive" = "surviving",
+): QcOperationEvaluation {
+  const rawSemanticStatus = String(finding.ops_semantic_status ?? "")
+    .trim()
+    .toLowerCase();
+  const semanticStatus = QC_OPS_SEMANTIC_STATUSES.has(
+    rawSemanticStatus as QcOpsSemanticStatus,
+  )
+    ? (rawSemanticStatus as QcOpsSemanticStatus)
+    : "legacy_unrecorded";
+  const hasOperations = Array.isArray(finding.proposed_ops) && finding.proposed_ops.length > 0;
+  const semanticallyApproved =
+    findingKind === "surviving" &&
+    hasOperations &&
+    semanticStatus === "approved";
+  const mechanicalStatus = semanticallyApproved
+    ? finding.ops_valid
+      ? "valid"
+      : "invalid"
+    : "not_evaluated";
+  const schema = schemaVersionNumber(schemaVersion);
+
+  return {
+    semanticStatus,
+    semanticReason: String(finding.ops_semantic_reason ?? "").trim(),
+    mechanicalStatus,
+    mechanicallyValid: mechanicalStatus === "valid",
+    actionable:
+      schema != null &&
+      schema >= 3 &&
+      semanticallyApproved &&
+      mechanicalStatus === "valid",
+  };
 }
 
 /** Legacy seats had no status; a preserved substantive verdict counts complete. */
@@ -1001,6 +1085,11 @@ export function collectQcOperationRecords(
     findingKind: "surviving" | "refuted" | "inconclusive",
   ) => {
     for (const finding of findings) {
+      const evaluation = qcOperationEvaluation(
+        finding,
+        result.schema_version,
+        findingKind,
+      );
       finding.proposed_ops.forEach((operation, operationIndex) => {
         records.push({
           findingId: finding.finding_id,
@@ -1009,12 +1098,9 @@ export function collectQcOperationRecords(
           operationIndex,
           opsValid: finding.ops_valid,
           invalidReason: finding.ops_invalid_reason,
-          validationStatus:
-            findingKind === "surviving"
-              ? finding.ops_valid
-                ? "valid"
-                : "invalid"
-              : "not_evaluated",
+          semanticStatus: evaluation.semanticStatus,
+          semanticReason: evaluation.semanticReason,
+          validationStatus: evaluation.mechanicalStatus,
           operation,
         });
       });
@@ -1168,11 +1254,32 @@ export function buildQcReportMetrics(
       0,
     ),
     findingsWithValidOperations: findings.filter(
-      (finding) => finding.proposed_ops.length > 0 && finding.ops_valid,
+      (finding) =>
+        qcOperationEvaluation(finding, result.schema_version).mechanicalStatus ===
+        "valid",
     ).length,
     findingsWithInvalidOperations: findings.filter(
-      (finding) => finding.proposed_ops.length > 0 && !finding.ops_valid,
+      (finding) =>
+        qcOperationEvaluation(finding, result.schema_version).mechanicalStatus ===
+        "invalid",
     ).length,
+    findingsWithRejectedOperations: findings.filter(
+      (finding) =>
+        finding.proposed_ops.length > 0 &&
+        qcOperationEvaluation(finding, result.schema_version).semanticStatus ===
+          "rejected",
+    ).length,
+    findingsWithUnevaluatedOperations: findings.filter((finding) => {
+      const semanticStatus = qcOperationEvaluation(
+        finding,
+        result.schema_version,
+      ).semanticStatus;
+      return (
+        finding.proposed_ops.length > 0 &&
+        semanticStatus !== "approved" &&
+        semanticStatus !== "rejected"
+      );
+    }).length,
     apiRequests: requestCount(result),
     modelResponses: responseCount(result),
     severity: countSeverities(candidates),

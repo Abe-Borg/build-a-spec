@@ -75,7 +75,7 @@ interface Props {
   referenceBusy: boolean;
   onStartResearch: () => void;
   onStopResearch: () => void;
-  onStartQc: () => void;
+  onStartQc: (acknowledgeScopeMismatch?: boolean) => void;
   onStopQc: () => void;
   onApplyQc: (findingIds: string[]) => void;
   onDismissQc: (findingId: string, reason: string) => Promise<void>;

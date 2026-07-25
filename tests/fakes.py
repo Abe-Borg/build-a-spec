@@ -19,7 +19,7 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
 
     A few concurrency/source-preservation tests need a trusted QC result only
     to reach the later guard they actually exercise.  Keep those fixtures on
-    the same v2 identity, lens, verifier, and pricing contract as production
+    the same v3 identity, lens, verifier, and pricing contract as production
     instead of weakening the endpoint's audit-completeness gate.
     """
     import uuid
@@ -72,10 +72,25 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         finding.verification_panel_size = panel_size
         finding.verification_threshold = (panel_size // 2) + 1
         finding.verification_outcome = "upheld"
+        has_ops = bool(finding.proposed_ops)
+        finding.ops_semantic_status = "approved" if has_ops else "not_proposed"
+        finding.ops_semantic_reason = (
+            f"All {panel_size} verifier seat(s) approved the operations."
+            if has_ops
+            else "No proposed operations were supplied."
+        )
+        if not has_ops:
+            finding.ops_valid = False
         finding.verdicts = [
             QCVerdict(
                 upholds=True,
                 note="Audit-grade endpoint test fixture upheld the finding.",
+                ops_adequate=has_ops,
+                ops_note=(
+                    "The complete operation set safely fixes the finding."
+                    if has_ops
+                    else "No operations were proposed."
+                ),
                 reviewer_index=index,
             )
             for index in range(1, panel_size + 1)
@@ -597,6 +612,8 @@ def qc_verdict_response(
     *,
     severity: str | None = None,
     note: str = "",
+    ops_adequate: bool | None = None,
+    ops_note: str = "",
     stop_reason: str = "tool_use",
     tokens: dict[str, int] | None = None,
 ) -> SimpleNamespace:
@@ -606,7 +623,15 @@ def qc_verdict_response(
             tool_use_block(
                 "toolu_qc_verdict",
                 "submit_qc_verdict",
-                {"upholds": upholds, "revised_severity": severity, "note": note},
+                {
+                    "upholds": upholds,
+                    "revised_severity": severity,
+                    "note": note,
+                    "ops_adequate": (
+                        upholds if ops_adequate is None else ops_adequate
+                    ),
+                    "ops_note": ops_note,
+                },
             )
         ],
         stop_reason=stop_reason,

@@ -338,7 +338,13 @@ QC_FINDINGS_SCHEMA: dict[str, Any] = {
 QC_VERDICT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["upholds", "revised_severity", "note"],
+    "required": [
+        "upholds",
+        "revised_severity",
+        "note",
+        "ops_adequate",
+        "ops_note",
+    ],
     "properties": {
         "upholds": {
             "type": "boolean",
@@ -349,12 +355,28 @@ QC_VERDICT_SCHEMA: dict[str, Any] = {
         },
         "revised_severity": {
             "type": ["string", "null"],
-            "enum": [*SEVERITIES, None],
-            "description": "A corrected severity, or null to keep the original.",
+            "description": (
+                "A corrected severity (critical, high, medium, or low), or "
+                "null to keep the original."
+            ),
         },
         "note": {
             "type": "string",
             "description": "One-line rationale for the verdict.",
+        },
+        "ops_adequate": {
+            "type": "boolean",
+            "description": (
+                "True only when the complete proposed operation set safely "
+                "and fully fixes the upheld finding."
+            ),
+        },
+        "ops_note": {
+            "type": "string",
+            "description": (
+                "One-line rationale for whether the proposed operations are "
+                "adequate and safe."
+            ),
         },
     },
 }
@@ -493,11 +515,21 @@ def normalize_findings(payload: dict) -> dict[str, Any]:
     }
 
 
-def normalize_verdict(payload: dict) -> dict[str, Any]:
-    """Clamp a ``submit_qc_verdict`` payload; unknown severity → keep original."""
+def normalize_verdict(
+    payload: dict, *, has_proposed_ops: bool = True
+) -> dict[str, Any]:
+    """Clamp a ``submit_qc_verdict`` payload to the verifier contract.
+
+    Unknown severities mean "keep original."  A refuting verdict or a
+    finding without proposed operations can never approve those operations,
+    even if the model emitted an inconsistent ``ops_adequate=true``.
+    """
     upholds = payload.get("upholds")
     if not isinstance(upholds, bool):
         raise ValueError("QC verdict 'upholds' must be a JSON boolean.")
+    ops_adequate = payload.get("ops_adequate")
+    if not isinstance(ops_adequate, bool):
+        raise ValueError("QC verdict 'ops_adequate' must be a JSON boolean.")
     revised = str(payload.get("revised_severity") or "").strip().lower()
     if revised not in SEVERITIES:
         revised = ""
@@ -505,6 +537,8 @@ def normalize_verdict(payload: dict) -> dict[str, Any]:
         "upholds": upholds,
         "revised_severity": revised,
         "note": str(payload.get("note") or "").strip(),
+        "ops_adequate": bool(ops_adequate and upholds and has_proposed_ops),
+        "ops_note": str(payload.get("ops_note") or "").strip(),
     }
 
 

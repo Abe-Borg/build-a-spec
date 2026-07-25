@@ -570,6 +570,26 @@ export interface AuditSnapshot {
 export type QcRunStatus = "idle" | "running" | "complete" | "failed";
 export type Severity = "critical" | "high" | "medium" | "low";
 export type QcFindingStatus = "open" | "applied" | "dismissed";
+export type QcOpsSemanticStatus =
+  | "not_proposed"
+  | "not_evaluated"
+  | "approved"
+  | "rejected";
+export type QcModuleSectionCompatibilityStatus =
+  | "match"
+  | "mismatch"
+  | "unknown"
+  | "not_applicable";
+
+export interface QcModuleSectionCompatibility {
+  status: QcModuleSectionCompatibilityStatus;
+  section_number: string;
+  section_title: string;
+  module_id: string;
+  module_display_name: string;
+  allowed_sections: { number: string; title: string }[];
+  message: string;
+}
 
 export interface QcSourceRecord {
   url: string;
@@ -599,8 +619,10 @@ export interface QcDispositionEvent {
 
 export interface QcVerdict {
   upholds: boolean;
-  revised_severity: string;
+  revised_severity: string | null;
   note: string;
+  ops_adequate: boolean;
+  ops_note: string;
   status: "completed" | "failed" | "cancelled" | string;
   error: string;
   reviewer_index: number;
@@ -631,6 +653,8 @@ export interface QcFinding {
   grounded: boolean;
   source_checks: QcSourceRecord[];
   proposed_ops: Record<string, unknown>[];
+  ops_semantic_status: QcOpsSemanticStatus;
+  ops_semantic_reason: string;
   ops_valid: boolean;
   ops_invalid_reason: string;
   verdicts: QcVerdict[];
@@ -732,6 +756,9 @@ export interface QcSnapshot {
   report_stale?: boolean;
   report_is_latest_attempt?: boolean;
   latest_attempt?: QcAttemptSnapshot | null;
+  /** Advisory comparison between the active section and a curated module's
+   * closed catalog. A mismatch requires explicit acknowledgement to run QC. */
+  module_section_compatibility?: QcModuleSectionCompatibility;
 }
 
 export interface QcAttemptSnapshot {

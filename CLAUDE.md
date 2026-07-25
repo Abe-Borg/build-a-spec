@@ -11,6 +11,9 @@ file is the working reference for AI-assisted development sessions.
 - Tests are hermetic: no network, no real API key. `tests/conftest.py` injects
   a placeholder `ANTHROPIC_API_KEY`; anything touching the API monkeypatches
   `backend.llm.conversation.get_client` with a fake streaming client.
+  `tools/qc_verifier_canary.py --run` is the sole explicit paid exception: one
+  low-token Fable verifier request for provider-side strict-schema acceptance,
+  never a full Final QC run. Without `--run` it performs no request.
 - Reused Spec Critic code is **copied in and adapted**, never imported across
   repos. When porting a file, keep its design and docstring posture, update
   identity strings (BuildASpec / BUILD_A_SPEC_*), and note the provenance in
@@ -514,14 +517,19 @@ the run's event log from seq 0 and follows until terminal, closing with a
 `research_failed`).
 
 Final QC (Batch 4) has the same channel shape (a QC run also outlives a
-chat turn): `POST /api/qc/start` (400 empty draft / no key; 409 while a turn
-streams or QC runs — research is NOT required), `GET /api/qc/status`
-(snapshot: status/error/events/result view), `GET /api/qc/stream` (replay +
+chat turn): `POST /api/qc/start` accepts optional
+`{acknowledge_scope_mismatch: boolean}` (400 empty draft / no key; 409 while a
+turn streams or QC runs; `module_section_mismatch` 409 with the compatibility
+object when a curated closed-catalog mismatch is not acknowledged — research
+is NOT required), `GET /api/qc/status` (snapshot: status/error/events/result
+view plus `module_section_compatibility`), `GET /api/qc/stream` (replay +
 follow + `stream_end`; event types `qc_started`, `lens_complete`,
 `lens_failed`, `verify_progress` {done,total}, `qc_complete`, `qc_failed`),
 `POST /api/qc/apply` (`{finding_ids}` → one undoable version; per-finding
-`applied`/`stale`/`no_ops`/`not_open`/`unknown` outcomes; duplicate ids are
-deduplicated; 409 while a turn or QC run is active),
+`applied`/`stale`/`no_ops`/`not_open`/`unknown` outcomes; duplicate ids and
+identical operations are deduplicated; different operations claiming the same
+deterministic write key return a structured 409 before any mutation; 409 while
+a turn or QC run is active),
 `POST /api/qc/dismiss` (`{finding_id, reason}` with a required nonblank audit
 rationale → remembered by
 content-addressed id across re-runs; 409 while QC runs),
@@ -987,7 +995,7 @@ deterministic validation/disposition events. Prompts and UI copy must not ask
 for, promise, serialize, or display private chain-of-thought.
 
 - **Versioned run/input envelope.** `QCResult` carries
-  `schema_version=2`, `protocol_version="final-qc/2"`, a UUID `run_id`,
+  `schema_version=3`, `protocol_version="final-qc/3"`, a UUID `run_id`,
   `execution_status` (`complete|partial|failed|cancelled`),
   start/finish/duration, reviewed
   `version_index` + `version_fingerprint`, and a deterministic
@@ -996,6 +1004,9 @@ for, promise, serialize, or display private chain-of-thought.
   context, source guard, model and request configuration) so staleness is not
   reduced to a mutable history index. It also records model, effort,
   max-tokens, request/response counts, run usage, and estimated cost.
+  Schema-2 reports remain readable/exportable historical records, but endpoint
+  guards never accept them as an actionable queue because they lack semantic
+  fix verification.
 - **Complete lens records.** `QCLensStatus` persists the lens id/title/brief,
   status (`completed|failed|cancelled`) and error, summary,
   finding/grounding counts,
@@ -1014,9 +1025,12 @@ for, promise, serialize, or display private chain-of-thought.
   does not claim that a URL proves every word of the model's rationale.
 - **Every expected verifier seat.** `QCVerdict` records stable
   `reviewer_index`, `status` (`completed|failed|cancelled`), error, uphold,
-  revised severity, concise note, `search_queries`, `retrieved_sources`,
-  `usage_totals`, and request/response counts. Seats are allocated in the
-  result even when calls fail. A failed/cancelled/missing seat makes the whole
+  revised severity, concise note, `ops_adequate`, `ops_note`, `search_queries`,
+  `retrieved_sources`, `usage_totals`, and request/response counts. The
+  verifier sees the complete proposed-operation payload as untrusted data and
+  must reject fixes that are partial, choice-creating, TBD-producing,
+  contradictory, scope-changing, or otherwise unsafe. Seats are allocated in
+  the result even when calls fail. A failed/cancelled/missing seat makes the whole
   candidate `inconclusive`; it is neither actionable nor substantively
   refuted, and the report becomes partial. Majority adjudication is performed
   only for a fully completed panel.
@@ -1029,9 +1043,16 @@ for, promise, serialize, or display private chain-of-thought.
   Refuted candidates keep the same detail in the report's full appendix.
   Infrastructure-inconclusive candidates occupy a separate collection and
   appendix with their failed/cancelled seat evidence; only verified survivors
-  enter the compact action queue.
-- **Full fix and disposition record.** Exact `proposed_ops`, snapshot dry-run
-  validity/error, status and dismiss reason persist. `QCDispositionEvent`
+  enter the compact action queue. `ops_semantic_status`
+  (`not_proposed|not_evaluated|approved|rejected`) and
+  `ops_semantic_reason` keep finding survival separate from fix eligibility:
+  a surviving finding needs every expected seat to complete, uphold, and set
+  `ops_adequate=true` before its operations can be approved.
+- **Full fix and disposition record.** Exact `proposed_ops`, aggregate semantic
+  decision, snapshot dry-run validity/error, status and dismiss reason persist.
+  Only semantically approved fixes proceed to deterministic/source-preservation
+  validation, so `ops_valid=true` means both semantic and mechanical approval.
+  `QCDispositionEvent`
   records apply/dismiss/stale/no-op outcomes with time, reason, and document
   identity where available. Revalidation against the current document remains
   authoritative; audit display of raw proposed ops never makes invalid or
@@ -1064,10 +1085,11 @@ for, promise, serialize, or display private chain-of-thought.
   readiness, persistence, and exports consume `audit_record_snapshot()` once
   rather than sampling mutable fields separately. SSE is bound to its starting
   run token and closes `superseded` before exposing a replacement run's events.
-  Restore accepts only an audit-complete report into the actionable retained
-  slot; partial/failed/cancelled reports remain latest-attempt evidence. Apply
-  and dismiss independently enforce that invariant and stay blocked during
-  worker settling.
+  Restore promotes only an execution-complete, structurally complete report to
+  the retained report slot; partial/failed/cancelled reports remain latest-
+  attempt evidence. Apply and dismiss independently require the current
+  schema/protocol (so retained schema-2 history is still nonactionable) and
+  stay blocked during worker settling.
 - **Surfaces and safety.** `QCReportModal` shows run/document identity,
   readiness, methodology/input manifest, every lens/check/query/source/error,
   metrics, complete surviving and refuted records, raw proposed-op JSON,
@@ -1109,17 +1131,23 @@ for, promise, serialize, or display private chain-of-thought.
   A dead/cancelled/missing verifier makes the candidate infrastructure-
   inconclusive and the run partial; it is never treated as substantive
   refutation evidence. Verifications for all findings flatten into
-  ONE thread pool (per-`(finding, verifier)` task); `verify_progress`
+  ONE bounded thread pool (per-`(finding, verifier)` task) with at most four
+  submitted futures; `verify_progress`
   {done,total} fires as each finding's panel resolves. Surviving severity =
   `median_severity([original, *upheld revisions])`; both original and final
   severity persist. Refuted findings are retained under `QCResult.refuted`;
   incomplete panels under `QCResult.inconclusive`, both with full
   evidence/seat/fix detail (transparency, excluded from the compact issue
-  queue).
-  (3) Deterministic ops validation: each surviving finding's `proposed_ops`
-  is dry-run via `apply_edits(deepcopy(snapshot))` (copy per finding — they
-  never see each other's effects); invalid → `ops_valid=False` +
-  `ops_invalid_reason`, kept advisory, never trusted raw.
+  queue). An immediate nonretryable `INVALID_REQUEST` before any model response
+  is treated as a shared verifier-phase failure: queued seats are synthesized
+  as failed zero-request records, in-flight calls settle, and the run is
+  partial. Ordinary transport, throttling, output, parse, and cancellation
+  failures do not open that circuit.
+  (3) Semantic then deterministic ops validation: only a surviving finding
+  with unanimous complete-panel operation approval is dry-run via
+  `apply_edits(deepcopy(snapshot))` (copy per finding — they never see each
+  other's effects); rejected or invalid fixes stay advisory with
+  `ops_valid=False` and their semantic/mechanical reason persisted.
 - **Content-addressed findings + dismiss memory.** `finding_id` is `qc-` plus
   the first 12 characters of a canonical-JSON SHA-256 over every material fact
   a carried disposition relies on: lens and element ids; normalized title,

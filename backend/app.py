@@ -115,6 +115,12 @@ from .qc.engine import (
     qc_input_fingerprint,
     qc_version_fingerprint,
 )
+from .qc.op_conflicts import (
+    canonical_qc_operation,
+    plan_qc_operation_batch,
+    qc_operation_identity,
+)
+from .qc.preflight import module_section_compatibility
 from .spec_modules import AVAILABLE_MODULES, DEFAULT_MODULE
 from .spec_doc import SpecEditError, diff_sections, lint_document, open_questions
 from .spec_doc.docx_export import (
@@ -202,6 +208,10 @@ class SessionResetRequest(BaseModel):
 
 class QcApplyRequest(BaseModel):
     finding_ids: list[str]
+
+
+class QcStartRequest(BaseModel):
+    acknowledge_scope_mismatch: bool = False
 
 
 class QcDismissRequest(BaseModel):
@@ -802,7 +812,7 @@ def _readiness_payload(
     # checks.  "Current" answers only whether the retained report belongs to
     # the live review inputs and is also the latest completed attempt;
     # "audit complete" answers whether that current report carries the full
-    # v2 coverage/verifier contract and has no unresolved critical findings.
+    # current coverage/verifier contract and has no unresolved critical findings.
     # Keeping the predicates distinct makes a failed gate diagnosable instead
     # of collapsing provenance, completeness, and severity into one boolean.
     qc_current = bool(qc_matches_inputs and latest_attempt_matches)
@@ -1041,6 +1051,9 @@ def _qc_snapshot_payload(session) -> dict[str, Any]:
         "settling": bool(runner.get("settling", False)),
         "events": qc_record.get("events") or [],
         "latest_attempt": latest_attempt,
+        "module_section_compatibility": module_section_compatibility(
+            session.doc.doc, session.module
+        ),
     }
     if qc_record.get("result") is not None:
         payload["result"] = qc_record["result"]
@@ -1888,6 +1901,17 @@ def create_app() -> FastAPI:
                         },
                         status_code=409,
                     )
+                compatibility = module_section_compatibility(
+                    result.section, session.module
+                )
+                if compatibility["status"] == "mismatch":
+                    # Keep the imported specification authoritative.  The
+                    # closed-catalog mismatch is advisory and travels with
+                    # the existing import warnings for later recovery/load.
+                    report["warnings"] = [
+                        *report.get("warnings", []),
+                        compatibility["message"],
+                    ]
                 session.doc.adopt_imported(result.section)
                 session.source_docx_bytes = source_bytes
                 session.source_docx_filename = safe_filename
@@ -1905,7 +1929,7 @@ def create_app() -> FastAPI:
 
         _trace_capture.import_event(
             blocks=result.imported_block_count,
-            warnings=len(result.warnings),
+            warnings=len(report["warnings"]),
             tracked_changes=result.tracked_changes_detected,
         )
         # The per-element permission sweep is the most expensive thing this
@@ -2167,7 +2191,9 @@ def create_app() -> FastAPI:
     # --- Final QC on Fable 5 (Batch 4) --------------------------------------
 
     @app.post("/api/qc/start")
-    def qc_start() -> JSONResponse:
+    def qc_start(
+        body: QcStartRequest | None = Body(default=None),
+    ) -> JSONResponse:
         """Launch the spare-no-expense Final-QC pass on Fable 5.
 
         Research is NOT required — when absent, the completeness lens adapts
@@ -2200,6 +2226,22 @@ def create_app() -> FastAPI:
                 return JSONResponse(
                     {"ok": False, "error": "There is no draft to review yet."},
                     status_code=400,
+                )
+            compatibility = module_section_compatibility(
+                session.doc.doc, session.module
+            )
+            acknowledged = bool(
+                body is not None and body.acknowledge_scope_mismatch
+            )
+            if compatibility["status"] == "mismatch" and not acknowledged:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "code": "module_section_mismatch",
+                        "error": compatibility["message"],
+                        "module_section_compatibility": compatibility,
+                    },
+                    status_code=409,
                 )
             try:
                 client = get_client()
@@ -2360,23 +2402,27 @@ def create_app() -> FastAPI:
             # the potentially expensive QC dry-run below is in progress.
             version_record = session.doc.versions[version_index]
             working = SpecSection.from_dict(version_record)
-        combined_ops: list[dict[str, Any]] = []
-        applied_ids: list[str] = []
         outcomes: dict[str, str] = {}
         skipped_events: list[tuple[str, str, str]] = []
+        eligible_findings: list[tuple[str, list[dict[str, Any]]]] = []
         selected_ids = list(dict.fromkeys(body.finding_ids))
         for finding_id in selected_ids:
             finding = result.finding(finding_id)
             if finding is None:
                 outcomes[finding_id] = "unknown"
                 continue
-            if not finding.ops_valid or not finding.proposed_ops:
+            if (
+                getattr(finding, "ops_semantic_status", "") != "approved"
+                or not finding.ops_valid
+                or not finding.proposed_ops
+            ):
                 outcomes[finding_id] = "no_ops"
                 skipped_events.append(
                     (
                         finding_id,
                         "apply_no_ops",
-                        "No validated mechanical operations were available.",
+                        "No semantically approved and mechanically validated "
+                        "operations were available.",
                     )
                 )
                 continue
@@ -2401,20 +2447,77 @@ def create_app() -> FastAPI:
                     )
                 )
                 continue
+            eligible_findings.append((finding_id, finding.proposed_ops))
+
+        batch = plan_qc_operation_batch(working, eligible_findings)
+        if batch.conflicts:
+            conflicting_ids = list(
+                dict.fromkeys(
+                    finding_id
+                    for conflict in batch.conflicts
+                    for finding_id in conflict["finding_ids"]
+                )
+            )
+            write_keys = sorted(
+                {
+                    write_key
+                    for conflict in batch.conflicts
+                    for write_key in conflict["write_keys"]
+                }
+            )
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "code": "qc_operation_conflict",
+                    "error": (
+                        "Selected Final QC fixes contain conflicting "
+                        "operations; nothing was applied."
+                    ),
+                    "finding_ids": conflicting_ids,
+                    "write_keys": write_keys,
+                    "conflicts": list(batch.conflicts),
+                },
+                status_code=409,
+            )
+
+        # Preserve the established per-finding stale outcome: one malformed
+        # proposal does not prevent unrelated, compatible findings from being
+        # applied. Exact operations already accepted for an earlier finding
+        # are omitted from later batches, so destructive/additive duplicates
+        # execute once while every owning finding can still be dispositioned.
+        combined_ops: list[dict[str, Any]] = []
+        applied_ids: list[str] = []
+        successful_identities: set[str] = set()
+        for finding_id, proposed_ops in eligible_findings:
+            previously_successful = set(successful_identities)
+            normalized = [
+                canonical_qc_operation(operation)
+                for operation in proposed_ops
+            ]
+            novel_ops = [
+                operation
+                for operation in normalized
+                if qc_operation_identity(operation) not in previously_successful
+            ]
             try:
-                working, _applied = apply_edits(working, finding.proposed_ops)
+                if novel_ops:
+                    working, _applied = apply_edits(working, novel_ops)
             except SpecEditError:
                 outcomes[finding_id] = "stale"
                 skipped_events.append(
                     (
                         finding_id,
                         "apply_stale",
-                        "The proposed operations no longer applied cleanly in the "
-                        "selected batch; nothing from this finding was applied.",
+                        "The proposed operations no longer applied cleanly in "
+                        "the selected batch; nothing from this finding was "
+                        "applied.",
                     )
                 )
                 continue
-            combined_ops.extend(finding.proposed_ops)
+            combined_ops.extend(novel_ops)
+            successful_identities.update(
+                qc_operation_identity(operation) for operation in normalized
+            )
             applied_ids.append(finding_id)
             outcomes[finding_id] = "applied"
 

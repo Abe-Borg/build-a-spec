@@ -23,7 +23,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type {
-  QcFinding,
+  QcModuleSectionCompatibility,
   QcSnapshot,
   ReadinessPayload,
   Severity,
@@ -38,11 +38,14 @@ import {
 } from "../lib/sourceCapabilities";
 import {
   qcInconclusiveCandidates,
+  qcOperationEvaluation,
   qcPrimaryReport,
   qcReportExportUrl,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
   safeHttpUrl,
+  type QcOperationEvaluation,
+  type QcReportFinding,
 } from "../lib/qcReport";
 import { useDialogFocus } from "../lib/dialogFocus";
 import ConfirmDialog from "./ConfirmDialog";
@@ -56,7 +59,7 @@ interface Props {
   sourceExpected: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
   usage: UsageSummary | null;
-  onStart: () => void;
+  onStart: (acknowledgeScopeMismatch: boolean) => void;
   onStop: () => void;
   onApply: (findingIds: string[]) => void;
   onDismiss: (findingId: string, reason: string) => Promise<void>;
@@ -68,6 +71,51 @@ interface Props {
 const HOLD_MS = 800;
 const SEVERITY_ORDER: Severity[] = ["critical", "high", "medium", "low"];
 const QC_BUSY_MESSAGE = "Wait for the current action to finish.";
+
+function qcOperationGate(
+  finding: QcReportFinding,
+  evaluation: QcOperationEvaluation,
+): SourceOperationCapability {
+  if (evaluation.actionable) return { allowed: true };
+  if (evaluation.semanticStatus === "legacy_unrecorded") {
+    return {
+      allowed: false,
+      blocker: "qc_schema_legacy",
+      message:
+        "Historical Final QC reports do not contain semantic fix verification and cannot supply an actionable queue. Re-run Final QC.",
+    };
+  }
+  if (evaluation.semanticStatus === "rejected") {
+    return {
+      allowed: false,
+      blocker: "qc_ops_semantic_rejected",
+      message:
+        evaluation.semanticReason ||
+        "The verifier panel did not approve this proposed fix.",
+    };
+  }
+  if (evaluation.semanticStatus === "not_evaluated") {
+    return {
+      allowed: false,
+      blocker: "qc_ops_semantic_not_evaluated",
+      message: evaluation.semanticReason || "This proposed fix was not semantically evaluated.",
+    };
+  }
+  if (evaluation.semanticStatus === "not_proposed" || finding.proposed_ops.length === 0) {
+    return {
+      allowed: false,
+      blocker: "qc_ops_missing",
+      message: evaluation.semanticReason || "Final QC did not propose a fix for this finding.",
+    };
+  }
+  return {
+    allowed: false,
+    blocker: "qc_ops_invalid",
+    message:
+      finding.ops_invalid_reason ||
+      "The semantically approved fix did not pass deterministic operation validation.",
+  };
+}
 
 const sevChip: Record<Severity, string> = {
   critical: "border-err/70 bg-err/25 text-err",
@@ -126,7 +174,7 @@ export default function QCDrawer({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
-  const [dismissTarget, setDismissTarget] = useState<QcFinding | null>(null);
+  const [dismissTarget, setDismissTarget] = useState<QcReportFinding | null>(null);
   const [dismissReason, setDismissReason] = useState("");
   const [dismissPending, setDismissPending] = useState(false);
   const [dismissError, setDismissError] = useState("");
@@ -144,6 +192,7 @@ export default function QCDrawer({
   const settling = qc?.settling ?? false;
   const interactionBusy = busy || settling;
   const result = qc?.result;
+  const moduleSectionCompatibility = qc?.module_section_compatibility;
   const primaryReport = qcPrimaryReport(qc);
   const findings = result ? qcSurvivingCandidates(result) : [];
   const refuted = result ? qcSubstantivelyRefutedCandidates(result) : [];
@@ -155,16 +204,28 @@ export default function QCDrawer({
     ((qc?.stale ?? false) ||
       (doc != null && result.version_index !== doc.version.index));
   const applyStateStale = result != null && (doc == null || stale);
-  const findingDecisions = new Map(
+  const findingOperationEvaluations = new Map(
     findings.map((finding) => [
       finding.finding_id,
-      qcBatchDecision({
-        finding,
-        sourceCapabilities,
-        sourceExpected,
-        stale: applyStateStale,
-      }),
+      qcOperationEvaluation(finding, result?.schema_version),
     ]),
+  );
+  const findingDecisions = new Map(
+    findings.map((finding) => {
+      const evaluation = findingOperationEvaluations.get(finding.finding_id)!;
+      const operationGate = qcOperationGate(finding, evaluation);
+      return [
+        finding.finding_id,
+        operationGate.allowed
+          ? qcBatchDecision({
+              finding,
+              sourceCapabilities,
+              sourceExpected,
+              stale: applyStateStale,
+            })
+          : operationGate,
+      ];
+    }),
   );
   const applicableCriticals = openCriticals.filter(
     (finding) => findingDecisions.get(finding.finding_id)?.allowed,
@@ -243,9 +304,9 @@ export default function QCDrawer({
 
   // The start button opens the confirmation dialog; the run only fires once
   // the user confirms in it (Fable 5 is expensive and a pass takes minutes).
-  const confirmStart = () => {
+  const confirmStart = (acknowledgeScopeMismatch: boolean) => {
     setConfirmOpen(false);
-    onStart();
+    onStart(acknowledgeScopeMismatch);
   };
 
   return (
@@ -557,6 +618,7 @@ export default function QCDrawer({
                         finding={f}
                         busy={interactionBusy}
                         decision={findingDecisions.get(f.finding_id)!}
+                        operationEvaluation={findingOperationEvaluations.get(f.finding_id)!}
                         open={!!openRationale[f.finding_id]}
                         onToggle={() =>
                           setOpenRationale((m) => ({
@@ -565,13 +627,8 @@ export default function QCDrawer({
                           }))
                         }
                         onApply={() => {
-                          const decision = qcBatchDecision({
-                            finding: f,
-                            sourceCapabilities,
-                            sourceExpected,
-                            stale: applyStateStale,
-                          });
-                          if (interactionBusy || !decision.allowed) return;
+                          const decision = findingDecisions.get(f.finding_id);
+                          if (interactionBusy || !decision?.allowed) return;
                           onApply([f.finding_id]);
                         }}
                         onDismiss={() => {
@@ -649,6 +706,7 @@ export default function QCDrawer({
         isRerun={!!primaryReport}
         costEstimate={costEstimate}
         busy={interactionBusy}
+        moduleSectionCompatibility={moduleSectionCompatibility}
         onConfirm={confirmStart}
         onCancel={() => setConfirmOpen(false)}
       />
@@ -750,7 +808,7 @@ function DismissQCModal({
   onConfirm,
   onCancel,
 }: {
-  finding: QcFinding | null;
+  finding: QcReportFinding | null;
   reason: string;
   busy: boolean;
   pending: boolean;
@@ -851,15 +909,40 @@ function ConfirmQCModal({
   isRerun,
   costEstimate,
   busy,
+  moduleSectionCompatibility,
   onConfirm,
   onCancel,
 }: {
   isRerun: boolean;
   costEstimate: string;
   busy: boolean;
-  onConfirm: () => void;
+  moduleSectionCompatibility?: QcModuleSectionCompatibility;
+  onConfirm: (acknowledgeScopeMismatch: boolean) => void;
   onCancel: () => void;
 }) {
+  const acknowledgementId = useId();
+  const [scopeMismatchAcknowledged, setScopeMismatchAcknowledged] =
+    useState(false);
+  const compatibilityKey = JSON.stringify([
+    moduleSectionCompatibility?.status ?? "",
+    moduleSectionCompatibility?.section_number ?? "",
+    moduleSectionCompatibility?.section_title ?? "",
+    moduleSectionCompatibility?.module_id ?? "",
+    moduleSectionCompatibility?.module_display_name ?? "",
+    moduleSectionCompatibility?.message ?? "",
+    ...(moduleSectionCompatibility?.allowed_sections ?? []).flatMap((section) => [
+      section.number,
+      section.title,
+    ]),
+  ]);
+  const scopeMismatch = moduleSectionCompatibility?.status === "mismatch";
+
+  // The acknowledgement is deliberately scoped to one visible preflight.
+  // Closing the modal unmounts it; any changed comparison resets it in place.
+  useEffect(() => {
+    setScopeMismatchAcknowledged(false);
+  }, [compatibilityKey]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onCancel();
@@ -870,6 +953,8 @@ function ConfirmQCModal({
 
   const sectionLabel =
     "text-[11px] font-semibold tracking-wide text-ink-faint uppercase";
+  const canConfirm =
+    !busy && (!scopeMismatch || scopeMismatchAcknowledged);
 
   return (
     <div
@@ -896,6 +981,71 @@ function ConfirmQCModal({
         </div>
 
         <div className="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-5 text-[13px] leading-relaxed text-ink-dim">
+          {scopeMismatch && moduleSectionCompatibility && (
+            <div
+              className="rounded-xl border border-warn/60 bg-warn/10 px-3.5 py-3 text-warn"
+              role="alert"
+            >
+              <p className="text-[11px] font-semibold tracking-wide uppercase">
+                Section is outside the selected module catalog
+              </p>
+              <p className="mt-1.5 text-[12px] leading-relaxed">
+                {moduleSectionCompatibility.message ||
+                  `Section ${moduleSectionCompatibility.section_number || "(number not recorded)"} is not listed by ${moduleSectionCompatibility.module_display_name || moduleSectionCompatibility.module_id || "the selected module"}.`}
+              </p>
+              <dl className="mt-2 space-y-1 text-[11px]">
+                <div>
+                  <dt className="inline font-semibold">Current specification: </dt>
+                  <dd className="inline">
+                    {moduleSectionCompatibility.section_number || "Number not recorded"}
+                    {moduleSectionCompatibility.section_title
+                      ? ` — ${moduleSectionCompatibility.section_title}`
+                      : ""}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="inline font-semibold">Selected module: </dt>
+                  <dd className="inline">
+                    {moduleSectionCompatibility.module_display_name ||
+                      moduleSectionCompatibility.module_id ||
+                      "Not recorded"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="inline font-semibold">Catalog sections: </dt>
+                  <dd className="inline">
+                    {moduleSectionCompatibility.allowed_sections.length > 0
+                      ? moduleSectionCompatibility.allowed_sections
+                          .map(
+                            (section) =>
+                              `${section.number}${section.title ? ` — ${section.title}` : ""}`,
+                          )
+                          .join("; ")
+                      : "None recorded"}
+                  </dd>
+                </div>
+              </dl>
+              <label
+                htmlFor={acknowledgementId}
+                className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-warn/50 bg-bg/30 px-2.5 py-2 text-[12px] font-medium text-ink"
+              >
+                <input
+                  id={acknowledgementId}
+                  type="checkbox"
+                  checked={scopeMismatchAcknowledged}
+                  onChange={(event) =>
+                    setScopeMismatchAcknowledged(event.target.checked)
+                  }
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-accent)]"
+                />
+                <span>
+                  I understand this specification is outside the selected
+                  module&apos;s catalog and want Final QC to review it as-is.
+                </span>
+              </label>
+            </div>
+          )}
+
           <p>
             Final QC is a spare-no-expense review of the whole section before it
             goes out the door. It runs on{" "}
@@ -955,8 +1105,13 @@ function ConfirmQCModal({
           </button>
           <button
             className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
-            onClick={onConfirm}
-            disabled={busy}
+            onClick={() => onConfirm(scopeMismatch && scopeMismatchAcknowledged)}
+            disabled={!canConfirm}
+            title={
+              scopeMismatch && !scopeMismatchAcknowledged
+                ? "Acknowledge the section/module mismatch before running Final QC."
+                : undefined
+            }
           >
             {isRerun ? "Re-run Final QC" : "Run Final QC"}
           </button>
@@ -970,15 +1125,17 @@ function FindingCard({
   finding,
   busy,
   decision,
+  operationEvaluation,
   open,
   onToggle,
   onApply,
   onDismiss,
   onJump,
 }: {
-  finding: QcFinding;
+  finding: QcReportFinding;
   busy: boolean;
   decision: SourceOperationCapability;
+  operationEvaluation: QcOperationEvaluation;
   open: boolean;
   onToggle: () => void;
   onApply: () => void;
@@ -995,6 +1152,36 @@ function FindingCard({
     : busy
       ? QC_BUSY_MESSAGE
       : "Apply this fix to the document (one undo step)";
+  const semanticSummary =
+    operationEvaluation.semanticStatus === "approved"
+      ? "Verifier panel approved the proposed fix."
+      : operationEvaluation.semanticStatus === "rejected"
+        ? "Verifier panel rejected the proposed fix; this finding is advisory only."
+        : operationEvaluation.semanticStatus === "not_proposed"
+          ? "No fix was proposed for this finding."
+          : operationEvaluation.semanticStatus === "not_evaluated"
+            ? "The proposed fix was not semantically evaluated."
+            : "Semantic fix verification was not recorded by this historical report.";
+  const semanticTone =
+    operationEvaluation.semanticStatus === "approved"
+      ? "border-ok/35 bg-ok/5 text-ok"
+      : operationEvaluation.semanticStatus === "rejected"
+        ? "border-err/40 bg-err/10 text-err"
+        : "border-warn/35 bg-warn/5 text-warn";
+  const fixStateLabel =
+    operationEvaluation.semanticStatus === "approved"
+      ? operationEvaluation.mechanicalStatus === "valid"
+        ? "fix ready"
+        : operationEvaluation.mechanicalStatus === "invalid"
+          ? "fix mechanically invalid"
+          : "fix not mechanically evaluated"
+      : operationEvaluation.semanticStatus === "rejected"
+        ? "fix rejected"
+        : operationEvaluation.semanticStatus === "not_proposed"
+          ? "no automatic fix"
+          : operationEvaluation.semanticStatus === "not_evaluated"
+            ? "fix not evaluated"
+            : "legacy fix record";
   return (
     <div
       className={`rounded-lg border border-edge bg-surface/40 p-2 ${
@@ -1028,6 +1215,11 @@ function FindingCard({
             {finding.status}
           </span>
         )}
+        <span
+          className={`shrink-0 rounded border px-1 py-px text-[9px] font-medium ${semanticTone}`}
+        >
+          {fixStateLabel}
+        </span>
       </div>
 
       <p className="mt-1 text-[11px] text-ink-dim">{finding.issue}</p>
@@ -1076,10 +1268,10 @@ function FindingCard({
                 [UNVERIFIED] cited but not retrieved
               </p>
             )}
-          {finding.ops_valid && finding.proposed_ops.length > 0 && (
+          {finding.proposed_ops.length > 0 && (
             <div className="rounded border border-edge/70 bg-bg/40 p-1.5">
               <p className="text-[10px] font-medium text-ink-faint uppercase">
-                Proposed fix
+                Proposed fix payload
               </p>
               <ul className="mt-0.5 space-y-0.5">
                 {finding.proposed_ops.map((op, i) => (
@@ -1090,6 +1282,24 @@ function FindingCard({
               </ul>
             </div>
           )}
+          <div className={`rounded border px-2 py-1.5 text-[11px] ${semanticTone}`}>
+            <p className="font-medium">{semanticSummary}</p>
+            {operationEvaluation.semanticReason && (
+              <p className="mt-0.5 whitespace-pre-wrap break-words opacity-90">
+                {operationEvaluation.semanticReason}
+              </p>
+            )}
+            {operationEvaluation.semanticStatus === "approved" && (
+              <p className="mt-0.5 text-ink-dim">
+                Mechanical validation:{" "}
+                {operationEvaluation.mechanicalStatus === "valid"
+                  ? "passed"
+                  : operationEvaluation.mechanicalStatus === "invalid"
+                    ? `failed${finding.ops_invalid_reason ? ` — ${finding.ops_invalid_reason}` : ""}`
+                    : "not evaluated"}
+              </p>
+            )}
+          </div>
           {finding.dismiss_reason && (
             <p className="text-[11px] text-ink-faint italic">
               Dismissed: {finding.dismiss_reason}

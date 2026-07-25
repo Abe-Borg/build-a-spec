@@ -28,6 +28,7 @@ import {
   normalizeSeverity,
   qcInconclusiveCandidates,
   qcLensCoverage,
+  qcOperationEvaluation,
   qcPrimaryReport,
   qcReportExportUrl,
   qcReportLimitations,
@@ -97,6 +98,16 @@ function statusTone(status: unknown): string {
     return "border-warn/40 bg-warn/10 text-warn";
   }
   return "border-edge bg-raised text-ink-dim";
+}
+
+function semanticOperationLabel(
+  status: ReturnType<typeof qcOperationEvaluation>["semanticStatus"],
+): string {
+  if (status === "approved") return "Approved by every verifier seat";
+  if (status === "rejected") return "Rejected — advisory finding only";
+  if (status === "not_proposed") return "No operation proposed";
+  if (status === "not_evaluated") return "Not semantically evaluated";
+  return "Not recorded — historical report";
 }
 
 function Pill({ children, className = "" }: { children: ReactNode; className?: string }) {
@@ -388,9 +399,16 @@ function VerdictRecord({ verdict, index }: { verdict: QcReportVerdict; index: nu
         </Pill>
         {verdict.status && <Pill className={statusTone(verdict.status)}>{verdict.status}</Pill>}
       </div>
-      <dl className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-5">
+      <dl className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-6">
         <DataField label="Stored reviewer index">{formatInteger(storedReviewerIndex)}</DataField>
         <DataField label="Revised severity">{verdict.revised_severity ? formatSeverity(verdict.revised_severity) : "Kept original / none recorded"}</DataField>
+        <DataField label="Proposed fix adequate">
+          {verdict.ops_adequate == null
+            ? "Not recorded (historical verifier record)"
+            : verdict.ops_adequate
+              ? "Yes"
+              : "No"}
+        </DataField>
         <DataField label="API requests">{formatInteger(verdict.api_request_count)}</DataField>
         <DataField label="Model responses">{formatInteger(verdict.model_response_count)}</DataField>
         <DataField label="Estimated seat cost">{formatUsd(verdict.estimated_cost_usd)}</DataField>
@@ -399,6 +417,12 @@ function VerdictRecord({ verdict, index }: { verdict: QcReportVerdict; index: nu
         <p className="text-[9px] font-semibold tracking-wide text-ink-faint uppercase">Reviewer note</p>
         <p className="mt-0.5 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-ink-dim">
           {verdict.note || NOT_RECORDED}
+        </p>
+      </div>
+      <div className="mt-2">
+        <p className="text-[9px] font-semibold tracking-wide text-ink-faint uppercase">Proposed-fix review note</p>
+        <p className="mt-0.5 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-ink-dim">
+          {verdict.ops_note || (verdict.ops_adequate == null ? "Not recorded in this historical verifier record." : NOT_RECORDED)}
         </p>
       </div>
       {verdict.error && (
@@ -450,6 +474,11 @@ function FindingRecord({
   const verdicts = finding.verdicts ?? [];
   const events = finding.disposition_events ?? [];
   const seats = verifierSeatCoverage(finding, schemaVersion);
+  const operationEvaluation = qcOperationEvaluation(
+    finding,
+    schemaVersion,
+    kind,
+  );
   return (
     <article className={`rounded-xl border bg-surface/55 px-4 py-4 shadow-sm ${kind === "inconclusive" ? "border-warn/60" : "border-edge"}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -501,7 +530,16 @@ function FindingRecord({
               ? `Not applicable — verification was infrastructure-inconclusive (stored field: ${recorded(finding.status)})`
               : recorded(finding.status)}
         </DataField>
-        <DataField label="Operation validation">{kind === "refuted" ? "Not evaluated — candidate was substantively refuted" : kind === "inconclusive" ? "Not evaluated — verification was infrastructure-inconclusive" : operations.length === 0 ? "No operation proposed" : finding.ops_valid ? "Valid" : "Invalid"}</DataField>
+        <DataField label="Semantic fix review">
+          {semanticOperationLabel(operationEvaluation.semanticStatus)}
+        </DataField>
+        <DataField label="Mechanical operation validation">
+          {operationEvaluation.mechanicalStatus === "valid"
+            ? "Valid"
+            : operationEvaluation.mechanicalStatus === "invalid"
+              ? "Invalid"
+              : "Not evaluated"}
+        </DataField>
         <DataField label="Verifier seats completed / expected">
           {seats.completed.toLocaleString("en-US")} / {seats.expected == null ? "expected not recorded" : seats.expected.toLocaleString("en-US")}
         </DataField>
@@ -543,16 +581,22 @@ function FindingRecord({
       </div>
 
       {(finding.dismiss_reason ||
-        (kind === "surviving" && finding.ops_invalid_reason)) && (
+        operationEvaluation.semanticReason ||
+        operationEvaluation.mechanicalStatus === "invalid") && (
         <div className="mt-3 space-y-1.5">
           {finding.dismiss_reason && (
             <p className="whitespace-pre-wrap break-words rounded border border-warn/40 bg-warn/10 px-2.5 py-2 text-[11px] text-warn">
               Dismissal reason: {finding.dismiss_reason}
             </p>
           )}
-          {kind === "surviving" && finding.ops_invalid_reason && (
+          {operationEvaluation.semanticReason && (
+            <p className="whitespace-pre-wrap break-words rounded border border-warn/40 bg-warn/10 px-2.5 py-2 text-[11px] text-warn">
+              Semantic fix-review detail: {operationEvaluation.semanticReason}
+            </p>
+          )}
+          {operationEvaluation.mechanicalStatus === "invalid" && (
             <p className="whitespace-pre-wrap break-words rounded border border-err/40 bg-err/10 px-2.5 py-2 text-[11px] text-err">
-              Operation validation detail: {finding.ops_invalid_reason}
+              Mechanical operation-validation detail: {finding.ops_invalid_reason || NOT_RECORDED}
             </p>
           )}
         </div>
@@ -969,8 +1013,8 @@ export default function QCReportModal({
                 ["Snapshot and identity", "The application captured the selected document version, a content fingerprint, the active module/project inputs, and whether requirements research was available."],
                 ["Parallel specialist lenses", "Each recorded lens received a defined brief and reviewed the whole input from its specialty. Lens check ledgers, searches, retrievals, summaries, errors, and usage appear in Section 05."],
                 ["Evidence qualification", "Candidate citations were retrieved and checked. Accepted and rejected source checks are both retained; rejected records provide traceability but do not count as grounding."],
-                ["Adversarial verification", "Candidate findings were sent to recorded reviewer seats. Each available verdict, note, revised severity, search, retrieval, error, and usage counter appears with the finding."],
-                ["Outcome separation and operation validation", "Candidates are separated into surviving findings, substantively refuted candidates, and infrastructure-inconclusive candidates. Only surviving findings can enter the action queue. Proposed document operations are mechanically validated when eligible; unabridged JSON remains visible for every bucket."],
+                ["Adversarial verification", "Candidate findings were sent to recorded reviewer seats. Finding survival uses the complete panel's majority; schema-3 fix eligibility separately requires every seat to uphold and approve the full operation set. Each available verdict, fix-adequacy decision, note, revised severity, search, retrieval, error, and usage counter appears with the finding."],
+                ["Outcome separation and operation validation", "Candidates are separated into surviving findings, substantively refuted candidates, and infrastructure-inconclusive candidates. Only a schema-3 surviving finding with unanimous semantic fix approval can enter deterministic and source-preservation validation; unabridged JSON remains visible for every bucket."],
                 ["Human disposition", "Open, applied, and dismissed states are kept separate from verification. Where supported by the record schema, later disposition events include time, reason, and document identity."],
               ].map(([title, body], index) => (
                 <li key={title} className="rounded-lg border border-edge/60 bg-surface/45 px-3 py-2.5">
@@ -999,7 +1043,7 @@ export default function QCReportModal({
               <Stat label="Unique source values" value={metrics.uniqueSourceUrls.toLocaleString("en-US")} detail={`${metrics.evidenceTraceRecords} total query/source trace entries`} />
               <Stat label="Source checks" value={metrics.sourceChecks.toLocaleString("en-US")} detail={`${metrics.acceptedSourceChecks} accepted · ${metrics.rejectedSourceChecks} rejected · ${metrics.unclassifiedSourceChecks} unclassified`} />
               <Stat label="Verifier records" value={metrics.verdicts.toLocaleString("en-US")} detail={`Completed-seat votes: ${metrics.upholdingVerdicts} uphold · ${metrics.refutingVerdicts} do not uphold`} />
-              <Stat label="Proposed operations" value={metrics.proposedOperations.toLocaleString("en-US")} detail={`${metrics.findingsWithValidOperations} surviving candidate(s) valid · ${metrics.findingsWithInvalidOperations} invalid · ${metrics.unevaluatedRefutedOperations} refuted and ${metrics.unevaluatedInconclusiveOperations} inconclusive operation(s) not evaluated`} />
+              <Stat label="Proposed operations" value={metrics.proposedOperations.toLocaleString("en-US")} detail={`${metrics.findingsWithValidOperations} semantically approved + mechanically valid · ${metrics.findingsWithInvalidOperations} mechanically invalid · ${metrics.findingsWithRejectedOperations} semantically rejected · ${metrics.findingsWithUnevaluatedOperations} survivor(s) not semantically evaluated`} />
               <Stat label="API requests" value={metrics.apiRequests.toLocaleString("en-US")} />
               <Stat label="Model responses" value={metrics.modelResponses.toLocaleString("en-US")} />
               <Stat label="Verifier errors" value={metrics.verdictErrors.toLocaleString("en-US")} />
@@ -1118,13 +1162,17 @@ export default function QCReportModal({
                       <Pill className={record.findingKind === "surviving" ? "border-ok/40 bg-ok/10 text-ok" : record.findingKind === "inconclusive" ? "border-warn/50 bg-warn/10 text-warn" : "border-edge bg-raised text-ink-dim"}>
                         {record.findingKind === "inconclusive" ? "infrastructure-inconclusive" : record.findingKind}
                       </Pill>
-                      <Pill className={record.validationStatus === "valid" ? "border-ok/40 bg-ok/10 text-ok" : record.validationStatus === "invalid" ? "border-err/40 bg-err/10 text-err" : "border-warn/40 bg-warn/10 text-warn"}>
-                        {record.validationStatus === "valid" ? "operation set valid" : record.validationStatus === "invalid" ? "operation set invalid" : record.findingKind === "inconclusive" ? "not evaluated — verification infrastructure-inconclusive" : "not evaluated — candidate substantively refuted"}
+                      <Pill className={record.semanticStatus === "approved" ? "border-ok/40 bg-ok/10 text-ok" : record.semanticStatus === "rejected" ? "border-err/40 bg-err/10 text-err" : "border-warn/40 bg-warn/10 text-warn"}>
+                        semantic: {semanticOperationLabel(record.semanticStatus)}
+                      </Pill>
+                      <Pill className={record.validationStatus === "valid" ? "border-ok/40 bg-ok/10 text-ok" : record.validationStatus === "invalid" ? "border-err/40 bg-err/10 text-err" : "border-edge bg-raised text-ink-dim"}>
+                        mechanical: {record.validationStatus === "valid" ? "valid" : record.validationStatus === "invalid" ? "invalid" : "not evaluated"}
                       </Pill>
                       <span className="break-all font-mono">{record.findingId}</span>
                     </div>
                     <p className="mb-2 whitespace-pre-wrap break-words text-[11px] text-ink-dim">{record.findingTitle || "Untitled finding"}</p>
-                    {record.validationStatus === "invalid" && record.invalidReason && <p className="mb-2 whitespace-pre-wrap break-words rounded border border-err/40 bg-err/10 px-2 py-1.5 text-[10px] text-err">Validation detail: {record.invalidReason}</p>}
+                    {record.semanticReason && <p className="mb-2 whitespace-pre-wrap break-words rounded border border-warn/40 bg-warn/10 px-2 py-1.5 text-[10px] text-warn">Semantic review detail: {record.semanticReason}</p>}
+                    {record.validationStatus === "invalid" && record.invalidReason && <p className="mb-2 whitespace-pre-wrap break-words rounded border border-err/40 bg-err/10 px-2 py-1.5 text-[10px] text-err">Mechanical validation detail: {record.invalidReason}</p>}
                     <JsonBlock value={record.operation} label={`Finding operation ${record.operationIndex + 1}`} />
                   </li>
                 ))}

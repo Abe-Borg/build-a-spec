@@ -9,6 +9,7 @@ import type {
   ProjectLoadResult,
   QcApplyResult,
   QcEvent,
+  QcModuleSectionCompatibility,
   QcSnapshot,
   ReadinessPayload,
   ReferenceDocMeta,
@@ -428,11 +429,45 @@ export async function deleteReference(
 
 /* --- Final QC on Fable 5 (Batch 4) --- */
 
-export async function startQc(): Promise<void> {
-  const resp = await fetch("/api/qc/start", { method: "POST" });
+export class QcStartError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly moduleSectionCompatibility?: QcModuleSectionCompatibility;
+
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    moduleSectionCompatibility?: QcModuleSectionCompatibility,
+  ) {
+    super(message);
+    this.name = "QcStartError";
+    this.status = status;
+    this.code = code;
+    this.moduleSectionCompatibility = moduleSectionCompatibility;
+  }
+}
+
+export async function startQc(
+  acknowledgeScopeMismatch = false,
+): Promise<void> {
+  const resp = await fetch("/api/qc/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      acknowledge_scope_mismatch: acknowledgeScopeMismatch,
+    }),
+  });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
-    throw new Error(data.error ?? `QC start failed (${resp.status})`);
+    throw new QcStartError(
+      data.error ?? `QC start failed (${resp.status})`,
+      resp.status,
+      typeof data.code === "string" ? data.code : undefined,
+      data.module_section_compatibility as
+        | QcModuleSectionCompatibility
+        | undefined,
+    );
   }
 }
 

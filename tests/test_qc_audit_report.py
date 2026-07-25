@@ -180,9 +180,21 @@ def _rich_audit_result() -> tuple[DocumentStore, QCResult]:
         ]
     )
     scripts["Upheld source-backed edition issue"] = [
-        qc_verdict_response(True, note="The retrieved basis supports the defect."),
-        qc_verdict_response(True, note="The document and citation conflict."),
-        qc_verdict_response(False, note="One reviewer found the basis ambiguous."),
+        qc_verdict_response(
+            True,
+            note="The retrieved basis supports the defect.",
+            ops_note="The replacement fully resolves the recorded edition conflict.",
+        ),
+        qc_verdict_response(
+            True,
+            note="The document and citation conflict.",
+            ops_note="The replacement introduces no unresolved choice.",
+        ),
+        qc_verdict_response(
+            True,
+            note="The complete correction is safe to apply.",
+            ops_note="The complete operation set is adequate.",
+        ),
     ]
     scripts["Refuted wording concern"] = [
         qc_verdict_response(False, note="The text is objectively measurable."),
@@ -557,8 +569,8 @@ def test_json_export_contains_complete_report_and_authoritative_current_state() 
     assert set(payload) == {"report", "current_state"}
 
     report = payload["report"]
-    assert report["schema_version"] >= 2
-    assert report["protocol_version"] == "final-qc/2"
+    assert report["schema_version"] == 3
+    assert report["protocol_version"] == "final-qc/3"
     assert report["run_id"].startswith("qc-run-")
     assert report["execution_status"] == "complete"
     assert report["version_fingerprint"] == qc_version_fingerprint(store.doc)
@@ -701,6 +713,9 @@ def test_detailed_docx_preserves_key_sections_findings_evidence_and_votes() -> N
     assert "The text is objectively measurable." in text
     assert "Reviewed with the project engineer" in text
     assert "replace" in text
+    assert "Semantic fix decision: APPROVED" in text
+    assert "Proposed fix adequate: APPROVED" in text
+    assert "The replacement fully resolves the recorded edition conflict." in text
     assert "3 reviewer record(s)" in text
     assert "2 reviewer record(s)" in text
 
@@ -999,22 +1014,46 @@ def test_duplicate_apply_ids_are_deduplicated_and_dismiss_is_blocked_while_runni
     assert dismiss.status_code == 409
 
 
-def test_apply_and_dismiss_require_audit_complete_and_nonsettling_result() -> None:
+def test_v2_exports_but_apply_and_dismiss_require_current_audit_contract() -> None:
     store, result = _rich_audit_result()
     finding_id = result.findings[0].finding_id
     session = sessions.get_session()
     session.doc = store
     client = TestClient(create_app())
 
-    legacy = copy.deepcopy(result)
-    legacy.schema_version = 1
-    legacy.protocol_version = "legacy-final-qc/1"
-    legacy.input_fingerprint = ""
-    legacy.input_manifest = {}
+    legacy_payload = copy.deepcopy(result.to_dict())
+    legacy_payload["schema_version"] = 2
+    legacy_payload["protocol_version"] = "final-qc/2"
+    legacy_payload["input_manifest"]["protocol_version"] = "final-qc/2"
+    legacy_payload["input_fingerprint"] = qc_input_fingerprint(
+        legacy_payload["input_manifest"]
+    )
+    for raw_finding in [
+        *legacy_payload["findings"],
+        *legacy_payload["refuted"],
+        *legacy_payload["inconclusive"],
+    ]:
+        raw_finding.pop("ops_semantic_status")
+        raw_finding.pop("ops_semantic_reason")
+        for raw_verdict in raw_finding["verdicts"]:
+            raw_verdict.pop("ops_adequate")
+            raw_verdict.pop("ops_note")
+    legacy = QCResult.from_dict(legacy_payload)
+    assert legacy is not None
     legacy_runner = QCRunner()
     legacy_runner.restore(legacy)
     assert legacy_runner.result is legacy
     session.qc = legacy_runner
+
+    json_export = client.get("/api/qc/export.json")
+    word_export = client.get("/api/qc/export")
+    assert json_export.status_code == 200
+    assert json_export.json()["report"]["schema_version"] == 2
+    assert word_export.status_code == 200
+    historical_word = _document_text(
+        Document(io.BytesIO(word_export.content))
+    )
+    assert "HISTORICAL REPORT IS NONACTIONABLE" in historical_word
 
     apply = client.post("/api/qc/apply", json={"finding_ids": [finding_id]})
     dismiss = client.post(
@@ -1503,7 +1542,7 @@ def test_malformed_persisted_enums_and_string_booleans_are_rejected() -> None:
     assert QCResult.from_dict(wrong_majority) is None
 
 
-def test_schema_v2_pricing_and_aggregate_accounting_are_reconciled() -> None:
+def test_current_schema_pricing_and_aggregate_accounting_are_reconciled() -> None:
     _store, result = _rich_audit_result()
     baseline = result.to_dict()
     assert QCResult.from_dict(copy.deepcopy(baseline)) is not None
@@ -1582,7 +1621,7 @@ def test_schema_v2_pricing_and_aggregate_accounting_are_reconciled() -> None:
         assert QCResult.from_dict(payload) is None, label
 
 
-def test_schema_v2_top_level_identity_agrees_with_hashed_input_manifest() -> None:
+def test_current_schema_top_level_identity_agrees_with_hashed_input_manifest() -> None:
     _store, result = _rich_audit_result()
     baseline = result.to_dict()
     assert QCResult.from_dict(copy.deepcopy(baseline)) is not None

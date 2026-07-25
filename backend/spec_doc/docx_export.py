@@ -871,6 +871,14 @@ def _qc_legacy_schema(document) -> bool:
         return True
 
 
+def _qc_has_semantic_fix_review(document) -> bool:
+    """Whether the report schema records verifier approval of proposed ops."""
+    try:
+        return int(getattr(document, "_qc_schema_version", 1) or 1) >= 3
+    except (TypeError, ValueError):
+        return False
+
+
 def _qc_add_label(
     document,
     label: str,
@@ -1424,7 +1432,7 @@ def _qc_execution_issues(qc_result: dict) -> list[str]:
     if schema_version >= 2 and not str(
         qc_result.get("execution_status") or ""
     ).strip():
-        issues.append("The schema v2 execution-status field is missing.")
+        issues.append("The schema-2+ execution-status field is missing.")
     statuses = [
         item
         for item in _qc_list(qc_result.get("lens_statuses"))
@@ -2026,14 +2034,19 @@ def _qc_render_methodology(document, qc_result: dict) -> None:
             (
                 "Adversarial verification",
                 "Candidate findings are challenged by a severity-based reviewer "
-                "panel. The report preserves completed, failed, and cancelled "
-                "reviewer records when the active schema provides them.",
+                "panel. Finding survival uses the completed panel's majority. In "
+                "schema 3, a proposed fix is separately approved only when every "
+                "expected seat completes, upholds the finding, and approves the "
+                "complete operation payload. The report preserves completed, "
+                "failed, and cancelled reviewer records.",
             ),
             (
                 "Operation validation and disposition",
-                "Proposed edits are recorded in full with their validation state. "
-                "Open, applied, dismissed, substantively refuted, and "
-                "infrastructure-inconclusive outcomes remain distinct.",
+                "Proposed edits are recorded in full with semantic and mechanical "
+                "validation kept distinct. Only semantically approved operations "
+                "proceed to deterministic and source-preservation validation. Open, "
+                "applied, dismissed, substantively refuted, and infrastructure-"
+                "inconclusive outcomes remain distinct.",
             ),
         ],
     )
@@ -2212,7 +2225,7 @@ def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> N
             _qc_add_callout(
                 document,
                 "Missing required audit record",
-                "Schema v2 requires at least one reviewed check for every completed "
+                "Current audit schemas require at least one reviewed check for every completed "
                 "lens. This lens is incomplete even if its status says completed.",
                 accent=_QC_RISK,
             )
@@ -2340,6 +2353,26 @@ def _qc_render_verdict(document, verdict: dict, index: int) -> None:
         verdict.get("revised_severity") or "No revision recorded",
     )
     _qc_add_label(document, "Verdict note", verdict.get("note") or "Not recorded")
+    if "ops_adequate" in verdict:
+        adequate = verdict.get("ops_adequate") is True
+        _qc_add_label(
+            document,
+            "Proposed fix adequate",
+            "APPROVED" if adequate else "NOT APPROVED",
+            color=_QC_POSITIVE if adequate else _QC_RISK,
+        )
+    else:
+        _qc_add_label(
+            document,
+            "Proposed fix adequate",
+            "Not recorded by this historical report",
+            color=_QC_MUTED,
+        )
+    _qc_add_label(
+        document,
+        "Proposed-fix note",
+        verdict.get("ops_note") or "Not recorded",
+    )
     if verdict.get("error"):
         _qc_add_callout(
             document,
@@ -2430,6 +2463,44 @@ def _qc_render_ops(
     document, finding: dict, *, candidate_kind: str = "surviving"
 ) -> None:
     _qc_heading(document, "Proposed Operations and Validation", 3)
+    semantic_schema = _qc_has_semantic_fix_review(document)
+    semantic_status = str(
+        finding.get("ops_semantic_status") or ""
+    ).strip().lower()
+    semantic_reason = str(
+        finding.get("ops_semantic_reason") or ""
+    ).strip()
+    if semantic_schema:
+        _qc_add_label(
+            document,
+            "Semantic fix decision",
+            semantic_status.upper().replace("_", " ") or "NOT RECORDED",
+            color=(
+                _QC_POSITIVE
+                if semantic_status == "approved"
+                else _QC_RISK
+                if semantic_status == "rejected"
+                else _QC_MUTED
+            ),
+        )
+        _qc_add_label(
+            document,
+            "Semantic decision detail",
+            semantic_reason or "No semantic decision reason was persisted.",
+        )
+    else:
+        _qc_add_label(
+            document,
+            "Semantic fix decision",
+            "NOT RECORDED - HISTORICAL REPORT IS NONACTIONABLE",
+            color=_QC_MUTED,
+        )
+        _qc_add_label(
+            document,
+            "Semantic decision detail",
+            "Schema-2 and earlier reports predate semantic fix approval. Any "
+            "saved mechanical dry run remains historical evidence only.",
+        )
     operations = [
         item
         for item in _qc_list(finding.get("proposed_ops"))
@@ -2477,6 +2548,34 @@ def _qc_render_ops(
             "that are substantively refuted or lack a complete verifier panel. "
             "A false ops_valid default is not an invalidity finding for these "
             "operations.",
+        )
+        return
+    if not semantic_schema:
+        _qc_add_label(
+            document,
+            "Operation eligibility",
+            "NONACTIONABLE - SEMANTIC APPROVAL NOT RECORDED",
+            color=_QC_MUTED,
+        )
+        _qc_add_label(
+            document,
+            "Historical mechanical result",
+            "VALID" if valid is True else "INVALID OR NOT VALIDATED",
+            color=_QC_MUTED,
+        )
+        if finding.get("ops_invalid_reason"):
+            _qc_add_label(
+                document,
+                "Historical validation detail",
+                finding.get("ops_invalid_reason"),
+            )
+        return
+    if semantic_status != "approved":
+        _qc_add_label(
+            document,
+            "Operation validation",
+            "NOT EVALUATED - SEMANTIC APPROVAL REQUIRED",
+            color=_QC_MUTED,
         )
         return
     _qc_add_label(

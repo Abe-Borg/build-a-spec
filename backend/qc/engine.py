@@ -38,9 +38,16 @@ import hashlib
 import json
 import math
 import re
+import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -57,6 +64,7 @@ from ..research.grounding import (
 from ..research.resend_sanitizer import sanitize_messages_for_resend
 from ..research.retry_policy import (
     DEFAULT_REALTIME_RETRY_POLICY,
+    FailureClass,
     classify_exception,
     compute_backoff_seconds,
     is_retryable_failure_class,
@@ -133,14 +141,17 @@ QC_MAX_CONTINUATIONS = 16
 # Persisted report/protocol identifiers. Bump the schema when the serialized
 # audit record changes incompatibly; bump the protocol whenever the actual
 # review method or required reviewer output changes.
-QC_REPORT_SCHEMA_VERSION = 2
-QC_PROTOCOL_VERSION = "final-qc/2"
+QC_REPORT_SCHEMA_VERSION = 3
+QC_PROTOCOL_VERSION = "final-qc/3"
 
 _VERDICT_STATUSES = frozenset({"completed", "failed", "cancelled"})
 _LENS_STATUSES = frozenset({"completed", "failed", "cancelled"})
 _FINDING_STATUSES = frozenset({"open", "applied", "dismissed"})
 _VERIFICATION_OUTCOMES = frozenset(
     {"", "upheld", "refuted", "default_refuted", "inconclusive"}
+)
+_OPS_SEMANTIC_STATUSES = frozenset(
+    {"not_proposed", "not_evaluated", "approved", "rejected"}
 )
 _EXECUTION_STATUSES = frozenset({"complete", "partial", "failed", "cancelled"})
 _DISPOSITION_ACTIONS = frozenset(
@@ -473,6 +484,8 @@ class QCVerdict:
     upholds: bool
     revised_severity: str = ""  # "" = keep original
     note: str = ""
+    ops_adequate: bool = False
+    ops_note: str = ""
     status: str = "completed"  # completed | failed | cancelled
     error: str = ""
     reviewer_index: int = 0
@@ -492,6 +505,11 @@ class QCVerdict:
         upholds = raw.get("upholds")
         if not isinstance(upholds, bool):
             raise ValueError("Persisted QC verdict 'upholds' must be a JSON boolean.")
+        ops_adequate = raw.get("ops_adequate", False)
+        if not isinstance(ops_adequate, bool):
+            raise ValueError(
+                "Persisted QC verdict 'ops_adequate' must be a JSON boolean."
+            )
         revised_severity = str(raw.get("revised_severity", "") or "").lower()
         if revised_severity and revised_severity not in SEVERITIES:
             raise ValueError(
@@ -507,6 +525,8 @@ class QCVerdict:
             upholds=upholds,
             revised_severity=revised_severity,
             note=str(raw.get("note", "") or ""),
+            ops_adequate=ops_adequate,
+            ops_note=str(raw.get("ops_note", "") or ""),
             status=status,
             error=str(raw.get("error", "") or ""),
             reviewer_index=reviewer_index,
@@ -564,6 +584,8 @@ class QCFinding:
     grounded: bool = False
     source_checks: list[QCSourceRecord] = field(default_factory=list)
     proposed_ops: list[dict] = field(default_factory=list)
+    ops_semantic_status: str = "not_evaluated"
+    ops_semantic_reason: str = ""
     ops_valid: bool = False
     ops_invalid_reason: str = ""
     verdicts: list[QCVerdict] = field(default_factory=list)
@@ -595,6 +617,13 @@ class QCFinding:
         if verification_outcome not in _VERIFICATION_OUTCOMES:
             raise ValueError(
                 "Persisted QC finding has an unsupported verification outcome."
+            )
+        ops_semantic_status = str(
+            raw.get("ops_semantic_status", "") or "not_evaluated"
+        ).strip().lower()
+        if ops_semantic_status not in _OPS_SEMANTIC_STATUSES:
+            raise ValueError(
+                "Persisted QC finding has an unsupported ops semantic status."
             )
         for bool_key in ("element_resolved", "grounded", "ops_valid"):
             if bool_key in raw and not isinstance(raw.get(bool_key), bool):
@@ -640,6 +669,8 @@ class QCFinding:
                 for o in (raw.get("proposed_ops") or [])
                 if isinstance(o, dict)
             ],
+            ops_semantic_status=ops_semantic_status,
+            ops_semantic_reason=str(raw.get("ops_semantic_reason", "") or ""),
             ops_valid=bool(raw.get("ops_valid", False)),
             ops_invalid_reason=str(raw.get("ops_invalid_reason", "") or ""),
             verdicts=[
@@ -885,6 +916,24 @@ class QCResult:
             return "inconclusive"
         upholds = sum(1 for verdict in finding.verdicts if verdict.upholds)
         return "upheld" if upholds >= (expected // 2) + 1 else "refuted"
+
+    @staticmethod
+    def _structural_ops_semantic_status(finding: QCFinding) -> str:
+        """Recompute fix eligibility from the persisted full verifier panel."""
+        if not finding.proposed_ops:
+            return "not_proposed"
+        if finding.verification_outcome != "upheld":
+            return "not_evaluated"
+        return (
+            "approved"
+            if all(
+                verdict.status == "completed"
+                and verdict.upholds
+                and verdict.ops_adequate
+                for verdict in finding.verdicts
+            )
+            else "rejected"
+        )
 
     def _audit_accounting_consistent(self) -> bool:
         """Reconcile current-schema spend to every underlying review record."""
@@ -1141,6 +1190,9 @@ class QCResult:
         if not isinstance(data, dict):
             return None
         try:
+            schema_version = _persisted_nonnegative_int(
+                data.get("schema_version", 1), field_name="schema_version"
+            )
             raw_findings = data.get("findings") or []
             raw_refuted = data.get("refuted") or []
             raw_inconclusive = data.get("inconclusive") or []
@@ -1156,6 +1208,25 @@ class QCResult:
                 )
             ):
                 return None
+            if schema_version >= QC_REPORT_SCHEMA_VERSION:
+                for raw_finding in [
+                    *raw_findings,
+                    *raw_refuted,
+                    *raw_inconclusive,
+                ]:
+                    if (
+                        not isinstance(raw_finding.get("ops_semantic_status"), str)
+                        or not isinstance(raw_finding.get("ops_semantic_reason"), str)
+                    ):
+                        return None
+                    raw_verdicts = raw_finding.get("verdicts") or []
+                    if not isinstance(raw_verdicts, list) or any(
+                        not isinstance(raw_verdict, dict)
+                        or not isinstance(raw_verdict.get("ops_adequate"), bool)
+                        or not isinstance(raw_verdict.get("ops_note"), str)
+                        for raw_verdict in raw_verdicts
+                    ):
+                        return None
             findings = [
                 QCFinding.from_dict(f)
                 for f in raw_findings
@@ -1203,9 +1274,6 @@ class QCResult:
             )
             if not isinstance(research_profile_present, bool):
                 return None
-            schema_version = _persisted_nonnegative_int(
-                data.get("schema_version", 1), field_name="schema_version"
-            )
             cost_basis = _persisted_cost_basis(
                 data.get("cost_basis"),
                 required=schema_version >= QC_REPORT_SCHEMA_VERSION,
@@ -1341,6 +1409,19 @@ class QCResult:
                     # malformed project must not surface executable operations
                     # or a substantive refutation by trusting a stored label.
                     return None
+                if any(
+                    finding.ops_semantic_status
+                    != result._structural_ops_semantic_status(finding)
+                    or not finding.ops_semantic_reason.strip()
+                    or (finding.ops_valid and finding.ops_semantic_status != "approved")
+                    or any(
+                        verdict.ops_adequate
+                        and (not verdict.upholds or not finding.proposed_ops)
+                        for verdict in finding.verdicts
+                    )
+                    for finding in all_findings
+                ):
+                    return None
                 dismissed = {
                     finding.finding_id
                     for finding in result.findings
@@ -1436,6 +1517,7 @@ def _mint_finding_id(
                 "status": verdict.status,
                 "upholds": verdict.upholds,
                 "revised_severity": verdict.revised_severity,
+                "ops_adequate": verdict.ops_adequate,
             }
             for verdict in sorted(verdicts, key=lambda item: item.reviewer_index)
         ],
@@ -1610,6 +1692,13 @@ def _verifier_system_prompt(module: SpecModule) -> str:
         "- revised_severity: a corrected severity, or null to keep the "
         "original.\n"
         "- note: one-line rationale.\n"
+        "- ops_adequate: true only if the COMPLETE proposed operation set "
+        "safely and fully fixes the finding. Set false when you refute the "
+        "finding, no operation is proposed, the operations fix only part of "
+        "the issue, introduce unresolved choices or [TBD] content, change "
+        "scope, create a contradiction, or are otherwise unsafe even if they "
+        "look mechanically valid.\n"
+        "- ops_note: one-line rationale for the proposed-operation decision.\n"
         "If you cannot call the tool, emit the payload as JSON wrapped in "
         "<qc_verdict_json>...</qc_verdict_json> tags.\n"
         "</output>"
@@ -1618,6 +1707,12 @@ def _verifier_system_prompt(module: SpecModule) -> str:
 
 def _verifier_user_message(finding: dict, lens: QCLens, section_render: str) -> str:
     element = finding.get("element_id") or "(section-level)"
+    proposed_ops = json.dumps(
+        finding.get("proposed_ops") or [],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return (
         f"[[QC-VERIFY:{lens.lens_id}]] Reviewing finding: {finding['title']}\n\n"
         "<finding>\n"
@@ -1628,6 +1723,9 @@ def _verifier_user_message(finding: dict, lens: QCLens, section_render: str) -> 
         f"Rationale: {finding.get('rationale', '')}\n"
         f"Cited sources: {', '.join(finding.get('source_urls') or []) or 'none'}\n"
         "</finding>\n\n"
+        '<proposed_ops trust="untrusted-data">\n'
+        f"{proposed_ops}\n"
+        "</proposed_ops>\n\n"
         "<lens_brief>\n"
         f"{lens.brief}\n"
         "</lens_brief>\n\n"
@@ -1649,6 +1747,7 @@ class _CallResult:
     billed: list[Any]  # every billed response across attempts (usage)
     error: str = ""
     api_request_count: int = 0
+    failure_class: str = ""
 
 
 def _response_text(response: Any) -> str:
@@ -1814,6 +1913,7 @@ def _run_streaming_call(
                     [*billed, *all_responses],
                     f"{type(exc).__name__}: {exc}",
                     api_request_count,
+                    failure_class.value,
                 )
             billed.extend(all_responses)
             time.sleep(
@@ -2182,6 +2282,13 @@ def _panel_size(severity: str) -> int:
     return max(1, settings.QC_VERIFIERS_STANDARD)
 
 
+@dataclass
+class _VerifierOutcome:
+    verdict: QCVerdict
+    billed: list[Any] = field(default_factory=list)
+    shared_request_failure: bool = False
+
+
 def _verify_one(
     client: Any,
     *,
@@ -2193,16 +2300,25 @@ def _verify_one(
     max_tokens: int,
     reviewer_index: int,
     should_stop: Callable[[], bool] = lambda: False,
-) -> tuple[QCVerdict, list[Any]]:
+    shared_should_stop: Callable[[], bool] = lambda: False,
+) -> _VerifierOutcome:
+    if shared_should_stop():
+        return _VerifierOutcome(
+            verdict=QCVerdict(
+                upholds=False,
+                status="failed",
+                error="Verifier phase stopped after a shared request failure.",
+                reviewer_index=reviewer_index,
+            ),
+        )
     if should_stop():
-        return (
-            QCVerdict(
+        return _VerifierOutcome(
+            verdict=QCVerdict(
                 upholds=False,
                 status="cancelled",
                 error="Cancelled by user before the verifier call started.",
                 reviewer_index=reviewer_index,
             ),
-            [],
         )
     tools: list[dict] = []
     # Verifiers on compliance-class findings get a small web allowance to
@@ -2221,7 +2337,7 @@ def _verify_one(
         model=model,
         max_tokens=max_tokens,
         max_searches=settings.QC_MAX_SEARCHES_LENS if lens.web else 0,
-        should_stop=should_stop,
+        should_stop=lambda: should_stop() or shared_should_stop(),
     )
     usage = _sum_billed(result.billed)
     queries, retrieved_sources = _collect_call_activity(result.responses)
@@ -2229,15 +2345,26 @@ def _verify_one(
         result.billed, include_unconfirmed_fetches=True
     )
     if result.payload is None:
-        return (
-            QCVerdict(
+        shared_request_failure = (
+            result.failure_class == FailureClass.INVALID_REQUEST.value
+            and not result.responses
+            and not result.billed
+        )
+        return _VerifierOutcome(
+            verdict=QCVerdict(
                 upholds=False,
                 status=(
                     "cancelled"
                     if result.error == "Cancelled by user."
+                    and not shared_should_stop()
                     else "failed"
                 ),
-                error=result.error or "QC verifier failed.",
+                error=(
+                    "Verifier phase stopped after a shared request failure."
+                    if result.error == "Cancelled by user."
+                    and shared_should_stop()
+                    else result.error or "QC verifier failed."
+                ),
                 reviewer_index=reviewer_index,
                 search_queries=queries,
                 retrieved_sources=retrieved_sources,
@@ -2248,13 +2375,17 @@ def _verify_one(
                 api_request_count=result.api_request_count,
                 model_response_count=len(result.billed),
             ),
-            result.billed,
+            billed=result.billed,
+            shared_request_failure=shared_request_failure,
         )
     try:
-        v = normalize_verdict(result.payload)
+        v = normalize_verdict(
+            result.payload,
+            has_proposed_ops=bool(finding.get("proposed_ops")),
+        )
     except (TypeError, ValueError) as exc:
-        return (
-            QCVerdict(
+        return _VerifierOutcome(
+            verdict=QCVerdict(
                 upholds=False,
                 status="failed",
                 error=f"Malformed QC verdict: {exc}",
@@ -2268,13 +2399,15 @@ def _verify_one(
                 api_request_count=result.api_request_count,
                 model_response_count=len(result.billed),
             ),
-            result.billed,
+            billed=result.billed,
         )
-    return (
-        QCVerdict(
+    return _VerifierOutcome(
+        verdict=QCVerdict(
             upholds=v["upholds"],
             revised_severity=v["revised_severity"],
             note=v["note"],
+            ops_adequate=v["ops_adequate"],
+            ops_note=v["ops_note"],
             status="completed",
             reviewer_index=reviewer_index,
             search_queries=queries,
@@ -2286,7 +2419,7 @@ def _verify_one(
             api_request_count=result.api_request_count,
             model_response_count=len(result.billed),
         ),
-        result.billed,
+        billed=result.billed,
     )
 
 
@@ -2549,6 +2682,56 @@ def _validate_ops(
     finding.ops_valid = True
 
 
+def _set_ops_semantic_decision(finding: QCFinding) -> None:
+    """Persist the conservative panel decision on the proposed fix."""
+    finding.ops_valid = False
+    finding.ops_invalid_reason = ""
+    if not finding.proposed_ops:
+        finding.ops_semantic_status = "not_proposed"
+        finding.ops_semantic_reason = "No proposed operations were supplied."
+        return
+    if finding.verification_outcome != "upheld":
+        finding.ops_semantic_status = "not_evaluated"
+        finding.ops_semantic_reason = (
+            "Proposed operations were not evaluated because the finding did "
+            "not receive an upheld verification outcome "
+            f"({finding.verification_outcome})."
+        )
+        return
+
+    rejected: list[str] = []
+    for verdict in finding.verdicts:
+        if verdict.status != "completed":
+            rejected.append(
+                f"reviewer {verdict.reviewer_index} did not complete"
+            )
+        elif not verdict.upholds:
+            detail = verdict.note.strip()
+            rejected.append(
+                f"reviewer {verdict.reviewer_index} refuted the finding"
+                + (f" ({detail})" if detail else "")
+            )
+        elif not verdict.ops_adequate:
+            detail = verdict.ops_note.strip()
+            rejected.append(
+                f"reviewer {verdict.reviewer_index} rejected the operations"
+                + (f" ({detail})" if detail else "")
+            )
+
+    if rejected:
+        finding.ops_semantic_status = "rejected"
+        finding.ops_semantic_reason = "Semantic approval failed: " + "; ".join(
+            rejected
+        )
+        return
+
+    finding.ops_semantic_status = "approved"
+    finding.ops_semantic_reason = (
+        f"All {len(finding.verdicts)} verifier seat(s) upheld the finding and "
+        "approved the complete proposed operation set."
+    )
+
+
 def _reviewed_location(section: SpecSection, element_id: str) -> tuple[str, str, bool]:
     """Resolve a model-supplied element id against the immutable snapshot."""
     if not element_id or element_id == "sec":
@@ -2757,48 +2940,101 @@ def run_final_qc(
         for i, (lens, finding) in enumerate(raw_findings):
             for j in range(_panel_size(finding["severity"])):
                 tasks.append((i, j))
-        remaining = {i: _panel_size(f["severity"]) for i, (_l, f) in enumerate(raw_findings)}
+        remaining = {
+            i: _panel_size(f["severity"])
+            for i, (_l, f) in enumerate(raw_findings)
+        }
         done = 0
         total = len(raw_findings)
         event_sink({"type": "verify_progress", "done": 0, "total": total})
+        pending_tasks = deque(tasks)
+        shared_failure = threading.Event()
+        shared_failure_error = ""
+
+        def record_verifier_outcome(
+            finding_index: int,
+            outcome: _VerifierOutcome,
+        ) -> None:
+            nonlocal done
+            verdicts[finding_index].append(outcome.verdict)
+            _merge_usage(usage_totals, _sum_billed(outcome.billed))
+            remaining[finding_index] -= 1
+            if remaining[finding_index] == 0:
+                done += 1
+                event_sink(
+                    {"type": "verify_progress", "done": done, "total": total}
+                )
+
         with ThreadPoolExecutor(max_workers=_QC_MAX_WORKERS) as pool:
-            futures = {
-                pool.submit(
-                    _verify_one,
-                    client,
-                    finding=raw_findings[i][1],
-                    lens=raw_findings[i][0],
-                    section_render=section_render,
-                    module=module,
-                    model=model,
-                    max_tokens=max_tokens,
-                    reviewer_index=j + 1,
-                    should_stop=should_stop,
-                ): (i, j)
-                for (i, j) in tasks
-            }
-            for future in as_completed(futures):
-                i, j = futures[future]
-                try:
-                    verdict, billed = future.result()
-                except Exception as exc:  # noqa: BLE001 — retained as failed seat
-                    verdict, billed = (
-                        QCVerdict(
+            futures: dict[Any, tuple[int, int]] = {}
+
+            def fill_available_slots() -> None:
+                while (
+                    pending_tasks
+                    and len(futures) < _QC_MAX_WORKERS
+                    and not shared_failure.is_set()
+                ):
+                    i, j = pending_tasks.popleft()
+                    future = pool.submit(
+                        _verify_one,
+                        client,
+                        finding=raw_findings[i][1],
+                        lens=raw_findings[i][0],
+                        section_render=section_render,
+                        module=module,
+                        model=model,
+                        max_tokens=max_tokens,
+                        reviewer_index=j + 1,
+                        should_stop=should_stop,
+                        shared_should_stop=shared_failure.is_set,
+                    )
+                    futures[future] = (i, j)
+
+            fill_available_slots()
+            while futures:
+                completed_futures, _ = wait(
+                    tuple(futures), return_when=FIRST_COMPLETED
+                )
+                for future in completed_futures:
+                    i, j = futures.pop(future)
+                    try:
+                        outcome = future.result()
+                    except Exception as exc:  # noqa: BLE001 — failed seat retained
+                        outcome = _VerifierOutcome(
+                            verdict=QCVerdict(
+                                upholds=False,
+                                status="failed",
+                                error=f"{type(exc).__name__}: {exc}",
+                                reviewer_index=j + 1,
+                            )
+                        )
+                    record_verifier_outcome(i, outcome)
+                    if outcome.shared_request_failure and not shared_failure.is_set():
+                        shared_failure_error = outcome.verdict.error
+                        shared_failure.set()
+
+                fill_available_slots()
+
+        if shared_failure.is_set():
+            root_error = shared_failure_error or "Unknown invalid request."
+            while pending_tasks:
+                i, j = pending_tasks.popleft()
+                record_verifier_outcome(
+                    i,
+                    _VerifierOutcome(
+                        verdict=QCVerdict(
                             upholds=False,
                             status="failed",
-                            error=f"{type(exc).__name__}: {exc}",
+                            error=(
+                                "Verifier seat was not started after a shared "
+                                f"request failure: {root_error}"
+                            ),
                             reviewer_index=j + 1,
-                        ),
-                        [],
+                            api_request_count=0,
+                            model_response_count=0,
+                        )
                     )
-                verdicts[i].append(verdict)
-                _merge_usage(usage_totals, _sum_billed(billed))
-                remaining[i] -= 1
-                if remaining[i] == 0:
-                    done += 1
-                    event_sink(
-                        {"type": "verify_progress", "done": done, "total": total}
-                    )
+                )
 
     # -- Resolve survivors + refuted + infrastructure-inconclusive ---------
     survivors: list[QCFinding] = []
@@ -2861,8 +3097,10 @@ def run_final_qc(
             verification_panel_size=size,
             verification_threshold=(size // 2) + 1,
         )
+        _set_ops_semantic_decision(obj)
         if survives:
-            _validate_ops(obj, section, source_guard)
+            if obj.ops_semantic_status == "approved":
+                _validate_ops(obj, section, source_guard)
             carried_dismissal = _validated_remembered_dismissal(
                 remembered_records.get(obj.finding_id)
             )

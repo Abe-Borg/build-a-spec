@@ -329,7 +329,13 @@ that lens's brief. Web search allowed (small allowance) for
 compliance-class findings.
 
 Output tool `submit_qc_verdict` (strict):
-`{"upholds": bool, "revised_severity": "critical"|"high"|"medium"|"low"|null, "note": str}`.
+`{"upholds": bool, "revised_severity":
+"critical"|"high"|"medium"|"low"|null, "note": str,
+"ops_adequate": bool, "ops_note": str}`.
+The verifier receives the complete `proposed_ops` payload as untrusted data.
+`ops_adequate` is false for a refuted/no-op finding and whenever the operations
+are partial, introduce choices or `[TBD]`, change scope, create a contradiction,
+or are otherwise unsafe despite being mechanically valid.
 
 Panel sizes: `QC_VERIFIERS_STANDARD` (2) for medium/low,
 `QC_VERIFIERS_CRITICAL` (3) for critical/high. Majority upholds →
@@ -347,12 +353,17 @@ status/error, submitted verdict and severity note when present, queries,
 retrieved sources, billed usage, and request/response counts. A dead verifier
 places the candidate in the infrastructure-inconclusive collection, marks the
 overall report partial, and blocks readiness. Majority adjudication occurs
-only when every expected seat completes.
+only when every expected seat completes. Finding survival retains the complete-
+panel majority rule, but fix eligibility is deliberately stricter: every seat
+must complete, uphold, and approve the operation set.
 
 This phase is the "as many agents as necessary" clause: total calls =
-5 lenses + Σ panel sizes. Do not add a cap on findings count; the
-runaway guard is per-call (search ceilings, retry policy), not
-per-run.
+5 lenses + Σ panel sizes. Do not add a cap on findings count. The scheduler
+keeps at most four submitted verifier futures. One immediate nonretryable
+`INVALID_REQUEST` before any model response opens a shared phase circuit:
+unstarted seats become failed zero-request records, in-flight calls settle,
+and the run is partial. Transport, throttle, output, parse, and cancellation
+failures do not open the circuit.
 
 ---
 
@@ -360,12 +371,18 @@ per-run.
 
 For each surviving finding with `proposed_ops`:
 
-1. Dry-run `apply_edits(ops)` against a fresh copy of the SNAPSHOT
+1. Persist `ops_semantic_status` and `ops_semantic_reason`. Only unanimous
+   complete-panel approval produces `approved`; majority-only survivors remain
+   advisory with `rejected`. Refuted/infrastructure-inconclusive operations are
+   `not_evaluated`; findings without operations are `not_proposed`.
+2. Only an `approved` operation set is dry-run with `apply_edits(ops)` against
+   a fresh copy of the SNAPSHOT
    (each finding independently — copy per finding, they must not see
    each other's effects). Invalid → retain the exact proposal for audit,
    keep the finding as advisory with `ops_valid=False`, and record
-   `ops_invalid_reason`; the apply path must reject it.
-2. Findings are content-addressed as `qc-` plus the first 12 characters of a
+   `ops_invalid_reason`; the apply path must reject it. `ops_valid=true`
+   therefore means both semantic approval and mechanical/source validation.
+3. Findings are content-addressed as `qc-` plus the first 12 characters of a
    canonical-JSON SHA-256 over every material fact a carried disposition
    relies on: lens id; element id; normalized title, issue, rationale and
    submitted severity; normalized cited URLs; exact proposed operations;
@@ -385,6 +402,7 @@ Assemble `QCResult`:
 ```python
 @dataclass
 class QCVerdict: reviewer_index, status, upholds, revised_severity, note,
+    ops_adequate, ops_note,
     error, search_queries, retrieved_sources, attempted_search_queries,
     attempted_sources, usage_totals, estimated_cost_usd,
     api_request_count, model_response_count
@@ -398,7 +416,8 @@ class QCLensStatus: lens_id, title, brief, status, error, summary,
 class QCFinding: finding_id, lens_id, original_severity, severity,
     element_id, reviewed_ref, reviewed_text, element_resolved, title, issue,
     rationale, source_urls, accepted_sources, source_checks, grounded,
-    proposed_ops, ops_valid, ops_invalid_reason,
+    proposed_ops, ops_semantic_status, ops_semantic_reason,
+    ops_valid, ops_invalid_reason,
     verdicts: list[QCVerdict], verification_panel_size, verification_threshold,
     verification_outcome, status: "open" | "applied" | "dismissed",
     dismiss_reason, disposition_events
@@ -425,19 +444,29 @@ gains a `qc_result` field; restore via `QCRunner.restore`, same as the
 audit's). The runner also persists `qc_latest_attempt`, separately from the
 last successful `qc_result`, so a failed/cancelled rerun remains visible and
 blocks readiness rather than making the earlier success look current.
+The current persisted contract is schema `3` / protocol `final-qc/3`.
+Schema-2 reports continue to load and export as historical evidence but never
+supply an actionable queue. Import, QC status, and QC start share one exact
+normalized section-number compatibility helper for curated closed catalogs;
+import appends a mismatch warning without refusing the source.
 
 ---
 
 ## API surface (`backend/app.py`)
 
-- `POST /api/qc/start` — gates: non-empty doc (400), no key (400), QC
-  already running (409), model turn streaming (409 via Batch 2's
-  `turn_active`). Research is NOT required: when absent, the
+- `POST /api/qc/start` — optional body
+  `{acknowledge_scope_mismatch: false}`; gates: non-empty doc (400), no key
+  (400), QC already running (409), model turn streaming (409 via Batch 2's
+  `turn_active`), and unacknowledged curated-module section mismatch (409
+  `module_section_mismatch` plus the compatibility object). The mismatch is
+  advisory after explicit acknowledgement and never changes the module or
+  specification. Research is NOT required: when absent, the
   completeness lens brief adapts (skip profile coverage, note it) and
   `research_profile_present: false` flags the result + UI shows
   "run research first for full coverage" advisory. Launches
   `QCRunner.start(...)` with a fresh client.
-- `GET /api/qc/status` — snapshot: status, error, event log, compact result
+- `GET /api/qc/status` — snapshot: status, error, event log, compact result,
+  section/module compatibility
   view plus the canonical report payload needed by the in-app full-report
   surface.
 - `GET /api/qc/stream` — SSE replay-and-follow (event types:
@@ -448,7 +477,10 @@ blocks readiness rather than making the earlier success look current.
   time (no dead air; the Batch 2 UX mandate applies here explicitly).
 - `POST /api/qc/apply` — body `{finding_ids: [..]}`; gates like manual
   edit (409 while `turn_active` or a QC attempt is running); preserves-order
-  deduplicates ids and applies each open finding's validated ops
+  deduplicates ids and identical operations, then derives deterministic write
+  keys before mutation. Different operations claiming a shared write key
+  return structured 409 conflict details and apply nothing; otherwise applies
+  each open finding's validated ops
   via ONE `begin_turn`/`apply_edits`/`commit_turn` sequence per request
   (one undo snapshot for the accepted set); re-dry-runs against the
   CURRENT doc first (doc may have moved since QC ran) — ops that no
@@ -504,7 +536,7 @@ blocks readiness rather than making the earlier success look current.
   {id: "profile_complete",   ok, detail},
   {id: "research_complete",  ok, detail},
   {id: "qc_current",         ok, detail},   // exact full input + latest completed attempt identity
-  {id: "qc_audit_complete",  ok, detail},   // v2 contract + complete lenses/seats + no open criticals
+  {id: "qc_audit_complete",  ok, detail},   // current contract + complete lenses/seats + no open criticals
 ], ready: bool}   // ready = all non-advisory checks ok
 ```
 

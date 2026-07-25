@@ -5,6 +5,7 @@ import {
   buildQcReportMetrics,
   collectQcOperationRecords,
   qcInconclusiveCandidates,
+  qcOperationEvaluation,
   qcPrimaryReport,
   qcReportExportUrl,
   qcReportLimitations,
@@ -25,6 +26,8 @@ function verdict(
     upholds: false,
     revised_severity: "",
     note: "not upheld",
+    ops_adequate: false,
+    ops_note: "proposed fix not approved",
     status: "completed",
     error: "",
     reviewer_index: reviewerIndex,
@@ -57,6 +60,8 @@ function finding(
     grounded: false,
     source_checks: [],
     proposed_ops: [{ action: "replace", target_id: "pt1.a1.p1", text: "Revised" }],
+    ops_semantic_status: "approved",
+    ops_semantic_reason: "All verifier seats approved the proposed fix.",
     ops_valid: false,
     ops_invalid_reason: "Dry-run failed",
     verdicts: [],
@@ -72,8 +77,8 @@ function finding(
 
 function result(overrides: Partial<QcReportResult> = {}): QcReportResult {
   return {
-    schema_version: 2,
-    protocol_version: "final-qc/2",
+    schema_version: 3,
+    protocol_version: "final-qc/3",
     run_id: "qc-run-test",
     execution_status: "complete",
     summary: "Test report",
@@ -181,6 +186,61 @@ test("refuted operations are retained as not evaluated, never called invalid", (
   );
   assert.equal(operations[0].validationStatus, "invalid");
   assert.equal(operations[1].validationStatus, "not_evaluated");
+});
+
+test("semantic fix review stays separate from mechanical validation", () => {
+  const approved = finding({ ops_valid: true, ops_invalid_reason: "" });
+  const rejected = finding({
+    finding_id: "qc-semantic-rejected",
+    ops_semantic_status: "rejected",
+    ops_semantic_reason: "The replacement only fixes part of the issue.",
+    ops_valid: false,
+    ops_invalid_reason: "",
+  });
+  const unevaluated = finding({
+    finding_id: "qc-semantic-not-evaluated",
+    ops_semantic_status: "not_evaluated",
+    ops_semantic_reason: "Verifier panel was incomplete.",
+    ops_valid: false,
+  });
+  const notProposed = finding({
+    finding_id: "qc-no-operation",
+    proposed_ops: [],
+    ops_semantic_status: "not_proposed",
+    ops_semantic_reason: "No safe automatic edit was identified.",
+    ops_valid: false,
+  });
+
+  assert.deepEqual(qcOperationEvaluation(approved, 3), {
+    semanticStatus: "approved",
+    semanticReason: "All verifier seats approved the proposed fix.",
+    mechanicalStatus: "valid",
+    mechanicallyValid: true,
+    actionable: true,
+  });
+  assert.equal(qcOperationEvaluation(rejected, 3).mechanicalStatus, "not_evaluated");
+  assert.equal(qcOperationEvaluation(rejected, 3).actionable, false);
+  assert.equal(qcOperationEvaluation(unevaluated, 3).semanticStatus, "not_evaluated");
+  assert.equal(qcOperationEvaluation(notProposed, 3).semanticStatus, "not_proposed");
+});
+
+test("schema-v2 operations remain readable but cannot become actionable", () => {
+  const legacyFinding = finding({ ops_valid: true, ops_invalid_reason: "" });
+  delete (legacyFinding as { ops_semantic_status?: string }).ops_semantic_status;
+  delete (legacyFinding as { ops_semantic_reason?: string }).ops_semantic_reason;
+  const legacyReport = result({
+    schema_version: 2,
+    protocol_version: "final-qc/2",
+    findings: [legacyFinding],
+  });
+  const evaluation = qcOperationEvaluation(legacyFinding, 2);
+  const [operation] = collectQcOperationRecords(legacyReport);
+
+  assert.equal(evaluation.semanticStatus, "legacy_unrecorded");
+  assert.equal(evaluation.mechanicalStatus, "not_evaluated");
+  assert.equal(evaluation.actionable, false);
+  assert.equal(operation.semanticStatus, "legacy_unrecorded");
+  assert.equal(operation.validationStatus, "not_evaluated");
 });
 
 test("structurally incomplete refuted panels fail closed as inconclusive", () => {

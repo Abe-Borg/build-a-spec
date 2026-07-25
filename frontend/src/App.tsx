@@ -46,6 +46,7 @@ import {
   loadProjectFile,
   redoDoc,
   resetSession,
+  QcStartError,
   startQc,
   startResearch,
   stopChat,
@@ -304,16 +305,21 @@ export default function App() {
     }
   }, [refreshQc, refreshReadiness, refreshUsage]);
 
-  const onStartQc = useCallback(async () => {
+  const onStartQc = useCallback(async (acknowledgeScopeMismatch = false) => {
     try {
-      await startQc();
+      await startQc(acknowledgeScopeMismatch);
       addNote("Sent to Final QC — findings will appear in the Final QC panel.");
       void followQc();
     } catch (e) {
       setQc((prev) => ({
+        ...prev,
         status: "failed",
         error: e instanceof Error ? e.message : String(e),
         events: prev?.events ?? [],
+        module_section_compatibility:
+          e instanceof QcStartError && e.moduleSectionCompatibility
+            ? e.moduleSectionCompatibility
+            : prev?.module_section_compatibility,
       }));
     }
   }, [followQc, addNote]);

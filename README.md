@@ -276,7 +276,9 @@ actions.
   content/input fingerprints, input manifest, model, effective QC
   configuration, start/finish timestamps and duration, research-profile
   availability, and current/stale status. A later document edit cannot be
-  mistaken for the version that was reviewed.
+  mistaken for the version that was reviewed. New reports use schema `3` and
+  protocol `final-qc/3`; schema-2 reports remain readable and exportable as
+  historical evidence, but cannot provide an actionable fix queue.
 - **Each lens leaves an observable work record, including failures.** The
   report keeps the lens title, completion status or error, summary, explicit
   coverage checks and outcomes, search queries, retrieved sources, finding and
@@ -291,13 +293,21 @@ actions.
   finding faces a panel of independent Fable 5 refuters prompted to *refute*
   it (2 for medium/low, 3 for critical/high). The report preserves every
   expected verifier seat, including its success, verdict, severity revision,
-  note, usage, or failure. A tie on a fully completed panel goes to the
-  refuters. A failed or cancelled seat remains visible and makes the candidate
-  infrastructure-inconclusive; missing infrastructure is never presented as
-  substantive evidence against a finding.
+  proposed-fix adequacy decision and note, usage, or failure. A tie on a fully
+  completed panel goes to the refuters. Finding validity still uses that panel
+  majority, while a fix is executable only when every expected seat completes,
+  upholds the finding, and approves the complete operation payload. A surviving
+  finding without unanimous fix approval stays visible and advisory. A failed
+  or cancelled seat remains visible and makes the candidate infrastructure-
+  inconclusive; missing infrastructure is never presented as substantive
+  evidence against a finding.
   This is the "as many agents as necessary" clause: total calls = 5 lenses +
   Σ panel sizes, with no cap on findings count (the runaway guards are
-  per-call).
+  per-call). The verifier queue keeps at most four provider requests in flight;
+  one immediate, nonretryable shared request-shape rejection opens a phase
+  circuit breaker, preserves zero-request records for every unstarted seat, and
+  settles the attempt partial instead of repeating the same bad request across
+  the whole panel.
 - **Sources are traceable one by one.** For every check and finding, the report
   distinguishes URLs the lens cited from URLs the run actually retrieved and
   accepted after grounding validation. It preserves source-level grounding
@@ -317,15 +327,27 @@ actions.
   them refuted. No candidate is deleted from the audit trail.
 - **Accept the fix, or dismiss it — and dismiss decisions survive re-runs.**
   The report preserves the full proposed `apply_spec_edits` operation payload,
-  snapshot dry-run result and validation error, if any. **Apply fix** edits the
-  document exactly as previewed, in **one undo step** after validation against
-  the current document; a moved target is recorded `stale` and skipped, never
-  partially applied. **Dismiss** requires and preserves a reviewer rationale
+  unanimous semantic-approval result, snapshot dry-run result and validation
+  error, if any. Only semantically approved operations enter deterministic and
+  source-preservation validation; `ops_valid` means both checks passed.
+  **Apply fix** edits the document exactly as previewed, in **one undo step**
+  after validation against the current document; a moved target is recorded
+  `stale` and skipped, never partially applied. Multi-finding requests
+  deduplicate identical operations, but reject different operations that claim
+  the same deterministic write target with a structured `409` before mutating
+  anything. **Dismiss** requires and preserves a reviewer rationale
   (blank/whitespace reasons are rejected) and is
   remembered by content-addressed id, so a re-run that regenerates the same
   finding auto-marks it dismissed. Open, applied, dismissed, advisory,
   invalid, no-op, and stale outcomes remain in the report. An "Apply all
   criticals" press-and-hold handles the urgent set at once.
+- **Module scope is checked without rewriting the specification.** For curated
+  modules with a closed section catalog, import, QC status, and QC start compare
+  the normalized specification section number with that catalog. A mismatch is
+  an advisory import warning and appears in the QC cost confirmation. Running
+  remains allowed after a dedicated acknowledgement; the server enforces the
+  acknowledgement with the stable `module_section_mismatch` conflict code and
+  never changes the selected module or specification automatically.
 - **Issue readiness — the "can it go out the door" screenshot moment.** A
   deterministic checklist (no model call) at the top of the QC drawer goes
   green exactly when: no open items, no unreviewed imported/assumed blocks,
@@ -795,6 +817,15 @@ Hermetic by default — no API key, no network. `tests/conftest.py` injects a pl
 ```
 venv\Scripts\python -m pytest -q
 ```
+
+The paid provider-schema smoke test is separate and explicitly opt-in; it
+sends one low-token Fable verifier request and never runs a full Final QC:
+
+```
+venv\Scripts\python tools\qc_verifier_canary.py --run
+```
+
+Without `--run`, the command only reports whether a key is configured.
 
 The DOCX fidelity contract, fixture layers, frontend checks, and release
 verification commands are documented in

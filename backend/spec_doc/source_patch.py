@@ -2257,6 +2257,7 @@ def _blocked_element_operations(
     if kind == "section":
         operations = {
             "replace_text": denied,
+            "set_project_identity": _allowed_capability(),
             "set_project_profile": _allowed_capability(),
             "set_standard_edition": _allowed_capability(),
             "set_standard_suppressed": _allowed_capability(),
@@ -2644,6 +2645,7 @@ def source_edit_capabilities(
                 current=current,
                 bound_inputs=bound_inputs,
             ),
+            "set_project_identity": _allowed_capability(),
             "set_project_profile": _allowed_capability(),
             "set_standard_edition": _allowed_capability(),
             "set_standard_suppressed": _allowed_capability(),

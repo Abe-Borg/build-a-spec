@@ -50,8 +50,7 @@ backend/
                            kept, deprecated); Batch 5
                            adds GET /api/doc/diff + ?redline=master|version on
                            /api/export/docx (+ baseline_index in _doc_payload);
-                           Batch 6 adds POST /api/onboarding/demo (guided-tour
-                           demo directive; 409 unless the document is blank);
+                           onboarding is frontend-only and passive (no demo API);
                            Batch 7 adds POST /api/chat/stop + /api/research/stop
                            + /api/qc/stop (409 when nothing is running/streaming);
                            Batch 9 adds suggested_prompts to _doc_payload (no new
@@ -255,9 +254,8 @@ backend/
                            ins/del via docx.oxml; clean path untouched, byte-stable)
                            + redline_filename
   spec_doc/project.py      JSON project files (save/resume) + chat transcript +
-                           module_id + discipline (Batch 10: saved
-                           unconditionally, loaded w/ sanitize + the open-catalog
-                           invariant; old files degrade to "") + audit_result +
+                           module_id + legacy discipline fallback (the versioned
+                           document project_identity is authoritative) + audit_result +
                            qc_result (baseline_index rides store.to_dict/load — no
                            project.py change); Batch 9 adds an optional
                            suggested_prompts key (omitted when empty;
@@ -265,20 +263,18 @@ backend/
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
                            FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message);
-                           Batch 6 adds onboarding_demo_directive (discipline-
-                           sanitized) + _ONBOARDING_POLICY in the stable prompt;
                            Batch 9 adds _SUGGESTED_PROMPTS_POLICY (after
-                           _FIGURE_POLICY) + the demo directive's no-suggest clause;
+                           _FIGURE_POLICY);
                            Batch 10 splits sanitize_discipline (public, no
                            fallback — shared w/ reset + project load), renders
                            open-catalog guidance in _render_catalog, and rewords
                            _STANDARDS_POLICY/_PROVENANCE/FULL_DRAFT_DIRECTIVE
                            to stay true for pinless modules
   llm/conversation.py      stream_user_turn generator; tool dispatch + continuation;
-                           lint event + standards_payload; Batch 10 renders the
-                           PROJECT DISCIPLINE line first in PROJECT CONTEXT
-                           (open-catalog sessions only — curated request bytes
-                           unchanged); Batch 7 adds
+                           lint event + standards_payload; PROJECT CONTEXT begins
+                           with versioned discipline/project type identity, using
+                           legacy session discipline only when identity is absent;
+                           Batch 7 adds
                            SessionState.stop_requested (threading.Event) — a
                            user stop ends the round loop early but still
                            commits (current_message_snapshot, not
@@ -291,9 +287,8 @@ frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
                            baselineIndex, suggestions (Batch 9 reply chips),
-                           pickerOpen + modules (Batch 10 module picker; New
-                           session → picker → reset-with-body; the raw newSession
-                           stays bodyless for the tour),
+                           NewSessionDialog (blank slate active; template choices
+                           visible but disabled),
                            settings-open, closePromptOpen
                            (window.buildaspecRequestClose hook), send loop (SSE
                            switch incl. status/thinking_delta); QC follow-stream
@@ -307,8 +302,7 @@ frontend/src/
                            start/status/stream/apply/dismiss + readiness; Batch 5
                            getDocDiff; Batch 7 stopChat/stopResearch/stopQc (409
                            from an already-settled run/turn is swallowed, not
-                           thrown); Batch 10 resetSession(opts?) (JSON body only
-                           when opts given) + getModules
+                           thrown); resetSession(opts?) retains compatibility APIs
   lib/useSmoothText.ts     [Batch 2] rAF typewriter smoothing + reduced-motion +
                            splitStableTail (cheap-markdown prefix/tail split)
   lib/reviewQueue.ts       [Batch 3] pure buildQueue(doc, mode) — the review
@@ -317,13 +311,10 @@ frontend/src/
   lib/qcReport.ts          pure audit-report helpers: coverage/limitations,
                            safe source links, formatting for identity, lens/seat
                            telemetry, operations/dispositions, usage and cost
-  lib/tour.ts              [Batch 6] the guided tour as pure data: STARTER_PROMPTS,
-                           DISCIPLINES, DEMO_PROFILE, 22 steps in 4 chunks,
-                           anchorSelector (data-tour / el-* / doc-snapshot resolvers)
-  lib/useOnboarding.ts     [Batch 6] tour phase machine: runId zombie guard on
-                           every await, key-gate auto-advance, do-this-for-me +
-                           run-it dispatch, fresh-vs-keep resolution; endConfirm
-                           flag (requestEnd/cancelEnd) gates every popup close (✕ /
+  lib/tour.ts              [Batch 6] passive guided-tour data: starter prompts,
+                           stable data-tour anchors, explanatory steps in 4 chunks
+  lib/useOnboarding.ts     [Batch 6] navigation-only tour phase machine;
+                           endConfirm flag (requestEnd/cancelEnd) gates every popup close (✕ /
                            backdrop) behind an end-or-continue confirmation —
                            orthogonal to phase, so "Continue" restores the popup
                            untouched and abort/start clear it
@@ -369,10 +360,9 @@ frontend/src/
                            StatusStrip (live status strip) / SettingsPanel (key mgmt +
                            usage table + about) / CloseDialog (save-before-leaving
                            prompt: Save & close / Close without saving / Cancel)
-                           / OnboardingOverlay (Batch 6: spotlight cutout + step
-                           bubbles + discipline/entry/work-choice dialogs + resume
-                           pill; drawers gain an openNonce prop, controls gain
-                           data-tour anchors; every popup close (✕ / backdrop) now
+                           / OnboardingOverlay (Batch 6: blocking spotlight + passive
+                           step bubbles; drawers gain an openNonce prop, controls
+                           gain data-tour anchors; every popup close (✕ / backdrop)
                            routes to ob.requestEnd, and Escape yields to the confirm
                            while it's open) / ConfirmDialog (Batch 7: generic
                            title/body/confirm/cancel modal — the lose-progress
@@ -381,10 +371,8 @@ frontend/src/
                            `elevated` prop (z-80) lets App host the tour's
                            end-or-continue confirm above the overlay's own modals) /
                            ModalShell (Batch 10: extracted from OnboardingOverlay
-                           + primaryBtn/quietBtn, shared) / ModulePickerDialog
-                           (Batch 10: session-start module cards + discipline
-                           chips/input for generic; Header label shows
-                           "Generic — {discipline}" when set) /
+                           + primaryBtn/quietBtn, shared) / NewSessionDialog
+                           (blank slate plus disabled template choices) /
                            FigureCard (Batch 8: inline figure render — sanitized
                            SVG/mermaid in a sandbox="" iframe, escaped data table,
                            SVG/PNG/CSV downloads + a ✕ to remove) /
@@ -427,11 +415,8 @@ tests/
                            (author/date/unique id, w:delText not w:t, para-mark
                            ins/del), doc/diff + redline API validation, no-baseline
                            400, baseline_index project round-trip, clean-path no-marks
-  test_onboarding.py       [Batch 6] demo-endpoint guards (incl. the blank-doc gate,
-                           with a profile-only variant pinning is_empty), directive
-                           snapshot + discipline sanitization, stable-policy
-                           snapshot, scripted 3-round demo e2e (patches per PART,
-                           one undo step, open_questions carries tbd+needs_input)
+  frontend/tests/tour.test.ts
+                           [Batch 6] passive tour-data invariants and current anchors
   test_stop.py             [Batch 7] chat stop mid-stream (truncates the live
                            SSE events, still commits, history stays alternating
                            even when caught right after a tool dispatch) +
@@ -500,12 +485,9 @@ baseline_index}`; 400 out-of-range or base==cur), and `GET
 `.docx` (400 when `redline=master` and no baseline; filename gains
 ` - REDLINE`). The clean `GET /api/export/docx` is byte-identical to before.
 
-The Batch 6 onboarding surface is REST-only too, NO new SSE event:
-`POST /api/onboarding/demo` (`{discipline}`) returns `{ok, message}` (409
-while a turn streams / research runs, or when the document is non-empty)
-and the frontend sends `message` through `POST /api/chat` — the demo draft
-is an ordinary turn on the one streaming path, exactly like the Batch 3
-full-draft pass.
+Onboarding is frontend-only and adds no REST or SSE surface. It is a passive
+overlay over the current project and never sends chat, edit, research, or QC
+requests.
 
 Research has its own channel (a run outlives any one chat turn):
 `POST /api/research/start` (400 incomplete profile / no key; 409 while
@@ -660,7 +642,7 @@ already resolved and does nothing). 409 when nothing is running.
 ## Phase 3 — implemented notes
 
 - **Modules.** `SessionState.module` holds the active `SpecModule`
-  (default: `hyperscale_fire`); reset keeps it, project load resolves it
+  (current default: `generic`); reset keeps it, project load resolves it
   from the file's `module_id` via `get_module` (unknown → default, the
   Spec Critic degrade posture — visible through the standards block, never
   silent in effect). Registry validation runs at import: bad prompt slots,
@@ -1278,89 +1260,32 @@ events, no new env vars, no new Python deps (`difflib` is stdlib).
 ## Batch 6 — implemented notes (v1.1.0: guided onboarding + starter prompts)
 
 Five starter-prompt chips in the empty chat; the first (verbatim, a frozen
-ask: "New to this software, show me how to use this") runs a guided tour of
-the whole workflow on a model-drafted demo spec. No new SSE events, no new
-deps (Python or npm), one new REST route.
+ask: "New to this software, show me how to use this") runs a passive guided
+tour over the current project. No backend route, SSE event, model call, or
+project mutation belongs to onboarding.
 
-- **The demo rides the Batch 3 directive pattern.** `POST
-  /api/onboarding/demo` (`{discipline}`) is thin: 409 while a turn streams
-  or research runs, PLUS 409 when the document is non-empty — the tour
-  drafts onto a blank page only (the frontend's entry guard offers
-  fresh-start first; the endpoint backstops it). Returns `{ok, message:
-  onboarding_demo_directive(discipline)}` — server-owned in `prompts.py`,
-  sent back through `/api/chat` as a visible user turn.
-  `_sanitize_discipline` folds all whitespace (newline-injection guard),
-  caps at 80 chars, and falls back to the fire default when empty. The
-  directive demands: deliberately SMALL (ONE brief article per PART),
-  header via replace-on-`sec` (free-form, so any discipline works at the
-  document level), honest provenance (user said nothing → ≈all `assumed`),
-  exactly one `[TBD: …]` + one `needs_input` (live material for the tour's
-  open-items and review steps), NO profile / NO overrides (later steps
-  teach those), ~one-PART-per-call batches, a 2-3 sentence close, and NO
-  follow-up questions (the tour drives what happens next).
-- **`_ONBOARDING_POLICY`** ("# Guided-tour demo pass") joins the STABLE
-  prompt right after `_FULL_DRAFT_POLICY`: honor the stated discipline over
-  the catalog steer, small is correct, provenance/spec-language rules
-  stand. Module-stable, zero session data (the cache rule).
 - **The tour is scripted frontend, never model-driven.** `lib/tour.ts` is
-  pure data (the `reviewQueue.ts` convention): STARTER_PROMPTS,
-  DISCIPLINES, DEMO_PROFILE, 22 `TourStep`s in 4 chunks (*Reading the page
-  / Tell it about the project / Make it yours / Out the door*), and
-  `anchorSelector` (data-tour attrs, literal `el-*` ids, and
-  first-assumed/first-paragraph resolvers over the doc snapshot).
-  `lib/useOnboarding.ts` is the phase machine (`idle → entry-guard →
-  discipline → key-gate → generating → touring ↔ chunk-break ↔ paused →
-  work-choice`) with a `runId` counter re-checked after every await — the
-  frontend mirror of the backend `generation` zombie guard. Caps arrive
-  per render via latest-refs (StrictMode-safe); generation only ever
-  starts from a click handler; the key-gate effect auto-advances when
-  `health.api_key_present` flips (the banner's save already refreshes
-  health).
-- **Spotlight = no click shield (deliberate posture).** One
-  `pointer-events: none` div whose `box-shadow: 0 0 0 9999px` paints the
-  dim (box-shadows are never hit-testable) + an accent ring — every
-  control stays usable at every step; the tour directs attention, it never
-  jails. Anchor pipeline: querySelector retry (150ms × 14, drawers render
-  a frame after their nonce bump) → `scrollIntoView` → rAF settle (rect
-  stable 2 frames, ≤650ms) → follow via resize + capture-phase scroll +
-  ResizeObserver; re-resolve on doc-version change (undo can delete the
-  anchor); missing anchor → centered bubble, never a hang. z-layers:
-  cutout 60, bubbles/pill 65, tour dialogs 70 (app modals stay 50).
-- **`App.send` now returns `Promise<boolean>`** (true = the turn completed
-  cleanly); the generating phase awaits it. Existing callers ignore the
-  value. Failure → error card with Retry — safe because the failed turn
-  rolled back server-side, so the doc is still blank and the 409 guard
-  still passes.
+  pure data: starter prompts, stable `data-tour` anchors, and four chunks
+  (*Reading the page / Tell it about the project / Make it yours / Out the
+  door*). `lib/useOnboarding.ts` has only `idle`, `touring`, and
+  `chunk-break` phases with Back/Continue/Finish/End navigation.
+- **The spotlight blocks application interaction.** A full-screen hit target
+  sits over the app while the cutout remains visual-only. Drawers may open
+  automatically for inspection. Anchor lookup retries briefly, follows resize
+  and scrolling, and falls back to a centered explanation when the named
+  control is absent (including empty-document controls).
 - **Drawer opening = optional `openNonce` prop** (Review / Research / QC
   drawers + the panel's open-items block): a bump does `setExpanded(true)`;
-  users can re-collapse and the tour never fights back. App owns
+  the blocking overlay prevents manual interaction while touring. App owns
   `drawerNonces` + `bumpDrawer` (the `prefill.nonce` idiom).
-- **"Do this for me" is deterministic where possible**: the profile step
-  POSTs `set_project_profile` through `/api/doc/edit` (DEMO_PROFILE =
-  Phoenix, Arizona, USA, "Demo Client (tour)"; the frontend `EditOp` type
-  gained the action + fields), the review step confirms
-  `buildQueue(doc,"all")[0]` via `set_status`. The research and Final QC
-  steps offer REAL runs — "Run it now" + honest cost/time note + a
-  prominent skip (Abraham's call, AskUserQuestion 2026-07-22) — gated like
-  the drawers' own buttons (`profileComplete`/`hasContent`, not running,
-  not busy). The QC run-it intentionally bypasses QCDrawer's confirm
-  modal: the bubble's cost note IS that informed-consent step.
-- **Fresh-vs-keep**: the work-choice dialog fires on any exit into real
-  work (chunk-break "Start real work", the final Finish, the paused pill's
-  ✕). Fresh = `newSession()`; keep = end the tour. Either marks
-  `onboarding-completed` in localStorage (the codebase's FIRST localStorage
-  use — try/caught, cosmetic, drives only the chip sub-line/pulse). The
-  Header's "New session" and project load call `onboarding.abort()`; the
-  hook's own fresh paths call the RAW `newSession` — never re-wrap it.
-- **Re-entry**: a "Tour" button in the Header nav; same entry guard.
-- **Tests**: `tests/test_onboarding.py` clones the `test_full_draft.py`
-  shape (guards incl. a profile-only non-empty variant pinning the
-  `is_empty` gate, directive snapshot, sanitization, stable-policy
-  snapshot, and a scripted 3-round e2e). The frontend stays pinned by
-  `npm run build` (tsc) — the no-vitest convention stands; a Playwright
-  smoke of the pre-generation flow (chips → discipline → key-gate →
-  entry-guard → fresh-start) was verified against the real DOM during
-  development.
+- **Completion semantics.** Every step and chunk modal exposes End tour via
+  the shared confirmation. Finish and explicit End mark the cosmetic
+  localStorage completion flag; `abort()` handles external session/project
+  teardown without marking completion. Confirmation copy states that no
+  project changes were made.
+- **Tests.** `frontend/tests/tour.test.ts` pins passive data (no application
+  actions or synthetic click resolvers), stable anchors, and coverage of the
+  dynamic heading plus the revised new-session choices.
 
 ## Batch 7 — implemented notes (v1.2.0: stop generation / research / QC)
 
@@ -1567,9 +1492,8 @@ policy block. No new deps, no new env vars, no new endpoints, no format bump.
   QC / export / undo / save are panel buttons, never chips); ≤60-char aim,
   120 hard; wind down near issue-ready; harmonize with the full-draft close (the
   chips ARE the clickable answers to its 2-3 follow-ups). Module-stable, zero
-  session data (the cache rule). The onboarding demo directive gains an explicit
-  "do NOT call suggest_prompts" clause (the demo mandates no follow-ups; the tour
-  drives what's next).
+  session data (the cache rule). The passive tour never enters the chat path,
+  so it cannot stage or replace suggestions.
 - **Frontend**: `SuggestedPrompts.tsx` renders between the chat scroll region
   and `Composer` (outside `data-tour="composer"`, so tour spotlight rects are
   untouched) — `rounded-full` accent pills, hidden entirely when empty, disabled
@@ -1616,28 +1540,25 @@ new REST route (`GET /api/modules`) + an optional body on the reset route.
   `_render_catalog` renders establish-the-section-from-discipline guidance
   instead of a list. `lead_section()` has no runtime callers (verified) so
   an empty catalog needs no engine guard.
-- **Discipline is session state, captured at session start.**
-  `SessionState.discipline` (kept on reset, like `module`); the INVARIANT —
-  non-empty ⇒ the active module is open-catalog — is enforced at the only
-  two write sites (`POST /api/session/reset` with the Batch 10 optional
-  body, and `load_project`), so a curated module can never carry a stale
-  discipline and the Header label ("Generic — {discipline}") needs no extra
-  state. Sanitized by the shared `sanitize_discipline` (whitespace fold,
-  80-char cap, empty stays empty — the onboarding demo keeps its own
-  fallback wrapper). Persisted as a top-level project-file key beside
-  `module_id` (no PROJECT_FORMAT bump; old files degrade to "").
+- **Discipline has a versioned source of truth.** `SpecSection.project_identity`
+  carries optional `discipline` and facility/use `project_type` fields.
+  `set_project_identity` supports partial corrections and explicit clearing;
+  it is transactional, undoable, import-preserved, and serialized in every
+  document version. `SessionState.discipline` remains only for reset/API and
+  old-project compatibility. `effective_discipline()` always prefers document
+  identity and falls back to the sanitized top-level field when older projects
+  lack it.
 - **Context placement (the cache rule).** The discipline renders as the
-  FIRST line of PROJECT CONTEXT (`PROJECT DISCIPLINE: …`, or an
-  ask-the-user line when an open-catalog session hasn't stated one) —
-  never the stable prompt, which for the generic module carries only the
-  policy POINTER naming the line. Curated sessions render neither, so
-  their request bytes are unchanged. Research threads discipline into the
+  first block of PROJECT CONTEXT beside project type (or an unknown marker),
+  never the stable prompt. Prompt guidance records or corrects identity only
+  once the user or clear document context establishes it. Research threads
+  effective discipline into the
   dimension-template kwargs (set unconditionally — a `{discipline}`
   template can never KeyError; dummy kwarg registration-checks it) and the
   fan-out header; QC threads it as a `<project_discipline>` block in the
   lens user message; both only when non-empty (curated runs byte-identical).
   `POST /api/research/start` 400s for an open-catalog module with no
-  discipline (backstop — the picker normally guarantees it).
+  effective discipline.
 - **The generic module's content** (spec_modules/generic.py, native):
   discipline-agnostic scaffold playbook — 3 must-ask topics
   (section_selection / project_identity / scope_basis, the hazard_picture
@@ -1649,15 +1570,18 @@ new REST route (`GET /api/modules`) + an optional body on the reset route.
   UL/FM) vs Canada (NBC/NFC as provincially adopted, CSA/ULC + ULC
   listings, metric, no silent US→CA standard mapping). Research dimensions
   mirror the hyperscale four (same ids + budgets), `{discipline}`-
-  parameterized and two-country aware. `DEFAULT_MODULE` stays
-  `hyperscale_fire`.
-- **Frontend.** "New session" now opens `ModulePickerDialog` (module cards,
-  current preselected; generic card reveals DISCIPLINES chips that prefill
-  a free-text input; Start disabled until valid; Cancel keeps the session;
-  fetch-failure degrades to the plain old reset). `ModalShell` +
-  `primaryBtn`/`quietBtn` extracted from OnboardingOverlay for reuse. The
-  raw bodyless `newSession` survives untouched for the tour (Batch 6
-  never-re-wrap rule); `resetSession(opts?)` sends a body only when given.
+  parameterized and two-country aware. `DEFAULT_MODULE` is now `generic`.
+- **Frontend.** "New session" opens `NewSessionDialog`: Blank slate actively
+  resets to `{module_id:"generic", discipline:"", project_context:""}`;
+  Start from a template and Load your own template are visible, disabled, and
+  labeled as in development. Cancel/Escape and the shared unsaved-work gate
+  keep existing content safe. The frontend no longer fetches modules or
+  collects discipline/project description. `ModalShell` plus
+  `primaryBtn`/`quietBtn` remain shared.
+  `projectHeading.ts` formats directly from the current document: blank with
+  no discipline; discipline-only until project type, city, and region all
+  exist; otherwise `Discipline · Project Type · City, Region` (never country).
+  This makes chat edits, profile edits, load/import, undo, and redo reactive.
   `StandardsStrip` already self-hides on an empty list (a state previously
   unreachable — on a generic session it appears with the first recorded
   override; the tour's standards anchor falls back to a centered bubble).
@@ -1684,11 +1608,10 @@ new REST route (`GET /api/modules`) + an optional body on the reset route.
   double-reported. (3) The deprecated audit path threads `discipline` into
   `build_audit_user_message` (`<project_discipline>`, non-empty only), so
   the generic `compliance_persona`'s session-discipline reference isn't
-  dangling. (4) `POST /api/onboarding/demo` sets `session.discipline` on an
-  open-catalog session (invariant-gated) so the tour's chosen discipline
-  can't mismatch the PROJECT CONTEXT. (5) `App.onLoadProject` calls
-  `refreshHealth()` so a project that switches module/discipline updates the
-  Header label + picker preselect.
+  dangling. (4) The later context-aware-session work removed the obsolete
+  onboarding demo route and made document identity authoritative. (5)
+  `App.onLoadProject` still refreshes health for legacy module compatibility;
+  the heading itself reads current document state.
 
 ## Standards management — implemented notes (per-document add / delete)
 
@@ -1763,9 +1686,7 @@ new deps, no project-file format bump; one thin REST route + one js_api method.
   opens a Save / Don't save / Cancel prompt. Loss now requires an explicit
   "…without saving". The native window-close prompt (`main._CloseController`)
   was already gated; these reuse the same predicate + save machinery. The raw
-  bodyless `newSession` is UNTOUCHED (the onboarding tour's fresh-start path
-  depends on it — the Batch 6 never-re-wrap rule); only the Header button path
-  gets the gate.
+  Header's explicit blank-slate reset runs only after this gate resolves.
 - **`CloseDialog` is now the shared 3-way "save before you lose this?" modal**
   — optional `title`/`body`/`saveLabel`/`discardLabel` props default to the
   window-close wording (that instance is byte-unchanged); the in-app gate

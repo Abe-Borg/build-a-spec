@@ -934,6 +934,13 @@ def test_has_body_content_ignores_project_setup_metadata():
     section = SpecSection.empty()
     assert section.is_empty() and not section.has_body_content()
 
+    section.project_identity = {
+        "discipline": "Mechanical",
+        "project_type": "Data Center",
+    }
+    assert not section.is_empty()
+    assert not section.has_body_content()
+
     section.project_profile = {"city": "Phoenix"}
     assert not section.is_empty()  # profile counts as "not empty"...
     assert not section.has_body_content()  # ...but is not body content
@@ -948,6 +955,10 @@ def test_has_body_content_ignores_project_setup_metadata():
 
 def test_adopt_imported_carries_project_setup_across_the_replacement():
     store = DocumentStore()
+    store.doc.project_identity = {
+        "discipline": "Fire Protection",
+        "project_type": "Data Center",
+    }
     store.doc.project_profile = {"city": "Phoenix", "client_name": "Acme"}
     store.doc.edition_overrides = {
         "NFPA 13": {"edition": "2019", "basis": "local amendment"}
@@ -960,11 +971,132 @@ def test_adopt_imported_carries_project_setup_across_the_replacement():
     # The master replaced the tree, but the project setup survived onto it.
     assert store.doc.number == "21 13 13"
     assert store.doc.title == "WET-PIPE SPRINKLER SYSTEMS"
+    assert store.doc.project_identity == {
+        "discipline": "Fire Protection",
+        "project_type": "Data Center",
+    }
     assert store.doc.project_profile == {"city": "Phoenix", "client_name": "Acme"}
     assert store.doc.edition_overrides == {
         "NFPA 13": {"edition": "2019", "basis": "local amendment"}
     }
     assert store.doc.suppressed_standards == {"NFPA 291": "out of scope"}
+
+
+def test_project_identity_is_versioned_sanitized_and_backward_compatible():
+    store = DocumentStore()
+    store.begin_turn()
+    applied = store.apply_edits(
+        [
+            {
+                "action": "set_project_identity",
+                "target_id": "sec",
+                "discipline": "  Mechanical \n (HVAC) ",
+                "project_type": "  Data \t Center  ",
+            }
+        ]
+    )
+    store.commit_turn()
+    assert applied == [
+        {
+            "action": "set_project_identity",
+            "id": "sec",
+            "discipline": "Mechanical (HVAC)",
+            "project_type": "Data Center",
+        }
+    ]
+    assert store.doc.project_identity == {
+        "discipline": "Mechanical (HVAC)",
+        "project_type": "Data Center",
+    }
+
+    store.begin_turn()
+    store.apply_edits(
+        [
+            {
+                "action": "set_project_identity",
+                "target_id": "sec",
+                "project_type": "Hospital",
+            }
+        ]
+    )
+    store.commit_turn()
+    assert store.doc.project_identity["discipline"] == "Mechanical (HVAC)"
+    assert store.doc.project_identity["project_type"] == "Hospital"
+    assert store.undo()
+    assert store.doc.project_identity["project_type"] == "Data Center"
+    assert store.redo()
+    assert store.doc.project_identity["project_type"] == "Hospital"
+
+    # An explicit blank clears only the named field and versions that
+    # correction like any other document edit.
+    store.begin_turn()
+    store.apply_edits(
+        [
+            {
+                "action": "set_project_identity",
+                "target_id": "sec",
+                "discipline": "   ",
+            }
+        ]
+    )
+    store.commit_turn()
+    assert store.doc.project_identity == {"project_type": "Hospital"}
+    assert store.undo()
+    assert store.doc.project_identity["discipline"] == "Mechanical (HVAC)"
+    assert store.redo()
+    assert "discipline" not in store.doc.project_identity
+
+    legacy = store.doc.to_dict()
+    legacy.pop("project_identity")
+    assert SpecSection.from_dict(legacy).project_identity == {}
+
+
+def test_project_identity_rejects_bad_ops_and_bounds_values():
+    store = DocumentStore()
+    with pytest.raises(SpecEditError, match="target_id must be 'sec'"):
+        store.apply_edits(
+            [
+                {
+                    "action": "set_project_identity",
+                    "target_id": "pt1",
+                    "discipline": "Mechanical",
+                }
+            ]
+        )
+    with pytest.raises(SpecEditError, match="provide 'discipline'"):
+        store.apply_edits(
+            [{"action": "set_project_identity", "target_id": "sec"}]
+        )
+    with pytest.raises(SpecEditError, match="must be a string"):
+        store.apply_edits(
+            [
+                {
+                    "action": "set_project_identity",
+                    "target_id": "sec",
+                    "project_type": 42,
+                }
+            ]
+        )
+    store.apply_edits(
+        [
+            {
+                "action": "set_project_identity",
+                "target_id": "sec",
+                "discipline": "x" * 100,
+                "project_type": "y" * 200,
+            }
+        ]
+    )
+    assert len(store.doc.project_identity["discipline"]) == 80
+    assert len(store.doc.project_identity["project_type"]) == 120
+
+    malformed = SpecSection.empty().to_dict()
+    malformed["project_identity"] = ["Mechanical"]
+    with pytest.raises(ValueError, match="project_identity must be an object"):
+        SpecSection.from_dict(malformed)
+    malformed["project_identity"] = {"unknown": "value"}
+    with pytest.raises(ValueError, match="unknown fields"):
+        SpecSection.from_dict(malformed)
 
 
 def test_adopt_import_sets_baseline_index():

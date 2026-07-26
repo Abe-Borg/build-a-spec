@@ -1,7 +1,9 @@
-"""Batch 10 session-surface tests: the module picker's backend — reset with
-an optional body, the modules listing, the session discipline in per-turn
-context (never the stable prompt), and project-file persistence with the
-open-catalog invariant."""
+"""Session compatibility and versioned project-identity tests.
+
+The UI no longer exposes module or discipline selection, but the reset/module
+APIs and legacy session discipline remain load-compatible.  The document's
+versioned identity is authoritative whenever it exists.
+"""
 from __future__ import annotations
 
 import json
@@ -75,6 +77,7 @@ def test_reset_with_body_switches_module_and_reports_it():
     health = client.get("/api/health").json()
     assert health["module_id"] == "generic"
     assert health["discipline"] == "Mechanical (HVAC)"
+    assert health["legacy_discipline"] == "Mechanical (HVAC)"
 
     # Switching back to the curated module clears the discipline (the
     # invariant: non-empty discipline ⇒ open-catalog module active).
@@ -171,19 +174,74 @@ def test_open_catalog_without_discipline_asks_for_it(monkeypatch):
     _patch_client(monkeypatch, fake)
     client.post("/api/chat", json={"message": "Hello"})
     context = request_context_text(fake.messages.last_request)
-    assert "PROJECT DISCIPLINE: [not yet stated]" in context
+    assert "PROJECT DISCIPLINE: [not yet determined]" in context
+    assert "ask the user what discipline" in context
 
 
-def test_curated_module_context_has_no_discipline_line(monkeypatch):
+def test_curated_module_context_reports_unknown_identity(monkeypatch):
     client = _client()
-    # The default is now the generic open-catalog module (which DOES render a
-    # discipline line); select a curated module to exercise the no-line path.
+    # The identity block is universal; curated modules simply do not add the
+    # generic module's ask-before-drafting backstop.
     client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
     fake = FakeClient([text_turn(["Hi."])])
     _patch_client(monkeypatch, fake)
     client.post("/api/chat", json={"message": "Hello"})
     context = request_context_text(fake.messages.last_request)
-    assert context and "PROJECT DISCIPLINE" not in context
+    assert "PROJECT DISCIPLINE: [not yet determined]" in context
+    assert "ask the user what discipline" not in context
+
+
+def test_document_identity_overrides_legacy_discipline_everywhere_visible(
+    monkeypatch,
+):
+    client = _client()
+    _reset_generic(client, discipline="Electrical")
+    edit = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_project_identity",
+                    "target_id": "sec",
+                    "discipline": "Structural",
+                    "project_type": "Office Tower",
+                }
+            ]
+        },
+    )
+    assert edit.status_code == 200, edit.text
+    assert edit.json()["doc"]["project_identity"] == {
+        "discipline": "Structural",
+        "project_type": "Office Tower",
+    }
+    # Health and the next model turn use the versioned value, while the
+    # legacy field remains untouched for old-project compatibility.
+    assert sessions.get_session().discipline == "Electrical"
+    health = client.get("/api/health").json()
+    assert health["discipline"] == "Structural"
+    assert health["legacy_discipline"] == "Electrical"
+    fake = FakeClient([text_turn(["Understood."])])
+    _patch_client(monkeypatch, fake)
+    client.post("/api/chat", json={"message": "Continue"})
+    context = request_context_text(fake.messages.last_request)
+    assert "PROJECT DISCIPLINE: Structural" in context
+    assert "PROJECT TYPE (facility/use): Office Tower" in context
+    assert "PROJECT DISCIPLINE: Electrical" not in context
+
+    saved = sessions.project_payload(sessions.get_session())
+    assert saved["discipline"] == "Structural"
+    assert saved["doc"]["versions"][saved["doc"]["index"]][
+        "project_identity"
+    ]["discipline"] == "Structural"
+
+    # The top-level value is mirrored for older app builds, but this build
+    # recognizes versioned identity and does not treat that mirror as a
+    # fallback. Undo after reload can therefore return to unknown identity.
+    loaded = client.post("/api/project/load", json=saved)
+    assert loaded.status_code == 200, loaded.text
+    assert sessions.get_session().discipline == ""
+    assert client.post("/api/doc/undo").status_code == 200
+    assert client.get("/api/health").json()["discipline"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +256,7 @@ def test_project_round_trip_preserves_module_and_discipline(monkeypatch):
     assert saved["module_id"] == "generic"
     assert saved["discipline"] == "Structural"
 
-    # Move the session to the curated default, then load the file back.
+    # Move the session to the curated module, then load the file back.
     client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
     assert sessions.get_session().module.module_id == "hyperscale_fire"
     resp = client.post("/api/project/load", json=saved)

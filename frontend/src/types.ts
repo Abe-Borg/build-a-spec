@@ -68,20 +68,12 @@ export interface Health {
   api_key_present: boolean;
   module?: string;
   module_id?: string;
-  /** Non-empty only while the generic open-catalog module is active (Batch 10). */
+  /** Effective discipline: document identity first, legacy session fallback. */
   discipline?: string;
-  /** Optional project-description primer captured at session start. */
+  /** Stable old-project fallback; never mirrors document identity. */
+  legacy_discipline?: string;
+  /** Legacy optional project-description primer. */
   project_context?: string;
-}
-
-/** One selectable spec module (Batch 10 session-start picker). */
-export interface ModuleInfo {
-  module_id: string;
-  display_name: string;
-  description: string;
-  /** Open-catalog module — a session on it needs a stated discipline. */
-  generic: boolean;
-  default: boolean;
 }
 
 /** API-key resolution status (WI3 settings panel). Never carries the key. */
@@ -137,6 +129,11 @@ export interface SpecDoc {
   parts: DocPart[];
   version: { index: number; count: number };
   edition_overrides?: Record<string, { edition: string; basis: string }>;
+  project_identity?: {
+    discipline?: string;
+    /** Facility/use, e.g. Data Center or Hospital. */
+    project_type?: string;
+  };
   project_profile?: {
     city?: string;
     state_or_province?: string;
@@ -154,6 +151,8 @@ export interface DocOp {
     | "replace"
     | "delete"
     | "set_status"
+    | "set_project_identity"
+    | "set_project_profile"
     | "set_standard_edition"
     | "set_standard_suppressed";
   id: string;
@@ -168,9 +167,7 @@ export interface DocOp {
   previous_position?: number;
 }
 
-/** A manual edit op sent to POST /api/doc/edit (WI2; set_project_profile added
- * for the panel's project-profile form and the tour's deterministic fill;
- * set_standard_edition / set_standard_suppressed for the standards manager). */
+/** A manual edit op sent to POST /api/doc/edit. */
 export interface EditOp {
   action:
     | "add_article"
@@ -179,6 +176,7 @@ export interface EditOp {
     | "set_status"
     | "add_paragraph"
     | "move"
+    | "set_project_identity"
     | "set_project_profile"
     | "set_standard_edition"
     | "set_standard_suppressed";
@@ -189,6 +187,9 @@ export interface EditOp {
   /** add_article / add_paragraph: optional insertion index; move: required
    * final index among the target article or paragraph's existing siblings. */
   position?: number;
+  /** set_project_identity fields (target_id must be "sec"). */
+  discipline?: string;
+  project_type?: string;
   /** set_project_profile fields (target_id must be "sec") — provide only
    * the ones being changed; an explicit empty string clears that field. */
   city?: string;
@@ -318,6 +319,7 @@ export type SourceCapabilityOperation =
   | "add_paragraph"
   | "set_status"
   | "set_provenance"
+  | "set_project_identity"
   | "set_project_profile"
   | "set_standard_edition"
   | "set_standard_suppressed";

@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .llm.conversation import SessionState
+from .llm.conversation import SessionState, effective_discipline
 from .spec_doc.project import save_project
 from .spec_doc.project_package import ProjectPackageError, build_project_package
 
@@ -101,7 +101,9 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         audit_result=session.audit.result,
         qc_result=qc_record["result"],
         qc_latest_attempt=qc_record["latest_attempt"],
-        discipline=session.discipline,
+        # Keep the legacy top-level field populated for older builds while
+        # the versioned document identity is authoritative in this build.
+        discipline=effective_discipline(session),
         project_context=session.project_context,
         figures=session.figures.to_dict(),
         suggested_prompts=list(session.suggested_prompts),

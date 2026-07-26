@@ -67,8 +67,7 @@ You can stage up to five one-tap reply chips with the suggest_prompts tool — s
 - Suggest only things sayable in chat that you can act on next turn. Research runs, Final QC, export, undo, and saving are panel buttons — never chips. Don't re-suggest anything already done or answered.
 - Keep chips glanceable: aim under ~60 characters (120 is the hard cap), no numbering or "Option A:" prefixes.
 - Wind down honestly. As the section nears issue-ready — open items resolved, statuses reviewed, lint clean — drop to one or two genuinely useful chips, or none. A full bar on a finished section is noise, not help.
-- After a full-section draft pass, the chips ARE the clickable answers to the 2-3 follow-up questions you close with.
-- The guided-tour demo pass is the exception: do not call suggest_prompts there — the tour, not chat, drives what happens next."""
+- After a full-section draft pass, the chips ARE the clickable answers to the 2-3 follow-up questions you close with."""
 
 _REFERENCE_DOC_POLICY = """\
 # Reference documents
@@ -121,15 +120,6 @@ The user can ask you — through a "Draft the complete section" action — to la
 - Keep each apply_spec_edits call to a sensible batch (roughly an article or a few related articles — about 25 ops as a soft guide) instead of one enormous batch, so edit patches stream steadily and the user watches the section assemble live. This is a pacing guide, never a cap: don't hold back content to hit a number.
 - Everything else is unchanged — the provenance discipline, the standards editions in effect, grounded research items (tag derived provisions with source_item_id), and the defaults-first posture all apply exactly as in a normal turn. The user reviews the assumed blocks one at a time afterward, so honest over-flagging is exactly right; never silently confirm a guess to look finished."""
 
-_ONBOARDING_POLICY = """\
-# Guided-tour demo pass
-
-The app ships a guided onboarding tour that can send you a demo-draft directive (it announces itself as "the guided-tour DEMO pass"). When that directive arrives:
-
-- Honor its stated discipline even when it is outside this module's specialty: the demo exists to teach the app's mechanics, so draft brief, plainly competent provisions in that discipline instead of steering back to the section catalog.
-- Small is correct there. One short article per PART, small edit batches, a 2-3 sentence close, and no follow-up questions — the tour, not you, drives the next steps. Resist the instinct to be thorough.
-- Everything else stands: the provenance stamps, [TBD: ...] markers, and imperative spec language apply exactly as in real work."""
-
 _INTERVIEW_POLICY = """\
 # Interview policy — defaults-first
 
@@ -146,7 +136,8 @@ The editions in effect for this project (any module default editions plus record
 _RESEARCH_POLICY = """\
 # Project profile and grounded research
 
-- Record the project identity with set_project_profile as the user states it (city, state, country, client) — usually while covering the location/client topic. The user can also fill it out directly from the panel's project-profile form at any time; either path lands in the same PROJECT PROFILE block, so treat whatever it already reports as settled and never re-ask for a field it shows filled. Once all four fields are recorded, the user can launch the requirements-research phase from the panel; suggest it once at that moment, in one line.
+- Record discipline and project type with set_project_identity as soon as the user or clear document context establishes them, and correct them when the user clarifies. Project type means facility/use (for example Data Center, Hospital, Office Tower), not construction scope or the CSI section/system. Do not guess prematurely.
+- Record the project profile with set_project_profile as the user states it (city, state, country, client) — usually while covering the location/client topic. The user can also fill it out directly from the panel's project-profile form at any time; either path lands in the same PROJECT PROFILE block, so treat whatever it already reports as settled and never re-ask for a field it shows filled. Once all four fields are recorded, the user can launch the requirements-research phase from the panel; suggest it once at that moment, in one line.
 - Your context carries a PROJECT PROFILE block every turn naming exactly which fields are still missing. While it stays incomplete, this is a non-defaultable topic: weave a question about a missing field into a turn every so often — not every turn, and never displacing whatever topic is already in progress — instead of letting it drop after one unanswered ask.
 - When a PROJECT REQUIREMENTS PROFILE appears in your context, treat its grounded items as project facts that outrank your training priors. Items marked [UNVERIFIED] could not be grounded in retrieved sources — treat them as leads, not facts. Items marked [PROCESS] are project-team advisories, never spec text.
 - When a profile item motivates a provision you draft, pass its item id as source_item_id on the edit so the panel can show the citation.
@@ -178,30 +169,13 @@ Draft the COMPLETE section now — the full first pass, top to bottom.
 - When you're done, give me a short summary in chat plus the 2–3 highest-value follow-up questions."""
 
 
-# The guided-tour demo directive (Batch 6). Like FULL_DRAFT_DIRECTIVE it is
-# an ordinary user message the frontend sends back through the normal chat
-# path, server-owned so the demo's obligations stay versioned with the
-# engine. The complementary stable-prompt policy is ``_ONBOARDING_POLICY``.
-# The discipline is free text from the tour's picker — sanitized here, and
-# rendered only into this per-turn user message, never the cached stable
-# prompt.
-_DEFAULT_DEMO_DISCIPLINE = "Fire Protection & Suppression"
+# Legacy session-discipline and session-primer bounds. New sessions learn
+# discipline through versioned project identity; older project files still
+# load their top-level discipline through these sanitizers.
 _MAX_DISCIPLINE_LEN = 80
-# Room for a sentence or two of project-priming context (the picker's
-# "describe this project" field) — longer than a discipline, still bounded so
-# a pasted paragraph can't bloat every turn.
+# Room for a sentence or two of legacy project-priming context. The current UI
+# no longer collects it, but older project files and API clients can supply it.
 _MAX_PROJECT_CONTEXT_LEN = 400
-
-_ONBOARDING_DEMO_DIRECTIVE = """\
-This is the guided-tour DEMO pass — I'm brand new here, and the tour is about to teach me the app on whatever you draft. Draft a deliberately SMALL demonstration section for my discipline: {discipline}.
-
-- Keep it genuinely short: set the section header (replace on "sec") with a sensible section number and title for this discipline, then ONE brief article per PART with 2-4 short paragraphs each. It is a teaching prop, not a deliverable — do not expand it.
-- If the discipline is outside your specialty, draft it anyway, plainly and competently, in generic {discipline} conventions — the demo teaches the app's mechanics, not deep domain content.
-- Stamp provenance honestly: I've told you nothing, so nearly everything will be assumed. Include exactly one inline [TBD: ...] marker and exactly one needs_input paragraph so the open-items tracking has live material for the tour.
-- Do NOT set the project profile and do NOT record edition overrides — later tour steps teach those.
-- Keep each apply_spec_edits call small (about one PART per call) so the document assembles visibly while I watch.
-- Close with 2-3 sentences in chat saying what you built and that it's a demo. Ask NO follow-up questions and do NOT call suggest_prompts — the guided tour drives what happens next."""
-
 
 def sanitize_discipline(discipline: str) -> str:
     """Collapse free-text discipline input to one bounded line.
@@ -209,8 +183,8 @@ def sanitize_discipline(discipline: str) -> str:
     Whitespace folding neutralizes newline injection into prompt/directive
     structure; the cap keeps a pasted paragraph from bloating a turn. Empty
     (or whitespace-only) input stays empty — callers choose their own
-    fallback. Shared by the session-level discipline (Batch 10: the reset
-    endpoint and project load) and the onboarding demo directive below.
+    fallback. Retained for the legacy session-level discipline on reset and
+    project load.
     """
     return " ".join((discipline or "").split())[:_MAX_DISCIPLINE_LEN].strip()
 
@@ -224,20 +198,6 @@ def sanitize_project_context(text: str) -> str:
     empty. Shared by the reset endpoint and project load.
     """
     return " ".join((text or "").split())[:_MAX_PROJECT_CONTEXT_LEN].strip()
-
-
-def _sanitize_discipline(discipline: str) -> str:
-    """Demo-directive variant: empty input falls back to the module's home
-    discipline rather than erroring — the demo must always be startable.
-    """
-    return sanitize_discipline(discipline) or _DEFAULT_DEMO_DISCIPLINE
-
-
-def onboarding_demo_directive(discipline: str) -> str:
-    """The guided-tour demo directive for ``discipline`` (Batch 6)."""
-    return _ONBOARDING_DEMO_DIRECTIVE.format(
-        discipline=_sanitize_discipline(discipline)
-    )
 
 
 def _render_catalog(module: SpecModule) -> str:
@@ -323,7 +283,6 @@ def render_system_prompt(module: SpecModule) -> str:
             _RESEARCH_POLICY,
             _GAP_AND_ADAPT,
             _FULL_DRAFT_POLICY,
-            _ONBOARDING_POLICY,
             _render_catalog(module),
             _render_playbook(module),
             conventions,

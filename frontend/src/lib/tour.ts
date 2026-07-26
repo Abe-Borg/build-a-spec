@@ -1,44 +1,20 @@
-/**
- * The guided tour (Batch 6): starter prompts, the discipline picker's
- * options, and the tour itself — chunks of steps, each step anchored to a
- * real UI element and carrying its bubble copy and optional actions.
- *
- * Pure data + pure resolvers over the doc snapshot (the `reviewQueue.ts`
- * convention): no React, no fetches. The state machine lives in
- * `useOnboarding.ts`; the rendering in `OnboardingOverlay.tsx`.
- */
-import type { SpecDoc, DocParagraph } from "../types";
-import { buildQueue } from "./reviewQueue";
+import type { SpecDoc } from "../types";
 import {
   SOURCE_CAPABILITY_GUIDANCE,
   SOURCE_OUTPUT_GUIDANCE,
   type SourceOutputGuidance,
 } from "./sourceOutputGuidance";
 
-/* --- Starter prompts (the empty-chat chips) --- */
-
 export interface StarterPrompt {
-  /** The chip text. For `kind: "chat"` it is sent verbatim as the message. */
   label: string;
-  /** Faint sub-line under the label (the onboarding chip's is dynamic). */
   sub?: string;
   kind: "onboarding" | "chat";
 }
 
-/**
- * The empty-chat starter chips, tailored to the session's discipline. Only the
- * "start drafting" chip is discipline-specific; the rest are discipline-neutral
- * on-ramps. When no discipline is set (neutral boot, or a curated module that
- * implies its own), the drafting chip is generic and the model asks. The
- * project-description primer the user may enter in the picker is deliberately
- * NOT embedded here — the model receives it via PROJECT CONTEXT, so clicking
- * the drafting chip already yields project-specific output.
- */
 export function starterPrompts(discipline?: string): StarterPrompt[] {
-  const d = discipline?.trim();
+  const known = discipline?.trim();
   return [
     {
-      // Verbatim by request — the onboarding entry point.
       label: "New to this software, show me how to use this",
       kind: "onboarding",
     },
@@ -49,8 +25,10 @@ export function starterPrompts(discipline?: string): StarterPrompt[] {
       kind: "chat",
     },
     {
-      label: d
-        ? `Start drafting my ${d} section — show me what you assume as you go.`
+      label: known
+        ? "Start drafting my " +
+          known +
+          " section — show me what you assume as you go."
         : "Start drafting — I'll tell you the discipline, section, and project as we go.",
       sub: "Watch a section take shape immediately",
       kind: "chat",
@@ -72,78 +50,16 @@ export function starterPrompts(discipline?: string): StarterPrompt[] {
   ];
 }
 
-/**
- * Deterministic examples for the suggested-replies tour step. The onboarding
- * demo deliberately does not ask the model to stage real replies, so these
- * keep the lesson anchored to the actual chip bar while still behaving like
- * normal, send-immediately suggestions.
- */
-export const TOUR_SUGGESTED_PROMPTS = [
-  "Use your recommended defaults.",
-  "Walk me through the open decisions.",
-  "What should I review first?",
-] as const;
-
-/* --- Discipline picker --- */
-
-export const DISCIPLINES: readonly string[] = [
-  "Fire Protection & Suppression",
-  "Mechanical (HVAC)",
-  "Plumbing",
-  "Electrical",
-];
-
-/** The deterministic demo profile the "Do this for me" step records. */
-export const DEMO_PROFILE = {
-  city: "Phoenix",
-  state: "Arizona",
-  country: "USA",
-  client: "Demo Client (tour)",
-} as const;
-
-/** Composer prefill for the profile step's "I'll type it" alternative. */
-export const PROFILE_PREFILL =
-  "The project is in <city>, <state>, <country>, and the client is <client>.";
-
-/* --- Tour structure --- */
-
-export type TourActionKind =
-  | "profile-fill" // POST /api/doc/edit set_project_profile with DEMO_PROFILE
-  | "confirm-first" // confirm the first outstanding review-queue entry
-  | "run-research" // launch the real research run (user-approved cost)
-  | "run-qc" // launch the real Final QC run (user-approved cost)
-  | "prefill-composer"; // pause the tour and put text in the composer
-
-export interface TourAction {
-  kind: TourActionKind;
-  label: string;
-  /** Small-print honesty line under the button (cost / time / effect). */
-  note?: string;
-  /** For `prefill-composer`. */
-  prefillText?: string;
-}
-
 export interface TourStep {
   id: string;
-  /**
-   * Anchor: a `data-tour` attribute value, or a literal `el-…` DOM id
-   * (the document panel's stable element ids). Empty string = centered
-   * card with no spotlight.
-   */
+  /** A data-tour value. Empty means a centered explanatory card. */
   anchor: string;
-  /** Resolve the anchor from the doc snapshot instead (overrides anchor). */
-  resolve?: "first-assumed" | "first-paragraph";
-  /** Drawer that must be open for the anchor to exist (openNonce bump). */
   drawer?: "review" | "research" | "qc" | "openItems";
   title: string;
   body: string;
-  /** Optional compact definitions rendered below the main teaching copy. */
   details?: readonly SourceOutputGuidance[];
-  /** Preferred bubble side; the overlay flips it when out of room. */
   placement?: "top" | "bottom" | "left" | "right";
-  /** Label for the Continue button (e.g. "Skip for now" on run-it steps). */
   continueLabel?: string;
-  actions?: TourAction[];
 }
 
 export interface TourChunk {
@@ -163,33 +79,41 @@ export const TOUR: readonly TourChunk[] = [
         placement: "right",
         title: "Two panes, one document",
         body:
-          "This side is the conversation — you answer, ask, decide. The " +
-          "paper on the right is the real specification: the model edits " +
-          "it through a document tool and never writes spec text in chat.",
+          "The left side is the conversation. The paper on the right is the " +
+          "real specification: model drafting lands there as structured, " +
+          "addressable content rather than as spec text in chat.",
       },
       {
-        id: "header",
-        anchor: "el-sec",
-        placement: "left",
-        title: "The section header",
+        id: "project-heading",
+        anchor: "project-heading",
+        placement: "bottom",
+        title: "Project context at a glance",
         body:
-          "The number and title were set by the model with the same edit " +
-          "operation it uses for every provision. Nothing on the paper is " +
-          "decoration — every block is real, addressable content.",
+          "This heading stays blank until the discipline is known. It shows " +
+          "only the discipline until the facility type and city/region are " +
+          "also established, then expands to Discipline · Project Type · " +
+          "City, Region. Chat corrections and document versions update it.",
+      },
+      {
+        id: "document",
+        anchor: "doc-panel",
+        placement: "left",
+        title: "The specification document",
+        body:
+          "Section number, title, articles, and provisions form a structured " +
+          "CSI SectionFormat document. On an empty session this panel is ready " +
+          "for either conversation-led drafting or a master-spec import.",
       },
       {
         id: "statuses",
         anchor: "doc-panel",
-        resolve: "first-assumed",
         placement: "left",
         title: "Every block wears its provenance",
         body:
-          "Amber assumed is a defensible default you haven't confirmed; " +
-          "red needs-input can't stand without you; blue imported is " +
-          "master content awaiting review. You've told the model nothing " +
-          "yet, so the demo is almost all assumed — honest over-flagging " +
-          "is the point. Hover the block: ✓ confirm, ✏️ edit and 🗑 delete " +
-          "appear.",
+          "Amber assumed is a defensible default awaiting review; red " +
+          "needs-input cannot stand without a decision; blue imported is " +
+          "master content awaiting project review. Confirmed content is the " +
+          "material the user has stated or approved.",
       },
       {
         id: "open-items",
@@ -198,9 +122,9 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Nothing unresolved can hide",
         body:
-          "The demo deliberately left one [TBD: …] marker and one " +
-          "needs-input block; they're tracked here — and scheduled in the " +
-          "export — until resolved. Click an item to jump to its block.",
+          "TBD markers and needs-input blocks collect here and remain visible " +
+          "in exports until resolved. The drawer is a navigable inventory of " +
+          "decisions, not a second copy of the document.",
       },
       {
         id: "lint",
@@ -208,10 +132,9 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Advisory lint",
         body:
-          "Deterministic checks — stale standard editions, placeholders, " +
-          "empty articles — recomputed after every change. Advisory only: " +
-          "lint never blocks an edit, and the model fixes findings as it " +
-          "touches the affected blocks. A clean demo may show none.",
+          "Deterministic checks for stale editions, placeholders, and empty " +
+          "or duplicate structure recompute after every change. They remain " +
+          "advisory and never silently block an edit.",
       },
       {
         id: "standards",
@@ -219,19 +142,18 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Standards editions in effect",
         body:
-          "Drafting defaults to current published editions. When your " +
-          "jurisdiction has adopted an earlier one, the model records an " +
-          "override with the stated adoption as its basis — never silently.",
+          "The active basis and any jurisdiction-adopted overrides stay " +
+          "visible. Overrides require a stated adoption basis and are never " +
+          "recorded silently.",
       },
       {
         id: "spend",
         anchor: "spend-pill",
         placement: "bottom",
-        title: "Real tokens, live meter",
+        title: "Live usage meter",
         body:
-          "That demo ran on your API key — a few cents. This pill " +
-          "estimates session spend as you go; the full breakdown lives in " +
-          "Settings.",
+          "Estimated session spend is visible here. Settings contains the " +
+          "full breakdown by interview, research, audit, and Final QC.",
       },
     ],
   },
@@ -245,21 +167,19 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Real work is an interview",
         body:
-          "Every question arrives with a recommended answer, and \"I " +
-          "don't know\" is a first-class reply — the model applies the " +
-          "default and stamps the block assumed. Ask it to guide you and " +
-          "open questions become concrete options with plain tradeoffs.",
+          "Questions arrive with a recommended answer, and “I don't know” is " +
+          "a valid response: the model can apply a defensible default and " +
+          "mark it assumed instead of stalling the draft.",
       },
       {
         id: "suggested-replies",
-        anchor: "suggested-prompts",
+        anchor: "composer",
         placement: "top",
         title: "Suggested replies",
         body:
-          "When a useful next step is clear, reply chips tailored to the " +
-          "current conversation appear just above the composer. Click one " +
-          "to send it immediately, ignore them, or type your own response. " +
-          "When nothing useful needs suggesting, the row stays out of the way.",
+          "When a useful next move is clear, contextual reply chips can appear " +
+          "above the composer. They are optional shortcuts; normal typed " +
+          "conversation always remains available outside the tour.",
       },
       {
         id: "profile",
@@ -268,25 +188,9 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "The project profile",
         body:
-          "Research needs four facts: city, state, country, client. " +
-          "Mention them in chat and the model records them, fill the form " +
-          "right here in the drawer — or take the demo shortcut below and " +
-          "watch the research button unlock.",
-        actions: [
-          {
-            kind: "profile-fill",
-            label: "Do this for me",
-            note:
-              "Records a demo profile — Phoenix, Arizona, USA, " +
-              "Demo Client (tour) — as one undoable edit.",
-          },
-          {
-            kind: "prefill-composer",
-            label: "I'll type it",
-            prefillText: PROFILE_PREFILL,
-            note: "Puts a fill-in sentence in the composer; the tour waits.",
-          },
-        ],
+          "Research uses four explicit facts: city, state/province, country, " +
+          "and client. Conversation can record them, and the same values are " +
+          "visible in the Research panel for later review or correction.",
       },
       {
         id: "research",
@@ -295,21 +199,9 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Grounded requirements research",
         body:
-          "A systematic web sweep of governing codes, AHJ rules, and " +
-          "client standards for your jurisdiction. Findings cite pages " +
-          "the tools actually retrieved; anything unverifiable is marked " +
-          "a lead, not a fact — and grounded items feed the draft with " +
-          "◆ provenance chips.",
-        continueLabel: "Skip for now",
-        actions: [
-          {
-            kind: "run-research",
-            label: "Run it now",
-            note:
-              "Real run on your API key — several minutes and real " +
-              "spend (watch the meter). The tour continues while it runs.",
-          },
-        ],
+          "A deliberate web sweep covers governing codes, AHJ rules, client " +
+          "standards, and site conditions. Retrieved evidence is distinguished " +
+          "from unverified leads, and grounded items can carry into provisions.",
       },
       {
         id: "draft-full",
@@ -317,10 +209,9 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "One-pass full draft",
         body:
-          "On an empty or sparse page this button drafts the entire " +
-          "section from everything known — profile, research, your " +
-          "answers. The demo already has its articles, so it's resting; " +
-          "hover it — disabled controls here always explain themselves.",
+          "On an empty or sparse document, this control can draft the complete " +
+          "section from the profile, research, and interview decisions. " +
+          "Unavailable controls explain what prerequisite is missing.",
       },
     ],
   },
@@ -331,15 +222,12 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "inline-edit",
         anchor: "doc-panel",
-        resolve: "first-paragraph",
         placement: "left",
         title: "Edit directly on the paper",
         body:
-          "Hover a block: ✏️ rewrites it, ✓ confirms its review status, and " +
-          "🗑 deletes it. On an imported DOCX the server enables each action " +
-          "separately; disabled controls explain why, while status can remain " +
-          "available on read-only text. No chat round-trip — the " +
-          "model simply sees the result next turn. Try confirming this one.",
+          "Document blocks expose direct edit, confirm, delete, and structural " +
+          "controls when permitted. Imported DOCX content uses server-derived " +
+          "permissions so unsupported source mutations remain disabled.",
       },
       {
         id: "versions",
@@ -347,9 +235,9 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Every change is a version",
         body:
-          "Each model turn and each manual edit commits one undoable " +
-          "version. Step back with ‹ and forward with › — nothing is " +
-          "ever lost, and the history survives project save and reopen.",
+          "Each model turn and manual edit commits one undoable version. The " +
+          "history survives project save and reopen, including project identity " +
+          "and profile changes.",
       },
       {
         id: "review",
@@ -358,17 +246,8 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "The review queue",
         body:
-          "Walks every assumed and imported block in document order at " +
-          "keyboard speed — K keep, E edit, D delete, A ask the model " +
-          "about it. This is how a senior reviewer clears a draft's " +
-          "guesses in one pass.",
-        actions: [
-          {
-            kind: "confirm-first",
-            label: "Do this for me",
-            note: "Confirms the first outstanding block (one undo step).",
-          },
-        ],
+          "The queue walks assumed and imported blocks in document order for " +
+          "fast confirmation, editing, deletion, or follow-up with the model.",
       },
       {
         id: "compare",
@@ -376,10 +255,9 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Compare any two versions",
         body:
-          "Insertions green, deletions struck — the same diff engine " +
-          "that produces the Word redline export. With an imported " +
-          "DOCX, the baseline is the normalized provision extraction, " +
-          "not the original Word package.",
+          "Insertions and deletions use the same semantic diff engine that " +
+          "produces the Word redline export. Imported baselines represent the " +
+          "normalized provision extraction.",
       },
       {
         id: "import",
@@ -387,16 +265,10 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "The other on-ramp",
         body:
-          "Instead of drafting from scratch, extract supported body " +
-          "content from an office .docx into a blank session: every " +
-          "block lands stamped imported and the interview pivots to " +
-          "adapting it. The exact source package is retained, and only " +
-          "server-proven operations are enabled through the source-preserving " +
-          "path. " + SOURCE_CAPABILITY_GUIDANCE + " Exact-original download " +
-          "stays available even if the package is pass-through-only. " +
-          "Bounded structural edits require a proven flat island with isolated " +
-          "direct Word list bindings. It's disabled now " +
-          "because this session has content.",
+          "A supported office DOCX can seed a blank document with imported " +
+          "provenance. The exact source package remains available while only " +
+          "server-proven edits enter the source-preserving path. " +
+          SOURCE_CAPABILITY_GUIDANCE,
       },
     ],
   },
@@ -409,22 +281,11 @@ export const TOUR: readonly TourChunk[] = [
         anchor: "qc-drawer",
         drawer: "qc",
         placement: "top",
-        title: "Final QC on Fable 5",
+        title: "Final QC",
         body:
-          "Five review lenses fan out over the finished draft, every " +
-          "finding faces an adversarial verification panel, and " +
-          "survivors arrive with ready-to-apply fixes. The deliberate, " +
-          "expensive last pass before a section ships.",
-        continueLabel: "Skip for now",
-        actions: [
-          {
-            kind: "run-qc",
-            label: "Run it now",
-            note:
-              "The most expensive feature — Fable 5, several minutes of " +
-              "real spend. On this tiny demo it's purely a demonstration.",
-          },
-        ],
+          "Five review lenses examine the finished draft, and candidate " +
+          "findings face adversarial verification before any ready-to-apply " +
+          "fix is offered.",
       },
       {
         id: "readiness",
@@ -433,19 +294,19 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "The out-the-door checklist",
         body:
-          "Deterministic — no model call: open items, unreviewed blocks, " +
-          "lint, research currency, QC status. When these are green, the " +
-          "section is defensible.",
+          "The deterministic checklist covers open items, unreviewed blocks, " +
+          "lint, research currency, and Final QC status without another model " +
+          "call.",
       },
       {
         id: "export",
         anchor: "export",
         placement: "bottom",
-        title: "Export",
+        title: "Export guarantees",
         body:
-          "After an import, the Export area presents distinct guarantees. " +
-          "Choose deliberately; a source-preserving option is never silently " +
-          "substituted with a normalized one.",
+          "Imported projects expose distinct output guarantees so a " +
+          "source-preserving result is never silently substituted with a " +
+          "normalized one.",
         details: SOURCE_OUTPUT_GUIDANCE,
       },
       {
@@ -454,10 +315,9 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Projects are one file",
         body:
-          "Save writes the whole session — conversation, every version, " +
-          "research, QC, and the exact imported source when present — to " +
-          "one .baspec file. Open resumes it exactly, undo and source-export " +
-          "state included.",
+          "A .baspec project carries conversation, versions, identity, " +
+          "research, QC, and the exact imported source when present. Opening " +
+          "it restores the working state.",
       },
       {
         id: "settings",
@@ -465,51 +325,30 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Settings",
         body:
-          "Key management (stored in your OS credential manager), the " +
-          "usage breakdown behind the spend pill, and app updates.",
+          "Settings contains key management, the usage breakdown, and app " +
+          "updates. API keys use the operating system credential store when " +
+          "available.",
       },
       {
         id: "finish",
         anchor: "new-session",
         placement: "bottom",
-        title: "That's the whole loop",
+        title: "Start the next project",
         body:
-          "Interview → research → draft → review → QC → export. New " +
-          "session gives you a blank page whenever you're ready — which " +
-          "is exactly the next choice.",
+          "New session offers a blank slate now. Built-in templates and loading " +
+          "a personal template are visible but disabled while those features " +
+          "are in development.",
         continueLabel: "Finish",
       },
     ],
   },
 ];
 
-/* --- Pure resolvers over the doc snapshot --- */
-
-function firstParagraph(doc: SpecDoc | null): DocParagraph | null {
-  if (!doc) return null;
-  for (const part of doc.parts) {
-    for (const article of part.articles) {
-      if (article.paragraphs.length > 0) return article.paragraphs[0];
-    }
-  }
-  return null;
-}
-
-/**
- * The CSS selector for a step's anchor, or null when it can't exist yet.
- * Dynamic steps resolve against the doc snapshot; `el-…` anchors are the
- * document panel's stable DOM ids; everything else is a data-tour value.
- */
-export function anchorSelector(step: TourStep, doc: SpecDoc | null): string | null {
-  if (step.resolve === "first-assumed") {
-    const entry = buildQueue(doc, "assumptions")[0];
-    return entry ? `#el-${CSS.escape(entry.elementId)}` : null;
-  }
-  if (step.resolve === "first-paragraph") {
-    const p = firstParagraph(doc);
-    return p ? `#el-${CSS.escape(p.id)}` : null;
-  }
+/** CSS selector for a stable tour anchor, or null for a centered card. */
+export function anchorSelector(
+  step: TourStep,
+  _doc: SpecDoc | null,
+): string | null {
   if (!step.anchor) return null;
-  if (step.anchor.startsWith("el-")) return `#${CSS.escape(step.anchor)}`;
-  return `[data-tour="${step.anchor}"]`;
+  return '[data-tour="' + step.anchor + '"]';
 }

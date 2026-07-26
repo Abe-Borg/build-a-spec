@@ -637,6 +637,40 @@ def test_qc_start_gates_and_apply_is_one_undo_step(monkeypatch):
     assert "2019" in reverted["parts"][0]["articles"][0]["paragraphs"][0]["text"]
 
 
+def test_qc_prefers_document_identity_over_legacy_discipline(monkeypatch):
+    client = _client()
+    client.post(
+        "/api/session/reset",
+        json={"module_id": "generic", "discipline": "Electrical"},
+    )
+    _seed_doc(client, monkeypatch)
+    identity = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_project_identity",
+                    "target_id": "sec",
+                    "discipline": "Structural",
+                }
+            ]
+        },
+    )
+    assert identity.status_code == 200, identity.text
+    fake = SequencedFakeClient(_qc_scripts())
+    monkeypatch.setattr("backend.app.get_client", lambda: fake)
+    assert client.post("/api/qc/start").json()["ok"] is True
+    assert _wait_qc(client)["status"] == "complete"
+    assert len(fake.requests) == len(QC_LENSES)
+    assert all(
+        "<project_discipline>\nStructural\n</project_discipline>"
+        in req["messages"][0]["content"]
+        and "<project_discipline>\nElectrical\n</project_discipline>"
+        not in req["messages"][0]["content"]
+        for req in fake.requests
+    )
+
+
 def test_qc_apply_rejects_result_when_doc_moved(monkeypatch):
     client = _client()
     _seed_doc(client, monkeypatch)

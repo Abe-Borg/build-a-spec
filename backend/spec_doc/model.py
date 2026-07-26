@@ -105,6 +105,11 @@ class SpecSection:
     # of the tree on purpose — overrides ride the same transactional
     # apply / per-turn versioning / undo / project-file machinery as text.
     edition_overrides: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Compact identity learned through the interview. Project type is the
+    # facility/use (data center, hospital, office tower), not the CSI section
+    # or delivery method. Kept on the versioned tree so chat edits, undo/redo,
+    # imports, project files, and future templates share one source.
+    project_identity: dict[str, str] = field(default_factory=dict)
     # Project identity recorded through set_project_profile (Phase 4):
     # {"city", "state_or_province", "country", "client_name"} — the
     # ProjectProfile dict shape. On the tree for the same reason as
@@ -131,6 +136,7 @@ class SpecSection:
             not self.number
             and not self.title
             and not self.edition_overrides
+            and not self.project_identity
             and not self.project_profile
             and not self.suppressed_standards
             and not any(part.articles for part in self.parts)
@@ -161,6 +167,7 @@ class SpecSection:
             "section": {"number": self.number, "title": self.title},
             "parts": [_part_to_dict(part) for part in self.parts],
             "edition_overrides": copy.deepcopy(self.edition_overrides),
+            "project_identity": dict(self.project_identity),
             "project_profile": dict(self.project_profile),
             "suppressed_standards": dict(self.suppressed_standards),
         }
@@ -175,6 +182,7 @@ class SpecSection:
             overrides = validate_overrides_shape(
                 data.get("edition_overrides")
             )
+            identity = _validate_identity_shape(data.get("project_identity"))
             profile = _validate_profile_shape(data.get("project_profile"))
             suppressed = validate_suppressed_shape(
                 data.get("suppressed_standards")
@@ -184,6 +192,7 @@ class SpecSection:
                 title=str(section.get("title", "")),
                 parts=parts,
                 edition_overrides=overrides,
+                project_identity=identity,
                 project_profile=profile,
                 suppressed_standards=suppressed,
             )
@@ -196,6 +205,34 @@ class SpecSection:
 
 
 _PROFILE_FIELDS = ("city", "state_or_province", "country", "client_name")
+_IDENTITY_FIELD_LIMITS = {"discipline": 80, "project_type": 120}
+
+
+def _clean_identity_value(value: str, field_name: str) -> str:
+    """Fold identity metadata to one bounded, prompt-safe display line."""
+    return " ".join(value.split())[:_IDENTITY_FIELD_LIMITS[field_name]].strip()
+
+
+def _validate_identity_shape(data: Any) -> dict[str, str]:
+    """Validate and normalize optional persisted project identity metadata."""
+    if data in (None, {}):
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("project_identity must be an object")
+    unknown = set(data) - set(_IDENTITY_FIELD_LIMITS)
+    if unknown:
+        raise ValueError(
+            f"project_identity has unknown fields: {sorted(unknown)}"
+        )
+    clean: dict[str, str] = {}
+    for key in _IDENTITY_FIELD_LIMITS:
+        value = data.get(key, "")
+        if not isinstance(value, str):
+            raise ValueError(f"project_identity.{key} must be a string")
+        normalized = _clean_identity_value(value, key)
+        if normalized:
+            clean[key] = normalized
+    return clean
 
 
 def _validate_profile_shape(data: Any) -> dict[str, str]:
@@ -534,6 +571,7 @@ _ACTIONS = (
     "set_status",
     "set_standard_edition",
     "set_standard_suppressed",
+    "set_project_identity",
     "set_project_profile",
 )
 
@@ -700,6 +738,41 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             "id": "sec",
             "standard": standard,
             "suppressed": True,
+        }
+
+    # -- compact project identity: section-level metadata -----------------
+    if action == "set_project_identity":
+        if target_id != "sec":
+            raise SpecEditError(
+                "set_project_identity: target_id must be 'sec' (identity "
+                "is section-level metadata)."
+            )
+        provided = {
+            field_name: op[field_name]
+            for field_name in _IDENTITY_FIELD_LIMITS
+            if field_name in op and op[field_name] is not None
+        }
+        if not provided:
+            raise SpecEditError(
+                "set_project_identity: provide 'discipline' and/or "
+                "'project_type'."
+            )
+        updated = dict(section.project_identity)
+        for field_name, raw in provided.items():
+            if not isinstance(raw, str):
+                raise SpecEditError(
+                    f"set_project_identity: '{field_name}' must be a string."
+                )
+            value = _clean_identity_value(raw, field_name)
+            if value:
+                updated[field_name] = value
+            else:
+                updated.pop(field_name, None)
+        section.project_identity = updated
+        return {
+            "action": "set_project_identity",
+            "id": "sec",
+            **{key: updated.get(key, "") for key in provided},
         }
 
     # -- project profile: section-level metadata ---------------------------
@@ -1027,6 +1100,8 @@ class DocumentStore:
         # Carry the pre-import project setup across the tree replacement. The
         # importer never populates these, so an empty check just future-proofs
         # against a master that ever does.
+        if not section.project_identity:
+            section.project_identity = dict(self.doc.project_identity)
         if not section.project_profile:
             section.project_profile = dict(self.doc.project_profile)
         if not section.edition_overrides:
@@ -1173,6 +1248,12 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "reason. This is the ONLY way to drop a module-pinned standard — "
         "removing an override with set_standard_edition just reverts a pin "
         "to its default edition, it does not exclude it.\n"
+        "- set_project_identity: target_id = 'sec'; record discipline and "
+        "project_type as soon as they are established by the user or clear "
+        "document context. project_type means facility/use (for example "
+        "Data Center, Hospital, Office Tower), NOT the CSI section/system or "
+        "construction scope. Do not guess either value prematurely. Provide "
+        "only fields being changed; an explicit empty string clears one.\n"
         "- set_project_profile: target_id = 'sec'; record the project "
         "identity as the user states it — city, state (name or 2-letter "
         "code), country ('USA'/'Canada'), client. Provide only the fields "
@@ -1218,6 +1299,8 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
                         "state": {"type": "string"},
                         "country": {"type": "string"},
                         "client": {"type": "string"},
+                        "discipline": {"type": "string"},
+                        "project_type": {"type": "string"},
                         "source_item_id": {"type": "string"},
                     },
                     "required": ["action", "target_id"],

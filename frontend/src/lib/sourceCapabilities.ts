@@ -154,6 +154,8 @@ function mappedOperations(
       return ["set_status"];
     case "set_provenance":
       return ["set_provenance"];
+    case "set_project_identity":
+      return ["set_project_identity"];
     case "set_project_profile":
       return ["set_project_profile"];
     case "set_standard_edition":

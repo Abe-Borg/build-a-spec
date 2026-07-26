@@ -15,9 +15,6 @@ Endpoints (all JSON unless noted):
 - ``POST /api/draft/full``    → the canned full-section draft directive for
   the frontend to send through the normal chat path (409 while a turn or
   research runs).
-- ``POST /api/onboarding/demo`` → the guided-tour demo directive (Batch 6)
-  for the frontend to send through the normal chat path (409 while a turn
-  or research runs, or when the document is not blank).
 - ``GET  /api/doc``           → current document snapshot + open questions.
 - ``GET  /api/doc/capabilities`` → just the imported-source permission
   report, for polling while the background sweep derives it.
@@ -100,12 +97,13 @@ from .llm.client import (
     get_client,
     reset_client_cache,
 )
-from .llm.conversation import SessionState, standards_payload, stream_user_turn
-from .llm.prompts import (
-    FULL_DRAFT_DIRECTIVE,
-    onboarding_demo_directive,
-    sanitize_discipline,
+from .llm.conversation import (
+    SessionState,
+    effective_discipline,
+    standards_payload,
+    stream_user_turn,
 )
+from .llm.prompts import FULL_DRAFT_DIRECTIVE
 from .project_profile import ProjectProfile
 from .qc.engine import (
     QC_PROTOCOL_VERSION,
@@ -185,10 +183,6 @@ class SaveKeyRequest(BaseModel):
 
 class EditDocRequest(BaseModel):
     ops: list[dict[str, Any]]
-
-
-class OnboardingDemoRequest(BaseModel):
-    discipline: str
 
 
 class SessionResetRequest(BaseModel):
@@ -531,7 +525,7 @@ def _qc_matches_current_inputs(session, result, *, block: bool = False) -> bool:
             session.doc.doc,
             session.research.profile_result,
             session.module,
-            session.discipline,
+            effective_discipline(session),
             _qc_source_guard(session, block=block),
             model=settings.QC_MODEL,
             max_tokens=settings.QC_MAX_TOKENS,
@@ -568,7 +562,7 @@ def _qc_export_current_state(
         session.research.profile_result,
         session.module,
         version_index=session.doc.index,
-        discipline=session.discipline,
+        discipline=effective_discipline(session),
         source_guard=_qc_source_guard(session, block=True),
         model=settings.QC_MODEL,
         max_tokens=settings.QC_MAX_TOKENS,
@@ -1097,7 +1091,11 @@ def create_app() -> FastAPI:
             "api_key_present": bool(load_api_key()),
             "module": session.module.display_name,
             "module_id": session.module.module_id,
-            "discipline": session.discipline,
+            "discipline": effective_discipline(session),
+            # Stable fallback for old projects. The frontend must not use the
+            # effective value as a fallback because it can become stale when
+            # undo removes versioned identity.
+            "legacy_discipline": session.discipline,
             "project_context": session.project_context,
         }
 
@@ -1185,7 +1183,7 @@ def create_app() -> FastAPI:
             "ok": True,
             "module_id": session.module.module_id,
             "module": session.module.display_name,
-            "discipline": session.discipline,
+            "discipline": effective_discipline(session),
             "project_context": session.project_context,
         }
 
@@ -1205,7 +1203,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/modules")
     def modules() -> dict:
-        """The selectable module registry, for the session-start picker."""
+        """Compatibility module registry retained for future templates."""
         return {
             "ok": True,
             "modules": [
@@ -1286,55 +1284,6 @@ def create_app() -> FastAPI:
                 status_code=409,
             )
         return JSONResponse({"ok": True, "message": FULL_DRAFT_DIRECTIVE})
-
-    @app.post("/api/onboarding/demo")
-    def onboarding_demo(body: OnboardingDemoRequest) -> JSONResponse:
-        """Hand the frontend the guided-tour demo directive (Batch 6).
-
-        Thin like ``/api/draft/full``: the returned message goes back
-        through ``/api/chat`` as an ordinary, visible user turn, so the
-        demo rides the one streaming path. The extra guard is the blank
-        document — the tour drafts its demo onto a clean page only; the
-        frontend offers "start fresh" first, and this 409 backstops it.
-        """
-        session = sessions.get_session()
-        if session.turn_active:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "A model turn is already streaming — wait for "
-                    "it to finish before starting the demo.",
-                },
-                status_code=409,
-            )
-        if session.research.status == "running":
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "Requirements research is running — let it "
-                    "finish before starting the demo.",
-                },
-                status_code=409,
-            )
-        if not session.doc.doc.is_empty():
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "The guided tour drafts its demo into a blank "
-                    "session — start a New session first (the tour offers "
-                    "this).",
-                },
-                status_code=409,
-            )
-        # On an open-catalog session, align the session discipline with the
-        # demo's chosen discipline (honoring the invariant — a curated module
-        # stays ""). Otherwise the demo directive would draft discipline B
-        # while the PROJECT CONTEXT still names an earlier discipline A.
-        if getattr(session.module, "open_catalog", False):
-            session.discipline = sanitize_discipline(body.discipline)
-        return JSONResponse(
-            {"ok": True, "message": onboarding_demo_directive(body.discipline)}
-        )
 
     # --- Document ----------------------------------------------------------
 
@@ -2012,7 +1961,7 @@ def create_app() -> FastAPI:
             run_generation = session.generation
             runner = session.research
             module = session.module
-            discipline = session.discipline
+            discipline = effective_discipline(session)
             profile_data = dict(session.doc.doc.project_profile)
         profile = ProjectProfile.from_dict(profile_data)
         if profile is None or not profile.is_complete():
@@ -2034,9 +1983,9 @@ def create_app() -> FastAPI:
                 },
                 status_code=400,
             )
-        # Batch 10 backstop: an open-catalog session researches "{discipline}
-        # work" — without a stated discipline the templates have nothing to
-        # research. The session-start picker normally guarantees this.
+        # An open-catalog session researches "{discipline} work" — without a
+        # document identity (or legacy saved-project fallback), its templates
+        # have nothing reliable to research.
         if getattr(module, "open_catalog", False) and not discipline:
             return JSONResponse(
                 {
@@ -2130,7 +2079,7 @@ def create_app() -> FastAPI:
             profile = session.research.profile_result
             snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
             module = session.module
-            discipline = session.discipline
+            discipline = effective_discipline(session)
             version_index = session.doc.index
             run_generation = session.generation
             runner = session.audit
@@ -2263,7 +2212,7 @@ def create_app() -> FastAPI:
                 model=settings.QC_MODEL,
                 max_tokens=settings.QC_MAX_TOKENS,
                 version_index=session.doc.index,
-                discipline=session.discipline,
+                discipline=effective_discipline(session),
                 source_guard=source_guard,
                 remembered_dismissed=remembered,
                 usage_sink=lambda u, g=run_generation: session.add_usage_if_current(

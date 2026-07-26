@@ -3,6 +3,7 @@ import { HELP_TOPICS, type HelpTopic } from "./HelpModal";
 
 interface Props {
   health: Health | null;
+  projectHeading: string;
   busy: boolean;
   update: UpdateCheckPayload | null;
   usage: UsageSummary | null;
@@ -16,6 +17,7 @@ interface Props {
 
 export default function Header({
   health,
+  projectHeading,
   busy,
   update,
   usage,
@@ -31,12 +33,17 @@ export default function Header({
     update?.status === "UPDATE_AVAILABLE" && !!update.version;
   return (
     <header className="flex items-center gap-4 border-b border-edge bg-surface px-5 py-3">
-      <div className="flex flex-none items-baseline gap-3">
+      <div
+        className="flex flex-none items-baseline gap-3"
+        data-tour="project-heading"
+      >
         <h1 className="font-[family-name:var(--font-display)] text-lg font-semibold tracking-tight">
           Build-a-Spec
         </h1>
-        <span className="hidden text-xs text-ink-dim xl:inline">
-          {health?.discipline || health?.module || ""}
+        <span
+          className="hidden text-xs text-ink-dim xl:inline"
+        >
+          {projectHeading}
         </span>
       </div>
       <span className="h-5 w-px flex-none bg-edge" aria-hidden="true" />
@@ -52,7 +59,7 @@ export default function Header({
         ))}
         <button
           onClick={onStartTour}
-          title="Guided tour of the whole workflow, on a live demo spec"
+          title="Passive guided tour of the complete workflow"
           className="rounded-md px-2.5 py-1 text-xs text-ink-dim transition-colors hover:bg-raised hover:text-ink"
         >
           Tour

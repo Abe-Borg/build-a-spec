@@ -476,6 +476,7 @@ def test_global_and_runtime_blockers_deny_body_but_allow_metadata(
         assert capability.blocker == expected_blocker
         assert capability.message
 
+    assert _operation(report, "sec", "set_project_identity").allowed is True
     assert _operation(report, "sec", "set_project_profile").allowed is True
     assert _operation(report, "sec", "set_standard_edition").allowed is True
     assert _operation(report, "sec", "set_standard_suppressed").allowed is True

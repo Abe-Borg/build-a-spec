@@ -12,11 +12,9 @@ interface Props {
   onSend: (text: string) => void;
   /** Model-staged reply chips (Batch 9), shown above the composer. */
   suggestions: string[];
-  /** Deterministic examples shown while the tour teaches reply chips. */
-  tutorialSuggestions?: readonly string[];
   /** Active discipline (generic open-catalog sessions) — tailors starter chips. */
   discipline?: string;
-  /** Start the guided tour (Batch 6) — the onboarding starter chip. */
+  /** Start the passive guided tour — the onboarding starter chip. */
   onStartOnboarding: () => void;
   /** Stop the in-flight turn, forwarded to the composer. */
   onStop: () => void;
@@ -35,7 +33,6 @@ export default function Chat({
   busy,
   onSend,
   suggestions,
-  tutorialSuggestions,
   discipline,
   onStartOnboarding,
   onStop,
@@ -46,7 +43,6 @@ export default function Chat({
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
-  const shownSuggestions = tutorialSuggestions ?? suggestions;
 
   // Stay pinned to the bottom on new messages unless the user scrolled up.
   // The suggestions bar appearing/growing shrinks the scroll viewport, so
@@ -56,7 +52,7 @@ export default function Chat({
     if (el && pinnedRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, shownSuggestions]);
+  }, [messages, suggestions]);
 
   // While a turn streams, the smoothed text grows between message updates
   // (via requestAnimationFrame inside the bubble), so follow the bottom on
@@ -117,8 +113,8 @@ export default function Chat({
                     </span>
                     <span className="mt-0.5 block text-[11px] text-ink-faint">
                       {toured
-                        ? "Take the tour again — live demo, ~5 minutes"
-                        : "Guided tour with a live demo · ~5 minutes"}
+                        ? "Take the passive tour again · ~3 minutes"
+                        : "Passive guided tour · ~3 minutes"}
                     </span>
                   </button>
                 ) : (
@@ -155,7 +151,7 @@ export default function Chat({
         )}
       </div>
       <SuggestedPrompts
-        prompts={shownSuggestions}
+        prompts={suggestions}
         busy={busy}
         onSend={onSend}
       />

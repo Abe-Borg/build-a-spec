@@ -337,7 +337,7 @@ def test_empty_suggestions_omitted_from_the_project_file():
 
 
 # ---------------------------------------------------------------------------
-# Stable prompt + demo directive
+# Stable prompt
 # ---------------------------------------------------------------------------
 
 
@@ -351,10 +351,3 @@ def test_stable_prompt_carries_suggested_prompts_policy():
     assert "USER'S voice" in prompt
     # It is stable content — no session-varying data leaked in.
     assert "Standards editions in effect" not in prompt
-
-
-def test_demo_directive_skips_suggestions():
-    from backend.llm.prompts import onboarding_demo_directive
-
-    text = onboarding_demo_directive("Plumbing")
-    assert "do NOT call suggest_prompts" in text

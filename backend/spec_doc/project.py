@@ -318,13 +318,29 @@ def load_project(data: Any, session) -> None:
 
     raw_module_id = str(data.get("module_id") or "").strip()
     session.module = get_module(raw_module_id) if raw_module_id else HYPERSCALE_FIRE
-    # Session discipline (Batch 10) rides beside module_id; sanitize the
-    # untrusted string and enforce the invariant (non-empty only while an
-    # open-catalog module is active — a curated module clears it). Old
-    # files without the key degrade to "".
+    # Session discipline rides beside module_id for old-project and old-app
+    # compatibility. Once any serialized version carries non-empty versioned
+    # project identity, this build ignores the mirrored top-level value: undo
+    # to a pre-identity version must be able to make discipline unknown again.
+    # A history that never carried identity is genuinely legacy and keeps the
+    # sanitized fallback.
     from ..llm.prompts import sanitize_discipline, sanitize_project_context
 
-    session.discipline = sanitize_discipline(str(data.get("discipline") or ""))
+    raw_versions = doc_data.get("versions") if isinstance(doc_data, dict) else None
+    has_versioned_identity = bool(
+        isinstance(raw_versions, list)
+        and any(
+            isinstance(version, dict)
+            and isinstance(version.get("project_identity"), dict)
+            and bool(version["project_identity"])
+            for version in raw_versions
+        )
+    )
+    session.discipline = (
+        ""
+        if has_versioned_identity
+        else sanitize_discipline(str(data.get("discipline") or ""))
+    )
     if not getattr(session.module, "open_catalog", False):
         session.discipline = ""
     # Priming text rides beside discipline; applies to any module (not gated by

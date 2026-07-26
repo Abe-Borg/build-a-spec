@@ -447,3 +447,49 @@ def test_generic_research_threads_discipline_into_every_dimension(monkeypatch):
         "Discipline: Electrical." in req["messages"][0]["content"]
         for req in fake.requests
     )
+
+
+def test_generic_research_prefers_document_identity_over_legacy_discipline(
+    monkeypatch,
+):
+    client = _client()
+    client.post(
+        "/api/session/reset",
+        json={"module_id": "generic", "discipline": "Electrical"},
+    )
+    identity = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_project_identity",
+                    "target_id": "sec",
+                    "discipline": "Plumbing",
+                }
+            ]
+        },
+    )
+    assert identity.status_code == 200, identity.text
+    _record_profile(client, monkeypatch)
+
+    keys = {
+        "governing construction codes for Plumbing work",
+        "authority having jurisdiction over Plumbing work",
+        "publishes design and construction standards",
+        "site and environmental factors",
+    }
+    fake = SequencedFakeClient(
+        {
+            key: [research_response(items=[], searched_urls=["https://x.gov"])]
+            for key in keys
+        }
+    )
+    _patch_research_client(monkeypatch, fake)
+    assert client.post("/api/research/start").json()["ok"] is True
+    assert _wait_terminal(client)["status"] == "complete"
+    assert len(fake.requests) == 4
+    assert all(
+        "Discipline: Plumbing." in req["messages"][0]["content"]
+        and "Discipline: Electrical." not in req["messages"][0]["content"]
+        for req in fake.requests
+    )

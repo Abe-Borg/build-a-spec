@@ -304,6 +304,19 @@ def test_audit_api_lifecycle_and_export_and_round_trip(monkeypatch):
     assert client.post("/api/audit/start").status_code == 400
 
     _seed_doc_and_research(client, monkeypatch)
+    identity = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "set_project_identity",
+                    "target_id": "sec",
+                    "discipline": "Mechanical",
+                }
+            ]
+        },
+    )
+    assert identity.status_code == 200, identity.text
 
     from types import SimpleNamespace
 
@@ -328,8 +341,10 @@ def test_audit_api_lifecycle_and_export_and_round_trip(monkeypatch):
     class _AuditClient:
         def __init__(self):
             self.messages = self
+            self.requests = []
 
-        def stream(self, **_request):
+        def stream(self, **request):
+            self.requests.append(request)
             response = SimpleNamespace(
                 content=[
                     tool_use_block(
@@ -352,7 +367,8 @@ def test_audit_api_lifecycle_and_export_and_round_trip(monkeypatch):
 
             return _Ctx()
 
-    monkeypatch.setattr("backend.app.get_client", lambda: _AuditClient())
+    audit_client = _AuditClient()
+    monkeypatch.setattr("backend.app.get_client", lambda: audit_client)
     assert client.post("/api/audit/start").json()["ok"] is True
 
     deadline = time.monotonic() + 5
@@ -364,6 +380,9 @@ def test_audit_api_lifecycle_and_export_and_round_trip(monkeypatch):
     assert status["status"] == "complete"
     assert status["result"]["coverage"][0]["status"] == "represented"
     assert status["result"]["version_index"] == session_version(client)
+    assert len(audit_client.requests) == 1
+    audit_message = audit_client.requests[0]["messages"][0]["content"]
+    assert "<project_discipline>\nMechanical\n</project_discipline>" in audit_message
 
     # Export carries the compliance closing section.
     import io

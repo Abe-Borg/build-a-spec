@@ -14,9 +14,8 @@ encodes the *absence* of curation honestly:
   lint rule (active only for unpinned modules) plus the readiness
   checklist's lint-clean gate enforce the posture without blocking a turn.
 - **Open catalog.** No fixed section list; the model establishes the
-  MasterFormat section from the session's stated discipline (captured by
-  the session-start picker, rendered into PROJECT CONTEXT — never this
-  module's cached stable prompt).
+  MasterFormat section from the document's stated discipline (rendered into
+  PROJECT CONTEXT — never this module's cached stable prompt).
 - **Region-aware, both countries.** USA: I-codes as model basis with
   state/local adoption as per-project data. Canada: NBC/NFC as provincially
   adopted (or the province's own code), CSA/ULC standards and ULC listings,

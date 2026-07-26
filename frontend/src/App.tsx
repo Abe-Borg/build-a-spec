@@ -9,7 +9,6 @@ import type {
   ImportReport,
   ReferenceDocMeta,
   LintIssue,
-  ModuleInfo,
   OpenItem,
   QcSnapshot,
   ReadinessPayload,
@@ -33,7 +32,6 @@ import {
   getDocCapabilities,
   getDocDiff,
   getHealth,
-  getModules,
   getQcStatus,
   getReadiness,
   getResearchStatus,
@@ -63,10 +61,13 @@ import ArtifactPanel from "./components/ArtifactPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import HelpModal, { type HelpTopic } from "./components/HelpModal";
 import OnboardingOverlay from "./components/OnboardingOverlay";
-import ModulePickerDialog from "./components/ModulePickerDialog";
+import NewSessionDialog from "./components/NewSessionDialog";
 import { sourceCapabilitiesPending } from "./lib/sourceCapabilities";
 import { useOnboarding, type DrawerName } from "./lib/useOnboarding";
-import { TOUR, TOUR_SUGGESTED_PROMPTS } from "./lib/tour";
+import {
+  formatProjectHeading,
+  projectDiscipline,
+} from "./lib/projectHeading";
 import CloseDialog from "./components/CloseDialog";
 import ConfirmDialog from "./components/ConfirmDialog";
 
@@ -126,10 +127,7 @@ export default function App() {
     qc: 0,
     openItems: 0,
   });
-  // Session-start module picker (Batch 10). The registry is fetched lazily on
-  // first open, then cached for the app's lifetime (it's static per build).
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [modules, setModules] = useState<ModuleInfo[] | null>(null);
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
   // The in-app save-before-you-lose-it gate for the two paths that discard the
   // session (New session, Open project). Non-null = the prompt is open; the
   // pending action (and, for a load, its file) runs after Save/Discard. Null
@@ -646,9 +644,7 @@ export default function App() {
     });
   };
 
-  // Resolves true only when the server completed the turn cleanly — the
-  // guided tour awaits this to advance past its demo-generation phase.
-  // Existing callers ignore the value.
+  // Resolves true only when the server completed the turn cleanly.
   const send = async (text: string): Promise<boolean> => {
     if (busyRef.current || manualEditBusyRef.current) return false;
     // A turn started mid-upload would be rejected by the import's own guard
@@ -841,41 +837,15 @@ export default function App() {
     refreshReadiness();
   };
 
-  // The RAW bodyless reset (keeps module + discipline). The onboarding hook
-  // depends on receiving exactly this — never re-wrap it (Batch 6 rule).
-  const newSession = async () => {
-    await resetSession();
-    clearSessionState();
-  };
-
-  /** Open the module picker (Batch 10), fetching the registry on first use. */
-  const openPicker = async () => {
-    if (modules === null) {
-      try {
-        setModules(await getModules());
-      } catch {
-        // Registry unreachable — degrade to the plain reset (old behavior).
-        void newSession();
-        return;
-      }
-    }
-    setPickerOpen(true);
-  };
-
-  /** Picker confirm: reset into the chosen module, then resync everything. */
-  const onPickerConfirm = async (
-    moduleId: string,
-    discipline: string,
-    projectContext: string,
-  ) => {
-    setPickerOpen(false);
+  /** Start a truly neutral session; chat establishes all project identity. */
+  const startBlankSession = async () => {
+    setNewSessionOpen(false);
     await resetSession({
-      module_id: moduleId,
-      discipline,
-      project_context: projectContext,
+      module_id: "generic",
+      discipline: "",
+      project_context: "",
     });
     clearSessionState();
-    // The Header label renders module/discipline from health — resync it.
     refreshHealth();
   };
 
@@ -1011,7 +981,7 @@ export default function App() {
 
   /** Run the pending session-discarding action once the gate resolves. */
   const runGate = (gate: NonNullable<typeof saveGate>) => {
-    if (gate.kind === "new-session") void openPicker();
+    if (gate.kind === "new-session") setNewSessionOpen(true);
     else void doLoadProject(gate.file);
   };
 
@@ -1031,13 +1001,11 @@ export default function App() {
     if (gate) runGate(gate);
   };
 
-  /** Header "New session": offer to save, then open the module picker. */
+  /** Header "New session": offer to save, then show the start choices. */
   const requestNewSession = async () => {
-    // Session-changing work kills the tour (its own fresh-start path calls the
-    // raw newSession, never this gated one).
     onboarding.abort();
     if (await isUnsaved()) setSaveGate({ kind: "new-session" });
-    else void openPicker();
+    else setNewSessionOpen(true);
   };
 
   /** The actual project load (after the save gate). Rebuilds the transcript
@@ -1065,9 +1033,8 @@ export default function App() {
           lines: restored,
         });
       }
-      // A loaded project can switch the module + discipline (project.py
-      // resolves both from the file); the Header label and the picker's
-      // preselect read them from health, so resync it.
+      // A loaded project can restore legacy module/discipline compatibility
+      // fields; resync health while the document remains heading-authoritative.
       refreshHealth();
       refreshResearch();
       refreshQc();
@@ -1156,29 +1123,15 @@ export default function App() {
     setDrawerNonces((prev) => ({ ...prev, [name]: prev[name] + 1 }));
   }, []);
 
-  const onboarding = useOnboarding({
-    send,
-    editDoc: onEditDoc,
-    startResearch: onStartResearch,
-    startQc: onStartQc,
-    newSession,
-    prefillComposer: onAskModel,
-    health,
-    doc,
-    hasContent,
-  });
-
-  const tutorialSuggestions =
-    onboarding.phase.kind === "touring" &&
-    TOUR[onboarding.phase.chunk]?.steps[onboarding.phase.step]?.id ===
-      "suggested-replies"
-      ? TOUR_SUGGESTED_PROMPTS
-      : undefined;
+  const onboarding = useOnboarding();
+  const activeDiscipline = projectDiscipline(doc, health?.legacy_discipline);
+  const projectHeading = formatProjectHeading(doc, health?.legacy_discipline);
 
   return (
     <div className="flex h-full flex-col">
       <Header
         health={health}
+        projectHeading={projectHeading}
         busy={busy}
         update={update}
         usage={usage}
@@ -1209,20 +1162,13 @@ export default function App() {
       <OnboardingOverlay
         ob={onboarding}
         doc={doc}
-        busy={busy}
-        profileComplete={profileComplete}
-        researchStatus={research?.status ?? "idle"}
-        qcStatus={qc?.status ?? "idle"}
-        hasContent={hasContent}
         bumpDrawer={bumpDrawer}
       />
-      <ModulePickerDialog
-        open={pickerOpen}
-        modules={modules ?? []}
+      <NewSessionDialog
+        open={newSessionOpen}
         busy={busy}
-        currentModuleId={health?.module_id}
-        onCancel={() => setPickerOpen(false)}
-        onConfirm={onPickerConfirm}
+        onCancel={() => setNewSessionOpen(false)}
+        onBlankSlate={() => void startBlankSession()}
       />
       {/* Closing (✕ / backdrop) any tour popup confirms here first, so the
           guided tour is never dismissed by accident. Elevated above the
@@ -1235,13 +1181,13 @@ export default function App() {
         body={
           <>
             You can restart it anytime from the{" "}
-            <b className="text-ink">Tour</b> button in the header — the demo
-            section stays on the page either way.
+            <b className="text-ink">Tour</b> button in the header. This
+            passive tour has not changed your project.
           </>
         }
         confirmLabel="End tour"
         cancelLabel="Continue tour"
-        onConfirm={onboarding.abort}
+        onConfirm={onboarding.end}
         onCancel={onboarding.cancelEnd}
       />
       <CloseDialog
@@ -1287,8 +1233,7 @@ export default function App() {
           busy={busy}
           onSend={send}
           suggestions={suggestions}
-          tutorialSuggestions={tutorialSuggestions}
-          discipline={health?.discipline}
+          discipline={activeDiscipline}
           onStartOnboarding={onboarding.start}
           onStop={onStop}
           uploading={fileLoading !== null}

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "test": "node --test tests/sourceCapabilities.test.ts tests/structuralEditing.test.ts tests/qcReport.test.ts tests/qcApi.test.ts",
+    "test": "node --test tests/sourceCapabilities.test.ts tests/structuralEditing.test.ts tests/qcReport.test.ts tests/qcApi.test.ts tests/projectHeading.test.ts tests/tour.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -252,18 +252,14 @@ class SessionState:
     import_report: dict[str, Any] | None = None
     generation: int = 0
     module: SpecModule = field(default_factory=lambda: get_module(None))
-    # Session-level discipline (Batch 10), meaningful only with an
-    # open-catalog module — invariant: non-empty ⇒ the active module is
-    # open-catalog, enforced at the two write sites (the reset endpoint and
-    # project load). Like ``module``, reset keeps it (the session-start
-    # picker always sends explicit values). Rendered into PROJECT CONTEXT
-    # each turn, never the cached stable prompt.
+    # Legacy session-level discipline, meaningful only with an open-catalog
+    # module. New work records versioned ``doc.project_identity`` instead;
+    # this remains the fallback for old project files and API clients.
     discipline: str = ""
-    # Optional one-or-two-sentence project description from the session-start
-    # picker (free text, sanitized). Purely primes the model — rendered into
-    # PROJECT CONTEXT each turn, never the cached stable prompt. Unlike
-    # ``discipline`` this is CLEARED on reset: it describes one specific
-    # project, so it must not bleed into the next session.
+    # Optional legacy project primer (free text, sanitized). The current UI no
+    # longer collects it, but old project files/API clients remain compatible.
+    # It is cleared on reset so one project's description cannot bleed into
+    # the next.
     project_context: str = ""
     research: ResearchRunner = field(default_factory=ResearchRunner)
     audit: AuditRunner = field(default_factory=AuditRunner)
@@ -1195,6 +1191,31 @@ _PROFILE_FIELD_LABELS: tuple[tuple[str, str], ...] = (
 )
 
 
+def effective_discipline(session: SessionState) -> str:
+    """Versioned project discipline, falling back to legacy session state."""
+    identity = getattr(session.doc.doc, "project_identity", {}) or {}
+    current = str(identity.get("discipline", "") or "").strip()
+    return current or session.discipline
+
+
+def _project_identity_block(session: SessionState) -> str:
+    """Compact identity status the model must maintain as context develops."""
+    identity = getattr(session.doc.doc, "project_identity", {}) or {}
+    discipline = effective_discipline(session)
+    project_type = str(identity.get("project_type", "") or "").strip()
+    return "\n".join(
+        [
+            "PROJECT IDENTITY (record with set_project_identity only when "
+            "established):",
+            f"- PROJECT DISCIPLINE: {discipline or '[not yet determined]'}",
+            "- PROJECT TYPE (facility/use): "
+            + (project_type or "[not yet determined]"),
+            "When the user or clear document context establishes or corrects "
+            "either value, record it immediately. Do not infer prematurely.",
+        ]
+    )
+
+
 def _profile_status_block(project_profile: dict[str, str]) -> str:
     """Per-field PROJECT PROFILE status for the PROJECT CONTEXT block.
 
@@ -1254,18 +1275,13 @@ def _turn_context_text(session: SessionState) -> str:
     """
     doc = session.doc.doc
     unstructured = session.import_is_unstructured()
-    parts = []
-    # Session discipline (Batch 10): renders only for open-catalog sessions
-    # (never for curated modules — their request bytes are unchanged).
-    if session.discipline:
+    parts = [_project_identity_block(session)]
+    if (
+        getattr(session.module, "open_catalog", False)
+        and not effective_discipline(session)
+    ):
         parts.append(
-            f"PROJECT DISCIPLINE: {session.discipline} (session-selected — "
-            "governs section selection, conventions, terminology, and "
-            "research)"
-        )
-    elif getattr(session.module, "open_catalog", False):
-        parts.append(
-            "PROJECT DISCIPLINE: [not yet stated] — ask the user what "
+            "The discipline is not yet known — ask the user what "
             "discipline this section is for before drafting domain content."
         )
     # Optional project-description primer (any module — not gated by

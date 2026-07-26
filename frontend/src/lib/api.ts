@@ -5,7 +5,6 @@ import type {
   Health,
   ImportResultPayload,
   KeyStatus,
-  ModuleInfo,
   ProjectLoadResult,
   QcApplyResult,
   QcEvent,
@@ -41,9 +40,8 @@ export async function saveApiKey(apiKey: string): Promise<void> {
 }
 
 /**
- * Reset the session. With `opts` (the Batch 10 module picker) the chosen
- * module/discipline ride a JSON body; without, the historical bodyless call
- * — reset keeps the active module + discipline (the onboarding tour's path).
+ * Reset the session. The new-session UI sends an explicit neutral module and
+ * empty context; the bodyless form remains available to older callers.
  */
 export async function resetSession(opts?: {
   module_id?: string;
@@ -59,16 +57,6 @@ export async function resetSession(opts?: {
     return;
   }
   await fetch("/api/session/reset", { method: "POST" });
-}
-
-/** The selectable module registry (Batch 10 session-start picker). */
-export async function getModules(): Promise<ModuleInfo[]> {
-  const resp = await fetch("/api/modules");
-  const data = await resp.json();
-  if (!resp.ok || !data.ok) {
-    throw new Error(data.error ?? `modules failed (${resp.status})`);
-  }
-  return data.modules ?? [];
 }
 
 /**
@@ -292,25 +280,6 @@ export async function draftFull(): Promise<string> {
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
     throw new Error(data.error ?? `draft failed (${resp.status})`);
-  }
-  return data.message as string;
-}
-
-/**
- * Fetch the guided-tour demo directive (Batch 6). The caller sends the
- * returned text back through {@link streamChat} as a normal user turn, so
- * the demo rides the one chat pipeline. 409 while a turn or research runs,
- * or when the document is not blank.
- */
-export async function startOnboardingDemo(discipline: string): Promise<string> {
-  const resp = await fetch("/api/onboarding/demo", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ discipline }),
-  });
-  const data = await resp.json();
-  if (!resp.ok || !data.ok) {
-    throw new Error(data.error ?? `demo failed (${resp.status})`);
   }
   return data.message as string;
 }

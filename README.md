@@ -123,11 +123,12 @@ sheet, a previous project's section, or meeting notes.
 
 ## Shipped in v1.5.0 (Batch 10: Generic any-discipline module)
 
-**Any discipline, any project type, anywhere in the USA and Canada.** The
-"New session" button now opens a module picker: the curated hyperscale-fire
-module, or **Generic — Any Discipline**, where you type your discipline
-(chips suggest Fire Protection / Mechanical / Plumbing / Electrical; free
-text welcome) and the app drafts to that discipline's conventions.
+**Any discipline, any project type, anywhere in the USA and Canada.** A new
+session starts from a blank, generic document. Built-in templates and personal
+template loading are shown as disabled choices while those workflows are in
+development. The compatibility module APIs remain available for old projects
+and future template seeding, but the current dialog does not ask the user to
+select a discipline or describe the project.
 
 - **No pinned editions in generic mode — deliberately.** The generic module
   ships zero standards pins. Every edition enters through the existing
@@ -138,15 +139,18 @@ text welcome) and the app drafts to that discipline's conventions.
   active only in generic mode) flags any year citation with no recorded
   basis — which flows into the readiness checklist, so an issue-ready draft
   has a recorded basis for every cited edition.
-- **Discipline is captured at session start** and threads everywhere: the
-  drafting context, all four research dimensions (now
+- **Project identity is learned from the work itself.** Once conversation or
+  clear document context establishes the discipline and facility/use type, the
+  model records them as versioned `project_identity` metadata. Discipline
+  threads through the drafting context, all four research dimensions (now
   discipline-parameterized and US/Canada-aware — provincial NBC/NFC
   adoption, CSA/ULC listings, metric units), and the Final-QC lens briefs.
-  It persists in project files and shows in the header
-  ("Generic — Electrical").
-- **The curated module is untouched**: hyperscale fire suppression keeps
-  its NFPA pins, playbook, and byte-identical behavior; it stays the
-  default.
+  The legacy saved-project discipline is only a fallback when identity is
+  absent. The header stays blank until discipline is known, then shows the
+  discipline alone until project type plus city/region are complete; afterward
+  it reads `Discipline · Project Type · City, Region`.
+- **The curated module remains compatible**: hyperscale fire suppression keeps
+  its NFPA pins and playbook for existing projects and future templates.
 
 ## Shipped in v1.4.0 (Batch 9: Dynamic suggested-prompts bar) and still current
 
@@ -170,8 +174,7 @@ next message, so an interview is mostly tapping, not typing.
   turn keeps whatever it staged); a failed turn leaves the previous chips
   untouched and the bar restores itself on the next refresh. The current set
   rides the project file, so a saved-and-resumed session comes back with its
-  chips. The guided-tour demo pass deliberately offers none — the tour drives
-  what happens next.
+  chips.
 
 > Note: the v1.2.0 (Batch 7: stop generation / research / QC) and v1.3.0
 > (Batch 8: chat figures) status sections were never written into this README;
@@ -180,50 +183,27 @@ next message, so an interview is mostly tapping, not typing.
 
 ## Shipped in v1.1.0 (Batch 6: Guided onboarding + starter prompts) and still current
 
-**A first-time user goes from an empty chat to "I understand this whole app"
-in about five minutes, on a live demo.** The empty chat now opens with five
-starter-prompt chips; the first — *"New to this software, show me how to use
-this"* — runs a guided tour of the entire workflow on a demo spec the model
-drafts in front of you.
+**The guided tutorial is a passive tour over the current project.** It starts
+immediately when selected, regardless of document contents or API-key state,
+and never resets, drafts, edits, prefills, confirms, researches, or runs QC.
 
-- **Discipline first, then a live demo.** The tour asks your discipline
-  (Fire Protection & Suppression / Mechanical (HVAC) / Plumbing / Electrical /
-  free-text other), fetches a server-owned demo directive
-  (`POST /api/onboarding/demo` — the Batch 3 thin-directive pattern, 409
-  unless the document is blank), and sends it through the ordinary chat
-  path: the demo streams onto the paper like any real turn, deliberately
-  small (one brief article per PART, plus one planted `[TBD: …]` and one
-  needs-input block so the training has live open items to point at). A new
-  stable-prompt policy ("Guided-tour demo pass") keeps the fire-module
-  persona from steering a Plumbing demo back to sprinklers.
-- **A scripted spotlight tour, in chunks.** 22 steps in 4 chunks — *Reading
+- **A scripted spotlight tour, in chunks.** Four chunks — *Reading
   the page / Tell it about the project / Make it yours / Out the door* —
   cover every station of the workflow: statuses & provenance, open items,
   lint, standards, the spend meter, the defaults-first interview, profile,
   research, draft-full, inline edits, versions, the review queue, compare,
   master import, Final QC, readiness, export, save/open, settings. Each step
-  dims the screen around the real control (a pointer-events-none box-shadow
-  cutout — nothing is ever click-jailed) with a dismissible bubble beside
-  it. Chunk breaks pause for *Continue / Ask a question / Start real work*.
-- **"Do this for me" where input is needed.** The profile step records a
-  demo profile deterministically through `POST /api/doc/edit`
-  (`set_project_profile` — no tokens, one undo step) or prefills the
-  composer so you type your own; the review step can confirm the first
-  outstanding block for you. The research and Final QC steps offer real
-  **"Run it now"** buttons with honest cost/time notes and a prominent skip
-  (decided with Abraham 2026-07-22) — runs stream in their drawers while the
-  tour continues.
-- **Start fresh or keep it.** Leaving the tour for real work (mid-tour or at
-  the end) asks: start fresh (session reset) or keep the demo as a scratch
-  starting point. Starting the tour over a non-empty session hits an entry
-  guard (save-first hint + fresh-start), and the endpoint's blank-document
-  409 backstops it server-side.
-- **Re-entry + polish.** A "Tour" button in the header restarts it any time.
-  ✕ / Escape collapse the tour to a floating "Resume tour" pill — nothing is
-  lost. The onboarding chip pulses until the first completion (the
-  codebase's first, cosmetic-only, localStorage use). Reduced motion is
-  honored throughout, and a missing anchor degrades to a centered bubble,
-  never a hang.
+  blocks interaction with the application while highlighting stable controls;
+  a missing control degrades to a centered explanation, never a hang. Drawers
+  may open automatically for viewing.
+- **Navigation only.** Tutorial UI offers Back, Continue, Finish, and End tour.
+  End tour appears on every step and chunk break and uses one confirmation
+  flow whose copy makes clear that the tour changed nothing. Finishing or
+  explicitly ending records completion; external teardown does not.
+- **Current workflow copy.** The tour explains the context-aware heading and
+  the new blank/template/template-upload session choices without asking the
+  user to operate them. A header button restarts the tour at any time, reduced
+  motion is honored, and the first-run chip remains cosmetic localStorage.
 
 ## Shipped in v1.0.0 (Batch 5: Redline export + version diff) and still current
 
@@ -590,7 +570,7 @@ All five roadmap phases are shipped. What remains is real-world hardening: cutti
 main.py                  pywebview shell: starts the backend, opens the native window
 backend/                 FastAPI + the conversation engine (Python 3.11+)
   app.py                 /api/health, /api/key, /api/session/reset, /api/chat (SSE),
-                         /api/draft/full, /api/onboarding/demo,
+                         /api/draft/full,
                          /api/doc (+ undo/redo/edit/diff/capabilities),
                          /api/export/docx (+ ?redline=master|version),
                          /api/import/master + /api/import/original,
@@ -687,7 +667,7 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
   llm/
     client.py            Anthropic client factory (monkeypatch seam for tests)
     prompts.py           engine prompt protocol + module-rendered system prompt
-                         + the full-draft and onboarding-demo directives
+                         + the full-draft directive
     conversation.py      streaming turn loop: apply_spec_edits dispatch,
                          web_search/web_fetch with pause_turn continuation,
                          adaptive thinking, the per-turn PROJECT CONTEXT
@@ -697,21 +677,19 @@ frontend/                Vite + React + TypeScript + Tailwind v4
   src/App.tsx            state owner: chat + document + lint + research + QC +
                          readiness + update + SSE dispatch
   src/lib/api.ts         SSE parsing over fetch; doc/undo/edit/diff/draft-full/
-                         onboarding-demo/project/research/import/qc/readiness/
+                         project/research/import/qc/readiness/
                          update calls
   src/lib/reviewQueue.ts buildQueue(doc, mode): the review queue as a pure
                          document-order walk (port of iter_paragraphs)
   src/lib/qcReport.ts    pure Final QC report formatting, coverage, source-link,
                          operation, usage, and limitations helpers
-  src/lib/tour.ts        the guided tour as pure data: starter prompts,
-                         disciplines, 22 steps in 4 chunks, anchor resolvers
-  src/lib/useOnboarding.ts  the tour's phase machine (runId zombie guard,
-                         key-gate auto-advance, do-this-for-me dispatch)
+  src/lib/tour.ts        passive guided-tour data: starter prompts, stable
+                         anchors, and explanatory steps in 4 chunks
+  src/lib/useOnboarding.ts  navigation-only tour phase machine
   src/lib/onboardingStorage.ts  "tour completed" flag (cosmetic localStorage)
   src/components/        Chat (starter chips), MessageBubble (markdown),
                          Composer (ask-model prefill),
-                         OnboardingOverlay (spotlight cutout + bubbles +
-                         discipline/entry/work-choice dialogs + resume pill),
+                         OnboardingOverlay (blocking spotlight + passive bubbles),
                          Header (spend ticker + update pill), ApiKeyBanner,
                          ArtifactPanel (stepper, Compare toggle + base picker,
                          export menu, import, "Draft full section", open items),

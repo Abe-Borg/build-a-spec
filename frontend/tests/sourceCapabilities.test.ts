@@ -71,6 +71,7 @@ const report: SourceCapabilitiesState = {
   elements: {
     sec: {
       replace_text: headingDenied,
+      set_project_identity: { allowed: true },
       set_project_profile: { allowed: true },
       set_standard_edition: { allowed: true },
       set_standard_suppressed: { allowed: true },
@@ -142,6 +143,18 @@ test("active-source detection distinguishes pre-import and legacy source-less hi
   assert.equal(sourceCapabilitiesExpected(null, true, 1, 1), true);
   assert.equal(sourceCapabilitiesExpected(null, true, null, 1), false);
   assert.equal(sourceCapabilitiesExpected(report, false, 99, 0), true);
+});
+
+test("project identity metadata remains editable for source-backed documents", () => {
+  assert.equal(
+    sourceEditOpDecision(report, true, {
+      action: "set_project_identity",
+      target_id: "sec",
+      discipline: "Mechanical",
+      project_type: "Hospital",
+    }).allowed,
+    true,
+  );
 });
 
 test("source-backed documents fail closed when report, element, or op is missing", () => {

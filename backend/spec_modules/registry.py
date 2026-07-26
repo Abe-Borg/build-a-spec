@@ -13,9 +13,8 @@ from .base import SpecModule, validate_module_registry
 from .generic import GENERIC
 from .hyperscale_fire import HYPERSCALE_FIRE
 
-# Order is the picker's card order (AVAILABLE_MODULES preserves it, /api/modules
-# iterates it). The generic any-discipline module leads: it is the neutral
-# default, and the app no longer presents as fire-protection-specialized.
+# Registry/API order. The generic any-discipline module leads: it is the
+# neutral default, and the app no longer presents as fire-protection-specialized.
 _ALL_MODULES: tuple[SpecModule, ...] = (GENERIC, HYPERSCALE_FIRE)
 
 validate_module_registry(_ALL_MODULES)
@@ -26,7 +25,7 @@ AVAILABLE_MODULES: dict[str, SpecModule] = {
 
 # The neutral default: a fresh session boots discipline-agnostic and the model
 # asks what discipline the section is for. Curated modules (e.g. hyperscale
-# fire) are opt-in from the New-session picker.
+# fire) remain available to saved projects and future templates.
 DEFAULT_MODULE: SpecModule = GENERIC
 
 

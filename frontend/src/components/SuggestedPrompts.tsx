@@ -1,5 +1,5 @@
 interface Props {
-  prompts: string[];
+  prompts: readonly string[];
   busy: boolean;
   /**
    * Send-immediately (the starter-chip pattern): the chip label IS the
@@ -18,7 +18,12 @@ interface Props {
 export default function SuggestedPrompts({ prompts, busy, onSend }: Props) {
   if (prompts.length === 0) return null;
   return (
-    <div role="group" aria-label="Suggested replies" className="px-5 pb-2">
+    <div
+      role="group"
+      aria-label="Suggested replies"
+      data-tour="suggested-prompts"
+      className="px-5 pb-2"
+    >
       <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">
         <span aria-hidden className="text-xs text-ink-faint">
           ✦

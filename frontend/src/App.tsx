@@ -66,6 +66,7 @@ import OnboardingOverlay from "./components/OnboardingOverlay";
 import ModulePickerDialog from "./components/ModulePickerDialog";
 import { sourceCapabilitiesPending } from "./lib/sourceCapabilities";
 import { useOnboarding, type DrawerName } from "./lib/useOnboarding";
+import { TOUR, TOUR_SUGGESTED_PROMPTS } from "./lib/tour";
 import CloseDialog from "./components/CloseDialog";
 import ConfirmDialog from "./components/ConfirmDialog";
 
@@ -1143,6 +1144,13 @@ export default function App() {
     hasContent,
   });
 
+  const tutorialSuggestions =
+    onboarding.phase.kind === "touring" &&
+    TOUR[onboarding.phase.chunk]?.steps[onboarding.phase.step]?.id ===
+      "suggested-replies"
+      ? TOUR_SUGGESTED_PROMPTS
+      : undefined;
+
   return (
     <div className="flex h-full flex-col">
       <Header
@@ -1255,6 +1263,7 @@ export default function App() {
           busy={busy}
           onSend={send}
           suggestions={suggestions}
+          tutorialSuggestions={tutorialSuggestions}
           discipline={health?.discipline}
           onStartOnboarding={onboarding.start}
           onStop={onStop}

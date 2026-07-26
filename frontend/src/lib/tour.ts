@@ -72,6 +72,18 @@ export function starterPrompts(discipline?: string): StarterPrompt[] {
   ];
 }
 
+/**
+ * Deterministic examples for the suggested-replies tour step. The onboarding
+ * demo deliberately does not ask the model to stage real replies, so these
+ * keep the lesson anchored to the actual chip bar while still behaving like
+ * normal, send-immediately suggestions.
+ */
+export const TOUR_SUGGESTED_PROMPTS = [
+  "Use your recommended defaults.",
+  "Walk me through the open decisions.",
+  "What should I review first?",
+] as const;
+
 /* --- Discipline picker --- */
 
 export const DISCIPLINES: readonly string[] = [
@@ -240,7 +252,7 @@ export const TOUR: readonly TourChunk[] = [
       },
       {
         id: "suggested-replies",
-        anchor: "composer",
+        anchor: "suggested-prompts",
         placement: "top",
         title: "Suggested replies",
         body:

@@ -12,6 +12,8 @@ interface Props {
   onSend: (text: string) => void;
   /** Model-staged reply chips (Batch 9), shown above the composer. */
   suggestions: string[];
+  /** Deterministic examples shown while the tour teaches reply chips. */
+  tutorialSuggestions?: readonly string[];
   /** Active discipline (generic open-catalog sessions) — tailors starter chips. */
   discipline?: string;
   /** Start the guided tour (Batch 6) — the onboarding starter chip. */
@@ -33,6 +35,7 @@ export default function Chat({
   busy,
   onSend,
   suggestions,
+  tutorialSuggestions,
   discipline,
   onStartOnboarding,
   onStop,
@@ -43,6 +46,7 @@ export default function Chat({
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
+  const shownSuggestions = tutorialSuggestions ?? suggestions;
 
   // Stay pinned to the bottom on new messages unless the user scrolled up.
   // The suggestions bar appearing/growing shrinks the scroll viewport, so
@@ -52,7 +56,7 @@ export default function Chat({
     if (el && pinnedRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, suggestions]);
+  }, [messages, shownSuggestions]);
 
   // While a turn streams, the smoothed text grows between message updates
   // (via requestAnimationFrame inside the bubble), so follow the bottom on
@@ -150,7 +154,11 @@ export default function Chat({
           </div>
         )}
       </div>
-      <SuggestedPrompts prompts={suggestions} busy={busy} onSend={onSend} />
+      <SuggestedPrompts
+        prompts={shownSuggestions}
+        busy={busy}
+        onSend={onSend}
+      />
       <Composer
         disabled={busy}
         onSend={onSend}

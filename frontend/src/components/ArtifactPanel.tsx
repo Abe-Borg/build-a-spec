@@ -518,17 +518,14 @@ export default function ArtifactPanel({
     >
       <div className="flex items-center justify-between gap-3 border-b border-edge px-5 py-2.5">
         <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex items-center gap-2 text-xs font-medium tracking-wide text-ink-dim uppercase">
-            Specification
-            {lintIssues.length > 0 && (
-              <span
-                className="rounded-full border border-warn/50 bg-warn/15 px-1.5 py-px text-[10px] font-semibold text-warn normal-case"
-                title="Advisory lint issues — see the Issues drawer below"
-              >
-                ⚠ {lintIssues.length}
-              </span>
-            )}
-          </span>
+          {lintIssues.length > 0 && (
+            <span
+              className="rounded-full border border-warn/50 bg-warn/15 px-1.5 py-px text-[10px] font-semibold text-warn normal-case"
+              title="Advisory lint issues — see the Issues drawer below"
+            >
+              ⚠ {lintIssues.length}
+            </span>
+          )}
           <Tip tip={draftTip} className="shrink-0">
             <button
               className={`rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${

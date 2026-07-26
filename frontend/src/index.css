@@ -114,7 +114,7 @@ body {
 .md blockquote {
   border-left: 3px solid var(--color-edge);
   padding-left: 0.9em;
-  color: var(--color-ink-dim);
+  color: var(--color-paper-dim);
 }
 .md table {
   border-collapse: collapse;
@@ -131,6 +131,57 @@ body {
   background: #f8ecd6;
   box-shadow: inset 2px 0 0 var(--color-accent);
   transition: background 0.6s ease;
+}
+
+/* Structural editor: the grip is always visible so reordering is discoverable.
+   Pointer drags activate after a short movement; touch-action belongs only on
+   the handle so the rest of the document remains normally scrollable. */
+.structure-drag-handle {
+  display: inline-flex;
+  width: 1.1rem;
+  flex: 0 0 1.1rem;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  margin-top: 0.05rem;
+  border-radius: 0.2rem;
+  color: var(--color-ink-dim);
+  cursor: grab;
+  opacity: 0.58;
+  touch-action: none;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease,
+    opacity 0.15s ease;
+}
+.structure-drag-handle:hover,
+.structure-drag-handle:focus-visible {
+  background: color-mix(in srgb, var(--color-paper-edge) 65%, transparent);
+  color: var(--color-paper-ink);
+  opacity: 1;
+}
+.structure-drag-handle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+.structure-drag-handle:active {
+  cursor: grabbing;
+}
+.structure-drag-handle:disabled {
+  cursor: default;
+  opacity: 0.18;
+}
+.structure-sortable.is-dragging {
+  border-radius: 0.25rem;
+  background: color-mix(in srgb, var(--color-paper) 88%, white);
+  box-shadow: 0 5px 18px rgba(34, 28, 22, 0.16);
+  opacity: 0.82;
+}
+@media (prefers-reduced-motion: reduce) {
+  .structure-sortable,
+  .structure-drag-handle {
+    transition: none !important;
+  }
 }
 
 /* Compare mode (Batch 5): tracked-changes rendering on the paper surface.

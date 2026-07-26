@@ -173,6 +173,7 @@ export interface DocOp {
  * set_standard_edition / set_standard_suppressed for the standards manager). */
 export interface EditOp {
   action:
+    | "add_article"
     | "replace"
     | "delete"
     | "set_status"
@@ -185,8 +186,8 @@ export interface EditOp {
   text?: string;
   status?: BlockStatus;
   source_item_id?: string;
-  /** add_paragraph: optional insertion index; move: required final index
-   * among the target paragraph's existing siblings. */
+  /** add_article / add_paragraph: optional insertion index; move: required
+   * final index among the target article or paragraph's existing siblings. */
   position?: number;
   /** set_project_profile fields (target_id must be "sec") — provide only
    * the ones being changed; an explicit empty string clears that field. */
@@ -313,6 +314,7 @@ export type SourceCapabilityOperation =
   | "replace_text"
   | "delete"
   | "move"
+  | "add_article"
   | "add_paragraph"
   | "set_status"
   | "set_provenance"

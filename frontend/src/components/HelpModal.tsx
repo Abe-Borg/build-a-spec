@@ -200,7 +200,7 @@ function HowToUse() {
           },
           {
             t: "Draft the section",
-            d: "Hit “Draft full section” to lay down every PART and article in one pass, or build it up article by article through chat.",
+            d: "Hit “Draft full section” to lay down every PART and article in one pass, build it through chat, or use Add first article on the blank page and continue with the inline structure controls.",
           },
           {
             t: "Walk the Review queue",
@@ -244,7 +244,7 @@ function Workflows() {
         steps={[
           "Add your key, then tell Claude the project basics.",
           "Run Research to ground the requirements for the jurisdiction.",
-          "“Draft full section” for a complete first pass.",
+          "Use “Draft full section” for a complete first pass, or add the first article directly to PART 1, 2, or 3 and build the hierarchy yourself.",
           "Walk the Review queue, confirming or editing each assumption.",
           "Final QC, apply the fixes, export a clean .docx.",
         ]}
@@ -275,7 +275,9 @@ function Workflows() {
         tagline="You don’t have to draft the whole section."
         steps={[
           "Ask about a single provision, a code citation, or an edition — Claude answers in chat and can edit just that block.",
-          "Use the inline ✏️ / ✓ / 🗑 affordances on eligible blocks to edit, confirm, or delete without going through chat. For an imported DOCX, each action follows the current server capability; disabled actions show why, while ✓ status confirmation can remain available on read-only text.",
+          "Use the inline add, ✏️, ✓, and 🗑 affordances on eligible blocks to create, edit, confirm, or delete without going through chat. Paragraphs can nest through four provision levels (A., 1., a., 1)); the editor refuses a fifth level.",
+          "Reorder an article or provision only among its current siblings: drag its grip, or focus the grip and press Space/Enter to pick it up, Up/Down to move it, Space/Enter to drop, and Escape to cancel. The up/down buttons remain available as a fallback.",
+          "For an imported DOCX, article changes and nested structure remain disabled. Only server-proven flat Word-numbered provisions and exact allowed positions are offered; hover a disabled control for the server's reason.",
         ]}
       />
     </div>
@@ -321,6 +323,10 @@ function HowItWorks() {
                 The export schedules every assumption and unreviewed block.
               </>
             ),
+          },
+          {
+            t: "Direct structure editing stays bounded",
+            d: "Add articles, provisions, and subparagraphs directly on the paper, up to the four existing provision levels. Grip reordering is sibling-only: it never moves content to another PART, reparents it, promotes or demotes it, or changes stable element IDs.",
           },
           {
             t: "Imported DOCX files have a narrow boundary",

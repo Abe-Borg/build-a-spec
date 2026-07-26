@@ -144,6 +144,8 @@ function mappedOperations(
       return ["delete"];
     case "move":
       return ["move"];
+    case "add_article":
+      return ["add_article"];
     case "add_paragraph":
       // Status/provenance describe the new node and are covered by the server's
       // candidate-add probe; there is no new UID to query before submission.
@@ -205,7 +207,11 @@ export function sourceEditOpDecision(
   }
 
   const action = op.action;
-  if (action === "move" || action === "add_paragraph") {
+  if (
+    action === "move" ||
+    action === "add_article" ||
+    action === "add_paragraph"
+  ) {
     const position = op.position;
     if (
       typeof position !== "number" ||

@@ -77,6 +77,12 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
+  // Manual document edits have their own lock. They must disable the paper's
+  // mutation controls while the authoritative server response is in flight,
+  // but they are not a chat turn and must never turn the composer's Stop
+  // button on. The ref closes the same-tick double-submit gap before React can
+  // render the state change (especially important for rapid drag/drop moves).
+  const [manualEditBusy, setManualEditBusy] = useState(false);
   const [doc, setDoc] = useState<SpecDoc | null>(null);
   const [openItems, setOpenItems] = useState<OpenItem[]>([]);
   const [lintIssues, setLintIssues] = useState<LintIssue[]>([]);
@@ -146,6 +152,7 @@ export default function App() {
   const [importNotice, setImportNotice] = useState<ImportNotice>(null);
   const fileLoadingRef = useRef(false);
   const busyRef = useRef(false);
+  const manualEditBusyRef = useRef(false);
   const researchFollowRef = useRef(false);
   const qcFollowRef = useRef(false);
 
@@ -643,7 +650,7 @@ export default function App() {
   // guided tour awaits this to advance past its demo-generation phase.
   // Existing callers ignore the value.
   const send = async (text: string): Promise<boolean> => {
-    if (busyRef.current) return false;
+    if (busyRef.current || manualEditBusyRef.current) return false;
     // A turn started mid-upload would be rejected by the import's own guard
     // once the file finished parsing — a 409 arriving long after the click,
     // blaming the upload. Refuse it here instead.
@@ -778,7 +785,7 @@ export default function App() {
 
   /** Fetch the canned full-draft directive and send it as a normal turn. */
   const onDraftFull = async () => {
-    if (busyRef.current) return;
+    if (busyRef.current || manualEditBusyRef.current) return;
     try {
       const message = await draftFull();
       await send(message);
@@ -904,6 +911,20 @@ export default function App() {
   };
 
   const onEditDoc = async (ops: EditOp[]) => {
+    // A model turn, file load, or earlier manual mutation owns the server-side
+    // tree. Refuse locally rather than queueing an edit against a stale sibling
+    // position/version. The visible state disables follow-up controls; the ref
+    // is the authoritative same-tick guard.
+    if (
+      ops.length === 0 ||
+      busyRef.current ||
+      manualEditBusyRef.current ||
+      fileLoadingRef.current
+    ) {
+      return;
+    }
+    manualEditBusyRef.current = true;
+    setManualEditBusy(true);
     try {
       const payload = await editDoc(ops);
       applyDocPayload(payload);
@@ -926,6 +947,9 @@ export default function App() {
           error: true,
         },
       ]);
+    } finally {
+      manualEditBusyRef.current = false;
+      setManualEditBusy(false);
     }
   };
 
@@ -1292,7 +1316,7 @@ export default function App() {
           sourceAvailable={sourceAvailable}
           preservationReady={preservationReady}
           sourceCapabilities={sourceCapabilities}
-          busy={busy}
+          busy={busy || manualEditBusy}
           fileLoading={fileLoading}
           importNotice={importNotice}
           onDismissImportNotice={() => setImportNotice(null)}

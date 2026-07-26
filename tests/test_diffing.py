@@ -257,6 +257,42 @@ def test_moved_paragraph_produces_no_marks():
     assert diff.stats["changed"] == 0
 
 
+def test_moved_article_and_its_subtree_produce_no_marks():
+    store = _seed()
+    article = store.doc.parts[0].articles[1]
+    parent = article.paragraphs[0]
+    store.begin_turn()
+    added = store.apply_edits(
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": parent.uid,
+                "text": "Use the referenced edition.",
+                "status": "confirmed",
+            }
+        ]
+    )
+    store.commit_turn()
+    child_uid = added[0]["id"]
+    subtree_uids = {article.uid, parent.uid, child_uid}
+    base = _section(store)
+
+    store.begin_turn()
+    store.apply_edits(
+        [{"action": "move", "target_id": article.uid, "position": 0}]
+    )
+    store.commit_turn()
+
+    diff = diff_sections(base, store.doc)
+    subtree = [element for element in diff.elements if element.uid in subtree_uids]
+    assert {element.uid for element in subtree} == subtree_uids
+    assert all(element.kind == "unchanged" for element in subtree)
+    assert all(element.runs is None for element in subtree)
+    moved_article = next(element for element in subtree if element.uid == article.uid)
+    assert (moved_article.ref_base, moved_article.ref_cur) == ("1.2", "1.1")
+    assert not diff.has_changes()
+
+
 def test_status_only_change_lands_in_status_changes_not_elements():
     store = _seed()
     base = _section(store)

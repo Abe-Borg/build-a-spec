@@ -187,6 +187,137 @@ def _store_with_move_fixture() -> DocumentStore:
     )
 
 
+def _store_with_article_move_fixture() -> DocumentStore:
+    return _store_with(
+        [
+            {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1",
+                "text": "Summary parent.",
+                "status": "confirmed",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a1.p1",
+                "text": "Summary child.",
+                "status": "confirmed",
+            },
+            {
+                "action": "add_article",
+                "target_id": "pt1",
+                "text": "REFERENCES",
+            },
+            {
+                "action": "add_paragraph",
+                "target_id": "pt1.a2",
+                "text": "Reference provision.",
+                "status": "confirmed",
+            },
+            {
+                "action": "add_article",
+                "target_id": "pt1",
+                "text": "SUBMITTALS",
+            },
+        ]
+    )
+
+
+def test_move_article_uses_final_index_and_preserves_ids_subtrees_and_counter():
+    store = _store_with_article_move_fixture()
+    part = store.doc.parts[0]
+    original_next_seq = part.next_seq
+    summary_tree_ids = (
+        part.articles[0].paragraphs[0].uid,
+        part.articles[0].paragraphs[0].children[0].uid,
+    )
+
+    store.begin_turn()
+    applied = store.apply_edits(
+        [{"action": "move", "target_id": "pt1.a1", "position": 2}]
+    )
+    assert applied == [
+        {
+            "action": "move",
+            "id": "pt1.a1",
+            "position": 2,
+            "previous_position": 0,
+        }
+    ]
+    part = store.doc.parts[0]
+    assert [article.uid for article in part.articles] == [
+        "pt1.a2",
+        "pt1.a3",
+        "pt1.a1",
+    ]
+    assert [
+        article["number"]
+        for article in store.snapshot()["parts"][0]["articles"]
+    ] == ["1.1", "1.2", "1.3"]
+    moved_summary = part.articles[2]
+    assert (
+        moved_summary.paragraphs[0].uid,
+        moved_summary.paragraphs[0].children[0].uid,
+    ) == summary_tree_ids == ("pt1.a1.p1", "pt1.a1.p1.p1")
+    assert part.next_seq == original_next_seq == 4
+
+    moved_back = store.apply_edits(
+        [{"action": "move", "target_id": "pt1.a1", "position": 0}]
+    )
+    assert moved_back[0]["previous_position"] == 2
+    assert [article.uid for article in store.doc.parts[0].articles] == [
+        "pt1.a1",
+        "pt1.a2",
+        "pt1.a3",
+    ]
+
+    added = store.apply_edits(
+        [{"action": "add_article", "target_id": "pt1", "text": "QUALITY"}]
+    )
+    assert added[0]["id"] == "pt1.a4"
+
+
+def test_move_article_is_one_undoable_version_and_redo_restores_order():
+    store = _store_with_article_move_fixture()
+    original = [article.uid for article in store.doc.parts[0].articles]
+
+    store.begin_turn()
+    store.apply_edits(
+        [{"action": "move", "target_id": "pt1.a3", "position": 0}]
+    )
+    assert store.commit_turn() is True
+    moved = [article.uid for article in store.doc.parts[0].articles]
+    assert moved == ["pt1.a3", "pt1.a1", "pt1.a2"]
+
+    assert store.undo()
+    assert [article.uid for article in store.doc.parts[0].articles] == original
+    assert store.redo()
+    assert [article.uid for article in store.doc.parts[0].articles] == moved
+
+
+def test_moved_article_order_survives_store_round_trip():
+    store = _store_with_article_move_fixture()
+    store.begin_turn()
+    store.apply_edits(
+        [{"action": "move", "target_id": "pt1.a3", "position": 0}]
+    )
+    store.commit_turn()
+
+    restored = DocumentStore()
+    restored.load(store.to_dict())
+
+    articles = restored.snapshot()["parts"][0]["articles"]
+    assert [article["id"] for article in articles] == [
+        "pt1.a3",
+        "pt1.a1",
+        "pt1.a2",
+    ]
+    assert [article["number"] for article in articles] == ["1.1", "1.2", "1.3"]
+    assert articles[1]["paragraphs"][0]["children"][0]["id"] == (
+        "pt1.a1.p1.p1"
+    )
+
+
 def test_move_top_level_uses_final_index_in_both_directions_and_keeps_ids():
     store = _store_with_move_fixture()
     original_article = store.doc.parts[0].articles[0]
@@ -337,12 +468,12 @@ def test_invalid_move_rolls_back_the_whole_mixed_batch():
         ),
         pytest.param(
             {"action": "move", "target_id": "pt1.a1", "position": 0},
-            "paragraph id",
-            id="article",
+            "already at position",
+            id="article-no-op",
         ),
         pytest.param(
             {"action": "move", "target_id": "pt1", "position": 0},
-            "paragraph id",
+            "article or paragraph id",
             id="part",
         ),
         pytest.param(

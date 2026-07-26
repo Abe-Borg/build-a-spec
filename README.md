@@ -56,6 +56,26 @@ See [DOCX fidelity and compatibility](docs/DOCX_FIDELITY.md) for the complete
 export, API payload, blocker-code, persistence, diagnostics, and test-fixture
 contracts.
 
+## Current Status — direct structural editing
+
+The paper is now a practical outline editor as well as a model-authored
+artifact. From a blank native project, add the first article to PART 1, 2, or
+3; then add articles, top-level provisions, and subparagraphs through the four
+SectionFormat provision levels. New user-authored provisions are confirmed,
+and article deletion warns before removing its full provision subtree.
+
+- **Reorder by grip or keyboard.** Articles move only within their PART;
+  provisions move only among siblings under their current article or parent.
+  Drag the grip, or focus it and use Space/Enter, Up/Down, and Escape. Existing
+  up/down controls remain as a fallback. A move keeps stable IDs and carries
+  the whole descendant subtree while positional numbering updates.
+- **The safety boundary stays visible.** There is no PART reordering,
+  cross-PART move, reparenting, promotion, or demotion. Imported DOCX files do
+  not permit article or nested structural edits; only flat Word-numbered edits
+  and exact sibling positions explicitly authorized by the server are offered.
+  A disabled control shows the server's reason, and no structural action
+  silently switches the project to normalized-only output.
+
 ## Current Status — non-spec uploads: honest framing + reference documents
 
 **Uploading something that is not a spec section no longer dresses it as

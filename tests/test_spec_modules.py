@@ -189,6 +189,8 @@ def test_rendered_prompt_is_stable_and_complete():
     assert "21 13 13 Wet-Pipe Sprinkler Systems" in prompt
     assert "(must ask)" in prompt
     assert "set_standard_edition" in prompt
+    assert "reorder an article or paragraph among its current siblings" in prompt
+    assert "articles stay in their current part" in prompt
     # Every domain-conventions placeholder resolved.
     assert "{ibc}" not in prompt and "{ifc}" not in prompt
     # Editions in effect do NOT render here (they are dynamic-block data —

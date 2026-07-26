@@ -8,13 +8,45 @@
  * reveal ✏️ (inline edit), ✓ (confirm an assumed/imported block), and 🗑
  * (delete). All affordances are disabled while a model turn streams.
  */
-import { Fragment, useState, type ButtonHTMLAttributes } from "react";
 import {
-  sourceAllowedPositions,
+  Fragment,
+  useCallback,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type Announcements,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import {
   sourceCapability,
   sourceCapabilityTitle,
   sourceEditOpDecision,
 } from "../lib/sourceCapabilities";
+import {
+  adjacentAllowedPosition,
+  canAddChildParagraph,
+  editorAllowedPositions,
+  hasAlternatePosition,
+  paragraphSubtreeSize,
+  siblingDropPosition,
+  submitExclusiveEdit,
+} from "../lib/structuralEditing";
 import type {
   DiffRun,
   DocArticle,
@@ -138,28 +170,156 @@ function ReadOnlyBadge({
   );
 }
 
-function moveTarget(
-  capability: SourceOperationCapability,
-  direction: "up" | "down",
-): number | null {
-  const current = capability.current_position;
-  if (typeof current !== "number" || !Number.isInteger(current)) return null;
-  const positions = sourceAllowedPositions(capability);
-  if (direction === "up") {
-    const candidates = positions.filter((position) => position < current);
-    return candidates.length ? candidates[candidates.length - 1] : null;
-  }
-  return positions.find((position) => position > current) ?? null;
+type SubmitEdit = (ops: EditOp[]) => boolean;
+
+const dragInstructions = {
+  draggable:
+    "To pick up an item, press Space. Use the up and down arrow keys to move it among its siblings. Press Space again to drop it, or Escape to cancel.",
+};
+
+function sortableAnnouncements(
+  itemLabel: string,
+  ids: readonly string[],
+  allowedPositionsFor: (id: string) => readonly number[],
+): Announcements {
+  const positionOf = (id: string | number) => ids.indexOf(String(id)) + 1;
+  const destinationOf = (
+    activeId: string | number,
+    overId: string | number | null,
+  ) =>
+    siblingDropPosition(
+      ids,
+      String(activeId),
+      overId === null ? null : String(overId),
+      allowedPositionsFor(String(activeId)),
+    );
+  return {
+    onDragStart({ active }) {
+      return `Picked up ${itemLabel} at position ${positionOf(active.id)} of ${ids.length}.`;
+    },
+    onDragOver({ active, over }) {
+      if (!over || active.id === over.id) return undefined;
+      const destination = destinationOf(active.id, over.id);
+      return destination === null
+        ? `${itemLabel} cannot be moved to that sibling position.`
+        : `${itemLabel} will move to position ${destination + 1} of ${ids.length}.`;
+    },
+    onDragEnd({ active, over }) {
+      const destination = destinationOf(active.id, over?.id ?? null);
+      return destination === null
+        ? `${itemLabel} was not moved.`
+        : `${itemLabel} was dropped at position ${destination + 1} of ${ids.length}.`;
+    },
+    onDragCancel() {
+      return `${itemLabel} movement cancelled.`;
+    },
+  };
+}
+
+function SortableSiblingList({
+  ids,
+  itemLabel,
+  busy,
+  allowedPositionsFor,
+  onMove,
+  children,
+}: {
+  ids: readonly string[];
+  itemLabel: string;
+  busy: boolean;
+  allowedPositionsFor: (id: string) => readonly number[];
+  onMove: (id: string, position: number) => void;
+  children: ReactNode;
+}) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    if (busy) return;
+    const activeId = String(active.id);
+    const overId = over ? String(over.id) : null;
+    const position = siblingDropPosition(
+      ids,
+      activeId,
+      overId,
+      allowedPositionsFor(activeId),
+    );
+    if (position !== null) onMove(activeId, position);
+  };
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      accessibility={{
+        screenReaderInstructions: dragInstructions,
+        announcements: sortableAnnouncements(
+          itemLabel,
+          ids,
+          allowedPositionsFor,
+        ),
+      }}
+      onDragEnd={handleDragEnd}
+    >
+      <SortableContext items={[...ids]} strategy={verticalListSortingStrategy}>
+        {children}
+      </SortableContext>
+    </DndContext>
+  );
+}
+
+type SortableState = ReturnType<typeof useSortable>;
+
+function sortableItemStyle(sortable: SortableState): CSSProperties {
+  const transform = sortable.transform;
+  return {
+    transform: transform
+      ? `translate3d(${transform.x}px, ${transform.y}px, 0) scaleX(${transform.scaleX}) scaleY(${transform.scaleY})`
+      : undefined,
+    transition: sortable.transition,
+    position: "relative",
+    zIndex: sortable.isDragging ? 10 : undefined,
+  };
+}
+
+function DragHandle({
+  sortable,
+  disabled,
+  label,
+  title,
+}: {
+  sortable: SortableState;
+  disabled: boolean;
+  label: string;
+  title: string;
+}) {
+  return (
+    <span className="inline-flex" title={disabled ? title : undefined}>
+      <button
+        ref={sortable.setActivatorNodeRef}
+        {...sortable.attributes}
+        {...sortable.listeners}
+        type="button"
+        className="structure-drag-handle"
+        disabled={disabled}
+        aria-label={label}
+        title={disabled ? undefined : title}
+      >
+        <span aria-hidden="true">⠿</span>
+      </button>
+    </span>
+  );
 }
 
 /** Hover toolbar for a paragraph: confirm / edit / delete. */
 function RowActions({
   canConfirm,
   busy,
-  sourceExpected,
   replaceCapability,
   deleteCapability,
   moveCapability,
+  currentPosition,
+  allowedMovePositions,
   statusCapability,
   confirming,
   onConfirm,
@@ -170,10 +330,11 @@ function RowActions({
 }: {
   canConfirm: boolean;
   busy: boolean;
-  sourceExpected: boolean;
   replaceCapability: SourceOperationCapability;
   deleteCapability: SourceOperationCapability;
   moveCapability: SourceOperationCapability;
+  currentPosition: number;
+  allowedMovePositions: readonly number[];
   statusCapability: SourceOperationCapability;
   confirming: boolean;
   onConfirm: () => void;
@@ -182,8 +343,16 @@ function RowActions({
   onMove: (position: number) => void;
   onCancelDelete: () => void;
 }) {
-  const moveUpPosition = moveTarget(moveCapability, "up");
-  const moveDownPosition = moveTarget(moveCapability, "down");
+  const moveUpPosition = adjacentAllowedPosition(
+    currentPosition,
+    "up",
+    allowedMovePositions,
+  );
+  const moveDownPosition = adjacentAllowedPosition(
+    currentPosition,
+    "down",
+    allowedMovePositions,
+  );
   const moveTitle = sourceCapabilityTitle(
     moveCapability,
     "Move this provision",
@@ -207,7 +376,7 @@ function RowActions({
     );
   }
   return (
-    <span className="ml-1 hidden shrink-0 items-center gap-0.5 group-hover:inline-flex">
+    <span className="pointer-events-none ml-1 inline-flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
       {canConfirm && (
         <CapabilityButton
           className={actionBtn}
@@ -237,52 +406,44 @@ function RowActions({
       >
         🗑
       </CapabilityButton>
-      {sourceExpected && (
-        <>
-          <CapabilityButton
-            className={actionBtn}
-            onClick={() => {
-              if (moveCapability.allowed && moveUpPosition !== null) {
-                onMove(moveUpPosition);
-              }
-            }}
-            disabled={
-              busy || !moveCapability.allowed || moveUpPosition === null
-            }
-            title={
-              !moveCapability.allowed
-                ? moveTitle
-                : moveUpPosition === null
-                  ? "No server-authorized position exists above this provision."
-                  : `Move to sibling position ${moveUpPosition + 1}`
-            }
-            aria-label="Move provision up"
-          >
-            ↑
-          </CapabilityButton>
-          <CapabilityButton
-            className={actionBtn}
-            onClick={() => {
-              if (moveCapability.allowed && moveDownPosition !== null) {
-                onMove(moveDownPosition);
-              }
-            }}
-            disabled={
-              busy || !moveCapability.allowed || moveDownPosition === null
-            }
-            title={
-              !moveCapability.allowed
-                ? moveTitle
-                : moveDownPosition === null
-                  ? "No server-authorized position exists below this provision."
-                  : `Move to sibling position ${moveDownPosition + 1}`
-            }
-            aria-label="Move provision down"
-          >
-            ↓
-          </CapabilityButton>
-        </>
-      )}
+      <CapabilityButton
+        className={actionBtn}
+        onClick={() => {
+          if (moveCapability.allowed && moveUpPosition !== null) {
+            onMove(moveUpPosition);
+          }
+        }}
+        disabled={busy || !moveCapability.allowed || moveUpPosition === null}
+        title={
+          !moveCapability.allowed
+            ? moveTitle
+            : moveUpPosition === null
+              ? "No allowed position exists above this provision."
+              : `Move to sibling position ${moveUpPosition + 1}`
+        }
+        aria-label="Move provision up"
+      >
+        ↑
+      </CapabilityButton>
+      <CapabilityButton
+        className={actionBtn}
+        onClick={() => {
+          if (moveCapability.allowed && moveDownPosition !== null) {
+            onMove(moveDownPosition);
+          }
+        }}
+        disabled={busy || !moveCapability.allowed || moveDownPosition === null}
+        title={
+          !moveCapability.allowed
+            ? moveTitle
+            : moveDownPosition === null
+              ? "No allowed position exists below this provision."
+              : `Move to sibling position ${moveDownPosition + 1}`
+        }
+        aria-label="Move provision down"
+      >
+        ↓
+      </CapabilityButton>
     </span>
   );
 }
@@ -290,6 +451,8 @@ function RowActions({
 function ParagraphNode({
   p,
   depth,
+  position,
+  siblingCount,
   changedIds,
   sourceLookup,
   busy,
@@ -299,12 +462,14 @@ function ParagraphNode({
 }: {
   p: DocParagraph;
   depth: number;
+  position: number;
+  siblingCount: number;
   changedIds: ReadonlySet<string>;
   sourceLookup: ReadonlyMap<string, string>;
   busy: boolean;
   sourceExpected: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
-  onEdit: (ops: EditOp[]) => void;
+  onEdit: SubmitEdit;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(p.text);
@@ -334,6 +499,14 @@ function ParagraphNode({
     p.id,
     "move",
   );
+  const allowedMovePositions = editorAllowedPositions(
+    moveCapability,
+    sourceExpected,
+    siblingCount - 1,
+  );
+  const canMove =
+    !busy && hasAlternatePosition(position, allowedMovePositions);
+  const sortable = useSortable({ id: p.id, disabled: !canMove });
   const statusCapability = sourceCapability(
     sourceCapabilities,
     sourceExpected,
@@ -351,8 +524,7 @@ function ParagraphNode({
       );
       if (!decision.allowed) return false;
     }
-    onEdit(ops);
-    return true;
+    return onEdit(ops);
   };
 
   const startEdit = () => {
@@ -380,7 +552,11 @@ function ParagraphNode({
   };
 
   return (
-    <>
+    <div
+      ref={sortable.setNodeRef}
+      className={`structure-sortable ${sortable.isDragging ? "is-dragging" : ""}`}
+      style={sortableItemStyle(sortable)}
+    >
       <div
         id={`el-${p.id}`}
         className={`group flex gap-2 rounded px-1 py-0.5 ${
@@ -392,6 +568,18 @@ function ParagraphNode({
         }`}
         style={{ marginLeft: `${depth * 1.4}rem` }}
       >
+        <DragHandle
+          sortable={sortable}
+          disabled={!canMove}
+          label={`Reorder provision ${p.label}`}
+          title={
+            !moveCapability.allowed
+              ? sourceCapabilityTitle(moveCapability, "")
+              : canMove
+                ? "Drag to reorder among siblings. Keyboard: Space, arrow keys, Space."
+                : "No other allowed sibling position is available."
+          }
+        />
         <span className="w-6 shrink-0 text-right">{p.label}</span>
         {editing ? (
           <span className="min-w-0 flex-1">
@@ -444,10 +632,11 @@ function ParagraphNode({
             <RowActions
               canConfirm={p.status === "assumed" || p.status === "imported"}
               busy={busy}
-              sourceExpected={sourceExpected}
               replaceCapability={replaceCapability}
               deleteCapability={deleteCapability}
               moveCapability={moveCapability}
+              currentPosition={position}
+              allowedMovePositions={allowedMovePositions}
               statusCapability={statusCapability}
               confirming={confirming}
               onConfirm={() => {
@@ -474,20 +663,143 @@ function ParagraphNode({
           </span>
         )}
       </div>
-      {p.children.map((child) => (
-        <ParagraphNode
-          key={child.id}
-          p={child}
-          depth={depth + 1}
-          changedIds={changedIds}
-          sourceLookup={sourceLookup}
-          busy={busy}
-          sourceExpected={sourceExpected}
-          sourceCapabilities={sourceCapabilities}
-          onEdit={onEdit}
-        />
-      ))}
-    </>
+      <ParagraphList
+        paragraphs={p.children}
+        parentId={p.id}
+        depth={depth + 1}
+        allowAdd={canAddChildParagraph(depth)}
+        changedIds={changedIds}
+        sourceLookup={sourceLookup}
+        busy={busy}
+        sourceExpected={sourceExpected}
+        sourceCapabilities={sourceCapabilities}
+        onEdit={onEdit}
+      />
+    </div>
+  );
+}
+
+function ParagraphList({
+  paragraphs,
+  parentId,
+  depth,
+  allowAdd,
+  changedIds,
+  sourceLookup,
+  busy,
+  sourceExpected,
+  sourceCapabilities,
+  onEdit,
+}: {
+  paragraphs: DocParagraph[];
+  parentId: string;
+  depth: number;
+  allowAdd: boolean;
+  changedIds: ReadonlySet<string>;
+  sourceLookup: ReadonlyMap<string, string>;
+  busy: boolean;
+  sourceExpected: boolean;
+  sourceCapabilities: SourceCapabilitiesState | null;
+  onEdit: SubmitEdit;
+}) {
+  const ids = paragraphs.map((paragraph) => paragraph.id);
+  const addCapability = sourceCapability(
+    sourceCapabilities,
+    sourceExpected,
+    parentId,
+    "add_paragraph",
+  );
+  const allowedAddPositions = allowAdd
+    ? editorAllowedPositions(
+        addCapability,
+        sourceExpected,
+        paragraphs.length,
+      )
+    : [];
+  const allowedAddSet = new Set(allowedAddPositions);
+  const movePositionsFor = (id: string) => {
+    const capability = sourceCapability(
+      sourceCapabilities,
+      sourceExpected,
+      id,
+      "move",
+    );
+    return editorAllowedPositions(
+      capability,
+      sourceExpected,
+      paragraphs.length - 1,
+    );
+  };
+  const addAt = (position: number) =>
+    allowedAddSet.has(position) ? (
+      <AddParagraphControl
+        parentId={parentId}
+        position={position}
+        depth={depth}
+        busy={busy}
+        sourceExpected={sourceExpected}
+        sourceCapabilities={sourceCapabilities}
+        onEdit={onEdit}
+      />
+    ) : null;
+
+  if (paragraphs.length === 0 && allowedAddPositions.length === 0) {
+    if (!allowAdd || !sourceExpected || addCapability.allowed) return null;
+    return (
+      <div style={{ marginLeft: `${depth * 1.4 + 2}rem` }}>
+        <CapabilityButton
+          className={actionBtn}
+          disabled
+          title={sourceCapabilityTitle(addCapability, "")}
+        >
+          + Add subparagraph (read-only)
+        </CapabilityButton>
+      </div>
+    );
+  }
+
+  return (
+    <SortableSiblingList
+      ids={ids}
+      itemLabel={depth === 0 ? "provision" : "subparagraph"}
+      busy={busy}
+      allowedPositionsFor={movePositionsFor}
+      onMove={(id, position) => {
+        onEdit([{ action: "move", target_id: id, position }]);
+      }}
+    >
+      <div className="space-y-1">
+        {paragraphs.map((paragraph, position) => (
+          <Fragment key={paragraph.id}>
+            {addAt(position)}
+            <ParagraphNode
+              p={paragraph}
+              depth={depth}
+              position={position}
+              siblingCount={paragraphs.length}
+              changedIds={changedIds}
+              sourceLookup={sourceLookup}
+              busy={busy}
+              sourceExpected={sourceExpected}
+              sourceCapabilities={sourceCapabilities}
+              onEdit={onEdit}
+            />
+          </Fragment>
+        ))}
+        {addAt(paragraphs.length)}
+        {allowAdd && sourceExpected && !addCapability.allowed && (
+          <div style={{ marginLeft: `${depth * 1.4 + 2}rem` }}>
+            <CapabilityButton
+              className={actionBtn}
+              disabled
+              title={sourceCapabilityTitle(addCapability, "")}
+            >
+              + Add {depth === 0 ? "provision" : "subparagraph"} (read-only)
+            </CapabilityButton>
+          </div>
+        )}
+      </div>
+    </SortableSiblingList>
   );
 }
 
@@ -500,6 +812,8 @@ function ArticleTitle({
   sourceExpected,
   sourceCapabilities,
   onEdit,
+  leading,
+  actions,
 }: {
   id: string;
   number: string;
@@ -508,7 +822,9 @@ function ArticleTitle({
   busy: boolean;
   sourceExpected: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
-  onEdit: (ops: EditOp[]) => void;
+  onEdit: SubmitEdit;
+  leading: ReactNode;
+  actions: ReactNode;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
@@ -535,13 +851,13 @@ function ArticleTitle({
         sourceExpected,
         { ...op },
       );
-      if (!busy && decision.allowed) {
-        onEdit([op]);
+      if (!busy && decision.allowed && onEdit([op])) {
         setEditing(false);
       }
     };
     return (
       <p className="flex items-center gap-2 text-[13px] font-semibold">
+        {leading}
         {number}&nbsp;&nbsp;
         <input
           autoFocus
@@ -578,6 +894,7 @@ function ArticleTitle({
           : ""
       }`}
     >
+      {leading}
       {number}&nbsp;&nbsp;
       <span className="uppercase">{title}</span>
       <ReadOnlyBadge
@@ -599,24 +916,27 @@ function ArticleTitle({
       >
         ✏️
       </CapabilityButton>
+      {actions}
     </p>
   );
 }
 
 function AddParagraphControl({
-  articleId,
+  parentId,
   position,
+  depth,
   busy,
   sourceExpected,
   sourceCapabilities,
   onEdit,
 }: {
-  articleId: string;
+  parentId: string;
   position: number;
+  depth: number;
   busy: boolean;
   sourceExpected: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
-  onEdit: (ops: EditOp[]) => void;
+  onEdit: SubmitEdit;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -625,14 +945,14 @@ function AddParagraphControl({
     sourceExpected,
     {
       action: "add_paragraph",
-      target_id: articleId,
+      target_id: parentId,
       position,
       text: "New provision",
     },
   );
   const title = sourceCapabilityTitle(
     decision,
-    `Add a top-level provision at sibling position ${position + 1}`,
+    `Add a ${depth === 0 ? "top-level provision" : "subparagraph"} at sibling position ${position + 1}`,
   );
 
   const start = () => {
@@ -645,7 +965,7 @@ function AddParagraphControl({
     if (!text) return;
     const op: EditOp = {
       action: "add_paragraph",
-      target_id: articleId,
+      target_id: parentId,
       position,
       text,
       status: "confirmed",
@@ -656,13 +976,15 @@ function AddParagraphControl({
       { ...op },
     );
     if (busy || !currentDecision.allowed) return;
-    onEdit([op]);
-    setEditing(false);
+    if (onEdit([op])) setEditing(false);
   };
 
   if (editing) {
     return (
-      <div className="my-1 ml-8 rounded border border-dashed border-paper-edge bg-white/35 px-2 py-1">
+      <div
+        className="my-1 rounded border border-dashed border-paper-edge bg-white/35 px-2 py-1"
+        style={{ marginLeft: `${depth * 1.4 + 2}rem` }}
+      >
         <input
           autoFocus
           value={draft}
@@ -675,7 +997,7 @@ function AddParagraphControl({
               save();
             }
           }}
-          placeholder="New top-level provision"
+          placeholder={depth === 0 ? "New top-level provision" : "New subparagraph"}
           className="w-full rounded border border-paper-edge bg-white/70 px-1.5 py-0.5 text-[12px] text-paper-ink outline-none focus:border-[#c08457]"
         />
         <span className="mt-1 flex items-center gap-2 text-[11px] text-paper-dim">
@@ -700,7 +1022,10 @@ function AddParagraphControl({
   }
 
   return (
-    <div className="my-0.5 ml-8 flex items-center gap-1 text-[10px] text-paper-dim/80">
+    <div
+      className="my-0.5 flex items-center gap-1 text-[10px] text-paper-dim/80"
+      style={{ marginLeft: `${depth * 1.4 + 2}rem` }}
+    >
       <span className="h-px min-w-4 flex-1 bg-paper-edge/50" />
       <CapabilityButton
         className={`${actionBtn} whitespace-nowrap`}
@@ -708,7 +1033,7 @@ function AddParagraphControl({
         disabled={busy || !decision.allowed}
         title={title}
       >
-        + Add provision here
+        + Add {depth === 0 ? "provision" : "subparagraph"} here
       </CapabilityButton>
       <span className="h-px min-w-4 flex-1 bg-paper-edge/50" />
     </div>
@@ -717,6 +1042,8 @@ function AddParagraphControl({
 
 function ArticleBlock({
   article,
+  position,
+  siblingCount,
   changedIds,
   sourceLookup,
   busy,
@@ -725,34 +1052,144 @@ function ArticleBlock({
   onEdit,
 }: {
   article: DocArticle;
+  position: number;
+  siblingCount: number;
   changedIds: ReadonlySet<string>;
   sourceLookup: ReadonlyMap<string, string>;
   busy: boolean;
   sourceExpected: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
-  onEdit: (ops: EditOp[]) => void;
+  onEdit: SubmitEdit;
 }) {
-  const addCapability = sourceCapability(
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const moveCapability = sourceCapability(
     sourceCapabilities,
     sourceExpected,
     article.id,
-    "add_paragraph",
+    "move",
   );
-  const allowedPositions = new Set(sourceAllowedPositions(addCapability));
-  const addAt = (position: number) =>
-    allowedPositions.has(position) ? (
-      <AddParagraphControl
-        articleId={article.id}
-        position={position}
-        busy={busy}
-        sourceExpected={sourceExpected}
-        sourceCapabilities={sourceCapabilities}
-        onEdit={onEdit}
-      />
-    ) : null;
+  const deleteCapability = sourceCapability(
+    sourceCapabilities,
+    sourceExpected,
+    article.id,
+    "delete",
+  );
+  const allowedMovePositions = editorAllowedPositions(
+    moveCapability,
+    sourceExpected,
+    siblingCount - 1,
+  );
+  const canMove =
+    !busy && hasAlternatePosition(position, allowedMovePositions);
+  const sortable = useSortable({ id: article.id, disabled: !canMove });
+  const upPosition = adjacentAllowedPosition(
+    position,
+    "up",
+    allowedMovePositions,
+  );
+  const downPosition = adjacentAllowedPosition(
+    position,
+    "down",
+    allowedMovePositions,
+  );
+  const provisionCount = paragraphSubtreeSize(article.paragraphs);
+  const moveTitle = sourceCapabilityTitle(moveCapability, "Move this article");
+  const structureActions = confirmingDelete ? (
+    <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-normal">
+      <span className="text-[#a03d31]">
+        {provisionCount > 0
+          ? `Delete article and ${provisionCount} provision${provisionCount === 1 ? "" : "s"}?`
+          : "Delete article?"}
+      </span>
+      <CapabilityButton
+        className={actionBtn}
+        disabled={busy || !deleteCapability.allowed}
+        title={sourceCapabilityTitle(deleteCapability, "Confirm delete")}
+        onClick={() => {
+          if (onEdit([{ action: "delete", target_id: article.id }])) {
+            setConfirmingDelete(false);
+          }
+        }}
+      >
+        ✓
+      </CapabilityButton>
+      <button
+        type="button"
+        className={actionBtn}
+        onClick={() => setConfirmingDelete(false)}
+        title="Keep article"
+      >
+        ✕
+      </button>
+    </span>
+  ) : (
+    <span className="pointer-events-none ml-1 inline-flex items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+      <CapabilityButton
+        className={actionBtn}
+        disabled={busy || !deleteCapability.allowed}
+        title={sourceCapabilityTitle(
+          deleteCapability,
+          provisionCount > 0
+            ? `Delete article and its ${provisionCount} provisions`
+            : "Delete article",
+        )}
+        onClick={() => setConfirmingDelete(true)}
+        aria-label={`Delete article ${article.number}`}
+      >
+        🗑
+      </CapabilityButton>
+      <CapabilityButton
+        className={actionBtn}
+        disabled={busy || !moveCapability.allowed || upPosition === null}
+        title={
+          !moveCapability.allowed
+            ? moveTitle
+            : upPosition === null
+              ? "No allowed position exists above this article."
+              : `Move to article position ${upPosition + 1}`
+        }
+        onClick={() => {
+          if (upPosition !== null) {
+            onEdit([
+              { action: "move", target_id: article.id, position: upPosition },
+            ]);
+          }
+        }}
+        aria-label={`Move article ${article.number} up`}
+      >
+        ↑
+      </CapabilityButton>
+      <CapabilityButton
+        className={actionBtn}
+        disabled={busy || !moveCapability.allowed || downPosition === null}
+        title={
+          !moveCapability.allowed
+            ? moveTitle
+            : downPosition === null
+              ? "No allowed position exists below this article."
+              : `Move to article position ${downPosition + 1}`
+        }
+        onClick={() => {
+          if (downPosition !== null) {
+            onEdit([
+              { action: "move", target_id: article.id, position: downPosition },
+            ]);
+          }
+        }}
+        aria-label={`Move article ${article.number} down`}
+      >
+        ↓
+      </CapabilityButton>
+    </span>
+  );
 
   return (
-    <div id={`el-${article.id}`}>
+    <div
+      ref={sortable.setNodeRef}
+      id={`el-${article.id}`}
+      className={`structure-sortable ${sortable.isDragging ? "is-dragging" : ""}`}
+      style={sortableItemStyle(sortable)}
+    >
       <ArticleTitle
         id={article.id}
         number={article.number}
@@ -762,36 +1199,144 @@ function ArticleBlock({
         sourceExpected={sourceExpected}
         sourceCapabilities={sourceCapabilities}
         onEdit={onEdit}
+        leading={
+          <DragHandle
+            sortable={sortable}
+            disabled={!canMove}
+            label={`Reorder article ${article.number}`}
+            title={
+              !moveCapability.allowed
+                ? sourceCapabilityTitle(moveCapability, "")
+                : canMove
+                  ? "Drag to reorder within this PART. Keyboard: Space, arrow keys, Space."
+                  : "No other allowed article position is available."
+            }
+          />
+        }
+        actions={structureActions}
       />
-      <div className="mt-1.5 space-y-1">
-        {article.paragraphs.map((paragraph, position) => (
-          <Fragment key={paragraph.id}>
-            {addAt(position)}
-            <ParagraphNode
-              p={paragraph}
-              depth={0}
-              changedIds={changedIds}
-              sourceLookup={sourceLookup}
-              busy={busy}
-              sourceExpected={sourceExpected}
-              sourceCapabilities={sourceCapabilities}
-              onEdit={onEdit}
-            />
-          </Fragment>
-        ))}
-        {addAt(article.paragraphs.length)}
-        {sourceExpected && !addCapability.allowed && (
-          <div className="ml-8 mt-1">
-            <CapabilityButton
-              className={actionBtn}
-              disabled
-              title={sourceCapabilityTitle(addCapability, "")}
-            >
-              + Add top-level provision (read-only)
-            </CapabilityButton>
-          </div>
-        )}
+      <div className="mt-1.5">
+        <ParagraphList
+          paragraphs={article.paragraphs}
+          parentId={article.id}
+          depth={0}
+          allowAdd
+          changedIds={changedIds}
+          sourceLookup={sourceLookup}
+          busy={busy}
+          sourceExpected={sourceExpected}
+          sourceCapabilities={sourceCapabilities}
+          onEdit={onEdit}
+        />
       </div>
+    </div>
+  );
+}
+
+function AddArticleControl({
+  partId,
+  position,
+  busy,
+  sourceExpected,
+  sourceCapabilities,
+  onEdit,
+}: {
+  partId: string;
+  position: number;
+  busy: boolean;
+  sourceExpected: boolean;
+  sourceCapabilities: SourceCapabilitiesState | null;
+  onEdit: SubmitEdit;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const decision = sourceEditOpDecision(
+    sourceCapabilities,
+    sourceExpected,
+    {
+      action: "add_article",
+      target_id: partId,
+      position,
+      text: "New article",
+    },
+  );
+  const save = () => {
+    const text = draft.trim();
+    if (!text || busy) return;
+    const op: EditOp = {
+      action: "add_article",
+      target_id: partId,
+      position,
+      text,
+    };
+    const currentDecision = sourceEditOpDecision(
+      sourceCapabilities,
+      sourceExpected,
+      { ...op },
+    );
+    if (currentDecision.allowed && onEdit([op])) setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="my-1 rounded border border-dashed border-paper-edge bg-white/35 px-2 py-1">
+        <input
+          autoFocus
+          value={draft}
+          disabled={busy || !decision.allowed}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setEditing(false);
+            if (event.key === "Enter") {
+              event.preventDefault();
+              save();
+            }
+          }}
+          placeholder="New article title"
+          maxLength={200}
+          className="w-full rounded border border-paper-edge bg-white/70 px-1.5 py-0.5 text-[12px] font-semibold uppercase text-paper-ink outline-none focus:border-[#c08457]"
+        />
+        <span className="mt-1 flex items-center gap-2 text-[11px] text-paper-dim">
+          <CapabilityButton
+            className={actionBtn}
+            onClick={save}
+            disabled={busy || !decision.allowed || !draft.trim()}
+            title={sourceCapabilityTitle(decision, "Add article (Enter)")}
+          >
+            Add
+          </CapabilityButton>
+          <button
+            type="button"
+            className={actionBtn}
+            onClick={() => setEditing(false)}
+            title="Cancel (Esc)"
+          >
+            Cancel
+          </button>
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-1 flex items-center gap-1 text-[10px] text-paper-dim/80">
+      <span className="h-px min-w-4 flex-1 bg-paper-edge/50" />
+      <CapabilityButton
+        className={`${actionBtn} whitespace-nowrap`}
+        onClick={() => {
+          if (busy || !decision.allowed) return;
+          setDraft("");
+          setEditing(true);
+        }}
+        disabled={busy || !decision.allowed}
+        title={sourceCapabilityTitle(
+          decision,
+          `Add an article at position ${position + 1}`,
+        )}
+      >
+        + Add article here
+      </CapabilityButton>
+      <span className="h-px min-w-4 flex-1 bg-paper-edge/50" />
     </div>
   );
 }
@@ -811,7 +1356,7 @@ function PartBlock({
   busy: boolean;
   sourceExpected: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
-  onEdit: (ops: EditOp[]) => void;
+  onEdit: SubmitEdit;
 }) {
   const replaceCapability = sourceCapability(
     sourceCapabilities,
@@ -819,6 +1364,41 @@ function PartBlock({
     part.id,
     "replace_text",
   );
+  const addCapability = sourceCapability(
+    sourceCapabilities,
+    sourceExpected,
+    part.id,
+    "add_article",
+  );
+  const allowedAddPositions = editorAllowedPositions(
+    addCapability,
+    sourceExpected,
+    part.articles.length,
+  );
+  const allowedAddSet = new Set(allowedAddPositions);
+  const articleIds = part.articles.map((article) => article.id);
+  const movePositionsFor = (id: string) =>
+    editorAllowedPositions(
+      sourceCapability(
+        sourceCapabilities,
+        sourceExpected,
+        id,
+        "move",
+      ),
+      sourceExpected,
+      part.articles.length - 1,
+    );
+  const addAt = (position: number) =>
+    allowedAddSet.has(position) ? (
+      <AddArticleControl
+        partId={part.id}
+        position={position}
+        busy={busy}
+        sourceExpected={sourceExpected}
+        sourceCapabilities={sourceCapabilities}
+        onEdit={onEdit}
+      />
+    ) : null;
   return (
     <div>
       <p
@@ -834,24 +1414,47 @@ function PartBlock({
           sourceExpected={sourceExpected}
         />
       </p>
-      {part.articles.length === 0 ? (
-        <p className="mt-2 text-xs text-paper-dim italic">(No articles yet.)</p>
-      ) : (
+      <SortableSiblingList
+        ids={articleIds}
+        itemLabel="article"
+        busy={busy}
+        allowedPositionsFor={movePositionsFor}
+        onMove={(id, position) => {
+          onEdit([{ action: "move", target_id: id, position }]);
+        }}
+      >
         <div className="mt-3 space-y-4">
-          {part.articles.map((article) => (
-            <ArticleBlock
-              key={article.id}
-              article={article}
-              changedIds={changedIds}
-              sourceLookup={sourceLookup}
-              busy={busy}
-              sourceExpected={sourceExpected}
-              sourceCapabilities={sourceCapabilities}
-              onEdit={onEdit}
-            />
+          {part.articles.length === 0 && allowedAddPositions.length === 0 && (
+            <p className="text-xs text-paper-dim italic">(No articles yet.)</p>
+          )}
+          {part.articles.map((article, position) => (
+            <Fragment key={article.id}>
+              {addAt(position)}
+              <ArticleBlock
+                article={article}
+                position={position}
+                siblingCount={part.articles.length}
+                changedIds={changedIds}
+                sourceLookup={sourceLookup}
+                busy={busy}
+                sourceExpected={sourceExpected}
+                sourceCapabilities={sourceCapabilities}
+                onEdit={onEdit}
+              />
+            </Fragment>
           ))}
+          {addAt(part.articles.length)}
+          {sourceExpected && !addCapability.allowed && (
+            <CapabilityButton
+              className={actionBtn}
+              disabled
+              title={sourceCapabilityTitle(addCapability, "")}
+            >
+              + Add article (read-only)
+            </CapabilityButton>
+          )}
         </div>
-      )}
+      </SortableSiblingList>
     </div>
   );
 }
@@ -1042,11 +1645,25 @@ export default function SpecDocument({
   busy?: boolean;
   sourceExpected?: boolean;
   sourceCapabilities?: SourceCapabilitiesState | null;
-  onEdit?: (ops: EditOp[]) => void;
+  onEdit?: (ops: EditOp[]) => void | Promise<void>;
   diff?: SectionDiff | null;
   /** The import found no SectionFormat structure (see ImportReport). */
   unstructuredImport?: boolean;
 }) {
+  const editInFlightRef = useRef(false);
+  const [editInFlight, setEditInFlight] = useState(false);
+  const submitEdit = useCallback(
+    (ops: EditOp[]): boolean => {
+      if (busy) return false;
+      setEditInFlight(true);
+      return submitExclusiveEdit(
+        editInFlightRef,
+        () => onEdit(ops),
+        () => setEditInFlight(false),
+      );
+    },
+    [busy, onEdit],
+  );
   if (diff) {
     return <DiffDocument diff={diff} />;
   }
@@ -1063,6 +1680,7 @@ export default function SpecDocument({
   // than latching at import.
   const hasHeader = Boolean(doc.section.number || doc.section.title);
   const bareImport = unstructuredImport && !hasHeader;
+  const editorBusy = busy || editInFlight;
   // Empty parts are pure scaffolding for such a document; once it is being
   // turned into a spec, "(No articles yet.)" is a useful drafting cue again.
   const visibleParts = bareImport
@@ -1123,10 +1741,10 @@ export default function SpecDocument({
             part={part}
             changedIds={changedIds}
             sourceLookup={sourceLookup}
-            busy={busy}
+            busy={editorBusy}
             sourceExpected={sourceExpected}
             sourceCapabilities={sourceCapabilities}
-            onEdit={onEdit}
+            onEdit={submitEdit}
           />
         ))}
       </div>

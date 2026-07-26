@@ -790,7 +790,20 @@ def _validate_fixed_projection(
         base_identities = {(row[0], row[1], row[2]) for row in base_headings}
         cur_identities = {(row[0], row[1], row[2]) for row in cur_headings}
         changed_identities = base_identities ^ cur_identities
-        uid = next((identity[1] for identity in changed_identities), "sec")
+        uid = next((identity[1] for identity in changed_identities), None)
+        if uid is None:
+            # A pure heading reorder preserves every identity and value, so
+            # identify the first heading whose positional peer changed.
+            uid = next(
+                (
+                    current_row[1]
+                    for baseline_row, current_row in zip(
+                        base_headings, cur_headings, strict=False
+                    )
+                    if baseline_row[:3] != current_row[:3]
+                ),
+                "sec",
+            )
         raise SourcePatchError(uid, "structural_change")
 
     base_uids = set(base)
@@ -2249,12 +2262,16 @@ def _blocked_element_operations(
             "set_standard_suppressed": _allowed_capability(),
         }
     elif kind == "part":
-        operations = {"replace_text": denied}
+        operations = {
+            "replace_text": denied,
+            "add_article": denied,
+        }
     elif kind == "article":
         operations = {
             "replace_text": denied,
             "add_paragraph": denied,
             "delete": denied,
+            "move": denied,
         }
     else:
         operations = {
@@ -2634,6 +2651,8 @@ def source_edit_capabilities(
     )
 
     for part in current.parts:
+        article_structure_blocker = mutation_blocker or "structural_change"
+        article_structure_message = mutation_message
         elements[part.uid] = SourceElementCapabilities(
             {
                 "replace_text": _probe_heading_capability(
@@ -2643,7 +2662,14 @@ def source_edit_capabilities(
                     baseline=baseline,
                     current=current,
                     bound_inputs=bound_inputs,
-                )
+                ),
+                # Imported heading structure is immutable.  Report that
+                # categorical restriction directly instead of performing a
+                # full source-package probe that can never succeed.
+                "add_article": _denied_capability(
+                    article_structure_blocker,
+                    article_structure_message,
+                ),
             }
         )
         for article in part.articles:
@@ -2673,6 +2699,10 @@ def source_edit_capabilities(
                         baseline=baseline,
                         current=current,
                         bound_inputs=bound_inputs,
+                    ),
+                    "move": _denied_capability(
+                        article_structure_blocker,
+                        article_structure_message,
                     ),
                 }
             )

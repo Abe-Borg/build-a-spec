@@ -75,8 +75,13 @@ const report: SourceCapabilitiesState = {
       set_standard_edition: { allowed: true },
       set_standard_suppressed: { allowed: true },
     },
+    pt1: {
+      add_article: headingDenied,
+    },
     "pt1.a1": {
       replace_text: headingDenied,
+      delete: headingDenied,
+      move: headingDenied,
       add_paragraph: {
         allowed: true,
         // These extrema are informational and deliberately include a gap.
@@ -267,6 +272,30 @@ test("move and add use explicit positions and never expand min/max ranges", () =
       text: "Implicit append is not safe to infer",
     }).blocker,
     "capability_position_invalid",
+  );
+});
+
+test("article creation and article movement use explicit server capabilities", () => {
+  assert.strictEqual(
+    sourceCapability(report, true, "pt1", "add_article"),
+    headingDenied,
+  );
+  assert.strictEqual(
+    sourceEditOpDecision(report, true, {
+      action: "add_article",
+      target_id: "pt1",
+      text: "Summary",
+      position: 0,
+    }),
+    headingDenied,
+  );
+  assert.strictEqual(
+    sourceEditOpDecision(report, true, {
+      action: "move",
+      target_id: "pt1.a1",
+      position: 0,
+    }),
+    headingDenied,
   );
 });
 

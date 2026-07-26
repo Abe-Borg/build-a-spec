@@ -14,6 +14,7 @@ from pathlib import Path
 import zipfile
 
 import pytest
+from docx import Document
 from fastapi.testclient import TestClient
 
 from backend import sessions
@@ -186,6 +187,24 @@ def _import_api(
     return payload
 
 
+def _two_article_master() -> bytes:
+    document = Document()
+    for text in (
+        "SECTION 21 13 13",
+        "WET-PIPE SPRINKLER SYSTEMS",
+        "PART 1 - GENERAL",
+        "1.1 SUMMARY",
+        "A. Provide the work of this Section.",
+        "1.2 REFERENCES",
+        "A. Comply with referenced standards.",
+        "END OF SECTION 21 13 13",
+    ):
+        document.add_paragraph(text)
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
 def test_report_is_deeply_immutable_deterministic_and_does_not_mutate_inputs(
     tmp_path,
 ):
@@ -254,6 +273,13 @@ def test_manual_label_simple_text_headings_and_complex_content(tmp_path):
         heading = _operation(report, uid, "replace_text")
         assert heading.allowed is False
         assert heading.blocker == "heading_change"
+
+    add_article = _operation(report, "pt1", "add_article")
+    assert add_article.allowed is False
+    assert add_article.blocker == "structural_change"
+    move_article = _operation(report, "pt1.a1", "move")
+    assert move_article.allowed is False
+    assert move_article.blocker == "structural_change"
 
     manual = report.elements["pt1.a1.p1"].operations
     assert manual["replace_text"].allowed is True
@@ -436,8 +462,10 @@ def test_global_and_runtime_blockers_deny_body_but_allow_metadata(
     for uid, operation_name in (
         ("sec", "replace_text"),
         ("pt1", "replace_text"),
+        ("pt1", "add_article"),
         ("pt1.a1", "replace_text"),
         ("pt1.a1", "add_paragraph"),
+        ("pt1.a1", "move"),
         ("pt1.a1.p1", "replace_text"),
         ("pt1.a1.p1", "delete"),
         ("pt1.a1.p1", "move"),
@@ -787,6 +815,43 @@ def test_pass_through_api_keeps_metadata_editable_and_rejects_forged_body_edit(
     assert api_client.get("/api/import/original").content == source
 
 
+def test_imported_article_add_and_move_fail_atomically_with_explicit_denials(
+    api_client,
+):
+    source = _two_article_master()
+    imported = _import_api(
+        api_client,
+        source,
+        filename="capability-two-article-master.docx",
+    )
+    capabilities = imported["source_capabilities"]["elements"]
+    assert capabilities["pt1"]["add_article"]["allowed"] is False
+    assert capabilities["pt1"]["add_article"]["blocker"] == "structural_change"
+    for uid in ("pt1.a1", "pt1.a2"):
+        assert capabilities[uid]["move"]["allowed"] is False
+        assert capabilities[uid]["move"]["blocker"] == "structural_change"
+
+    before = api_client.get("/api/doc").json()["doc"]
+    for operation in (
+        {
+            "action": "add_article",
+            "target_id": "pt1",
+            "text": "UNSAFE IMPORTED ARTICLE",
+        },
+        {"action": "move", "target_id": "pt1.a2", "position": 0},
+    ):
+        rejected = api_client.post(
+            "/api/doc/edit",
+            json={"ops": [operation]},
+        )
+        assert rejected.status_code == 400
+        assert "[structural_change]" in rejected.json()["error"]
+        if operation["action"] == "move":
+            assert "'pt1.a2'" in rejected.json()["error"]
+        assert api_client.get("/api/doc").json()["doc"] == before
+        assert api_client.get("/api/import/original").content == source
+
+
 def test_legacy_source_less_project_has_no_imported_body_capability_lock(
     tmp_path,
     api_client,
@@ -920,13 +985,16 @@ def test_incomplete_source_scope_denies_body_but_allows_metadata_everywhere(
     session = sessions.get_session()
     corrupt(session)
 
-    operations = _settled_doc(api_client)["source_capabilities"]["elements"][
-        "pt1.a1.p1"
-    ]
+    elements = _settled_doc(api_client)["source_capabilities"]["elements"]
+    operations = elements["pt1.a1.p1"]
     assert operations["replace_text"]["allowed"] is False
     assert operations["replace_text"]["blocker"] == expected_blocker
     assert operations["set_status"]["allowed"] is True
     assert operations["set_provenance"]["allowed"] is True
+    assert elements["pt1"]["add_article"]["allowed"] is False
+    assert elements["pt1"]["add_article"]["blocker"] == expected_blocker
+    assert elements["pt1.a1"]["move"]["allowed"] is False
+    assert elements["pt1.a1"]["move"]["blocker"] == expected_blocker
 
     metadata = api_client.post(
         "/api/doc/edit",

@@ -19,7 +19,13 @@ from backend.app import create_app
 from backend.spec_doc.diffing import diff_sections
 from backend.spec_doc.docx_export import build_docx
 from backend.spec_doc.importer import parse_master_docx
-from backend.spec_doc.model import Article, Paragraph, SpecSection, iter_paragraphs
+from backend.spec_doc.model import (
+    Article,
+    Paragraph,
+    SpecSection,
+    apply_edits,
+    iter_paragraphs,
+)
 from tests.docx_fidelity_helpers import (
     DOCX_MEDIA_TYPE,
     TARGET_MODEL_TEXT,
@@ -417,6 +423,28 @@ def test_repeated_normalized_export_has_deterministic_member_contents():
     assert _member_contents(first) == _member_contents(second)
     assert _xml_part(first, "word/numbering.xml") is not None
     assert _xml_part(first, "word/document.xml") is not None
+
+
+def test_normalized_export_uses_moved_article_order_and_new_numbers():
+    section, _applied = apply_edits(
+        _numbered_section(),
+        [{"action": "move", "target_id": "pt1.a2", "position": 0}],
+    )
+    document_root = _xml_part(build_docx(section), "word/document.xml")
+    visible = [
+        _paragraph_text(paragraph)
+        for paragraph in document_root.xpath("./w:body/w:p", namespaces=_NS)
+    ]
+
+    headings = [text for text in visible if text[:3] in {"1.1", "1.2", "1.3"}]
+    assert headings == [
+        "1.1SECOND ARTICLE",
+        "1.2FIRST ARTICLE",
+        "1.3EMPTY ARTICLE",
+    ]
+    assert visible.index("1.1SECOND ARTICLE") < visible.index(
+        "Article two top alpha"
+    ) < visible.index("1.2FIRST ARTICLE")
 
 
 def test_normalized_export_reimports_with_identical_provision_text_and_depth(

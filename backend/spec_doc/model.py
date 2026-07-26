@@ -823,10 +823,20 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
         }
 
     if action == "move":
-        if not isinstance(node, Paragraph):
+        if isinstance(node, Article):
+            siblings = next(
+                part.articles for part in section.parts if node in part.articles
+            )
+            element_kind = "article"
+        elif isinstance(node, Paragraph):
+            ctx = _find_paragraph_context(section, node.uid)
+            assert ctx is not None
+            siblings = ctx[0]
+            element_kind = "paragraph"
+        else:
             raise SpecEditError(
-                "move: target must be a paragraph id. Sections, parts, and "
-                "articles cannot be moved."
+                "move: target must be an article or paragraph id. Sections "
+                "and parts cannot be moved."
             )
         extra_keys = set(op) - {"action", "target_id", "position"}
         if extra_keys:
@@ -840,11 +850,8 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(position, int) or isinstance(position, bool):
             raise SpecEditError(
                 "move: 'position' is required and must be a 0-based integer "
-                "index among the paragraph's current siblings."
+                "index among the target's current siblings."
             )
-        ctx = _find_paragraph_context(section, node.uid)
-        assert ctx is not None
-        siblings = ctx[0]
         if not 0 <= position < len(siblings):
             raise SpecEditError(
                 "move: 'position' is outside the current sibling list "
@@ -853,7 +860,7 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
         previous_position = siblings.index(node)
         if position == previous_position:
             raise SpecEditError(
-                f"move: paragraph {node.uid!r} is already at position "
+                f"move: {element_kind} {node.uid!r} is already at position "
                 f"{position}; no change was requested."
             )
         siblings.pop(previous_position)
@@ -1126,15 +1133,17 @@ APPLY_SPEC_EDITS_TOOL: dict[str, Any] = {
         "field is only used when setting the section number.\n"
         "\n"
         "Operations:\n"
-        "- add_article: target_id = a part id; text = the article title.\n"
+        "- add_article: target_id = a part id; text = the article title; "
+        "position = an optional 0-based insertion index.\n"
         "- add_paragraph: target_id = an article id (top-level paragraph) "
         "or a paragraph id (nested subparagraph, max 4 levels); text = the "
         "provision text; status = confirmed | assumed | needs_input "
         "(defaults to assumed).\n"
-        "- move: target_id = a paragraph id; position = its required final "
-        "0-based index among its existing siblings. This reorders only "
-        "within the same semantic parent; it cannot move sections, parts, "
-        "articles, or reparent a paragraph.\n"
+        "- move: target_id = an article or paragraph id; position = its "
+        "required final 0-based index among its existing siblings. Articles "
+        "stay within their current part, and paragraphs stay within their "
+        "current article or parent paragraph; sections and parts cannot be "
+        "moved, and content cannot be reparented.\n"
         "- replace: target_id = an article (text = new title), a paragraph "
         "(text and/or status), or 'sec' to set the section header (text = "
         "section title, numbering = section number like '21 13 13').\n"

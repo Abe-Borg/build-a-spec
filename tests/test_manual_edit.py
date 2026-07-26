@@ -58,6 +58,13 @@ def test_set_status_in_tool_schema_enum():
     assert "set_status" in action["enum"]
 
 
+def test_tool_description_documents_article_moves_and_positions():
+    description = APPLY_SPEC_EDITS_TOOL["description"]
+    assert "target_id = an article or paragraph id" in description
+    assert "Articles stay within their current part" in description
+    assert "position = an optional 0-based insertion index" in description
+
+
 def test_manual_replace_edits_transactionally(monkeypatch):
     client = _client()
     _seed(client, monkeypatch)
@@ -119,6 +126,56 @@ def test_manual_delete_edit(monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json()["doc"]["parts"][0]["articles"][0]["paragraphs"] == []
+
+
+def test_manual_add_and_move_article_is_confirmed_and_undoable(monkeypatch):
+    client = _client()
+    _seed(client, monkeypatch)
+
+    added = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "add_article",
+                    "target_id": "pt1",
+                    "text": "REFERENCES",
+                    "position": 0,
+                },
+                {
+                    "action": "add_paragraph",
+                    "target_id": "pt1.a2",
+                    "text": "Comply with referenced standards.",
+                    "status": "confirmed",
+                },
+            ]
+        },
+    )
+    assert added.status_code == 200, added.text
+    articles = added.json()["doc"]["parts"][0]["articles"]
+    assert [article["id"] for article in articles] == ["pt1.a2", "pt1.a1"]
+    assert articles[0]["paragraphs"][0]["status"] == "confirmed"
+
+    moved = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {"action": "move", "target_id": "pt1.a1", "position": 0}
+            ]
+        },
+    )
+    assert moved.status_code == 200, moved.text
+    assert [
+        article["id"]
+        for article in moved.json()["doc"]["parts"][0]["articles"]
+    ] == ["pt1.a1", "pt1.a2"]
+
+    undone = client.post("/api/doc/undo")
+    assert undone.status_code == 200
+    assert [
+        article["id"]
+        for article in undone.json()["doc"]["parts"][0]["articles"]
+    ] == ["pt1.a2", "pt1.a1"]
 
 
 def test_invalid_manual_batch_400_and_unchanged(monkeypatch):

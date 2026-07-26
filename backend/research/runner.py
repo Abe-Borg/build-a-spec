@@ -232,6 +232,12 @@ class ResearchRunner:
     def is_terminal(self) -> bool:
         return self.status in _TERMINAL
 
+    @property
+    def is_settling(self) -> bool:
+        """Whether a stopped/provider worker can still report paid usage."""
+        thread = self._thread
+        return bool(thread is not None and thread.is_alive())
+
     def snapshot(self) -> dict[str, Any]:
         """UI-shaped status payload (poll endpoint + initial page load)."""
         with self._lock:

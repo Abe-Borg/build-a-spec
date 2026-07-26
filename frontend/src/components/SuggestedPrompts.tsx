@@ -22,6 +22,7 @@ export default function SuggestedPrompts({ prompts, busy, onSend }: Props) {
       role="group"
       aria-label="Suggested replies"
       data-tour="suggested-prompts"
+      data-capability="chat.suggestions"
       className="px-5 pb-2"
     >
       <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">

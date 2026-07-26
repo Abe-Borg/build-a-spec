@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 from . import settings
 
@@ -64,6 +64,7 @@ def _category_models() -> dict[str, str]:
         "research": settings.RESEARCH_MODEL,
         "audit": settings.RESEARCH_MODEL,
         "qc": settings.QC_MODEL,
+        "template": settings.INTERVIEW_MODEL,
     }
 
 
@@ -196,3 +197,85 @@ class UsageLedger:
         with self._lock:
             self.categories = {}
             self.turns = 0
+
+    def load_snapshot(self, snapshot: Mapping[str, Any]) -> None:
+        """Restore the additive counters used by a detached workspace clone."""
+        raw_categories = snapshot.get("categories")
+        raw_turns = snapshot.get("turns")
+        categories: dict[str, dict[str, int]] = {}
+        if isinstance(raw_categories, Mapping):
+            for category, raw_bucket in raw_categories.items():
+                if not isinstance(category, str) or not isinstance(raw_bucket, Mapping):
+                    continue
+                bucket = {
+                    str(key): int(value)
+                    for key, value in raw_bucket.items()
+                    if isinstance(key, str)
+                    and isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and value >= 0
+                }
+                if bucket:
+                    categories[category] = bucket
+        turns = (
+            int(raw_turns)
+            if isinstance(raw_turns, (int, float))
+            and not isinstance(raw_turns, bool)
+            and raw_turns >= 0
+            else 0
+        )
+        with self._lock:
+            self.categories = categories
+            self.turns = turns
+
+    def merge_delta(
+        self,
+        before: Mapping[str, Any],
+        after: Mapping[str, Any],
+    ) -> None:
+        """Merge non-negative spend accrued by a disposable child workspace."""
+        before_categories = before.get("categories")
+        after_categories = after.get("categories")
+        if not isinstance(before_categories, Mapping):
+            before_categories = {}
+        if not isinstance(after_categories, Mapping):
+            after_categories = {}
+        deltas: dict[str, dict[str, int]] = {}
+        for category, raw_bucket in after_categories.items():
+            if not isinstance(category, str) or not isinstance(raw_bucket, Mapping):
+                continue
+            prior = before_categories.get(category)
+            if not isinstance(prior, Mapping):
+                prior = {}
+            bucket: dict[str, int] = {}
+            for key, raw_value in raw_bucket.items():
+                if (
+                    not isinstance(key, str)
+                    or not isinstance(raw_value, (int, float))
+                    or isinstance(raw_value, bool)
+                ):
+                    continue
+                old = prior.get(key, 0)
+                old_value = (
+                    int(old)
+                    if isinstance(old, (int, float)) and not isinstance(old, bool)
+                    else 0
+                )
+                delta = max(0, int(raw_value) - old_value)
+                if delta:
+                    bucket[key] = delta
+            if bucket:
+                deltas[category] = bucket
+        before_turns = before.get("turns", 0)
+        after_turns = after.get("turns", 0)
+        turn_delta = max(
+            0,
+            (int(after_turns) if isinstance(after_turns, (int, float)) else 0)
+            - (int(before_turns) if isinstance(before_turns, (int, float)) else 0),
+        )
+        with self._lock:
+            for category, delta_bucket in deltas.items():
+                bucket = self.categories.setdefault(category, {})
+                for key, value in delta_bucket.items():
+                    bucket[key] = bucket.get(key, 0) + value
+            self.turns += turn_delta

@@ -86,6 +86,12 @@ datas += [(
     os.path.join("backend", "tracing", "viewer"),
 )]
 
+# Curated semantic spec starters used by New Session and the offline tutorial.
+datas += [(
+    os.path.join(_repo_root, "backend", "templates", "curated"),
+    os.path.join("backend", "templates", "curated"),
+)]
+
 a = Analysis(
     [os.path.join(SPECPATH, "app_entry.py")],
     pathex=[_repo_root],

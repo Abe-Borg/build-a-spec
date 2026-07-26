@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Health } from "../types";
 import { checkUpdate } from "../lib/api";
+import { TOUR } from "../lib/tour";
 import {
   SOURCE_CAPABILITY_GUIDANCE,
   SOURCE_OUTPUT_GUIDANCE,
@@ -35,6 +36,7 @@ interface Props {
   topic: HelpTopic | null;
   onClose: () => void;
   onNavigate: (topic: HelpTopic) => void;
+  onStartTutorialAtChapter: (chapterId: string) => void;
   health: Health | null;
 }
 
@@ -147,7 +149,11 @@ function SourceOutputGuide() {
 
 /* --- per-topic content --- */
 
-function HowToUse() {
+function HowToUse({
+  onStartTutorialAtChapter,
+}: {
+  onStartTutorialAtChapter: (chapterId: string) => void;
+}) {
   return (
     <div className="space-y-4">
       <Lead>
@@ -223,6 +229,31 @@ function HowToUse() {
         ]}
       />
       <SourceOutputGuide />
+      <section className="rounded-xl border border-edge bg-raised/50 p-4">
+        <h3 className="text-sm font-medium text-ink">Full interactive tutorial</h3>
+        <p className="mt-1 text-xs leading-relaxed text-ink-dim">
+          Practice every feature against a protected copy of your spec, a newly generated spec,
+          or the complete bundled showcase. Start at the beginning or jump to a named chapter.
+        </p>
+        <button
+          onClick={() => onStartTutorialAtChapter(TOUR[0].id)}
+          className="mt-3 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover"
+        >
+          Restart full tutorial
+        </button>
+        <div className="mt-3 flex flex-wrap gap-1.5" aria-label="Tutorial chapters">
+          {TOUR.map((chapter, index) => (
+            <button
+              key={chapter.id}
+              onClick={() => onStartTutorialAtChapter(chapter.id)}
+              className="rounded-md border border-edge bg-surface px-2 py-1 text-[11px] text-ink-dim hover:border-accent hover:text-accent"
+              title={`Start at chapter ${index + 1}: ${chapter.title}`}
+            >
+              {index + 1}. {chapter.title}
+            </button>
+          ))}
+        </div>
+      </section>
       <p className="text-xs text-ink-faint">
         Every phase — research, QC, export — is something you trigger. Nothing
         runs on its own.
@@ -456,6 +487,7 @@ function About({ health }: { health: Health | null }) {
         <button
           onClick={runUpdateCheck}
           disabled={checking}
+          data-capability="updates.manage"
           className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm text-ink transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
         >
           Check for updates
@@ -466,10 +498,18 @@ function About({ health }: { health: Health | null }) {
   );
 }
 
-function Body({ topic, health }: { topic: HelpTopic; health: Health | null }) {
+function Body({
+  topic,
+  health,
+  onStartTutorialAtChapter,
+}: {
+  topic: HelpTopic;
+  health: Health | null;
+  onStartTutorialAtChapter: (chapterId: string) => void;
+}) {
   switch (topic) {
     case "how-to-use":
-      return <HowToUse />;
+      return <HowToUse onStartTutorialAtChapter={onStartTutorialAtChapter} />;
     case "workflows":
       return <Workflows />;
     case "how-it-works":
@@ -485,6 +525,7 @@ export default function HelpModal({
   topic,
   onClose,
   onNavigate,
+  onStartTutorialAtChapter,
   health,
 }: Props) {
   // Close on Escape while open.
@@ -510,6 +551,7 @@ export default function HelpModal({
       <div
         className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
+        data-capability="help.topics"
       >
         {/* Header: title + close */}
         <div className="flex items-center justify-between border-b border-edge px-6 py-3">
@@ -549,7 +591,11 @@ export default function HelpModal({
 
         {/* Scrollable body */}
         <div className="overflow-y-auto px-6 py-5">
-          <Body topic={topic} health={health} />
+          <Body
+            topic={topic}
+            health={health}
+            onStartTutorialAtChapter={onStartTutorialAtChapter}
+          />
         </div>
       </div>
     </div>

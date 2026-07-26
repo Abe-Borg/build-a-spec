@@ -1,0 +1,42 @@
+{
+  "kind": "buildaspec-spec-template",
+  "format": 1,
+  "id": "curated:hyperscale-fire-starter",
+  "name": "Hyperscale Fire Protection Starter",
+  "description": "A review-ready starter for a mission-critical wet-pipe sprinkler section.",
+  "created_at": "2026-07-26T00:00:00+00:00",
+  "updated_at": "2026-07-26T00:00:00+00:00",
+  "module_id": "hyperscale_fire",
+  "document": {
+    "section": {"number": "21 13 13", "title": "WET-PIPE SPRINKLER SYSTEMS"},
+    "parts": [
+      {"id": "pt1", "number": 1, "title": "PART 1 - GENERAL", "seq": 3, "articles": [
+        {"id": "pt1.a1", "number": "1.1", "title": "SUMMARY", "seq": 3, "paragraphs": [
+          {"id": "pt1.a1.p1", "label": "A.", "text": "Provide a complete wet-pipe automatic sprinkler system coordinated with the building fire-protection design.", "status": "imported", "source_item_id": "", "seq": 1, "children": []},
+          {"id": "pt1.a1.p2", "label": "B.", "text": "Coordinate system zoning, monitoring interfaces, and impairment planning with related work.", "status": "imported", "source_item_id": "", "seq": 1, "children": []}
+        ]},
+        {"id": "pt1.a2", "number": "1.2", "title": "DESIGN CRITERIA", "seq": 2, "paragraphs": [
+          {"id": "pt1.a2.p1", "label": "A.", "text": "Establish the governing code editions, hazard classifications, water-supply basis, and owner criteria before final design.", "status": "needs_input", "source_item_id": "", "seq": 2, "children": [
+            {"id": "pt1.a2.p1.p1", "label": "1.", "text": "Required design density and area: [TBD: project fire-protection design criteria].", "status": "needs_input", "source_item_id": "", "seq": 1, "children": []}
+          ]}
+        ]}
+      ]},
+      {"id": "pt2", "number": 2, "title": "PART 2 - PRODUCTS", "seq": 2, "articles": [
+        {"id": "pt2.a1", "number": "2.1", "title": "SYSTEM COMPONENTS", "seq": 3, "paragraphs": [
+          {"id": "pt2.a1.p1", "label": "A.", "text": "Provide listed pipe, fittings, valves, sprinklers, supervisory devices, and accessories compatible with the selected system.", "status": "imported", "source_item_id": "", "seq": 1, "children": []},
+          {"id": "pt2.a1.p2", "label": "B.", "text": "Provide corrosion protection and environmental ratings appropriate to each installed location.", "status": "imported", "source_item_id": "", "seq": 1, "children": []}
+        ]}
+      ]},
+      {"id": "pt3", "number": 3, "title": "PART 3 - EXECUTION", "seq": 2, "articles": [
+        {"id": "pt3.a1", "number": "3.1", "title": "INSTALLATION, TESTING, AND CLOSEOUT", "seq": 3, "paragraphs": [
+          {"id": "pt3.a1.p1", "label": "A.", "text": "Install components to maintain access, drainage, seismic clearances, and coordination with other building systems.", "status": "imported", "source_item_id": "", "seq": 1, "children": []},
+          {"id": "pt3.a1.p2", "label": "B.", "text": "Flush, test, inspect, and document the completed system before turnover.", "status": "imported", "source_item_id": "", "seq": 1, "children": []}
+        ]}
+      ]}
+    ],
+    "edition_overrides": {},
+    "project_identity": {"discipline": "Fire Protection", "project_type": "Hyperscale Data Center"},
+    "project_profile": {},
+    "suppressed_standards": {}
+  }
+}

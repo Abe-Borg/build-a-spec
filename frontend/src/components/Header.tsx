@@ -8,6 +8,7 @@ interface Props {
   update: UpdateCheckPayload | null;
   usage: UsageSummary | null;
   onNewSession: () => void;
+  onOpenTemplates: () => void;
   onInstallUpdate: () => void;
   onOpenSettings: () => void;
   onOpenHelp: (topic: HelpTopic) => void;
@@ -22,6 +23,7 @@ export default function Header({
   update,
   usage,
   onNewSession,
+  onOpenTemplates,
   onInstallUpdate,
   onOpenSettings,
   onOpenHelp,
@@ -36,6 +38,7 @@ export default function Header({
       <div
         className="flex flex-none items-baseline gap-3"
         data-tour="project-heading"
+        data-capability="session.identity"
       >
         <h1 className="font-[family-name:var(--font-display)] text-lg font-semibold tracking-tight">
           Build-a-Spec
@@ -47,7 +50,11 @@ export default function Header({
         </span>
       </div>
       <span className="h-5 w-px flex-none bg-edge" aria-hidden="true" />
-      <nav className="flex flex-none items-center gap-0.5">
+      <nav
+        className="flex flex-none items-center gap-0.5"
+        data-tour="help-nav"
+        data-capability="help.topics"
+      >
         {HELP_TOPICS.map((t) => (
           <button
             key={t.id}
@@ -59,7 +66,8 @@ export default function Header({
         ))}
         <button
           onClick={onStartTour}
-          title="Passive guided tour of the complete workflow"
+          data-capability="tour.controls"
+          title="Full guided tutorial using an actual specification"
           className="rounded-md px-2.5 py-1 text-xs text-ink-dim transition-colors hover:bg-raised hover:text-ink"
         >
           Tour
@@ -71,6 +79,7 @@ export default function Header({
           (update?.platform_supported ? (
             <button
               onClick={onInstallUpdate}
+              data-capability="updates.manage"
               className="rounded-full border border-accent/60 bg-accent/15 px-3 py-1 text-xs text-accent transition-colors hover:bg-accent/25"
               title={update?.notes || "Download and install the update"}
             >
@@ -107,7 +116,17 @@ export default function Header({
           </span>
         )}
         <button
+          onClick={onOpenTemplates}
+          disabled={busy}
+          data-tour="templates"
+          data-capability="template.start"
+          className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-xs text-ink transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
+        >
+          Templates
+        </button>
+        <button
           onClick={onNewSession}
+          data-capability="session.unsaved-gates"
           disabled={busy}
           data-tour="new-session"
           className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-xs text-ink transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"

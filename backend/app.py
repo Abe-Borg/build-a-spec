@@ -68,11 +68,11 @@ import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal
 from urllib.parse import quote
 
 import anthropic
-from fastapi import Body, FastAPI, UploadFile
+from fastapi import Body, FastAPI, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
@@ -166,6 +166,26 @@ from .spec_doc.source_package import (
     read_upload_bounded,
     sanitize_source_filename,
 )
+from .templates import (
+    MAX_TEMPLATE_BYTES,
+    TEMPLATE_MEDIA_TYPE,
+    TemplateError,
+    TemplateImmutableError,
+    TemplateNotFoundError,
+    get_template_catalog,
+    template_summary,
+)
+from .tutorial import (
+    TUTORIAL_MANIFEST_VERSION,
+    analyze_tutorial_coverage,
+    build_showcase_session,
+    repair_tutorial_copy,
+    reference_practice_copy,
+    review_practice_copy,
+    structural_practice_copy,
+    tutorial_enrichment_directive,
+    validate_tutorial_enrichment,
+)
 
 _DEV_ORIGINS = [
     "http://localhost:5173",
@@ -183,6 +203,13 @@ class SaveKeyRequest(BaseModel):
 
 class EditDocRequest(BaseModel):
     ops: list[dict[str, Any]]
+    workspace_id: int | None = None
+    generation: int | None = None
+
+
+class WorkspaceMutationRequest(BaseModel):
+    workspace_id: int | None = None
+    generation: int | None = None
 
 
 class SessionResetRequest(BaseModel):
@@ -202,19 +229,61 @@ class SessionResetRequest(BaseModel):
 
 class QcApplyRequest(BaseModel):
     finding_ids: list[str]
+    workspace_id: int | None = None
+    generation: int | None = None
 
 
 class QcStartRequest(BaseModel):
     acknowledge_scope_mismatch: bool = False
+    workspace_id: int | None = None
+    generation: int | None = None
 
 
 class QcDismissRequest(BaseModel):
     finding_id: str
     reason: str
+    workspace_id: int | None = None
+    generation: int | None = None
 
 
 class TestKeyRequest(BaseModel):
     api_key: str | None = None
+
+
+class TemplatePreviewRequest(BaseModel):
+    name: str
+    description: str = ""
+    mode: Literal["exact", "ai_generalize"] = "exact"
+
+
+class TemplateCommitRequest(BaseModel):
+    preview_token: str
+
+
+class TemplateUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class TutorialStartRequest(BaseModel):
+    request_id: str
+    source: Literal["current", "generated", "showcase"] = "current"
+    workspace_id: int
+    generation: int
+
+
+class TutorialRequest(BaseModel):
+    tutorial_id: str
+    workspace_id: int
+    generation: int
+
+
+class TutorialEnrichRequest(TutorialRequest):
+    mode: Literal["live", "bundled"] = "live"
+
+
+class TutorialScenarioRequest(TutorialRequest):
+    chapter: str
 
 
 def _sse(event: dict) -> str:
@@ -693,7 +762,18 @@ def _doc_payload(session) -> dict[str, Any]:
     profile = ProjectProfile.from_dict(session.doc.doc.project_profile)
     preservation = _source_readiness(session)
     capabilities = session.source_edit_capabilities()
+    workspace = sessions.get_workspace()
+    workspace_fields = (
+        {
+            "workspace_id": workspace.workspace_id,
+            "workspace_scope": workspace.scope,
+            "generation": session.generation,
+        }
+        if workspace.session is session and workspace.scope != "original"
+        else {}
+    )
     return {
+        **workspace_fields,
         "doc": session.doc.snapshot(),
         "open_questions": open_questions(session.doc.doc),
         "lint": lint_document(
@@ -721,6 +801,7 @@ def _doc_payload(session) -> dict[str, Any]:
         # Import honesty/recovery metadata. Native .baspec packages carry the
         # source as a separate binary member; legacy JSON remains source-less.
         "import_report": session.import_report,
+        "template_origin": session.template_origin,
         "source_available": session.source_docx_bytes is not None,
         "preservation_ready": bool(preservation and preservation.ready),
         "source_preservation": _source_preservation_payload(
@@ -1070,6 +1151,164 @@ def _qc_snapshot_payload(session) -> dict[str, Any]:
     return payload
 
 
+def _session_bundle(lease: sessions.WorkspaceLease | None = None) -> dict[str, Any]:
+    """One coherent hydration payload for workspace transitions."""
+    lease = lease or sessions.get_workspace()
+    session = lease.session
+    with session.session_state_guard():
+        doc_payload = _doc_payload(session)
+        return {
+            "workspace_id": lease.workspace_id,
+            "workspace_scope": lease.scope,
+            "generation": session.generation,
+            "tutorial_id": lease.tutorial_id,
+            "scenario_kind": lease.scenario_kind,
+            "tutorial_source": lease.tutorial_source,
+            "chat": chat_transcript(session.history),
+            **doc_payload,
+            "module_id": session.module.module_id,
+            "module": session.module.display_name,
+            "discipline": effective_discipline(session),
+            "project_context": session.project_context,
+            "research": session.research.snapshot(),
+            "audit": session.audit.snapshot(),
+            "qc": _qc_snapshot_payload(session),
+            "readiness": _readiness_payload(session),
+            "usage": session.usage.snapshot(),
+            "health": {
+                "status": "ok",
+                "app": settings.APP_NAME,
+                "version": settings.VERSION,
+                "model": settings.INTERVIEW_MODEL,
+                "api_key_present": bool(load_api_key()),
+                "module": session.module.display_name,
+                "module_id": session.module.module_id,
+                "discipline": effective_discipline(session),
+                "legacy_discipline": session.discipline,
+                "project_context": session.project_context,
+                "workspace_id": lease.workspace_id,
+                "workspace_scope": lease.scope,
+                "generation": session.generation,
+            },
+        }
+
+
+def _template_binding(lease: sessions.WorkspaceLease) -> dict[str, Any]:
+    return {
+        "workspace_id": lease.workspace_id,
+        "generation": lease.session.generation,
+        "doc_version": lease.session.doc.index,
+    }
+
+
+def _response_text(response: Any) -> str:
+    parts: list[str] = []
+    for block in getattr(response, "content", []) or []:
+        if isinstance(block, dict):
+            text = block.get("text")
+        else:
+            text = getattr(block, "text", None)
+        if isinstance(text, str):
+            parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def _template_structure_contract(section: SpecSection) -> dict[str, Any]:
+    """The facts an AI template preview is never allowed to rewrite.
+
+    AI mode may generalize wording, but it is not a second drafting turn.  A
+    stable structural contract makes that distinction enforceable instead of
+    relying only on the prompt: no blocks can appear/disappear/reparent, IDs
+    remain stable, and unresolved decisions stay unresolved at the same IDs.
+    """
+    nodes: list[tuple[str, str, int, bool, bool]] = []
+    for part in section.parts:
+        for article in part.articles:
+            nodes.append((article.uid, part.uid, -1, False, False))
+
+            def visit(paragraphs: list[Any], parent: str, depth: int) -> None:
+                for paragraph in paragraphs:
+                    nodes.append(
+                        (
+                            paragraph.uid,
+                            parent,
+                            depth,
+                            paragraph.status == "needs_input",
+                            "[TBD:" in paragraph.text,
+                        )
+                    )
+                    visit(paragraph.children, paragraph.uid, depth + 1)
+
+            visit(article.paragraphs, article.uid, 0)
+    return {
+        "number": section.number,
+        "title": section.title,
+        "identity": dict(section.project_identity),
+        "parts": [
+            (part.uid, part.number, part.title, [article.uid for article in part.articles])
+            for part in section.parts
+        ],
+        "nodes": nodes,
+    }
+
+
+def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
+    """Generalize body wording on a clone; never mutate the active project."""
+    document = session.doc.doc.to_dict()
+    encoded = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded) > 1_500_000:
+        raise TemplateError(
+            "This section is too large for AI template generalization; use Exact instead."
+        )
+    prompt = (
+        "Turn the following specification into a reusable semantic starter. "
+        "Return ONLY one JSON object with a 'document' field. Preserve every "
+        "id, sequence counter, PART/article/paragraph shape, section number, "
+        "section title, discipline, and project type. Generalize client, site, "
+        "location, quantity, and project-specific body wording without adding "
+        "new requirements. Clear project_profile, edition_overrides, "
+        "suppressed_standards, and every source_item_id. Keep needs_input and "
+        "[TBD: ...] items. Do not invent citations, standards, research, or QC.\n\n"
+        + encoded
+    )
+    try:
+        response = get_client().messages.create(
+            model=settings.INTERVIEW_MODEL,
+            max_tokens=settings.INTERVIEW_MAX_TOKENS,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except MissingApiKeyError:
+        raise
+    session.usage.add("template", getattr(response, "usage", None), count_turn=True)
+    text = _response_text(response)
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I | re.S)
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise TemplateError(
+            "The model did not return a valid template preview; try again or use Exact."
+        ) from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("document"), dict):
+        raise TemplateError(
+            "The model did not return a valid template document; try again or use Exact."
+        )
+    try:
+        generalized = SpecSection.from_dict(payload["document"])
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise TemplateError(
+            "The model returned malformed template content; try again or use Exact."
+        ) from exc
+    if _template_structure_contract(generalized) != _template_structure_contract(
+        session.doc.doc
+    ):
+        raise TemplateError(
+            "The proposed AI template changed structure, identity, or an unresolved "
+            "decision. Nothing was saved; try again or use Exact."
+        )
+    return generalized.to_dict()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.APP_NAME, version=settings.VERSION)
 
@@ -1080,9 +1319,48 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def _lease_slow_session_operations(request: Request, call_next):
+        """Keep workspace transitions out of delayed upload/load commits.
+
+        These handlers yield to bounded reads and CPU worker threads before
+        mutating session state.  Holding a manager lease for the complete
+        request makes tutorial start/restore report a truthful busy guard,
+        while the handler's own generation checks still reject a reset/load
+        that replaced the same session object.
+        """
+        guarded = {
+            ("POST", "/api/reference/upload"),
+            ("POST", "/api/import/master"),
+            ("POST", "/api/project/load-file"),
+            ("POST", "/api/research/start"),
+            ("POST", "/api/research/stop"),
+            ("POST", "/api/audit/start"),
+            ("POST", "/api/qc/start"),
+            ("POST", "/api/qc/stop"),
+            ("POST", "/api/qc/apply"),
+            ("POST", "/api/qc/dismiss"),
+        }
+        if (request.method, request.url.path) not in guarded:
+            return await call_next(request)
+        lease = sessions.get_workspace()
+        try:
+            with sessions.active_write(lease.workspace_id):
+                return await call_next(request)
+        except sessions.WorkspaceConflictError as exc:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "code": "stale_workspace",
+                    "error": str(exc),
+                },
+                status_code=409,
+            )
+
     @app.get("/api/health")
     def health() -> dict:
-        session = sessions.get_session()
+        workspace = sessions.get_workspace()
+        session = workspace.session
         return {
             "status": "ok",
             "app": settings.APP_NAME,
@@ -1097,6 +1375,9 @@ def create_app() -> FastAPI:
             # undo removes versioned identity.
             "legacy_discipline": session.discipline,
             "project_context": session.project_context,
+            "workspace_id": workspace.workspace_id,
+            "workspace_scope": workspace.scope,
+            "generation": session.generation,
         }
 
     @app.post("/api/key")
@@ -1166,8 +1447,18 @@ def create_app() -> FastAPI:
         return JSONResponse({"ok": True})
 
     @app.post("/api/session/reset")
-    def reset(body: SessionResetRequest | None = Body(default=None)) -> dict:
-        session = sessions.get_session()
+    def reset(body: SessionResetRequest | None = Body(default=None)) -> Response:
+        workspace = sessions.get_workspace()
+        if workspace.scope != "original":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "code": "tutorial_active",
+                    "error": "Return to or keep the tutorial workspace before starting a new session.",
+                },
+                status_code=409,
+            )
+        session = workspace.session
         if body is None:
             session.reset()
         else:
@@ -1179,13 +1470,15 @@ def create_app() -> FastAPI:
                 discipline=body.discipline,
                 project_context=body.project_context,
             )
-        return {
-            "ok": True,
-            "module_id": session.module.module_id,
-            "module": session.module.display_name,
-            "discipline": effective_discipline(session),
-            "project_context": session.project_context,
-        }
+        return JSONResponse(
+            {
+                "ok": True,
+                "module_id": session.module.module_id,
+                "module": session.module.display_name,
+                "discipline": effective_discipline(session),
+                "project_context": session.project_context,
+            }
+        )
 
     @app.get("/api/session/unsaved")
     def session_unsaved() -> dict:
@@ -1200,6 +1493,11 @@ def create_app() -> FastAPI:
             "ok": True,
             "unsaved": sessions.has_unsaved_progress(sessions.get_session()),
         }
+
+    @app.get("/api/session/bundle")
+    def session_bundle() -> dict:
+        """Hydrate the active session after a native-shell restore."""
+        return _session_bundle()
 
     @app.get("/api/modules")
     def modules() -> dict:
@@ -1218,13 +1516,624 @@ def create_app() -> FastAPI:
             ],
         }
 
+    # --- Reusable semantic templates --------------------------------------
+
+    def _template_error(exc: Exception) -> JSONResponse:
+        if isinstance(exc, TemplateNotFoundError):
+            status = 404
+        elif isinstance(exc, TemplateImmutableError):
+            status = 409
+        else:
+            status = 400
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=status)
+
+    @app.get("/api/templates")
+    def template_list() -> dict:
+        try:
+            listing = get_template_catalog().list()
+        except TemplateError as exc:
+            return _template_error(exc)
+        return {
+            "ok": True,
+            "templates": listing.templates,
+            "invalid_personal_count": listing.invalid_personal_count,
+        }
+
+    @app.post("/api/templates/preview")
+    def template_preview(
+        body: TemplatePreviewRequest, request: Request
+    ) -> Response:
+        def build_preview() -> dict[str, Any]:
+            lease = sessions.get_workspace()
+            session = lease.session
+            with sessions.active_write(lease.workspace_id):
+                with session.session_state_guard():
+                    if session.turn_active:
+                        raise TemplateError(
+                            "Wait for the current model turn before creating a template."
+                        )
+                    version = session.doc.index
+                    override = (
+                        _ai_generalized_template_document(session)
+                        if body.mode == "ai_generalize"
+                        else None
+                    )
+                    sessions.workspace_manager().assert_active(lease)
+                    if session.doc.index != version:
+                        raise TemplateError(
+                            "The project changed while the preview was being created."
+                        )
+                    token, template = get_template_catalog().preview(
+                        session.doc.doc,
+                        name=body.name,
+                        description=body.description,
+                        module_id=session.module.module_id,
+                        document_override=override,
+                        binding=_template_binding(lease),
+                    )
+                    preview_section = SpecSection.from_dict(template["document"])
+                    preview_diff = (
+                        diff_sections(session.doc.doc, preview_section).to_dict()
+                        if body.mode == "ai_generalize"
+                        else None
+                    )
+            return {
+                "ok": True,
+                "preview_token": token,
+                "template": template_summary(template, "personal"),
+                "document": template["document"],
+                "mode": body.mode,
+                "diff": preview_diff,
+            }
+
+        if "text/event-stream" in request.headers.get("accept", ""):
+            def events() -> Iterator[str]:
+                yield _sse(
+                    {
+                        "type": "template_status",
+                        "stage": (
+                            "generalizing"
+                            if body.mode == "ai_generalize"
+                            else "preparing"
+                        ),
+                    }
+                )
+                try:
+                    preview = build_preview()
+                except (TemplateError, MissingApiKeyError) as exc:
+                    yield _sse({"type": "error", "message": str(exc)})
+                    return
+                except sessions.WorkspaceConflictError as exc:
+                    yield _sse(
+                        {
+                            "type": "error",
+                            "code": "stale_workspace",
+                            "message": str(exc),
+                        }
+                    )
+                    return
+                yield _sse({"type": "template_preview", "preview": preview})
+
+            return StreamingResponse(
+                events(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        try:
+            return JSONResponse(build_preview())
+        except (TemplateError, MissingApiKeyError) as exc:
+            return _template_error(exc)
+        except sessions.WorkspaceConflictError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+
+    @app.post("/api/templates")
+    def template_commit(body: TemplateCommitRequest) -> JSONResponse:
+        lease = sessions.get_workspace()
+        try:
+            with sessions.active_write(lease.workspace_id):
+                with lease.session.session_state_guard():
+                    sessions.workspace_manager().assert_fresh(lease)
+                    summary = get_template_catalog().commit_preview(
+                        body.preview_token, binding=_template_binding(lease)
+                    )
+        except TemplateError as exc:
+            return _template_error(exc)
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+        return JSONResponse({"ok": True, "template": summary})
+
+    @app.patch("/api/templates/{template_id:path}")
+    def template_update(
+        template_id: str, body: TemplateUpdateRequest
+    ) -> JSONResponse:
+        try:
+            current, _source = get_template_catalog().get(template_id)
+            summary = get_template_catalog().update(
+                template_id,
+                name=current["name"] if body.name is None else body.name,
+                description=(
+                    current["description"]
+                    if body.description is None
+                    else body.description
+                ),
+            )
+        except TemplateError as exc:
+            return _template_error(exc)
+        return JSONResponse({"ok": True, "template": summary})
+
+    @app.delete("/api/templates/{template_id:path}")
+    def template_delete(template_id: str) -> JSONResponse:
+        try:
+            get_template_catalog().delete(template_id)
+        except TemplateError as exc:
+            return _template_error(exc)
+        return JSONResponse({"ok": True})
+
+    @app.get("/api/templates/{template_id:path}/export")
+    def template_export(template_id: str) -> Response:
+        try:
+            payload, filename = get_template_catalog().export(template_id)
+        except TemplateError as exc:
+            return _template_error(exc)
+        return Response(
+            content=payload,
+            media_type=TEMPLATE_MEDIA_TYPE,
+            headers=_attachment_headers(filename),
+        )
+
+    @app.post("/api/templates/import")
+    async def template_import(file: UploadFile) -> JSONResponse:
+        data = await file.read(MAX_TEMPLATE_BYTES + 1)
+        if len(data) > MAX_TEMPLATE_BYTES:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": f"Template exceeds the {MAX_TEMPLATE_BYTES // (1024 * 1024)} MiB limit.",
+                },
+                status_code=413,
+            )
+        try:
+            summary = get_template_catalog().import_bytes(data)
+        except TemplateError as exc:
+            return _template_error(exc)
+        return JSONResponse({"ok": True, "template": summary})
+
+    @app.post("/api/templates/{template_id:path}/instantiate")
+    def template_instantiate(template_id: str) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if lease.scope == "tutorial" or (
+            lease.scope == "scenario" and lease.scenario_kind != "template"
+        ):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "code": "tutorial_scenario_required",
+                    "error": "Open the tutorial template scenario before replacing its document.",
+                },
+                status_code=409,
+            )
+        try:
+            with sessions.active_write(lease.workspace_id):
+                with lease.session.session_state_guard():
+                    result = get_template_catalog().instantiate(
+                        template_id, lease.session
+                    )
+            return JSONResponse(
+                {"ok": True, **result, "session": _session_bundle(lease)}
+            )
+        except TemplateError as exc:
+            return _template_error(exc)
+        except sessions.WorkspaceConflictError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+
+    # --- Actual-content tutorial workspaces --------------------------------
+
+    def _tutorial_error(exc: Exception) -> JSONResponse:
+        status = 409 if isinstance(exc, sessions.WorkspaceConflictError) else 400
+        payload = {"ok": False, "error": str(exc)}
+        if status == 409:
+            payload["code"] = (
+                "workspace_busy"
+                if isinstance(exc, sessions.WorkspaceBusyError)
+                else "stale_workspace"
+            )
+        return JSONResponse(payload, status_code=status)
+
+    def _tutorial_request_is_current(
+        lease: sessions.WorkspaceLease, body: TutorialRequest
+    ) -> bool:
+        return (
+            lease.scope in {"tutorial", "scenario"}
+            and lease.tutorial_id == body.tutorial_id
+            and lease.workspace_id == body.workspace_id
+            and lease.generation == body.generation
+        )
+
+    def _stale_tutorial_response() -> JSONResponse:
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "stale_workspace",
+                "error": "This tutorial workspace or generation is no longer active.",
+            },
+            status_code=409,
+        )
+
+    @app.get("/api/tutorial/status")
+    def tutorial_status() -> dict:
+        lease = sessions.get_workspace()
+        coverage = (
+            analyze_tutorial_coverage(lease.session).to_dict()
+            if lease.scope in {"tutorial", "scenario"}
+            else None
+        )
+        payload = {
+            "ok": True,
+            "active": lease.scope != "original",
+            "manifest_version": TUTORIAL_MANIFEST_VERSION,
+            "tutorial_id": lease.tutorial_id,
+            "workspace_id": lease.workspace_id,
+            "generation": lease.session.generation,
+            "scope": lease.scope,
+            "scenario_kind": lease.scenario_kind,
+            "source": lease.tutorial_source,
+            "coverage": coverage,
+        }
+        if lease.scope != "original":
+            payload["session"] = _session_bundle(lease)
+        return payload
+
+    @app.post("/api/tutorial/start")
+    def tutorial_start(body: TutorialStartRequest) -> JSONResponse:
+        manager = sessions.workspace_manager()
+        try:
+            staged = build_showcase_session() if body.source == "showcase" else None
+            if body.source == "generated":
+                current = sessions.get_workspace().session
+                staged = SessionState()
+                staged.module = current.module
+                staged.discipline = current.discipline
+                staged.project_context = current.project_context
+                staged.usage.load_snapshot(current.usage.snapshot())
+            lease = manager.begin_tutorial(
+                body.workspace_id,
+                expected_generation=body.generation,
+                staged_session=staged,
+                request_id=body.request_id,
+                source=body.source,
+            )
+            coverage = analyze_tutorial_coverage(lease.session)
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "tutorial_id": lease.tutorial_id,
+                    "workspace_id": lease.workspace_id,
+                    "generation": lease.generation,
+                    "source": body.source,
+                    "needs_enrichment": not coverage.ready,
+                    "coverage": coverage.to_dict(),
+                    "session": _session_bundle(lease),
+                }
+            )
+        except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
+            return _tutorial_error(exc)
+
+    @app.post("/api/tutorial/enrich")
+    def tutorial_enrich(body: TutorialEnrichRequest) -> Response:
+        lease = sessions.get_workspace()
+        if lease.scope != "tutorial" or not _tutorial_request_is_current(lease, body):
+            return _stale_tutorial_response()
+        coverage = analyze_tutorial_coverage(lease.session)
+        if coverage.ready:
+            return StreamingResponse(
+                iter(
+                    [
+                        _sse(
+                            {
+                                "type": "tutorial_coverage",
+                                "workspace_id": lease.workspace_id,
+                                "generation": lease.generation,
+                                "coverage": coverage.to_dict(),
+                            }
+                        )
+                    ]
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        directive = tutorial_enrichment_directive(coverage)
+        before_section = SpecSection.from_dict(lease.session.doc.doc.to_dict())
+        fallback_base = sessions.clone_session_for_tutorial(lease.session)
+        history_start = len(lease.session.history)
+
+        def events() -> Iterator[str]:
+            updated = None
+            failure = ""
+            valid_enrichment = True
+            if body.mode == "bundled":
+                try:
+                    repaired = sessions.workspace_manager().replace_tutorial(
+                        lease.workspace_id,
+                        repair_tutorial_copy(fallback_base),
+                        source=(
+                            "showcase"
+                            if lease.tutorial_source == "generated"
+                            else None
+                        ),
+                    )
+                    repaired_coverage = analyze_tutorial_coverage(repaired.session)
+                    yield _sse(
+                        {
+                            "type": "tutorial_fallback",
+                            "message": (
+                                "Bundled LLM-authored examples were added around "
+                                "the unchanged protected spec without an API call."
+                            ),
+                            "reason": "bundled_enrichment_selected",
+                            "replaces_workspace_id": lease.workspace_id,
+                            "replaces_generation": lease.generation,
+                            "workspace_id": repaired.workspace_id,
+                            "generation": repaired.generation,
+                            "source": repaired.tutorial_source,
+                            "coverage": repaired_coverage.to_dict(),
+                            "session": _session_bundle(repaired),
+                        }
+                    )
+                except sessions.WorkspaceConflictError as exc:
+                    yield _sse({"type": "error", "message": str(exc)})
+                return
+            try:
+                with sessions.active_write(lease.workspace_id):
+                    for event in stream_user_turn(lease.session, directive):
+                        yield _sse(
+                            {
+                                **event,
+                                "workspace_id": lease.workspace_id,
+                                "generation": lease.session.generation,
+                            }
+                        )
+                    if len(lease.session.history) > history_start:
+                        first_added = lease.session.history[history_start]
+                        if first_added.get("role") == "user":
+                            first_added["content"] = [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "Build the missing tutorial examples in this "
+                                        "protected copy without changing my existing content."
+                                    ),
+                                }
+                            ]
+                    updated = analyze_tutorial_coverage(lease.session)
+                    valid_enrichment, validation_reasons = validate_tutorial_enrichment(
+                        before_section, lease.session.doc.doc
+                    )
+                    if not valid_enrichment:
+                        failure = "; ".join(validation_reasons[:4])
+                    yield _sse(
+                        {
+                            "type": "tutorial_coverage",
+                            "workspace_id": lease.workspace_id,
+                            "generation": lease.session.generation,
+                            "coverage": updated.to_dict(),
+                        }
+                    )
+            except sessions.WorkspaceConflictError as exc:
+                yield _sse({"type": "error", "message": str(exc)})
+                return
+            except Exception as exc:  # noqa: BLE001 - recover with bundled fixture
+                failure = str(exc)
+
+            if updated is not None and updated.ready and valid_enrichment:
+                current = sessions.get_workspace()
+                if (
+                    current.scope == "tutorial"
+                    and current.tutorial_id == lease.tutorial_id
+                    and current.session is lease.session
+                ):
+                    yield _sse(
+                        {
+                            "type": "tutorial_session",
+                            "workspace_id": current.workspace_id,
+                            "generation": current.generation,
+                            "source": current.tutorial_source,
+                            "session": _session_bundle(current),
+                        }
+                    )
+                return
+
+            # A stopped/failed/partial generation is never allowed to carry
+            # the user into chapters whose anchors do not exist.  Revalidate
+            # the actual document, then atomically replace only the protected
+            # tutorial copy with the bundled LLM-authored showcase when the
+            # attempted repair is still incomplete.  The retained original
+            # is untouched and paid usage from the attempt remains visible.
+            if updated is None:
+                updated = analyze_tutorial_coverage(lease.session)
+            if not updated.ready or not valid_enrichment:
+                try:
+                    fallback = repair_tutorial_copy(fallback_base)
+                    repaired = sessions.workspace_manager().replace_tutorial(
+                        lease.workspace_id,
+                        fallback,
+                        source=(
+                            "showcase"
+                            if lease.tutorial_source == "generated"
+                            else None
+                        ),
+                    )
+                    repaired_coverage = analyze_tutorial_coverage(repaired.session)
+                    yield _sse(
+                        {
+                            "type": "tutorial_fallback",
+                            "message": (
+                                "The live enrichment did not produce every safe "
+                                "tutorial fixture, so bundled LLM-authored examples were "
+                                "added around the unchanged protected spec."
+                            ),
+                            "reason": failure or "incomplete_enrichment",
+                            "replaces_workspace_id": lease.workspace_id,
+                            "replaces_generation": lease.generation,
+                            "workspace_id": repaired.workspace_id,
+                            "generation": repaired.generation,
+                            "source": repaired.tutorial_source,
+                            "coverage": repaired_coverage.to_dict(),
+                            "session": _session_bundle(repaired),
+                        }
+                    )
+                except sessions.WorkspaceConflictError as exc:
+                    yield _sse({"type": "error", "message": str(exc)})
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post("/api/tutorial/scenario/start")
+    def tutorial_scenario_start(body: TutorialScenarioRequest) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if lease.scope != "tutorial" or not _tutorial_request_is_current(lease, body):
+            return _stale_tutorial_response()
+        chapter = body.chapter.strip().lower()
+        kind = (
+            "review"
+            if "review" in chapter
+            else "import"
+            if "import" in chapter
+            else "template"
+            if "template" in chapter
+            else "project_roundtrip"
+            if "save" in chapter or "project" in chapter
+            else "references"
+            if "reference" in chapter or "figure" in chapter
+            else "research"
+            if "research" in chapter
+            else "qc"
+            if "qc" in chapter or "readiness" in chapter
+            else "structural"
+        )
+        try:
+            staged: SessionState | None = None
+            if kind == "structural":
+                staged = structural_practice_copy(lease.session)
+            elif kind == "review":
+                staged = review_practice_copy(lease.session)
+            elif kind == "import":
+                source_bytes = build_docx(lease.session.doc.doc)
+                imported, report, source_context = _prepare_master_import(
+                    source_bytes, "tutorial-section.docx"
+                )
+                staged = SessionState()
+                staged.module = lease.session.module
+                staged.doc.adopt_imported(imported.section)
+                staged.source_docx_bytes = source_bytes
+                staged.source_docx_filename = "tutorial-section.docx"
+                staged.source_docx_map = imported.source_map
+                staged.source_patch_context = source_context
+                staged.import_report = report
+            elif kind == "template":
+                staged = SessionState()
+                token, _template = get_template_catalog().preview(
+                    lease.session.doc.doc,
+                    name="Tutorial spec starter",
+                    description="Temporary template created from the active tutorial specification.",
+                    module_id=lease.session.module.module_id,
+                )
+                get_template_catalog().instantiate_preview(token, staged)
+            elif kind == "project_roundtrip":
+                project_bytes = sessions.project_package_bytes(lease.session)
+                _parsed, staged, _typed_map, _source_context = _stage_project_load(
+                    project_bytes
+                )
+            elif kind == "references":
+                staged = reference_practice_copy(lease.session)
+            scenario = sessions.workspace_manager().push_scenario(
+                body.workspace_id, kind=kind, staged_session=staged
+            )
+        except (
+            sessions.WorkspaceConflictError,
+            sessions.WorkspaceBusyError,
+            TemplateError,
+            MasterImportError,
+            SourcePatchError,
+            ProjectPackageError,
+            ValueError,
+        ) as exc:
+            return _tutorial_error(exc)
+        return JSONResponse({"ok": True, "session": _session_bundle(scenario)})
+
+    @app.post("/api/tutorial/scenario/finish")
+    def tutorial_scenario_finish(body: TutorialRequest) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if lease.scope != "scenario" or not _tutorial_request_is_current(lease, body):
+            return _stale_tutorial_response()
+        try:
+            restored = sessions.workspace_manager().pop_scenario(body.workspace_id)
+        except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
+            return _tutorial_error(exc)
+        return JSONResponse({"ok": True, "session": _session_bundle(restored)})
+
+    @app.post("/api/tutorial/restore")
+    def tutorial_restore(body: TutorialRequest) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _tutorial_request_is_current(lease, body):
+            return _stale_tutorial_response()
+        try:
+            current_workspace_id = body.workspace_id
+            if lease.scope == "scenario":
+                tutorial_lease = sessions.workspace_manager().pop_scenario(
+                    current_workspace_id
+                )
+                current_workspace_id = tutorial_lease.workspace_id
+            restored = sessions.workspace_manager().finish_tutorial(
+                current_workspace_id, disposition="restore"
+            )
+        except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
+            return _tutorial_error(exc)
+        return JSONResponse({"ok": True, "session": _session_bundle(restored)})
+
+    @app.post("/api/tutorial/keep")
+    def tutorial_keep(body: TutorialRequest) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _tutorial_request_is_current(lease, body):
+            return _stale_tutorial_response()
+        try:
+            current_workspace_id = body.workspace_id
+            if lease.scope == "scenario":
+                tutorial_lease = sessions.workspace_manager().pop_scenario(
+                    current_workspace_id
+                )
+                current_workspace_id = tutorial_lease.workspace_id
+            kept = sessions.workspace_manager().finish_tutorial(
+                current_workspace_id, disposition="keep"
+            )
+        except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
+            return _tutorial_error(exc)
+        return JSONResponse({"ok": True, "session": _session_bundle(kept)})
+
     @app.post("/api/chat")
     def chat(body: ChatRequest) -> StreamingResponse:
-        session = sessions.get_session()
+        lease = sessions.get_workspace()
+        session = lease.session
 
         def event_stream() -> Iterator[str]:
-            for event in stream_user_turn(session, body.message):
-                yield _sse(event)
+            try:
+                with sessions.active_write(lease.workspace_id):
+                    for event in stream_user_turn(session, body.message):
+                        if lease.scope == "original":
+                            yield _sse(event)
+                        else:
+                            yield _sse(
+                                {
+                                    **event,
+                                    "workspace_id": lease.workspace_id,
+                                    "generation": session.generation,
+                                }
+                            )
+            except sessions.WorkspaceConflictError as exc:
+                yield _sse({"type": "error", "message": str(exc)})
 
         return StreamingResponse(
             event_stream(),
@@ -1311,43 +2220,70 @@ def create_app() -> FastAPI:
             ),
         }
 
+    def _mutation_lease_matches(
+        lease: sessions.WorkspaceLease,
+        body: WorkspaceMutationRequest | EditDocRequest | None,
+    ) -> bool:
+        if body is None:
+            return True
+        return (
+            (body.workspace_id is None or body.workspace_id == lease.workspace_id)
+            and (body.generation is None or body.generation == lease.generation)
+        )
+
     @app.post("/api/doc/undo")
-    def undo_doc() -> JSONResponse:
-        session = sessions.get_session()
-        with session.session_state_guard():
-            if session.turn_active:
-                return JSONResponse(
-                    {
-                        "ok": False,
-                        "error": "A model turn is streaming — try undo again "
-                        "once it finishes.",
-                    },
-                    status_code=409,
-                )
-            if not session.doc.undo():
-                return JSONResponse(
-                    {"ok": False, "error": "Nothing to undo."}, status_code=409
-                )
-            return JSONResponse({"ok": True, **_doc_payload(session)})
+    def undo_doc(body: WorkspaceMutationRequest | None = None) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        try:
+            with sessions.active_write(lease.workspace_id):
+                with session.session_state_guard():
+                    sessions.workspace_manager().assert_fresh(lease)
+                    if session.turn_active:
+                        return JSONResponse(
+                            {
+                                "ok": False,
+                                "error": "A model turn is streaming — try undo again "
+                                "once it finishes.",
+                            },
+                            status_code=409,
+                        )
+                    if not session.doc.undo():
+                        return JSONResponse(
+                            {"ok": False, "error": "Nothing to undo."}, status_code=409
+                        )
+                    return JSONResponse({"ok": True, **_doc_payload(session)})
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
 
     @app.post("/api/doc/redo")
-    def redo_doc() -> JSONResponse:
-        session = sessions.get_session()
-        with session.session_state_guard():
-            if session.turn_active:
-                return JSONResponse(
-                    {
-                        "ok": False,
-                        "error": "A model turn is streaming — try redo again "
-                        "once it finishes.",
-                    },
-                    status_code=409,
-                )
-            if not session.doc.redo():
-                return JSONResponse(
-                    {"ok": False, "error": "Nothing to redo."}, status_code=409
-                )
-            return JSONResponse({"ok": True, **_doc_payload(session)})
+    def redo_doc(body: WorkspaceMutationRequest | None = None) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        try:
+            with sessions.active_write(lease.workspace_id):
+                with session.session_state_guard():
+                    sessions.workspace_manager().assert_fresh(lease)
+                    if session.turn_active:
+                        return JSONResponse(
+                            {
+                                "ok": False,
+                                "error": "A model turn is streaming — try redo again "
+                                "once it finishes.",
+                            },
+                            status_code=409,
+                        )
+                    if not session.doc.redo():
+                        return JSONResponse(
+                            {"ok": False, "error": "Nothing to redo."}, status_code=409
+                        )
+                    return JSONResponse({"ok": True, **_doc_payload(session)})
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
 
     @app.post("/api/doc/edit")
     def edit_doc(body: EditDocRequest) -> JSONResponse:
@@ -1359,29 +2295,37 @@ def create_app() -> FastAPI:
         model turn streams (409) — a mid-turn manual edit would be swept into
         that turn's commit/rollback.
         """
-        session = sessions.get_session()
-        with session.session_state_guard():
-            if session.turn_active:
-                return JSONResponse(
-                    {
-                        "ok": False,
-                        "error": "A model turn is streaming — try the edit "
-                        "again once it finishes.",
-                    },
-                    status_code=409,
-                )
-            session.doc.begin_turn()
-            try:
-                applied = session.apply_doc_edits(body.ops)
-            except SpecEditError as exc:
-                session.doc.rollback_turn()
-                return JSONResponse(
-                    {"ok": False, "error": str(exc)}, status_code=400
-                )
-            session.doc.commit_turn()
-            return JSONResponse(
-                {"ok": True, "applied": applied, **_doc_payload(session)}
-            )
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        try:
+            with sessions.active_write(lease.workspace_id):
+                with session.session_state_guard():
+                    sessions.workspace_manager().assert_fresh(lease)
+                    if session.turn_active:
+                        return JSONResponse(
+                            {
+                                "ok": False,
+                                "error": "A model turn is streaming — try the edit "
+                                "again once it finishes.",
+                            },
+                            status_code=409,
+                        )
+                    session.doc.begin_turn()
+                    try:
+                        applied = session.apply_doc_edits(body.ops)
+                    except SpecEditError as exc:
+                        session.doc.rollback_turn()
+                        return JSONResponse(
+                            {"ok": False, "error": str(exc)}, status_code=400
+                        )
+                    session.doc.commit_turn()
+                    return JSONResponse(
+                        {"ok": True, "applied": applied, **_doc_payload(session)}
+                    )
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
 
     def _redline_for_export(
         store, redline: str | None, base: int | None
@@ -1621,24 +2565,33 @@ def create_app() -> FastAPI:
         )
 
     @app.delete("/api/figure/{fid}")
-    def figure_delete(fid: str) -> JSONResponse:
-        session = sessions.get_session()
-        delete_status, figures = session.delete_figure_if_idle(fid)
-        if delete_status == "active":
-            # Deleting mid-turn would shift the list under the turn's
-            # provisional-figure bookkeeping (begin/rollback by index).
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "A turn is generating — try again in a moment.",
-                },
-                status_code=409,
-            )
-        if delete_status == "missing":
-            return JSONResponse(
-                {"ok": False, "error": f"No figure {fid!r}."}, status_code=404
-            )
-        return JSONResponse({"ok": True, "figures": figures})
+    def figure_delete(
+        fid: str, body: WorkspaceMutationRequest | None = None
+    ) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        try:
+            with sessions.active_write(lease.workspace_id):
+                sessions.workspace_manager().assert_fresh(lease)
+                delete_status, figures = session.delete_figure_if_idle(fid)
+                if delete_status == "active":
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": "A turn is generating — try again in a moment.",
+                        },
+                        status_code=409,
+                    )
+                if delete_status == "missing":
+                    return JSONResponse(
+                        {"ok": False, "error": f"No figure {fid!r}."},
+                        status_code=404,
+                    )
+                return JSONResponse({"ok": True, "figures": figures})
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
 
     # --- Reference documents ------------------------------------------------
 
@@ -1650,7 +2603,11 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/api/reference/upload")
-    async def reference_upload(file: UploadFile) -> JSONResponse:
+    async def reference_upload(
+        file: UploadFile,
+        workspace_id: int | None = None,
+        generation: int | None = None,
+    ) -> JSONResponse:
         """Attach a document as background context for the model.
 
         Accepts every type in ``reference_extract.REFERENCE_KINDS`` (Word,
@@ -1661,7 +2618,15 @@ def create_app() -> FastAPI:
         document tree, so it has no blank-document precondition and stays
         available at any point in a session.
         """
-        session = sessions.get_session()
+        entry_lease = sessions.get_workspace()
+        if not _mutation_lease_matches(
+            entry_lease,
+            WorkspaceMutationRequest(
+                workspace_id=workspace_id, generation=generation
+            ),
+        ):
+            return _stale_tutorial_response()
+        session = entry_lease.session
         entry_generation = session.generation
         submitted_name = (
             (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
@@ -1702,10 +2667,22 @@ def create_app() -> FastAPI:
                 {"ok": False, "error": str(exc)}, status_code=400
             )
         with session.session_state_guard():
+            try:
+                sessions.workspace_manager().assert_active(entry_lease)
+            except sessions.WorkspaceConflictError:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "code": "stale_workspace",
+                        "error": "The workspace changed while the document was being read — attach it again.",
+                    },
+                    status_code=409,
+                )
             if session.generation != entry_generation:
                 return JSONResponse(
                     {
                         "ok": False,
+                        "code": "stale_workspace",
                         "error": "The session was replaced while the "
                         "document was being read — attach it again.",
                     },
@@ -1749,22 +2726,45 @@ def create_app() -> FastAPI:
         )
 
     @app.delete("/api/reference/{rid}")
-    def reference_delete(rid: str) -> JSONResponse:
-        session = sessions.get_session()
-        with session.session_state_guard():
-            if not session.references.delete(rid):
-                return JSONResponse(
-                    {"ok": False, "error": f"No reference document {rid!r}."},
-                    status_code=404,
-                )
-            snapshot = session.references.snapshot()
-        return JSONResponse({"ok": True, "reference_docs": snapshot})
+    def reference_delete(
+        rid: str, body: WorkspaceMutationRequest | None = None
+    ) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        try:
+            with sessions.active_write(lease.workspace_id):
+                with session.session_state_guard():
+                    sessions.workspace_manager().assert_fresh(lease)
+                    if not session.references.delete(rid):
+                        return JSONResponse(
+                            {
+                                "ok": False,
+                                "error": f"No reference document {rid!r}.",
+                            },
+                            status_code=404,
+                        )
+                    snapshot = session.references.snapshot()
+                return JSONResponse({"ok": True, "reference_docs": snapshot})
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
 
     # --- Master-spec import (Phase 5) ---------------------------------------
 
     @app.post("/api/import/master")
     async def import_master(file: UploadFile) -> JSONResponse:
-        session = sessions.get_session()
+        entry_lease = sessions.get_workspace()
+        session = entry_lease.session
+        if entry_lease.scope == "tutorial":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "code": "tutorial_scenario_required",
+                    "error": "Open the tutorial import scenario before replacing its document.",
+                },
+                status_code=409,
+            )
         # The session this upload was chosen for. Reading the master now
         # yields the event loop, so "New session" / a project load can land
         # in between — and a fresh session is blank, so the body-content
@@ -1821,10 +2821,22 @@ def create_app() -> FastAPI:
         # active session untouched.
         try:
             with session.session_state_guard():
+                try:
+                    sessions.workspace_manager().assert_active(entry_lease)
+                except sessions.WorkspaceConflictError:
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "code": "stale_workspace",
+                            "error": "The workspace changed while the master was being read — import it again.",
+                        },
+                        status_code=409,
+                    )
                 if session.generation != entry_generation:
                     return JSONResponse(
                         {
                             "ok": False,
+                            "code": "stale_workspace",
                             "error": "The session was replaced while the "
                             "master was being read — import it again into "
                             "the current session.",
@@ -1946,8 +2958,13 @@ def create_app() -> FastAPI:
     # --- Requirements research (Phase 4) ------------------------------------
 
     @app.post("/api/research/start")
-    def research_start() -> JSONResponse:
-        session = sessions.get_session()
+    def research_start(
+        body: WorkspaceMutationRequest | None = None,
+    ) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
         with session.session_state_guard():
             if session.qc.status == "running":
                 return JSONResponse(
@@ -2036,13 +3053,18 @@ def create_app() -> FastAPI:
         return sessions.get_session().research.snapshot()
 
     @app.post("/api/research/stop")
-    def research_stop() -> JSONResponse:
+    def research_stop(
+        body: WorkspaceMutationRequest | None = None,
+    ) -> JSONResponse:
         """Stop the running research fan-out. Discards whatever it found.
 
         Resolves immediately as a failed run (the UI never waits on the
         background thread to notice); a 409 means nothing is running.
         """
-        if not sessions.get_session().research.stop():
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        if not lease.session.research.stop():
             return JSONResponse(
                 {"ok": False, "error": "Research is not running."},
                 status_code=409,
@@ -2150,7 +3172,10 @@ def create_app() -> FastAPI:
         non-empty draft, an API key, no QC already running, and no model turn
         streaming (a QC of a mid-turn tree would review a moving target).
         """
-        session = sessions.get_session()
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
         _settle_source_capabilities(session)
         with session.session_state_guard():
             if session.turn_active:
@@ -2242,13 +3267,18 @@ def create_app() -> FastAPI:
             return _qc_snapshot_payload(session)
 
     @app.post("/api/qc/stop")
-    def qc_stop() -> JSONResponse:
+    def qc_stop(
+        body: WorkspaceMutationRequest | None = None,
+    ) -> JSONResponse:
         """Stop the running pass while preserving its eventual partial record.
 
         Resolves immediately as a failed run (the UI never waits on the
         background thread to notice); a 409 means nothing is running.
         """
-        if not sessions.get_session().qc.stop():
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        if not lease.session.qc.stop():
             return JSONResponse(
                 {"ok": False, "error": "Final QC is not running."},
                 status_code=409,
@@ -2283,7 +3313,10 @@ def create_app() -> FastAPI:
         Each selected finding is then re-dry-run and the accepted set commits
         atomically. Rejected (409) while a model turn streams.
         """
-        session = sessions.get_session()
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
         _settle_source_capabilities(session)
         with session.session_state_guard():
             if session.turn_active:
@@ -2561,7 +3594,10 @@ def create_app() -> FastAPI:
 
     @app.post("/api/qc/dismiss")
     def qc_dismiss(body: QcDismissRequest) -> JSONResponse:
-        session = sessions.get_session()
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
         with session.session_state_guard():
             if session.qc.status == "running" or session.qc.is_settling:
                 return JSONResponse(
@@ -2756,8 +3792,29 @@ def create_app() -> FastAPI:
     # --- Project save / resume --------------------------------------------
 
     @app.get("/api/project/save")
-    def project_save() -> Response:
-        session = sessions.get_session()
+    def project_save(scope: str | None = None) -> Response:
+        workspace = sessions.get_workspace()
+        if workspace.scope != "original" and scope not in {"tutorial", "original"}:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "code": "tutorial_active",
+                    "error": "Choose Save tutorial copy or return to your project before saving.",
+                },
+                status_code=409,
+            )
+        try:
+            session = (
+                sessions.workspace_manager().original_for_save()
+                if workspace.scope != "original" and scope == "original"
+                else sessions.workspace_manager().tutorial_for_save()
+                if workspace.scope != "original" and scope == "tutorial"
+                else workspace.session
+            )
+        except sessions.WorkspaceConflictError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=409
+            )
         try:
             with session.session_state_guard():
                 payload = sessions.project_package_bytes(session)
@@ -2775,7 +3832,17 @@ def create_app() -> FastAPI:
     @app.post("/api/project/load")
     def project_load(body: dict[str, Any]) -> JSONResponse:
         """Legacy format-1 JSON load (source-less compatibility endpoint)."""
-        session = sessions.get_session()
+        workspace = sessions.get_workspace()
+        if workspace.scope != "original":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "code": "tutorial_active",
+                    "error": "Resolve the tutorial before opening another project.",
+                },
+                status_code=409,
+            )
+        session = workspace.session
         try:
             with session.session_state_guard():
                 load_project(body, session)
@@ -2807,7 +3874,17 @@ def create_app() -> FastAPI:
         # loop for seconds, so "New session" can complete in between — and
         # this commit replaces everything, so a stale load would silently
         # discard the session the user just deliberately started.
-        entry_generation = sessions.get_session().generation
+        entry_lease = sessions.get_workspace()
+        if entry_lease.scope != "original":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "code": "tutorial_active",
+                    "error": "Resolve the tutorial before opening another project.",
+                },
+                status_code=409,
+            )
+        entry_generation = entry_lease.session.generation
         try:
             payload = await read_project_upload_bounded(file)
             # Staging re-parses and re-indexes the attached master, which is
@@ -2829,12 +3906,24 @@ def create_app() -> FastAPI:
 
         # The same semantic payload was fully staged above, so these writes
         # are the commit point. A rejected package never reaches them.
-        session = sessions.get_session()
+        session = entry_lease.session
         with session.session_state_guard():
+            try:
+                sessions.workspace_manager().assert_active(entry_lease)
+            except sessions.WorkspaceConflictError:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "code": "stale_workspace",
+                        "error": "The workspace changed while the project was being read.",
+                    },
+                    status_code=409,
+                )
             if session.generation != entry_generation:
                 return JSONResponse(
                     {
                         "ok": False,
+                        "code": "stale_workspace",
                         "error": "The session was replaced while the project "
                         "was being read — open it again from the current "
                         "session.",

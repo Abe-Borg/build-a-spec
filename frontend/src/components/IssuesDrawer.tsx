@@ -31,6 +31,7 @@ export default function IssuesDrawer({
     <div
       className="max-h-44 overflow-y-auto border-t border-edge bg-bg/60 px-5 py-2.5"
       data-tour="lint-issues"
+      data-capability="document.lint"
     >
       <p className="text-[11px] font-medium tracking-wide text-ink-dim uppercase">
         Issues ({issues.length}) — advisory
@@ -209,8 +210,10 @@ export function StandardsStrip({
     <div
       className="border-t border-edge bg-bg/80 px-5 py-2"
       data-tour="standards-strip"
+      data-capability="standards.manage"
     >
       <button
+        data-capability="standards.basis"
         className="flex w-full items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
         onClick={() => setExpanded((v) => !v)}
         title="Standards editions in effect — add, change, or exclude standards for this project"

@@ -27,6 +27,7 @@ import type {
   SourceCapabilitiesState,
   SpecDoc,
   StandardInfo,
+  TemplateOrigin,
   UsageSummary,
 } from "../types";
 import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
@@ -58,6 +59,8 @@ interface Props {
   sourceAvailable: boolean;
   preservationReady: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
+  templateOrigin: TemplateOrigin | null;
+  tutorialActive: boolean;
   busy: boolean;
   /** A master import / project open the server is still working through.
    *  Drives the progress line and keeps both file actions disabled. */
@@ -67,6 +70,7 @@ interface Props {
   onDismissImportNotice?: () => void;
   onUndo: () => void;
   onRedo: () => void;
+  onSaveAsTemplate: () => void;
   onEditDoc: (ops: EditOp[]) => void;
   onLoadProject: (file: File) => void;
   /** Native pywebview Open dialog (Open / Import). Resolves to a File when
@@ -299,12 +303,15 @@ export default function ArtifactPanel({
   sourceAvailable,
   preservationReady,
   sourceCapabilities,
+  templateOrigin,
+  tutorialActive,
   busy,
   fileLoading = null,
   importNotice = null,
   onDismissImportNotice,
   onUndo,
   onRedo,
+  onSaveAsTemplate,
   onEditDoc,
   onLoadProject,
   nativeOpenFile,
@@ -515,6 +522,7 @@ export default function ArtifactPanel({
     <aside
       className="flex min-w-[420px] flex-1 basis-[54%] flex-col bg-surface"
       data-tour="doc-panel"
+      data-capability="document.structure"
     >
       <div className="flex items-center justify-between gap-3 border-b border-edge px-5 py-2.5">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -534,6 +542,7 @@ export default function ArtifactPanel({
               onClick={onDraftFull}
               disabled={draftDisabled}
               data-tour="draft-full"
+              data-capability="chat.full-draft"
             >
               ✨ Draft full section
             </button>
@@ -543,6 +552,7 @@ export default function ArtifactPanel({
           <span
             className="flex items-center gap-1.5"
             data-tour="version-stepper"
+            data-capability="history.undo-redo"
           >
             <button
               className={actionButton}
@@ -582,6 +592,7 @@ export default function ArtifactPanel({
               }
               disabled={busy || !canCompare}
               data-tour="compare"
+              data-capability="history.compare"
             >
               {compareMode ? "Exit compare" : "Compare"}
             </button>
@@ -591,7 +602,11 @@ export default function ArtifactPanel({
               the normalized provision tree / a chosen version. Downloads are disabled
               while a turn streams — mid-turn the live doc holds provisional
               edits and only committed versions are downloadable. */}
-          <div className="relative" data-tour="export">
+          <div
+            className="relative"
+            data-tour="export"
+            data-capability="export.clean"
+          >
             <button
               className={
                 actionButton +
@@ -606,6 +621,7 @@ export default function ArtifactPanel({
             {exportMenuOpen && (
               <div
                 className="absolute right-0 z-20 mt-1 w-72 rounded-md border border-edge bg-raised py-1 text-[11px] shadow-lg"
+                data-capability="export.redline-source"
                 onMouseLeave={() => setExportMenuOpen(false)}
               >
                 {importedMode ? (
@@ -637,6 +653,25 @@ export default function ArtifactPanel({
                     >
                       Export normalized DOCX
                     </a>
+                    {sourceAvailable ? (
+                      <a
+                        className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
+                        href="/api/import/original"
+                        download
+                        onClick={() => setExportMenuOpen(false)}
+                        title="Download the exact DOCX package that was imported, unchanged"
+                        data-capability="import.source-output"
+                      >
+                        Download exact original DOCX
+                      </a>
+                    ) : (
+                      <span
+                        className="block cursor-default px-3 py-1.5 text-ink-faint"
+                        title="This imported project does not contain a recoverable exact source package"
+                      >
+                        Exact original DOCX unavailable
+                      </span>
+                    )}
                   </>
                 ) : (
                   <a
@@ -715,19 +750,45 @@ export default function ArtifactPanel({
             className={
               actionButton + (busy ? " pointer-events-none opacity-40" : "")
             }
-            href={busy ? undefined : "/api/project/save"}
+            href={
+              busy
+                ? undefined
+                : tutorialActive
+                  ? "/api/project/save?scope=tutorial"
+                  : "/api/project/save"
+            }
             aria-disabled={busy}
             download
             title="Save the project, including its exact source DOCX when available, as .baspec"
             data-tour="save"
+            data-capability="project.save-open"
           >
             Save
           </a>
           <button
             className={actionButton}
+            onClick={onSaveAsTemplate}
+            disabled={busy || !hasContent}
+            title={
+              hasContent
+                ? "Open the template studio to turn this spec into a reusable starter"
+                : "Add spec content before creating a template"
+            }
+            data-tour="save-template"
+            data-capability="template.create"
+          >
+            Save as Template
+          </button>
+          <button
+            className={actionButton}
             onClick={handleOpenClick}
-            disabled={busy || !!fileLoading}
-            title="Open a saved project file"
+            data-capability="project.save-open"
+            disabled={busy || !!fileLoading || tutorialActive}
+            title={
+              tutorialActive
+                ? "This chapter already uses a real temporary .baspec round trip; return to your project before opening another file."
+                : "Open a saved project file"
+            }
           >
             {fileLoading?.kind === "open" ? "Opening…" : "Open"}
           </button>
@@ -758,6 +819,7 @@ export default function ArtifactPanel({
               onClick={handleImportClick}
               disabled={busy || hasContent || !!fileLoading}
               data-tour="import-master"
+              data-capability="import.master"
             >
               {fileLoading?.kind === "import" ? "Importing…" : "Import Spec"}
             </button>
@@ -779,6 +841,7 @@ export default function ArtifactPanel({
               onClick={handleAttachClick}
               disabled={referenceBusy}
               data-tour="attach-reference"
+              data-capability="reference.attach"
             >
               {referenceBusy ? "Attaching…" : "Attach Document"}
             </button>
@@ -798,7 +861,10 @@ export default function ArtifactPanel({
       </div>
 
       {referenceDocs.length > 0 && (
-        <div className="border-b border-line bg-surface-2/40 px-5 py-3">
+        <div
+          className="border-b border-line bg-surface-2/40 px-5 py-3"
+          data-capability="reference.use"
+        >
           <p className="text-[11px] font-semibold tracking-wide text-ink-dim uppercase">
             Reference documents ({referenceDocs.length})
           </p>
@@ -983,6 +1049,7 @@ export default function ArtifactPanel({
             busy={busy}
             sourceExpected={activeSourceExpected}
             sourceCapabilities={sourceCapabilities}
+            templateOrigin={templateOrigin}
             onEdit={onEditDoc}
             unstructuredImport={unstructuredImport}
           />
@@ -1048,6 +1115,7 @@ export default function ArtifactPanel({
         <div
           className="border-t border-edge bg-bg/70 px-5 py-2"
           data-tour="open-items"
+          data-capability="document.open-items"
         >
           <button
             className="flex w-full items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"

@@ -13,9 +13,12 @@ import type {
   QcSnapshot,
   ReadinessPayload,
   ResearchSnapshot,
+  SessionBundle,
   SourceCapabilitiesState,
   SpecDoc,
   StandardInfo,
+  TutorialEvent,
+  TemplateOrigin,
   UpdateCheckPayload,
   UsageSummary,
 } from "./types";
@@ -35,8 +38,10 @@ import {
   getQcStatus,
   getReadiness,
   getResearchStatus,
+  getSessionBundle,
   getUsage,
   importMaster,
+  instantiateTemplate,
   uploadReference,
   deleteReference,
   installUpdate,
@@ -63,7 +68,11 @@ import HelpModal, { type HelpTopic } from "./components/HelpModal";
 import OnboardingOverlay from "./components/OnboardingOverlay";
 import NewSessionDialog from "./components/NewSessionDialog";
 import { sourceCapabilitiesPending } from "./lib/sourceCapabilities";
-import { useOnboarding, type DrawerName } from "./lib/useOnboarding";
+import {
+  useOnboarding,
+  type DrawerName,
+  type OnboardingApi,
+} from "./lib/useOnboarding";
 import {
   formatProjectHeading,
   projectDiscipline,
@@ -97,6 +106,7 @@ export default function App() {
   const [helpTopic, setHelpTopic] = useState<HelpTopic | null>(null);
   // Shown when the pywebview shell reports a window-close with unsaved work.
   const [closePromptOpen, setClosePromptOpen] = useState(false);
+  const [tutorialCloseBlocked, setTutorialCloseBlocked] = useState(false);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
   const [baselineIndex, setBaselineIndex] = useState<number | null>(null);
@@ -107,6 +117,7 @@ export default function App() {
   const [preservationReady, setPreservationReady] = useState(false);
   const [sourceCapabilities, setSourceCapabilities] =
     useState<SourceCapabilitiesState | null>(null);
+  const [templateOrigin, setTemplateOrigin] = useState<TemplateOrigin | null>(null);
   // Chat-authored figures (diagrams/schematics/tables), keyed for the bubbles.
   const [figures, setFigures] = useState<Figure[]>([]);
   const figuresById = useMemo(
@@ -128,12 +139,17 @@ export default function App() {
     openItems: 0,
   });
   const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const [templatesOnly, setTemplatesOnly] = useState(false);
+  const [templateStarting, setTemplateStarting] = useState(false);
   // The in-app save-before-you-lose-it gate for the two paths that discard the
   // session (New session, Open project). Non-null = the prompt is open; the
   // pending action (and, for a load, its file) runs after Save/Discard. Null
   // when idle — the session-close window prompt is separate (closePromptOpen).
   const [saveGate, setSaveGate] = useState<
-    { kind: "new-session" } | { kind: "open-project"; file: File } | null
+    | { kind: "new-session" }
+    | { kind: "open-project"; file: File }
+    | { kind: "start-template"; templateId: string }
+    | null
   >(null);
   // A file upload in flight (master import / project open). Reading, parsing
   // and indexing a big master takes real seconds on the server, and until it
@@ -153,22 +169,39 @@ export default function App() {
   const manualEditBusyRef = useRef(false);
   const researchFollowRef = useRef(false);
   const qcFollowRef = useRef(false);
+  const onboardingRef = useRef<OnboardingApi | null>(null);
+  // Every whole-session/tutorial transition advances this epoch. Read calls
+  // and streams captured against an older workspace must never repaint the
+  // newly hydrated document with discarded scenario state.
+  const workspaceEpochRef = useRef(0);
 
   const refreshHealth = useCallback(() => {
+    const epoch = workspaceEpochRef.current;
     getHealth()
-      .then(setHealth)
-      .catch(() => setHealth(null));
+      .then((value) => {
+        if (workspaceEpochRef.current === epoch) setHealth(value);
+      })
+      .catch(() => {
+        if (workspaceEpochRef.current === epoch) setHealth(null);
+      });
   }, []);
 
   const refreshResearch = useCallback(() => {
+    const epoch = workspaceEpochRef.current;
     getResearchStatus()
-      .then(setResearch)
-      .catch(() => setResearch(null));
+      .then((value) => {
+        if (workspaceEpochRef.current === epoch) setResearch(value);
+      })
+      .catch(() => {
+        if (workspaceEpochRef.current === epoch) setResearch(null);
+      });
   }, []);
 
   const refreshDoc = useCallback(() => {
+    const epoch = workspaceEpochRef.current;
     getDoc()
       .then((payload) => {
+        if (workspaceEpochRef.current !== epoch) return;
         setDoc(payload.doc);
         setOpenItems(payload.open_questions);
         setLintIssues(payload.lint);
@@ -179,29 +212,47 @@ export default function App() {
         setSourceAvailable(payload.source_available ?? false);
         setPreservationReady(payload.preservation_ready ?? false);
         setSourceCapabilities(payload.source_capabilities ?? null);
+        setTemplateOrigin(payload.template_origin ?? null);
         setFigures(payload.figures ?? []);
         setSuggestions(payload.suggested_prompts ?? []);
         setReferenceDocs(payload.reference_docs ?? []);
       })
-      .catch(() => setDoc(null));
+      .catch(() => {
+        if (workspaceEpochRef.current === epoch) setDoc(null);
+      });
   }, []);
 
   const refreshQc = useCallback(() => {
+    const epoch = workspaceEpochRef.current;
     getQcStatus()
-      .then(setQc)
-      .catch(() => setQc(null));
+      .then((value) => {
+        if (workspaceEpochRef.current === epoch) setQc(value);
+      })
+      .catch(() => {
+        if (workspaceEpochRef.current === epoch) setQc(null);
+      });
   }, []);
 
   const refreshReadiness = useCallback(() => {
+    const epoch = workspaceEpochRef.current;
     getReadiness()
-      .then(setReadiness)
-      .catch(() => setReadiness(null));
+      .then((value) => {
+        if (workspaceEpochRef.current === epoch) setReadiness(value);
+      })
+      .catch(() => {
+        if (workspaceEpochRef.current === epoch) setReadiness(null);
+      });
   }, []);
 
   const refreshUsage = useCallback(() => {
+    const epoch = workspaceEpochRef.current;
     getUsage()
-      .then(setUsage)
-      .catch(() => setUsage(null));
+      .then((value) => {
+        if (workspaceEpochRef.current === epoch) setUsage(value);
+      })
+      .catch(() => {
+        if (workspaceEpochRef.current === epoch) setUsage(null);
+      });
   }, []);
 
   /**
@@ -309,7 +360,10 @@ export default function App() {
 
   const onStartQc = useCallback(async (acknowledgeScopeMismatch = false) => {
     try {
-      await startQc(acknowledgeScopeMismatch);
+      await startQc(acknowledgeScopeMismatch, {
+        workspaceId: health?.workspace_id,
+        generation: health?.generation,
+      });
       addNote("Sent to Final QC — findings will appear in the Final QC panel.");
       void followQc();
     } catch (e) {
@@ -324,19 +378,22 @@ export default function App() {
             : prev?.module_section_compatibility,
       }));
     }
-  }, [followQc, addNote]);
+  }, [followQc, addNote, health]);
 
   /** Stop Final QC while its worker preserves any completed paid activity. */
   const onStopQc = useCallback(async () => {
     try {
-      await stopQc();
+      await stopQc({
+        workspaceId: health?.workspace_id,
+        generation: health?.generation,
+      });
     } catch {
       // Best-effort — the run may have already settled on its own.
     } finally {
       refreshQc();
       refreshReadiness();
     }
-  }, [refreshQc, refreshReadiness]);
+  }, [refreshQc, refreshReadiness, health]);
 
   // A page load during a running QC (or a resumed project) picks it back up.
   useEffect(() => {
@@ -347,7 +404,21 @@ export default function App() {
   // the session holds unsaved work; show the save-before-leaving dialog. The
   // shell has already vetoed the close and awaits a js_api call (or a stay).
   useEffect(() => {
-    window.buildaspecRequestClose = () => setClosePromptOpen(true);
+    window.buildaspecRequestClose = (reason) => {
+      if (reason === "tutorial-busy") {
+        setTutorialCloseBlocked(true);
+        return;
+      }
+      if (reason === "tutorial-restored") {
+        void getSessionBundle()
+          .then((session) => {
+            onboardingRef.current?.acceptNativeRestore(session);
+          })
+          .finally(() => setClosePromptOpen(true));
+        return;
+      }
+      setClosePromptOpen(true);
+    };
     return () => {
       delete window.buildaspecRequestClose;
     };
@@ -355,8 +426,13 @@ export default function App() {
 
   const onApplyQc = useCallback(
     async (findingIds: string[]) => {
+      const epoch = workspaceEpochRef.current;
       try {
-        const payload = await applyQc(findingIds);
+        const payload = await applyQc(findingIds, {
+          workspaceId: health?.workspace_id,
+          generation: health?.generation,
+        });
+        if (workspaceEpochRef.current !== epoch) return;
         applyDocPayload(payload);
         refreshQc();
         refreshReadiness();
@@ -382,6 +458,7 @@ export default function App() {
           },
         ]);
       } catch (e) {
+        if (workspaceEpochRef.current !== epoch) return;
         refreshDoc();
         setMessages((prev) => [
           ...prev,
@@ -398,16 +475,22 @@ export default function App() {
     },
     // applyDocPayload is stable in practice; listing it is noise.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [refreshQc, refreshReadiness, refreshDoc],
+    [refreshQc, refreshReadiness, refreshDoc, health],
   );
 
   const onDismissQc = useCallback(
     async (findingId: string, reason: string) => {
+      const epoch = workspaceEpochRef.current;
       try {
-        const snapshot = await dismissQc(findingId, reason);
+        const snapshot = await dismissQc(findingId, reason, {
+          workspaceId: health?.workspace_id,
+          generation: health?.generation,
+        });
+        if (workspaceEpochRef.current !== epoch) return;
         setQc(snapshot);
         refreshReadiness();
       } catch (e) {
+        if (workspaceEpochRef.current !== epoch) return;
         refreshQc();
         setMessages((prev) => [
           ...prev,
@@ -423,7 +506,7 @@ export default function App() {
         throw e;
       }
     },
-    [refreshQc, refreshReadiness],
+    [refreshQc, refreshReadiness, health],
   );
 
   const onImportMaster = useCallback(
@@ -480,7 +563,10 @@ export default function App() {
     setReferenceBusy(true);
     setImportNotice(null);
     try {
-      const { reference_docs, warnings } = await uploadReference(file);
+      const { reference_docs, warnings } = await uploadReference(file, {
+        workspaceId: health?.workspace_id,
+        generation: health?.generation,
+      });
       setReferenceDocs(reference_docs);
       if (warnings.length) {
         setImportNotice({
@@ -502,12 +588,15 @@ export default function App() {
     } finally {
       setReferenceBusy(false);
     }
-  }, []);
+  }, [health]);
 
   const onRemoveReference = useCallback(async (rid: string) => {
     setReferenceBusy(true);
     try {
-      setReferenceDocs(await deleteReference(rid));
+      setReferenceDocs(await deleteReference(rid, {
+        workspaceId: health?.workspace_id,
+        generation: health?.generation,
+      }));
     } catch (e) {
       setImportNotice({
         tone: "error",
@@ -518,7 +607,7 @@ export default function App() {
     } finally {
       setReferenceBusy(false);
     }
-  }, []);
+  }, [health]);
 
   const onInstallUpdate = useCallback(async () => {
     try {
@@ -564,7 +653,10 @@ export default function App() {
 
   const onStartResearch = useCallback(async () => {
     try {
-      await startResearch();
+      await startResearch({
+        workspaceId: health?.workspace_id,
+        generation: health?.generation,
+      });
       addNote("Started requirements research — progress in the Research panel.");
       void followResearch();
     } catch (e) {
@@ -574,18 +666,21 @@ export default function App() {
         events: prev?.events ?? [],
       }));
     }
-  }, [followResearch, addNote]);
+  }, [followResearch, addNote, health]);
 
   /** Stop the running research fan-out (confirmed in the drawer — loses progress). */
   const onStopResearch = useCallback(async () => {
     try {
-      await stopResearch();
+      await stopResearch({
+        workspaceId: health?.workspace_id,
+        generation: health?.generation,
+      });
     } catch {
       // Best-effort — the run may have already settled on its own.
     } finally {
       refreshResearch();
     }
-  }, [refreshResearch]);
+  }, [refreshResearch, health]);
 
   // A page load during a running research (or a resumed project) picks the
   // stream back up.
@@ -808,17 +903,23 @@ export default function App() {
   /** Remove a figure (the ✕ on a figure card). Resync on a 409/404. */
   const onDeleteFigure = useCallback(
     async (fid: string) => {
+      const epoch = workspaceEpochRef.current;
       try {
-        setFigures(await deleteFigure(fid));
+        const remaining = await deleteFigure(fid, {
+          workspaceId: health?.workspace_id,
+          generation: health?.generation,
+        });
+        if (workspaceEpochRef.current === epoch) setFigures(remaining);
       } catch {
         refreshDoc();
       }
     },
-    [refreshDoc],
+    [health, refreshDoc],
   );
 
   /** Shared post-reset clear+refresh — every session-start path runs this. */
   const clearSessionState = () => {
+    workspaceEpochRef.current += 1;
     setMessages([]);
     setOpenItems([]);
     setLintIssues([]);
@@ -831,6 +932,7 @@ export default function App() {
     setSourceAvailable(false);
     setPreservationReady(false);
     setSourceCapabilities(null);
+    setTemplateOrigin(null);
     refreshDoc();
     refreshResearch();
     refreshQc();
@@ -840,6 +942,7 @@ export default function App() {
   /** Start a truly neutral session; chat establishes all project identity. */
   const startBlankSession = async () => {
     setNewSessionOpen(false);
+    setTemplatesOnly(false);
     await resetSession({
       module_id: "generic",
       discipline: "",
@@ -863,6 +966,7 @@ export default function App() {
     source_available?: boolean;
     preservation_ready?: boolean;
     source_capabilities?: SourceCapabilitiesState | null;
+    template_origin?: TemplateOrigin | null;
   }) => {
     setDoc(payload.doc);
     setOpenItems(payload.open_questions);
@@ -874,10 +978,103 @@ export default function App() {
     setSourceAvailable(payload.source_available ?? false);
     setPreservationReady(payload.preservation_ready ?? false);
     setSourceCapabilities(payload.source_capabilities ?? null);
+    setTemplateOrigin(payload.template_origin ?? null);
     setFigures(payload.figures ?? []);
     setSuggestions(payload.suggested_prompts ?? []);
     setReferenceDocs(payload.reference_docs ?? []);
     setChangedIds(new Set());
+  };
+
+  /** Hydrate a tutorial/template transition without assuming whether the
+   * backend initially returns a flat payload or a nested doc_payload. */
+  const applySessionBundle = (bundle: SessionBundle) => {
+    workspaceEpochRef.current += 1;
+    const merged = {
+      ...bundle,
+      ...(bundle.doc_payload ?? {}),
+    } as SessionBundle;
+    if (merged.doc) {
+      applyDocPayload({
+        doc: merged.doc,
+        open_questions: merged.open_questions ?? [],
+        lint: merged.lint ?? [],
+        standards: merged.standards ?? [],
+        profile_complete: merged.profile_complete ?? false,
+        baseline_index: merged.baseline_index ?? null,
+        figures: merged.figures ?? [],
+        suggested_prompts: merged.suggested_prompts ?? [],
+        reference_docs: merged.reference_docs ?? [],
+        import_report: merged.import_report ?? null,
+        source_available: merged.source_available ?? false,
+        preservation_ready: merged.preservation_ready ?? false,
+        source_capabilities: merged.source_capabilities ?? null,
+        template_origin: merged.template_origin ?? null,
+      });
+    }
+    const transcript = merged.chat ?? merged.messages;
+    if (transcript) {
+      const rebuilt: ChatMessage[] = transcript.map((message) => ({
+        id: newId(),
+        role: message.role,
+        text: message.text,
+      }));
+      const assistantPositions = rebuilt
+        .map((message, index) => (message.role === "assistant" ? index : -1))
+        .filter((index) => index >= 0);
+      for (const figure of merged.figures ?? []) {
+        const at = assistantPositions[figure.message_index];
+        if (at !== undefined) {
+          rebuilt[at].figureIds = [
+            ...(rebuilt[at].figureIds ?? []),
+            figure.fid,
+          ];
+        }
+      }
+      setMessages(rebuilt);
+    }
+    if (merged.research) setResearch(merged.research);
+    if (merged.qc) setQc(merged.qc);
+    if (merged.readiness) setReadiness(merged.readiness);
+    if (merged.usage) setUsage(merged.usage);
+    if (merged.health) setHealth(merged.health);
+    refreshHealth();
+    refreshResearch();
+    refreshQc();
+    refreshReadiness();
+    refreshUsage();
+  };
+
+  /** Apply normal stream events emitted by tutorial enrichment. */
+  const applyTutorialEvent = (event: TutorialEvent) => {
+    switch (event.type) {
+      case "doc_patch":
+        setDoc(event.doc);
+        setChangedIds(new Set(event.ops.map((op) => op.id).filter(Boolean)));
+        break;
+      case "doc_snapshot":
+        setDoc(event.doc);
+        break;
+      case "open_questions":
+        setOpenItems(event.items);
+        break;
+      case "lint":
+        setLintIssues(event.items);
+        setStandards(event.standards);
+        break;
+      case "figure":
+        setFigures((current) => [
+          ...current.filter((figure) => figure.fid !== event.figure.fid),
+          event.figure,
+        ]);
+        break;
+      case "suggested_prompts":
+        setSuggestions(event.prompts);
+        break;
+      case "turn_complete":
+        refreshUsage();
+        refreshReadiness();
+        break;
+    }
   };
 
   const onEditDoc = async (ops: EditOp[]) => {
@@ -895,8 +1092,13 @@ export default function App() {
     }
     manualEditBusyRef.current = true;
     setManualEditBusy(true);
+    const epoch = workspaceEpochRef.current;
     try {
-      const payload = await editDoc(ops);
+      const payload = await editDoc(ops, {
+        workspaceId: health?.workspace_id,
+        generation: health?.generation,
+      });
+      if (workspaceEpochRef.current !== epoch) return;
       applyDocPayload(payload);
       refreshReadiness();
       refreshQc();
@@ -924,8 +1126,12 @@ export default function App() {
   };
 
   const onUndo = async () => {
-    const payload = await undoDoc().catch(() => null);
-    if (payload) {
+    const epoch = workspaceEpochRef.current;
+    const payload = await undoDoc({
+      workspaceId: health?.workspace_id,
+      generation: health?.generation,
+    }).catch(() => null);
+    if (payload && workspaceEpochRef.current === epoch) {
       applyDocPayload(payload);
       refreshReadiness();
       refreshQc();
@@ -933,8 +1139,12 @@ export default function App() {
   };
 
   const onRedo = async () => {
-    const payload = await redoDoc().catch(() => null);
-    if (payload) {
+    const epoch = workspaceEpochRef.current;
+    const payload = await redoDoc({
+      workspaceId: health?.workspace_id,
+      generation: health?.generation,
+    }).catch(() => null);
+    if (payload && workspaceEpochRef.current === epoch) {
       applyDocPayload(payload);
       refreshReadiness();
       refreshQc();
@@ -979,10 +1189,68 @@ export default function App() {
     }
   };
 
+  async function doInstantiateTemplate(templateId: string) {
+    if (templateStarting) return;
+    setTemplateStarting(true);
+    try {
+      const session = await instantiateTemplate(templateId);
+      applySessionBundle(session);
+      onboardingRef.current?.syncSessionIdentity(session);
+      if (session.template_warning) {
+        setImportNotice({
+          tone: "warn",
+          name: "Reusable template",
+          title: "Template started with a compatibility fallback",
+          lines: [session.template_warning],
+        });
+      }
+      setNewSessionOpen(false);
+      setTemplatesOnly(false);
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: newId(),
+          role: "assistant",
+          text: `Could not start that template: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          error: true,
+        },
+      ]);
+    } finally {
+      setTemplateStarting(false);
+    }
+  }
+
+  const requestStartTemplate = async (templateId: string) => {
+    // A tutorial scenario is explicitly disposable and the tutorial base is
+    // retained server-side. Starting its ephemeral template must not invoke
+    // the ordinary project-discard save gate (which intentionally rejects
+    // saves from scenario scope).
+    if (health?.workspace_scope === "scenario") {
+      void doInstantiateTemplate(templateId);
+      return;
+    }
+    if (await isUnsaved()) {
+      setSaveGate({ kind: "start-template", templateId });
+    } else {
+      void doInstantiateTemplate(templateId);
+    }
+  };
+
+  const openTemplateStudio = () => {
+    setTemplatesOnly(true);
+    setNewSessionOpen(true);
+  };
+
   /** Run the pending session-discarding action once the gate resolves. */
   const runGate = (gate: NonNullable<typeof saveGate>) => {
-    if (gate.kind === "new-session") setNewSessionOpen(true);
-    else void doLoadProject(gate.file);
+    if (gate.kind === "new-session") {
+      setTemplatesOnly(false);
+      setNewSessionOpen(true);
+    } else if (gate.kind === "open-project") void doLoadProject(gate.file);
+    else void doInstantiateTemplate(gate.templateId);
   };
 
   const onGateSave = async () => {
@@ -1003,9 +1271,12 @@ export default function App() {
 
   /** Header "New session": offer to save, then show the start choices. */
   const requestNewSession = async () => {
-    onboarding.abort();
+    if (!(await onboarding.abort())) return;
     if (await isUnsaved()) setSaveGate({ kind: "new-session" });
-    else setNewSessionOpen(true);
+    else {
+      setTemplatesOnly(false);
+      setNewSessionOpen(true);
+    }
   };
 
   /** The actual project load (after the save gate). Rebuilds the transcript
@@ -1020,6 +1291,7 @@ export default function App() {
     setFileLoading({ kind: "open", name: file.name });
     try {
       const result = await loadProjectFile(file);
+      workspaceEpochRef.current += 1;
       applyDocPayload(result);
       // The .baspec carries the original import's content-loss warnings, and
       // with the imported-DOCX banner gone this is the only place they can
@@ -1078,7 +1350,7 @@ export default function App() {
 
   /** Open project (the panel's file picker): offer to save, then load. */
   const onLoadProject = async (file: File) => {
-    onboarding.abort();
+    if (!(await onboarding.abort())) return;
     if (await isUnsaved()) setSaveGate({ kind: "open-project", file });
     else void doLoadProject(file);
   };
@@ -1096,7 +1368,7 @@ export default function App() {
    * where the input works normally.
    */
   const nativeOpenFile = async (
-    kind: "project" | "docx" | "reference",
+    kind: "project" | "docx" | "reference" | "template",
   ): Promise<File | null | undefined> => {
     const api = window.pywebview?.api;
     if (!api?.open_file) return undefined; // browser/dev → HTML input
@@ -1123,7 +1395,19 @@ export default function App() {
     setDrawerNonces((prev) => ({ ...prev, [name]: prev[name] + 1 }));
   }, []);
 
-  const onboarding = useOnboarding();
+  const onboarding = useOnboarding({
+    editDoc: onEditDoc,
+    startResearch: () => void onStartResearch(),
+    startQc: () => void onStartQc(),
+    prefillComposer: onAskModel,
+    openTemplates: openTemplateStudio,
+    applySession: applySessionBundle,
+    applyTutorialEvent,
+    health,
+    doc,
+    hasContent,
+  });
+  onboardingRef.current = onboarding;
   const activeDiscipline = projectDiscipline(doc, health?.legacy_discipline);
   const projectHeading = formatProjectHeading(doc, health?.legacy_discipline);
 
@@ -1136,6 +1420,7 @@ export default function App() {
         update={update}
         usage={usage}
         onNewSession={() => void requestNewSession()}
+        onOpenTemplates={openTemplateStudio}
         onStartTour={onboarding.start}
         onInstallUpdate={onInstallUpdate}
         onOpenSettings={() => {
@@ -1157,18 +1442,35 @@ export default function App() {
         topic={helpTopic}
         onClose={() => setHelpTopic(null)}
         onNavigate={setHelpTopic}
+        onStartTutorialAtChapter={(chapterId) => {
+          setHelpTopic(null);
+          onboarding.startAtChapter(chapterId);
+        }}
         health={health}
       />
       <OnboardingOverlay
         ob={onboarding}
         doc={doc}
+        busy={busy || manualEditBusy}
+        hasContent={hasContent}
+        profileComplete={profileComplete}
+        researchStatus={research?.status ?? "idle"}
+        qcStatus={qc?.status ?? "idle"}
+        sourceAvailable={sourceAvailable}
         bumpDrawer={bumpDrawer}
       />
       <NewSessionDialog
         open={newSessionOpen}
-        busy={busy}
-        onCancel={() => setNewSessionOpen(false)}
+        busy={busy || templateStarting}
+        hasContent={hasContent}
+        templatesOnly={templatesOnly}
+        onCancel={() => {
+          setNewSessionOpen(false);
+          setTemplatesOnly(false);
+        }}
         onBlankSlate={() => void startBlankSession()}
+        onStartTemplate={(templateId) => void requestStartTemplate(templateId)}
+        openTemplateFile={() => nativeOpenFile("template")}
       />
       {/* Closing (✕ / backdrop) any tour popup confirms here first, so the
           guided tour is never dismissed by accident. Elevated above the
@@ -1181,14 +1483,24 @@ export default function App() {
         body={
           <>
             You can restart it anytime from the{" "}
-            <b className="text-ink">Tour</b> button in the header. This
-            passive tour has not changed your project.
+            <b className="text-ink">Tour</b> button in the header. Your
+            original project remains protected until you choose what to keep.
           </>
         }
         confirmLabel="End tour"
         cancelLabel="Continue tour"
         onConfirm={onboarding.end}
         onCancel={onboarding.cancelEnd}
+      />
+      <ConfirmDialog
+        open={tutorialCloseBlocked}
+        elevated
+        title="Tutorial work is still settling"
+        body="A chat, research, Final QC, import, or edit in the protected tutorial workspace is still active. Return to the app and stop it or let it finish before closing; the original project remains protected."
+        confirmLabel="Return to tutorial"
+        cancelLabel="Stay open"
+        onConfirm={() => setTutorialCloseBlocked(false)}
+        onCancel={() => setTutorialCloseBlocked(false)}
       />
       <CloseDialog
         open={closePromptOpen}
@@ -1210,18 +1522,24 @@ export default function App() {
         title={
           saveGate?.kind === "open-project"
             ? "Open a different project?"
-            : "Start a new session?"
+            : saveGate?.kind === "start-template"
+              ? "Start from this template?"
+              : "Start a new session?"
         }
         body="You have unsaved work in this session. Save it to a project file first, or continue without saving — this can't be undone."
         saveLabel={
           saveGate?.kind === "open-project"
             ? "Save, then open"
-            : "Save, then start"
+            : saveGate?.kind === "start-template"
+              ? "Save, then use template"
+              : "Save, then start"
         }
         discardLabel={
           saveGate?.kind === "open-project"
             ? "Open without saving"
-            : "Start without saving"
+            : saveGate?.kind === "start-template"
+              ? "Use template without saving"
+              : "Start without saving"
         }
         onSave={onGateSave}
         onDiscard={onGateDiscard}
@@ -1261,12 +1579,15 @@ export default function App() {
           sourceAvailable={sourceAvailable}
           preservationReady={preservationReady}
           sourceCapabilities={sourceCapabilities}
-          busy={busy || manualEditBusy}
+          templateOrigin={templateOrigin}
+          tutorialActive={health?.workspace_scope !== undefined && health.workspace_scope !== "original"}
+          busy={busy || manualEditBusy || referenceBusy}
           fileLoading={fileLoading}
           importNotice={importNotice}
           onDismissImportNotice={() => setImportNotice(null)}
           onUndo={onUndo}
           onRedo={onRedo}
+          onSaveAsTemplate={openTemplateStudio}
           onEditDoc={onEditDoc}
           onLoadProject={onLoadProject}
           nativeOpenFile={nativeOpenFile}

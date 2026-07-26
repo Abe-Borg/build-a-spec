@@ -130,7 +130,7 @@ def build_docx(
     else:
         document.add_paragraph("None — every provision is confirmed.")
 
-    # -- imported provisions not yet reviewed (Phase 5 master import) ------
+    # -- imported/external starter provisions not yet reviewed -------------
     imported = [
         (ref, p.text)
         for _part, _article, p, _depth, ref in iter_paragraphs(section)
@@ -138,11 +138,15 @@ def build_docx(
     ]
     if imported:
         document.add_paragraph()
+        # Keep the established heading for exported-document compatibility.
+        # Template-seeded paragraphs share the same reviewable ``imported``
+        # status, while the explanatory copy below names both origins.
         _centered(document, "IMPORTED PROVISIONS NOT YET REVIEWED")
         document.add_paragraph(
-            "The following provisions were imported from a master "
-            "specification and have not been confirmed or adapted for this "
-            "project. Each requires review before issue."
+            "The following provisions came from external starter content "
+            "(an office master or reusable template) and have not been "
+            "confirmed or adapted for this project. Each requires review "
+            "before issue."
         )
         _schedule_table(document, imported, ("Ref", "Imported provision"))
 

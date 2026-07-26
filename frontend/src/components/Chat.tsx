@@ -1,7 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChatMessage, Figure } from "../types";
 import { starterPrompts } from "../lib/tour";
-import { hasCompletedOnboarding } from "../lib/onboardingStorage";
+import {
+  consumeTutorialUpdateInvitation,
+  hasCompletedOnboarding,
+} from "../lib/onboardingStorage";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SuggestedPrompts from "./SuggestedPrompts";
@@ -14,7 +17,7 @@ interface Props {
   suggestions: string[];
   /** Active discipline (generic open-catalog sessions) — tailors starter chips. */
   discipline?: string;
-  /** Start the passive guided tour — the onboarding starter chip. */
+  /** Start the full interactive guided tutorial — the onboarding starter chip. */
   onStartOnboarding: () => void;
   /** Stop the in-flight turn, forwarded to the composer. */
   onStop: () => void;
@@ -75,11 +78,13 @@ export default function Chat({
   };
 
   const toured = hasCompletedOnboarding();
+  const [tutorialUpdated] = useState(consumeTutorialUpdateInvitation);
 
   return (
     <section
       className="flex min-w-[420px] flex-1 basis-[46%] flex-col border-r border-edge"
       data-tour="chat-pane"
+      data-capability="chat.streaming"
     >
       <div
         ref={scrollRef}
@@ -97,7 +102,10 @@ export default function Chat({
               I&apos;ll interview you through the rest while the spec takes
               shape. Or start from one of these:
             </p>
-            <div className="mt-6 flex w-full max-w-md flex-col gap-2 text-left">
+            <div
+              className="mt-6 flex w-full max-w-md flex-col gap-2 text-left"
+              data-capability="session.starters"
+            >
               {starterPrompts(discipline).map((p) =>
                 p.kind === "onboarding" ? (
                   <button
@@ -105,16 +113,18 @@ export default function Chat({
                     onClick={onStartOnboarding}
                     disabled={busy}
                     className={`rounded-xl border border-accent/50 bg-accent/10 px-4 py-2.5 transition-colors hover:border-accent hover:bg-accent/15 disabled:pointer-events-none disabled:opacity-40 ${
-                      toured ? "" : "chip-pulse"
+                      toured && !tutorialUpdated ? "" : "chip-pulse"
                     }`}
                   >
                     <span className="block text-sm text-ink">
                       🧭 {p.label}
                     </span>
                     <span className="mt-0.5 block text-[11px] text-ink-faint">
-                      {toured
-                        ? "Take the passive tour again · ~3 minutes"
-                        : "Passive guided tour · ~3 minutes"}
+                      {tutorialUpdated
+                        ? "Full tutorial updated — see every feature"
+                        : toured
+                          ? "Take the full interactive tutorial again"
+                          : "Full interactive tutorial · uses an actual spec"}
                     </span>
                   </button>
                 ) : (
@@ -138,7 +148,10 @@ export default function Chat({
             </div>
           </div>
         ) : (
-          <div className="mx-auto flex max-w-3xl flex-col gap-5">
+          <div
+            className="mx-auto flex max-w-3xl flex-col gap-5"
+            data-capability="figure.create"
+          >
             {messages.map((m) => (
               <MessageBubble
                 key={m.id}

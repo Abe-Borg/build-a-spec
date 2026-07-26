@@ -48,10 +48,16 @@ _REFERENCE_OPEN_FILE_TYPES = (
     "Reference document (*.docx;*.pdf;*.txt;*.xml;*.csv)",
     "All files (*.*)",
 )
+_TEMPLATE_OPEN_FILE_TYPES = (
+    "Build a Spec template (*.bastemplate)",
+    "All files (*.*)",
+)
+_TEMPLATE_SAVE_FILE_TYPES = _TEMPLATE_OPEN_FILE_TYPES
 _OPEN_FILE_TYPES_BY_KIND = {
     "docx": _DOCX_OPEN_FILE_TYPES,
     "reference": _REFERENCE_OPEN_FILE_TYPES,
     "project": _PROJECT_OPEN_FILE_TYPES,
+    "template": _TEMPLATE_OPEN_FILE_TYPES,
 }
 
 
@@ -136,11 +142,24 @@ class _CloseController:
         "window.buildaspecRequestClose();return true;}"
         "}catch(e){}return false;})()"
     )
+    _REQUEST_BUSY_TUTORIAL_CLOSE_JS = (
+        "(function(){try{"
+        "if(typeof window.buildaspecRequestClose==='function'){"
+        "window.buildaspecRequestClose('tutorial-busy');return true;}"
+        "}catch(e){}return false;})()"
+    )
+    _REQUEST_RESTORED_TUTORIAL_CLOSE_JS = (
+        "(function(){try{"
+        "if(typeof window.buildaspecRequestClose==='function'){"
+        "window.buildaspecRequestClose('tutorial-restored');return true;}"
+        "}catch(e){}return false;})()"
+    )
 
     def __init__(self) -> None:
         self._window = None
         self._allow_close = False
         self._prompting = False
+        self._close_reason = "unsaved"
 
     def _bind(self, window) -> None:
         self._window = window
@@ -155,8 +174,24 @@ class _CloseController:
         try:
             from backend import sessions
 
-            if not sessions.has_unsaved_progress(sessions.get_session()):
+            # A tutorial is a disposable workspace. Native close always
+            # returns to the exact retained original before deciding whether
+            # the user's real project needs a save prompt.
+            manager = sessions.workspace_manager()
+            restored_tutorial = manager.current().scope != "original"
+            try:
+                session = manager.restore_original_for_native_close().session
+            except sessions.WorkspaceBusyError:
+                self._close_reason = "tutorial-busy"
+                if not self._prompting:
+                    self._prompting = True
+                    threading.Thread(target=self._ask_frontend, daemon=True).start()
+                return False
+            if not sessions.has_unsaved_progress(session):
                 return None  # nothing to lose — close without nagging
+            self._close_reason = (
+                "tutorial-restored" if restored_tutorial else "unsaved"
+            )
         except Exception:
             return None  # never trap the user on a bookkeeping error
         if not self._prompting:
@@ -166,13 +201,22 @@ class _CloseController:
 
     def _ask_frontend(self) -> None:
         handled = False
+        reason = self._close_reason
         try:
-            handled = bool(self._window.evaluate_js(self._REQUEST_CLOSE_JS))
+            script = (
+                self._REQUEST_BUSY_TUTORIAL_CLOSE_JS
+                if reason == "tutorial-busy"
+                else self._REQUEST_RESTORED_TUTORIAL_CLOSE_JS
+                if reason == "tutorial-restored"
+                else self._REQUEST_CLOSE_JS
+            )
+            handled = bool(self._window.evaluate_js(script))
         except Exception:
             handled = False
         finally:
             self._prompting = False
-        if not handled:
+            self._close_reason = "unsaved"
+        if not handled and reason != "tutorial-busy":
             # No frontend handler (broken/old page) — don't trap the user.
             self._force_close()
 
@@ -199,6 +243,27 @@ class _CloseController:
         ``_force_close()``.
         """
         return self._save_project_file()
+
+    def save_template(self, template_id: str) -> bool:
+        """Export one validated catalog entry through a scoped Save dialog."""
+        import webview
+
+        from backend.templates import get_template_catalog
+
+        try:
+            payload, filename = get_template_catalog().export(template_id)
+        except Exception:
+            return False
+        target = self._window.create_file_dialog(
+            webview.FileDialog.SAVE,
+            save_filename=filename,
+            file_types=_TEMPLATE_SAVE_FILE_TYPES,
+        )
+        if not target:
+            return False
+        if isinstance(target, (tuple, list)):
+            target = target[0]
+        return self._atomic_write_target(target, payload, prefix=".buildaspec-template-")
 
     def open_file(self, kind: str = "project") -> dict[str, str] | None:
         """Frontend's Open / Import buttons (native shell): show a native
@@ -267,7 +332,10 @@ class _CloseController:
 
         from backend import sessions
 
-        session = sessions.get_session()
+        workspace = sessions.get_workspace()
+        if workspace.scope != "original":
+            return False
+        session = workspace.session
         try:
             payload = sessions.project_package_bytes(session)
             filename = sessions.project_default_filename(session)
@@ -313,6 +381,35 @@ class _CloseController:
                 except OSError:
                     pass
         return True
+
+    @staticmethod
+    def _atomic_write_target(target, payload: bytes, *, prefix: str) -> bool:
+        temp_path: str | None = None
+        try:
+            target_path = os.path.abspath(os.fspath(target))
+            target_dir = os.path.dirname(target_path)
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=target_dir,
+                prefix=prefix,
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temp_path = handle.name
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, target_path)
+            temp_path = None
+            return True
+        except (OSError, TypeError, ValueError):
+            return False
+        finally:
+            if temp_path is not None:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
 
 
 def main() -> None:

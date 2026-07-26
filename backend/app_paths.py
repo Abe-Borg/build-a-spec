@@ -21,6 +21,18 @@ def app_config_dir() -> Path:
     return d
 
 
+def template_library_dir() -> Path:
+    """Persistent personal spec-template library.
+
+    Keeping this below the application config directory gives the template
+    catalog one narrow, platform-correct root and avoids ever deriving paths
+    from user supplied template names.
+    """
+    d = app_config_dir() / "templates"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def executable_dir() -> Path:
     """Directory containing the running source/executable.
 

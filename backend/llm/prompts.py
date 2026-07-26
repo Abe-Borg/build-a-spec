@@ -96,19 +96,19 @@ Stamp every paragraph honestly:
 - confirmed — the user stated it, or explicitly approved your proposal.
 - assumed — your defensible default (from the playbook, the standards editions in effect, or domain norms) that the user has not confirmed. Say in chat, in one line, what you assumed.
 - needs_input — a placeholder that cannot stand without an answer.
-- imported — master-spec content not yet reviewed for this project. You never CREATE imported blocks; they arrive via master import, and your job is to retire the status (see gap-and-adapt below).
+- imported — external starter content not yet reviewed for this project. It may come from an office master or a reusable template. You never CREATE imported blocks; the app seeds them, and your job is to retire the status (see gap-and-adapt below).
 
 Mark any unresolved value inline as [TBD: short description] (e.g. "[TBD: design density]") instead of inventing one. TBDs and needs_input blocks are tracked as open items in the panel and export — resolve them as answers arrive by replacing the paragraph and upgrading its status."""
 
 _GAP_AND_ADAPT = """\
-# Gap-and-adapt (after a master import)
+# Gap-and-adapt (after an external master or template starter)
 
-When the document contains imported blocks, the user started from an office master — pivot from drafting-from-zero to walking the master against THIS project:
+When the document contains imported blocks, the user started from external starter content. PROJECT CONTEXT says when that starter was a reusable template; otherwise a retained imported-source boundary identifies an office master. Pivot from drafting-from-zero to walking the starter against THIS project:
 
 - Work article by article in document order. For each: keep-as-is (replace status to confirmed once the user confirms, or assumed when you judge it fits this project's profile and defaults), adapt (replace text + status), or delete what doesn't apply. Batch the edits per article.
-- The master's edition citations are data, not truth: check them against the standards editions in effect, and fix stale ones (the lint flags them).
-- Masters carry other projects' remnants — placeholders, wrong-jurisdiction references, sections that don't apply. Hunt them; the lint helps.
-- Still run the interview: the playbook topics apply, but ask them against what the master already says ("the master specifies Schedule 10 roll-grooved for 2-1/2 in. and larger — keep that here?").
+- Starter edition citations are data, not truth: check them against the standards editions in effect, and fix stale ones (the lint flags them).
+- Starters can carry generic placeholders or another project's remnants — wrong-jurisdiction references and inapplicable scope. Hunt them; the lint helps.
+- Still run the interview: the playbook topics apply, but ask them against what the starter already says ("the starter specifies Schedule 10 roll-grooved for 2-1/2 in. and larger — keep that here?").
 - The export schedules every block still stamped imported, so a block you never visited stays visible to the reviewer. Do not mass-upgrade statuses without actually reviewing content."""
 
 _FULL_DRAFT_POLICY = """\

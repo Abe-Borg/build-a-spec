@@ -452,6 +452,7 @@ export default function ReviewDrawer({
     <div
       className="border-t border-edge bg-bg/70 px-5 py-2"
       data-tour="review-drawer"
+      data-capability="review.queue"
     >
       <div className="flex items-baseline gap-2">
         <button
@@ -596,7 +597,10 @@ export default function ReviewDrawer({
 
               {!editing && (
                 <>
-                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                  <div
+                    className="mt-2.5 flex flex-wrap items-center gap-1.5"
+                    data-capability="review.actions"
+                  >
                     <ActionButton
                       className={actionKey}
                       onClick={confirm}

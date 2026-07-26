@@ -1,0 +1,227 @@
+{
+  "kind": "buildaspec-spec-template",
+  "format": 1,
+  "id": "curated:complete-section-starter",
+  "name": "Complete Section Starter",
+  "description": "A discipline-neutral SectionFormat starter with review items, nested provisions, and editable placeholders.",
+  "created_at": "2026-07-26T00:00:00+00:00",
+  "updated_at": "2026-07-26T00:00:00+00:00",
+  "module_id": "generic",
+  "document": {
+    "section": {
+      "number": "01 80 00",
+      "title": "PERFORMANCE AND COORDINATION REQUIREMENTS"
+    },
+    "parts": [
+      {
+        "id": "pt1",
+        "number": 1,
+        "title": "PART 1 - GENERAL",
+        "seq": 4,
+        "articles": [
+          {
+            "id": "pt1.a1",
+            "number": "1.1",
+            "title": "SUMMARY",
+            "seq": 4,
+            "paragraphs": [
+              {
+                "id": "pt1.a1.p1",
+                "label": "A.",
+                "text": "Provide labor, materials, coordination, testing, and documentation necessary for a complete installation within this Section's scope.",
+                "status": "imported",
+                "source_item_id": "",
+                "seq": 3,
+                "children": [
+                  {
+                    "id": "pt1.a1.p1.p1",
+                    "label": "1.",
+                    "text": "Coordinate interfaces with adjacent systems before fabrication or procurement.",
+                    "status": "imported",
+                    "source_item_id": "",
+                    "seq": 3,
+                    "children": [
+                      {
+                        "id": "pt1.a1.p1.p1.p1",
+                        "label": "a.",
+                        "text": "Record conflicts and proposed resolutions in the coordination submittal.",
+                        "status": "imported",
+                        "source_item_id": "",
+                        "seq": 2,
+                        "children": [
+                          {
+                            "id": "pt1.a1.p1.p1.p1.p1",
+                            "label": "1)",
+                            "text": "Identify the responsible party and required decision date for each unresolved interface.",
+                            "status": "imported",
+                            "source_item_id": "",
+                            "seq": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "id": "pt1.a1.p1.p2",
+                    "label": "2.",
+                    "text": "Do not conceal work until required inspections and tests are complete.",
+                    "status": "imported",
+                    "source_item_id": "",
+                    "seq": 1,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "pt1.a1.p2",
+                "label": "B.",
+                "text": "Related requirements are specified in adjoining technical sections and the Contract Documents.",
+                "status": "imported",
+                "source_item_id": "",
+                "seq": 1,
+                "children": []
+              },
+              {
+                "id": "pt1.a1.p3",
+                "label": "C.",
+                "text": "Confirm the final limits of work for [TBD: coordinated project scope].",
+                "status": "needs_input",
+                "source_item_id": "",
+                "seq": 1,
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "pt1.a2",
+            "number": "1.2",
+            "title": "SUBMITTALS",
+            "seq": 3,
+            "paragraphs": [
+              {
+                "id": "pt1.a2.p1",
+                "label": "A.",
+                "text": "Submit product data, shop drawings, and coordination information appropriate to the selected system.",
+                "status": "imported",
+                "source_item_id": "",
+                "seq": 1,
+                "children": []
+              },
+              {
+                "id": "pt1.a2.p2",
+                "label": "B.",
+                "text": "Submit closeout records identifying installed products, test results, and accepted deviations.",
+                "status": "imported",
+                "source_item_id": "",
+                "seq": 1,
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "pt1.a3",
+            "number": "1.3",
+            "title": "QUALITY ASSURANCE",
+            "seq": 2,
+            "paragraphs": [
+              {
+                "id": "pt1.a3.p1",
+                "label": "A.",
+                "text": "Use qualified installers and testing personnel experienced with work of comparable type and complexity.",
+                "status": "imported",
+                "source_item_id": "",
+                "seq": 1,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "pt2",
+        "number": 2,
+        "title": "PART 2 - PRODUCTS",
+        "seq": 2,
+        "articles": [
+          {
+            "id": "pt2.a1",
+            "number": "2.1",
+            "title": "SYSTEM REQUIREMENTS",
+            "seq": 3,
+            "paragraphs": [
+              {
+                "id": "pt2.a1.p1",
+                "label": "A.",
+                "text": "Provide compatible components rated for the environmental and operating conditions established by the project requirements.",
+                "status": "imported",
+                "source_item_id": "",
+                "seq": 1,
+                "children": []
+              },
+              {
+                "id": "pt2.a1.p2",
+                "label": "B.",
+                "text": "Final performance criteria: [TBD: discipline-specific rating and capacity].",
+                "status": "needs_input",
+                "source_item_id": "",
+                "seq": 1,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "pt3",
+        "number": 3,
+        "title": "PART 3 - EXECUTION",
+        "seq": 2,
+        "articles": [
+          {
+            "id": "pt3.a1",
+            "number": "3.1",
+            "title": "INSTALLATION AND VERIFICATION",
+            "seq": 4,
+            "paragraphs": [
+              {
+                "id": "pt3.a1.p1",
+                "label": "A.",
+                "text": "Examine substrates and conditions; report conditions that prevent compliant installation before proceeding.",
+                "status": "imported",
+                "source_item_id": "",
+                "seq": 1,
+                "children": []
+              },
+              {
+                "id": "pt3.a1.p2",
+                "label": "B.",
+                "text": "Install and coordinate the work in accordance with accepted submittals and applicable requirements.",
+                "status": "imported",
+                "source_item_id": "",
+                "seq": 1,
+                "children": []
+              },
+              {
+                "id": "pt3.a1.p3",
+                "label": "C.",
+                "text": "Test completed work, correct deficiencies, and submit final verification records.",
+                "status": "imported",
+                "source_item_id": "",
+                "seq": 1,
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "edition_overrides": {},
+    "project_identity": {
+      "discipline": "General Requirements",
+      "project_type": "Building Project"
+    },
+    "project_profile": {},
+    "suppressed_standards": {}
+  }
+}

@@ -206,6 +206,7 @@ export default function ResearchDrawer({
     <div
       className="border-t border-edge bg-bg/70 px-5 py-2"
       data-tour="research-drawer"
+      data-capability="research.profile"
     >
       <div className="flex items-baseline gap-2">
         <button
@@ -231,6 +232,7 @@ export default function ResearchDrawer({
           <button
             className="shrink-0 rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent"
             onClick={() => setReportOpen(true)}
+            data-capability="research.report"
             title="View the full research findings report"
           >
             View report
@@ -246,6 +248,7 @@ export default function ResearchDrawer({
             onClick={onStart}
             disabled={startDisabled}
             data-tour="research-start"
+            data-capability="research.run"
           >
             {running ? (
               <span className="status-shimmer">{startLabel}</span>
@@ -334,7 +337,7 @@ export default function ResearchDrawer({
                     ).length
                   } dimension(s) failed)`}
               </p>
-              <ul className="space-y-1">
+              <ul className="space-y-1" data-capability="research.apply">
                 {items.map((item) => (
                   <li key={item.item_id} className="text-[11px]">
                     <div className="flex items-baseline gap-2">

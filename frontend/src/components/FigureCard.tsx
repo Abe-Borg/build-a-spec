@@ -148,7 +148,10 @@ function FigureCard({
   };
 
   return (
-    <figure className="my-3 rounded-lg border border-edge bg-surface/60 p-3">
+    <figure
+      className="my-3 rounded-lg border border-edge bg-surface/60 p-3"
+      data-capability="figure.manage"
+    >
       <figcaption className="mb-2 flex items-start gap-2">
         <span className="mt-0.5 shrink-0 rounded bg-edge/60 px-1.5 py-px text-[10px] font-medium tracking-wide text-ink-faint uppercase">
           {kindBadge[figure.kind]}

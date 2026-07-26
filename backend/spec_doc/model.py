@@ -1022,8 +1022,9 @@ def apply_edits(
 class DocumentStore:
     """The session's document plus its per-turn snapshot history.
 
-    ``versions[0]`` is the empty document; every turn that changed the doc
-    appends one snapshot at commit. Undo/redo move ``index`` along that
+    ``versions[0]`` is normally the empty document; a template instance uses
+    its immutable starter snapshot as version zero. Every later turn that
+    changed the doc appends one snapshot at commit. Undo/redo move ``index`` along that
     list; a new edit after undo truncates the redo tail (so ids can never
     collide with an abandoned future). Turn semantics mirror the
     conversation-history invariant: mutations during a turn are provisional
@@ -1121,6 +1122,24 @@ class DocumentStore:
         self._dirty = False
         # This version is the baseline for "redline vs master" (Batch 5).
         self.baseline_index = self.index
+
+    def seed_template(self, section: SpecSection) -> None:
+        """Start a new native document from a semantic template.
+
+        A template is the initial document, not an import operation.  It is
+        therefore version zero and has no source-DOCX baseline; Undo only
+        becomes available after the user makes their first change.
+        """
+        if self._turn_backup is not None:
+            raise ValueError("Cannot instantiate a template during a turn.")
+        snapshot = section.to_dict()
+        parsed = SpecSection.from_dict(snapshot)
+        self.doc = parsed
+        self.versions = [snapshot]
+        self.index = 0
+        self.baseline_index = None
+        self._turn_backup = None
+        self._dirty = False
 
     def rollback_turn(self) -> None:
         if self._turn_backup is not None:

@@ -33,6 +33,11 @@ class AuditRunner:
         self.error = ""
         self.result: dict[str, Any] | None = None
 
+    @property
+    def is_settling(self) -> bool:
+        thread = self._thread
+        return bool(thread is not None and thread.is_alive())
+
     def start(
         self,
         *,

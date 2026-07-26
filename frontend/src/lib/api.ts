@@ -14,9 +14,16 @@ import type {
   ReferenceDocMeta,
   ResearchEvent,
   ResearchSnapshot,
+  SessionBundle,
   SectionDiffPayload,
   SourceCapabilitiesState,
   StreamEvent,
+  TemplatePreviewResult,
+  TemplateSummary,
+  TutorialEvent,
+  TutorialStartPayload,
+  TutorialStatusPayload,
+  TutorialSource,
   UpdateCheckPayload,
   UsageSummary,
 } from "../types";
@@ -114,6 +121,12 @@ export async function getDoc(): Promise<DocPayload> {
   return resp.json();
 }
 
+export async function getSessionBundle(): Promise<SessionBundle> {
+  const resp = await fetch("/api/session/bundle");
+  if (!resp.ok) throw new Error(`session bundle ${resp.status}`);
+  return resp.json();
+}
+
 /**
  * Just the imported-source permission report.
  *
@@ -138,9 +151,17 @@ export async function getFigures(): Promise<Figure[]> {
 }
 
 /** Delete a figure. 409 while a turn streams; returns the remaining figures. */
-export async function deleteFigure(fid: string): Promise<Figure[]> {
+export async function deleteFigure(
+  fid: string,
+  lease: WorkspaceLeaseInput = {},
+): Promise<Figure[]> {
   const resp = await fetch(`/api/figure/${encodeURIComponent(fid)}`, {
     method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
   });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
@@ -155,8 +176,23 @@ export function figureCsvUrl(fid: string): string {
 }
 
 /** Step the document one version back/forward; null when at the end stop. */
-async function stepDoc(direction: "undo" | "redo"): Promise<DocPayload | null> {
-  const resp = await fetch(`/api/doc/${direction}`, { method: "POST" });
+interface WorkspaceLeaseInput {
+  workspaceId?: number;
+  generation?: number;
+}
+
+async function stepDoc(
+  direction: "undo" | "redo",
+  lease: WorkspaceLeaseInput = {},
+): Promise<DocPayload | null> {
+  const resp = await fetch(`/api/doc/${direction}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
+  });
   if (resp.status === 409) return null;
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
@@ -165,8 +201,8 @@ async function stepDoc(direction: "undo" | "redo"): Promise<DocPayload | null> {
   return data;
 }
 
-export const undoDoc = () => stepDoc("undo");
-export const redoDoc = () => stepDoc("redo");
+export const undoDoc = (lease?: WorkspaceLeaseInput) => stepDoc("undo", lease);
+export const redoDoc = (lease?: WorkspaceLeaseInput) => stepDoc("redo", lease);
 
 /** Version diff for the in-app compare view (Batch 5). cur defaults to head. */
 export async function getDocDiff(
@@ -184,11 +220,18 @@ export async function getDocDiff(
 }
 
 /** Apply a manual edit batch (WI2). 409 while a model turn streams. */
-export async function editDoc(ops: EditOp[]): Promise<DocPayload> {
+export async function editDoc(
+  ops: EditOp[],
+  lease: WorkspaceLeaseInput = {},
+): Promise<DocPayload> {
   const resp = await fetch("/api/doc/edit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ops }),
+    body: JSON.stringify({
+      ops,
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
   });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
@@ -303,6 +346,285 @@ export async function* streamChat(
   yield* readSse<StreamEvent>(resp);
 }
 
+/* --- Full guided tutorial workspace --- */
+
+export async function getTutorialStatus(): Promise<TutorialStatusPayload> {
+  const resp = await fetch("/api/tutorial/status");
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `tutorial status failed (${resp.status})`);
+  }
+  return data;
+}
+
+export async function startTutorialWorkspace(
+  args: {
+    source: TutorialSource;
+    requestId: string;
+    workspaceId: number;
+    generation: number;
+  },
+): Promise<TutorialStartPayload> {
+  const resp = await fetch("/api/tutorial/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      request_id: args.requestId,
+      source: args.source,
+      workspace_id: args.workspaceId,
+      generation: args.generation,
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `tutorial start failed (${resp.status})`);
+  }
+  return data;
+}
+
+export async function* enrichTutorialWorkspace(args: {
+  tutorialId: string;
+  workspaceId?: number;
+  generation?: number;
+  mode?: "live" | "bundled";
+}): AsyncGenerator<TutorialEvent> {
+  const resp = await fetch("/api/tutorial/enrich", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tutorial_id: args.tutorialId,
+      workspace_id: args.workspaceId,
+      generation: args.generation,
+      mode: args.mode ?? "live",
+    }),
+  });
+  if (!resp.ok || !resp.body) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error ?? `tutorial enrichment failed (${resp.status})`);
+  }
+  yield* readSse<TutorialEvent>(resp);
+}
+
+async function tutorialTransition(
+  path: string,
+  body: Record<string, unknown>,
+): Promise<SessionBundle> {
+  const resp = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `tutorial transition failed (${resp.status})`);
+  }
+  return (data.session ?? data) as SessionBundle;
+}
+
+export const startTutorialScenario = (args: {
+  tutorialId: string;
+  workspaceId?: number;
+  generation?: number;
+  chapter: string;
+}) =>
+  tutorialTransition("/api/tutorial/scenario/start", {
+    tutorial_id: args.tutorialId,
+    workspace_id: args.workspaceId,
+    generation: args.generation,
+    chapter: args.chapter,
+  });
+
+export const finishTutorialScenario = (args: {
+  tutorialId: string;
+  workspaceId?: number;
+  generation?: number;
+}) =>
+  tutorialTransition("/api/tutorial/scenario/finish", {
+    tutorial_id: args.tutorialId,
+    workspace_id: args.workspaceId,
+    generation: args.generation,
+  });
+
+export const restoreTutorialWorkspace = (args: {
+  tutorialId: string;
+  workspaceId?: number;
+  generation?: number;
+}) =>
+  tutorialTransition("/api/tutorial/restore", {
+    tutorial_id: args.tutorialId,
+    workspace_id: args.workspaceId,
+    generation: args.generation,
+  });
+
+export const keepTutorialWorkspace = (args: {
+  tutorialId: string;
+  workspaceId?: number;
+  generation?: number;
+}) =>
+  tutorialTransition("/api/tutorial/keep", {
+    tutorial_id: args.tutorialId,
+    workspace_id: args.workspaceId,
+    generation: args.generation,
+  });
+
+/** Download the tutorial copy without changing the active tutorial scope. */
+export async function downloadTutorialCopy(): Promise<void> {
+  const resp = await fetch("/api/project/save?scope=tutorial");
+  if (!resp.ok) throw new Error(`tutorial save failed (${resp.status})`);
+  const blob = await resp.blob();
+  const cd = resp.headers.get("Content-Disposition") ?? "";
+  const filename = /filename="?([^";]+)"?/.exec(cd)?.[1] ?? "tutorial.baspec";
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Save the protected pre-tutorial project before replacing it with the tutorial. */
+export async function downloadOriginalProjectCopy(): Promise<void> {
+  const resp = await fetch("/api/project/save?scope=original");
+  if (!resp.ok) throw new Error(`original project save failed (${resp.status})`);
+  const blob = await resp.blob();
+  const cd = resp.headers.get("Content-Disposition") ?? "";
+  const filename =
+    /filename="?([^";]+)"?/.exec(cd)?.[1] ?? "original-project.baspec";
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* --- Reusable spec starters (templates) --- */
+
+export async function listTemplates(): Promise<{
+  templates: TemplateSummary[];
+  invalidPersonalCount: number;
+}> {
+  const resp = await fetch("/api/templates");
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `template list failed (${resp.status})`);
+  }
+  return {
+    templates: data.templates ?? [],
+    invalidPersonalCount: data.invalid_personal_count ?? 0,
+  };
+}
+
+export async function previewTemplate(args: {
+  name: string;
+  description?: string;
+  mode: "exact" | "ai_generalize";
+}): Promise<TemplatePreviewResult> {
+  const resp = await fetch("/api/templates/preview", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify(args),
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error ?? `template preview failed (${resp.status})`);
+  }
+  if (!(resp.headers.get("Content-Type") ?? "").includes("text/event-stream")) {
+    const data = await resp.json();
+    if (!data.ok) throw new Error(data.error ?? "template preview failed");
+    return data;
+  }
+  let preview: TemplatePreviewResult | null = null;
+  for await (const event of readSse<
+    | { type: "template_status"; stage: string }
+    | { type: "template_preview"; preview: TemplatePreviewResult }
+    | { type: "error"; message: string }
+  >(resp)) {
+    if (event.type === "error") throw new Error(event.message);
+    if (event.type === "template_preview") preview = event.preview;
+  }
+  if (!preview) throw new Error("The template preview stream ended without a result.");
+  return preview;
+}
+
+export async function commitTemplate(
+  previewToken: string,
+): Promise<TemplateSummary> {
+  const resp = await fetch("/api/templates", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ preview_token: previewToken }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `template save failed (${resp.status})`);
+  }
+  return (data.template ?? data) as TemplateSummary;
+}
+
+export async function updateTemplate(
+  id: string,
+  fields: { name?: string; description?: string },
+): Promise<TemplateSummary> {
+  const resp = await fetch(`/api/templates/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `template update failed (${resp.status})`);
+  }
+  return (data.template ?? data) as TemplateSummary;
+}
+
+export async function deleteTemplate(id: string): Promise<void> {
+  const resp = await fetch(`/api/templates/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!resp.ok && resp.status !== 204) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error ?? `template delete failed (${resp.status})`);
+  }
+}
+
+export async function importTemplate(file: File): Promise<TemplateSummary> {
+  const body = new FormData();
+  body.append("file", file);
+  const resp = await fetch("/api/templates/import", { method: "POST", body });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `template import failed (${resp.status})`);
+  }
+  return (data.template ?? data) as TemplateSummary;
+}
+
+export const templateExportUrl = (id: string) =>
+  `/api/templates/${encodeURIComponent(id)}/export`;
+
+export async function instantiateTemplate(id: string): Promise<SessionBundle> {
+  const resp = await fetch(
+    `/api/templates/${encodeURIComponent(id)}/instantiate`,
+    { method: "POST" },
+  );
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `template start failed (${resp.status})`);
+  }
+  const session = (data.session ?? data) as SessionBundle;
+  if (typeof data.warning === "string" && data.warning) {
+    session.template_warning = data.warning;
+  }
+  return session;
+}
+
 /**
  * Stop the in-flight turn (Claude.ai-style stop button). Whatever text/edits
  * landed before this call still lands normally through that turn's own
@@ -319,8 +641,17 @@ export async function stopChat(): Promise<void> {
 
 /* --- Research (Phase 4) --- */
 
-export async function startResearch(): Promise<void> {
-  const resp = await fetch("/api/research/start", { method: "POST" });
+export async function startResearch(
+  lease: WorkspaceLeaseInput = {},
+): Promise<void> {
+  const resp = await fetch("/api/research/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
+  });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
     throw new Error(data.error ?? `research start failed (${resp.status})`);
@@ -328,8 +659,17 @@ export async function startResearch(): Promise<void> {
 }
 
 /** Stop the running research fan-out. Discards whatever it found so far. */
-export async function stopResearch(): Promise<void> {
-  const resp = await fetch("/api/research/stop", { method: "POST" });
+export async function stopResearch(
+  lease: WorkspaceLeaseInput = {},
+): Promise<void> {
+  const resp = await fetch("/api/research/stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
+  });
   if (!resp.ok && resp.status !== 409) {
     const data = await resp.json().catch(() => ({}));
     throw new Error(data.error ?? `stop failed (${resp.status})`);
@@ -369,10 +709,19 @@ export async function importMaster(file: File): Promise<ImportResultPayload> {
 
 export async function uploadReference(
   file: File,
+  lease: WorkspaceLeaseInput = {},
 ): Promise<{ reference_docs: ReferenceDocMeta[]; warnings: string[] }> {
   const form = new FormData();
   form.append("file", file);
-  const resp = await fetch("/api/reference/upload", {
+  const query = new URLSearchParams();
+  if (lease.workspaceId !== undefined) {
+    query.set("workspace_id", String(lease.workspaceId));
+  }
+  if (lease.generation !== undefined) {
+    query.set("generation", String(lease.generation));
+  }
+  const suffix = query.size ? `?${query}` : "";
+  const resp = await fetch(`/api/reference/upload${suffix}`, {
     method: "POST",
     body: form,
   });
@@ -385,9 +734,15 @@ export async function uploadReference(
 
 export async function deleteReference(
   rid: string,
+  lease: WorkspaceLeaseInput = {},
 ): Promise<ReferenceDocMeta[]> {
   const resp = await fetch(`/api/reference/${encodeURIComponent(rid)}`, {
     method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
   });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
@@ -419,12 +774,15 @@ export class QcStartError extends Error {
 
 export async function startQc(
   acknowledgeScopeMismatch = false,
+  lease: WorkspaceLeaseInput = {},
 ): Promise<void> {
   const resp = await fetch("/api/qc/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       acknowledge_scope_mismatch: acknowledgeScopeMismatch,
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
     }),
   });
   const data = await resp.json();
@@ -441,8 +799,17 @@ export async function startQc(
 }
 
 /** Request a stop; the worker may continue briefly to preserve paid partial activity. */
-export async function stopQc(): Promise<void> {
-  const resp = await fetch("/api/qc/stop", { method: "POST" });
+export async function stopQc(
+  lease: WorkspaceLeaseInput = {},
+): Promise<void> {
+  const resp = await fetch("/api/qc/stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
+  });
   if (!resp.ok && resp.status !== 409) {
     const data = await resp.json().catch(() => ({}));
     throw new Error(data.error ?? `stop failed (${resp.status})`);
@@ -463,11 +830,18 @@ export async function* streamQc(): AsyncGenerator<QcEvent> {
 }
 
 /** Apply accepted findings' fixes as one undoable version. */
-export async function applyQc(findingIds: string[]): Promise<QcApplyResult> {
+export async function applyQc(
+  findingIds: string[],
+  lease: WorkspaceLeaseInput = {},
+): Promise<QcApplyResult> {
   const resp = await fetch("/api/qc/apply", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ finding_ids: findingIds }),
+    body: JSON.stringify({
+      finding_ids: findingIds,
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
   });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
@@ -480,11 +854,17 @@ export async function applyQc(findingIds: string[]): Promise<QcApplyResult> {
 export async function dismissQc(
   findingId: string,
   reason: string,
+  lease: WorkspaceLeaseInput = {},
 ): Promise<QcSnapshot> {
   const resp = await fetch("/api/qc/dismiss", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ finding_id: findingId, reason }),
+    body: JSON.stringify({
+      finding_id: findingId,
+      reason,
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
   });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {

@@ -314,9 +314,11 @@ export default function QCDrawer({
     <div
       className="border-t border-edge bg-bg/70 px-5 py-2"
       data-tour="qc-drawer"
+      data-capability="qc.run"
     >
       <div className="flex items-baseline gap-2">
         <button
+          data-capability="qc.preflight"
           ref={drawerToggleRef}
           className="flex min-w-0 flex-1 items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
           onClick={() => setExpanded((v) => !v)}
@@ -417,6 +419,7 @@ export default function QCDrawer({
             <div
               className="rounded-lg border border-edge bg-surface/50 p-2.5"
               data-tour="readiness"
+              data-capability="readiness.checklist"
             >
               <p className="flex items-center gap-2 text-[11px] font-medium tracking-wide text-ink-dim uppercase">
                 Issue readiness
@@ -512,8 +515,11 @@ export default function QCDrawer({
           )}
 
           {/* Complete: findings */}
+          <span className="sr-only" data-capability="qc.findings">
+            Final QC findings and actions
+          </span>
           {result && !running && (
-            <>
+            <div data-capability="qc.actions">
               {stale && (
                 <p className="rounded border border-warn/40 bg-warn/10 px-2 py-1 text-[11px] font-medium text-warn">
                   The document has changed since this QC ran (v
@@ -695,7 +701,7 @@ export default function QCDrawer({
                   )}
                 </div>
               )}
-            </>
+            </div>
           )}
         </div>
       )}
@@ -766,7 +772,10 @@ function QCReportActions({
 }) {
   const target = reportRunId || "ID not recorded";
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div
+      className="flex flex-wrap items-center gap-1.5"
+      data-capability="qc.report"
+    >
       <button
         className="rounded-md border border-accent/60 bg-accent/10 px-2 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/20"
         onClick={onView}

@@ -56,9 +56,14 @@ export default function Composer({
   };
 
   return (
-    <div className="border-t border-edge bg-surface p-4" data-tour="composer">
+    <div
+      className="border-t border-edge bg-surface p-4"
+      data-tour="composer"
+      data-capability="chat.interview"
+    >
       <div className="flex items-end gap-2 rounded-2xl border border-edge bg-bg p-2 focus-within:border-accent/70">
         <textarea
+          data-capability="chat.web-verify"
           ref={ref}
           rows={1}
           value={value}
@@ -80,6 +85,7 @@ export default function Composer({
         {disabled ? (
           <button
             onClick={onStop}
+            data-capability="chat.stop"
             title="Stop generating"
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white transition-colors hover:bg-accent-hover"
           >

@@ -74,6 +74,10 @@ export interface Health {
   legacy_discipline?: string;
   /** Legacy optional project-description primer. */
   project_context?: string;
+  /** Lease identity for every operation that can switch tutorial workspaces. */
+  workspace_id?: number;
+  workspace_scope?: "original" | "tutorial" | "scenario";
+  generation?: number;
 }
 
 /** API-key resolution status (WI3 settings panel). Never carries the key. */
@@ -392,6 +396,12 @@ export interface ReferenceDocMeta {
   excerpt: string;
 }
 
+export interface TemplateOrigin {
+  template_id: string;
+  name: string;
+  seed_block_ids: string[];
+}
+
 export interface DocPayload {
   doc: SpecDoc;
   open_questions: OpenItem[];
@@ -417,6 +427,8 @@ export interface DocPayload {
   source_preservation: SourcePreservationState | null;
   /** Per-operation source-edit permissions; null when no source package exists. */
   source_capabilities: SourceCapabilitiesState | null;
+  /** Reusable-starter provenance; independent from office-master source state. */
+  template_origin: TemplateOrigin | null;
 }
 
 /* --- Version diff / redline (Batch 5, mirrors backend/spec_doc/diffing.py) --- */
@@ -807,6 +819,128 @@ export interface ProjectLoadResult extends DocPayload {
   chat: { role: Role; text: string }[];
 }
 
+/* --- Reusable spec starters (templates) --- */
+
+export type TemplateSource = "curated" | "personal";
+
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  description: string;
+  source: TemplateSource;
+  module_id: string;
+  discipline: string;
+  project_type: string;
+  section_number: string;
+  section_title: string;
+  article_count: number;
+  paragraph_count: number;
+  updated_at?: string;
+  preview: string;
+  editable: boolean;
+  module_available: boolean;
+}
+
+export interface TemplatePreviewResult {
+  ok: boolean;
+  preview_token: string;
+  template: TemplateSummary;
+  document: SpecDoc;
+  diff?: SectionDiffPayload;
+  /** AI-generalization may be accepted asynchronously by older servers. */
+  status?: "complete" | "running" | "failed" | string;
+  error?: string;
+}
+
+/** Session hydration returned by tutorial and template transitions. */
+export type SessionBundle = Partial<DocPayload> & {
+  doc?: SpecDoc;
+  chat?: { role: Role; text: string }[];
+  messages?: { role: Role; text: string }[];
+  workspace_id?: number;
+  workspace_scope?: "original" | "tutorial" | "scenario";
+  generation?: number;
+  tutorial_id?: string;
+  scenario_kind?: string;
+  tutorial_source?: "current" | "generated" | "showcase";
+  research?: ResearchSnapshot;
+  qc?: QcSnapshot;
+  readiness?: ReadinessPayload;
+  usage?: UsageSummary;
+  health?: Health;
+  /** Warning returned while instantiating a template (for example, generic
+   * module fallback when its original curated module is not installed). */
+  template_warning?: string;
+  /** Defensive compatibility with an initially nested implementation. */
+  doc_payload?: Partial<DocPayload>;
+};
+
+/* --- Full guided tutorial workspace --- */
+
+export type TutorialSource = "current" | "generated" | "showcase";
+
+export interface TutorialCoverage {
+  ready: boolean;
+  gaps: string[];
+  anchors: Record<string, string>;
+  counts: Record<string, number>;
+  doc_version: number;
+}
+
+export interface TutorialStatusPayload {
+  ok: boolean;
+  active: boolean;
+  tutorial_id?: string;
+  workspace_id?: number;
+  generation?: number;
+  scope?: "original" | "tutorial" | "scenario";
+  source?: TutorialSource;
+  coverage?: TutorialCoverage;
+  chapter?: string;
+  scenario_kind?: string;
+  session?: SessionBundle;
+}
+
+export interface TutorialStartPayload {
+  ok: boolean;
+  tutorial_id: string;
+  workspace_id: number;
+  generation: number;
+  source: TutorialSource;
+  needs_enrichment: boolean;
+  coverage?: TutorialCoverage;
+  session: SessionBundle;
+}
+
+interface TutorialEventMeta {
+  workspace_id?: number;
+  generation?: number;
+}
+
+export type TutorialEvent =
+  | (StreamEvent & TutorialEventMeta)
+  | (TutorialEventMeta & {
+      type: "tutorial_coverage";
+      coverage: TutorialCoverage;
+    })
+  | (TutorialEventMeta & {
+      type: "tutorial_fallback";
+      /** Identity of the lease being replaced; must match the caller's
+       * expected workspace before the replacement session is accepted. */
+      replaces_workspace_id?: number;
+      replaces_generation?: number;
+      message: string;
+      reason?: string;
+      source?: TutorialSource;
+      session: SessionBundle;
+      coverage?: TutorialCoverage;
+    })
+  | (TutorialEventMeta & {
+      type: "tutorial_session";
+      source?: TutorialSource;
+      session: SessionBundle;
+    });
+
 /** Aggregated billed usage for one turn (all continuation rounds). */
 export interface TurnUsage {
   input_tokens?: number;
@@ -860,10 +994,14 @@ declare global {
          *  path. Resolves to the file's name + base64 bytes, or null when the
          *  dialog was cancelled. `kind` picks the file filter. */
         open_file?: (
-          kind: "project" | "docx" | "reference",
+          kind: "project" | "docx" | "reference" | "template",
         ) => Promise<{ name: string; data_b64: string } | null>;
+        /** Native Save dialog for a portable reusable starter. */
+        save_template?: (templateId: string) => Promise<boolean>;
       };
     };
-    buildaspecRequestClose?: () => void;
+    buildaspecRequestClose?: (
+      reason?: "tutorial-busy" | "tutorial-restored",
+    ) => void;
   }
 }

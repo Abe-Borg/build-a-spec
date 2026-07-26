@@ -250,6 +250,11 @@ class SessionState:
     # Sanitized, JSON-safe import diagnostics do ride the project file so a
     # resumed session still tells the truth about normalization and loss.
     import_report: dict[str, Any] | None = None
+    # Optional provenance for a native document seeded from a reusable
+    # template.  This is intentionally separate from source-DOCX provenance:
+    # template content is reviewable starter material, but never enables the
+    # source-preserving export/edit path.
+    template_origin: dict[str, Any] | None = None
     generation: int = 0
     module: SpecModule = field(default_factory=lambda: get_module(None))
     # Legacy session-level discipline, meaningful only with an open-catalog
@@ -1134,6 +1139,7 @@ class SessionState:
         self._capability_warm = None
         self._capability_warm_next = None
         self.import_report = None
+        self.template_origin = None
         # Per-project priming text does not survive a reset (see the field
         # comment). Module and discipline are kept; this is not.
         self.project_context = ""
@@ -1158,6 +1164,28 @@ class SessionState:
         self._active_turn_token = None
         self.turn_active = False
         self.generation += 1
+
+    def start_from_template(
+        self,
+        section: SpecSection,
+        *,
+        module_id: str,
+        template_id: str,
+        template_name: str,
+        seed_block_ids: list[str],
+    ) -> None:
+        """Atomically replace this session with an independent template seed."""
+        with self._turn_state_lock:
+            self._reset_while_locked()
+            self.module = get_module(module_id)
+            self.discipline = ""
+            self.project_context = ""
+            self.doc.seed_template(section)
+            self.template_origin = {
+                "template_id": template_id,
+                "name": template_name,
+                "seed_block_ids": list(seed_block_ids),
+            }
 
 
 class _SessionInvalidated(RuntimeError):
@@ -1290,6 +1318,14 @@ def _turn_context_text(session: SessionState) -> str:
         parts.append(
             "PROJECT DESCRIPTION (stated by the user at session start): "
             + session.project_context
+        )
+    if session.template_origin:
+        parts.append(
+            "TEMPLATE STARTER: This native, source-less specification was "
+            f"seeded from {session.template_origin.get('name', 'a reusable template')!r}. "
+            "Imported-status blocks here mean template starter content awaiting "
+            "project review; they do not have a retained Word source and must "
+            "not be described as extracted from an office master."
         )
     parts += [
         standards_context_block(

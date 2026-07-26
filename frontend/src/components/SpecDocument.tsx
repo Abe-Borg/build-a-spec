@@ -10,7 +10,9 @@
  */
 import {
   Fragment,
+  createContext,
   useCallback,
+  useContext,
   useRef,
   useState,
   type ButtonHTMLAttributes,
@@ -58,9 +60,14 @@ import type {
   SourceCapabilitiesState,
   SourceOperationCapability,
   SpecDoc,
+  TemplateOrigin,
 } from "../types";
 
 const TBD_SPLIT = /(\[TBD:[^\]]*\])/g;
+const TemplateSeedContext = createContext<{
+  name: string;
+  ids: ReadonlySet<string>;
+}>({ name: "", ids: new Set() });
 
 function TbdText({ text }: { text: string }) {
   const pieces = text.split(TBD_SPLIT);
@@ -97,12 +104,30 @@ const badgeStyles: Record<string, { css: string; label: string }> = {
   },
 };
 
-function StatusBadge({ status }: { status: DocParagraph["status"] }) {
-  const style = badgeStyles[status];
+function StatusBadge({
+  status,
+  blockId,
+}: {
+  status: DocParagraph["status"];
+  blockId: string;
+}) {
+  const templateSeed = useContext(TemplateSeedContext);
+  const fromTemplate = status === "imported" && templateSeed.ids.has(blockId);
+  const style = fromTemplate
+    ? {
+        css: "border-[#7d63ad]/50 bg-[#eee8f8] text-[#654892]",
+        label: "template starter",
+      }
+    : badgeStyles[status];
   if (!style) return null;
   return (
     <span
       className={`ml-2 inline-block rounded border px-1 py-px align-middle text-[9px] font-semibold tracking-wide uppercase ${style.css}`}
+      title={
+        fromTemplate
+          ? `Reusable starter: ${templateSeed.name || "personal template"}`
+          : undefined
+      }
     >
       {style.label}
     </span>
@@ -301,6 +326,7 @@ function DragHandle({
         {...sortable.listeners}
         type="button"
         className="structure-drag-handle"
+        data-capability="document.rearrange"
         disabled={disabled}
         aria-label={label}
         title={disabled ? undefined : title}
@@ -376,7 +402,10 @@ function RowActions({
     );
   }
   return (
-    <span className="pointer-events-none ml-1 inline-flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+    <span
+      className="pointer-events-none ml-1 inline-flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+      data-capability="document.edit"
+    >
       {canConfirm && (
         <CapabilityButton
           className={actionBtn}
@@ -559,6 +588,11 @@ function ParagraphNode({
     >
       <div
         id={`el-${p.id}`}
+        data-capability={
+          sourceExpected
+            ? "document.source-permissions"
+            : "document.provenance"
+        }
         className={`group flex gap-2 rounded px-1 py-0.5 ${
           changedIds.has(p.id) ? "changed-block" : ""
         } ${
@@ -623,7 +657,7 @@ function ParagraphNode({
         ) : (
           <span className="min-w-0 flex-1">
             <TbdText text={p.text} />
-            <StatusBadge status={p.status} />
+            <StatusBadge status={p.status} blockId={p.id} />
             <SourceChip itemId={p.source_item_id} lookup={sourceLookup} />
             <ReadOnlyBadge
               capability={replaceCapability}
@@ -1024,6 +1058,7 @@ function AddParagraphControl({
   return (
     <div
       className="my-0.5 flex items-center gap-1 text-[10px] text-paper-dim/80"
+      data-capability="document.insert"
       style={{ marginLeft: `${depth * 1.4 + 2}rem` }}
     >
       <span className="h-px min-w-4 flex-1 bg-paper-edge/50" />
@@ -1187,6 +1222,7 @@ function ArticleBlock({
     <div
       ref={sortable.setNodeRef}
       id={`el-${article.id}`}
+      data-capability="document.rearrange"
       className={`structure-sortable ${sortable.isDragging ? "is-dragging" : ""}`}
       style={sortableItemStyle(sortable)}
     >
@@ -1319,7 +1355,10 @@ function AddArticleControl({
   }
 
   return (
-    <div className="my-1 flex items-center gap-1 text-[10px] text-paper-dim/80">
+    <div
+      className="my-1 flex items-center gap-1 text-[10px] text-paper-dim/80"
+      data-capability="document.insert"
+    >
       <span className="h-px min-w-4 flex-1 bg-paper-edge/50" />
       <CapabilityButton
         className={`${actionBtn} whitespace-nowrap`}
@@ -1594,7 +1633,10 @@ function DiffDocument({ diff }: { diff: SectionDiff }) {
   const section = diff.elements.find((e) => e.node_type === "section");
   const sectionNumber = section?.number_cur ?? "";
   return (
-    <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
+    <div
+      className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]"
+      data-capability="document.structure"
+    >
       {diff.elements.map((e, i) => (
         <DiffElementRow key={`${e.uid}-${e.kind}-${i}`} e={e} />
       ))}
@@ -1635,6 +1677,7 @@ export default function SpecDocument({
   busy = false,
   sourceExpected = false,
   sourceCapabilities = null,
+  templateOrigin = null,
   onEdit = () => {},
   diff = null,
   unstructuredImport = false,
@@ -1645,6 +1688,7 @@ export default function SpecDocument({
   busy?: boolean;
   sourceExpected?: boolean;
   sourceCapabilities?: SourceCapabilitiesState | null;
+  templateOrigin?: TemplateOrigin | null;
   onEdit?: (ops: EditOp[]) => void | Promise<void>;
   diff?: SectionDiff | null;
   /** The import found no SectionFormat structure (see ImportReport). */
@@ -1686,7 +1730,12 @@ export default function SpecDocument({
   const visibleParts = bareImport
     ? doc.parts.filter((part) => part.articles.length > 0)
     : doc.parts;
+  const templateSeed = {
+    name: templateOrigin?.name ?? "",
+    ids: new Set(templateOrigin?.seed_block_ids ?? []),
+  };
   return (
+    <TemplateSeedContext.Provider value={templateSeed}>
     <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-[13px] leading-relaxed text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
       {/* `el-sec` stays on whichever block renders — it is the tour's section
           anchor and the target of a header edit. */}
@@ -1755,5 +1804,6 @@ export default function SpecDocument({
         </p>
       )}
     </div>
+    </TemplateSeedContext.Provider>
   );
 }

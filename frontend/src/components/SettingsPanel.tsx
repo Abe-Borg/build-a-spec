@@ -21,6 +21,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   research: "Research",
   audit: "Audit",
   qc: "Final QC",
+  template: "Template creation",
 };
 
 /** Compact token formatting: 12345 → "12.3k". */
@@ -200,6 +201,7 @@ export default function SettingsPanel({
       <div
         className="w-full max-w-lg overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
+        data-capability="session.api-key"
       >
         <div className="flex items-center justify-between border-b border-edge px-5 py-3">
           <h2 className="font-[family-name:var(--font-display)] text-lg font-semibold">
@@ -216,7 +218,7 @@ export default function SettingsPanel({
 
         <div className="max-h-[70vh] space-y-6 overflow-y-auto px-5 py-5">
           {/* --- API key --- */}
-          <section>
+          <section data-capability="session.api-key">
             <p className={label}>Anthropic API key</p>
             <div className="mt-2 flex items-center gap-2 text-sm">
               <span
@@ -310,7 +312,7 @@ export default function SettingsPanel({
           </section>
 
           {/* --- Usage (WI4) --- */}
-          <section>
+          <section data-capability="usage.details">
             <p className={label}>Usage this session</p>
             {usage ? (
               <UsageTable usage={usage} />

@@ -166,6 +166,88 @@ def test_on_closing_no_progress_does_not_prompt():
     assert window.evaluated == []
 
 
+def test_native_close_restores_original_before_running_unsaved_prompt():
+    original = sessions.get_session()
+    original.history.append(
+        {"role": "user", "content": [{"type": "text", "text": "real project"}]}
+    )
+    tutorial = sessions.workspace_manager().begin_tutorial(
+        request_id="native-close-contract"
+    )
+    tutorial.session.history.append(
+        {"role": "assistant", "content": [{"type": "text", "text": "tutorial only"}]}
+    )
+
+    window = _FakeWindow(evaluate_return=True)
+    controller = _controller_with(window)
+    assert controller._on_closing() is False
+    assert sessions.get_workspace().scope == "original"
+    assert sessions.get_session() is original
+    assert all("tutorial only" not in str(item) for item in original.history)
+    for _ in range(200):
+        if window.evaluated:
+            break
+        time.sleep(0.01)
+    assert "tutorial-restored" in window.evaluated[0]
+
+
+def test_native_close_discards_tutorial_when_retained_original_is_blank():
+    original = sessions.get_session()
+    tutorial = sessions.workspace_manager().begin_tutorial(
+        request_id="native-close-blank-contract"
+    )
+    tutorial.session.history.append(
+        {"role": "assistant", "content": [{"type": "text", "text": "tutorial only"}]}
+    )
+
+    window = _FakeWindow()
+    controller = _controller_with(window)
+    assert controller._on_closing() is None
+    assert sessions.get_session() is original
+    assert sessions.has_unsaved_progress(original) is False
+    assert window.evaluated == []
+
+
+def test_native_close_never_orphans_running_tutorial_work():
+    original = sessions.get_session()
+    original.history.append(
+        {"role": "user", "content": [{"type": "text", "text": "real project"}]}
+    )
+    tutorial = sessions.workspace_manager().begin_tutorial(
+        request_id="native-close-busy-contract"
+    )
+    tutorial.session.research.status = "running"
+
+    window = _FakeWindow(evaluate_return=True)
+    controller = _controller_with(window)
+    assert controller._on_closing() is False
+    for _ in range(200):
+        if window.evaluated:
+            break
+        time.sleep(0.01)
+    assert sessions.get_workspace().scope == "tutorial"
+    assert sessions.get_session() is tutorial.session
+    assert window.destroyed is False
+    assert "tutorial-busy" in window.evaluated[0]
+
+
+def test_unhandled_busy_tutorial_close_stays_vetoed():
+    tutorial = sessions.workspace_manager().begin_tutorial(
+        request_id="native-close-unhandled-busy"
+    )
+    tutorial.session.qc.status = "running"
+    window = _FakeWindow(evaluate_return=False)
+    controller = _controller_with(window)
+
+    assert controller._on_closing() is False
+    for _ in range(200):
+        if window.evaluated:
+            break
+        time.sleep(0.01)
+    assert window.destroyed is False
+    assert sessions.get_workspace().scope == "tutorial"
+
+
 def test_on_closing_with_progress_vetoes_and_asks_frontend():
     sessions.get_session().history.append(
         {"role": "user", "content": [{"type": "text", "text": "hi"}]}
@@ -323,6 +405,38 @@ def test_open_file_project_vs_docx_filter(tmp_path, monkeypatch):
     assert ".docx" in joined and ".baspec" not in joined
 
 
+def test_open_file_template_uses_scoped_portable_template_filter(tmp_path, monkeypatch):
+    _fake_webview(monkeypatch)
+    target = tmp_path / "starter.bastemplate"
+    target.write_bytes(b"{}")
+    window = _FakeWindow(dialog_path=str(target))
+    controller = _controller_with(window)
+
+    result = controller.open_file("template")
+    assert result is not None and result["name"] == "starter.bastemplate"
+    (_, kwargs), = window.dialog_calls
+    joined = " ".join(kwargs.get("file_types", ()))
+    assert ".bastemplate" in joined
+    assert ".baspec" not in joined
+
+
+def test_save_template_writes_only_catalog_export(tmp_path, monkeypatch):
+    _fake_webview(monkeypatch)
+    target = tmp_path / "starter.bastemplate"
+    window = _FakeWindow(dialog_path=str(target))
+    controller = _controller_with(window)
+
+    class _Catalog:
+        def export(self, template_id):
+            assert template_id == "personal:" + "a" * 32
+            return b'{"kind":"buildaspec-spec-template"}', "starter.bastemplate"
+
+    monkeypatch.setattr("backend.templates.get_template_catalog", lambda: _Catalog())
+    assert controller.save_template("personal:" + "a" * 32) is True
+    assert target.read_bytes() == b'{"kind":"buildaspec-spec-template"}'
+    assert window.destroyed is False
+
+
 def test_open_file_reference_filter_offers_every_supported_type(
     tmp_path, monkeypatch
 ):
@@ -405,6 +519,8 @@ def test_native_file_filters_are_pywebview_valid():
         main._PROJECT_SAVE_FILE_TYPES,
         main._DOCX_OPEN_FILE_TYPES,
         main._REFERENCE_OPEN_FILE_TYPES,
+        main._TEMPLATE_OPEN_FILE_TYPES,
+        main._TEMPLATE_SAVE_FILE_TYPES,
     ):
         for entry in group:
             assert re.match(_PYWEBVIEW_FILE_FILTER, entry), (

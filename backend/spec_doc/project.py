@@ -46,6 +46,7 @@ class ValidatedProjectData:
     doc_data: dict[str, Any]
     import_report: dict[str, Any] | None
     source_map: dict[str, Any] | None
+    template_origin: dict[str, Any] | None
 
 
 def sanitize_source_map(value: Any) -> dict[str, Any] | None:
@@ -180,6 +181,7 @@ def validate_project_data(data: Any) -> ValidatedProjectData:
         doc_data=doc_data,
         import_report=sanitize_import_report(data.get("import_report")),
         source_map=sanitize_source_map(data.get("source_map")),
+        template_origin=sanitize_template_origin(data.get("template_origin")),
     )
 
 
@@ -198,6 +200,7 @@ def save_project(
     reference_docs: dict[str, Any] | None = None,
     import_report: dict[str, Any] | None = None,
     source_map: dict[str, Any] | None = None,
+    template_origin: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -241,7 +244,39 @@ def save_project(
         safe_source_map = sanitize_source_map(source_map)
         if safe_source_map is not None:
             payload["source_map"] = safe_source_map
+    safe_template_origin = sanitize_template_origin(template_origin)
+    if safe_template_origin is not None:
+        payload["template_origin"] = safe_template_origin
     return payload
+
+
+def sanitize_template_origin(value: Any) -> dict[str, Any] | None:
+    """Validate the optional, source-less template provenance marker."""
+    if value in (None, {}):
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Malformed template origin.")
+    allowed = {"template_id", "name", "seed_block_ids"}
+    if set(value) - allowed:
+        raise ValueError("Malformed template origin.")
+    template_id = value.get("template_id")
+    name = value.get("name")
+    ids = value.get("seed_block_ids")
+    if not isinstance(template_id, str) or not template_id[:160].strip():
+        raise ValueError("Malformed template origin.")
+    if not isinstance(name, str) or not name[:160].strip():
+        raise ValueError("Malformed template origin.")
+    if (
+        not isinstance(ids, list)
+        or len(ids) > 100_000
+        or not all(isinstance(uid, str) and 0 < len(uid) <= 240 for uid in ids)
+    ):
+        raise ValueError("Malformed template origin.")
+    return {
+        "template_id": template_id.strip()[:160],
+        "name": " ".join(name.split())[:160],
+        "seed_block_ids": list(dict.fromkeys(ids)),
+    }
 
 
 def chat_transcript(history: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -402,6 +437,7 @@ def load_project(data: Any, session) -> None:
         session._capability_warm = None
         session._capability_warm_next = None
     session.import_report = restored_import_report
+    session.template_origin = staged.template_origin
     # Keep the assignment conditional so format-1 compatibility callers with
     # an older/lightweight session object continue to load unchanged.
     if hasattr(session, "source_docx_map"):

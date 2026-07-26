@@ -658,7 +658,7 @@ export default function ArtifactPanel({
               disabled={busy || hasContent || !!fileLoading}
               data-tour="import-master"
             >
-              {fileLoading?.kind === "import" ? "Importing…" : "Import master"}
+              {fileLoading?.kind === "import" ? "Importing…" : "Import Spec"}
             </button>
           </Tip>
           <input
@@ -679,7 +679,7 @@ export default function ArtifactPanel({
               disabled={referenceBusy}
               data-tour="attach-reference"
             >
-              {referenceBusy ? "Attaching…" : "Attach reference"}
+              {referenceBusy ? "Attaching…" : "Attach Document"}
             </button>
           </Tip>
           <input

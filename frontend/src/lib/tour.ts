@@ -239,6 +239,17 @@ export const TOUR: readonly TourChunk[] = [
           "open questions become concrete options with plain tradeoffs.",
       },
       {
+        id: "suggested-replies",
+        anchor: "composer",
+        placement: "top",
+        title: "Suggested replies",
+        body:
+          "When a useful next step is clear, reply chips tailored to the " +
+          "current conversation appear just above the composer. Click one " +
+          "to send it immediately, ignore them, or type your own response. " +
+          "When nothing useful needs suggesting, the row stays out of the way.",
+      },
+      {
         id: "profile",
         anchor: "research-drawer",
         drawer: "research",

@@ -324,7 +324,6 @@ export const TOUR: readonly TourChunk[] = [
         body:
           "A deliberate run covers governing codes, AHJ requirements, owner/client/insurer standards, and site/environment conditions. Progress streams live; you can follow it, stop and discard the incomplete sweep, or rerun later.",
         optionalReason: "A live run takes several minutes and uses real API and web-search spend.",
-        actions: [{ kind: "run-research", label: "Run research now" }],
       },
       {
         id: "research-report",

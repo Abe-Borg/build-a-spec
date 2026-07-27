@@ -105,6 +105,29 @@ test("every step anchor resolves to a real production data-tour attribute", () =
   assert.deepEqual(missing, []);
 });
 
+test("the blank-start chapter's controls exist in the empty-document renderer", () => {
+  // A blank document renders ArtifactPanel's EmptyState, NOT SpecDocument, so
+  // a capability declared only in SpecDocument is unreachable in the very
+  // chapter that teaches it — the step would spotlight nothing and degrade to
+  // the "control is not available" card.
+  const chapter = /id:\s*"blank-start"[\s\S]*?\n\s{2}\}/.exec(tour)?.[0];
+  assert.ok(chapter, "the blank-start chapter must exist");
+  assert.match(chapter, /scenario:\s*"blank"/);
+  const taught = new Set<string>();
+  for (const match of chapter.matchAll(/capabilities:\s*\[([^\]]*)\]/g)) {
+    for (const id of quoted(match[1])) taught.add(id);
+  }
+  assert.ok(taught.size > 0);
+  const declared = new Set<string>();
+  for (const match of artifact.matchAll(/data-capability\s*=\s*"([^"]+)"/g)) {
+    for (const id of match[1].split(/\s+/)) declared.add(id);
+  }
+  const unreachable = [...taught].filter((id) => !declared.has(id));
+  assert.deepEqual(unreachable, []);
+  // And #el-sec must exist there, or the section-header resolver cannot bind.
+  assert.match(artifact, /id="el-sec"/);
+});
+
 test("a step with no anchor supplies a document resolver instead", () => {
   const steps = [...tour.matchAll(/\{\s*\n\s*id:\s*"[^"]+",[\s\S]*?\n\s{6}\}/g)].map(
     (m) => m[0],

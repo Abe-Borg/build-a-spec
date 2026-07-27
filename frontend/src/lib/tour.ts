@@ -13,7 +13,16 @@ import {
   type SourceOutputGuidance,
 } from "./sourceOutputGuidance";
 
-export const TOUR_VERSION = 2;
+/**
+ * Bump whenever chapter/step ORDER changes.
+ *
+ * Resume records persist numeric chunk and step indexes and are accepted
+ * whenever this matches, so inserting a chapter without bumping would resume
+ * a saved tutorial at a different chapter than the one it was paused in —
+ * with instructions that no longer match the active scenario. A bump simply
+ * discards stale records, which is the correct outcome.
+ */
+export const TOUR_VERSION = 3;
 
 export interface StarterPrompt {
   label: string;

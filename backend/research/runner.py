@@ -23,6 +23,7 @@ from ..tracing import capture as _trace
 from .engine import (
     RequirementsProfile,
     ResearchFanoutError,
+    append_research_round,
     run_requirements_research,
 )
 
@@ -41,12 +42,23 @@ class ResearchRunner:
     runner holds the :class:`RequirementsProfile` the conversation engine
     splices into the dynamic context. ``restore()`` rebuilds a completed
     runner from a project file.
+
+    Runs ACCUMULATE. The Research button can be pressed any number of times
+    in a session, and each press appends a round to the profile rather than
+    replacing it (:func:`.engine.append_research_round`) — earlier findings
+    stay in the drafting context, keep their ``[r-…]`` ids for the
+    provenance chips provisions already cite, and are never quietly
+    unbought. A run that fails or is stopped leaves those earlier rounds
+    exactly as they were; only the round in flight is lost.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._cancel_event: threading.Event | None = None
+        # The round the active run is (1-based) — so a terminal event
+        # raised outside the worker, i.e. stop(), can name its round too.
+        self._round_number = 0
         self.status = STATUS_IDLE
         self.error = ""
         self.profile_result: RequirementsProfile | None = None
@@ -54,11 +66,13 @@ class ResearchRunner:
 
     # -- events --------------------------------------------------------------
 
-    def _emit(self, event: dict[str, Any]) -> None:
+    def _emit(self, event: dict[str, Any], *, round_number: int = 0) -> None:
         with self._lock:
             event = dict(event)
             event["seq"] = len(self.events)
             event["ts"] = time.strftime("%H:%M:%S")
+            if round_number:
+                event["round"] = round_number
             self.events.append(event)
 
     def events_since(self, seq: int) -> list[dict[str, Any]]:
@@ -84,14 +98,25 @@ class ResearchRunner:
         ``on_settled`` (optional) runs after the terminal state is set —
         the app layer uses it for nothing today but tests can synchronize
         on it.
+
+        The existing ``profile_result`` is deliberately NOT cleared: this
+        run is the next round on top of it, and until it resolves the model
+        keeps drafting from the research the session already paid for. The
+        event log IS cleared — it is this round's progress log, and the
+        accumulated knowledge lives in the profile.
         """
         with self._lock:
             if self.status == STATUS_RUNNING:
                 return False
             self.status = STATUS_RUNNING
             self.error = ""
-            self.profile_result = None
             self.events = []
+            round_number = (
+                self.profile_result.round_count + 1
+                if self.profile_result is not None
+                else 1
+            )
+            self._round_number = round_number
             cancel_event = threading.Event()
             self._cancel_event = cancel_event
 
@@ -101,7 +126,7 @@ class ResearchRunner:
         )
 
         def _sink(event: dict) -> None:
-            self._emit(event)
+            self._emit(event, round_number=round_number)
             _trace.research_event(trace_handle, event)
 
         def _work() -> None:
@@ -117,40 +142,68 @@ class ResearchRunner:
                     should_stop=cancel_event.is_set,
                 )
             except ResearchFanoutError as exc:
-                if self._try_resolve(STATUS_FAILED, error=str(exc)):
-                    self._emit({"type": "research_failed", "error": str(exc)})
+                message = self._failure_message(str(exc))
+                if self._try_resolve(STATUS_FAILED, error=message):
+                    self._emit(
+                        {"type": "research_failed", "error": message},
+                        round_number=round_number,
+                    )
                     _trace.research_end(
-                        trace_handle, status=STATUS_FAILED, error=str(exc)
+                        trace_handle, status=STATUS_FAILED, error=message
                     )
             except Exception as exc:  # noqa: BLE001 — surfaced, never raised
-                message = f"{type(exc).__name__}: {exc}"
+                message = self._failure_message(f"{type(exc).__name__}: {exc}")
                 if self._try_resolve(STATUS_FAILED, error=message):
-                    self._emit({"type": "research_failed", "error": message})
+                    self._emit(
+                        {"type": "research_failed", "error": message},
+                        round_number=round_number,
+                    )
                     _trace.research_end(
                         trace_handle, status=STATUS_FAILED, error=message
                     )
             else:
                 # Meter first — the spend is real even on a run that ends up
                 # discarded below (stopped, or superseded by a fresh start).
+                # Meter THIS round's own usage, never the merged profile's:
+                # that total is cumulative and would re-bill every earlier
+                # round each time a new one lands.
                 if usage_sink is not None:
                     try:
                         usage_sink(result.usage_total())
                     except Exception:  # noqa: BLE001 — metering never sinks a run
                         pass
-                if self._try_resolve(STATUS_COMPLETE, profile_result=result):
+                merged: RequirementsProfile | None = None
+
+                def _adopt(
+                    previous: RequirementsProfile | None,
+                ) -> RequirementsProfile:
+                    nonlocal merged
+                    merged = append_research_round(previous, result)
+                    return merged
+
+                if self._try_resolve(STATUS_COMPLETE, adopt=_adopt) and merged:
+                    latest = merged.rounds[-1] if merged.rounds else None
                     self._emit(
                         {
                             "type": "research_complete",
-                            "item_count": len(result.items),
-                            "grounded_count": len(result.grounded_items()),
-                            "completed_dimensions": result.completed_dimensions,
-                            "failed_dimensions": result.failed_dimensions,
-                        }
+                            # Cumulative — what the session now holds.
+                            "item_count": len(merged.items),
+                            "grounded_count": len(merged.grounded_items()),
+                            "completed_dimensions": merged.completed_dimensions,
+                            "failed_dimensions": merged.failed_dimensions,
+                            # This round's own contribution.
+                            "round_item_count": len(result.items),
+                            "new_item_count": latest.new_items if latest else 0,
+                            "repeat_item_count": (
+                                latest.repeat_items if latest else 0
+                            ),
+                        },
+                        round_number=round_number,
                     )
                     _trace.research_end(
                         trace_handle,
                         status=STATUS_COMPLETE,
-                        items=len(result.items),
+                        items=len(merged.items),
                     )
             finally:
                 if on_settled is not None:
@@ -169,7 +222,9 @@ class ResearchRunner:
         status: str,
         *,
         error: str = "",
-        profile_result: RequirementsProfile | None = None,
+        adopt: Callable[
+            [RequirementsProfile | None], RequirementsProfile
+        ] | None = None,
     ) -> bool:
         """Atomically move RUNNING -> a terminal status; False if it lost the race.
 
@@ -178,15 +233,35 @@ class ResearchRunner:
         lock first while status is still ``running`` wins; a losing caller's
         result/error is silently discarded rather than clobbering whatever
         already resolved it.
+
+        ``adopt`` (the success path) maps the accumulated profile to its
+        replacement — the round-append merge — and runs INSIDE the same
+        lock as the compare-and-set. That is what keeps a stopped run's
+        late-finishing thread from folding its discarded round into a
+        profile that has already moved on: it loses the CAS, so its merge
+        never runs at all.
         """
         with self._lock:
             if self.status != STATUS_RUNNING:
                 return False
             self.status = status
             self.error = error
-            if profile_result is not None:
-                self.profile_result = profile_result
+            if adopt is not None:
+                self.profile_result = adopt(self.profile_result)
             return True
+
+    def _failure_message(self, base: str) -> str:
+        """A failure message that says what survived it.
+
+        Rounds accumulate, so a failed or stopped run costs only the round
+        in flight — the user should not read "failed" and assume the
+        research they already paid for is gone.
+        """
+        with self._lock:
+            retained = self.profile_result is not None
+        if not retained:
+            return base
+        return f"{base} Earlier research rounds are unchanged and still in use."
 
     def stop(self) -> bool:
         """Request cancellation of the running run. False if none is running.
@@ -196,20 +271,37 @@ class ResearchRunner:
         hasn't started its network call yet bails without spending anything;
         a dimension already mid-call completes naturally but its result is
         discarded — ``_try_resolve`` in the background thread's completion
-        handler will find the status already resolved and do nothing.
+        handler will find the status already resolved and do nothing, so its
+        round is never merged in.
+
+        Only the round in flight is lost: rounds that already completed stay
+        in the profile, which is what the message says.
         """
-        if not self._try_resolve(
-            STATUS_FAILED,
-            error="Stopped by user — progress was discarded.",
-        ):
+        # Read the active round BEFORE the compare-and-set: until it lands,
+        # status is still running, so no fresh start() can have renumbered
+        # it. A stop that beats the worker's first event would otherwise
+        # leave the round's whole log a single untagged terminal event.
+        round_number = self._round_number
+        message = self._failure_message(
+            "Stopped by user — this round's progress was discarded."
+        )
+        if not self._try_resolve(STATUS_FAILED, error=message):
             return False
         if self._cancel_event is not None:
             self._cancel_event.set()
-        self._emit({"type": "research_failed", "error": self.error})
+        self._emit(
+            {"type": "research_failed", "error": self.error},
+            round_number=round_number,
+        )
         return True
 
     def restore(self, profile: RequirementsProfile) -> None:
-        """Adopt a previously-completed profile (project resume)."""
+        """Adopt a previously-completed profile (project resume).
+
+        The saved profile carries its own rounds, so a resumed session
+        continues counting from where it left off — pressing Research adds
+        round N+1, not a replacement.
+        """
         with self._lock:
             self.status = STATUS_COMPLETE
             self.error = ""
@@ -223,7 +315,8 @@ class ResearchRunner:
                 "grounded_count": len(profile.grounded_items()),
                 "completed_dimensions": profile.completed_dimensions,
                 "failed_dimensions": profile.failed_dimensions,
-            }
+            },
+            round_number=profile.round_count,
         )
 
     # -- snapshots -----------------------------------------------------------
@@ -276,23 +369,43 @@ class ResearchRunner:
         yield {"type": "stream_end", "status": self.status}
 
 
+def _dimension_view(status: Any) -> dict[str, Any]:
+    return {
+        "dimension_id": status.dimension_id,
+        "title": status.title,
+        "status": status.status,
+        "item_count": status.item_count,
+        "grounded_count": status.grounded_count,
+        "web_search_requests": status.web_search_requests,
+        "web_fetch_requests": status.web_fetch_requests,
+        "error": status.error,
+    }
+
+
 def _profile_view(profile: RequirementsProfile) -> dict[str, Any]:
-    """The research drawer's view of a completed profile."""
+    """The research drawer's view of a completed profile.
+
+    ``dimension_statuses`` is the cumulative view across every round;
+    ``rounds`` is what each round did on its own, so the findings report
+    can show that (say) round 2 added four items and re-confirmed nine.
+    """
     return {
         "research_date": profile.research_date,
         "project": dict(profile.project or {}),
         "dimension_statuses": [
+            _dimension_view(s) for s in profile.dimension_statuses
+        ],
+        "rounds": [
             {
-                "dimension_id": s.dimension_id,
-                "title": s.title,
-                "status": s.status,
-                "item_count": s.item_count,
-                "grounded_count": s.grounded_count,
-                "web_search_requests": s.web_search_requests,
-                "web_fetch_requests": s.web_fetch_requests,
-                "error": s.error,
+                "round_index": r.round_index,
+                "research_date": r.research_date,
+                "dimension_statuses": [
+                    _dimension_view(s) for s in r.dimension_statuses
+                ],
+                "new_items": r.new_items,
+                "repeat_items": r.repeat_items,
             }
-            for s in profile.dimension_statuses
+            for r in profile.rounds
         ],
         "items": [
             {
@@ -308,6 +421,8 @@ def _profile_view(profile: RequirementsProfile) -> dict[str, Any]:
                 "confidence": i.confidence,
                 "actionability": i.actionability,
                 "notes": i.notes,
+                "research_date": i.research_date,
+                "round_index": i.round_index,
             }
             for i in profile.items
         ],

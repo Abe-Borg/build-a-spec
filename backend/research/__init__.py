@@ -9,6 +9,8 @@ from .engine import (
     RequirementsProfile,
     ResearchFanoutError,
     ResearchItem,
+    ResearchRound,
+    append_research_round,
     research_context_block,
     run_requirements_research,
 )
@@ -18,7 +20,9 @@ __all__ = [
     "RequirementsProfile",
     "ResearchFanoutError",
     "ResearchItem",
+    "ResearchRound",
     "ResearchRunner",
+    "append_research_round",
     "research_context_block",
     "run_requirements_research",
 ]

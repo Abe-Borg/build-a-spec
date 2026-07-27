@@ -147,6 +147,63 @@ def test_a_refound_requirement_is_confirmed_in_place_not_duplicated():
     assert (second.rounds[1].new_items, second.rounds[1].repeat_items) == (0, 1)
 
 
+def test_an_ungrounded_reassertion_does_not_redate_the_evidence():
+    """A round that re-states an item without grounding it confirms nothing.
+
+    The union above keeps round 1's accepted sources and its `grounded`
+    flag, so advancing the date too would present that older evidence as
+    freshly verified — the exact overstatement [UNVERIFIED] exists to
+    prevent.
+    """
+    grounded = _ritem(
+        "r-a",
+        "Rule A.",
+        grounded=True,
+        source_urls=["https://a.gov"],
+        accepted_sources=["https://a.gov"],
+        confidence=0.8,
+    )
+    # Round 2 cites something the server tools never retrieved.
+    ungrounded = _ritem(
+        "r-a",
+        "Rule A.",
+        grounded=False,
+        source_urls=["https://never-retrieved.example"],
+        accepted_sources=[],
+        confidence=0.6,
+    )
+    first = append_research_round(None, _round(items=[grounded]))
+    second = append_research_round(
+        first, _round(items=[ungrounded], date="2026-07-27")
+    )
+
+    merged = second.items[0]
+    assert merged.grounded is True
+    assert merged.accepted_sources == ["https://a.gov"]
+    # The evidence is still round 1's, so the date is too.
+    assert merged.research_date == "2026-07-21"
+    assert "as of 2026-07-21" in second.render_text()
+    # It still counts as re-found for the round's own tally.
+    assert second.rounds[1].repeat_items == 1
+
+    # And the reverse: fresh grounding DOES advance the date.
+    third = append_research_round(
+        second,
+        _round(
+            items=[
+                _ritem(
+                    "r-a",
+                    "Rule A.",
+                    grounded=True,
+                    accepted_sources=["https://c.gov"],
+                )
+            ],
+            date="2026-08-01",
+        ),
+    )
+    assert third.items[0].research_date == "2026-08-01"
+
+
 def test_the_previous_profile_is_never_mutated_by_a_later_round():
     """The conversation thread may be rendering it while the merge runs."""
     first = append_research_round(
@@ -292,7 +349,10 @@ def test_more_than_one_round_dates_every_item_it_renders():
 
     assert "over 2 rounds" in text
     assert "latest round researched 2026-07-27" in text
-    assert "Each item is dated with the round that last confirmed it" in text
+    assert (
+        "Each item is dated by the round that last grounded it in a "
+        "retrieved source" in text
+    )
     # An item from round 1 is not claimed as-of today.
     line_a = next(line for line in text.splitlines() if "Rule A." in line)
     line_b = next(line for line in text.splitlines() if "Rule B." in line)
@@ -356,6 +416,75 @@ def test_a_profile_saved_before_rounds_existed_becomes_round_one():
     )
     assert appended.round_count == 2
     assert [i.item_id for i in appended.items] == ["r-a", "r-b"]
+
+
+def test_a_malformed_collection_degrades_instead_of_raising():
+    """`from_dict` promises garbage degrades to None, and the project-load
+    endpoint only translates ProjectPackageError/ValueError — so a scalar
+    where a list belongs must not escape as a TypeError (a 500 that blocks
+    the whole project from opening)."""
+    good = {
+        "items": [
+            {
+                "item_id": "r-a",
+                "dimension_id": "governing_codes",
+                "category": "governing_code",
+                "requirement": "Rule A.",
+            }
+        ],
+        "dimension_statuses": [
+            {"dimension_id": "governing_codes", "status": "completed"}
+        ],
+        "research_date": "2026-07-21",
+    }
+    for key in ("rounds", "dimension_statuses", "items"):
+        for bad in (1, "x", {"round_index": 1}):
+            payload = {**good, key: bad}
+            profile = RequirementsProfile.from_dict(payload)  # must not raise
+            if key == "items":
+                # Statuses alone still make a usable (item-less) profile.
+                assert profile is not None and profile.items == []
+            else:
+                assert profile is not None
+                assert [i.item_id for i in profile.items] == ["r-a"]
+    # Everything malformed at once is simply not a profile.
+    assert RequirementsProfile.from_dict({"items": 1, "dimension_statuses": 1}) is None
+
+
+def test_a_stopped_round_is_still_tagged_with_its_round_number():
+    runner = ResearchRunner()
+    runner.profile_result = append_research_round(
+        None, _round(items=[_ritem("r-a", "Rule A.")])
+    )
+
+    release = threading.Event()
+
+    class _Blocking:
+        def __init__(self) -> None:
+            self.messages = self
+
+        def stream(self, **_request):
+            release.wait(timeout=10)
+            raise RuntimeError("aborted")
+
+    settled = threading.Event()
+    assert runner.start(
+        module=HYPERSCALE_FIRE,
+        project_profile=PROFILE,
+        client=_Blocking(),
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        on_settled=settled.set,
+    )
+    # Stop before any dimension has emitted — the terminal event is the
+    # only entry in this round's log, so it has to name the round itself.
+    assert runner.stop() is True
+    failed = [e for e in runner.events if e["type"] == "research_failed"]
+    assert len(failed) == 1
+    assert failed[0]["round"] == 2
+
+    release.set()
+    assert settled.wait(timeout=10)
 
 
 # ---------------------------------------------------------------------------

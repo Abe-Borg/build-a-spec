@@ -2094,10 +2094,18 @@ SSE event type, no new dep, no project-format bump (one additive key).
   again" is identical by construction. A re-found item is **confirmed in
   place**, never duplicated: citations union, `grounded` ORs, `confidence`
   takes the max, blank descriptive fields fill in — evidence only ever
-  strengthens. `research_date` advances to the round that re-confirmed it
-  (that IS when the claim was last checked) while `round_index` stays the
-  round that first found it. This also dedupes a single round's own
-  duplicate ids, which the old path kept.
+  strengthens. `round_index` stays the round that first found it. This also
+  dedupes a single round's own duplicate ids, which the old path kept.
+- **`research_date` dates EVIDENCE, not assertion** (review finding, fixed
+  before merge): it advances only when the fresh occurrence actually
+  grounded the item in a retrieved source. A round that re-states an item
+  whose citations fail grounding has confirmed nothing — and since the
+  union above keeps the earlier round's `grounded` flag and accepted
+  sources, re-dating it would render older evidence as freshly verified,
+  the exact overstatement `[UNVERIFIED]` exists to prevent. An item no
+  round ever grounded carries the round that first reported it. The
+  multi-round header states this rule verbatim so the model reads the same
+  contract the code enforces.
 - **Nothing is mutated.** The merge builds a new profile from
   `dataclasses.replace` copies, because the conversation thread may be
   rendering the previous profile into a turn's PROJECT CONTEXT at that exact
@@ -2127,7 +2135,11 @@ SSE event type, no new dep, no project-format bump (one additive key).
 - **A failed or stopped round costs only that round**, and says so —
   `_failure_message` appends "Earlier research rounds are unchanged and still
   in use." when a profile survives, and the stop message became "this
-  round's progress was discarded". Readiness is deliberately unchanged
+  round's progress was discarded". `stop()` tags that terminal event with
+  the active round (`_round_number`, read before the CAS while no fresh
+  `start()` can renumber it) — a stop that beats the worker's first event
+  would otherwise leave the round's whole log one untagged entry. Readiness
+  is deliberately unchanged
   (still `status == "complete"`): a failed extra round leaves the session no
   worse off than before this work, and loosening a readiness gate was not
   the ask.
@@ -2139,7 +2151,14 @@ SSE event type, no new dep, no project-format bump (one additive key).
 - **Legacy files are one round.** `from_dict` synthesizes round 1 from the
   saved `dimension_statuses`/`research_date` and back-dates the items when a
   file carries no `rounds`, so appending to a resumed project numbers the
-  next round 2 rather than 1. Note the knock-on: `to_dict()` gained keys, so
+  next round 2 rather than 1. Every serialized collection now goes through
+  `_as_list` (review finding): `from_dict` promises garbage degrades to
+  `None` and project load promises a malformed profile degrades to "not
+  researched", but the load endpoint only translates
+  `ProjectPackageError`/`ValueError` — so iterating a scalar (`"rounds": 1`)
+  escaped as a 500 that blocked the whole project from opening. The same
+  hole pre-existed for `items`/`dimension_statuses`; all three are closed.
+  Note the knock-on: `to_dict()` gained keys, so
   the QC input manifest's research fingerprint changes — an old project
   resumed after this change reads its retained Final QC as stale once. That
   is the conservative direction (a stale marker over-warns; it never calls a

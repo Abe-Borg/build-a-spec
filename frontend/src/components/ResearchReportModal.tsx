@@ -58,11 +58,15 @@ function ItemRow({ item, dated }: { item: ResearchItemView; dated?: boolean }) {
   if (item.category) details.push(item.category.replace(/_/g, " "));
   details.push(`confidence ${Math.round(item.confidence * 100)}%`);
   // Once a session has more than one round, the report's single header date
-  // would misdate earlier findings — so each item carries its own.
+  // would misdate earlier findings — so each item carries its own. The date
+  // is when its evidence was last accepted, so "confirmed" is only honest
+  // for a grounded item; an unverified lead is dated, not confirmed.
   if (dated && item.research_date)
     details.push(
       item.round_index
-        ? `round ${item.round_index}, confirmed ${item.research_date}`
+        ? `round ${item.round_index}, ${
+            item.grounded ? "confirmed" : "reported"
+          } ${item.research_date}`
         : `as of ${item.research_date}`,
     );
   return (

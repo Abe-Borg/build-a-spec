@@ -56,6 +56,9 @@ class ResearchRunner:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._cancel_event: threading.Event | None = None
+        # The round the active run is (1-based) — so a terminal event
+        # raised outside the worker, i.e. stop(), can name its round too.
+        self._round_number = 0
         self.status = STATUS_IDLE
         self.error = ""
         self.profile_result: RequirementsProfile | None = None
@@ -113,6 +116,7 @@ class ResearchRunner:
                 if self.profile_result is not None
                 else 1
             )
+            self._round_number = round_number
             cancel_event = threading.Event()
             self._cancel_event = cancel_event
 
@@ -273,6 +277,11 @@ class ResearchRunner:
         Only the round in flight is lost: rounds that already completed stay
         in the profile, which is what the message says.
         """
+        # Read the active round BEFORE the compare-and-set: until it lands,
+        # status is still running, so no fresh start() can have renumbered
+        # it. A stop that beats the worker's first event would otherwise
+        # leave the round's whole log a single untagged terminal event.
+        round_number = self._round_number
         message = self._failure_message(
             "Stopped by user — this round's progress was discarded."
         )
@@ -280,7 +289,10 @@ class ResearchRunner:
             return False
         if self._cancel_event is not None:
             self._cancel_event.set()
-        self._emit({"type": "research_failed", "error": self.error})
+        self._emit(
+            {"type": "research_failed", "error": self.error},
+            round_number=round_number,
+        )
         return True
 
     def restore(self, profile: RequirementsProfile) -> None:

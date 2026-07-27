@@ -937,6 +937,7 @@ function ArticleTitle({
       />
       <CapabilityButton
         className={`${actionBtn} ml-1 hidden group-hover:inline-block`}
+        data-capability="document.edit"
         onClick={() => {
           if (busy || !replaceCapability.allowed) return;
           setDraft(title);
@@ -1161,6 +1162,7 @@ function ArticleBlock({
     <span className="pointer-events-none ml-1 inline-flex items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
       <CapabilityButton
         className={actionBtn}
+        data-capability="document.edit"
         disabled={busy || !deleteCapability.allowed}
         title={sourceCapabilityTitle(
           deleteCapability,
@@ -1670,6 +1672,137 @@ function DiffDocument({ diff }: { diff: SectionDiff }) {
   );
 }
 
+/**
+ * The section number and title, editable in place.
+ *
+ * Both ride one `replace` on the `sec` target — the same op the model uses —
+ * so this is a normal undoable version, not a special case. Mirrors
+ * `ArticleTitle`: hover-revealed pencil, Enter saves, Escape cancels, and the
+ * server's own denial sentence stays hoverable on a disabled control.
+ */
+function SectionHeader({
+  number,
+  title,
+  changed,
+  capability,
+  sourceExpected,
+  busy,
+  onEdit,
+}: {
+  number: string;
+  title: string;
+  changed: boolean;
+  capability: SourceOperationCapability;
+  sourceExpected: boolean;
+  busy: boolean;
+  onEdit: (ops: EditOp[]) => boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draftNumber, setDraftNumber] = useState(number);
+  const [draftTitle, setDraftTitle] = useState(title);
+
+  const save = () => {
+    const op: EditOp = {
+      action: "replace",
+      target_id: "sec",
+      text: draftTitle.trim(),
+      numbering: draftNumber.trim(),
+    };
+    // `capability` is already the server's `replace_text` verdict for `sec`,
+    // which is exactly the operation this op performs — no second mapping
+    // needed. The backend still validates the submitted value either way.
+    if (!busy && capability.allowed && onEdit([op])) {
+      setEditing(false);
+    }
+  };
+
+  const headingClass = `rounded text-[13px] font-semibold tracking-wide ${
+    changed ? "changed-block" : ""
+  }`;
+
+  if (editing) {
+    return (
+      <div className="mx-auto flex max-w-md flex-col items-stretch gap-1.5">
+        <input
+          autoFocus
+          aria-label="Section number"
+          placeholder="Section number (e.g. 21 13 13)"
+          value={draftNumber}
+          disabled={busy}
+          onChange={(e) => setDraftNumber(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setEditing(false);
+            if (e.key === "Enter") {
+              e.preventDefault();
+              save();
+            }
+          }}
+          className="rounded border border-paper-edge bg-white/70 px-1.5 py-0.5 text-center text-[13px] font-semibold tracking-wide text-paper-ink outline-none focus:border-[#c08457]"
+        />
+        <input
+          aria-label="Section title"
+          placeholder="Section title"
+          value={draftTitle}
+          disabled={busy}
+          onChange={(e) => setDraftTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setEditing(false);
+            if (e.key === "Enter") {
+              e.preventDefault();
+              save();
+            }
+          }}
+          className="rounded border border-paper-edge bg-white/70 px-1.5 py-0.5 text-center text-[13px] font-semibold tracking-wide text-paper-ink uppercase outline-none focus:border-[#c08457]"
+        />
+        <div className="flex items-center justify-center gap-2">
+          <CapabilityButton
+            className={actionBtn}
+            onClick={save}
+            disabled={busy}
+            title="Save (Enter)"
+          >
+            Save
+          </CapabilityButton>
+          <CapabilityButton
+            className={actionBtn}
+            onClick={() => setEditing(false)}
+            disabled={busy}
+            title="Cancel (Esc)"
+          >
+            Cancel
+          </CapabilityButton>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="group">
+      <p className={headingClass}>SECTION {number || "[TBD]"}</p>
+      <p className={`mt-1 uppercase ${headingClass}`}>
+        {title || "[TBD: section title]"}
+        <ReadOnlyBadge capability={capability} sourceExpected={sourceExpected} />
+        <CapabilityButton
+          className={`${actionBtn} ml-1 hidden group-hover:inline-block`}
+          onClick={() => {
+            if (busy || !capability.allowed) return;
+            setDraftNumber(number);
+            setDraftTitle(title);
+            setEditing(true);
+          }}
+          disabled={busy || !capability.allowed}
+          title={sourceCapabilityTitle(
+            capability,
+            "Edit section number and title",
+          )}
+        >
+          ✏️
+        </CapabilityButton>
+      </p>
+    </div>
+  );
+}
+
 export default function SpecDocument({
   doc,
   changedIds,
@@ -1756,30 +1889,22 @@ export default function SpecDocument({
       ) : (
         <div
           id="el-sec"
+          data-capability="document.section-header"
           className={`text-center ${
             sourceExpected && !sectionReplaceCapability.allowed
               ? "rounded border-l-2 border-paper-edge bg-paper-edge/15 py-1"
               : ""
           }`}
         >
-          <p
-            className={`rounded text-[13px] font-semibold tracking-wide ${
-              changedIds.has("sec") ? "changed-block" : ""
-            }`}
-          >
-            SECTION {doc.section.number || "[TBD]"}
-          </p>
-          <p
-            className={`mt-1 rounded text-[13px] font-semibold tracking-wide uppercase ${
-              changedIds.has("sec") ? "changed-block" : ""
-            }`}
-          >
-            {doc.section.title || "[TBD: section title]"}
-            <ReadOnlyBadge
-              capability={sectionReplaceCapability}
-              sourceExpected={sourceExpected}
-            />
-          </p>
+          <SectionHeader
+            number={doc.section.number}
+            title={doc.section.title}
+            changed={changedIds.has("sec")}
+            capability={sectionReplaceCapability}
+            sourceExpected={sourceExpected}
+            busy={editorBusy}
+            onEdit={submitEdit}
+          />
         </div>
       )}
 

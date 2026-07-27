@@ -596,11 +596,11 @@ export default function ReviewDrawer({
               )}
 
               {!editing && (
-                <>
-                  <div
-                    className="mt-2.5 flex flex-wrap items-center gap-1.5"
-                    data-capability="review.actions"
-                  >
+                // One capability element over every review action: the
+                // per-block keys, the article-wide press-and-hold, and the
+                // legend that documents them.
+                <div data-capability="review.actions">
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                     <ActionButton
                       className={actionKey}
                       onClick={confirm}
@@ -704,7 +704,7 @@ export default function ReviewDrawer({
                       </>
                     )}
                   </p>
-                </>
+                </div>
               )}
             </>
           ) : (

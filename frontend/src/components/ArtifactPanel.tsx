@@ -226,6 +226,8 @@ function EmptyState({
       <form
         className="mt-10 rounded-lg border border-paper-edge bg-white/35 p-4"
         onSubmit={addFirstArticle}
+        data-tour="first-article"
+        data-capability="document.first-article"
       >
         <p className="text-xs font-semibold tracking-wide text-paper-ink uppercase">
           Add the first article
@@ -953,7 +955,10 @@ export default function ArtifactPanel({
       )}
 
       {compareMode && (
-        <div className="flex flex-wrap items-center gap-3 border-b border-edge bg-bg/40 px-5 py-2 text-[11px]">
+        <div
+          className="flex flex-wrap items-center gap-3 border-b border-edge bg-bg/40 px-5 py-2 text-[11px]"
+          data-capability="history.compare"
+        >
           <span className="font-medium tracking-wide text-ink-dim uppercase">
             Comparing
           </span>

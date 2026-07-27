@@ -90,6 +90,7 @@ export default function Header({
               href={update?.releases_url}
               target="_blank"
               rel="noreferrer"
+              data-capability="updates.manage"
               className="rounded-full border border-accent/60 bg-accent/15 px-3 py-1 text-xs text-accent transition-colors hover:bg-accent/25"
               title="Open the releases page"
             >
@@ -100,6 +101,7 @@ export default function Header({
           onClick={onOpenSettings}
           title="Estimated spend this session — click for the breakdown"
           data-tour="spend-pill"
+          data-capability="usage.details"
           className="rounded-full border border-edge bg-raised px-3 py-1 text-xs text-ink-dim tabular-nums transition-colors hover:border-accent hover:text-accent"
         >
           {spendLabel}
@@ -138,6 +140,7 @@ export default function Header({
           title="Settings"
           aria-label="Settings"
           data-tour="settings"
+          data-capability="session.api-key"
           className="flex h-8 w-8 items-center justify-center rounded-lg border border-edge bg-raised text-ink-dim transition-colors hover:border-accent hover:text-accent"
         >
           <svg

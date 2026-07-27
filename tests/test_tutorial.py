@@ -17,6 +17,7 @@ from backend.spec_doc import lint_document
 from backend.spec_doc.model import SpecSection, iter_paragraphs
 from backend.tutorial import (
     analyze_tutorial_coverage,
+    blank_practice_copy,
     build_showcase_session,
     detached_practice_copy,
     reference_practice_copy,
@@ -681,6 +682,7 @@ def test_chapter_scenarios_exercise_production_round_trips_and_restore_base(
     base_doc = current["doc"]
 
     cases = [
+        ("blank", "blank"),
         ("review", "review"),
         ("references", "references"),
         ("import", "import"),
@@ -701,7 +703,18 @@ def test_chapter_scenarios_exercise_production_round_trips_and_restore_base(
         scenario = response.json()["session"]
         assert scenario["workspace_scope"] == "scenario"
         assert scenario["scenario_kind"] == expected_kind
-        if expected_kind == "references":
+        if expected_kind == "blank":
+            # The from-scratch on-ramp's own state: the panel's empty-state
+            # controls only render when there is genuinely nothing here.
+            assert scenario["doc"]["section"]["number"] == ""
+            assert scenario["doc"]["section"]["title"] == ""
+            assert all(
+                part["articles"] == [] for part in scenario["doc"]["parts"]
+            )
+            assert scenario["doc"] != base_doc
+            assert scenario["source_available"] is False
+            assert scenario["baseline_index"] is None
+        elif expected_kind == "references":
             assert {item["kind"] for item in scenario["reference_docs"]} == {
                 "docx",
                 "pdf",
@@ -796,3 +809,67 @@ def test_replace_completion_can_save_the_protected_original_first():
     )
     assert kept.status_code == 200
     assert "retain me" not in str(sessions.get_session().history)
+
+
+def test_blank_practice_copy_is_empty_but_keeps_the_drafting_identity():
+    source = build_showcase_session()
+    source.discipline = "Plumbing"
+    source.project_context = "tutorial primer"
+
+    blank = blank_practice_copy(source)
+
+    assert blank.doc.doc.is_empty()
+    assert blank.doc.doc.number == ""
+    assert blank.doc.doc.title == ""
+    assert blank.history == []
+    assert blank.figures.figures == []
+    # Module, discipline and primer ride along so the heading and the drafting
+    # context stay coherent on the empty page.
+    assert blank.module is source.module
+    assert blank.discipline == "Plumbing"
+    assert blank.project_context == "tutorial primer"
+    # The source it was built from is untouched.
+    assert not source.doc.doc.is_empty()
+
+
+def test_an_unmapped_chapter_name_does_not_silently_start_a_practice_fixture():
+    """The chapter->kind chain is an ordered substring match with a catch-all.
+
+    A new chunk whose scenario name has no branch falls through to
+    ``structural``, which blanks the section header and seeds duplicate
+    articles — in the wrong chapter, with no error. This pins the two names
+    that must not collide with that fallback.
+    """
+    client = TestClient(create_app())
+    original = sessions.get_workspace()
+    started = client.post(
+        "/api/tutorial/start",
+        json={
+            "request_id": "chapter-mapping-contract",
+            "source": "showcase",
+            "workspace_id": original.workspace_id,
+            "generation": original.generation,
+        },
+    ).json()
+    tutorial_id = started["tutorial_id"]
+    current = started["session"]
+
+    for chapter, expected_kind in (("blank", "blank"), ("structural", "structural")):
+        scenario = client.post(
+            "/api/tutorial/scenario/start",
+            json={
+                "tutorial_id": tutorial_id,
+                "workspace_id": current["workspace_id"],
+                "generation": current["generation"],
+                "chapter": chapter,
+            },
+        ).json()["session"]
+        assert scenario["scenario_kind"] == expected_kind
+        current = client.post(
+            "/api/tutorial/scenario/finish",
+            json={
+                "tutorial_id": tutorial_id,
+                "workspace_id": scenario["workspace_id"],
+                "generation": scenario["generation"],
+            },
+        ).json()["session"]

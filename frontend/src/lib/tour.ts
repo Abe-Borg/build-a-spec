@@ -195,13 +195,13 @@ export const TOUR: readonly TourChunk[] = [
       },
       {
         id: "streaming",
-        capabilities: ["chat.streaming", "chat.stop"],
+        capabilities: ["chat.streaming", "chat.stop", "chat.thinking"],
         mode: "interactive",
         anchor: "chat-pane",
         placement: "right",
         title: "Watch work land live",
         body:
-          "Thinking, searching, fetching, drafting, and drawing statuses appear in chat while document patches land on the paper. Changed blocks glow briefly and scroll-follow stays with the work. Stop preserves visible partial progress; a failed turn restores the prior document while its already-used tokens remain in usage.",
+          "Thinking, searching, fetching, drafting, and drawing statuses appear in chat while document patches land on the paper. Changed blocks glow briefly and scroll-follow stays with the work. Expand Thinking on a reply to read the reasoning summary as it streams — it is shown, never stored, so it is absent from history, traces, and the project file. Stop preserves visible partial progress; a failed turn restores the prior document while its already-used tokens remain in usage.",
       },
       {
         id: "full-draft",
@@ -223,6 +223,34 @@ export const TOUR: readonly TourChunk[] = [
         body:
           "Ask the assistant to verify a current code, product, or jurisdiction fact and it can search and fetch during the normal turn. This is separate from the systematic four-dimension Research workflow.",
         optionalReason: "A live check uses the user's API key and web tools.",
+      },
+    ],
+  },
+  {
+    id: "blank-start",
+    title: "Start from an empty page",
+    scenario: "blank",
+    steps: [
+      {
+        id: "section-header",
+        capabilities: ["document.section-header"],
+        mode: "interactive",
+        anchor: "",
+        resolve: "section-header",
+        placement: "bottom",
+        title: "Name the section",
+        body:
+          "An unnamed section reads SECTION [TBD]. Hover the header and edit it to set the number and title yourself, or state them in chat and the assistant records the same change. Either way it is one undoable version, and the number is what the export filename, the module scope check, and Final QC all read.",
+      },
+      {
+        id: "first-article",
+        capabilities: ["document.first-article"],
+        mode: "interactive",
+        anchor: "first-article",
+        placement: "top",
+        title: "Add the first article yourself",
+        body:
+          "A blank document offers a PART chooser and a title field. Adding the first article is a normal edit — user-authored content enters confirmed, not assumed. From there the between-block inserters appear and you can build the outline by hand, ask for a full draft, or import a master instead. Nothing here requires the assistant.",
       },
     ],
   },
@@ -268,15 +296,25 @@ export const TOUR: readonly TourChunk[] = [
           "Drag articles within a PART or move paragraphs among their siblings. Keyboard: Space picks up, Up/Down moves, Space or Enter drops, Escape cancels. Arrow buttons are the fallback. IDs and subtrees stay intact and numbering recomputes; cross-PART moves and reparenting are deliberately blocked.",
       },
       {
-        id: "open-lint",
-        capabilities: ["document.open-items", "document.lint"],
+        id: "open-items",
+        capabilities: ["document.open-items"],
         mode: "interactive",
         anchor: "open-items",
         drawer: "openItems",
         placement: "top",
-        title: "Open decisions and deterministic lint",
+        title: "Open decisions stay counted",
         body:
-          "TBD and needs-input blocks collect in a jumpable inventory and remain scheduled in exports. Advisory lint jumps to stale or unrecorded editions, placeholders, template markers, empty articles, duplicate titles, and missing headers; lint never blocks an edit.",
+          "TBD markers and needs-input blocks collect in a jumpable inventory, remain scheduled in exports, and are one of the readiness checklist's gating conditions. Click any entry to jump to the block that raised it.",
+      },
+      {
+        id: "lint",
+        capabilities: ["document.lint"],
+        mode: "interactive",
+        anchor: "lint-issues",
+        placement: "top",
+        title: "Deterministic lint, running on every change",
+        body:
+          "This practice state contains real findings on purpose. Lint runs with no model call and no network: stale or unrecorded editions, unresolved placeholders, template markers, empty articles, duplicate article titles, and an unset section header. Click one to jump to it. Lint is advisory — it never blocks an edit or a turn — but a clean report is required for issue readiness.",
       },
     ],
   },
@@ -314,14 +352,14 @@ export const TOUR: readonly TourChunk[] = [
       },
       {
         id: "research-run",
-        capabilities: ["research.run"],
+        capabilities: ["research.run", "research.stop"],
         mode: "optional",
         anchor: "research-start",
         drawer: "research",
         placement: "top",
         title: "Systematic four-dimension research",
         body:
-          "A deliberate run covers governing codes, AHJ requirements, owner/client/insurer standards, and site/environment conditions. Progress streams live; you can follow it, stop and discard the incomplete sweep, or rerun later.",
+          "A deliberate run covers governing codes, AHJ requirements, owner/client/insurer standards, and site/environment conditions. Progress streams live. Running it again appends a round rather than replacing anything. Stop, behind a confirmation, discards only the round in flight — every earlier round's findings stay in use, and the spend already committed is still metered.",
         optionalReason: "A live run takes several minutes and uses real API and web-search spend.",
       },
       {
@@ -334,7 +372,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Evidence stays distinguishable",
         body:
-          "Compact and full reports show dimension telemetry, confidence, retrieved sources, [UNVERIFIED] leads, and [PROCESS] requirements. Grounded items can create standards overrides and real provisions with ◆ source chips. Save/reopen preserves the report; readiness detects when it is stale.",
+          "Compact and full reports show dimension telemetry, confidence, retrieved sources, [UNVERIFIED] leads, and [PROCESS] requirements. Grounded items can create standards overrides and real provisions with ◆ source chips. Rounds accumulate: a requirement found again is confirmed in place rather than duplicated, so item ids stay stable for the chips already citing them, and once there is more than one round each item is dated by the round that last grounded it in a retrieved source. The report breaks out what each round added versus re-confirmed. Save/reopen preserves it; readiness detects when it is stale.",
       },
     ],
   },
@@ -401,7 +439,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Attach background without polluting the spec",
         body:
-          "Attach or remove up to 20 DOCX, PDF, TXT, XML, or CSV files. See kind, extracted blocks, truncation, tracked-change Accept-All, PDF page markers, and tabular/XML structure. The model reads them on request; they save with the project but stay out of the spec, lint, diff, QC, readiness, and document export.",
+          "Attach or remove up to 20 DOCX, PDF, TXT, XML, or CSV files, within a shared 100,000-token budget the panel meters as you add them. See kind, extracted blocks, truncation, tracked-change Accept-All, PDF page markers, and tabular/XML structure. The assistant sees a one-line summary every turn and opens the full text only when it needs it, so a long standard does not inflate the cost of every later message. They save with the project but stay out of the spec, lint, diff, QC, readiness, and document export.",
       },
     ],
   },
@@ -442,7 +480,7 @@ export const TOUR: readonly TourChunk[] = [
     steps: [
       {
         id: "qc-run",
-        capabilities: ["qc.preflight", "qc.run"],
+        capabilities: ["qc.preflight", "qc.run", "qc.stop"],
         mode: "optional",
         anchor: "qc-drawer",
         drawer: "qc",
@@ -517,13 +555,13 @@ export const TOUR: readonly TourChunk[] = [
       },
       {
         id: "help-updates",
-        capabilities: ["help.topics", "updates.manage"],
+        capabilities: ["help.topics", "help.trust", "updates.manage"],
         mode: "explanatory",
         anchor: "help-nav",
         placement: "bottom",
-        title: "Help and updates are always available",
+        title: "Help, the trust dossier, and updates",
         body:
-          "The five Help topics cover the workflow in place. About contains the manual update check and release information; the header shows an available update and supports installation when the current platform allows it.",
+          "The five Help topics cover the workflow in place, and can restart this tutorial or jump straight to any chapter. “Why trust it” links to a full dossier that answers, action by action, what runs on your machine, what leaves it, where each word came from, which parts involve no AI at all, and how to verify any of it yourself. About contains the manual update check and release information; the header shows an available update and installs it when the platform allows, or links to the releases page when it does not.",
       },
     ],
   },

@@ -124,11 +124,11 @@ sheet, a previous project's section, or meeting notes.
 ## Shipped in v1.5.0 (Batch 10: Generic any-discipline module)
 
 **Any discipline, any project type, anywhere in the USA and Canada.** A new
-session starts from a blank, generic document. Built-in templates and personal
-template loading are shown as disabled choices while those workflows are in
-development. The compatibility module APIs remain available for old projects
-and future template seeding, but the current dialog does not ask the user to
-select a discipline or describe the project.
+session starts from a blank, generic document, from a built-in or personal
+template, or from a template file you load (see *Reusable templates* above).
+The compatibility module APIs remain available for old projects and template
+seeding, but the dialog does not ask the user to select a discipline or
+describe the project.
 
 - **No pinned editions in generic mode — deliberately.** The generic module
   ships zero standards pins. Every edition enters through the existing
@@ -181,29 +181,70 @@ next message, so an interview is mostly tapping, not typing.
 > both shipped and are described in `CLAUDE.md`. This is a pre-existing
 > documentation gap, called out here rather than silently left implied.
 
-## Shipped in v1.1.0 (Batch 6: Guided onboarding + starter prompts) and still current
+## Reusable templates
 
-**The guided tutorial is a passive tour over the current project.** It starts
-immediately when selected, regardless of document contents or API-key state,
-and never resets, drafts, edits, prefills, confirms, researches, or runs QC.
+**Turn a finished section into a starting point.** Save the current spec as a
+named template, then start any future project from it — yours, or one of the
+built-in starters.
 
-- **A scripted spotlight tour, in chunks.** Four chunks — *Reading
-  the page / Tell it about the project / Make it yours / Out the door* —
-  cover every station of the workflow: statuses & provenance, open items,
-  lint, standards, the spend meter, the defaults-first interview, profile,
-  research, draft-full, inline edits, versions, the review queue, compare,
-  master import, Final QC, readiness, export, save/open, settings. Each step
-  blocks interaction with the application while highlighting stable controls;
-  a missing control degrades to a centered explanation, never a hang. Drawers
-  may open automatically for viewing.
-- **Navigation only.** Tutorial UI offers Back, Continue, Finish, and End tour.
-  End tour appears on every step and chunk break and uses one confirmation
-  flow whose copy makes clear that the tour changed nothing. Finishing or
-  explicitly ending records completion; external teardown does not.
-- **Current workflow copy.** The tour explains the context-aware heading and
-  the new blank/template/template-upload session choices without asking the
-  user to operate them. A header button restarts the tour at any time, reduced
-  motion is honored, and the first-run chip remains cosmetic localStorage.
+- **Two ways to create one.** *Exact* keeps your wording verbatim. *AI
+  generalize* has the model rewrite project-specific language into reusable
+  language and clears the project profile, edition overrides, and research
+  provenance — then shows you **a diff of exactly what it changed, before
+  anything is saved**. If the model alters structure, ids, or resolves an
+  open decision, the preview is rejected outright and nothing is written.
+- **They are files.** Export a template to a `.bastemplate` and hand it to a
+  colleague; import theirs. Rename, re-describe, or delete your own; built-in
+  starters are read-only.
+- **Template content is labeled.** A section seeded from a template badges
+  those blocks as a template starter, so nobody mistakes reusable boilerplate
+  for a decision made about this project. It is not Word-source provenance
+  and never unlocks source-preserving export.
+
+## Set the section number and title yourself
+
+The section header is editable in place: hover it, click the pencil, type the
+number and title, press Enter. It is one undoable version and writes the same
+operation the assistant would — so you can name a section without asking, or
+ask and have it named. (An imported file with no spec structure deliberately
+does not offer this: it has no section number, and inventing one is exactly
+what the honest-framing rule above exists to prevent.)
+
+## The guided tutorial — an actual specification, not a slideshow
+
+**The tutorial teaches against real document state in a protected copy of
+your work.** Pick your own spec, a freshly generated one, or the bundled
+showcase; practice on it; then choose what happens to it at the end. Your
+original is retained the whole time and restored by default.
+
+- **Eleven chapters over a real workspace.** Start from an empty page ·
+  the paper · grounding · review and compare · figures and references ·
+  master import and source output · Final QC and readiness · export, save
+  and support · templates — plus the workspace and conversation chapters
+  that open it. Several chapters swap in a purpose-built practice copy built
+  by **production code paths**: the import chapter really imports a DOCX, the
+  save chapter really round-trips a `.baspec`, the references chapter really
+  attaches five files through the real extractors.
+- **It is interactive where that is honest, and explicit where it is not.**
+  Steps are marked *interactive*, *optional*, or *explanatory*. Optional
+  steps are the ones that spend money — a live research run, a Final QC pass
+  — and they say so before you click. **Nothing is ever fabricated:** if
+  there is no completed research or QC result, the step says exactly that
+  rather than inventing findings or a readiness state.
+- **Every feature is covered, and that is enforced by a test.** UI controls
+  carry a capability id, tutorial steps reference the same ids, and the test
+  suite asserts the two sets are equal in both directions — so a feature
+  cannot ship untaught, and a tutorial step cannot describe a control that
+  does not exist. Step anchors are checked against the real DOM attributes
+  too.
+- **You choose the ending.** Return to your project (default), save a
+  `.baspec` copy of the tutorial work first, or replace your project with the
+  tutorial copy — which is deliberately last, needs a second confirmation,
+  and offers to save your original first.
+- **Resume, jump, and restart.** Pause any time; the tutorial resumes only
+  when the server agrees the same protected workspace is still live. Help
+  restarts it or jumps straight to any named chapter. Reduced motion is
+  honored.
 
 ## Shipped in v1.0.0 (Batch 5: Redline export + version diff) and still current
 
@@ -579,8 +620,21 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/qc/start|status|stream|apply|dismiss|export +
                          /api/qc/export.json,
                          /api/readiness, /api/audit/* (deprecated),
+                         /api/templates (+preview/import/{id}/export/
+                         {id}/instantiate),
+                         /api/tutorial/status|start|enrich|scenario/*|
+                         restore|keep,
+                         /api/reference/upload + /api/references,
+                         /api/figures + /api/figure/{fid}/csv,
+                         /api/session/unsaved|bundle, /api/usage,
                          /api/update/check|install,
                          /api/trace/viewer, /api/project/save + load/load-file
+  templates.py           TemplateCatalog: curated + personal libraries, the
+                         preview→commit create flow (Exact / AI-generalize),
+                         import/export/instantiate
+  tutorial.py            tutorial coverage analysis, the enrichment directive and
+                         its additive-only validator, the bundled showcase, and
+                         the per-chapter practice-copy builders
   qc/
     schema.py            QC lens definitions + submit_qc_findings/verdict strict
                          tools + observable reviewed-check and finding/verdict
@@ -684,13 +738,18 @@ frontend/                Vite + React + TypeScript + Tailwind v4
                          document-order walk (port of iter_paragraphs)
   src/lib/qcReport.ts    pure Final QC report formatting, coverage, source-link,
                          operation, usage, and limitations helpers
-  src/lib/tour.ts        passive guided-tour data: starter prompts, stable
-                         anchors, and explanatory steps in 4 chunks
-  src/lib/useOnboarding.ts  navigation-only tour phase machine
-  src/lib/onboardingStorage.ts  "tour completed" flag (cosmetic localStorage)
+  src/lib/capabilities.ts  the end-user capability vocabulary; the tutorial
+                         covers it and a test enforces both directions
+  src/lib/tour.ts        the versioned tutorial manifest: starter prompts,
+                         chapters (with backend scenarios), steps, anchors,
+                         document resolvers, readiness, and step actions
+  src/lib/useOnboarding.ts  tutorial lifecycle: workspace start/enrich, scenario
+                         swap, chapter jump, restore/keep, resume persistence
+  src/lib/onboardingStorage.ts  "tour completed" flag + the resume record
   src/components/        Chat (starter chips), MessageBubble (markdown),
                          Composer (ask-model prefill),
-                         OnboardingOverlay (blocking spotlight + passive bubbles),
+                         OnboardingOverlay (spotlight + step cards + finish
+                         choices; real controls stay interactive),
                          Header (spend ticker + update pill), ApiKeyBanner,
                          ArtifactPanel (stepper, Compare toggle + base picker,
                          export menu, import, "Draft full section", open items),

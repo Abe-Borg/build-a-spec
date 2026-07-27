@@ -87,6 +87,56 @@ test("every registered capability is declared by production UI", () => {
   assert.deepEqual([...declared].sort(), [...expected].sort());
 });
 
+test("every step anchor resolves to a real production data-tour attribute", () => {
+  // Without this, a renamed or mistyped anchor degrades silently into the
+  // "control is not available in the current UI state" card after a ~2s
+  // retry loop — which reads as a legitimate product state, not a bug.
+  const root = fileURLToPath(new URL("../src/", import.meta.url));
+  const productionUi = sourceFiles(root)
+    .filter((path) => !path.endsWith("tour.ts"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+  const declared = new Set(
+    [...productionUi.matchAll(/data-tour\s*=\s*"([^"${]+)"/g)].map((m) => m[1]),
+  );
+  const anchors = [...tour.matchAll(/\n\s*anchor:\s*"([^"]*)"/g)].map((m) => m[1]);
+  assert.ok(anchors.length > 0, "the manifest must declare anchors");
+  const missing = anchors.filter((anchor) => anchor && !declared.has(anchor));
+  assert.deepEqual(missing, []);
+});
+
+test("the blank-start chapter's controls exist in the empty-document renderer", () => {
+  // A blank document renders ArtifactPanel's EmptyState, NOT SpecDocument, so
+  // a capability declared only in SpecDocument is unreachable in the very
+  // chapter that teaches it — the step would spotlight nothing and degrade to
+  // the "control is not available" card.
+  const chapter = /id:\s*"blank-start"[\s\S]*?\n\s{2}\}/.exec(tour)?.[0];
+  assert.ok(chapter, "the blank-start chapter must exist");
+  assert.match(chapter, /scenario:\s*"blank"/);
+  const taught = new Set<string>();
+  for (const match of chapter.matchAll(/capabilities:\s*\[([^\]]*)\]/g)) {
+    for (const id of quoted(match[1])) taught.add(id);
+  }
+  assert.ok(taught.size > 0);
+  const declared = new Set<string>();
+  for (const match of artifact.matchAll(/data-capability\s*=\s*"([^"]+)"/g)) {
+    for (const id of match[1].split(/\s+/)) declared.add(id);
+  }
+  const unreachable = [...taught].filter((id) => !declared.has(id));
+  assert.deepEqual(unreachable, []);
+  // And #el-sec must exist there, or the section-header resolver cannot bind.
+  assert.match(artifact, /id="el-sec"/);
+});
+
+test("a step with no anchor supplies a document resolver instead", () => {
+  const steps = [...tour.matchAll(/\{\s*\n\s*id:\s*"[^"]+",[\s\S]*?\n\s{6}\}/g)].map(
+    (m) => m[0],
+  );
+  const anchorless = steps.filter((step) => /anchor:\s*""/.test(step));
+  assert.ok(anchorless.length > 0, "blank anchors exist only with a resolver");
+  for (const step of anchorless) assert.match(step, /resolve:\s*"/);
+});
+
 test("tutorial is versioned, resumable, interactive, and document-aware", () => {
   assert.match(tour, /TOUR_VERSION\s*=\s*\d+/);
   assert.match(tour, /mode:\s*"interactive"/);
@@ -107,6 +157,12 @@ test("tutorial is versioned, resumable, interactive, and document-aware", () => 
   assert.match(storage, /consumeTutorialUpdateInvitation/);
   assert.match(chat, /Full tutorial updated/);
   assert.doesNotMatch(chat, /passive|3-minute|~3 minutes/i);
+});
+
+test("review tutorial does not offer a one-click confirmation shortcut", () => {
+  assert.doesNotMatch(tour, /confirm-first|Confirm the first outstanding block/);
+  assert.doesNotMatch(overlay, /confirm-first/);
+  assert.doesNotMatch(hook, /confirm-first/);
 });
 
 test("workspace lifecycle protects current work and offers explicit outcomes", () => {

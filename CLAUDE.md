@@ -50,7 +50,12 @@ backend/
                            kept, deprecated); Batch 5
                            adds GET /api/doc/diff + ?redline=master|version on
                            /api/export/docx (+ baseline_index in _doc_payload);
-                           onboarding is frontend-only and passive (no demo API);
+                           the tutorial is NOT frontend-only any more: it owns
+                           /api/tutorial/status|start|enrich|scenario/start|
+                           scenario/finish|restore|keep, and ~two dozen unrelated
+                           routes call _stale_tutorial_response() for the same
+                           lease check; templates own /api/templates(+preview,
+                           import, {id}/export, {id}/instantiate);
                            Batch 7 adds POST /api/chat/stop + /api/research/stop
                            + /api/qc/stop (409 when nothing is running/streaming);
                            Batch 9 adds suggested_prompts to _doc_payload (no new
@@ -189,11 +194,27 @@ backend/
                            through a BOM/UTF-8/cp1252/latin-1 ladder with a NUL
                            binary guard, structure kept verbatim. Blocking — worker
                            thread only
-  sessions.py              single module-level SessionState (history + DocumentStore
+  templates.py             reusable semantic templates: TemplateCatalog (curated
+                           + personal libraries, preview→commit two-phase create,
+                           Exact vs AI-Generalize, import/export/instantiate);
+                           templates/curated/*.bastemplate ship with the app
+  tutorial.py              tutorial fixtures + coverage: analyze_tutorial_coverage,
+                           tutorial_enrichment_directive, validate_tutorial_
+                           enrichment (additive-only proof), build_showcase_session,
+                           repair_tutorial_copy, and the practice-copy builders
+                           (blank / detached / structural / review / references)
+  sessions.py              SessionState (history + DocumentStore
                            + SpecModule + discipline (Batch 10, session-level
                            like module) + ResearchRunner + AuditRunner + QCRunner
                            + FigureStore + ReferenceDocStore + UsageLedger +
-                           suggested_prompts) +
+                           suggested_prompts) + SessionManager, which owns the
+                           ACTIVE one across three scopes (original → tutorial →
+                           scenario, never nested): begin_tutorial (idempotent per
+                           request_id, refuses while busy), push/pop_scenario,
+                           replace_tutorial, finish_tutorial(restore|keep),
+                           clone_session_for_tutorial. Every scope change mints a
+                           new workspace_id; that + generation is the lease the
+                           tutorial routes re-check —
                            has_unsaved_progress /
                            project_payload / project_default_stem /
                            project_default_filename (timestamped
@@ -320,9 +341,20 @@ frontend/src/
   lib/qcReport.ts          pure audit-report helpers: coverage/limitations,
                            safe source links, formatting for identity, lens/seat
                            telemetry, operations/dispositions, usage and cost
-  lib/tour.ts              [Batch 6] passive guided-tour data: starter prompts,
-                           stable data-tour anchors, explanatory steps in 4 chunks
-  lib/useOnboarding.ts     [Batch 6] navigation-only tour phase machine;
+  lib/capabilities.ts      END_USER_CAPABILITIES: the one vocabulary of end-user
+                           capability ids. Production controls declare them via
+                           data-capability; tour.ts steps reference them; the
+                           tour test asserts set equality BOTH ways. Adding one
+                           is a three-place edit (see "Capability coverage")
+  lib/tour.ts              the versioned tutorial manifest: starter prompts,
+                           TOUR_VERSION, chunks (each with an optional backend
+                           `scenario`) → steps (capabilities, mode, anchor or
+                           document `resolve`, `drawer`, `readiness`, `actions`).
+                           anchorSelector() resolves a step against the LIVE
+                           SpecDoc; capabilityCoverage() flattens the contract
+  lib/useOnboarding.ts     the tutorial lifecycle machine: workspace start /
+                           enrich / scenario swap / restore / keep, chapter
+                           jump, stale-generation rejection, resume persistence;
                            endConfirm flag (requestEnd/cancelEnd) gates every popup close (✕ /
                            backdrop) behind an end-or-continue confirmation —
                            orthogonal to phase, so "Continue" restores the popup
@@ -1284,33 +1316,160 @@ events, no new env vars, no new Python deps (`difflib` is stdlib).
 
 ## Batch 6 — implemented notes (v1.1.0: guided onboarding + starter prompts)
 
-Five starter-prompt chips in the empty chat; the first (verbatim, a frozen
-ask: "New to this software, show me how to use this") runs a passive guided
-tour over the current project. No backend route, SSE event, model call, or
-project mutation belongs to onboarding.
+> **SUPERSEDED.** Batch 6 shipped a *passive* tour: frontend-only, four
+> chunks, no backend route, no project mutation. That is no longer what
+> ships. The tutorial now runs on a real, server-owned **tutorial
+> workspace** with per-chapter **scenarios**, and it does start runs, apply
+> edits, and prefill the composer when you ask it to. See "Guided tutorial —
+> implemented notes" below for the current architecture. The starter chips
+> and the `openNonce` drawer idiom described here are the parts that
+> survived unchanged.
 
-- **The tour is scripted frontend, never model-driven.** `lib/tour.ts` is
-  pure data: starter prompts, stable `data-tour` anchors, and four chunks
-  (*Reading the page / Tell it about the project / Make it yours / Out the
-  door*). `lib/useOnboarding.ts` has only `idle`, `touring`, and
-  `chunk-break` phases with Back/Continue/Finish/End navigation.
-- **The spotlight blocks application interaction.** A full-screen hit target
-  sits over the app while the cutout remains visual-only. Drawers may open
-  automatically for inspection. Anchor lookup retries briefly, follows resize
-  and scrolling, and falls back to a centered explanation when the named
-  control is absent (including empty-document controls).
+- **Starter chips.** Five prompts in the empty chat (`starterPrompts()` in
+  `lib/tour.ts`, rendered by `Chat.tsx`); the first is the frozen onboarding
+  ask and launches the tutorial instead of sending a message.
 - **Drawer opening = optional `openNonce` prop** (Review / Research / QC
-  drawers + the panel's open-items block): a bump does `setExpanded(true)`;
-  the blocking overlay prevents manual interaction while touring. App owns
-  `drawerNonces` + `bumpDrawer` (the `prefill.nonce` idiom).
-- **Completion semantics.** Every step and chunk modal exposes End tour via
-  the shared confirmation. Finish and explicit End mark the cosmetic
-  localStorage completion flag; `abort()` handles external session/project
-  teardown without marking completion. Confirmation copy states that no
-  project changes were made.
-- **Tests.** `frontend/tests/tour.test.ts` pins passive data (no application
-  actions or synthetic click resolvers), stable anchors, and coverage of the
-  dynamic heading plus the revised new-session choices.
+  drawers + the panel's open-items block): a bump does `setExpanded(true)`.
+  App owns `drawerNonces` + `bumpDrawer` (the `prefill.nonce` idiom).
+- **The spotlight leaves real controls interactive** (it did not, in Batch 6).
+  The root is `pointer-events-none`; only the step card takes pointer events.
+  Anchor lookup retries ~2s, follows resize and scrolling, and falls back to
+  an honest "this control is not available in the current UI state" card.
+- **Completion flag** is cosmetic localStorage; `abort()` handles external
+  session/project teardown without marking completion.
+
+## Guided tutorial — implemented notes (real workspaces + per-chapter scenarios)
+
+The tutorial teaches against **actual document state**, not a scripted
+mock-up. It runs in a protected server-owned copy of the user's project (or a
+generated spec, or the bundled showcase), and each chapter can swap in a
+purpose-built practice copy. The original is retained and restorable
+throughout.
+
+- **Three scopes, one lease.** `SessionManager` (`backend/sessions.py`) moves
+  `original` → `tutorial` → `scenario`; scenarios never nest. Every
+  transition mints a new monotonic `workspace_id`, and that plus
+  `session.generation` is the lease every tutorial route re-checks
+  (`_tutorial_request_is_current`) — a stale request gets
+  `409 {code: "stale_workspace"}` rather than mutating the wrong workspace.
+  `begin_tutorial` is idempotent per `request_id` and refuses while a chat
+  turn, research, audit, or QC run is active or settling.
+- **Routes** (`backend/app.py`): `GET /api/tutorial/status`, `POST
+  /api/tutorial/{start,enrich,scenario/start,scenario/finish,restore,keep}`.
+  `enrich` is SSE. `GET /api/project/save?scope=tutorial|original` saves
+  either copy mid-tutorial.
+- **Coverage, not decoration.** `analyze_tutorial_coverage`
+  (`backend/tutorial.py`) checks 15+ teaching anchors the manifest needs
+  (section number/title, substantive content, all three PARTs, sibling
+  articles and paragraphs, four paragraph levels, assumed/needs_input/TBD
+  content, version history, one figure of each kind, suggested prompts).
+  Gaps drive enrichment.
+- **Enrichment is additive and proven so.** `mode:"live"` runs a real
+  `stream_user_turn` against the enrichment directive; `mode:"bundled"` adds
+  deterministic fixtures with zero spend. `validate_tutorial_enrichment`
+  rejects the result outright if any pre-existing PART, article, paragraph,
+  identity or metadata value changed or moved, or if a new block claims
+  provenance. A failed/incomplete/invalid enrichment atomically swaps in the
+  bundled showcase (`tutorial_fallback`) — paid usage from the attempt stays
+  visible.
+- **Nine scenario kinds** (`push_scenario`'s allowlist): `blank`,
+  `structural`, `review`, `import`, `template`, `project_roundtrip`,
+  `references`, `research`, `qc`. Several run **production** code paths — the
+  import scenario builds a DOCX and runs `_prepare_master_import`; the
+  project scenario round-trips real `.baspec` bytes; the references scenario
+  attaches five real files through the real extractors.
+- **The chapter→kind mapping is an ordered substring chain with `structural`
+  as a silent catch-all** (`tutorial_scenario_start`). An unmapped scenario
+  name does **not** error — it quietly starts the structural practice copy.
+  Every new kind needs its own branch ahead of the fallback, and a test that
+  pins it (`test_an_unmapped_chapter_name_does_not_silently_start_a_practice_fixture`).
+- **Frontend.** `lib/useOnboarding.ts` is the lifecycle machine (phases
+  `idle`, `source-choice`, `enrichment-choice`, `preparing`, `touring`,
+  `chunk-break`, `paused`, `completion`); `OnboardingOverlay.tsx` renders the
+  spotlight, per-step actions, readiness repair, and the finish choices;
+  `lib/onboardingStorage.ts` holds the resume record keyed on
+  `TOUR_VERSION` + the workspace lease (the server is authoritative — only an
+  exact three-way match restores progress).
+- **Paid results are never fabricated.** `research`, `imported` and `qc`
+  readiness are deliberately **not** repairable by "Build the missing
+  example"; a missing result renders honest copy saying so. Two
+  `doesNotMatch` assertions in `tour.test.ts` keep it that way.
+
+## Reusable templates — implemented notes
+
+A semantic template is a reusable starter document — not a project, and not a
+Word file. Curated templates ship in `backend/templates/curated/`; personal
+ones live in the app config dir (`app_paths.template_library_dir()`).
+
+- **Routes**: `GET /api/templates`, `POST /api/templates/preview` (SSE when
+  `Accept: text/event-stream`), `POST /api/templates`, `PATCH|DELETE
+  /api/templates/{id}`, `GET /api/templates/{id}/export`, `POST
+  /api/templates/import`, `POST /api/templates/{id}/instantiate`.
+- **Two creation modes.** *Exact* snapshots the current document verbatim.
+  *AI Generalize* has the model rewrite project-specific wording into
+  reusable language and clears profile/overrides/suppressions/provenance —
+  then returns a **diff preview to approve before anything is saved**.
+  `_template_structure_contract` rejects an AI preview outright if it changed
+  structure, ids, identity, or resolved an open decision.
+- **Two-phase commit**: preview token → commit, bound to workspace,
+  generation and document version.
+- **`template_origin`** (id, name, `seed_block_ids`) rides a seeded document
+  and renders a "template starter" badge. It is explicitly **not** source-DOCX
+  provenance and never unlocks source-preserving export.
+- **`.bastemplate`** is `application/vnd.buildaspec.template+json` (16 MiB
+  import cap). `main.py` exposes `js_api.save_template(id)` for a native
+  Save dialog.
+
+## Capability coverage — implemented notes (the tutorial as a contract)
+
+`frontend/src/lib/capabilities.ts` is the single vocabulary of end-user
+capabilities. Production controls declare `data-capability="…"`;
+`lib/tour.ts` steps reference the same ids; `frontend/tests/tour.test.ts`
+asserts **set equality in both directions**. A capability that exists in only
+two of the three places fails the suite — that is the contract working.
+
+- **Adding a capability is a three-place edit**: registry entry, a
+  `data-capability` on the real control (any `frontend/src/**` file except
+  `capabilities.ts`/`tour.ts`), and at least one tour step. Ids must match
+  `/"([a-z][a-z0-9.-]+)"/` — the test extracts them by regex over file text,
+  so no capitals and no underscores. Space-separated ids
+  (`data-capability="help.topics tour.controls"`) and the
+  `data-capability={cond ? "a" : "b"}` form are both supported.
+- **The contract only polices the vocabulary against itself.** A shipped
+  feature with no id is invisible to it. An audit of every route, op and
+  affordance closed six such gaps: `chat.thinking` (the reasoning
+  disclosure), `research.stop` / `qc.stop` (aborting a paid run —
+  `chat.stop` already existed for the cheap one), `document.section-header`
+  and `document.first-article` (the from-scratch on-ramp), and `help.trust`
+  (the trust dossier, which had been sharing `help.topics`).
+- **Anchors are now validated too.** `tour.test.ts` checks that every step's
+  non-empty `anchor` exists as a `data-tour` attribute in production UI, and
+  that an anchorless step supplies a `resolve` instead. Before this a typo
+  degraded silently into the "control not available" card, which reads as a
+  legitimate product state rather than a bug.
+- **The section header became editable.** `SpecDocument`'s `SectionHeader`
+  mirrors `ArticleTitle` (hover pencil, Enter saves, Escape cancels) and
+  writes one `replace` on `sec` carrying `text` + `numbering` — the same op
+  the model uses, so it is one ordinary undoable version. It is gated on the
+  already-computed `sectionReplaceCapability` and suppressed entirely on a
+  `bareImport`, where inventing a section number is exactly what the
+  non-spec-upload framing exists to prevent.
+- **The `blank` scenario + chapter** exist because every other chapter runs
+  on a populated workspace, so the panel's empty-state controls could never
+  be on screen. `blank_practice_copy` returns a genuinely empty session
+  carrying only module/discipline/primer — not a cleared clone, because a
+  transcript describing a document that is no longer there is worse than no
+  transcript. Its two steps deliberately carry **no `readiness`**: emptiness
+  is the thing the user is about to destroy by doing the exercise, so a
+  readiness check would flip the step into its own "could not be prepared"
+  warning the moment they succeeded. Anchor resolution already covers the
+  case honestly — if the fixture failed, `first-article` does not resolve and
+  the step degrades to the standard "control is not available" card.
+- **Lint finally has its own step.** `document.lint` lives on the always-
+  rendered Issues strip (`data-tour="lint-issues"`), which returns `null`
+  only when there are no findings — so the step needs no drawer plumbing, and
+  the `structural` scenario's deliberately seeded findings are what it points
+  at.
 
 ## Batch 7 — implemented notes (v1.2.0: stop generation / research / QC)
 
@@ -2332,10 +2491,20 @@ here.
 
 ```
 .venv/bin/python -m pytest -q          # backend suite (Windows: .venv\Scripts\python)
+cd frontend && npm test                # node --test: the capability/tour contract + units
 cd frontend && npm run dev             # UI hot reload (with BUILD_A_SPEC_DEV=1 backend)
 cd frontend && npm run build           # tsc --noEmit && vite build -> dist/
 python main.py                         # run the app (serves dist/)
 ```
+
+`npm test` is not optional after touching UI: it is what enforces the
+capability-coverage contract (`frontend/tests/tour.test.ts`). A new control
+without a `data-capability`, a capability without a tour step, or a step
+anchor with no matching `data-tour` all fail there. CI runs it (ci.yml's
+Frontend build job, before the build), so a gap fails the PR rather than
+shipping — but find out locally, not from a red check. The workflow pins
+**Node 22**: `npm test` runs `node --test` directly over the `.ts` test files
+and depends on type stripping, which Node 20 cannot do.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

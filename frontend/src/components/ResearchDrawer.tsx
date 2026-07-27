@@ -270,6 +270,7 @@ export default function ResearchDrawer({
           <button
             className="shrink-0 rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-err hover:text-err"
             onClick={() => setStopConfirmOpen(true)}
+            data-capability="research.stop"
             title="Stop research"
           >
             Stop

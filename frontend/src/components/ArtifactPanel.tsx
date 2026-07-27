@@ -34,7 +34,7 @@ import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
 import QCDrawer from "./QCDrawer";
 import ResearchDrawer from "./ResearchDrawer";
 import ReviewDrawer from "./ReviewDrawer";
-import SpecDocument from "./SpecDocument";
+import SpecDocument, { SectionHeader } from "./SpecDocument";
 import {
   sourceCapability,
   sourceCapabilityTitle,
@@ -158,12 +158,14 @@ function EmptyState({
   busy,
   sourceExpected,
   sourceCapabilities,
+  unstructuredImport,
   onEditDoc,
 }: {
   doc: SpecDoc;
   busy: boolean;
   sourceExpected: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
+  unstructuredImport: boolean;
   onEditDoc: (ops: EditOp[]) => void;
 }) {
   const [partId, setPartId] = useState(doc.parts[0]?.id ?? "");
@@ -175,6 +177,12 @@ function EmptyState({
     sourceExpected,
     selectedPart?.id ?? "",
     "add_article",
+  );
+  const sectionReplaceCapability = sourceCapability(
+    sourceCapabilities,
+    sourceExpected,
+    "sec",
+    "replace_text",
   );
   const articleTitle = title.trim();
   const addDisabled =
@@ -201,12 +209,42 @@ function EmptyState({
 
   return (
     <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
-      <div className="text-center">
-        <p className="text-[13px] font-semibold tracking-wide">SECTION</p>
-        <p className="mt-1 text-[13px] font-semibold tracking-wide text-paper-dim">
-          — awaiting the interview —
-        </p>
-      </div>
+      {/* A blank document renders here, not in SpecDocument — so the header
+          editor has to live in both places, or naming the section would be
+          impossible on the one page where you most want to do it. An
+          unstructured import is the exception: it has no section number and
+          inventing one is what the honest-framing rule exists to prevent. */}
+      {unstructuredImport ? (
+        <div id="el-sec" className="text-center">
+          <p className="text-[13px] font-semibold tracking-wide">SECTION</p>
+          <p className="mt-1 text-[13px] font-semibold tracking-wide text-paper-dim">
+            — awaiting the interview —
+          </p>
+        </div>
+      ) : (
+        <div
+          id="el-sec"
+          data-capability="document.section-header"
+          className="text-center"
+        >
+          <SectionHeader
+            number={doc.section.number}
+            title={doc.section.title}
+            changed={false}
+            capability={sectionReplaceCapability}
+            sourceExpected={sourceExpected}
+            busy={busy}
+            onEdit={(ops) => {
+              onEditDoc(ops);
+              return true;
+            }}
+          />
+          <p className="mt-1 text-[11px] text-paper-dim">
+            Name it here, or just tell the assistant — either records the same
+            change.
+          </p>
+        </div>
+      )}
 
       <div className="mt-10 space-y-8 select-none">
         {["PART 1 - GENERAL", "PART 2 - PRODUCTS", "PART 3 - EXECUTION"].map(
@@ -226,6 +264,8 @@ function EmptyState({
       <form
         className="mt-10 rounded-lg border border-paper-edge bg-white/35 p-4"
         onSubmit={addFirstArticle}
+        data-tour="first-article"
+        data-capability="document.first-article"
       >
         <p className="text-xs font-semibold tracking-wide text-paper-ink uppercase">
           Add the first article
@@ -953,7 +993,10 @@ export default function ArtifactPanel({
       )}
 
       {compareMode && (
-        <div className="flex flex-wrap items-center gap-3 border-b border-edge bg-bg/40 px-5 py-2 text-[11px]">
+        <div
+          className="flex flex-wrap items-center gap-3 border-b border-edge bg-bg/40 px-5 py-2 text-[11px]"
+          data-capability="history.compare"
+        >
           <span className="font-medium tracking-wide text-ink-dim uppercase">
             Comparing
           </span>
@@ -1015,6 +1058,7 @@ export default function ArtifactPanel({
             busy={busy}
             sourceExpected={activeSourceExpected}
             sourceCapabilities={sourceCapabilities}
+            unstructuredImport={unstructuredImport}
             onEditDoc={onEditDoc}
           />
         ) : (

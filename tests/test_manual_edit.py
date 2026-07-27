@@ -525,3 +525,73 @@ def test_manual_suppress_is_undoable():
     undone = client.post("/api/doc/undo").json()
     rows = [s for s in undone["standards"] if s["name"] == "NFPA 2001"]
     assert len(rows) == 1 and rows[0]["is_suppressed"] is False
+
+
+def test_manual_section_header_edit_sets_number_and_title_as_one_version():
+    """The panel's header control writes the same op the model uses.
+
+    Before this, naming the section was chat-only: the header rendered as
+    plain text with no edit affordance.
+    """
+    client = _client()
+    before = client.get("/api/doc").json()
+    assert before["doc"]["section"]["number"] == ""
+    assert before["doc"]["section"]["title"] == ""
+    start_version = before["doc"]["version"]["count"]
+
+    resp = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": "sec",
+                    "text": "WET-PIPE SPRINKLER SYSTEMS",
+                    "numbering": "21 13 13",
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["doc"]["section"]["number"] == "21 13 13"
+    assert data["doc"]["section"]["title"] == "WET-PIPE SPRINKLER SYSTEMS"
+    # One undoable version, and undo returns the unnamed header.
+    assert data["doc"]["version"]["count"] == start_version + 1
+    undone = client.post("/api/doc/undo").json()
+    assert undone["doc"]["section"]["number"] == ""
+    assert undone["doc"]["section"]["title"] == ""
+
+
+def test_section_header_edit_accepts_number_or_title_alone():
+    client = _client()
+    numbered = client.post(
+        "/api/doc/edit",
+        json={"ops": [{"action": "replace", "target_id": "sec", "numbering": "23 05 00"}]},
+    ).json()
+    assert numbered["doc"]["section"]["number"] == "23 05 00"
+    assert numbered["doc"]["section"]["title"] == ""
+
+    titled = client.post(
+        "/api/doc/edit",
+        json={"ops": [{"action": "replace", "target_id": "sec", "text": "COMMON WORK"}]},
+    ).json()
+    assert titled["doc"]["section"]["number"] == "23 05 00"
+    assert titled["doc"]["section"]["title"] == "COMMON WORK"
+
+
+def test_section_header_edit_is_rejected_while_a_model_turn_streams():
+    client = _client()
+    sessions.get_session().turn_active = True
+    try:
+        resp = client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {"action": "replace", "target_id": "sec", "numbering": "21 13 13"}
+                ]
+            },
+        )
+        assert resp.status_code == 409
+    finally:
+        sessions.get_session().turn_active = False

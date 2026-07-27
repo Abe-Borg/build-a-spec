@@ -554,6 +554,24 @@ def detached_practice_copy(source: SessionState) -> SessionState:
     return clone
 
 
+def blank_practice_copy(source: SessionState) -> SessionState:
+    """Create the empty-page fixture the from-scratch on-ramp needs.
+
+    Every other chapter runs on a populated workspace, so the panel's
+    empty-state controls — the PART chooser, the first-article field, and the
+    unset section header — can never be on screen.  This is a genuinely blank
+    session rather than a cleared clone: carrying the tutorial's transcript
+    onto a blank page would leave a conversation describing a specification
+    that is no longer there.  Module and discipline ride along so the heading
+    and drafting context stay coherent.
+    """
+    blank = SessionState()
+    blank.module = source.module
+    blank.discipline = source.discipline
+    blank.project_context = source.project_context
+    return blank
+
+
 def structural_practice_copy(source: SessionState) -> SessionState:
     """Create a disposable edit/reorder/lint fixture through real doc ops."""
     from .sessions import clone_session_for_tutorial

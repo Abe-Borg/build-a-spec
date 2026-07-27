@@ -59,6 +59,8 @@ function ThinkingBlock({
     <div className="mb-2">
       <button
         type="button"
+        data-capability="chat.thinking"
+        aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-1 text-[11px] font-medium tracking-wide text-ink-faint uppercase transition-colors hover:text-ink-dim"
       >

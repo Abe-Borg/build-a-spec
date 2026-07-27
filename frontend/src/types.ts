@@ -188,6 +188,9 @@ export interface EditOp {
   text?: string;
   status?: BlockStatus;
   source_item_id?: string;
+  /** replace on target_id "sec": the section number (e.g. "21 13 13").
+   * `text` carries the section title on the same op. */
+  numbering?: string;
   /** add_article / add_paragraph: optional insertion index; move: required
    * final index among the target article or paragraph's existing siblings. */
   position?: number;

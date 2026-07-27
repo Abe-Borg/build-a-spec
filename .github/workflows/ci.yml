@@ -52,13 +52,23 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          # 22+: `npm test` runs node --test directly over the .ts test files
+          # and relies on type stripping. Node 20 cannot parse them.
+          node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
+
+      # The capability-coverage contract lives here (tests/tour.test.ts): a
+      # control with no capability id, a capability with no tutorial step, or
+      # a step anchor with no matching data-tour all fail this step. `npm run
+      # build` alone would not catch any of them.
+      - name: Test
+        working-directory: frontend
+        run: npm test
 
       - name: Build
         working-directory: frontend

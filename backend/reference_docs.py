@@ -42,6 +42,7 @@ from .reference_extract import REFERENCE_KIND_LABELS
 # this caps one model-visible payload rather than the upload itself (every
 # supported type is separately bounded by the upload read limit).
 MAX_REFERENCE_DOCS = 20
+MAX_REFERENCE_TOKENS = 100_000
 MAX_TEXT_CHARS = 400_000
 MAX_TITLE = 200
 _EXCERPT_CHARS = 280
@@ -118,6 +119,8 @@ class ReferenceDoc:
     # Defaults to Word: it was the only supported type when the store shipped,
     # so a project file without the field can only hold Word attachments.
     kind: str = "docx"
+    # Anthropic's Messages token-counting endpoint result for this document.
+    token_count: int = 0
 
     def kind_label(self) -> str:
         return REFERENCE_KIND_LABELS.get(self.kind, self.kind or "file")
@@ -138,6 +141,7 @@ class ReferenceDoc:
             "tracked_changes": self.tracked_changes,
             "added_at": self.added_at,
             "kind": self.kind,
+            "token_count": self.token_count,
         }
 
     def metadata(self) -> dict[str, Any]:
@@ -158,6 +162,7 @@ class ReferenceDoc:
             "added_at": self.added_at,
             "kind": self.kind,
             "kind_label": self.kind_label(),
+            "token_count": self.token_count,
             "excerpt": self.excerpt(),
         }
 
@@ -176,6 +181,7 @@ class ReferenceDoc:
             tracked_changes=bool(data.get("tracked_changes", False)),
             added_at=str(data.get("added_at", "")),
             kind=str(data.get("kind", "") or "docx"),
+            token_count=max(0, int(data.get("token_count", 0) or 0)),
         )
 
 
@@ -200,12 +206,21 @@ class ReferenceDocStore:
         title: str = "",
         tracked_changes: bool = False,
         kind: str = "docx",
+        token_count: int = 0,
     ) -> ReferenceDoc:
         """Attach one document. Raises :class:`ReferenceDocError`."""
         if len(self.docs) >= MAX_REFERENCE_DOCS:
             raise ReferenceDocError(
                 f"This session already has the maximum of "
                 f"{MAX_REFERENCE_DOCS} reference documents. Remove one first."
+            )
+        token_count = max(0, int(token_count))
+        total_tokens = sum(doc.token_count for doc in self.docs)
+        if total_tokens + token_count > MAX_REFERENCE_TOKENS:
+            raise ReferenceDocError(
+                f"Attached documents would use {total_tokens + token_count:,} "
+                f"tokens; the maximum is {MAX_REFERENCE_TOKENS:,}. Remove a "
+                "document or attach a smaller one."
             )
         body = text.strip()
         if not body:
@@ -230,6 +245,7 @@ class ReferenceDocStore:
             tracked_changes=tracked_changes,
             added_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             kind=kind or "docx",
+            token_count=token_count,
         )
         self._next_seq += 1
         self.docs.append(doc)

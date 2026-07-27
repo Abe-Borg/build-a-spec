@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 
+import pytest
 from docx import Document
 from fastapi.testclient import TestClient
 
@@ -25,12 +26,29 @@ from backend.llm.conversation import (
 )
 from backend.reference_docs import (
     MAX_REFERENCE_DOCS,
+    MAX_REFERENCE_TOKENS,
     MAX_TEXT_CHARS,
     ReferenceDocError,
     ReferenceDocStore,
     TurnReferenceBudget,
 )
 from backend.spec_doc.project import load_project
+
+
+def test_reference_store_enforces_cumulative_anthropic_token_limit():
+    store = ReferenceDocStore()
+    first = store.add(
+        filename="one.txt",
+        text="one",
+        block_count=1,
+        token_count=MAX_REFERENCE_TOKENS - 1,
+    )
+    assert first.metadata()["token_count"] == MAX_REFERENCE_TOKENS - 1
+
+    with pytest.raises(ReferenceDocError, match="100,001 tokens"):
+        store.add(filename="two.txt", text="two", block_count=1, token_count=2)
+
+    assert [doc.rid for doc in store.docs] == ["ref-1"]
 
 DOCX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

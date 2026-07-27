@@ -2060,11 +2060,24 @@ outside the modal.
 - **It stacks, it doesn't replace.** Local `deepDive` state inside `HelpModal`
   (cleared whenever `topic !== "why-trust-it"`, so closing help or switching
   tabs drops it). The dossier renders as a **sibling** of the help backdrop,
-  not a child — a click on its own backdrop must close only the dossier. The
-  help dialog's Escape handler is disabled while it is open (`if (!topic ||
-  deepDive) return`) and the dossier installs its own, so one Escape closes
-  one dialog. `z-[60]` sits above help (`z-50`) and below `ModalShell`
-  (`z-[70]`), which is never open at the same time.
+  not a child — a click on its own backdrop must close only the dossier.
+  `z-[60]` sits above help (`z-50`) and below `ModalShell` (`z-[70]`), which is
+  never open at the same time.
+- **Keyboard: `useDialogFocus`, same as the QC dialogs.** Containment matters
+  more here than usual — without it Shift+Tab reaches the topic strip
+  *underneath*, and activating a topic button changes `topic`, which clears
+  `deepDive` and closes the dossier out from under a keyboard user.
+- **One Escape closes one dialog, and that needs TWO guards.** `deepDive`
+  keeps the help listener off while the child dialog owns the keyboard — that
+  is the intent — but intent alone loses a race: the dossier's handler is on
+  `document`, help's is on `window`, and **React flushes the close
+  synchronously inside that native handler**, so help's effect has already
+  re-run and re-attached by the time the SAME keydown finishes bubbling.
+  (Verified in a browser: a probe listener on `document` bubble already sees
+  the dossier unmounted.) `useDialogFocus` calls `preventDefault()` before
+  closing, so help's handler also checks `e.defaultPrevented` — the reliable
+  "already handled" signal, independent of React's flush timing. Removing
+  either guard reintroduces a real bug.
 - **Shape**: `max-w-5xl`, `max-h-[88vh]`, a sticky contents rail (`lg:` and up)
   with IntersectionObserver scroll-spy rooted on the scroll container, and
   `#id` anchors per section. The rail is presentation only — everything is in
@@ -2089,6 +2102,14 @@ outside the modal.
 - **The `.docx` precision that matters**: extracted provision text DOES travel
   in the per-turn context; the retained package bytes never do. Both statements
   appear together everywhere the topic comes up.
+- **"Nothing runs on its own" was an overclaim and is gone.** `App` mounts and
+  calls `checkUpdate()` unprompted (the server throttles to once a day, but the
+  first launch of a day really does hit GitHub). The dossier invites readers to
+  *watch a firewall log* — so an unqualified claim would have been caught by
+  exactly the reader it is written for. Everywhere the topic appears (short
+  answer, the boundary list, the diagram label, Money, Security, and the
+  `WhyTrustIt` point) it is now scoped to **model** work plus an explicit
+  disclosure of the update check. Keep that scoping if the claim is reworded.
 - **`SOURCE_OUTPUT_GUIDANCE` is reused, not restated** (the export card renders
   the shared constant) — the five contracts must read identically in Help,
   onboarding, and here.

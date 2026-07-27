@@ -77,6 +77,9 @@ backend/
                            structured→tagged-JSON parse, grounding, retries with
                            billed-usage aggregation; RequirementsProfile +
                            render_text + research_context_block (trim-to-cap);
+                           ResearchRound + append_research_round: rounds APPEND
+                           (item_id join, evidence-only upgrade, cumulative
+                           dimension view, per-item as-of dates, pure/no-mutate);
                            Batch 7 threads a should_stop callback into
                            _run_dimension (checked before each retry/continuation
                            — cooperative, not mid-call interruption); Batch 10
@@ -96,7 +99,13 @@ backend/
                            (per-run cancel_event + race-free _try_resolve). The
                            snapshot's per-dimension view now carries the human
                            dimension title (DimensionStatus.title, defaulted +
-                           serialized) for the findings-report headings
+                           serialized) for the findings-report headings.
+                           start() no longer clears profile_result — a run is
+                           the NEXT ROUND: _try_resolve takes an `adopt`
+                           callable that folds the round in under the same CAS
+                           lock, the meter still gets the round's OWN usage
+                           (the merged total is cumulative), and a
+                           failed/stopped round says earlier rounds survived
   updates.py               [PORT ≈verbatim: Spec Critic src/core/updates.py]
                            GitHub-Releases manifest updater: https-only +
                            redirect-downgrade guard, SHA-256 verify before
@@ -442,6 +451,14 @@ tests/
                            GET /api/modules, discipline in context / not the
                            stable block, project round-trip + old-file compat +
                            invariant-on-load
+  test_research_rounds.py  rounds APPEND: the merge (add / confirm-in-place /
+                           no-mutate / cumulative-vs-summed counts / a
+                           dimension that failed this round), rendering (one
+                           round byte-identical, many rounds dated per item),
+                           serialization + legacy-file synthesis, the runner
+                           (accumulate, meter each round once, failed and
+                           stopped rounds keep the rest), and the whole thing
+                           over the API + a save/resume that keeps counting
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -496,7 +513,14 @@ profile view), and `GET /api/research/stream` — an SSE stream that replays
 the run's event log from seq 0 and follows until terminal, closing with a
 `stream_end` sentinel (event types: `research_started`,
 `dimension_complete`, `dimension_failed`, `research_complete`,
-`research_failed`).
+`research_failed`). Every event carries the 1-based `round` it belongs to;
+`research_complete` reports the CUMULATIVE `item_count`/`grounded_count`
+plus that round's own `round_item_count`/`new_item_count`/
+`repeat_item_count`. The event log is per-round (cleared at each start —
+the accumulated knowledge is in the profile, not the log), and the
+snapshot's `profile` gains `rounds[]` plus per-item `research_date` /
+`round_index`. Starting a round does NOT clear the previous profile:
+pressing Research again appends (see "Research rounds" below).
 
 Final QC (Batch 4) has the same channel shape (a QC run also outlives a
 chat turn): `POST /api/qc/start` accepts optional
@@ -699,8 +723,9 @@ already resolved and does nothing). 409 when nothing is running.
   then `ResearchRunner.start` fans out on a daemon thread with the
   session's client. Reset/load swap in a fresh runner — an in-flight run
   settles into the abandoned object (zombie-turn pattern; pinned by
-  `test_session_reset_abandons_running_research`). Re-running replaces a
-  terminal run's results.
+  `test_session_reset_abandons_running_research`). Re-running **appends a
+  round** to the terminal run's results — it never replaces them (see
+  "Research rounds" at the end of this file).
 - **Grounding invariant** (ported): an item is `grounded` only when ≥1
   cited URL matches (post-`normalize_url`) a URL the server tools
   actually retrieved in that dimension's conversation — pooled across
@@ -2047,6 +2072,86 @@ No new SSE events, no new deps, no project-format bump.
   draw text, and a test-only dependency was not worth it. Plus a
   reference-upload case in `test_import_responsiveness.py`. Frontend pinned by
   `npm run build`.
+
+## Research rounds — implemented notes (append, never overwrite)
+
+Reported ask (Abraham): the user may press Research more than once in a
+session, and each additional round must APPEND rather than overwrite. It
+previously replaced everything — `start()` cleared `profile_result`, and the
+completing run's profile became the whole truth. That threw away paid,
+grounded findings and dangled every `Paragraph.source_item_id` chip pointing
+at an item id the new run happened not to re-mint. No new endpoint, no new
+SSE event type, no new dep, no project-format bump (one additive key).
+
+- **The merge is a pure function in the engine; the runner owns when.**
+  `append_research_round(previous, fresh)` (engine.py, beside the
+  dataclasses) is the whole policy — no I/O, no model, fully unit-testable.
+  `run_requirements_research` still produces exactly one round and now
+  stamps it as round 1 through the same function, so a profile is
+  well-formed from birth and the runner's job is only to renumber and fold.
+- **Items join on `item_id`** — which is already a content hash of
+  `(dimension_id, category, requirement)`, so "the same requirement found
+  again" is identical by construction. A re-found item is **confirmed in
+  place**, never duplicated: citations union, `grounded` ORs, `confidence`
+  takes the max, blank descriptive fields fill in — evidence only ever
+  strengthens. `research_date` advances to the round that re-confirmed it
+  (that IS when the claim was last checked) while `round_index` stays the
+  round that first found it. This also dedupes a single round's own
+  duplicate ids, which the old path kept.
+- **Nothing is mutated.** The merge builds a new profile from
+  `dataclasses.replace` copies, because the conversation thread may be
+  rendering the previous profile into a turn's PROJECT CONTEXT at that exact
+  moment. Pinned by
+  `test_the_previous_profile_is_never_mutated_by_a_later_round`.
+- **`dimension_statuses` is now the cumulative view; `rounds[]` keeps each
+  round's own.** Cumulative `status` is `completed` once a dimension has
+  completed in ANY round — its findings are real and still in the profile —
+  with `error` carrying the latest round's message so a fresh failure stays
+  visible, and the unmerged per-round record showing what actually happened.
+  Item counts are RECOMPUTED from the merged items (a re-found requirement
+  is one requirement); billed usage IS summed (every round's spend was
+  real).
+- **The meter must not re-bill.** `usage_total()` is cumulative by
+  construction now, so the runner keeps feeding the ledger
+  `result.usage_total()` — the round's OWN profile, before the merge. Pinned
+  by `test_runner_accumulates_rounds_and_meters_each_one_once` (140 total
+  across two rounds arrives as 100 then 40, never 100 then 140).
+- **The merge runs inside the existing compare-and-set.** `_try_resolve`
+  keeps being the single point every terminal transition goes through; the
+  success path now passes an `adopt` callable applied under the same lock.
+  That is what makes a stopped run safe: its late-finishing thread loses the
+  CAS, so its discarded round is never folded into a profile that has moved
+  on. `start()` no longer clears `profile_result` (the model keeps drafting
+  from paid research while the next round runs); it DOES clear `events`,
+  which is this round's progress log.
+- **A failed or stopped round costs only that round**, and says so —
+  `_failure_message` appends "Earlier research rounds are unchanged and still
+  in use." when a profile survives, and the stop message became "this
+  round's progress was discarded". Readiness is deliberately unchanged
+  (still `status == "complete"`): a failed extra round leaves the session no
+  worse off than before this work, and loosening a readiness gate was not
+  the ask.
+- **One round renders byte-identical.** The drafting-context header only
+  changes shape at `round_count > 1`, and only then does each item line gain
+  `; as of <date>` — because a single header date would otherwise claim
+  round 1's findings were confirmed today. Same posture as every other
+  "curated output stays byte-identical" rule in this file.
+- **Legacy files are one round.** `from_dict` synthesizes round 1 from the
+  saved `dimension_statuses`/`research_date` and back-dates the items when a
+  file carries no `rounds`, so appending to a resumed project numbers the
+  next round 2 rather than 1. Note the knock-on: `to_dict()` gained keys, so
+  the QC input manifest's research fingerprint changes — an old project
+  resumed after this change reads its retained Final QC as stale once. That
+  is the conservative direction (a stale marker over-warns; it never calls a
+  stale result current) and it is also correct for every genuine second
+  round, which really does change what the reviewers would see.
+- **UI**: the button reads "Research again (round N+1)" with a tooltip
+  saying it adds to what is there; the drawer strip shows "over N rounds";
+  the stop confirmation now says only this round's progress is lost and
+  names what survives; the findings report gains a **Research rounds**
+  section (per round: date, new vs re-confirmed, dimensions completed, and a
+  "failed this round" chip the cumulative view cannot show) and dates every
+  item once there is more than one round.
 
 ## Trust dossier — implemented notes (the "I'm not convinced" modal)
 

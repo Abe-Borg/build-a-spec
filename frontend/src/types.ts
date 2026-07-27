@@ -491,6 +491,13 @@ export interface ResearchEvent {
   project?: string;
   status?: ResearchRunStatus;
   restored?: boolean;
+  /** 1-based research round this event belongs to (rounds append). */
+  round?: number;
+  /** On `research_complete`: this round's own contribution, where
+   *  `item_count` is the cumulative total the session now holds. */
+  round_item_count?: number;
+  new_item_count?: number;
+  repeat_item_count?: number;
 }
 
 export interface ResearchItemView {
@@ -506,6 +513,11 @@ export interface ResearchItemView {
   confidence: number;
   actionability: string;
   notes: string;
+  /** Date of the round that last confirmed this item, and the 1-based
+   *  round that first found it. Empty/0 on profiles saved before research
+   *  rounds accumulated. */
+  research_date?: string;
+  round_index?: number;
 }
 
 export interface ResearchDimensionView {
@@ -521,11 +533,27 @@ export interface ResearchDimensionView {
   error: string;
 }
 
+/** One research pass's own record. Pressing Research again appends a
+ *  round rather than replacing the profile, so this is what a single round
+ *  did: its per-dimension outcome (unmerged — a dimension may have failed
+ *  here after succeeding earlier) and how much of it was new. */
+export interface ResearchRoundView {
+  round_index: number;
+  research_date: string;
+  dimension_statuses: ResearchDimensionView[];
+  new_items: number;
+  repeat_items: number;
+}
+
 export interface ResearchProfileView {
+  /** The latest round's date. */
   research_date: string;
   project: Record<string, string>;
+  /** Cumulative across every round. */
   dimension_statuses: ResearchDimensionView[];
   items: ResearchItemView[];
+  /** Each round's own record, oldest first. Absent on legacy payloads. */
+  rounds?: ResearchRoundView[];
 }
 
 export interface ResearchSnapshot {

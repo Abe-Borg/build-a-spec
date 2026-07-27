@@ -13,6 +13,7 @@ import type {
   ResearchDimensionView,
   ResearchItemView,
   ResearchProfileView,
+  ResearchRoundView,
 } from "../types";
 
 interface Props {
@@ -50,12 +51,20 @@ function sourceHost(url: string): string {
   }
 }
 
-function ItemRow({ item }: { item: ResearchItemView }) {
+function ItemRow({ item, dated }: { item: ResearchItemView; dated?: boolean }) {
   const details: string[] = [];
   if (item.authority) details.push(item.authority);
   if (item.code_reference) details.push(item.code_reference);
   if (item.category) details.push(item.category.replace(/_/g, " "));
   details.push(`confidence ${Math.round(item.confidence * 100)}%`);
+  // Once a session has more than one round, the report's single header date
+  // would misdate earlier findings — so each item carries its own.
+  if (dated && item.research_date)
+    details.push(
+      item.round_index
+        ? `round ${item.round_index}, confirmed ${item.research_date}`
+        : `as of ${item.research_date}`,
+    );
   return (
     <li className="rounded border border-edge/60 bg-bg/40 px-2.5 py-1.5">
       <div className="flex items-baseline gap-2">
@@ -105,12 +114,62 @@ function ItemRow({ item }: { item: ResearchItemView }) {
   );
 }
 
+/** What each round did on its own — shown only once a session has run more
+ *  than one. The dimension sections below are the cumulative view, which
+ *  cannot show that (say) round 2 recovered a dimension round 1 lost. */
+function RoundsSection({ rounds }: { rounds: ResearchRoundView[] }) {
+  return (
+    <section className="rounded border border-edge/60 bg-bg/40 px-3 py-2">
+      <h3 className="text-[13px] font-semibold text-ink">Research rounds</h3>
+      <p className="mt-0.5 text-[11px] text-ink-faint">
+        Each round adds to the findings below; a requirement found again is
+        confirmed in place rather than duplicated.
+      </p>
+      <ul className="mt-1.5 space-y-1">
+        {rounds.map((round) => {
+          const failed = round.dimension_statuses.filter(
+            (d) => d.status !== "completed",
+          ).length;
+          const parts = [
+            `${round.new_items} new`,
+            `${round.repeat_items} re-confirmed`,
+            `${round.dimension_statuses.length - failed}/${
+              round.dimension_statuses.length
+            } dimensions completed`,
+          ];
+          return (
+            <li
+              key={round.round_index}
+              className="flex flex-wrap items-baseline gap-x-2 text-[11px]"
+            >
+              <span className="font-medium text-ink-dim">
+                Round {round.round_index}
+              </span>
+              <span className="text-ink-faint">
+                {round.research_date || "—"}
+              </span>
+              <span className="text-ink-faint">{parts.join(" · ")}</span>
+              {failed > 0 && (
+                <span className="rounded-full bg-warn/15 px-1.5 py-px text-[10px] font-medium text-warn">
+                  {failed} failed this round
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 function DimensionSection({
   dim,
   items,
+  dated,
 }: {
   dim: ResearchDimensionView;
   items: ResearchItemView[];
+  dated?: boolean;
 }) {
   const failed = dim.status !== "completed";
   const telemetry = [
@@ -144,7 +203,7 @@ function DimensionSection({
       {items.length > 0 ? (
         <ul className="mt-1.5 space-y-1">
           {items.map((item) => (
-            <ItemRow key={item.item_id} item={item} />
+            <ItemRow key={item.item_id} item={item} dated={dated} />
           ))}
         </ul>
       ) : (
@@ -172,9 +231,13 @@ export default function ResearchReportModal({ open, profile, onClose }: Props) {
 
   const items = profile.items ?? [];
   const dims = profile.dimension_statuses ?? [];
+  const rounds = profile.rounds ?? [];
   const groundedTotal = items.filter((i) => i.grounded).length;
   const completedDims = dims.filter((d) => d.status === "completed").length;
   const failedDims = dims.length - completedDims;
+  // Rounds accumulate. With more than one, the per-dimension view below is
+  // the cumulative one and every finding needs its own date.
+  const multiRound = rounds.length > 1;
 
   // Group items by dimension in module-declaration order (the order
   // dimension_statuses arrives in). Any item whose dimension isn't listed
@@ -206,10 +269,14 @@ export default function ResearchReportModal({ open, profile, onClose }: Props) {
               </p>
             )}
             <p className="mt-0.5 text-[11px] text-ink-faint">
-              Researched {profile.research_date || "—"} · {completedDims}/
-              {dims.length} dimension{dims.length === 1 ? "" : "s"} completed
-              {failedDims > 0 && ` (${failedDims} failed)`} · {items.length}{" "}
-              finding{items.length === 1 ? "" : "s"}, {groundedTotal} grounded
+              {multiRound
+                ? `${rounds.length} rounds, latest ${profile.research_date || "—"}`
+                : `Researched ${profile.research_date || "—"}`}{" "}
+              · {completedDims}/{dims.length} dimension
+              {dims.length === 1 ? "" : "s"} completed
+              {failedDims > 0 && ` (${failedDims} never completed)`} ·{" "}
+              {items.length} finding{items.length === 1 ? "" : "s"},{" "}
+              {groundedTotal} grounded
             </p>
           </div>
           <button
@@ -241,11 +308,13 @@ export default function ResearchReportModal({ open, profile, onClose }: Props) {
 
         {/* Body */}
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
+          {multiRound && <RoundsSection rounds={rounds} />}
           {dims.map((dim) => (
             <DimensionSection
               key={dim.dimension_id}
               dim={dim}
               items={items.filter((i) => i.dimension_id === dim.dimension_id)}
+              dated={multiRound}
             />
           ))}
           {orphanItems.length > 0 && (
@@ -261,6 +330,7 @@ export default function ResearchReportModal({ open, profile, onClose }: Props) {
                 error: "",
               }}
               items={orphanItems}
+              dated={multiRound}
             />
           )}
           {items.length === 0 && completedDims === 0 && (

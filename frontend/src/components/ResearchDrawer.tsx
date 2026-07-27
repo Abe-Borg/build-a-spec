@@ -185,6 +185,12 @@ export default function ResearchDrawer({
   const grounded = items.filter((i) => i.grounded).length;
   const profile = profileLine(doc);
   const lastEvent = research?.events[research.events.length - 1];
+  // Rounds accumulate: a further run adds to these findings, never
+  // replaces them. Legacy payloads carry no rounds — treat a profile
+  // without them as the one round it is.
+  const rounds = research?.profile
+    ? (research.profile.rounds ?? []).length || 1
+    : 0;
 
   const startDisabled = !profileComplete || running || busy;
   const startTip = !profileComplete
@@ -193,17 +199,19 @@ export default function ResearchDrawer({
       ? "Research is already running."
       : busy
         ? "Finish the current turn first."
-        : "Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).";
+        : rounds > 0
+          ? `Run another round of research (uses your API key). It ADDS to the ${items.length} finding(s) you already have — nothing is replaced, and a requirement found again is confirmed in place.`
+          : "Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).";
   const startLabel = running
     ? lastEvent?.done != null
       ? `Researching… (${lastEvent.done}/${lastEvent.total})`
       : "Research in progress…"
-    : status === "complete"
-      ? "Re-research"
+    : rounds > 0
+      ? `Research again (round ${rounds + 1})`
       : "Research requirements";
   const startButtonClass = running
     ? "border-accent/40 bg-raised text-ink-dim"
-    : status === "complete" || startDisabled
+    : rounds > 0 || startDisabled
       ? "border-edge bg-raised text-ink-dim hover:border-accent hover:text-accent disabled:opacity-40"
       : "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25";
 
@@ -226,8 +234,8 @@ export default function ResearchDrawer({
             {profile || "profile pending"}
             {" · "}
             {statusLabel[status]}
-            {status === "complete" &&
-              ` · ${grounded}/${items.length} grounded`}
+            {rounds > 0 && ` · ${grounded}/${items.length} grounded`}
+            {rounds > 1 && ` over ${rounds} rounds`}
             {running && lastEvent?.done != null &&
               ` (${lastEvent.done}/${lastEvent.total} dimensions)`}
           </span>
@@ -280,10 +288,12 @@ export default function ResearchDrawer({
           <p>
             This stops the requirements research now in progress.{" "}
             <strong className="text-ink">
-              Any progress made so far will be lost
+              This round&apos;s progress will be lost
             </strong>{" "}
-            — completed dimensions won&apos;t be saved, and you&apos;ll need
-            to start over.
+            — dimensions it has already completed won&apos;t be saved.
+            {rounds > 0
+              ? ` The ${items.length} finding(s) from earlier rounds stay exactly as they are.`
+              : " You'll need to start over."}
           </p>
         }
         confirmLabel="Stop research"
@@ -328,7 +338,9 @@ export default function ResearchDrawer({
           {research.profile && (
             <>
               <p className="text-[11px] text-ink-faint">
-                Researched {research.profile.research_date}
+                {rounds > 1
+                  ? `${rounds} rounds, latest ${research.profile.research_date}`
+                  : `Researched ${research.profile.research_date}`}
                 {research.profile.dimension_statuses.some(
                   (d) => d.status !== "completed",
                 ) &&
@@ -336,7 +348,7 @@ export default function ResearchDrawer({
                     research.profile.dimension_statuses.filter(
                       (d) => d.status !== "completed",
                     ).length
-                  } dimension(s) failed)`}
+                  } dimension(s) never completed)`}
               </p>
               <ul className="space-y-1" data-capability="research.apply">
                 {items.map((item) => (

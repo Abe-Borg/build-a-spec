@@ -134,6 +134,13 @@ class ResearchItem:
     subset matching URLs the server tools actually retrieved. ``grounded``
     derives from that split — nothing renders as verified without at least
     one accepted citation.
+
+    The two round fields carry an item's place in an accumulating profile
+    (research rounds append — see :func:`append_research_round`):
+    ``round_index`` is the 1-based round that FIRST found it and
+    ``research_date`` is the date of the round that LAST confirmed it, so
+    the rendered "as of" date is never staler than the evidence. Both are
+    zero/empty on profiles saved before rounds existed.
     """
 
     item_id: str
@@ -149,6 +156,8 @@ class ResearchItem:
     confidence: float = 0.0
     actionability: str = "spec_requirement"
     notes: str = ""
+    research_date: str = ""
+    round_index: int = 0
 
     @property
     def is_process_advisory(self) -> bool:
@@ -174,18 +183,22 @@ class DimensionStatus:
 
 
 @dataclass
-class RequirementsProfile:
-    """The merged research output for one project.
+class ResearchRound:
+    """One research pass's own record, kept when later rounds append.
 
-    ``project`` is the serialized :class:`ProjectProfile` the research ran
-    for; ``research_date`` is the ISO date it ran — edition and process
-    facts are time-stamped claims.
+    The profile's top-level ``dimension_statuses`` is the *cumulative*
+    view (see :func:`append_research_round`); this is the unmerged record
+    of what a single round did — including a dimension that failed in this
+    round after succeeding in an earlier one, which the cumulative view
+    reports as completed. ``new_items`` / ``repeat_items`` split the
+    round's findings into what it added and what it re-confirmed.
     """
 
-    items: list[ResearchItem] = field(default_factory=list)
+    round_index: int
+    research_date: str
     dimension_statuses: list[DimensionStatus] = field(default_factory=list)
-    research_date: str = ""
-    project: dict | None = None
+    new_items: int = 0
+    repeat_items: int = 0
 
     @property
     def completed_dimensions(self) -> int:
@@ -194,6 +207,42 @@ class RequirementsProfile:
     @property
     def failed_dimensions(self) -> int:
         return sum(1 for s in self.dimension_statuses if s.status != "completed")
+
+
+@dataclass
+class RequirementsProfile:
+    """The merged research output for one project.
+
+    ``project`` is the serialized :class:`ProjectProfile` the research ran
+    for; ``research_date`` is the ISO date the LATEST round ran — edition
+    and process facts are time-stamped claims, dated per item once a
+    session has more than one round.
+
+    A profile accumulates: pressing Research again appends a round rather
+    than replacing what is already known (:func:`append_research_round`).
+    ``items`` and ``dimension_statuses`` are therefore the cumulative view
+    across every round, and ``rounds`` keeps each round's own record.
+    """
+
+    items: list[ResearchItem] = field(default_factory=list)
+    dimension_statuses: list[DimensionStatus] = field(default_factory=list)
+    research_date: str = ""
+    project: dict | None = None
+    rounds: list[ResearchRound] = field(default_factory=list)
+
+    @property
+    def completed_dimensions(self) -> int:
+        """Dimensions that have completed in at least one round."""
+        return sum(1 for s in self.dimension_statuses if s.status == "completed")
+
+    @property
+    def failed_dimensions(self) -> int:
+        """Dimensions that have never completed in any round."""
+        return sum(1 for s in self.dimension_statuses if s.status != "completed")
+
+    @property
+    def round_count(self) -> int:
+        return len(self.rounds)
 
     def grounded_items(self) -> list[ResearchItem]:
         return [i for i in self.items if i.grounded]
@@ -205,7 +254,13 @@ class RequirementsProfile:
         return None
 
     def usage_total(self) -> dict[str, int]:
-        """Billed usage summed across every dimension (WI4 cost meter)."""
+        """Billed usage summed across every dimension (WI4 cost meter).
+
+        Cumulative once rounds accumulate — the dimension statuses sum each
+        round's spend. The session meter is fed each round's OWN total as
+        that round completes (:mod:`.runner`), never this one, so a second
+        round cannot re-bill the first.
+        """
         keys = (
             "input_tokens",
             "output_tokens",
@@ -231,18 +286,39 @@ class RequirementsProfile:
         dimension (module declaration order via ``dimension_statuses``)
         then confidence descending, ties by ``item_id``. Empty sections
         are omitted.
+
+        A single-round profile renders exactly as it always has. Only a
+        profile that has accumulated more than one round says so — and
+        then every item carries its own "as of" date, because the header's
+        single date would otherwise claim an earlier round's findings were
+        confirmed today.
         """
         project = ProjectProfile.from_dict(self.project) or ProjectProfile(
             "", "", "", ""
         )
         total = len(self.dimension_statuses)
+        multi_round = self.round_count > 1
+        if multi_round:
+            provenance = (
+                f"Generated by location/client research over "
+                f"{self.round_count} rounds ({self.completed_dimensions} of "
+                f"{total} dimensions completed in at least one round), latest "
+                f"round researched {self.research_date}. Each item is dated "
+                "with the round that last confirmed it; edition and process "
+                "facts are as-of that item's date."
+            )
+        else:
+            provenance = (
+                f"Generated by location/client research "
+                f"({self.completed_dimensions} of {total} dimensions "
+                f"completed), researched {self.research_date}. Edition and "
+                "process facts are as-of that date."
+            )
         header = (
             "PROJECT REQUIREMENTS PROFILE\n"
             f"Project: {project.city}, {project.state_display}, "
             f"{project.country_display} | Client: {project.client_name}\n"
-            f"Generated by location/client research ({self.completed_dimensions} "
-            f"of {total} dimensions completed), researched {self.research_date}. "
-            "Edition and process facts are as-of that date.\n"
+            f"{provenance}\n"
             "Items marked [UNVERIFIED] could not be grounded in retrieved "
             "sources.\n"
             "Items marked [PROCESS] are project-team process/schedule "
@@ -273,7 +349,7 @@ class RequirementsProfile:
             )
             lines = [section_name]
             for item in section_items:
-                lines.append(_render_item_line(item))
+                lines.append(_render_item_line(item, dated=multi_round))
             parts.append("\n".join(lines))
         return "\n\n".join(parts)
 
@@ -287,6 +363,18 @@ class RequirementsProfile:
             ],
             "research_date": self.research_date,
             "project": dict(self.project) if self.project else None,
+            "rounds": [
+                {
+                    "round_index": r.round_index,
+                    "research_date": r.research_date,
+                    "dimension_statuses": [
+                        dataclasses.asdict(s) for s in r.dimension_statuses
+                    ],
+                    "new_items": r.new_items,
+                    "repeat_items": r.repeat_items,
+                }
+                for r in self.rounds
+            ],
         }
 
     @classmethod
@@ -317,48 +405,97 @@ class RequirementsProfile:
                         raw.get("actionability", "") or "spec_requirement"
                     ),
                     notes=str(raw.get("notes", "") or ""),
+                    research_date=str(raw.get("research_date", "") or ""),
+                    round_index=int(raw.get("round_index", 0) or 0),
                 )
             )
-        statuses: list[DimensionStatus] = []
-        for raw in data.get("dimension_statuses") or []:
-            if not isinstance(raw, dict):
-                continue
-            statuses.append(
-                DimensionStatus(
-                    dimension_id=str(raw.get("dimension_id", "") or ""),
-                    status=str(raw.get("status", "") or "failed"),
-                    title=str(raw.get("title", "") or ""),
-                    item_count=int(raw.get("item_count", 0) or 0),
-                    grounded_count=int(raw.get("grounded_count", 0) or 0),
-                    web_search_requests=int(
-                        raw.get("web_search_requests", 0) or 0
-                    ),
-                    web_fetch_requests=int(
-                        raw.get("web_fetch_requests", 0) or 0
-                    ),
-                    input_tokens=int(raw.get("input_tokens", 0) or 0),
-                    output_tokens=int(raw.get("output_tokens", 0) or 0),
-                    cache_read_input_tokens=int(
-                        raw.get("cache_read_input_tokens", 0) or 0
-                    ),
-                    cache_creation_input_tokens=int(
-                        raw.get("cache_creation_input_tokens", 0) or 0
-                    ),
-                    error=str(raw.get("error", "") or ""),
-                )
-            )
+        statuses = _statuses_from_raw(data.get("dimension_statuses"))
         if not items and not statuses:
             return None
         project = data.get("project")
+        research_date = str(data.get("research_date", "") or "")
+        rounds: list[ResearchRound] = []
+        for raw in data.get("rounds") or []:
+            if not isinstance(raw, dict):
+                continue
+            rounds.append(
+                ResearchRound(
+                    round_index=int(raw.get("round_index", 0) or 0),
+                    research_date=str(raw.get("research_date", "") or ""),
+                    dimension_statuses=_statuses_from_raw(
+                        raw.get("dimension_statuses")
+                    ),
+                    new_items=int(raw.get("new_items", 0) or 0),
+                    repeat_items=int(raw.get("repeat_items", 0) or 0),
+                )
+            )
+        if not rounds:
+            # A profile saved before rounds existed (or one the engine just
+            # produced) is exactly one round — synthesize its record and
+            # date its items, so appending a second round has a coherent
+            # first round to append to rather than a dateless void.
+            rounds = [
+                ResearchRound(
+                    round_index=1,
+                    research_date=research_date,
+                    dimension_statuses=[
+                        dataclasses.replace(s) for s in statuses
+                    ],
+                    new_items=len(items),
+                )
+            ]
+            items = [
+                dataclasses.replace(
+                    i,
+                    research_date=i.research_date or research_date,
+                    round_index=i.round_index or 1,
+                )
+                for i in items
+            ]
         return cls(
             items=items,
             dimension_statuses=statuses,
-            research_date=str(data.get("research_date", "") or ""),
+            research_date=research_date,
             project=project if isinstance(project, dict) else None,
+            rounds=rounds,
         )
 
 
-def _render_item_line(item: ResearchItem) -> str:
+def _statuses_from_raw(data: object) -> list[DimensionStatus]:
+    """Defensive per-dimension telemetry parse (profile + per-round)."""
+    statuses: list[DimensionStatus] = []
+    for raw in data or []:  # type: ignore[union-attr]
+        if not isinstance(raw, dict):
+            continue
+        statuses.append(
+            DimensionStatus(
+                dimension_id=str(raw.get("dimension_id", "") or ""),
+                status=str(raw.get("status", "") or "failed"),
+                title=str(raw.get("title", "") or ""),
+                item_count=int(raw.get("item_count", 0) or 0),
+                grounded_count=int(raw.get("grounded_count", 0) or 0),
+                web_search_requests=int(raw.get("web_search_requests", 0) or 0),
+                web_fetch_requests=int(raw.get("web_fetch_requests", 0) or 0),
+                input_tokens=int(raw.get("input_tokens", 0) or 0),
+                output_tokens=int(raw.get("output_tokens", 0) or 0),
+                cache_read_input_tokens=int(
+                    raw.get("cache_read_input_tokens", 0) or 0
+                ),
+                cache_creation_input_tokens=int(
+                    raw.get("cache_creation_input_tokens", 0) or 0
+                ),
+                error=str(raw.get("error", "") or ""),
+            )
+        )
+    return statuses
+
+
+def _render_item_line(item: ResearchItem, *, dated: bool = False) -> str:
+    """One rendered item. ``dated`` stamps the round that confirmed it.
+
+    Only a multi-round profile dates its items — with one round the
+    header's date covers every item, and the line stays as it was.
+    """
     marker = "[PROCESS] " if item.is_process_advisory else ""
     details = []
     if item.authority:
@@ -370,6 +507,8 @@ def _render_item_line(item: ResearchItem) -> str:
     )
     details.append(f"Sources: {sources}")
     details.append(f"confidence {round(item.confidence * 100)}%")
+    if dated and item.research_date:
+        details.append(f"as of {item.research_date}")
     return f"- [{item.item_id}] {marker}{item.requirement} ({'; '.join(details)})"
 
 
@@ -386,6 +525,194 @@ def _mint_item_id(dimension_id: str, category: str, requirement: str) -> str:
         repr((dimension_id, category, requirement.strip())).encode("utf-8")
     ).hexdigest()[:12]
     return f"r-{digest}"
+
+
+# ---------------------------------------------------------------------------
+# Round accumulation (research appends — it never overwrites)
+# ---------------------------------------------------------------------------
+
+
+def _dedupe_urls(*groups: list[str]) -> list[str]:
+    """Union of URL lists, first-seen order preserved."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for url in group:
+            if url and url not in seen:
+                seen.add(url)
+                out.append(url)
+    return out
+
+
+def _confirm_item(prior: ResearchItem, fresh: ResearchItem) -> ResearchItem:
+    """A later round re-found an item the profile already holds.
+
+    Identity fields are equal by construction — ``item_id`` is a content
+    hash of exactly ``(dimension_id, category, requirement)`` — so the
+    merge is about evidence, and it only ever strengthens: citations
+    union, grounding and confidence take the better of the two, and blank
+    descriptive fields fill in. ``research_date`` advances to the round
+    that just re-confirmed the item (that IS when the claim was last
+    checked); ``round_index`` stays the round that first found it.
+    """
+    return dataclasses.replace(
+        prior,
+        topic=prior.topic or fresh.topic,
+        authority=prior.authority or fresh.authority,
+        code_reference=prior.code_reference or fresh.code_reference,
+        notes=prior.notes or fresh.notes,
+        source_urls=_dedupe_urls(prior.source_urls, fresh.source_urls),
+        accepted_sources=_dedupe_urls(
+            prior.accepted_sources, fresh.accepted_sources
+        ),
+        grounded=prior.grounded or fresh.grounded,
+        confidence=max(prior.confidence, fresh.confidence),
+        research_date=fresh.research_date or prior.research_date,
+        round_index=prior.round_index or fresh.round_index,
+    )
+
+
+def _accumulate_statuses(
+    prior: list[DimensionStatus],
+    fresh: list[DimensionStatus],
+    items: list[ResearchItem],
+) -> list[DimensionStatus]:
+    """The cumulative per-dimension view across every round so far.
+
+    - ``status`` is ``completed`` once a dimension has completed in ANY
+      round: its findings are real and still in the profile, so reporting
+      it as failed because the newest round tripped would be a lie in the
+      other direction. The round's own record keeps that failure, and
+      ``error`` carries the latest round's message so it stays visible.
+    - Item counts are recomputed from the merged items, never summed — a
+      re-found requirement is one requirement, not two.
+    - Billed usage IS summed: every round's spend was real.
+    """
+    order = [s.dimension_id for s in prior]
+    order += [s.dimension_id for s in fresh if s.dimension_id not in order]
+    prior_by_id = {s.dimension_id: s for s in prior}
+    fresh_by_id = {s.dimension_id: s for s in fresh}
+
+    merged: list[DimensionStatus] = []
+    for dimension_id in order:
+        before = prior_by_id.get(dimension_id)
+        after = fresh_by_id.get(dimension_id)
+        if before is None:
+            base = dataclasses.replace(after)  # type: ignore[arg-type]
+        elif after is None:
+            base = dataclasses.replace(before)
+        else:
+            completed = "completed" in (before.status, after.status)
+            base = DimensionStatus(
+                dimension_id=dimension_id,
+                status="completed" if completed else after.status,
+                title=before.title or after.title,
+                web_search_requests=(
+                    before.web_search_requests + after.web_search_requests
+                ),
+                web_fetch_requests=(
+                    before.web_fetch_requests + after.web_fetch_requests
+                ),
+                input_tokens=before.input_tokens + after.input_tokens,
+                output_tokens=before.output_tokens + after.output_tokens,
+                cache_read_input_tokens=(
+                    before.cache_read_input_tokens
+                    + after.cache_read_input_tokens
+                ),
+                cache_creation_input_tokens=(
+                    before.cache_creation_input_tokens
+                    + after.cache_creation_input_tokens
+                ),
+                error=after.error,
+            )
+        owned = [i for i in items if i.dimension_id == dimension_id]
+        base.item_count = len(owned)
+        base.grounded_count = sum(1 for i in owned if i.grounded)
+        merged.append(base)
+    return merged
+
+
+def append_research_round(
+    previous: "RequirementsProfile | None", fresh: RequirementsProfile
+) -> RequirementsProfile:
+    """Fold a just-completed run into the session's accumulated profile.
+
+    The user may press Research more than once in a session — to widen
+    coverage after the interview turns up a new concern, or to retry a
+    dimension that failed. Each press APPENDS: findings from earlier
+    rounds are kept, because a provision may already cite one
+    (``Paragraph.source_item_id``) and because paid, grounded research is
+    not something to silently throw away.
+
+    Items join on ``item_id`` (the content hash), so a requirement the new
+    round re-found is confirmed in place rather than duplicated — see
+    :func:`_confirm_item`. Nothing is mutated: the returned profile is
+    built from copies, so the previous one stays safe to read from the
+    conversation thread that is rendering it right now.
+
+    ``previous`` of ``None`` (the first round of a session) returns
+    ``fresh`` renumbered as round 1.
+    """
+    round_index = (previous.round_count + 1) if previous is not None else 1
+    date = fresh.research_date
+    prior_items = list(previous.items) if previous is not None else []
+    prior_statuses = (
+        list(previous.dimension_statuses) if previous is not None else []
+    )
+
+    merged: dict[str, ResearchItem] = {}
+    order: list[str] = []
+    for item in prior_items:
+        if item.item_id not in merged:
+            order.append(item.item_id)
+        merged[item.item_id] = dataclasses.replace(item)
+    known_before = set(merged)
+
+    added: set[str] = set()
+    confirmed: set[str] = set()
+    for item in fresh.items:
+        stamped = dataclasses.replace(
+            item, research_date=date, round_index=round_index
+        )
+        prior = merged.get(item.item_id)
+        if prior is None:
+            merged[item.item_id] = stamped
+            order.append(item.item_id)
+        else:
+            merged[item.item_id] = _confirm_item(prior, stamped)
+        (confirmed if item.item_id in known_before else added).add(item.item_id)
+
+    items = [merged[item_id] for item_id in order]
+    round_statuses = [dataclasses.replace(s) for s in fresh.dimension_statuses]
+    record = ResearchRound(
+        round_index=round_index,
+        research_date=date,
+        dimension_statuses=round_statuses,
+        new_items=len(added),
+        repeat_items=len(confirmed),
+    )
+    return RequirementsProfile(
+        items=items,
+        dimension_statuses=_accumulate_statuses(
+            prior_statuses, fresh.dimension_statuses, items
+        ),
+        research_date=date,
+        # The latest round's project profile: research runs against the
+        # profile as it stood, and the newest run is the current truth.
+        project=dict(fresh.project) if fresh.project else None,
+        rounds=[
+            *(
+                dataclasses.replace(
+                    r,
+                    dimension_statuses=[
+                        dataclasses.replace(s) for s in r.dimension_statuses
+                    ],
+                )
+                for r in (previous.rounds if previous is not None else [])
+            ),
+            record,
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -902,11 +1229,16 @@ def run_requirements_research(
             f"All {len(statuses)} research dimension(s) failed. {errors}"
         )
 
-    return RequirementsProfile(
-        items=items,
-        dimension_statuses=statuses,
-        research_date=time.strftime("%Y-%m-%d"),
-        project=profile.to_dict(),
+    # Every profile carries its round record from birth — a fan-out is one
+    # round, and the runner renumbers it when folding it onto earlier ones.
+    return append_research_round(
+        None,
+        RequirementsProfile(
+            items=items,
+            dimension_statuses=statuses,
+            research_date=time.strftime("%Y-%m-%d"),
+            project=profile.to_dict(),
+        ),
     )
 
 

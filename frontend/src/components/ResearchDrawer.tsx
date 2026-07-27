@@ -201,6 +201,11 @@ export default function ResearchDrawer({
     : status === "complete"
       ? "Re-research"
       : "Research requirements";
+  const startButtonClass = running
+    ? "border-accent/40 bg-raised text-ink-dim"
+    : status === "complete" || startDisabled
+      ? "border-edge bg-raised text-ink-dim hover:border-accent hover:text-accent disabled:opacity-40"
+      : "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25";
 
   return (
     <div
@@ -240,11 +245,7 @@ export default function ResearchDrawer({
         )}
         <Tip tip={startTip} className="shrink-0">
           <button
-            className={`rounded-md border bg-raised px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none ${
-              running
-                ? "border-accent/40 text-ink-dim"
-                : "border-edge text-ink-dim hover:border-accent hover:text-accent disabled:opacity-40"
-            }`}
+            className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none ${startButtonClass}`}
             onClick={onStart}
             disabled={startDisabled}
             data-tour="research-start"

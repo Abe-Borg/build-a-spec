@@ -1620,7 +1620,7 @@ export default function TrustDeepDiveModal({ open, onClose }: Props) {
         tabIndex={-1}
         className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
-        data-capability="help.topics"
+        data-capability="help.trust"
       >
         <div className="flex items-start justify-between gap-4 border-b border-edge px-6 py-3.5">
           <div>

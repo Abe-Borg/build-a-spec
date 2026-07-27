@@ -364,6 +364,7 @@ export default function QCDrawer({
           <button
             className="shrink-0 rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-err hover:text-err"
             onClick={() => setStopConfirmOpen(true)}
+            data-capability="qc.stop"
             title="Stop Final QC"
           >
             Stop
@@ -515,9 +516,6 @@ export default function QCDrawer({
           )}
 
           {/* Complete: findings */}
-          <span className="sr-only" data-capability="qc.findings">
-            Final QC findings and actions
-          </span>
           {result && !running && (
             <div data-capability="qc.actions">
               {stale && (
@@ -592,6 +590,11 @@ export default function QCDrawer({
                 </span>
               )}
 
+              {/* The findings queue itself. It wraps the empty-state lines as
+                  well as the severity bands so the capability always resolves
+                  to something visible — a completed run with zero surviving
+                  findings is a real, and reportable, outcome. */}
+              <div data-capability="qc.findings">
               {openFindings.length === 0 && findings.length === 0 && inconclusive.length === 0 && (
                 <p className="text-[11px] text-ok">
                   No findings survived adversarial verification. Review the
@@ -648,6 +651,7 @@ export default function QCDrawer({
                   </div>
                 );
               })}
+              </div>
 
               {inconclusive.length > 0 && (
                 <div className="rounded border border-warn/35 bg-warn/5 px-2 py-1.5">

@@ -221,6 +221,7 @@ class SessionManager:
         staged_session: SessionState | None = None,
     ) -> WorkspaceLease:
         allowed = {
+            "blank",
             "structural",
             "review",
             "import",

@@ -254,7 +254,12 @@ function HowToUse({
         ]}
       />
       <SourceOutputGuide />
-      <section className="rounded-xl border border-edge bg-raised/50 p-4">
+      {/* A second, richer entry point into the tutorial than the header
+          button: this one can start at any named chapter. */}
+      <section
+        className="rounded-xl border border-edge bg-raised/50 p-4"
+        data-capability="help.topics tour.controls"
+      >
         <h3 className="text-sm font-medium text-ink">Full interactive tutorial</h3>
         <p className="mt-1 text-xs leading-relaxed text-ink-dim">
           Practice every feature against a protected copy of your spec, a newly generated spec,
@@ -493,6 +498,7 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
         </p>
         <button
           onClick={onDeepDive}
+          data-capability="help.trust"
           className="mt-3 rounded-lg border border-accent/60 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
         >
           I’m not convinced — show me exactly what runs →

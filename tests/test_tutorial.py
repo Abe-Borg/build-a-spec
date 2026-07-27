@@ -732,6 +732,56 @@ def test_media_practice_copy_discards_attempt_that_touches_existing_content(
     }
 
 
+def test_push_scenario_rejects_a_second_request_before_the_first_pays_for_its_build():
+    """A second, overlapping scenario/start must never start its own build.
+
+    push_scenario's build= defers construction until after every guard
+    passes, precisely so an in-flight (possibly billed, e.g.
+    media_practice_copy) build reserves the slot BEFORE paying for
+    anything. This proves the reservation — not just the eventual
+    push_scenario() call — blocks a race, using a real background thread
+    (the same blocking-fake-plus-release-event technique used elsewhere in
+    this suite for start/restart races).
+    """
+    import threading
+
+    manager = SessionManager()
+    manager.begin_tutorial(request_id="scenario-race-contract")
+    workspace_id = manager.current().workspace_id
+
+    entered_build = threading.Event()
+    release_build = threading.Event()
+
+    def _slow_build(_tutorial):
+        entered_build.set()
+        release_build.wait(timeout=5)
+        return SessionState()
+
+    first_result = []
+    thread = threading.Thread(
+        target=lambda: first_result.append(
+            manager.push_scenario(workspace_id, kind="references", build=_slow_build)
+        )
+    )
+    thread.start()
+    assert entered_build.wait(timeout=5)
+
+    second_build_called = False
+
+    def _second_build(_tutorial):
+        nonlocal second_build_called
+        second_build_called = True
+        return SessionState()
+
+    with pytest.raises(WorkspaceBusyError):
+        manager.push_scenario(workspace_id, kind="references", build=_second_build)
+    assert second_build_called is False
+
+    release_build.set()
+    thread.join(timeout=5)
+    assert first_result[0].scope == "scenario"
+
+
 def test_enrichment_validator_rejects_rewriting_existing_user_content():
     before = build_showcase_session().doc.doc
     after = SpecSection.from_dict(before.to_dict())

@@ -2455,15 +2455,31 @@ here.
   "behind the scenes" decision — no new SSE surface). The figure-generation
   turn is fully drained server-side (`for _event in stream_user_turn(...):
   pass`, events discarded) before the handler returns, behind the existing
-  "Preparing the … chapter…" modal, which simply takes a bit longer now. The
-  `references` kind's generation is wrapped in `sessions.active_write` (the
-  same pattern `/api/tutorial/enrich`'s own live turn already uses), scoped
-  to close before the shared `push_scenario` call (which itself rejects a
-  nonzero `_active_writes`). Without this wrap, a native window-close during
-  the in-flight generation would bypass `restore_original_for_native_close`'s
-  own busy veto — that guard only inspects `_busy_reasons`/`_active_writes`/
-  `_transitioning`, none of which would otherwise reflect work happening on a
-  detached clone nothing else holds a reference to.
+  "Preparing the … chapter…" modal, which simply takes a bit longer now.
+- **The scenario slot is reserved BEFORE paying for the build, not after.**
+  `SessionManager.push_scenario` gained an optional `build:
+  Callable[[SessionState], SessionState]` alongside `staged_session` — the
+  same reserve-then-build ordering it already used for its own
+  `clone_session_for_tutorial` fallback (check scope/no-existing-scenario/
+  not-busy under lock, THEN construct outside the lock, THEN re-verify and
+  activate). `app.py`'s `references` branch passes
+  `build=media_practice_copy` instead of computing `staged` eagerly, so the
+  reservation check happens before the (possibly billed) model call, not
+  after. `push_scenario` also gained a `_transitioning` guard it was
+  missing (review finding, fixed before merge): without it, two overlapping
+  `scenario/start` requests could both pass the reservation check and both
+  pay for their own build before either discovered the slot was taken —
+  `_transitioning` is exactly the in-progress-build signal
+  `restore_original_for_native_close` already reads, so checking it here
+  closes the same race for every scenario kind, not just figures. Every
+  other kind's construction stays cheap enough that pre-computing it (the
+  existing `staged =` pattern) remains fine — only `references` needed the
+  deferred path. Pinned by
+  `test_push_scenario_rejects_a_second_request_before_the_first_pays_for_its_build`
+  (a genuine background-thread race, not a state-poking unit test: a
+  blocked-until-released `build` proves a second overlapping call is
+  rejected — and never invokes its own `build` — before the first
+  releases).
 - **Real spend from a discarded attempt is never lost.** The attempt runs on
   a session clone (never the live tutorial session), so it's safe to build
   outside any lock; but `SessionManager.push_scenario` always re-derives the

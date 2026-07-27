@@ -12,7 +12,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal
 
 from .llm.conversation import SessionState, effective_discipline
 from .spec_doc.project import load_project, save_project
@@ -219,7 +219,19 @@ class SessionManager:
         *,
         kind: str,
         staged_session: SessionState | None = None,
+        build: Callable[[SessionState], SessionState] | None = None,
     ) -> WorkspaceLease:
+        """Reserve the scenario slot, then build it.
+
+        ``build`` (an alternative to a pre-built ``staged_session``) defers
+        construction until AFTER every guard below passes — the same
+        reserve-then-build ordering already used when neither is given
+        (the ``clone_session_for_tutorial`` fallback). This matters once a
+        scenario's construction can be expensive or paid (e.g. a live model
+        call): computing it eagerly, outside this method, would let two
+        overlapping requests both pay for it before either discovered the
+        slot was already taken.
+        """
         allowed = {
             "blank",
             "structural",
@@ -241,6 +253,8 @@ class SessionManager:
                 )
             if self._active_writes:
                 raise WorkspaceBusyError(["another edit or upload"])
+            if self._transitioning:
+                raise WorkspaceBusyError(["another tutorial transition"])
             reasons = self._busy_reasons(self._active)
             if reasons:
                 raise WorkspaceBusyError(reasons)
@@ -248,7 +262,12 @@ class SessionManager:
             tutorial = self._active
             activation = self._workspace_id
         try:
-            scenario = staged_session or clone_session_for_tutorial(tutorial)
+            if staged_session is not None:
+                scenario = staged_session
+            elif build is not None:
+                scenario = build(tutorial)
+            else:
+                scenario = clone_session_for_tutorial(tutorial)
         except Exception:
             with self._lock:
                 self._transitioning = False

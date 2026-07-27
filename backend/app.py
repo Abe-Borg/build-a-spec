@@ -2057,17 +2057,16 @@ def create_app() -> FastAPI:
                 _parsed, staged, _typed_map, _source_context = _stage_project_load(
                     project_bytes
                 )
-            elif kind == "references":
-                # A live model call now happens here (media_practice_copy),
-                # so it must be visible to the same busy/veto checks that
-                # already guard an in-flight chat/research/QC turn — see
-                # SessionManager.restore_original_for_native_close. The wrap
-                # closes before push_scenario, which itself rejects a
-                # nonzero _active_writes.
-                with sessions.active_write(lease.workspace_id):
-                    staged = media_practice_copy(lease.session)
+            build = media_practice_copy if kind == "references" else None
+            # "references" defers to push_scenario's own reserve-then-build
+            # sequence (via `build=`) rather than computing `staged` here,
+            # because media_practice_copy can make a real, billed model
+            # call: computing it eagerly would let two overlapping requests
+            # both pay for it before either discovered the scenario slot was
+            # already taken. Every other kind's construction is cheap enough
+            # that pre-computing it (the existing pattern above) is fine.
             scenario = sessions.workspace_manager().push_scenario(
-                body.workspace_id, kind=kind, staged_session=staged
+                body.workspace_id, kind=kind, staged_session=staged, build=build
             )
         except (
             sessions.WorkspaceConflictError,

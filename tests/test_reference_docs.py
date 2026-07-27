@@ -399,6 +399,23 @@ def test_remove_forgets_the_turn_that_read_the_document_and_every_later_turn():
             {"role": "assistant", "content": [{"type": "text", "text": "later reply"}]},
         ]
     )
+    session.suggested_prompts[:] = [f"Use {BODY_MARKER}"]
+    kept_figure = session.figures.create(
+        {
+            "kind": "mermaid",
+            "title": "Earlier figure",
+            "source": "flowchart LR; A-->B",
+        },
+        message_index=0,
+    )
+    session.figures.create(
+        {
+            "kind": "mermaid",
+            "title": "Reference-derived figure",
+            "source": "flowchart LR; C-->D",
+        },
+        message_index=1,
+    )
 
     removed = client.delete("/api/reference/ref-1")
 
@@ -409,6 +426,14 @@ def test_remove_forgets_the_turn_that_read_the_document_and_every_later_turn():
     ]
     assert "REFERENCE DOCUMENTS" not in _turn_context_text(session)
     assert BODY_MARKER not in str(session.history)
+    assert session.suggested_prompts == []
+    assert [figure.fid for figure in session.figures.figures] == [
+        kept_figure.fid
+    ]
+    assert removed.json()["suggested_prompts"] == []
+    assert [figure["fid"] for figure in removed.json()["figures"]] == [
+        kept_figure.fid
+    ]
 
 
 def test_remove_does_not_cross_an_active_model_turn():

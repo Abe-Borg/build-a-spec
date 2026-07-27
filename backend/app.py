@@ -2781,7 +2781,14 @@ def create_app() -> FastAPI:
                             },
                             status_code=404,
                         )
-                return JSONResponse({"ok": True, "reference_docs": snapshot})
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "reference_docs": snapshot,
+                        "suggested_prompts": list(session.suggested_prompts),
+                        "figures": session.figures.snapshot(),
+                    }
+                )
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
 

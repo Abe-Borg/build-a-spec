@@ -735,7 +735,11 @@ export async function uploadReference(
 export async function deleteReference(
   rid: string,
   lease: WorkspaceLeaseInput = {},
-): Promise<ReferenceDocMeta[]> {
+): Promise<{
+  reference_docs: ReferenceDocMeta[];
+  suggested_prompts: string[];
+  figures: Figure[];
+}> {
   const resp = await fetch(`/api/reference/${encodeURIComponent(rid)}`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
@@ -748,7 +752,11 @@ export async function deleteReference(
   if (!resp.ok || !data.ok) {
     throw new Error(data.error ?? `remove failed (${resp.status})`);
   }
-  return data.reference_docs;
+  return {
+    reference_docs: data.reference_docs,
+    suggested_prompts: data.suggested_prompts ?? [],
+    figures: data.figures ?? [],
+  };
 }
 
 /* --- Final QC on Fable 5 (Batch 4) --- */

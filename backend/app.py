@@ -2666,6 +2666,26 @@ def create_app() -> FastAPI:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
+        # Use Anthropic's canonical counter rather than a characters/4
+        # estimate. This is intentionally done before taking the session lock:
+        # it is a network call and the cumulative limit is checked atomically
+        # by ReferenceDocStore.add below.
+        try:
+            counted = await run_in_threadpool(
+                get_client().messages.count_tokens,
+                model=settings.INTERVIEW_MODEL,
+                messages=[{"role": "user", "content": extraction.text}],
+            )
+            token_count = int(counted.input_tokens)
+        except Exception as exc:  # noqa: BLE001 - provider errors become UI errors
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Could not count the document with Anthropic's token counter: "
+                    + str(exc),
+                },
+                status_code=502,
+            )
         with session.session_state_guard():
             try:
                 sessions.workspace_manager().assert_active(entry_lease)
@@ -2695,6 +2715,7 @@ def create_app() -> FastAPI:
                     block_count=extraction.block_count,
                     tracked_changes=extraction.tracked_changes,
                     kind=extraction.kind,
+                    token_count=token_count,
                 )
             except ReferenceDocError as exc:
                 return JSONResponse(

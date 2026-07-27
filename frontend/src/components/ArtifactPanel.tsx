@@ -860,52 +860,6 @@ export default function ArtifactPanel({
         </div>
       </div>
 
-      {referenceDocs.length > 0 && (
-        <div
-          className="border-b border-line bg-surface-2/40 px-5 py-3"
-          data-capability="reference.use"
-        >
-          <p className="text-[11px] font-semibold tracking-wide text-ink-dim uppercase">
-            Reference documents ({referenceDocs.length})
-          </p>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-ink-faint">
-            Background only — read by the assistant on request, never part of
-            the spec or its export.
-          </p>
-          <ul className="mt-2 space-y-1.5">
-            {referenceDocs.map((ref) => (
-              <li
-                key={ref.rid}
-                className="flex items-start justify-between gap-3 text-[11px] leading-relaxed"
-              >
-                <div className="min-w-0">
-                  <p className="truncate font-medium text-ink-dim">
-                    {ref.title}
-                  </p>
-                  <p className="text-ink-faint">
-                    {ref.kind_label} · {ref.block_count} block
-                    {ref.block_count === 1 ? "" : "s"}
-                    {ref.truncated && (
-                      <span className="text-warn"> · truncated</span>
-                    )}
-                    {ref.tracked_changes && <span> · Accept-All view</span>}
-                  </p>
-                </div>
-                <button
-                  className="shrink-0 text-ink-faint hover:text-danger"
-                  onClick={() => onRemoveReference(ref.rid)}
-                  disabled={referenceBusy}
-                  title={`Remove ${ref.title}`}
-                  aria-label={`Remove ${ref.title}`}
-                >
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {fileLoading && (
         <div
           className="flex items-start gap-3 border-b border-accent/30 bg-accent/[0.06] px-5 py-3"
@@ -1160,6 +1114,74 @@ export default function ArtifactPanel({
       )}
 
       <StandardsStrip standards={standards} onEditDoc={onEditDoc} busy={busy} />
+      <ReferenceDocumentsStrip
+        documents={referenceDocs}
+        busy={referenceBusy}
+        onRemove={onRemoveReference}
+      />
     </aside>
+  );
+}
+
+function ReferenceDocumentsStrip({
+  documents,
+  busy,
+  onRemove,
+}: {
+  documents: ReferenceDocMeta[];
+  busy: boolean;
+  onRemove: (rid: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (documents.length === 0) return null;
+  const totalTokens = documents.reduce((sum, doc) => sum + doc.token_count, 0);
+  return (
+    <div
+      className="border-t border-line bg-surface-2/40 px-5 py-2.5"
+      data-capability="reference.use"
+    >
+      <button
+        className="flex w-full items-center gap-2 text-left text-[11px] text-ink-faint hover:text-ink-dim"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+      >
+        <span className="font-medium tracking-wide uppercase">Documents</span>
+        <span>{documents.length}</span>
+        <span className="ml-auto tabular-nums">
+          {totalTokens.toLocaleString()} / 100,000 tokens
+        </span>
+        <span>{expanded ? "▾" : "▸"}</span>
+      </button>
+      {expanded && (
+        <ul className="mt-2 max-h-44 space-y-1.5 overflow-y-auto">
+          {documents.map((doc) => (
+            <li
+              key={doc.rid}
+              className="flex items-start justify-between gap-3 text-[11px] leading-relaxed"
+            >
+              <div className="min-w-0">
+                <p className="truncate font-medium text-ink-dim">{doc.title}</p>
+                <p className="text-ink-faint">
+                  {doc.kind_label} · {doc.token_count.toLocaleString()} tokens
+                  {doc.truncated && (
+                    <span className="text-warn"> · truncated</span>
+                  )}
+                  {doc.tracked_changes && <span> · Accept-All view</span>}
+                </p>
+              </div>
+              <button
+                className="shrink-0 text-ink-faint hover:text-danger"
+                onClick={() => onRemove(doc.rid)}
+                disabled={busy}
+                title={`Remove ${doc.title}`}
+                aria-label={`Remove ${doc.title}`}
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

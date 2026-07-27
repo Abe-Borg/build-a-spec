@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .figures import FIGURE_KINDS, FigureError
-from .llm.conversation import SessionState
+from .llm.conversation import SessionState, stream_user_turn
 from .reference_extract import extract_reference_document
 from .spec_doc.docx_export import build_docx
 from .spec_doc.model import SpecSection, iter_paragraphs
@@ -183,10 +183,11 @@ def analyze_tutorial_coverage(session: SessionState) -> TutorialCoverage:
         gaps.append("tbd_content")
     if len(session.doc.versions) < 2:
         gaps.append("version_history")
+    # Figures are no longer part of upfront coverage — Chapter 6 generates
+    # them (live, with a bundled fallback) when the tour reaches it, not at
+    # tutorial start. See media_practice_copy. Kept only as an informational
+    # count below.
     valid_figure_kinds = _valid_figure_kinds(session)
-    for kind in FIGURE_KINDS:
-        if kind not in valid_figure_kinds:
-            gaps.append(f"figure_{kind}")
     if not session.suggested_prompts:
         gaps.append("suggested_prompts")
 
@@ -231,7 +232,7 @@ section heading, article, provision, and user decision. Add only the material
 needed to make the live specification demonstrate the application's editing
 and review features. Current validated gaps: {gaps}.
 
-Use the normal document and figure tools. Ensure all three PARTs contain useful
+Use the normal document tools. Ensure all three PARTs contain useful
 domain-relevant content; one PART has at least two articles; one article has
 movable sibling provisions; and one branch demonstrates all four supported
 paragraph levels. Include at least one genuine unresolved [TBD: ...] provision
@@ -239,10 +240,26 @@ with status needs_input and at least one defensible default with status assumed.
 Never mark new material confirmed or imported. Never invent research citations,
 source_item_id values, governing editions, client requirements, or QC results.
 If discipline or project type is unknown, keep wording broadly applicable and
-use needs_input rather than guessing. Create one useful Mermaid diagram, one
-SVG schematic, and one data table, each attached to your assistant response,
-and offer two short suggested next replies. Finish with a concise explanation
-that all additions are tutorial-only and require project review.
+use needs_input rather than guessing. Offer two short suggested next replies.
+Finish with a concise explanation that all additions are tutorial-only and
+require project review.
+"""
+
+
+def tutorial_figures_directive() -> str:
+    """Scoped directive for Chapter 6: a few figures, nothing else touched."""
+    return """TUTORIAL WORKSPACE FIGURES
+
+You are working only in a disposable tutorial copy. Do not add, remove, or
+edit any section, article, provision, or other document content this turn —
+this turn is about figures only. Using create_figure, add two or three
+simple, representative figures for the current specification: for example a
+coordination/sequence Mermaid diagram, a status or decision SVG schematic,
+and a short schedule table. Each figure must be attached to your assistant
+response. Never invent research citations, source_item_id values, governing
+editions, client requirements, or QC results in a figure's caption or
+labels. Finish with one brief sentence noting these are tutorial-only
+examples.
 """
 
 
@@ -370,7 +387,6 @@ def build_showcase_session() -> SessionState:
             ],
         },
     ]
-    _ensure_tutorial_figures(session)
     session.suggested_prompts = [
         "Use the recommended default",
         "Show me the next open item",
@@ -509,7 +525,6 @@ def repair_tutorial_copy(source: SessionState) -> SessionState:
         store.rollback_turn()
         raise
 
-    _ensure_tutorial_figures(repaired)
     if not repaired.suggested_prompts:
         repaired.suggested_prompts = [
             "Use the recommended default",
@@ -700,17 +715,18 @@ def _tutorial_pdf(lines: list[str]) -> bytes:
     return bytes(output)
 
 
-def reference_practice_copy(source: SessionState) -> SessionState:
-    """Clone the tutorial and attach five extractor-produced references.
+def _attach_reference_fixtures(
+    clone: SessionState, section: SpecSection
+) -> SessionState:
+    """Attach five extractor-produced reference-document fixtures to ``clone``.
 
-    These files are derived from the active spec and flow through the same
-    DOCX/PDF/plain-text extractors as user uploads.  Only extracted text is
-    retained, exactly like production; the byte fixtures are disposable.
+    Derived from ``section``'s heading and first provisions; each fixture
+    flows through the same DOCX/PDF/plain-text extractors as a user upload,
+    and only the extracted text is retained — exactly like production.
+    Shared by ``reference_practice_copy`` and ``media_practice_copy`` so
+    both scenario builders attach identical reference fixtures without
+    double-cloning.
     """
-    from .sessions import clone_session_for_tutorial
-
-    clone = clone_session_for_tutorial(source)
-    section = source.doc.doc
     provisions = [
         paragraph.text
         for _part, _article, paragraph, _depth, _ref in iter_paragraphs(section)
@@ -752,3 +768,82 @@ def reference_practice_copy(source: SessionState) -> SessionState:
             kind=extracted.kind,
         )
     return clone
+
+
+def media_practice_copy(source: SessionState) -> SessionState:
+    """Build Chapter 6's combined figures + references scenario.
+
+    Tries one real, scoped model turn asking for a few figures through the
+    normal create_figure tool, at the moment the tour actually reaches this
+    chapter (never earlier). Any failure — no key, an API/network error, the
+    model touching document content it must not, or simply producing no
+    usable figure — discards that attempt and falls back to the bundled
+    fixtures, mirroring /api/tutorial/enrich's live-then-bundled pattern.
+    _ensure_tutorial_figures only backfills whatever kind(s) the live
+    attempt did not produce, so a partial live success is kept and topped
+    up rather than discarded outright.
+    """
+    from .sessions import clone_session_for_tutorial
+
+    attempt = clone_session_for_tutorial(source)
+    usage_before = attempt.usage.snapshot()
+    doc_before = copy.deepcopy(attempt.doc.doc.to_dict())
+    figures_before = len(attempt.figures.figures)
+    history_start = len(attempt.history)
+    live_ok = False
+    try:
+        for _event in stream_user_turn(attempt, tutorial_figures_directive()):
+            pass
+        live_ok = (
+            attempt.doc.doc.to_dict() == doc_before
+            and len(attempt.figures.figures) > figures_before
+        )
+    except Exception:
+        live_ok = False
+
+    # push_scenario always re-derives the returned clone's usage from the
+    # base tutorial session's own ledger, so real spend from this attempt
+    # must be merged onto `source` regardless of outcome, or a
+    # failed/discarded attempt would silently lose billed usage.
+    source.usage.merge_delta(usage_before, attempt.usage.snapshot())
+
+    if live_ok:
+        clone = attempt
+        if len(clone.history) > history_start:
+            first_added = clone.history[history_start]
+            if first_added.get("role") == "user":
+                # Never leak the raw internal directive into the visible
+                # transcript — same rewrite /api/tutorial/enrich already
+                # does for its own directive.
+                first_added["content"] = [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Add a few simple, representative figures to "
+                            "this protected copy without changing my "
+                            "existing content."
+                        ),
+                    }
+                ]
+    else:
+        clone = clone_session_for_tutorial(source)
+
+    # A figures-only turn must never wind down the reply-chip bar (a
+    # successful commit unconditionally replaces suggested_prompts with
+    # whatever this turn staged — [] if suggest_prompts was never called).
+    clone.suggested_prompts = list(source.suggested_prompts)
+    _ensure_tutorial_figures(clone)
+    return _attach_reference_fixtures(clone, source.doc.doc)
+
+
+def reference_practice_copy(source: SessionState) -> SessionState:
+    """Clone the tutorial and attach five extractor-produced references.
+
+    These files are derived from the active spec and flow through the same
+    DOCX/PDF/plain-text extractors as user uploads.  Only extracted text is
+    retained, exactly like production; the byte fixtures are disposable.
+    """
+    from .sessions import clone_session_for_tutorial
+
+    clone = clone_session_for_tutorial(source)
+    return _attach_reference_fixtures(clone, source.doc.doc)

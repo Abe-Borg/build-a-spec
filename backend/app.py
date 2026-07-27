@@ -179,8 +179,8 @@ from .tutorial import (
     TUTORIAL_MANIFEST_VERSION,
     analyze_tutorial_coverage,
     build_showcase_session,
+    media_practice_copy,
     repair_tutorial_copy,
-    reference_practice_copy,
     review_practice_copy,
     structural_practice_copy,
     tutorial_enrichment_directive,
@@ -1997,6 +1997,7 @@ def create_app() -> FastAPI:
         if lease.scope != "tutorial" or not _tutorial_request_is_current(lease, body):
             return _stale_tutorial_response()
         chapter = body.chapter.strip().lower()
+        # "references" now also covers Chapter 6's figures (media_practice_copy).
         kind = (
             "review"
             if "review" in chapter
@@ -2048,7 +2049,14 @@ def create_app() -> FastAPI:
                     project_bytes
                 )
             elif kind == "references":
-                staged = reference_practice_copy(lease.session)
+                # A live model call now happens here (media_practice_copy),
+                # so it must be visible to the same busy/veto checks that
+                # already guard an in-flight chat/research/QC turn — see
+                # SessionManager.restore_original_for_native_close. The wrap
+                # closes before push_scenario, which itself rejects a
+                # nonzero _active_writes.
+                with sessions.active_write(lease.workspace_id):
+                    staged = media_practice_copy(lease.session)
             scenario = sessions.workspace_manager().push_scenario(
                 body.workspace_id, kind=kind, staged_session=staged
             )

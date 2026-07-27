@@ -199,8 +199,16 @@ function clampOffset(
 ) {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const top = clamp(base.top + offset.dy, 8, vh - element.offsetHeight - 8);
-  const left = clamp(base.left + offset.dx, 8, vw - element.offsetWidth - 8);
+  // When the card is taller/wider than the viewport allows, the naive
+  // (8, viewport - size - 8) bounds invert (high < low). clamp() collapses
+  // an inverted range to `low`, which would pin the card and make dragging a
+  // no-op — so the low/high passed in here are sorted, giving the card room
+  // to move across its whole natural range (e.g. dragging up to reveal a
+  // clipped footer) instead of being stuck at the top.
+  const verticalHigh = vh - element.offsetHeight - 8;
+  const horizontalHigh = vw - element.offsetWidth - 8;
+  const top = clamp(base.top + offset.dy, Math.min(8, verticalHigh), Math.max(8, verticalHigh));
+  const left = clamp(base.left + offset.dx, Math.min(8, horizontalHigh), Math.max(8, horizontalHigh));
   return { dx: left - base.left, dy: top - base.top };
 }
 

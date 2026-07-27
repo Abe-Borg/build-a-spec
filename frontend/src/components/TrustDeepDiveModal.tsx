@@ -14,6 +14,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SOURCE_OUTPUT_GUIDANCE } from "../lib/sourceOutputGuidance";
+import { useDialogFocus } from "../lib/dialogFocus";
 
 interface Props {
   open: boolean;
@@ -296,7 +297,7 @@ function DataFlowDiagram() {
         viewBox="0 0 720 268"
         className="w-full"
         role="img"
-        aria-label="Data flow: your computer runs the app and holds every file; only model requests leave, over HTTPS, to the Anthropic API, which performs web searches on its own servers. A separate, optional update check contacts GitHub Releases."
+        aria-label="Data flow: your computer runs the app and holds every file; only model requests leave, over HTTPS, to the Anthropic API, which performs web searches on its own servers. A separate automatic update check contacts GitHub Releases for a version manifest."
       >
         <defs>
           <marker
@@ -471,7 +472,7 @@ function DataFlowDiagram() {
           markerEnd="url(#bas-arrow-faint)"
         />
         <text x="134" y="245" {...faint}>
-          Optional update check → GitHub Releases (version manifest only)
+          Automatic update check → GitHub Releases (version manifest only)
         </text>
       </svg>
       <figcaption className="mt-3 text-xs leading-relaxed text-ink-faint">
@@ -504,10 +505,15 @@ function Dossier() {
               differently on the page and in the export.
             </>,
             <>
-              <b className="text-ink">Nothing happens that you did not start.</b>{" "}
-              There is no background activity, no scheduled job, no
-              auto-research, no silent re-draft. Every model call traces back to
-              a message you sent or a button you pressed.
+              <b className="text-ink">
+                No model runs that you did not start.
+              </b>{" "}
+              No auto-research, no silent re-draft, no scheduled job: every
+              model call — and therefore every cent of spend — traces back to a
+              message you sent or a button you pressed. The one thing the app
+              does on its own is check for a new version at startup, at most
+              once a day; that request goes to GitHub, carries nothing about
+              your project, and can be switched off.
             </>,
             <>
               <b className="text-ink">Every automated judgment is re-derivable.</b>{" "}
@@ -660,9 +666,11 @@ function Dossier() {
               the web sites you research never see your IP address.
             </>,
             <>
-              <b className="text-ink">A version manifest request to GitHub</b>{" "}
-              when the app checks for updates (throttled to once a day, and
-              switchable off). It sends nothing about your project.
+              <b className="text-ink">A version manifest request to GitHub.</b>{" "}
+              This is the one request the app makes without being asked: it runs
+              automatically at startup, at most once a day, and again whenever
+              you press “Check for updates”. It sends nothing about your
+              project, and it can be switched off entirely.
             </>,
           ]}
           rightTitle="Never leaves your machine"
@@ -1333,7 +1341,7 @@ function Dossier() {
             ],
             [
               "Updates",
-              "HTTPS only, with a redirect-downgrade guard, and the installer is SHA-256 verified against the release manifest before it is ever launched. The application ships unsigned, so that hash is the integrity gate that matters. The check is throttled to once a day and can be switched off entirely.",
+              "The version check runs automatically at startup, throttled to once a day — the app's only unprompted outbound request — and can be switched off entirely with the BUILD_A_SPEC_DISABLE_UPDATE_CHECK environment variable. It is HTTPS only, with a redirect-downgrade guard, and the installer is SHA-256 verified against the release manifest before it is ever launched. The application ships unsigned, so that hash is the integrity gate that matters.",
             ],
             [
               "Data handling at Anthropic",
@@ -1349,7 +1357,9 @@ function Dossier() {
             <>
               <b className="text-ink">There is no subscription and no spend you
               did not start.</b> You are billed by Anthropic for your own API
-              usage, under your own key. Nothing runs in the background.
+              usage, under your own key. No model call is ever made in the
+              background — the automatic update check is the app’s only
+              unprompted request, and it costs nothing.
             </>,
             <>
               <b className="text-ink">The fixed instruction block is cached.</b>{" "}
@@ -1492,8 +1502,9 @@ function Dossier() {
             </>,
             <>
               <b className="text-ink">Watch a firewall or proxy log.</b> The only
-              routine destination is Anthropic’s API, plus GitHub when you check
-              for updates.
+              routine destination is Anthropic’s API. You will also see one
+              GitHub request at startup — that is the version check described
+              above, and it is the only unprompted connection the app makes.
             </>,
           ]}
         />
@@ -1543,20 +1554,17 @@ function Dossier() {
 
 export default function TrustDeepDiveModal({ open, onClose }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [active, setActive] = useState<string>(SECTIONS[0].id);
 
-  // Escape closes this modal only; HelpModal defers while it is open.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  // Initial focus, Escape, Tab containment, and focus restoration — the same
+  // helper the QC dialogs use. Containment matters more here than usual: this
+  // dialog stacks on the help dialog, and without it Shift+Tab reaches the
+  // topic strip underneath, whose buttons change the topic and so close this
+  // dialog out from under a keyboard user. HelpModal's own Escape handler is
+  // disabled while `deepDive` is set, so exactly one dialog closes per press.
+  useDialogFocus(open, dialogRef, closeButtonRef, onClose);
 
   // Scroll-spy for the contents rail. Rebuilt whenever the modal opens
   // because the sections only exist in the DOM while it is mounted.
@@ -1608,6 +1616,8 @@ export default function TrustDeepDiveModal({ open, onClose }: Props) {
       aria-label="How Build-a-Spec actually works"
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         data-capability="help.topics"
@@ -1623,6 +1633,7 @@ export default function TrustDeepDiveModal({ open, onClose }: Props) {
             </p>
           </div>
           <button
+            ref={closeButtonRef}
             onClick={onClose}
             className="rounded-lg px-2 py-1 text-ink-dim transition-colors hover:text-ink"
             title="Close"

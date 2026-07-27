@@ -280,7 +280,7 @@ function HowToUse({
         </div>
       </section>
       <p className="text-xs text-ink-faint">
-        Every phase — research, QC, export — is something you trigger. Nothing
+        Every phase — research, QC, export — is something you trigger. No model
         runs on its own.
       </p>
     </div>
@@ -476,8 +476,8 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
             d: "Every pinned edition has documented provenance; jurisdiction overrides always state their adoption basis, and a module that pins nothing records every edition with the basis it came from.",
           },
           {
-            t: "Nothing runs on its own",
-            d: "Research, Final QC, drafting, and export all start with a click of yours. There is no background activity and no scheduled work, so there is no spend you did not initiate.",
+            t: "No model runs on its own",
+            d: "Research, Final QC, drafting, and export all start with a click of yours — there is no background model work, and so no spend you did not initiate. The app's only unprompted request is the daily version check to GitHub, which carries nothing about your project and can be switched off.",
           },
           {
             t: "Your key and spend stay in view",
@@ -616,11 +616,21 @@ export default function HelpModal({
   }, [topic]);
 
   // Close on Escape while open — but yield to the dossier while it is up, so
-  // one Escape closes one dialog.
+  // one Escape closes one dialog. Two guards, because one is not enough:
+  //
+  //  - `deepDive` keeps this listener off entirely while the child dialog owns
+  //    the keyboard. That is the intent.
+  //  - `defaultPrevented` handles the race that intent alone misses. The
+  //    dossier's handler is on `document`, ours is on `window`, and React
+  //    flushes its close synchronously inside that native handler — so this
+  //    effect has already re-run and re-attached by the time the SAME keydown
+  //    finishes bubbling, and would close the help dialog too. The dossier
+  //    calls preventDefault() before closing, so "already handled" is the
+  //    reliable signal.
   useEffect(() => {
     if (!topic || deepDive) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !e.defaultPrevented) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

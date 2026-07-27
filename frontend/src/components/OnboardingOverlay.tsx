@@ -12,7 +12,6 @@ import type {
   ResearchRunStatus,
   SpecDoc,
 } from "../types";
-import { buildQueue } from "../lib/reviewQueue";
 import { usePrefersReducedMotion } from "../lib/useSmoothText";
 import { anchorSelector, TOUR, type TourStep } from "../lib/tour";
 import type { DrawerName, OnboardingApi } from "../lib/useOnboarding";
@@ -276,7 +275,6 @@ function readinessMet(
 function StepActions({
   step,
   ob,
-  doc,
   busy,
   profileComplete,
   researchStatus,
@@ -285,7 +283,6 @@ function StepActions({
 }: {
   step: TourStep;
   ob: OnboardingApi;
-  doc: SpecDoc | null;
   busy: boolean;
   profileComplete: boolean;
   researchStatus: ResearchRunStatus;
@@ -295,12 +292,6 @@ function StepActions({
   if (!step.actions?.length) return null;
   if (step.actions.some((action) => action.kind === "profile-fill") && profileComplete) {
     return <p className="mt-3 text-xs text-ok">✓ Project profile is complete.</p>;
-  }
-  if (
-    step.actions.some((action) => action.kind === "confirm-first") &&
-    buildQueue(doc, "all").length === 0
-  ) {
-    return <p className="mt-3 text-xs text-ok">✓ The review queue is clear.</p>;
   }
   return (
     <div className="mt-3 space-y-2 border-t border-edge pt-3">
@@ -723,7 +714,6 @@ export default function OnboardingOverlay({
           <StepActions
             step={step}
             ob={ob}
-            doc={doc}
             busy={busy}
             profileComplete={profileComplete}
             researchStatus={researchStatus}

@@ -109,6 +109,12 @@ test("tutorial is versioned, resumable, interactive, and document-aware", () => 
   assert.doesNotMatch(chat, /passive|3-minute|~3 minutes/i);
 });
 
+test("review tutorial does not offer a one-click confirmation shortcut", () => {
+  assert.doesNotMatch(tour, /confirm-first|Confirm the first outstanding block/);
+  assert.doesNotMatch(overlay, /confirm-first/);
+  assert.doesNotMatch(hook, /confirm-first/);
+});
+
 test("workspace lifecycle protects current work and offers explicit outcomes", () => {
   assert.match(hook, /startTutorialWorkspace/);
   assert.match(hook, /enrichTutorialWorkspace/);

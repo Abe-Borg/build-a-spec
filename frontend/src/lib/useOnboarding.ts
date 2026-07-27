@@ -18,7 +18,6 @@ import {
   startTutorialScenario,
   startTutorialWorkspace,
 } from "./api";
-import { buildQueue } from "./reviewQueue";
 import {
   clearOnboardingProgress,
   loadOnboardingProgress,
@@ -759,19 +758,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
             },
           ]);
           break;
-        case "confirm-first": {
-          const entry = buildQueue(current.doc, "all")[0];
-          if (entry) {
-            void current.editDoc([
-              {
-                action: "set_status",
-                target_id: entry.elementId,
-                status: "confirmed",
-              },
-            ]);
-          }
-          break;
-        }
         case "run-research":
           current.startResearch();
           break;

@@ -457,6 +457,64 @@ class SessionState:
                 return "missing", []
             return "deleted", self.figures.snapshot()
 
+    def delete_reference_if_idle(
+        self, rid: str
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Delete a reference and forget every turn that could remember it.
+
+        Reference bodies are elided after a turn, but the assistant's answer
+        can still summarize or quote what it read.  Once a user removes an
+        attachment, keeping that answer (or any later turn that saw it) in
+        model history would therefore keep the document in model context.
+        Truncate at the user turn that first successfully read the reference;
+        the UI may retain its already-rendered transcript, while subsequent
+        model requests and saved projects cannot reintroduce that material.
+        """
+        with self._turn_state_lock:
+            if self.turn_active:
+                return "active", []
+            if self.references.get(rid) is None:
+                return "missing", []
+
+            successful_read_ids = {
+                block.get("tool_use_id")
+                for message in self.history
+                if message.get("role") == "user"
+                for block in (message.get("content") or [])
+                if block.get("type") == "tool_result"
+                and not block.get("is_error")
+            }
+            first_read: int | None = None
+            for index, message in enumerate(self.history):
+                if message.get("role") != "assistant":
+                    continue
+                if any(
+                    block.get("type") == "tool_use"
+                    and block.get("name") == "read_reference_doc"
+                    and (block.get("input") or {}).get("ref_id") == rid
+                    and block.get("id") in successful_read_ids
+                    for block in (message.get("content") or [])
+                ):
+                    first_read = index
+                    break
+
+            if first_read is not None:
+                # Tool-result messages also have role=user.  A real user turn
+                # is the nearest preceding user message with a text block.
+                turn_start = 0
+                for index in range(first_read - 1, -1, -1):
+                    message = self.history[index]
+                    if message.get("role") == "user" and any(
+                        block.get("type") == "text"
+                        for block in (message.get("content") or [])
+                    ):
+                        turn_start = index
+                        break
+                del self.history[turn_start:]
+
+            self.references.delete(rid)
+            return "deleted", self.references.snapshot()
+
     @contextmanager
     def session_state_guard(self) -> Iterator[None]:
         """Serialize non-model state access against model-turn ownership."""

@@ -510,7 +510,20 @@ class SessionState:
                     ):
                         turn_start = index
                         break
+                discarded_message_index = sum(
+                    1
+                    for entry in chat_transcript(self.history[:turn_start])
+                    if entry["role"] == "assistant"
+                )
                 del self.history[turn_start:]
+                # Both are model-authored context from the discarded tail.
+                # Keeping either would leak reference-derived material into
+                # the UI/save payload, and stale figure message indices could
+                # later attach an old figure to an unrelated chat bubble.
+                self.suggested_prompts.clear()
+                self.figures.delete_from_message_index(
+                    discarded_message_index
+                )
 
             self.references.delete(rid)
             return "deleted", self.references.snapshot()

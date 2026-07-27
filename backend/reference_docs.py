@@ -46,6 +46,7 @@ MAX_REFERENCE_TOKENS = 100_000
 MAX_TEXT_CHARS = 400_000
 MAX_TITLE = 200
 _EXCERPT_CHARS = 280
+_LEGACY_TOKEN_OVERHEAD = 32
 
 # Cumulative ceiling on reference text returned within ONE turn, across every
 # read_reference_doc call in it. Per-document caps are not enough on their own:
@@ -70,6 +71,41 @@ TRUNCATION_MARKER = (
     "characters. The remainder was not stored and has NOT been read. Tell "
     "the user if the answer may depend on the omitted tail.]"
 )
+
+
+def prepare_reference_text(text: str) -> tuple[str, int, bool]:
+    """Return exactly the body retained by :meth:`ReferenceDocStore.add`.
+
+    Upload token counting must use this value too: counting the discarded tail
+    would consume quota for text the model can never read.
+    """
+    body = text.strip()
+    if not body:
+        raise ReferenceDocError(
+            "That document has no readable text to use as reference."
+        )
+    total = len(body)
+    truncated = total > MAX_TEXT_CHARS
+    if truncated:
+        body = body[:MAX_TEXT_CHARS] + TRUNCATION_MARKER.format(
+            kept=MAX_TEXT_CHARS, total=total
+        )
+    return body, total, truncated
+
+
+def _legacy_token_reservation(text: str) -> int:
+    """Conservatively reserve quota for a pre-token-count project attachment.
+
+    Loading a project is deliberately offline, so it cannot call Anthropic.
+    One token per UTF-8 byte plus a small Messages-envelope reserve is a
+    deliberately high allowance for legacy content, capped at the whole
+    attachment limit. It prevents old files from reopening as zero-cost and
+    bypassing the cumulative ceiling.
+    """
+    return min(
+        MAX_REFERENCE_TOKENS,
+        max(1, len(text.encode("utf-8")) + _LEGACY_TOKEN_OVERHEAD),
+    )
 
 
 class ReferenceDocError(ValueError):
@@ -170,6 +206,10 @@ class ReferenceDoc:
     def from_dict(cls, data: dict[str, Any]) -> "ReferenceDoc":
         rid = str(data["rid"])
         text = str(data.get("text", ""))
+        if "token_count" in data:
+            token_count = max(0, int(data.get("token_count", 0) or 0))
+        else:
+            token_count = _legacy_token_reservation(text)
         return cls(
             rid=rid,
             filename=str(data.get("filename", "")),
@@ -181,7 +221,7 @@ class ReferenceDoc:
             tracked_changes=bool(data.get("tracked_changes", False)),
             added_at=str(data.get("added_at", "")),
             kind=str(data.get("kind", "") or "docx"),
-            token_count=max(0, int(data.get("token_count", 0) or 0)),
+            token_count=token_count,
         )
 
 
@@ -222,17 +262,7 @@ class ReferenceDocStore:
                 f"tokens; the maximum is {MAX_REFERENCE_TOKENS:,}. Remove a "
                 "document or attach a smaller one."
             )
-        body = text.strip()
-        if not body:
-            raise ReferenceDocError(
-                "That document has no readable text to use as reference."
-            )
-        total = len(body)
-        truncated = total > MAX_TEXT_CHARS
-        if truncated:
-            body = body[:MAX_TEXT_CHARS] + TRUNCATION_MARKER.format(
-                kept=MAX_TEXT_CHARS, total=total
-            )
+        body, total, truncated = prepare_reference_text(text)
         clean_title = " ".join((title or filename).split())[:MAX_TITLE]
         doc = ReferenceDoc(
             rid=f"ref-{self._next_seq}",

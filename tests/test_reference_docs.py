@@ -31,6 +31,7 @@ from backend.reference_docs import (
     ReferenceDocError,
     ReferenceDocStore,
     TurnReferenceBudget,
+    prepare_reference_text,
 )
 from backend.spec_doc.project import load_project
 
@@ -49,6 +50,29 @@ def test_reference_store_enforces_cumulative_anthropic_token_limit():
         store.add(filename="two.txt", text="two", block_count=1, token_count=2)
 
     assert [doc.rid for doc in store.docs] == ["ref-1"]
+
+
+def test_legacy_reference_without_token_count_reserves_quota():
+    store = ReferenceDocStore()
+    store.load(
+        {
+            "reference_docs": [
+                {"rid": "ref-1", "filename": "old.txt", "text": "legacy body"}
+            ]
+        }
+    )
+
+    # Legacy projects load offline, so reserve at least one token per UTF-8
+    # byte (plus message overhead) rather than treating attachments as free.
+    assert store.docs[0].token_count > len(b"legacy body")
+    with pytest.raises(ReferenceDocError, match="maximum is 100,000"):
+        store.add(
+            filename="new.txt",
+            text="new",
+            block_count=1,
+            token_count=MAX_REFERENCE_TOKENS,
+        )
+
 
 DOCX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -213,6 +237,19 @@ def test_oversized_text_is_truncated_loudly_never_silently():
     assert "has NOT been read" in doc.text
 
 
+def test_token_counter_payload_is_the_exact_retained_truncated_text():
+    source = "x" * (MAX_TEXT_CHARS + 5_000)
+    retained, total, truncated = prepare_reference_text(source)
+    doc = ReferenceDocStore().add(
+        filename="huge.txt", text=source, block_count=1, token_count=12
+    )
+
+    assert truncated is True
+    assert total == len(source)
+    assert retained == doc.text
+    assert len(retained) < len(source)
+
+
 def test_metadata_never_carries_the_body():
     """It rides every document payload; a body here would cost a full copy
     of every attached document on each poll."""
@@ -362,6 +399,23 @@ def test_remove_forgets_the_turn_that_read_the_document_and_every_later_turn():
             {"role": "assistant", "content": [{"type": "text", "text": "later reply"}]},
         ]
     )
+    session.suggested_prompts[:] = [f"Use {BODY_MARKER}"]
+    kept_figure = session.figures.create(
+        {
+            "kind": "mermaid",
+            "title": "Earlier figure",
+            "source": "flowchart LR; A-->B",
+        },
+        message_index=0,
+    )
+    session.figures.create(
+        {
+            "kind": "mermaid",
+            "title": "Reference-derived figure",
+            "source": "flowchart LR; C-->D",
+        },
+        message_index=1,
+    )
 
     removed = client.delete("/api/reference/ref-1")
 
@@ -372,6 +426,14 @@ def test_remove_forgets_the_turn_that_read_the_document_and_every_later_turn():
     ]
     assert "REFERENCE DOCUMENTS" not in _turn_context_text(session)
     assert BODY_MARKER not in str(session.history)
+    assert session.suggested_prompts == []
+    assert [figure.fid for figure in session.figures.figures] == [
+        kept_figure.fid
+    ]
+    assert removed.json()["suggested_prompts"] == []
+    assert [figure["fid"] for figure in removed.json()["figures"]] == [
+        kept_figure.fid
+    ]
 
 
 def test_remove_does_not_cross_an_active_model_turn():

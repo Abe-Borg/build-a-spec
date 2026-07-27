@@ -274,6 +274,14 @@ class FigureStore:
                 return True
         return False
 
+    def delete_from_message_index(self, message_index: int) -> None:
+        """Drop figures attached to ``message_index`` and later bubbles."""
+        self.figures[:] = [
+            figure
+            for figure in self.figures
+            if figure.message_index < message_index
+        ]
+
     def get(self, fid: str) -> Figure | None:
         for figure in self.figures:
             if figure.fid == fid:

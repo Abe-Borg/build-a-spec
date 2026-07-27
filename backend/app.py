@@ -127,7 +127,7 @@ from .spec_doc.docx_export import (
     export_filename,
     redline_filename,
 )
-from .reference_docs import ReferenceDocError
+from .reference_docs import ReferenceDocError, prepare_reference_text
 from .reference_extract import (
     extract_reference_document,
     reference_kind_for_filename,
@@ -2666,6 +2666,10 @@ def create_app() -> FastAPI:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
+        try:
+            retained_text, _, _ = prepare_reference_text(extraction.text)
+        except ReferenceDocError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         # Use Anthropic's canonical counter rather than a characters/4
         # estimate. This is intentionally done before taking the session lock:
         # it is a network call and the cumulative limit is checked atomically
@@ -2674,7 +2678,7 @@ def create_app() -> FastAPI:
             counted = await run_in_threadpool(
                 get_client().messages.count_tokens,
                 model=settings.INTERVIEW_MODEL,
-                messages=[{"role": "user", "content": extraction.text}],
+                messages=[{"role": "user", "content": retained_text}],
             )
             token_count = int(counted.input_tokens)
         except Exception as exc:  # noqa: BLE001 - provider errors become UI errors
@@ -2777,7 +2781,14 @@ def create_app() -> FastAPI:
                             },
                             status_code=404,
                         )
-                return JSONResponse({"ok": True, "reference_docs": snapshot})
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "reference_docs": snapshot,
+                        "suggested_prompts": list(session.suggested_prompts),
+                        "figures": session.figures.snapshot(),
+                    }
+                )
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
 

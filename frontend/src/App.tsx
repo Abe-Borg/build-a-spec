@@ -593,10 +593,13 @@ export default function App() {
   const onRemoveReference = useCallback(async (rid: string) => {
     setReferenceBusy(true);
     try {
-      setReferenceDocs(await deleteReference(rid, {
+      const result = await deleteReference(rid, {
         workspaceId: health?.workspace_id,
         generation: health?.generation,
-      }));
+      });
+      setReferenceDocs(result.reference_docs);
+      setSuggestions(result.suggested_prompts);
+      setFigures(result.figures);
     } catch (e) {
       setImportNotice({
         tone: "error",

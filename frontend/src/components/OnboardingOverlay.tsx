@@ -191,35 +191,122 @@ function placeBubble(
   };
 }
 
+function clampOffset(
+  offset: { dx: number; dy: number },
+  base: { top: number; left: number },
+  element: HTMLElement,
+) {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  // When the card is taller/wider than the viewport allows, the naive
+  // (8, viewport - size - 8) bounds invert (high < low). clamp() collapses
+  // an inverted range to `low`, which would pin the card and make dragging a
+  // no-op — so the low/high passed in here are sorted, giving the card room
+  // to move across its whole natural range (e.g. dragging up to reveal a
+  // clipped footer) instead of being stuck at the top.
+  const verticalHigh = vh - element.offsetHeight - 8;
+  const horizontalHigh = vw - element.offsetWidth - 8;
+  const top = clamp(base.top + offset.dy, Math.min(8, verticalHigh), Math.max(8, verticalHigh));
+  const left = clamp(base.left + offset.dx, Math.min(8, horizontalHigh), Math.max(8, horizontalHigh));
+  return { dx: left - base.left, dy: top - base.top };
+}
+
 function AnchoredCard({
   rect,
   pending,
   placement,
+  resetKey,
   children,
 }: {
   rect: Rect | null;
   pending: boolean;
   placement: TourStep["placement"];
+  resetKey: string;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  // Manual nudge on top of the anchor-computed position, so a resize/scroll
+  // remeasure (which recomputes `position` from scratch) still preserves the
+  // user's drag rather than snapping back to the default placement.
+  const [offset, setOffset] = useState({ dx: 0, dy: 0 });
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    baseDx: number;
+    baseDy: number;
+  } | null>(null);
+
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element || !rect) {
       setPosition(null);
       return;
     }
-    const measure = () =>
-      setPosition(placeBubble(rect, placement, element.offsetWidth, element.offsetHeight));
+    const measure = () => {
+      const next = placeBubble(rect, placement, element.offsetWidth, element.offsetHeight);
+      setPosition(next);
+      setOffset((current) => clampOffset(current, next, element));
+    };
     measure();
     const observer =
       typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     observer?.observe(element);
     return () => observer?.disconnect();
   }, [rect, placement]);
+
+  // A new step (or a readiness flip that swaps the effective anchor) means a
+  // different default position — any manual nudge from before belongs to the
+  // previous anchor, not this one.
+  useEffect(() => {
+    setOffset({ dx: 0, dy: 0 });
+    dragRef.current = null;
+  }, [resetKey]);
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || dragRef.current || !position) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !target.closest("[data-drag-handle]")) return;
+    const element = ref.current;
+    if (!element) return;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      baseDx: offset.dx,
+      baseDy: offset.dy,
+    };
+    element.setPointerCapture(event.pointerId);
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    const element = ref.current;
+    if (!drag || !element || !position || drag.pointerId !== event.pointerId) return;
+    setOffset(
+      clampOffset(
+        {
+          dx: drag.baseDx + (event.clientX - drag.startX),
+          dy: drag.baseDy + (event.clientY - drag.startY),
+        },
+        position,
+        element,
+      ),
+    );
+  };
+
+  const endDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    ref.current?.releasePointerCapture(event.pointerId);
+  };
+
   const style = rect
-    ? (position ?? { top: -9999, left: -9999 })
+    ? position
+      ? { top: position.top + offset.dy, left: position.left + offset.dx }
+      : { top: -9999, left: -9999 }
     : pending
       ? { top: -9999, left: -9999 }
       : { right: 16, bottom: 16 };
@@ -233,6 +320,10 @@ function AnchoredCard({
         "pointer-events-auto fixed z-[65] w-[390px] max-w-[calc(100vw-16px)] rounded-xl border border-edge bg-surface p-4 shadow-2xl"
       }
       style={style}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
     >
       {children}
     </div>
@@ -624,7 +715,12 @@ export default function OnboardingOverlay({
   return (
     <div className="pointer-events-none fixed inset-0 z-[60]">
       {rect && <Cutout rect={rect} reducedMotion={reducedMotion} />}
-      <AnchoredCard rect={rect} pending={!missing} placement={anchorStep?.placement}>
+      <AnchoredCard
+        rect={rect}
+        pending={!missing}
+        placement={anchorStep?.placement}
+        resetKey={`${phase.chunk}:${phase.step}:${ready}`}
+      >
         <CardHeader
           kicker={`Chapter ${phase.chunk + 1}/${TOUR.length} — ${chapter.title} · ${
             phase.step + 1
@@ -747,7 +843,11 @@ export default function OnboardingOverlay({
 function CardHeader({ kicker, title, onClose }: { kicker: string; title: string; onClose: () => void }) {
   return (
     <div className="flex items-start justify-between gap-3">
-      <div>
+      <div
+        data-drag-handle
+        title="Drag to move"
+        className="min-w-0 flex-1 cursor-grab select-none touch-none active:cursor-grabbing"
+      >
         <p className="text-[11px] uppercase tracking-wide text-ink-faint">{kicker}</p>
         <h3 className="mt-0.5 font-[family-name:var(--font-display)] text-base font-semibold text-ink">{title}</h3>
       </div>

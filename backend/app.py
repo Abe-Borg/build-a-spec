@@ -180,8 +180,8 @@ from .tutorial import (
     analyze_tutorial_coverage,
     blank_practice_copy,
     build_showcase_session,
+    media_practice_copy,
     repair_tutorial_copy,
-    reference_practice_copy,
     review_practice_copy,
     structural_practice_copy,
     tutorial_enrichment_directive,
@@ -2001,7 +2001,8 @@ def create_app() -> FastAPI:
         # Ordered substring match with a `structural` catch-all: an unmapped
         # chapter name does NOT error, it quietly starts the structural
         # practice copy.  Every new kind therefore needs its own branch here,
-        # ahead of that fallback.
+        # ahead of that fallback. "references" also covers Chapter 6's
+        # figures (media_practice_copy).
         kind = (
             "blank"
             if "blank" in chapter
@@ -2056,10 +2057,16 @@ def create_app() -> FastAPI:
                 _parsed, staged, _typed_map, _source_context = _stage_project_load(
                     project_bytes
                 )
-            elif kind == "references":
-                staged = reference_practice_copy(lease.session)
+            build = media_practice_copy if kind == "references" else None
+            # "references" defers to push_scenario's own reserve-then-build
+            # sequence (via `build=`) rather than computing `staged` here,
+            # because media_practice_copy can make a real, billed model
+            # call: computing it eagerly would let two overlapping requests
+            # both pay for it before either discovered the scenario slot was
+            # already taken. Every other kind's construction is cheap enough
+            # that pre-computing it (the existing pattern above) is fine.
             scenario = sessions.workspace_manager().push_scenario(
-                body.workspace_id, kind=kind, staged_session=staged
+                body.workspace_id, kind=kind, staged_session=staged, build=build
             )
         except (
             sessions.WorkspaceConflictError,

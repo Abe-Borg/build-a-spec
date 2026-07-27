@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend import sessions
 from backend.app import _prepare_master_import, create_app
+from backend.llm.client import MissingApiKeyError
 from backend.llm.conversation import SessionState
 from backend.sessions import SessionManager, WorkspaceBusyError, WorkspaceConflictError
 from backend.spec_doc.docx_export import build_docx
@@ -20,6 +21,7 @@ from backend.tutorial import (
     blank_practice_copy,
     build_showcase_session,
     detached_practice_copy,
+    media_practice_copy,
     reference_practice_copy,
     repair_tutorial_copy,
     review_practice_copy,
@@ -28,6 +30,7 @@ from backend.tutorial import (
 )
 from backend.templates import TemplateCatalog
 from backend.spec_doc.project_package import parse_project_package
+from tests.fakes import FakeClient, text_turn, tool_turn
 
 
 def _replace_first(session: SessionState, suffix: str) -> None:
@@ -81,15 +84,9 @@ def test_bundled_llm_authored_showcase_satisfies_real_content_fixtures():
         1 for message in session.history if message.get("role") == "assistant"
     )
     assert assistant_count == 1
-    assert all(
-        figure["message_index"] < assistant_count
-        for figure in session.figures.snapshot()
-    )
-    assert {figure["kind"] for figure in session.figures.snapshot()} == {
-        "mermaid",
-        "svg",
-        "table",
-    }
+    # Figures no longer come from tutorial start — Chapter 6 (media_practice_copy)
+    # generates them live when the tour reaches that chapter, not before.
+    assert session.figures.snapshot() == []
     assert session.template_origin is None
 
 
@@ -111,9 +108,6 @@ def test_sparse_current_spec_reports_conditions_not_article_count_only():
         "needs_input_content",
         "tbd_content",
         "version_history",
-        "figure_mermaid",
-        "figure_svg",
-        "figure_table",
         "suggested_prompts",
     } == set(coverage.gaps)
 
@@ -161,7 +155,13 @@ def test_rich_source_backed_restore_preserves_every_original_store_exactly():
     imported, report, context = _prepare_master_import(source_bytes, "rich-source.docx")
     original.doc.adopt_imported(imported.section)
     original.history = copy.deepcopy(showcase.history)
-    original.figures.load(showcase.figures.to_dict())
+    # build_showcase_session() no longer seeds figures (Chapter 6 generates
+    # them live); seed one directly so the store-independence assertions
+    # below still have a figure to exercise.
+    original.figures.create(
+        {"kind": "table", "title": "Original figure", "columns": ["A"], "rows": [["1"]]},
+        message_index=0,
+    )
     referenced = reference_practice_copy(showcase)
     original.references.load(referenced.references.to_dict())
     original.suggested_prompts = list(showcase.suggested_prompts)
@@ -453,11 +453,9 @@ def test_incomplete_live_enrichment_atomically_falls_back_to_showcase(monkeypatc
         "Distinctive user-authored wording that the fallback must preserve exactly."
     )
     assert kept_article.paragraphs[0].status == "confirmed"
-    assert {figure["kind"] for figure in fallback["session"]["figures"]} == {
-        "mermaid",
-        "svg",
-        "table",
-    }
+    # The bundled fallback no longer creates figures either — Chapter 6
+    # generates them live when the tour reaches it.
+    assert fallback["session"]["figures"] == []
     assert fallback["source"] == "current"
 
 
@@ -495,9 +493,17 @@ def test_generated_live_failure_is_disclosed_as_bundled_showcase(monkeypatch):
 
 
 def test_successful_live_enrichment_finishes_with_authoritative_session(monkeypatch):
-    def complete_enrichment(session, _message):
+    def complete_enrichment(session, message):
         repaired = repair_tutorial_copy(session)
-        session.history = repaired.history
+        # A real successful stream_user_turn call always appends at least one
+        # user/assistant pair to history; repair_tutorial_copy no longer does
+        # this itself (it stopped seeding figures, which was the only thing
+        # that used to inject synthetic history here), so this fake mimics
+        # that real-turn effect directly instead of relying on it.
+        session.history = repaired.history + [
+            {"role": "user", "content": [{"type": "text", "text": message}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Enriched."}]},
+        ]
         session.doc = repaired.doc
         session.figures = repaired.figures
         session.suggested_prompts = repaired.suggested_prompts
@@ -532,14 +538,12 @@ def test_successful_live_enrichment_finishes_with_authoritative_session(monkeypa
     hydrated = next(event for event in events if event["type"] == "tutorial_session")
     assert hydrated["source"] == "generated"
     assert len(hydrated["session"]["chat"]) >= 2
-    assert {item["kind"] for item in hydrated["session"]["figures"]} == {
-        "mermaid",
-        "svg",
-        "table",
-    }
+    # repair_tutorial_copy no longer creates figures either — Chapter 6
+    # generates them live when the tour reaches it.
+    assert hydrated["session"]["figures"] == []
 
 
-def test_bundled_repair_preserves_existing_content_and_adds_all_real_figures():
+def test_bundled_repair_preserves_existing_content_and_creates_no_figures():
     source = SessionState()
     source.history.append(
         {"role": "user", "content": [{"type": "text", "text": "Keep this."}]}
@@ -547,17 +551,11 @@ def test_bundled_repair_preserves_existing_content_and_adds_all_real_figures():
     before_history = copy.deepcopy(source.history)
     repaired = repair_tutorial_copy(source)
 
-    assert repaired.history[: len(before_history)] == before_history
-    assert [message["role"] for message in repaired.history[-2:]] == [
-        "user",
-        "assistant",
-    ]
+    # No synthetic history injection happens here any more — figures are no
+    # longer created by repair_tutorial_copy at all.
+    assert repaired.history == before_history
     assert analyze_tutorial_coverage(repaired).ready is True
-    assert {figure["kind"] for figure in repaired.figures.snapshot()} == {
-        "mermaid",
-        "svg",
-        "table",
-    }
+    assert repaired.figures.snapshot() == []
 
 
 def test_review_practice_has_truthful_template_starter_imported_item():
@@ -589,6 +587,199 @@ def test_reference_scenario_uses_all_real_extractors_without_touching_the_spec()
     pdf = next(item for item in metadata if item["kind"] == "pdf")
     assert "[page 1]" in pdf["excerpt"]
     assert tutorial.references.snapshot() == []
+
+
+def test_media_practice_copy_live_success_backfills_missing_kinds_and_hides_directive(
+    monkeypatch,
+):
+    tutorial = build_showcase_session()
+    before_doc = copy.deepcopy(tutorial.doc.to_dict())
+    live_figure = {
+        "kind": "mermaid",
+        "title": "Live Coordination Sequence",
+        "source": "flowchart LR\n  A[Start] --> B[Verify]",
+    }
+    monkeypatch.setattr(
+        "backend.llm.conversation.get_client",
+        lambda: FakeClient(
+            [
+                tool_turn(
+                    ["Here is a figure. "],
+                    live_figure,
+                    tool_id="toolu_live_fig",
+                    name="create_figure",
+                ),
+                text_turn(["Done — tutorial-only examples above."]),
+            ]
+        ),
+    )
+
+    scenario = media_practice_copy(tutorial)
+
+    assert scenario.doc.to_dict() == before_doc
+    figures = scenario.figures.snapshot()
+    assert {figure["kind"] for figure in figures} == {"mermaid", "svg", "table"}
+    live = next(
+        figure for figure in figures if figure["title"] == "Live Coordination Sequence"
+    )
+    assert live["kind"] == "mermaid"
+    # The missing kinds (svg/table) were backfilled by the bundled fixtures
+    # rather than the whole live attempt being discarded.
+    assert {figure["title"] for figure in figures} == {
+        "Live Coordination Sequence",
+        "Tutorial Review Status Key",
+        "Tutorial Review Checklist",
+    }
+    assert {item["kind"] for item in scenario.references.snapshot()} == {
+        "docx",
+        "pdf",
+        "txt",
+        "xml",
+        "csv",
+    }
+    # The raw internal directive never leaks into the visible transcript.
+    assert "TUTORIAL WORKSPACE FIGURES" not in json.dumps(scenario.history)
+
+
+def test_media_practice_copy_falls_back_to_bundled_fixtures_without_api_key(
+    monkeypatch,
+):
+    tutorial = build_showcase_session()
+    before_doc = copy.deepcopy(tutorial.doc.to_dict())
+
+    def _no_key():
+        raise MissingApiKeyError("no key configured")
+
+    monkeypatch.setattr("backend.llm.conversation.get_client", _no_key)
+
+    scenario = media_practice_copy(tutorial)
+
+    assert scenario.doc.to_dict() == before_doc
+    assert {figure["kind"] for figure in scenario.figures.snapshot()} == {
+        "mermaid",
+        "svg",
+        "table",
+    }
+    assert {figure["title"] for figure in scenario.figures.snapshot()} == {
+        "Tutorial Coordination Flow",
+        "Tutorial Review Status Key",
+        "Tutorial Review Checklist",
+    }
+    assert {item["kind"] for item in scenario.references.snapshot()} == {
+        "docx",
+        "pdf",
+        "txt",
+        "xml",
+        "csv",
+    }
+
+
+def test_media_practice_copy_falls_back_when_model_creates_no_figure(monkeypatch):
+    tutorial = build_showcase_session()
+    before_doc = copy.deepcopy(tutorial.doc.to_dict())
+    monkeypatch.setattr(
+        "backend.llm.conversation.get_client",
+        lambda: FakeClient([text_turn(["Nothing to add here."])]),
+    )
+
+    scenario = media_practice_copy(tutorial)
+
+    assert scenario.doc.to_dict() == before_doc
+    assert {figure["kind"] for figure in scenario.figures.snapshot()} == {
+        "mermaid",
+        "svg",
+        "table",
+    }
+
+
+def test_media_practice_copy_discards_attempt_that_touches_existing_content(
+    monkeypatch,
+):
+    tutorial = build_showcase_session()
+    before_doc = copy.deepcopy(tutorial.doc.to_dict())
+    first = next(iter(iter_paragraphs(tutorial.doc.doc)))[2]
+    monkeypatch.setattr(
+        "backend.llm.conversation.get_client",
+        lambda: FakeClient(
+            [
+                tool_turn(
+                    ["Updating... "],
+                    {
+                        "edits": [
+                            {
+                                "action": "replace",
+                                "target_id": first.uid,
+                                "text": "HIJACKED existing content",
+                                "status": first.status,
+                            }
+                        ]
+                    },
+                    tool_id="toolu_hijack",
+                ),
+                text_turn(["Done."]),
+            ]
+        ),
+    )
+
+    scenario = media_practice_copy(tutorial)
+
+    # The hijacked edit does not survive — the whole attempt is discarded.
+    assert scenario.doc.to_dict() == before_doc
+    assert {figure["kind"] for figure in scenario.figures.snapshot()} == {
+        "mermaid",
+        "svg",
+        "table",
+    }
+
+
+def test_push_scenario_rejects_a_second_request_before_the_first_pays_for_its_build():
+    """A second, overlapping scenario/start must never start its own build.
+
+    push_scenario's build= defers construction until after every guard
+    passes, precisely so an in-flight (possibly billed, e.g.
+    media_practice_copy) build reserves the slot BEFORE paying for
+    anything. This proves the reservation — not just the eventual
+    push_scenario() call — blocks a race, using a real background thread
+    (the same blocking-fake-plus-release-event technique used elsewhere in
+    this suite for start/restart races).
+    """
+    import threading
+
+    manager = SessionManager()
+    manager.begin_tutorial(request_id="scenario-race-contract")
+    workspace_id = manager.current().workspace_id
+
+    entered_build = threading.Event()
+    release_build = threading.Event()
+
+    def _slow_build(_tutorial):
+        entered_build.set()
+        release_build.wait(timeout=5)
+        return SessionState()
+
+    first_result = []
+    thread = threading.Thread(
+        target=lambda: first_result.append(
+            manager.push_scenario(workspace_id, kind="references", build=_slow_build)
+        )
+    )
+    thread.start()
+    assert entered_build.wait(timeout=5)
+
+    second_build_called = False
+
+    def _second_build(_tutorial):
+        nonlocal second_build_called
+        second_build_called = True
+        return SessionState()
+
+    with pytest.raises(WorkspaceBusyError):
+        manager.push_scenario(workspace_id, kind="references", build=_second_build)
+    assert second_build_called is False
+
+    release_build.set()
+    thread.join(timeout=5)
+    assert first_result[0].scope == "scenario"
 
 
 def test_enrichment_validator_rejects_rewriting_existing_user_content():
@@ -666,6 +857,12 @@ def test_chapter_scenarios_exercise_production_round_trips_and_restore_base(
         "backend.templates._CATALOG",
         TemplateCatalog(personal_root=tmp_path / "templates", curated_root=curated),
     )
+    # The "references" case now also generates Chapter 6's figures live
+    # (media_practice_copy) — keep this hermetic, same as every other
+    # tutorial test that exercises a model call.
+    monkeypatch.setattr(
+        "backend.tutorial.stream_user_turn", lambda _session, _message: iter(())
+    )
     client = TestClient(create_app())
     original = sessions.get_workspace()
     started = client.post(
@@ -721,6 +918,14 @@ def test_chapter_scenarios_exercise_production_round_trips_and_restore_base(
                 "txt",
                 "xml",
                 "csv",
+            }
+            # The stubbed model turn produces no figures, so the bundled
+            # fallback backfills all three kinds; the document is untouched.
+            assert scenario["doc"] == base_doc
+            assert {f["kind"] for f in scenario["figures"]} == {
+                "mermaid",
+                "svg",
+                "table",
             }
         elif expected_kind == "review":
             seed_ids = set(scenario["template_origin"]["seed_block_ids"])

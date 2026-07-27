@@ -2406,6 +2406,103 @@ outside the modal.
   the dossier is part of help, and the tour manifest is a coverage contract
   over that vocabulary.
 
+## Guided tutorial figures — implemented notes (Chapter 6 generates its own figures)
+
+The 10-chapter guided tour (`frontend/src/lib/tour.ts`'s `TOUR`, rendered as
+"Chapter N/10" in `OnboardingOverlay.tsx`) runs against a disposable
+protected tutorial workspace with its own REST surface
+(`/api/tutorial/start|enrich|scenario/start|scenario/finish|restore|keep|
+status`, `backend/tutorial.py` + the corresponding routes in `backend/app.py`)
+and a scenario mechanism: several chapters build a throwaway `SessionState`
+clone via `SessionManager.push_scenario`/`pop_scenario` (`backend/sessions.py`)
+for that chapter only, discarded on exit. Picking a tutorial source can
+trigger a coverage-gap-driven enrichment pass (a live model turn, with a
+deterministic bundled fallback) before Chapter 1 begins. This supersedes the
+"onboarding is frontend-only and passive" framing elsewhere in this file,
+which predates the tutorial's REST/scenario rewrite; fully reconciling that
+older description is a separate, larger documentation cleanup, not attempted
+here.
+
+- **Chapter 6's figures now come from Chapter 6, not tutorial start.**
+  Reported symptom: the tour's "Figures and references" chapter has a step
+  describing the model's live `create_figure` ability, and does show a real
+  loading pause when entered — but the example figures visible at that point
+  were actually attached to the session much earlier (either hardcoded
+  fixtures or, on the live-AI-enrichment path, genuinely model-generated
+  content, but still upfront, before Chapter 1). `tutorial.py`'s
+  `media_practice_copy` fixes the timing: it builds Chapter 6's combined
+  figures + references scenario by trying one real, scoped model turn
+  (`tutorial_figures_directive`) asking for 2-3 simple figures through the
+  normal `create_figure` tool, at the moment the tour actually reaches this
+  chapter. Any failure — no key, an API/network error, the model touching
+  document content it must not, or simply producing no usable figure —
+  discards the attempt and falls back to `_ensure_tutorial_figures`'s bundled
+  fixtures (backfilling only whichever kind(s) are still missing), mirroring
+  `/api/tutorial/enrich`'s existing live-then-bundled pattern.
+  `build_showcase_session`/`repair_tutorial_copy` no longer create figures
+  upfront, and `tutorial_enrichment_directive` no longer asks for them either.
+  `reference_practice_copy` is unchanged in behavior, refactored to share its
+  fixture-attachment logic (`_attach_reference_fixtures`) with
+  `media_practice_copy` so both scenario builders attach identical reference
+  fixtures without double-cloning.
+- **Coverage no longer gates on figures.** `analyze_tutorial_coverage` dropped
+  its `figure_{kind}` gaps — under the new timing, no upfront path ever
+  creates figures, so that gap would otherwise be permanently unresolvable
+  and wrongly keep `coverage.ready`/`needs_enrichment` from ever settling.
+  `counts["figures"]`/`counts["valid_figure_kinds"]` remain as informational
+  counts only.
+- **`/api/tutorial/scenario/start` stays a plain JSON endpoint** (the
+  "behind the scenes" decision — no new SSE surface). The figure-generation
+  turn is fully drained server-side (`for _event in stream_user_turn(...):
+  pass`, events discarded) before the handler returns, behind the existing
+  "Preparing the … chapter…" modal, which simply takes a bit longer now.
+- **The scenario slot is reserved BEFORE paying for the build, not after.**
+  `SessionManager.push_scenario` gained an optional `build:
+  Callable[[SessionState], SessionState]` alongside `staged_session` — the
+  same reserve-then-build ordering it already used for its own
+  `clone_session_for_tutorial` fallback (check scope/no-existing-scenario/
+  not-busy under lock, THEN construct outside the lock, THEN re-verify and
+  activate). `app.py`'s `references` branch passes
+  `build=media_practice_copy` instead of computing `staged` eagerly, so the
+  reservation check happens before the (possibly billed) model call, not
+  after. `push_scenario` also gained a `_transitioning` guard it was
+  missing (review finding, fixed before merge): without it, two overlapping
+  `scenario/start` requests could both pass the reservation check and both
+  pay for their own build before either discovered the slot was taken —
+  `_transitioning` is exactly the in-progress-build signal
+  `restore_original_for_native_close` already reads, so checking it here
+  closes the same race for every scenario kind, not just figures. Every
+  other kind's construction stays cheap enough that pre-computing it (the
+  existing `staged =` pattern) remains fine — only `references` needed the
+  deferred path. Pinned by
+  `test_push_scenario_rejects_a_second_request_before_the_first_pays_for_its_build`
+  (a genuine background-thread race, not a state-poking unit test: a
+  blocked-until-released `build` proves a second overlapping call is
+  rejected — and never invokes its own `build` — before the first
+  releases).
+- **Real spend from a discarded attempt is never lost.** The attempt runs on
+  a session clone (never the live tutorial session), so it's safe to build
+  outside any lock; but `SessionManager.push_scenario` always re-derives the
+  returned scenario's usage ledger from the base tutorial session's own
+  ledger (`scenario.usage.load_snapshot(tutorial.usage.snapshot())`), so
+  `media_practice_copy` merges the attempt's usage delta onto the base
+  session (`source.usage.merge_delta(usage_before, attempt.usage.snapshot())`)
+  before returning, win or lose — otherwise a failed live attempt would
+  silently drop real billed usage. The same function also restores
+  `suggested_prompts` from the base session afterward (a figures-only turn
+  must not wind down the reply-chip bar the way an ordinary chat turn's
+  unconditional latest-only replace would) and rewrites the committed
+  directive's user message to a short honest summary (mirroring
+  `/api/tutorial/enrich`'s existing rewrite) so the raw internal directive
+  text never leaks into the visible chat transcript.
+- **Idempotency.** Re-entering Chapter 6 without leaving it never re-triggers
+  generation (`useOnboarding.ts`'s `enterChunk` short-circuits when the
+  desired scenario is already active). Leaving and returning always rebuilds
+  fresh from the same figureless base tutorial session (scenarios are
+  discarded on `pop_scenario`, never merged back), so repeated visits cost a
+  repeated (and potentially re-billed) generation rather than ever
+  duplicating figures or reference docs — an accepted tradeoff, not a bug.
+
 ## Commands
 
 ```

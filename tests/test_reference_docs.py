@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 
+import pytest
 from docx import Document
 from fastapi.testclient import TestClient
 
@@ -25,12 +26,52 @@ from backend.llm.conversation import (
 )
 from backend.reference_docs import (
     MAX_REFERENCE_DOCS,
+    MAX_REFERENCE_TOKENS,
     MAX_TEXT_CHARS,
     ReferenceDocError,
     ReferenceDocStore,
     TurnReferenceBudget,
+    prepare_reference_text,
 )
 from backend.spec_doc.project import load_project
+
+
+def test_reference_store_enforces_cumulative_anthropic_token_limit():
+    store = ReferenceDocStore()
+    first = store.add(
+        filename="one.txt",
+        text="one",
+        block_count=1,
+        token_count=MAX_REFERENCE_TOKENS - 1,
+    )
+    assert first.metadata()["token_count"] == MAX_REFERENCE_TOKENS - 1
+
+    with pytest.raises(ReferenceDocError, match="100,001 tokens"):
+        store.add(filename="two.txt", text="two", block_count=1, token_count=2)
+
+    assert [doc.rid for doc in store.docs] == ["ref-1"]
+
+
+def test_legacy_reference_without_token_count_reserves_quota():
+    store = ReferenceDocStore()
+    store.load(
+        {
+            "reference_docs": [
+                {"rid": "ref-1", "filename": "old.txt", "text": "legacy body"}
+            ]
+        }
+    )
+
+    # Legacy projects load offline, so reserve at least one token per UTF-8
+    # byte (plus message overhead) rather than treating attachments as free.
+    assert store.docs[0].token_count > len(b"legacy body")
+    with pytest.raises(ReferenceDocError, match="maximum is 100,000"):
+        store.add(
+            filename="new.txt",
+            text="new",
+            block_count=1,
+            token_count=MAX_REFERENCE_TOKENS,
+        )
 
 DOCX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -193,6 +234,19 @@ def test_oversized_text_is_truncated_loudly_never_silently():
     assert doc.char_count == MAX_TEXT_CHARS + 5_000
     assert "truncated" in doc.text
     assert "has NOT been read" in doc.text
+
+
+def test_token_counter_payload_is_the_exact_retained_truncated_text():
+    source = "x" * (MAX_TEXT_CHARS + 5_000)
+    retained, total, truncated = prepare_reference_text(source)
+    doc = ReferenceDocStore().add(
+        filename="huge.txt", text=source, block_count=1, token_count=12
+    )
+
+    assert truncated is True
+    assert total == len(source)
+    assert retained == doc.text
+    assert len(retained) < len(source)
 
 
 def test_metadata_never_carries_the_body():

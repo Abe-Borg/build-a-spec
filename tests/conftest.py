@@ -88,7 +88,7 @@ def settle_capability_sweep(timeout: float = 120.0) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _fresh_session():
+def _fresh_session(monkeypatch):
     from backend import sessions
     from backend.llm.client import reset_client_cache
     from backend.llm.conversation import reset_thinking_display_probe
@@ -99,6 +99,20 @@ def _fresh_session():
     # The thinking.display capability degrade is process-scoped; re-arm it so
     # a fallback test can't leak "omitted" into a later test's request.
     reset_thinking_display_probe()
+    # Reference uploads use Anthropic's remote token-counting endpoint in
+    # production. Keep the suite hermetic while preserving deterministic
+    # cumulative-limit behavior.
+    from types import SimpleNamespace
+    from backend import app as app_module
+
+    fake_client = SimpleNamespace(
+        messages=SimpleNamespace(
+            count_tokens=lambda **kwargs: SimpleNamespace(
+                input_tokens=max(1, len(str(kwargs["messages"][0]["content"])) // 4)
+            )
+        )
+    )
+    monkeypatch.setattr(app_module, "get_client", lambda: fake_client)
     yield
     sessions.reset_session()
     _restore_default_module()

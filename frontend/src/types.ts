@@ -394,6 +394,8 @@ export interface ReferenceDocMeta {
   /** That kind's display name — "Word", "PDF", "CSV". */
   kind_label: string;
   excerpt: string;
+  /** Anthropic-counted tokens contributed to the 100,000-token attachment cap. */
+  token_count: number;
 }
 
 export interface TemplateOrigin {

@@ -1679,8 +1679,12 @@ function DiffDocument({ diff }: { diff: SectionDiff }) {
  * so this is a normal undoable version, not a special case. Mirrors
  * `ArticleTitle`: hover-revealed pencil, Enter saves, Escape cancels, and the
  * server's own denial sentence stays hoverable on a disabled control.
+ *
+ * Exported because a blank document renders `ArtifactPanel`'s `EmptyState`
+ * instead of this component, and naming the section is exactly what you want
+ * to do first on a blank page.
  */
-function SectionHeader({
+export function SectionHeader({
   number,
   title,
   changed,

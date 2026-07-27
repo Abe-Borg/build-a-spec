@@ -454,7 +454,6 @@ export const TOUR: readonly TourChunk[] = [
         body:
           "The preflight estimates cost/time and requires confirmation; a curated-module mismatch requires acknowledgement. Five lenses run live and an adversarial verifier challenges candidates. Rerun anytime; Stop retains the paid partial audit and reports stale, partial, no-research, and latest-attempt states honestly.",
         optionalReason: "Final QC is the most expensive model workflow and requires explicit consent.",
-        actions: [{ kind: "run-qc", label: "Run Final QC now" }],
       },
       {
         id: "qc-findings",

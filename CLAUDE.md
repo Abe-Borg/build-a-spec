@@ -2048,6 +2048,60 @@ No new SSE events, no new deps, no project-format bump.
   reference-upload case in `test_import_responsiveness.py`. Frontend pinned by
   `npm run build`.
 
+## Trust dossier — implemented notes (the "I'm not convinced" modal)
+
+The help nav's five topics answer *what* the app does; a reader who has to put
+their seal on the output needs *how*. `components/TrustDeepDiveModal.tsx` is
+that second layer: a long-form, twelve-section dossier opened from a link at
+the bottom of "Why trust it?", written for a working AEC professional rather
+than a developer. Frontend only — no route, no SSE event, no dep, no state
+outside the modal.
+
+- **It stacks, it doesn't replace.** Local `deepDive` state inside `HelpModal`
+  (cleared whenever `topic !== "why-trust-it"`, so closing help or switching
+  tabs drops it). The dossier renders as a **sibling** of the help backdrop,
+  not a child — a click on its own backdrop must close only the dossier. The
+  help dialog's Escape handler is disabled while it is open (`if (!topic ||
+  deepDive) return`) and the dossier installs its own, so one Escape closes
+  one dialog. `z-[60]` sits above help (`z-50`) and below `ModalShell`
+  (`z-[70]`), which is never open at the same time.
+- **Shape**: `max-w-5xl`, `max-h-[88vh]`, a sticky contents rail (`lg:` and up)
+  with IntersectionObserver scroll-spy rooted on the scroll container, and
+  `#id` anchors per section. The rail is presentation only — everything is in
+  one scroll, so nothing is hidden behind a click.
+- **The runtime section is the point.** Thirteen `<Runtime>` cards, one per
+  user-triggered action (a chat turn, full draft, research, Final QC, applying
+  a QC fix, master import, reference attach, figures, suggested replies, manual
+  editing, export, the tutorial, stop), each answered in the SAME five terms —
+  *you do / what runs / what is sent / AI involved / bounded by*. The uniform
+  anatomy is what makes thirteen cards comparable rather than thirteen essays,
+  and "AI involved: None" on six of them is the most load-bearing line in the
+  document.
+- **Every number is real** and traceable to the code it describes: 8/4 chat web
+  allowances, 50 tool rounds, 40/12 governing-codes budget, 16 continuations,
+  4 concurrent research dimensions, 5 lenses at 4 concurrent, 3/2 verifier
+  seats, tie-to-refuters. When one of those settings moves, this modal moves
+  with it — a trust document that has drifted from the code is worse than none.
+- **One hand-authored inline SVG** (the data-flow diagram: your computer →
+  Anthropic API → public web, plus the dashed optional GitHub update check). No
+  external asset, no mermaid — the UI's "loads nothing from the internet" claim
+  is made *by* the modal, so it must hold *in* the modal.
+- **The `.docx` precision that matters**: extracted provision text DOES travel
+  in the per-turn context; the retained package bytes never do. Both statements
+  appear together everywhere the topic comes up.
+- **`SOURCE_OUTPUT_GUIDANCE` is reused, not restated** (the export card renders
+  the shared constant) — the five contracts must read identically in Help,
+  onboarding, and here.
+- **The other four topics were resynced** in the same pass: templates and
+  reference documents as on-ramps (`HowToUse`), two new recipes (`Workflows`:
+  reusable template, drafting against an owner's standard), a
+  "most of the app is not AI at all" point plus templates/references/figures
+  (`HowItWorks`), and two new points on `WhyTrustIt` (deterministic gates,
+  nothing runs on its own).
+- Reuses `data-capability="help.topics"` rather than minting a capability id —
+  the dossier is part of help, and the tour manifest is a coverage contract
+  over that vocabulary.
+
 ## Commands
 
 ```

@@ -309,6 +309,90 @@ def test_remove_and_list():
     assert client.delete("/api/reference/ref-404").status_code == 404
 
 
+def test_remove_forgets_the_turn_that_read_the_document_and_every_later_turn():
+    client = TestClient(create_app())
+    _attach(client)
+    session = sessions.get_session()
+    session.history.extend(
+        [
+            {"role": "user", "content": [{"type": "text", "text": "safe"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "safe reply"}]},
+            {"role": "user", "content": [{"type": "text", "text": "read it"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "read-1",
+                        "name": "read_reference_doc",
+                        "input": {"ref_id": "ref-1"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "read-1",
+                        "content": "[Reference document text omitted from history]",
+                    }
+                ],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": BODY_MARKER}]},
+            {"role": "user", "content": [{"type": "text", "text": "later"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "later reply"}]},
+        ]
+    )
+    session.suggested_prompts[:] = [f"Use {BODY_MARKER}"]
+    kept_figure = session.figures.create(
+        {
+            "kind": "mermaid",
+            "title": "Earlier figure",
+            "source": "flowchart LR; A-->B",
+        },
+        message_index=0,
+    )
+    session.figures.create(
+        {
+            "kind": "mermaid",
+            "title": "Reference-derived figure",
+            "source": "flowchart LR; C-->D",
+        },
+        message_index=1,
+    )
+
+    removed = client.delete("/api/reference/ref-1")
+
+    assert removed.status_code == 200
+    assert session.history == [
+        {"role": "user", "content": [{"type": "text", "text": "safe"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "safe reply"}]},
+    ]
+    assert "REFERENCE DOCUMENTS" not in _turn_context_text(session)
+    assert BODY_MARKER not in str(session.history)
+    assert session.suggested_prompts == []
+    assert [figure.fid for figure in session.figures.figures] == [
+        kept_figure.fid
+    ]
+    assert removed.json()["suggested_prompts"] == []
+    assert [figure["fid"] for figure in removed.json()["figures"]] == [
+        kept_figure.fid
+    ]
+
+
+def test_remove_does_not_cross_an_active_model_turn():
+    client = TestClient(create_app())
+    _attach(client)
+    session = sessions.get_session()
+    session.turn_active = True
+
+    refused = client.delete("/api/reference/ref-1")
+
+    assert refused.status_code == 409
+    assert session.references.get("ref-1") is not None
+
+
 def test_the_attachment_keeps_its_own_extension():
     """The shared filename sanitizer defaults to the imported-master case and
     appends ``.docx`` to anything else — which would rename a PDF and then

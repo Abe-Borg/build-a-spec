@@ -2737,7 +2737,18 @@ def create_app() -> FastAPI:
             with sessions.active_write(lease.workspace_id):
                 with session.session_state_guard():
                     sessions.workspace_manager().assert_fresh(lease)
-                    if not session.references.delete(rid):
+                    delete_status, snapshot = session.delete_reference_if_idle(
+                        rid
+                    )
+                    if delete_status == "active":
+                        return JSONResponse(
+                            {
+                                "ok": False,
+                                "error": "A turn is generating — try again in a moment.",
+                            },
+                            status_code=409,
+                        )
+                    if delete_status == "missing":
                         return JSONResponse(
                             {
                                 "ok": False,
@@ -2745,8 +2756,14 @@ def create_app() -> FastAPI:
                             },
                             status_code=404,
                         )
-                    snapshot = session.references.snapshot()
-                return JSONResponse({"ok": True, "reference_docs": snapshot})
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "reference_docs": snapshot,
+                        "suggested_prompts": list(session.suggested_prompts),
+                        "figures": session.figures.snapshot(),
+                    }
+                )
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
 

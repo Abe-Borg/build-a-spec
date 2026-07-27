@@ -6,6 +6,7 @@ import {
   SOURCE_CAPABILITY_GUIDANCE,
   SOURCE_OUTPUT_GUIDANCE,
 } from "../lib/sourceOutputGuidance";
+import TrustDeepDiveModal from "./TrustDeepDiveModal";
 
 /** The five info dialogs reachable from the header help nav. */
 export type HelpTopic =
@@ -186,17 +187,29 @@ function HowToUse({
             ),
           },
           {
-            t: "Start from a master, or a blank page",
+            t: "Pick a starting point",
             d: (
               <>
-                Optionally extract supported body content from an office master{" "}
-                <Tag>.docx</Tag> to adapt — every block lands stamped{" "}
-                <Tag>imported</Tag> until you review it — or draft the section
-                from scratch. Build-a-Spec keeps an immutable source copy and
-                enables each imported-body action only when the server can
-                prove that exact operation is safe. A disabled control shows
-                the reason; review status and project metadata can remain
-                editable even when body text is read-only.
+                A blank page, a reusable template (bundled or your own), or an
+                office master <Tag>.docx</Tag>. Template and master content
+                lands stamped <Tag>imported</Tag> until you review it. For a
+                master, Build-a-Spec keeps an immutable source copy and enables
+                each imported-body action only when the server can prove that
+                exact operation is safe. A disabled control shows the reason;
+                review status and project metadata can remain editable even
+                when body text is read-only.
+              </>
+            ),
+          },
+          {
+            t: "Attach anything it should read",
+            d: (
+              <>
+                An owner’s design standard, a basis-of-design narrative, a data
+                sheet, a previous section — as <Tag>.docx</Tag>,{" "}
+                <Tag>.pdf</Tag>, <Tag>.txt</Tag>, <Tag>.xml</Tag>, or{" "}
+                <Tag>.csv</Tag>. Reference documents are background the model
+                reads on demand; they never become part of the specification.
               </>
             ),
           },
@@ -225,6 +238,18 @@ function HowToUse({
           {
             t: "Export",
             d: "Choose the guarantee you need: exact original, a server-approved source-preserving patch, a newly generated normalized DOCX, or a normalized redline. A pass-through-only source permits exact-original download but no Word-body mutation.",
+          },
+          {
+            t: "Save, and keep the good work",
+            d: (
+              <>
+                Save a <Tag>.baspec</Tag> project to restore the whole
+                workspace later — document, versions, conversation, figures,
+                references, research and QC records, and any retained source
+                package. Turn a finished section into a reusable template from
+                the New session dialog.
+              </>
+            ),
           },
         ]}
       />
@@ -266,7 +291,7 @@ function Workflows() {
   return (
     <div className="space-y-4">
       <Lead>
-        Two on-ramps converge on one review surface. Pick the recipe that
+        Several on-ramps converge on one review surface. Pick the recipe that
         matches what you’re starting with.
       </Lead>
       <Recipe
@@ -291,6 +316,26 @@ function Workflows() {
           "Review status, research provenance, standards, and project metadata remain editable when the imported Word body is pass-through-only.",
           "Send to Final QC.",
           "Choose the exact-original download for unchanged upload bytes; Export preserved DOCX for a server-approved clone-and-patch; or intentionally choose normalized DOCX / normalized redline for the semantic view.",
+        ]}
+      />
+      <Recipe
+        title="From a reusable template"
+        tagline="A native starter — your own past work, or a bundled one."
+        steps={[
+          "New session → browse the bundled starters and your personal library, preview one, and start from it.",
+          "Template content lands imported, exactly like a master, so the same gap-and-adapt review applies — but there is no Word source package, so every editing control is available from the first turn.",
+          "Tell Claude the project; it walks the starter article by article against this project's facts.",
+          "Save a finished section back to the library from the New session dialog, or export a .bastemplate file to hand to a colleague.",
+        ]}
+      />
+      <Recipe
+        title="Draft against an owner's standard"
+        tagline="Reference documents — read from, never edited."
+        steps={[
+          "Attach the owner standard, basis of design, or data sheet (.docx, .pdf, .txt, .xml, or .csv) from the document panel.",
+          "Say what it is and what you want done with it. The model opens it on demand rather than being fed it every turn.",
+          "It extracts requirements and drafts them in spec language — it never pastes the attachment's wording into a provision, and never cites it as authority for a code requirement.",
+          "For a PDF, ask where something came from: the extracted text carries [page N] markers it can cite back to you.",
         ]}
       />
       <Recipe
@@ -341,6 +386,10 @@ function HowItWorks() {
             d: "The Research phase fans out web searches across governing codes, AHJ requirements, client standards, and site environment, then grounds each finding against the pages the tools actually retrieved.",
           },
           {
+            t: "Most of the app is not AI at all",
+            d: "Lint, version history, the diff behind Compare and the redline, display numbering, the readiness checklist, the QC fix dry-run, DOCX import and source analysis, and every export writer are deterministic code — same input, same answer, no network call.",
+          },
+          {
             t: "Pinned standards editions",
             d: "Current published editions are the drafting default; a jurisdiction’s adopted earlier edition overrides only with the adoption basis stated — never silently.",
           },
@@ -354,6 +403,14 @@ function HowItWorks() {
                 The export schedules every assumption and unreviewed block.
               </>
             ),
+          },
+          {
+            t: "Background material stays out of the spec",
+            d: "Attached reference documents are read on demand through a tool and never enter the document tree, lint, Compare, QC, or any export. Figures are exhibits that render in the chat — the enforceable words always live in a provision.",
+          },
+          {
+            t: "Good work is reusable",
+            d: "Any section can become a .bastemplate: one canonical document plus drafting-basis metadata, stored in your personal library and shareable as a file. Templates deliberately carry no conversation, research, QC, references, or Word source package.",
           },
           {
             t: "Direct structure editing stays bounded",
@@ -373,7 +430,7 @@ function HowItWorks() {
   );
 }
 
-function WhyTrustIt() {
+function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
   return (
     <div className="space-y-4">
       <Lead>
@@ -404,7 +461,11 @@ function WhyTrustIt() {
           },
           {
             t: "QC findings are adversarially verified",
-            d: "Every candidate finding faces a panel of independent Fable 5 refuters. A tie goes to the refuters, so plausible-but-wrong noise never reaches you — only real, actionable defects survive.",
+            d: "Every candidate finding faces a panel of independent Fable 5 refuters. A tie goes to the refuters, so plausible-but-wrong noise never reaches you — only real, actionable defects survive. Refuted findings stay in the report rather than being quietly deleted.",
+          },
+          {
+            t: "The checks that gate a section aren’t model output",
+            d: "Lint, version history, the diff behind Compare and the redline, the QC fix dry-run, source-preservation analysis, every export writer, and the readiness checklist are deterministic code. Same input, same answer, every time — and none of them makes a network call.",
           },
           {
             t: "The redline scope is explicit",
@@ -412,14 +473,31 @@ function WhyTrustIt() {
           },
           {
             t: "Standards carry receipts",
-            d: "Every pinned edition has documented provenance; jurisdiction overrides always state their adoption basis.",
+            d: "Every pinned edition has documented provenance; jurisdiction overrides always state their adoption basis, and a module that pins nothing records every edition with the basis it came from.",
+          },
+          {
+            t: "Nothing runs on its own",
+            d: "Research, Final QC, drafting, and export all start with a click of yours. There is no background activity and no scheduled work, so there is no spend you did not initiate.",
           },
           {
             t: "Your key and spend stay in view",
-            d: "The API key lives in your OS credential manager and is sent nowhere but the Anthropic API. A live meter shows the estimated cost as you go, and no phase runs without you triggering it.",
+            d: "The API key lives in your OS credential manager and is sent nowhere but the Anthropic API. A live meter shows the estimated cost as you go.",
           },
         ]}
       />
+      <div className="rounded-xl border border-edge bg-raised/40 p-4">
+        <h3 className="text-sm font-medium text-ink">Not convinced?</h3>
+        <p className="mt-1 text-xs leading-relaxed text-ink-dim">
+          Fair. The points above are claims — here is the mechanism behind each
+          one, action by action, plus how to audit any of it yourself.
+        </p>
+        <button
+          onClick={onDeepDive}
+          className="mt-3 rounded-lg border border-accent/60 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
+        >
+          I’m not convinced — show me exactly what runs →
+        </button>
+      </div>
     </div>
   );
 }
@@ -502,10 +580,12 @@ function Body({
   topic,
   health,
   onStartTutorialAtChapter,
+  onDeepDive,
 }: {
   topic: HelpTopic;
   health: Health | null;
   onStartTutorialAtChapter: (chapterId: string) => void;
+  onDeepDive: () => void;
 }) {
   switch (topic) {
     case "how-to-use":
@@ -515,7 +595,7 @@ function Body({
     case "how-it-works":
       return <HowItWorks />;
     case "why-trust-it":
-      return <WhyTrustIt />;
+      return <WhyTrustIt onDeepDive={onDeepDive} />;
     case "about":
       return <About health={health} />;
   }
@@ -528,19 +608,28 @@ export default function HelpModal({
   onStartTutorialAtChapter,
   health,
 }: Props) {
-  // Close on Escape while open.
+  // The "I'm not convinced" dossier stacks above this dialog. Kept as local
+  // state so leaving the topic (or closing help entirely) drops it too.
+  const [deepDive, setDeepDive] = useState(false);
   useEffect(() => {
-    if (!topic) return;
+    if (topic !== "why-trust-it") setDeepDive(false);
+  }, [topic]);
+
+  // Close on Escape while open — but yield to the dossier while it is up, so
+  // one Escape closes one dialog.
+  useEffect(() => {
+    if (!topic || deepDive) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [topic, onClose]);
+  }, [topic, deepDive, onClose]);
 
   if (!topic) return null;
 
   return (
+    <>
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-6 pt-16"
       onClick={onClose}
@@ -595,9 +684,14 @@ export default function HelpModal({
             topic={topic}
             health={health}
             onStartTutorialAtChapter={onStartTutorialAtChapter}
+            onDeepDive={() => setDeepDive(true)}
           />
         </div>
       </div>
     </div>
+    {/* Sibling, not a child: a click on the dossier's own backdrop must
+        close only the dossier, never the help dialog underneath it. */}
+    <TrustDeepDiveModal open={deepDive} onClose={() => setDeepDive(false)} />
+    </>
   );
 }

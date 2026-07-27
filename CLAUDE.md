@@ -2419,7 +2419,11 @@ python main.py                         # run the app (serves dist/)
 `npm test` is not optional after touching UI: it is what enforces the
 capability-coverage contract (`frontend/tests/tour.test.ts`). A new control
 without a `data-capability`, a capability without a tour step, or a step
-anchor with no matching `data-tour` all fail there.
+anchor with no matching `data-tour` all fail there. CI runs it (ci.yml's
+Frontend build job, before the build), so a gap fails the PR rather than
+shipping — but find out locally, not from a red check. The workflow pins
+**Node 22**: `npm test` runs `node --test` directly over the `.ts` test files
+and depends on type stripping, which Node 20 cannot do.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

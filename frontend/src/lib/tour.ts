@@ -74,7 +74,6 @@ export type TourResolver =
 
 export type TourActionKind =
   | "profile-fill"
-  | "confirm-first"
   | "run-research"
   | "run-qc"
   | "prefill-composer"
@@ -366,7 +365,6 @@ export const TOUR: readonly TourChunk[] = [
         title: "Clear assumptions and imports at speed",
         body:
           "Filter All, Assumed, or Imported; jump to the source block and see research context. Keep, Edit, Delete, Ask, Skip, or Back by button or keyboard. Hold the article action to confirm its remaining review blocks as one undo.",
-        actions: [{ kind: "confirm-first", label: "Confirm the first outstanding block" }],
       },
       {
         id: "compare",

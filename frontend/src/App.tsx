@@ -121,6 +121,34 @@ function mergeResearchEvent(
   return { ...base, events: next };
 }
 
+/** Adopt a fetched snapshot without letting it march the live board
+ *  backward. The refetch is asynchronous: kicked off by a milestone frame
+ *  (worst case `research_started`, the exact moment all four workers burst
+ *  their first events), its response can capture an EARLIER server log yet
+ *  resolve AFTER later SSE frames merged locally — replacing wholesale
+ *  would regress agents to "queued" and drop live activity until the next
+ *  milestone, minutes away. Within one round both logs are prefixes of the
+ *  same append-only server array (dense seq from 0), so same-round + longer
+ *  local log ⇒ the local log is a strict superset: keep it, and take
+ *  everything else (status/error/profile — which the merge never writes)
+ *  from the fetch. Different round (or either side empty) ⇒ the fetch is a
+ *  genuinely newer world: adopt it wholesale. */
+function reconcileResearchSnapshot(
+  prev: ResearchSnapshot | null,
+  fetched: ResearchSnapshot,
+): ResearchSnapshot {
+  const prevEvents = prev?.events ?? [];
+  const fetchedEvents = fetched.events ?? [];
+  const sameRound =
+    prevEvents.length > 0 &&
+    fetchedEvents.length > 0 &&
+    prevEvents[0].round === fetchedEvents[0].round;
+  if (sameRound && prevEvents.length > fetchedEvents.length) {
+    return { ...fetched, events: prevEvents };
+  }
+  return fetched;
+}
+
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -241,7 +269,7 @@ export default function App() {
     getResearchStatus()
       .then((value) => {
         if (workspaceEpochRef.current !== epoch) return;
-        setResearch(value);
+        setResearch((prev) => reconcileResearchSnapshot(prev, value));
         // Runs on every fetch, not gated by React's effect-dependency
         // diffing — so a second fast auth failure (identical status/
         // error_kind to the first) still opens the modal, as long as

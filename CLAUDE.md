@@ -2856,7 +2856,16 @@ semantics, retry policy, pause_turn loop, and grounding are untouched.
   restarts the local log; epoch-guarded like every other stream), and the
   authoritative snapshot is refetched only on the five milestone events +
   the stream's end. Status/error/profile stay snapshot-owned — the merge
-  never touches them.
+  never touches them. The refetch itself lands through
+  `reconcileResearchSnapshot` (review finding, fixed before merge): the
+  fetch is async and its worst case fires on `research_started` — the
+  exact moment all four workers burst — so a response captured early but
+  resolved late would wholesale-replace a longer local log and march the
+  board backward until the next milestone, minutes away. Same round +
+  longer local log ⇒ both are prefixes of the same append-only server
+  array, so the local events are kept and only status/error/profile adopt
+  the fetch; a different round (or an empty side) adopts the fetch
+  wholesale.
 - **The drawer's running body is the agent board.** `foldResearchBoard`
   (a pure `useMemo` fold over `research.events`, the QCDrawer lens-row
   precedent) seeds one `AgentCard` per dimension from `research_started`:

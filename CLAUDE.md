@@ -45,7 +45,8 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            now logs
 backend/
   settings.py              models (claude-sonnet-5 default), effort levels
-                           (interview high / research xhigh), max_tokens at
+                           (interview high / research high, dialed back
+                           2026-07-28 from xhigh — cost), max_tokens at
                            the 128k model ceiling, chat web-tool allowances,
                            port 8756, env knobs
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
@@ -701,7 +702,10 @@ already resolved and does nothing). 409 when nothing is running.
   blocks (search results, citations) stay.
 - **Adaptive thinking** is stated explicitly (`thinking: {type:
   "adaptive"}` + `output_config: {effort: settings.INTERVIEW_EFFORT}`,
-  default `high`; research runs `RESEARCH_EFFORT`, default `xhigh`).
+  default `high`; research runs `RESEARCH_EFFORT`, default `high` —
+  dialed back from `xhigh` on 2026-07-28: research fans out 4 concurrent
+  dimension calls, so `xhigh`'s reasoning depth multiplied across all of
+  them was the single biggest driver of research cost).
   Thinking blocks are preserved **verbatim** across continuation rounds —
   the API requires them during tool use; `_serialize` round-trips every
   block type exactly (SDK `model_dump`, `vars()` for test fakes).

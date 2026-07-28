@@ -55,6 +55,7 @@ interface Props {
   qc: QcSnapshot | null;
   readiness: ReadinessPayload | null;
   doc: SpecDoc | null;
+  profileComplete: boolean;
   busy: boolean;
   sourceExpected: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
@@ -150,6 +151,7 @@ export default function QCDrawer({
   qc,
   readiness,
   doc,
+  profileComplete,
   busy,
   sourceExpected,
   sourceCapabilities,
@@ -288,6 +290,12 @@ export default function QCDrawer({
     : primaryReport
       ? "Re-run Final QC"
       : "Send to Final QC";
+  const startDisabled = !profileComplete || running || interactionBusy;
+  const startTitle = !profileComplete
+    ? "Complete the project profile first — city, state, country, and client — before sending the section to Final QC."
+    : settling
+      ? "Stop requested; the paid partial audit record is still being preserved."
+      : "Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Fable 5 (uses your API key)";
 
   const applyAllDisabled = interactionBusy || applicableCriticals.length === 0;
   const applyAllTitle =
@@ -355,8 +363,8 @@ export default function QCDrawer({
               : "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25"
           }`}
           onClick={() => setConfirmOpen(true)}
-          disabled={running || interactionBusy}
-          title={settling ? "Stop requested; the paid partial audit record is still being preserved." : "Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Fable 5 (uses your API key)"}
+          disabled={startDisabled}
+          title={startTitle}
         >
           {startLabel}
         </button>

@@ -45,7 +45,8 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            now logs
 backend/
   settings.py              models (claude-sonnet-5 default), effort levels
-                           (interview high / research xhigh), max_tokens at
+                           (interview high / research high, dialed back
+                           2026-07-28 from xhigh — cost), max_tokens at
                            the 128k model ceiling, chat web-tool allowances,
                            port 8756, env knobs
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
@@ -145,7 +146,18 @@ backend/
   updates.py               [PORT ≈verbatim: Spec Critic src/core/updates.py]
                            GitHub-Releases manifest updater: https-only +
                            redirect-downgrade guard, SHA-256 verify before
-                           launch, atomic .part promote, throttle/skip state
+                           launch, atomic .part promote, throttle/skip state;
+                           + last_seen_version/mark_version_seen (the
+                           What's-new marker rides the same state file)
+  release_notes.py         the user-facing changelog SHIPPED IN THE BUILD:
+                           ReleaseNote/Section/Item + RELEASE_NOTES (newest
+                           first), resolve_pending (seen → newer-than-seen;
+                           no marker but ran_before → everything since
+                           EARLIEST_KNOWN_VERSION; fresh install → nothing),
+                           manifest_summary (latest.json notes — what a
+                           NOT-yet-updated app reads) + markdown_notes (the
+                           release page). No I/O, no app imports. A version
+                           with no entry fails the suite AND the workflow
   compliance/checker.py    [PORT: Spec Critic src/compliance/compliance_checker.py]
                            controlling = grounded spec_requirements only;
                            coverage matrix (represented/missing/contradicted/
@@ -474,7 +486,11 @@ frontend/src/
                            usage.context, hidden until a turn commits; Batch 6 Tour
                            button) / ApiKeyBanner /
                            StatusStrip (live status strip) / SettingsPanel (key mgmt +
-                           usage table + ContextLine gauge + about) / CloseDialog (save-before-leaving
+                           usage table + ContextLine gauge + What's new + developer
+                           tools) / WhatsNewModal (release notes after an update —
+                           opens once from App's mount check, reopened on demand
+                           from Settings; useDialogFocus, z-[60] scroll sheet)
+                           / CloseDialog (save-before-leaving
                            prompt: Save & close / Close without saving / Cancel)
                            / OnboardingOverlay (Batch 6: blocking spotlight + passive
                            step bubbles; drawers gain an openNonce prop, controls
@@ -750,7 +766,10 @@ already resolved and does nothing). 409 when nothing is running.
   blocks (search results, citations) stay.
 - **Adaptive thinking** is stated explicitly (`thinking: {type:
   "adaptive"}` + `output_config: {effort: settings.INTERVIEW_EFFORT}`,
-  default `high`; research runs `RESEARCH_EFFORT`, default `xhigh`).
+  default `high`; research runs `RESEARCH_EFFORT`, default `high` —
+  dialed back from `xhigh` on 2026-07-28: research fans out 4 concurrent
+  dimension calls, so `xhigh`'s reasoning depth multiplied across all of
+  them was the single biggest driver of research cost).
   Thinking blocks are preserved **verbatim** across continuation rounds —
   the API requires them during tool use; `_serialize` round-trips every
   block type exactly (SDK `model_dump`, `vars()` for test fakes).
@@ -2785,6 +2804,72 @@ zipfile stdlib), no new npm deps; three new env knobs; six new REST routes
   that offers them says so. TrustDeepDiveModal's trace card became "Trace
   files and the activity log" (+ the data-flow diagram label) — keep those
   in sync with this section.
+
+## In-app release notes — implemented notes (v1.7.0)
+
+Reported ask (Abraham): publish a release, and let the user read what
+changed when their app updates. The plumbing was half there — `latest.json`
+already carried a `notes` string and `/api/update/check` already returned it
+— but it only ever reached the user as the **tooltip** on the update pill,
+so in practice nobody ever read it. No new deps, no new SSE event, no
+project-format bump; two REST routes and one new capability-free modal.
+
+- **The notes ship INSIDE the build** (`backend/release_notes.py`), they are
+  not fetched. A freshly-updated app can say what changed with no network at
+  all, which is the same posture the trust dossier promises everywhere else
+  ("nothing runs on its own" is scoped to model work plus the disclosed
+  update check — a release-notes fetch would have been a third thing to
+  disclose). Structured data (`ReleaseNote` → `ReleaseSection` →
+  `ReleaseItem`), not markdown, so the modal, the manifest summary and the
+  release-page markdown are three renderings of ONE source and cannot drift.
+- **One entry, three audiences.** The bundled entry drives the in-app modal;
+  `manifest_summary()` writes `latest.json`'s `notes` (what a **not-yet
+  updated** app reads — it describes the version you would be getting);
+  `markdown_notes()` writes the GitHub Release body.
+  `packaging/windows/render_release_notes.py` renders the latter two at
+  build time and **exits non-zero when the version has no entry**, and
+  `test_the_shipped_notes_describe_the_shipped_version` fails the suite for
+  the same reason — a version bump without notes would put an empty modal in
+  front of every user who updates, which is worse than no feature.
+- **Fresh install vs upgrade is decided at boot, not per request.** The
+  marker is `last_seen_version` in the existing update state file. Absent on
+  every build before this one, so absence alone cannot distinguish "never
+  ran this app" from "upgraded from 1.0.0". The tiebreaker is whether that
+  state file **existed at startup** (`app.state.ran_before`, a pure read in
+  `create_app`) — sampled once because `/api/update/check` CREATES the file
+  on first run, and `App.tsx` fires both on mount, so a per-request read
+  would show a first-time user the product's back catalogue whenever the
+  update check happened to land first. Three cases, in
+  `release_notes.resolve_pending`: marker present → everything newer than
+  it; no marker but `ran_before` → everything since
+  `EARLIEST_KNOWN_VERSION` (1.0.0, the only release that ever shipped
+  without the marker); neither → nothing.
+- **A cosmetic modal must never break a launch.** `notes_between` treats an
+  unparseable bound as "no bound" rather than raising, and the boot probe is
+  wrapped — a corrupt state file degrades to showing the notes, never to a
+  failed start. Pinned by `test_a_corrupt_last_seen_version_degrades_
+  instead_of_raising` and `test_the_endpoint_survives_a_corrupt_state_file`.
+- **Routes**: `GET /api/release-notes` (launch check; `?all=true` is the
+  Settings button, which must work even when nothing is due — it returns the
+  entries with `pending: false`, i.e. "the user asked, the app did not
+  volunteer") and `POST /api/release-notes/seen`. Dismissing marks the
+  version seen **even when opened from Settings** — the user has now seen
+  them either way, and the alternative re-opens them unprompted next launch.
+  `mark_version_seen` merges into the existing state dict, so recording it
+  cannot erase the update throttle's `last_check` (pinned).
+- **No new capability id.** The Settings entry declares the existing
+  `updates.manage` — the TrustDeepDiveModal precedent (the dossier reuses
+  `help.topics`): the tour manifest is a coverage contract over a
+  *vocabulary*, and "keep the app current / see what changed" is one
+  capability with two controls. The existing `help-updates` tour step
+  already covered it; its body text was **stale** (it described an About
+  section that PR #23 deleted) and now describes what actually ships.
+- **v1.7.0 is the first release since v1.0.0.** 1.1.0–1.6.0 exist only as
+  version numbers in the code — 66 merged PRs and ~45k lines that no user
+  ever received. The 1.7.0 entry is therefore written as one combined,
+  theme-grouped list ("since 1.0"), not six per-version sections for
+  releases nobody had. Future entries are per-version as normal; the data
+  model was per-version from the start.
 
 ## Live research visibility — implemented notes (the per-agent board)
 

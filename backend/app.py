@@ -1367,6 +1367,21 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.APP_NAME, version=settings.VERSION)
 
+    # Whether the app has ever run on this machine, sampled ONCE at boot —
+    # before any request can race it. ``/api/release-notes`` needs to tell a
+    # fresh install (announce nothing) from an upgrade off a build that
+    # predates ``last_seen_version`` (announce everything). The signal is the
+    # update state file, which ``/api/update/check`` CREATES on first run, so
+    # reading it per-request would misread a first launch as an upgrade
+    # whenever the update check happened to land first. A pure read — nothing
+    # is written here, so the hermetic suite is unaffected.
+    try:
+        from . import updates as _updates_boot
+
+        app.state.ran_before = _updates_boot.default_state_path().exists()
+    except Exception:  # noqa: BLE001 — cosmetic signal, never fatal at boot
+        app.state.ran_before = False
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_DEV_ORIGINS,
@@ -4422,6 +4437,59 @@ def create_app() -> FastAPI:
             / "trace_viewer.html"
         )
         return FileResponse(viewer, media_type="text/html")
+
+    # --- Release notes ("what's new") ---------------------------------------
+
+    @app.get("/api/release-notes")
+    def release_notes_get(all: bool = False) -> dict:
+        """The release notes this user has not been shown yet.
+
+        ``all=true`` returns the current version's entry regardless of what
+        has been seen — that is the Settings "What's new" button, which must
+        work on demand. The default is the launch check: ``pending`` drives
+        the one-time modal after an update.
+        """
+        from . import release_notes, updates
+
+        state = updates.load_state(updates.default_state_path())
+        seen = updates.last_seen_version(state)
+        if all:
+            entries = release_notes.notes_between(
+                after="", through=settings.VERSION
+            )
+            pending = False
+        else:
+            entries = release_notes.resolve_pending(
+                current=settings.VERSION,
+                last_seen=seen,
+                ran_before=bool(getattr(app.state, "ran_before", False)),
+            )
+            pending = bool(entries)
+        return {
+            "ok": True,
+            "current": settings.VERSION,
+            "last_seen": seen,
+            "pending": pending,
+            "entries": [note.to_dict() for note in entries],
+        }
+
+    @app.post("/api/release-notes/seen")
+    def release_notes_seen() -> dict:
+        """Record that the current version's notes have been shown.
+
+        Called when the user dismisses the What's-new modal, so it opens
+        once per update rather than every launch.
+        """
+        from . import updates
+
+        path = updates.default_state_path()
+        state = updates.load_state(path)
+        updates.mark_version_seen(state, settings.VERSION)
+        updates.save_state(path, state)
+        _trace_capture.app_event(
+            "release_notes", action="seen", version=settings.VERSION
+        )
+        return {"ok": True, "last_seen": settings.VERSION}
 
     # --- Self-update (Phase 5) ----------------------------------------------
 

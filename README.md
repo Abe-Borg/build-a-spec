@@ -1,6 +1,6 @@
 # Build-a-Spec
 
-**v1.5.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.7.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
@@ -120,6 +120,31 @@ sheet, a previous project's section, or meeting notes.
   standard still offers to save before you start over.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
+
+## Shipped in v1.7.0 (Release notes in the app)
+
+The app tells you what changed when it updates, instead of leaving the notes
+on a web page you never visit.
+
+- **A "What's new" screen after an update.** The first launch of a new
+  version opens the release notes for it, grouped by theme. Dismiss it and
+  it stays dismissed; **Settings → What's new** reopens it any time.
+- **The notes ship inside the build.** They are not fetched — a freshly
+  updated app can show them with no network at all, which keeps the
+  "nothing reaches the internet except model work and the disclosed update
+  check" claim in the trust dossier true.
+- **One source of truth.** `backend/release_notes.py` renders three
+  surfaces: the in-app modal, the `notes` field in `latest.json` (what an
+  app that has *not* updated yet shows you about the pending version), and
+  the GitHub Release body. A version with no notes entry fails the test
+  suite and the release workflow, so a release can't ship with an empty
+  What's-new screen.
+- **A fresh install is not shown a back catalogue.** Only an upgrade opens
+  the notes; the app tells the two apart by whether it had ever run on the
+  machine before.
+
+Writing them is step 1 of the release runbook — see
+[docs/RELEASE_WINDOWS.md](docs/RELEASE_WINDOWS.md).
 
 ## Shipped in v1.5.0 (Batch 10: Generic any-discipline module)
 
@@ -537,11 +562,11 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   cheaper per turn.
 - **Adaptive thinking, wired properly.** Requests state
   `thinking: adaptive` explicitly with effort knobs (interview `high`,
-  research `xhigh`), and thinking blocks are preserved verbatim across
-  tool-use continuation rounds as the API requires — the previous code
-  dropped them, a latent 400 on real drafting turns. Output ceilings sit
-  at the model max (128k tokens), so nothing the app controls truncates
-  a draft.
+  research `high` — see below), and thinking blocks are preserved verbatim
+  across tool-use continuation rounds as the API requires — the previous
+  code dropped them, a latent 400 on real drafting turns. Output ceilings
+  sit at the model max (128k tokens), so nothing the app controls
+  truncates a draft.
 - **Live web lookups in the interview.** The drafting model carries
   `web_search`/`web_fetch` (same authoritative-domains blocklist as the
   research phase) for mid-interview verification — a UL category, a
@@ -549,8 +574,11 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   continuation handling and inline 🔍 activity chips in the chat. The
   systematic research fan-out stays button-triggered.
 - **Research budgets doubled** (per-dimension searches now 16–40, fetches
-  8–12, continuation ceiling 16) and research runs at `xhigh` effort —
+  8–12, continuation ceiling 16) and research runs at `high` effort —
   background work where latency is free and quality is the point.
+  (Dialed back from `xhigh` on 2026-07-28: research fans out 4 concurrent
+  per-dimension calls, so `xhigh`'s extra reasoning depth was compounding
+  across all of them and driving up cost — see the config table below.)
 - **Usage telemetry groundwork.** Every turn aggregates its billed usage
   (input/output/cache/thinking tokens, web-tool requests) across all
   rounds into `turn_complete.usage` and the session trace — the raw
@@ -859,7 +887,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_CHAT_MAX_FETCHES` | `4` | Interview web_fetch allowance per continuation round. |
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
-| `BUILD_A_SPEC_RESEARCH_EFFORT` | `xhigh` | Adaptive-thinking effort for research dimensions. |
+| `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
 | `BUILD_A_SPEC_QC_MODEL` | `claude-fable-5` | Model for the Final QC pass (the one non-Sonnet surface). |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Per-call QC output ceiling (model max — no app limit). |
 | `BUILD_A_SPEC_QC_EFFORT` | `xhigh` | Adaptive-thinking effort for QC lenses/verifiers. |

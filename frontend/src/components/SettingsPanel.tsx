@@ -15,6 +15,8 @@ interface Props {
   onKeyChange: () => void;
   /** Session usage snapshot (WI4 meter); null until first load. */
   usage?: UsageSummary | null;
+  /** Reopen this version's release notes (App owns the modal). */
+  onShowReleaseNotes: () => void;
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -144,6 +146,7 @@ export default function SettingsPanel({
   onClose,
   onKeyChange,
   usage,
+  onShowReleaseNotes,
 }: Props) {
   const [status, setStatus] = useState<KeyStatus | null>(null);
   const [replaceValue, setReplaceValue] = useState("");
@@ -353,6 +356,26 @@ export default function SettingsPanel({
                 No spend recorded yet this session.
               </p>
             )}
+          </section>
+
+          {/* --- What's new --- */}
+          <section data-capability="updates.manage">
+            <p className={label}>What&rsquo;s new</p>
+            <p className="mt-2 text-xs text-ink-faint">
+              The release notes for this version. They open by themselves the
+              first time you run a new version, and live inside the app — no
+              connection needed to read them.
+            </p>
+            <button
+              className={`${btn} mt-2`}
+              onClick={() => {
+                onClose();
+                onShowReleaseNotes();
+              }}
+              title="Read this version's release notes"
+            >
+              What&rsquo;s new in this version
+            </button>
           </section>
 
           {/* --- Developer tools --- */}

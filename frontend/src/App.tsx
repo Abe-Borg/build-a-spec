@@ -20,6 +20,7 @@ import type {
   StandardInfo,
   TutorialEvent,
   TemplateOrigin,
+  ReleaseNote,
   UpdateCheckPayload,
   UsageSummary,
 } from "./types";
@@ -27,6 +28,8 @@ import {
   applyQc,
   checkUnsaved,
   checkUpdate,
+  getReleaseNotes,
+  markReleaseNotesSeen,
   deleteFigure,
   dismissQc,
   downloadProjectFile,
@@ -65,6 +68,7 @@ import ApiKeyBanner from "./components/ApiKeyBanner";
 import Chat from "./components/Chat";
 import ArtifactPanel from "./components/ArtifactPanel";
 import SettingsPanel from "./components/SettingsPanel";
+import { WhatsNewModal } from "./components/WhatsNewModal";
 import HelpModal, { type HelpTopic } from "./components/HelpModal";
 import OnboardingOverlay from "./components/OnboardingOverlay";
 import NewSessionDialog from "./components/NewSessionDialog";
@@ -168,6 +172,10 @@ export default function App() {
   const [qc, setQc] = useState<QcSnapshot | null>(null);
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [update, setUpdate] = useState<UpdateCheckPayload | null>(null);
+  // Release notes for a version the user has not been shown yet. Non-empty
+  // opens the What's-new modal — on mount that means "the app just updated",
+  // and from Settings it is an explicit request.
+  const [whatsNew, setWhatsNew] = useState<ReleaseNote[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // A gentle nudge shown the moment chat, research, or Final QC fails
   // because the stored API key is invalid/expired (never the raw 401 text).
@@ -381,6 +389,13 @@ export default function App() {
     refreshUsage();
     // Throttled auto-check (server enforces once a day); failures ignored.
     checkUpdate().then(setUpdate).catch(() => setUpdate(null));
+    // Did this launch follow an update? The server decides (a fresh install
+    // gets nothing); anything pending opens the What's-new modal once.
+    getReleaseNotes()
+      .then((payload) => {
+        if (payload.pending) setWhatsNew(payload.entries);
+      })
+      .catch(() => {});
   }, [
     refreshHealth,
     refreshDoc,
@@ -394,6 +409,24 @@ export default function App() {
   // the update banner, ...) opens in the system browser, never inside the
   // native window — one delegated listener covers every renderer.
   useEffect(() => installExternalLinkHandler(), []);
+
+  /** Settings → "What's new": this version's notes, seen or not. */
+  const openReleaseNotes = useCallback(() => {
+    getReleaseNotes(true)
+      .then((payload) => setWhatsNew(payload.entries))
+      .catch(() => {});
+  }, []);
+
+  /**
+   * Close the modal and remember it. Recording the version on every close —
+   * including one opened deliberately from Settings — is the honest reading:
+   * the user has now seen these notes either way, and the alternative would
+   * re-open them unprompted on the next launch.
+   */
+  const dismissReleaseNotes = useCallback(() => {
+    setWhatsNew([]);
+    markReleaseNotesSeen().catch(() => {});
+  }, []);
 
   /**
    * Poll for the imported-source permission sweep while it is still running.
@@ -1573,6 +1606,12 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         usage={usage}
         onKeyChange={refreshHealth}
+        onShowReleaseNotes={openReleaseNotes}
+      />
+      <WhatsNewModal
+        open={whatsNew.length > 0}
+        entries={whatsNew}
+        onClose={dismissReleaseNotes}
       />
       <HelpModal
         topic={helpTopic}

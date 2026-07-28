@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Build-a-Spec"
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 
 # --- Models -----------------------------------------------------------------
 
@@ -63,7 +63,8 @@ INTERVIEW_MAX_TOKENS = _int_env(
 # (``thinking: {type: "adaptive"}``) plus an effort level via
 # ``output_config``. Interview turns default to "high" — the model's own
 # default: deep on complex work without stalling an interactive chat.
-# Research passes are background work and default to "xhigh".
+# Research passes are background work and default to "high" (dialed back
+# 2026-07-28 from "xhigh" — cost/quality tradeoff, confirmed with Abraham).
 EFFORT_LEVELS = ("low", "medium", "high", "max", "xhigh")
 
 
@@ -109,7 +110,7 @@ RESEARCH_MODEL = (
 RESEARCH_MAX_TOKENS = _int_env(
     "BUILD_A_SPEC_RESEARCH_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS
 )
-RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "xhigh")
+RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "high")
 
 # --- Final QC (Batch 4: spare-no-expense pre-issue review on Fable 5) --------
 

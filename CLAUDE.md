@@ -3197,19 +3197,26 @@ project-format bump.
   the one reading for the round's own `research_date` stamp, so a round
   that starts at 23:59 can't research "yesterday" and file under "today"
   (this replaced the stray `time.strftime` there).
-- **Deliberately NOT in the QC input manifest.** Hashing the date would
-  flip every retained Final QC result stale at each midnight and demand a
-  re-run of a review that costs real money and has not actually gone out
-  of date. The run's date is already recorded in `started_at`, so the
-  audit trail keeps it without the staleness gate treating the passage of
-  a day as a changed input. Recorded, not fingerprinted — pinned by a test
-  so a later "the manifest should cover every input" pass has to argue
-  with it.
+- **Recorded on the QC result, deliberately NOT in its input manifest.**
+  Hashing the date would flip every retained Final QC result stale at each
+  midnight and demand a re-run of a review that costs real money and has
+  not actually gone out of date. So `QCResult.context_date` persists the
+  local date the run gave its reviewers, and the fingerprint ignores it —
+  recorded, not fingerprinted, pinned by a test so a later "the manifest
+  should cover every input" pass has to argue with it. `started_at` does
+  NOT stand in for it (a first draft of this claimed it did, caught in
+  review): that field is a UTC audit timestamp while the context date is
+  the user's local one, so they are different calendar days for an evening
+  run west of UTC. ONE `current_datetime()` reading feeds both the prompt
+  and the record, so the two can never disagree. Surfaced as "Current date
+  supplied to reviewers" in the Word memo and the report modal, and absent
+  (→ "Not recorded") on every pre-1.8.0 record rather than defaulted to
+  today.
 - **The deprecated compliance audit got it too** (`build_audit_user_message`),
   reading inline since it is a single uncached call. It is superseded by the
   QC lenses but still reachable, and it would otherwise have been the one
   surface left judging currency against training data.
-- **Tests**: `tests/test_runtime_date.py` (10). Seven fail against the
+- **Tests**: `tests/test_runtime_date.py` (11). Seven fail against the
   pre-fix code. The two that matter most use a **counter clock** — a fake
   that hands out a different day on every call — so any refactor toward a
   per-call read shows up as four disagreeing dimension dates, or as more

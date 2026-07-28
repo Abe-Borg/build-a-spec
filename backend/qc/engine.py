@@ -75,7 +75,11 @@ from ..research.schema import (
     build_web_search_tool,
     extract_tool_use_block,
 )
-from ..runtime_context import date_context_block
+from ..runtime_context import (
+    current_date_iso,
+    current_datetime,
+    date_context_block,
+)
 from ..spec_doc.model import (
     SpecEditError,
     SpecSection,
@@ -816,6 +820,15 @@ class QCResult:
     input_manifest: dict[str, Any] = field(default_factory=dict)
     model: str = ""
     effort: str = ""
+    # The calendar date the run put in front of every lens and verifier
+    # seat, which now materially affects their edition-currency judgements.
+    # Recorded but NOT fingerprinted — hashing it would flip every retained
+    # result stale at each midnight and demand a paid re-run of a review
+    # that has not gone out of date. It cannot be reconstructed from
+    # ``started_at``: that is UTC (an audit timestamp) while this is the
+    # user's local date (context), so they disagree by a day for an evening
+    # run west of UTC.
+    context_date: str = ""
     max_tokens: int = 0
     duration_ms: int = 0
     usage_totals: dict[str, int] = field(default_factory=dict)
@@ -1174,6 +1187,7 @@ class QCResult:
             "input_manifest": dict(self.input_manifest),
             "model": self.model,
             "effort": self.effort,
+            "context_date": self.context_date,
             "max_tokens": self.max_tokens,
             "duration_ms": self.duration_ms,
             "usage_totals": dict(self.usage_totals),
@@ -1314,6 +1328,9 @@ class QCResult:
                 ),
                 model=str(data.get("model", "") or ""),
                 effort=str(data.get("effort", "") or ""),
+                # Absent from every pre-1.8.0 record, so "" (rendered "Not
+                # recorded") is the honest read, not a defaulted-to-today lie.
+                context_date=str(data.get("context_date", "") or ""),
                 max_tokens=_persisted_nonnegative_int(
                     data.get("max_tokens", 0), field_name="max_tokens"
                 ),
@@ -2925,11 +2942,15 @@ def run_final_qc(
     # Same discipline, load-bearing for a different reason: this string leads
     # both cached shared prefixes, so re-reading the clock per call would
     # fork the lens and verifier cache lineages the moment a run crossed
-    # midnight. Deliberately NOT folded into the input manifest below — the
-    # run's date is already recorded in `started_at`, and hashing it would
-    # flip every retained result stale at each midnight, forcing a re-run of
-    # a review that costs real money and has not actually gone out of date.
-    today = date_context_block()
+    # midnight. ONE reading feeds both the prefix and the persisted
+    # `context_date`, so the audit record cannot disagree with what the
+    # reviewers were actually told. Deliberately NOT folded into the input
+    # manifest below: hashing it would flip every retained result stale at
+    # each midnight, forcing a paid re-run of a review that has not actually
+    # gone out of date. Recorded, not fingerprinted.
+    run_clock = current_datetime()
+    today = date_context_block(run_clock)
+    context_date = current_date_iso(run_clock)
     run_id = run_id or f"qc-run-{uuid.uuid4().hex}"
     remembered_records = (
         dict(remembered_dismissed)
@@ -3322,6 +3343,7 @@ def run_final_qc(
         input_manifest=input_manifest,
         model=model,
         effort=effort,
+        context_date=context_date,
         max_tokens=max_tokens,
         duration_ms=max(0, int((time.monotonic() - pipeline_started) * 1000)),
         usage_totals=usage_totals,

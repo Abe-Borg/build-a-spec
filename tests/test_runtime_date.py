@@ -324,21 +324,48 @@ def test_the_run_date_is_recorded_but_not_hashed_into_the_input_manifest(
     """Deliberate: a retained review must not go stale at every midnight.
 
     The manifest fingerprint is what flips a saved result to "re-run me",
-    and Final QC costs real money. The date the run happened is already
-    recorded in ``started_at``, so the audit trail keeps it without the
-    staleness gate treating the passage of a day as a changed input.
+    and Final QC costs real money — so the date the reviewers were given is
+    recorded on the result and left out of the fingerprint. Two runs a day
+    apart on an unchanged document stay mutually current.
     """
-    dates = iter(["CURRENT DATE: day-1", "CURRENT DATE: day-2"])
+    clocks = iter([datetime(2031, 3, 14), datetime(2031, 3, 15)])
     monkeypatch.setattr(
-        "backend.qc.engine.date_context_block",
-        lambda *a, **k: next(dates),
+        "backend.qc.engine.current_datetime", lambda now=None: next(clocks)
     )
 
     first = _qc_run(_qc_client_with_one_finding(), _section())
     second = _qc_run(_qc_client_with_one_finding(), _section())
 
+    assert first.context_date == "2031-03-14"
+    assert second.context_date == "2031-03-15"
     assert first.input_fingerprint == second.input_fingerprint
-    assert first.started_at == "2031-03-14T10:00:00+00:00"
+
+
+def test_the_recorded_date_is_the_one_the_reviewers_were_actually_given():
+    """``started_at`` cannot stand in for it — different clocks.
+
+    ``started_at`` is a UTC audit timestamp; the reviewers get the user's
+    LOCAL date. West of UTC in the evening those are different calendar
+    days, so a report that only carried ``started_at`` could not
+    reconstruct the date the edition-currency judgements were made against.
+    One reading feeds both the prompt and the record, so they cannot drift.
+    """
+    fake = _qc_client_with_one_finding()
+    result = _qc_run(fake, _section())
+
+    assert result.context_date == current_date_iso()
+    for request in fake.requests:
+        prefix = request["messages"][0]["content"][0]["text"]
+        assert result.context_date in prefix
+
+    # Survives the project round-trip, and an older record reads as absent
+    # rather than as a defaulted-to-today claim it cannot support.
+    from backend.qc.engine import QCResult
+
+    assert QCResult.from_dict(result.to_dict()).context_date == result.context_date
+    legacy = result.to_dict()
+    legacy.pop("context_date")
+    assert QCResult.from_dict(legacy).context_date == ""
 
 
 # ---------------------------------------------------------------------------

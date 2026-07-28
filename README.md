@@ -537,11 +537,11 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   cheaper per turn.
 - **Adaptive thinking, wired properly.** Requests state
   `thinking: adaptive` explicitly with effort knobs (interview `high`,
-  research `xhigh`), and thinking blocks are preserved verbatim across
-  tool-use continuation rounds as the API requires — the previous code
-  dropped them, a latent 400 on real drafting turns. Output ceilings sit
-  at the model max (128k tokens), so nothing the app controls truncates
-  a draft.
+  research `high` — see below), and thinking blocks are preserved verbatim
+  across tool-use continuation rounds as the API requires — the previous
+  code dropped them, a latent 400 on real drafting turns. Output ceilings
+  sit at the model max (128k tokens), so nothing the app controls
+  truncates a draft.
 - **Live web lookups in the interview.** The drafting model carries
   `web_search`/`web_fetch` (same authoritative-domains blocklist as the
   research phase) for mid-interview verification — a UL category, a
@@ -549,8 +549,11 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   continuation handling and inline 🔍 activity chips in the chat. The
   systematic research fan-out stays button-triggered.
 - **Research budgets doubled** (per-dimension searches now 16–40, fetches
-  8–12, continuation ceiling 16) and research runs at `xhigh` effort —
+  8–12, continuation ceiling 16) and research runs at `high` effort —
   background work where latency is free and quality is the point.
+  (Dialed back from `xhigh` on 2026-07-28: research fans out 4 concurrent
+  per-dimension calls, so `xhigh`'s extra reasoning depth was compounding
+  across all of them and driving up cost — see the config table below.)
 - **Usage telemetry groundwork.** Every turn aggregates its billed usage
   (input/output/cache/thinking tokens, web-tool requests) across all
   rounds into `turn_complete.usage` and the session trace — the raw
@@ -859,7 +862,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_CHAT_MAX_FETCHES` | `4` | Interview web_fetch allowance per continuation round. |
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
-| `BUILD_A_SPEC_RESEARCH_EFFORT` | `xhigh` | Adaptive-thinking effort for research dimensions. |
+| `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
 | `BUILD_A_SPEC_QC_MODEL` | `claude-fable-5` | Model for the Final QC pass (the one non-Sonnet surface). |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Per-call QC output ceiling (model max — no app limit). |
 | `BUILD_A_SPEC_QC_EFFORT` | `xhigh` | Adaptive-thinking effort for QC lenses/verifiers. |

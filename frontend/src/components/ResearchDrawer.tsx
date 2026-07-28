@@ -13,14 +13,22 @@
  * Final QC drawer supersedes it (its code_compliance + completeness lenses
  * cover the audit's ground and more).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   EditOp,
-  ResearchEvent,
   ResearchRunStatus,
   ResearchSnapshot,
   SpecDoc,
 } from "../types";
+import {
+  ACTIVITY_LABELS,
+  RETRY_REASONS,
+  foldResearchBoard,
+  labelFromId,
+  trimUrl,
+  type DimLive,
+} from "../lib/researchAgents";
+import AgentActivityModal from "./AgentActivityModal";
 import ConfirmDialog from "./ConfirmDialog";
 import ResearchReportModal from "./ResearchReportModal";
 import Tip from "./Tip";
@@ -44,180 +52,11 @@ const statusLabel: Record<ResearchRunStatus, string> = {
   failed: "failed",
 };
 
-/* --- The live agent board (folded from the run's event stream) --- */
+/* --- The live agent board. Its fold + vocabulary live in
+ *     lib/researchAgents, shared with AgentActivityModal (the full
+ *     per-agent view a card click opens). --- */
 
-/** What each research agent shows while it works (StatusStrip vocabulary). */
-const ACTIVITY_LABELS: Record<string, string> = {
-  thinking: "Thinking…",
-  searching: "Searching the web…",
-  fetching: "Reading a source…",
-  writing: "Writing up findings…",
-};
-
-const RETRY_REASONS: Record<string, string> = {
-  rate_limit: "rate limited",
-  server_error: "provider error",
-  connection: "connection dropped",
-};
-
-/** Most-recent live queries/URLs shown per agent card. */
-const RECENT_CAP = 3;
-
-interface DimLive {
-  id: string;
-  title: string;
-  state: "queued" | "running" | "done" | "failed";
-  /** Last dimension_activity kind; "" before the first block streams. */
-  activity: string;
-  /** Live tick counts (events seen), vs the billed totals on completion. */
-  searches: number;
-  fetches: number;
-  /** Newest-first live queries/URLs, capped at RECENT_CAP. */
-  recent: { kind: "search" | "fetch"; text: string; seq: number }[];
-  retry: { attempt: number; max: number; reason: string } | null;
-  itemCount: number;
-  groundedCount: number;
-  billedSearches: number;
-  billedFetches: number;
-  error: string;
-}
-
-interface ResearchBoard {
-  dims: DimLive[];
-  doneCount: number;
-  total: number;
-  totalSearches: number;
-  totalFetches: number;
-}
-
-/** Legacy fallback so a card never reads as raw snake_case (mirrors the
- *  report modal's dimensionLabel). */
-function labelFromId(id: string): string {
-  return id
-    .split(/[_\s]+/)
-    .filter(Boolean)
-    .map((w) => w[0].toUpperCase() + w.slice(1))
-    .join(" ");
-}
-
-/** Show a fetched URL as host/path; the full URL rides the title. */
-function trimUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    const host = u.hostname.replace(/^www\./, "");
-    const path = u.pathname.replace(/\/$/, "");
-    return path && path !== "/" ? `${host}${path}` : host;
-  } catch {
-    return url;
-  }
-}
-
-/** Fold the run's event log into per-agent live state. Events interleave
- *  freely across dimensions (four workers), but each carries its
- *  dimension_id and a dimension's terminal event follows its live ones, so
- *  a single forward pass is exact. The roster seeds from research_started
- *  (ids + titles), so all cards exist from the first frame. */
-function foldResearchBoard(events: ResearchEvent[]): ResearchBoard {
-  const dims = new Map<string, DimLive>();
-  const ensure = (id: string, title?: string): DimLive => {
-    let dim = dims.get(id);
-    if (!dim) {
-      dim = {
-        id,
-        title: "",
-        state: "queued",
-        activity: "",
-        searches: 0,
-        fetches: 0,
-        recent: [],
-        retry: null,
-        itemCount: 0,
-        groundedCount: 0,
-        billedSearches: 0,
-        billedFetches: 0,
-        error: "",
-      };
-      dims.set(id, dim);
-    }
-    if (title && !dim.title) dim.title = title;
-    return dim;
-  };
-  for (const e of events) {
-    if (e.type === "research_started") {
-      for (const id of e.dimensions ?? []) ensure(id, e.dimension_titles?.[id]);
-      continue;
-    }
-    if (!e.dimension_id) continue;
-    switch (e.type) {
-      case "dimension_started": {
-        const dim = ensure(e.dimension_id, e.title);
-        dim.state = "running";
-        break;
-      }
-      case "dimension_activity": {
-        const dim = ensure(e.dimension_id);
-        dim.activity = e.kind ?? "";
-        dim.retry = null;
-        break;
-      }
-      case "dimension_search": {
-        const dim = ensure(e.dimension_id);
-        dim.searches += 1;
-        dim.activity = "searching";
-        dim.retry = null;
-        dim.recent = [
-          { kind: "search" as const, text: e.query ?? "", seq: e.seq },
-          ...dim.recent,
-        ].slice(0, RECENT_CAP);
-        break;
-      }
-      case "dimension_fetch": {
-        const dim = ensure(e.dimension_id);
-        dim.fetches += 1;
-        dim.activity = "fetching";
-        dim.retry = null;
-        dim.recent = [
-          { kind: "fetch" as const, text: e.url ?? "", seq: e.seq },
-          ...dim.recent,
-        ].slice(0, RECENT_CAP);
-        break;
-      }
-      case "dimension_retry": {
-        const dim = ensure(e.dimension_id);
-        dim.retry = {
-          attempt: e.attempt ?? 0,
-          max: e.max_attempts ?? 0,
-          reason: e.reason ?? "",
-        };
-        dim.activity = "";
-        break;
-      }
-      case "dimension_complete":
-      case "dimension_failed": {
-        const dim = ensure(e.dimension_id, e.title);
-        dim.state = e.type === "dimension_complete" ? "done" : "failed";
-        dim.itemCount = e.item_count ?? 0;
-        dim.groundedCount = e.grounded_count ?? 0;
-        dim.billedSearches = e.web_search_requests ?? 0;
-        dim.billedFetches = e.web_fetch_requests ?? 0;
-        dim.error = e.error ?? "";
-        dim.retry = null;
-        break;
-      }
-    }
-  }
-  const list = [...dims.values()];
-  return {
-    dims: list,
-    doneCount: list.filter((d) => d.state === "done" || d.state === "failed")
-      .length,
-    total: list.length,
-    totalSearches: list.reduce((n, d) => n + d.searches, 0),
-    totalFetches: list.reduce((n, d) => n + d.fetches, 0),
-  };
-}
-
-function AgentCard({ dim }: { dim: DimLive }) {
+function AgentCard({ dim, onOpen }: { dim: DimLive; onOpen: () => void }) {
   const dotClass =
     dim.state === "done"
       ? "bg-ok"
@@ -226,9 +65,18 @@ function AgentCard({ dim }: { dim: DimLive }) {
         : dim.state === "running"
           ? "agent-dot"
           : "bg-ink-faint";
+  // A real <button> (keyboard/focus for free, the drawer-header idiom), so
+  // every inner block is a span — a button allows no p/ul/li descendants.
   return (
-    <div className="rounded-lg border border-edge bg-surface/50 p-2.5">
-      <div className="flex items-baseline gap-2">
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-haspopup="dialog"
+      data-capability="research.agent-detail"
+      title="View this agent's full activity"
+      className="w-full rounded-lg border border-edge bg-surface/50 p-2.5 text-left transition-colors hover:border-accent/60"
+    >
+      <span className="flex items-baseline gap-2">
         <span
           className={`h-1.5 w-1.5 shrink-0 translate-y-[-1px] rounded-full ${dotClass}`}
           aria-hidden="true"
@@ -247,12 +95,14 @@ function AgentCard({ dim }: { dim: DimLive }) {
             </span>
           </span>
         )}
-      </div>
+      </span>
       {dim.state === "queued" && (
-        <p className="mt-1 text-[11px] text-ink-faint">Waiting for an agent…</p>
+        <span className="mt-1 block text-[11px] text-ink-faint">
+          Waiting for an agent…
+        </span>
       )}
       {dim.state === "running" && !dim.retry && (
-        <p
+        <span
           className="mt-1 flex items-center gap-1.5 text-[11px] text-ink-dim"
           aria-live="polite"
         >
@@ -264,39 +114,41 @@ function AgentCard({ dim }: { dim: DimLive }) {
           <span className="status-shimmer">
             {ACTIVITY_LABELS[dim.activity] ?? "Starting…"}
           </span>
-        </p>
+        </span>
       )}
       {dim.state === "running" && dim.retry && (
-        <p className="mt-1 text-[11px] text-warn">
+        <span className="mt-1 block text-[11px] text-warn">
           Retrying (attempt {dim.retry.attempt}/{dim.retry.max}) —{" "}
           {RETRY_REASONS[dim.retry.reason] ?? dim.retry.reason}…
-        </p>
+        </span>
       )}
       {dim.state === "running" && dim.recent.length > 0 && (
-        <ul className="mt-1 space-y-0.5">
+        <span className="mt-1 block space-y-0.5">
           {dim.recent.map((r) => (
-            <li
+            <span
               key={r.seq}
-              className="prompt-chip-in truncate text-[11px] text-ink-faint"
+              className="prompt-chip-in block truncate text-[11px] text-ink-faint"
               title={r.text}
             >
               {r.kind === "search" ? <>&ldquo;{r.text}&rdquo;</> : trimUrl(r.text)}
-            </li>
+            </span>
           ))}
-        </ul>
+        </span>
       )}
       {dim.state === "done" && (
-        <p className="mt-1 text-[11px] text-ink-faint">
+        <span className="mt-1 block text-[11px] text-ink-faint">
           ✓ {dim.itemCount} finding{dim.itemCount === 1 ? "" : "s"} ·{" "}
           {dim.groundedCount} grounded · {dim.billedSearches} search
           {dim.billedSearches === 1 ? "" : "es"} · {dim.billedFetches} fetch
           {dim.billedFetches === 1 ? "" : "es"}
-        </p>
+        </span>
       )}
       {dim.state === "failed" && (
-        <p className="mt-1 text-[11px] text-err">✗ {dim.error || "failed"}</p>
+        <span className="mt-1 block text-[11px] text-err">
+          ✗ {dim.error || "failed"}
+        </span>
       )}
-    </div>
+    </button>
   );
 }
 
@@ -436,6 +288,16 @@ export default function ResearchDrawer({
   }, [openNonce]);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  // Which agent's full activity modal is open; null = closed. Torn down
+  // with the research state itself (reset / failed status refresh).
+  const [agentDetailId, setAgentDetailId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!research) setAgentDetailId(null);
+  }, [research]);
+  // Focus fallback for the modal: the opener card unmounts with the board
+  // when the run completes mid-view, so closing then restores focus to the
+  // always-rendered drawer toggle instead of dropping it on the body.
+  const collapseToggleRef = useRef<HTMLButtonElement>(null);
   const status: ResearchRunStatus = research?.status ?? "idle";
   const running = status === "running";
   const items = research?.profile?.items ?? [];
@@ -486,6 +348,7 @@ export default function ResearchDrawer({
     >
       <div className="flex items-baseline gap-2">
         <button
+          ref={collapseToggleRef}
           className="flex min-w-0 flex-1 items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
           onClick={() => setExpanded((v) => !v)}
           title="Project profile and grounded requirements research"
@@ -578,6 +441,15 @@ export default function ResearchDrawer({
         onClose={() => setReportOpen(false)}
       />
 
+      <AgentActivityModal
+        open={agentDetailId !== null}
+        dimensionId={agentDetailId ?? ""}
+        events={research?.events ?? []}
+        runStatus={status}
+        onClose={() => setAgentDetailId(null)}
+        restoreFallbackRef={collapseToggleRef}
+      />
+
       {expanded && (
         <div className="mt-1.5">
           <ProjectProfileForm doc={doc} busy={busy} onEditDoc={onEditDoc} />
@@ -602,7 +474,11 @@ export default function ResearchDrawer({
                 </p>
               )}
               {board.dims.map((d) => (
-                <AgentCard key={d.id} dim={d} />
+                <AgentCard
+                  key={d.id}
+                  dim={d}
+                  onOpen={() => setAgentDetailId(d.id)}
+                />
               ))}
             </div>
           )}

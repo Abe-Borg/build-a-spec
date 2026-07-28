@@ -40,6 +40,7 @@ export const END_USER_CAPABILITIES = [
   "research.profile",
   "research.run",
   "research.stop",
+  "research.agent-detail",
   "research.report",
   "research.apply",
   "history.undo-redo",

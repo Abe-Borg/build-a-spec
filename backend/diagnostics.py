@@ -31,13 +31,13 @@ from __future__ import annotations
 import atexit
 import datetime as _dt
 import faulthandler
-import io
 import json
 import logging
 import logging.handlers
 import os
 import platform
 import sys
+import tempfile
 import threading
 import time
 import zipfile
@@ -589,6 +589,8 @@ def read_recent_trace_events(tail: int = 200) -> dict[str, Any]:
     recorder = get_recorder()
     if recorder is None:
         return {"enabled": False, "events": [], "spans": []}
+    # Short barrier so "Recent activity" includes what just happened.
+    recorder.flush(timeout=0.5)
     try:
         tail = int(tail)
     except (TypeError, ValueError):
@@ -622,65 +624,92 @@ def read_recent_trace_events(tail: int = 200) -> dict[str, Any]:
     }
 
 
-def build_bundle() -> tuple[bytes, str]:
-    """Assemble the diagnostics zip in memory; returns (bytes, filename).
+def build_bundle() -> tuple[Path, str]:
+    """Assemble the diagnostics zip into a temp file; (path, filename).
 
     Contents: the scrubbed snapshot, every log file (rotation already
     bounds them), the CURRENT trace run in full, and ``run.json`` only
     for the three most recent prior runs — full prior runs are unbounded
     and the trace list in the modal names the folder for anyone who
     needs more.
+
+    Written to a temporary FILE, not memory: a deep-trace run can be
+    hundreds of MB, and an in-memory zip of it would spike (or kill) the
+    desktop process exactly when the user is trying to report a problem.
+    The route streams the file out and deletes it afterwards. Before
+    copying the live run the recorder queue is flushed to disk, so a
+    bundle grabbed right after an incident contains the incident.
     """
     from .tracing.recorder import get_recorder
 
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "snapshot.json",
-            json.dumps(snapshot(), indent=2, default=str),
-        )
+    recorder = get_recorder()
+    if recorder is not None:
+        recorder.flush(timeout=2.0)
 
-        directory = log_dir()
-        log_names = [LOG_FILENAME] + [
-            f"{LOG_FILENAME}.{i}" for i in range(1, _LOG_BACKUP_COUNT + 1)
-        ]
-        log_names += [CRASH_FILENAME, RUN_MARKER_FILENAME]
-        for name in log_names:
-            _add_file_if_present(zf, directory / name, f"logs/{name}")
-
-        recorder = get_recorder()
-        current_id = None
-        if recorder is not None:
-            current_id = recorder.run_id
-            for name in (
-                "spans.jsonl",
-                "events.jsonl",
-                "prompts.jsonl",
-                "run.json",
-            ):
-                _add_file_if_present(
-                    zf,
-                    recorder.trace_dir / name,
-                    f"traces/{recorder.run_id}/{name}",
-                )
-
-        prior = [
-            run
-            for run in list_trace_runs(limit=10)["runs"]
-            if run["run_id"] != current_id
-        ][:3]
-        from .tracing import config as trace_config
-
-        root = trace_config.default_trace_root()
-        for run in prior:
-            _add_file_if_present(
-                zf,
-                root / run["run_id"] / "run.json",
-                f"traces/{run['run_id']}/run.json",
+    handle = tempfile.NamedTemporaryFile(
+        prefix="buildaspec-diagnostics-", suffix=".zip", delete=False
+    )
+    path = Path(handle.name)
+    try:
+        with handle, zipfile.ZipFile(
+            handle, "w", compression=zipfile.ZIP_DEFLATED
+        ) as zf:
+            zf.writestr(
+                "snapshot.json",
+                json.dumps(snapshot(), indent=2, default=str),
             )
 
+            directory = log_dir()
+            log_names = [LOG_FILENAME] + [
+                f"{LOG_FILENAME}.{i}" for i in range(1, _LOG_BACKUP_COUNT + 1)
+            ]
+            log_names += [CRASH_FILENAME, RUN_MARKER_FILENAME]
+            for name in log_names:
+                _add_file_if_present(zf, directory / name, f"logs/{name}")
+
+            current_id = None
+            if recorder is not None:
+                current_id = recorder.run_id
+                for name in (
+                    "spans.jsonl",
+                    "events.jsonl",
+                    "prompts.jsonl",
+                    "run.json",
+                ):
+                    _add_file_if_present(
+                        zf,
+                        recorder.trace_dir / name,
+                        f"traces/{recorder.run_id}/{name}",
+                    )
+
+            prior = [
+                run
+                for run in list_trace_runs(limit=10)["runs"]
+                if run["run_id"] != current_id
+            ][:3]
+            from .tracing import config as trace_config
+
+            root = trace_config.default_trace_root()
+            for run in prior:
+                _add_file_if_present(
+                    zf,
+                    root / run["run_id"] / "run.json",
+                    f"traces/{run['run_id']}/run.json",
+                )
+    except BaseException:
+        unlink_quietly(path)
+        raise
+
     stamp = _dt.datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    return buffer.getvalue(), f"buildaspec-diagnostics-{stamp}.zip"
+    return path, f"buildaspec-diagnostics-{stamp}.zip"
+
+
+def unlink_quietly(path: Path) -> None:
+    """Best-effort temp-file cleanup (the bundle route's background task)."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def _add_file_if_present(

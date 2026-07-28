@@ -231,6 +231,56 @@ def test_cross_thread_close_leaves_no_stale_parent(tmp_path):
     assert spans["after the cross-thread close"]["parent_span_id"] is None
 
 
+def test_prompt_ref_redacts_pasted_credentials_but_keeps_the_prompt(tmp_path):
+    """A key pasted into chat must not reach prompts.jsonl (P1 review find).
+
+    prompt_ref is the one write path scrub_data does not cover — and must
+    not: whole-string scrubbing would erase the entire prompt over one
+    pasted key. Substring redaction keeps the prompt useful.
+    """
+    rec = TraceRecorder(
+        run_id="run-p", trace_dir=tmp_path / "p", capture_level="default"
+    )
+    rec.start()
+    ref = rec.prompt_ref(
+        "user", "please use sk-ant-abc123def456ghi789 as the key, thanks"
+    )
+    assert "ref" in ref
+    rec.stop()
+    prompts = _read_jsonl(tmp_path / "p" / "prompts.jsonl")
+    assert len(prompts) == 1
+    assert "sk-ant-" not in prompts[0]["text"]
+    assert "<redacted>" in prompts[0]["text"]
+    assert prompts[0]["text"].startswith("please use ")
+
+    # Deep mode inlines — same redaction at the same choke point.
+    deep = TraceRecorder(
+        run_id="run-pd", trace_dir=tmp_path / "pd", capture_level="deep"
+    )
+    deep.start()
+    inline = deep.prompt_ref("user", "key sk-ant-abc123def456ghi789 end")
+    deep.stop()
+    assert inline == {"inline": "key <redacted> end"}
+
+
+def test_flush_barrier_makes_enqueued_events_immediately_readable(tmp_path):
+    """flush() returns only once prior records are on disk — no polling."""
+    rec = TraceRecorder(
+        run_id="run-fb", trace_dir=tmp_path / "fb", capture_level="default"
+    )
+    rec.start()
+    try:
+        for i in range(25):
+            rec.add_event(None, "api_request", path=f"/x/{i}")
+        assert rec.flush(timeout=5.0) is True
+        events = _read_jsonl(tmp_path / "fb" / "events.jsonl")
+        assert len(events) == 25
+    finally:
+        rec.stop()
+    # After stop, flush degrades gracefully instead of hanging.
+    assert rec.flush(timeout=0.1) is True
+
+
 def test_run_meta_records_the_environment(tmp_path):
     rec = TraceRecorder(
         run_id="run-env", trace_dir=tmp_path / "e", capture_level="default"

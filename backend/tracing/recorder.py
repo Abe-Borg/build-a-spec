@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .config import LEVEL_DEEP, LEVEL_DEFAULT
-from .redaction import scrub_data
+from .redaction import redact_text, scrub_data
 from .spans import (
     STATUS_ERROR,
     STATUS_OK,
@@ -72,6 +72,15 @@ def bind_to_current_context(fn):
 
 
 _SHUTDOWN_SENTINEL = object()
+
+
+class _FlushBarrier:
+    """Queue marker: set once every record enqueued before it is on disk."""
+
+    __slots__ = ("event",)
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
 
 FILE_SPANS = "spans.jsonl"
 FILE_EVENTS = "events.jsonl"
@@ -272,8 +281,34 @@ class TraceRecorder:
         event = make_event(span_id=span_id, type=type, fields=fields)
         self._enqueue(FILE_EVENTS, scrub_data(event))
 
+    def flush(self, timeout: float = 2.0) -> bool:
+        """Wait until everything enqueued so far is written and flushed.
+
+        The barrier the diagnostics bundle takes before copying the live
+        run — without it a bundle grabbed right after an incident can miss
+        the very events that explain it (they'd still be in the queue).
+        Returns False on timeout or a dead writer; callers proceed either
+        way (a partial record beats no record).
+        """
+        if self._stopped.is_set():
+            return True
+        if self._writer_thread is None or not self._writer_thread.is_alive():
+            return True
+        barrier = _FlushBarrier()
+        self._queue.put(barrier)
+        return barrier.event.wait(timeout)
+
     def prompt_ref(self, kind: str, text: str) -> dict[str, Any]:
-        """Content-hash reference (default) or inline text (deep)."""
+        """Content-hash reference (default) or inline text (deep).
+
+        Credential-shaped substrings are redacted BEFORE hashing/storing:
+        prompts carry whatever the user pasted into chat, and this is the
+        one write path ``scrub_data`` does not cover (deliberately — its
+        whole-string replacement would erase the entire prompt over one
+        pasted key). Redact-then-hash keeps dedupe consistent with the
+        stored text.
+        """
+        text = redact_text(text)
         if self._capture_level == LEVEL_DEEP:
             return {"inline": text}
         digest = hashlib.sha256(
@@ -331,6 +366,11 @@ class TraceRecorder:
                     item = self._queue.get()
                     if item is _SHUTDOWN_SENTINEL:
                         break
+                    if isinstance(item, _FlushBarrier):
+                        # Per-line flush means everything drained before
+                        # this marker is already on disk.
+                        item.event.set()
+                        continue
                     filename, payload = item
                     writer = writers.get(filename)
                     if writer is None:

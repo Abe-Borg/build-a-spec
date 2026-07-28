@@ -2639,7 +2639,11 @@ zipfile stdlib), no new npm deps; three new env knobs; six new REST routes
   frozen PROJECT CONTEXT + user text through `recorder.prompt_ref` —
   hash-deduped into prompts.jsonl at the default level, the stable prompt
   costs ONE entry per app run; deep mode inlines, making
-  `BUILD_A_SPEC_TRACE_DEEP` real for the first time). Event vocabulary from
+  `BUILD_A_SPEC_TRACE_DEEP` real for the first time. `prompt_ref` runs
+  `redaction.redact_text` — SUBSTRING-level credential redaction — before
+  hashing/storing: prompts carry whatever the user pasted into chat, this
+  is the one write path `scrub_data` does not cover, and whole-string
+  scrubbing would erase the entire prompt over one pasted key). Event vocabulary from
   the REST layer: `api_request`, `workspace_conflict`, `server_started`
   (end of create_app — the run dir exists from boot), `doc_edit` (op
   count/actions/ok), `doc_history` (undo/redo), `project_save`/
@@ -2660,11 +2664,16 @@ zipfile stdlib), no new npm deps; three new env knobs; six new REST routes
   1..5000, grace when disabled/missing), `GET /api/diagnostics/traces`
   (newest-first inventory, sizes only — never line counts),
   `GET /api/diagnostics/activity?tail=` (current run's events read back
-  leniently — safe because of per-line flush; final line may be torn —
-  plus `open_span_summaries`), `GET /api/diagnostics/bundle` (in-memory
-  zip: snapshot.json + all log files + the CURRENT trace run in full +
-  `run.json` of the 3 most recent prior runs; `_attachment_headers` +
-  no-store + nosniff, the `/api/import/original` posture; byte-scan test
+  leniently after a short `recorder.flush()` barrier — per-line flush
+  makes the file readable, the barrier makes it CURRENT — plus
+  `open_span_summaries`), `GET /api/diagnostics/bundle` (zip written to a
+  TEMP FILE and streamed via `FileResponse` + background unlink — a
+  deep-trace run can be hundreds of MB and an in-memory zip would spike
+  the process exactly when the user needs it; `recorder.flush(2.0)` runs
+  before the copy so a bundle grabbed right after an incident CONTAINS
+  the incident: snapshot.json + all log files + the CURRENT trace run in
+  full + `run.json` of the 3 most recent prior runs; `_attachment_headers`
+  + no-store + nosniff, the `/api/import/original` posture; byte-scan test
   proves the key never appears), `POST /api/diagnostics/client-event`
   (the frontend collector's sink: bounded >32KB→400, kind-allowlisted,
   logged + `client_error` event).

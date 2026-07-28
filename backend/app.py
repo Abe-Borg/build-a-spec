@@ -86,6 +86,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from . import diagnostics, settings, sessions
@@ -4329,20 +4330,27 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/api/diagnostics/bundle", include_in_schema=False)
-    def diagnostics_bundle() -> Response:
+    def diagnostics_bundle() -> FileResponse:
         """The downloadable support bundle (snapshot + logs + current trace).
 
         Contains draft text and prompts by design (the trace posture — that
         is what makes it useful); the modal copy says so before this link.
-        Never contains key material: the snapshot is masked+scrubbed and
-        nothing ever logs the key.
+        Never contains key material: the snapshot is masked+scrubbed,
+        nothing ever logs the key, and prompt capture redacts pasted
+        credential-shaped text at write time. Streamed from a temp file —
+        a deep-trace run can be hundreds of MB and an in-memory zip would
+        spike the desktop process exactly when the user needs it least.
         """
-        payload, filename = diagnostics.build_bundle()
+        path, filename = diagnostics.build_bundle()
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
         _trace_capture.app_event(
-            "export", kind="diagnostics_bundle", bytes=len(payload), ok=True
+            "export", kind="diagnostics_bundle", bytes=size, ok=True
         )
-        return Response(
-            content=payload,
+        return FileResponse(
+            path,
             media_type="application/zip",
             headers={
                 **_attachment_headers(filename),
@@ -4351,6 +4359,7 @@ def create_app() -> FastAPI:
                 "Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff",
             },
+            background=BackgroundTask(diagnostics.unlink_quietly, path),
         )
 
     @app.post("/api/diagnostics/client-event", include_in_schema=False)

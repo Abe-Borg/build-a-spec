@@ -328,10 +328,15 @@ def test_activity_endpoint_returns_recent_events_and_open_spans(trace_env):
 def test_bundle_zip_contains_snapshot_log_and_trace_and_never_the_key(
     log_env, trace_env
 ):
+    import tempfile
+    from pathlib import Path
+
     diagnostics.init_logging(force=True)
     client = TestClient(create_app())
     client.get("/api/doc")  # an api_request event + log lines
 
+    tempdir = Path(tempfile.gettempdir())
+    before = set(tempdir.glob("buildaspec-diagnostics-*.zip"))
     resp = client.get("/api/diagnostics/bundle")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/zip"
@@ -339,6 +344,9 @@ def test_bundle_zip_contains_snapshot_log_and_trace_and_never_the_key(
         "content-disposition", ""
     )
     assert resp.headers.get("cache-control") == "no-store"
+    # Streamed from a temp file, deleted by the background task after the
+    # response finishes (TestClient runs background tasks synchronously).
+    assert set(tempdir.glob("buildaspec-diagnostics-*.zip")) == before
 
     zf = zipfile.ZipFile(BytesIO(resp.content))
     names = zf.namelist()
@@ -346,6 +354,21 @@ def test_bundle_zip_contains_snapshot_log_and_trace_and_never_the_key(
     assert f"logs/{diagnostics.LOG_FILENAME}" in names
     assert any(
         n.startswith("traces/") and n.endswith("events.jsonl") for n in names
+    )
+    # The pre-copy flush barrier guarantees the request THIS test just made
+    # is in the archived events — a bundle grabbed right after an incident
+    # must contain the incident.
+    events_member = next(
+        n for n in names if n.startswith("traces/") and n.endswith("events.jsonl")
+    )
+    archived = [
+        json.loads(line)
+        for line in zf.read(events_member).decode("utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(
+        e.get("type") == "api_request" and e.get("path") == "/api/doc"
+        for e in archived
     )
     # The hermetic fake key must not appear in ANY member, decompressed.
     for name in names:

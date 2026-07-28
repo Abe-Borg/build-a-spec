@@ -44,6 +44,20 @@ def scrub_value(value: Any) -> Any:
     return value
 
 
+def redact_text(text: str) -> str:
+    """Substring-level credential redaction for free text (prompt capture).
+
+    Unlike :func:`scrub_value` — which replaces a whole matching string and
+    would erase an entire prompt over one pasted key — this replaces only
+    the credential-shaped spans and keeps the surrounding text readable.
+    """
+    if not isinstance(text, str):
+        return text
+    for pattern in _SECRET_VALUE_PATTERNS:
+        text = pattern.sub(_REDACTED, text)
+    return text
+
+
 def scrub_data(data: Any, *, _depth: int = 0) -> Any:
     """Recursively scrub a JSON-ready structure (bounded at six levels)."""
     if _depth > 6:

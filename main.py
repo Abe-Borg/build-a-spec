@@ -135,10 +135,12 @@ class _CloseController:
     from a worker thread; by the time it runs, the vetoed close has returned
     and the UI thread is free.
 
-    The bridge also exposes ``save_project`` (the in-app save gate) and
+    The bridge also exposes ``save_project`` (the in-app save gate),
     ``open_file`` (native Open/Import, since HTML file inputs are unreliable
-    in the webview). Only these ``js_api`` methods are public; everything else
-    is underscore-prefixed so pywebview does not expose it to JavaScript.
+    in the webview), and ``open_external_link`` (routes outbound hyperlink
+    clicks to the system browser instead of the app window). Only these
+    ``js_api`` methods are public; everything else is underscore-prefixed so
+    pywebview does not expose it to JavaScript.
     """
 
     # The frontend hook the prompt calls; returns whether it was handled so a
@@ -251,6 +253,26 @@ class _CloseController:
         """
         return self._save_project_file()
 
+    def open_external_link(self, url: str) -> bool:
+        """Open a URL in the user's default system browser.
+
+        pywebview's window is otherwise just a browser: a clicked link (a
+        chat citation, a research/QC report source, the trust dossier's
+        outbound references, ...) would navigate the window itself away from
+        the app with no way back. The frontend intercepts every such click
+        and calls this instead. Only http/https URLs are honored.
+        """
+        import urllib.parse
+        import webbrowser
+
+        try:
+            parsed = urllib.parse.urlsplit(url)
+        except ValueError:
+            return False
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return False
+        return bool(webbrowser.open(url))
+
     def save_template(self, template_id: str) -> bool:
         """Export one validated catalog entry through a scoped Save dialog."""
         import webview
@@ -322,33 +344,6 @@ class _CloseController:
             "name": os.path.basename(os.fspath(target)),
             "data_b64": base64.b64encode(payload).decode("ascii"),
         }
-
-    def open_in_browser(self, path: str) -> bool:
-        """Open an app-served path (e.g. the trace viewer) in the default
-        browser.
-
-        The pywebview window is a single-document shell — ``target=_blank``
-        has no reliable destination across its backends — so pages meant
-        for side-by-side reading (Developer tools → trace viewer) go to the
-        real browser against the same local server. Only local app paths
-        are accepted: an absolute path starting with one ``/`` (two would
-        be a scheme-relative external URL).
-        """
-        if not isinstance(path, str):
-            return False
-        path = path.strip()
-        if not path.startswith("/") or path.startswith("//"):
-            return False
-        import webbrowser
-
-        try:
-            return bool(
-                webbrowser.open(
-                    f"http://{settings.HOST}:{settings.PORT}{path}"
-                )
-            )
-        except Exception:
-            return False
 
     # --- internals ---------------------------------------------------------
     def _force_close(self) -> None:

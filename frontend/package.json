@@ -2,6 +2,11 @@
   "name": "build-a-spec-frontend",
   "private": true,
   "version": "1.6.0",
+  "license": "MIT",
+  "author": {
+    "name": "Abraham Borg",
+    "url": "https://github.com/Abe-Borg"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -68,6 +68,7 @@ import HelpModal, { type HelpTopic } from "./components/HelpModal";
 import OnboardingOverlay from "./components/OnboardingOverlay";
 import NewSessionDialog from "./components/NewSessionDialog";
 import { sourceCapabilitiesPending } from "./lib/sourceCapabilities";
+import { installExternalLinkHandler } from "./lib/externalLinks";
 import {
   useOnboarding,
   type DrawerName,
@@ -285,6 +286,11 @@ export default function App() {
     refreshReadiness,
     refreshUsage,
   ]);
+
+  // Every external link (chat citations, report sources, the trust dossier,
+  // the update banner, ...) opens in the system browser, never inside the
+  // native window — one delegated listener covers every renderer.
+  useEffect(() => installExternalLinkHandler(), []);
 
   /**
    * Poll for the imported-source permission sweep while it is still running.
@@ -936,7 +942,12 @@ export default function App() {
     setPreservationReady(false);
     setSourceCapabilities(null);
     setTemplateOrigin(null);
+    // The previous session's meter (spend pill + context gauge) must not
+    // linger over a fresh session; clear immediately, then refetch the
+    // server's zeroed snapshot.
+    setUsage(null);
     refreshDoc();
+    refreshUsage();
     refreshResearch();
     refreshQc();
     refreshReadiness();
@@ -1485,9 +1496,10 @@ export default function App() {
         title="End the guided tour?"
         body={
           <>
-            You can restart it anytime from the{" "}
-            <b className="text-ink">Tour</b> button in the header. Your
-            original project remains protected until you choose what to keep.
+            Your project comes back exactly as it was before the tour started
+            — the same document, history, and version list — and this practice
+            copy is discarded. You can restart the tour anytime from the{" "}
+            <b className="text-ink">Tour</b> button in the header.
           </>
         }
         confirmLabel="End tour"

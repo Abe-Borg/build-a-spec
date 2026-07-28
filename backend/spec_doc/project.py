@@ -417,6 +417,9 @@ def load_project(data: Any, session) -> None:
     # The meter is per-session; a resumed project starts its own count (the
     # prior session's spend lives in that session's traces, not this file).
     session.usage.reset()
+    # The context gauge measured the outgoing conversation; the loaded one
+    # has no measurement until its first turn commits.
+    session.last_context_tokens = None
     # Semantic/legacy JSON never contains source bytes. Clear them only after
     # the incoming project's load-bearing content validates. A .baspec caller
     # attaches its separately validated bytes after this semantic commit.

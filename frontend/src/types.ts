@@ -98,6 +98,13 @@ export interface UsageSummary {
     total: number;
   };
   cache_saved_usd: number;
+  /**
+   * Context gauge, not spend: the Anthropic-counted conversation size after
+   * the last committed chat turn (system prompt + tools + history + project
+   * context + the retained reply), against the model's context window. null
+   * until a turn commits (fresh session, reset, or a just-loaded project).
+   */
+  context?: { tokens: number; window: number } | null;
 }
 
 /* --- Document model (mirrors backend/spec_doc/model.py serialization) --- */
@@ -1137,9 +1144,12 @@ declare global {
         ) => Promise<{ name: string; data_b64: string } | null>;
         /** Native Save dialog for a portable reusable starter. */
         save_template?: (templateId: string) => Promise<boolean>;
-        /** Open an app-served path (the trace viewer) in the default
-         *  browser — the webview shell has no reliable target=_blank. */
-        open_in_browser?: (path: string) => Promise<boolean>;
+        /** Opens a URL in the user's default system browser instead of
+         *  navigating the app window itself. Resolves true if a browser was
+         *  launched; false for a rejected (non-http/https) or malformed URL.
+         *  Also how Developer tools opens the trace viewer (an app-served
+         *  localhost URL) — the shell has no reliable target=_blank. */
+        open_external_link?: (url: string) => Promise<boolean>;
       };
     };
     buildaspecRequestClose?: (

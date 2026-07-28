@@ -504,6 +504,29 @@ def test_open_file_unreadable_path_returns_none(tmp_path, monkeypatch):
     assert controller.open_file("project") is None
 
 
+def test_open_external_link_launches_system_browser(monkeypatch):
+    # A clicked citation/reference link must open in the OS browser, never
+    # navigate the app window itself away from the app.
+    controller = _controller_with(_FakeWindow())
+    calls: list[str] = []
+    monkeypatch.setattr("webbrowser.open", lambda url: calls.append(url) or True)
+
+    assert controller.open_external_link("https://example.com/spec?x=1") is True
+    assert calls == ["https://example.com/spec?x=1"]
+
+
+def test_open_external_link_rejects_non_http_schemes(monkeypatch):
+    controller = _controller_with(_FakeWindow())
+    calls: list[str] = []
+    monkeypatch.setattr("webbrowser.open", lambda url: calls.append(url) or True)
+
+    assert controller.open_external_link("javascript:alert(1)") is False
+    assert controller.open_external_link("file:///etc/passwd") is False
+    assert controller.open_external_link("not a url") is False
+    assert controller.open_external_link("") is False
+    assert calls == []
+
+
 # pywebview validates every create_file_dialog `file_types` entry through
 # `webview.util.parse_file_type` BEFORE opening the dialog, and its description
 # grammar accepts only word characters and spaces — a hyphen raises ValueError,

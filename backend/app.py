@@ -1185,6 +1185,26 @@ def _qc_snapshot_payload(session) -> dict[str, Any]:
     return payload
 
 
+def _usage_payload(session: SessionState) -> dict[str, Any]:
+    """The ledger snapshot plus the session context gauge.
+
+    ``context`` is the Anthropic-counted conversation size after the last
+    committed chat turn (its final request's full prompt plus the retained
+    reply) against the model's context window — a gauge, not spend, which is
+    why it rides beside the ledger snapshot rather than inside it. None
+    until a turn commits (fresh session, reset, or a just-loaded project).
+    """
+    with session.session_state_guard():
+        snapshot = session.usage.snapshot()
+        tokens = session.last_context_tokens
+    snapshot["context"] = (
+        {"tokens": tokens, "window": settings.MODEL_CONTEXT_WINDOW}
+        if tokens is not None
+        else None
+    )
+    return snapshot
+
+
 def _session_bundle(lease: sessions.WorkspaceLease | None = None) -> dict[str, Any]:
     """One coherent hydration payload for workspace transitions."""
     lease = lease or sessions.get_workspace()
@@ -1208,7 +1228,7 @@ def _session_bundle(lease: sessions.WorkspaceLease | None = None) -> dict[str, A
             "audit": session.audit.snapshot(),
             "qc": _qc_snapshot_payload(session),
             "readiness": _readiness_payload(session),
-            "usage": session.usage.snapshot(),
+            "usage": _usage_payload(session),
             "health": {
                 "status": "ok",
                 "app": settings.APP_NAME,
@@ -1608,7 +1628,7 @@ def create_app() -> FastAPI:
                 {
                     "ok": False,
                     "code": "tutorial_active",
-                    "error": "Return to or keep the tutorial workspace before starting a new session.",
+                    "error": "End the tour and return to your project before starting a new session.",
                 },
                 status_code=409,
             )
@@ -2286,32 +2306,12 @@ def create_app() -> FastAPI:
                 )
                 current_workspace_id = tutorial_lease.workspace_id
             restored = sessions.workspace_manager().finish_tutorial(
-                current_workspace_id, disposition="restore"
+                current_workspace_id
             )
         except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
             return _tutorial_error(exc)
         _trace_capture.app_event("tutorial", action="restore")
         return JSONResponse({"ok": True, "session": _session_bundle(restored)})
-
-    @app.post("/api/tutorial/keep")
-    def tutorial_keep(body: TutorialRequest) -> JSONResponse:
-        lease = sessions.get_workspace()
-        if not _tutorial_request_is_current(lease, body):
-            return _stale_tutorial_response()
-        try:
-            current_workspace_id = body.workspace_id
-            if lease.scope == "scenario":
-                tutorial_lease = sessions.workspace_manager().pop_scenario(
-                    current_workspace_id
-                )
-                current_workspace_id = tutorial_lease.workspace_id
-            kept = sessions.workspace_manager().finish_tutorial(
-                current_workspace_id, disposition="keep"
-            )
-        except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
-            return _tutorial_error(exc)
-        _trace_capture.app_event("tutorial", action="keep")
-        return JSONResponse({"ok": True, "session": _session_bundle(kept)})
 
     @app.post("/api/chat")
     def chat(body: ChatRequest) -> StreamingResponse:
@@ -4109,30 +4109,33 @@ def create_app() -> FastAPI:
 
         Session-scoped: reset and project load clear it. The dollar figures
         are estimates (labeled as such in the UI); the trace files remain the
-        permanent, exact record.
+        permanent, exact record. ``context`` (the conversation-size gauge)
+        rides the same payload — see :func:`_usage_payload`.
         """
-        return sessions.get_session().usage.snapshot()
+        return _usage_payload(sessions.get_session())
 
     # --- Project save / resume --------------------------------------------
 
     @app.get("/api/project/save")
     def project_save(scope: str | None = None) -> Response:
         workspace = sessions.get_workspace()
-        if workspace.scope != "original" and scope not in {"tutorial", "original"}:
+        if workspace.scope != "original" and scope != "tutorial":
             return JSONResponse(
                 {
                     "ok": False,
                     "code": "tutorial_active",
-                    "error": "Choose Save tutorial copy or return to your project before saving.",
+                    "error": (
+                        "A tutorial workspace is active. Use Save in the panel to "
+                        "download the tutorial copy, or end the tour to return to "
+                        "your project and save that."
+                    ),
                 },
                 status_code=409,
             )
         try:
             session = (
-                sessions.workspace_manager().original_for_save()
-                if workspace.scope != "original" and scope == "original"
-                else sessions.workspace_manager().tutorial_for_save()
-                if workspace.scope != "original" and scope == "tutorial"
+                sessions.workspace_manager().tutorial_for_save()
+                if workspace.scope != "original"
                 else workspace.session
             )
         except sessions.WorkspaceConflictError as exc:
@@ -4168,7 +4171,7 @@ def create_app() -> FastAPI:
                 {
                     "ok": False,
                     "code": "tutorial_active",
-                    "error": "Resolve the tutorial before opening another project.",
+                    "error": "End the tour and return to your project before opening another one.",
                 },
                 status_code=409,
             )
@@ -4214,7 +4217,7 @@ def create_app() -> FastAPI:
                 {
                     "ok": False,
                     "code": "tutorial_active",
-                    "error": "Resolve the tutorial before opening another project.",
+                    "error": "End the tour and return to your project before opening another one.",
                 },
                 status_code=409,
             )

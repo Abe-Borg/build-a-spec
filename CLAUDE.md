@@ -40,8 +40,9 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            close (closing-event veto → off-thread frontend
                            prompt → js_api save_and_close/discard_and_close,
                            native save via webview.FileDialog.SAVE; never traps
-                           the user) + open_in_browser(path) for the trace
-                           viewer; the pywebview-fallback except now logs
+                           the user); Developer tools reuses open_external_link
+                           for the trace viewer; the pywebview-fallback except
+                           now logs
 backend/
   settings.py              models (claude-sonnet-5 default), effort levels
                            (interview high / research xhigh), max_tokens at
@@ -184,7 +185,20 @@ backend/
                            Batch 2 adds key_status (masked, never leaks) + delete_api_key
   usage_ledger.py          [Batch 2] session-scoped billed-usage ledger (interview/
                            research/audit/qc), thread-safe, cost estimate from
-                           settings.PRICING; not persisted (per-session meter)
+                           settings.PRICING; not persisted (per-session meter).
+                           The context gauge is deliberately NOT here: it lives on
+                           SessionState.last_context_tokens (a gauge, not spend —
+                           the ledger's snapshot/merge tutorial plumbing is
+                           additive and would corrupt it): the Anthropic-counted
+                           conversation size after the last committed chat turn —
+                           its final request's prompt (input + cache r/w) plus
+                           that reply's retained non-thinking output — written
+                           only in the guarded commit block, cleared on
+                           reset/load, served as `context` {tokens, window:
+                           settings.MODEL_CONTEXT_WINDOW (1M; env
+                           BUILD_A_SPEC_CONTEXT_WINDOW pairs with a model
+                           override)} | null beside the /api/usage + session-
+                           bundle snapshot (app._usage_payload)
   figures.py               [Batch 8] chat-authored figures: Figure + FigureStore
                            (per-turn atomic like DocumentStore — begin/commit/
                            rollback, monotonic never-reused ids, validation, CSV
@@ -207,7 +221,9 @@ backend/
                            arrive over REST, not in a turn) — reset in place only.
                            The body never enters PROJECT CONTEXT and is elided
                            from committed history (PDF posture); the model re-reads
-                           on demand
+                           on demand. context_stubs() shows the REAL Anthropic-
+                           counted token_count (post-truncation — the number the
+                           100k cap and the panel use), never a chars/4 guess
   reference_extract.py     the attachment → text boundary: REFERENCE_KINDS
                            (.docx/.pdf/.txt/.xml/.csv) + labels, kind-for-filename,
                            sanitize_reference_filename (keeps the file's own
@@ -422,9 +438,11 @@ frontend/src/
                            no content truncation, DOCX + JSON downloads) /
                            SpecDocument (paper rendering + inline manual-edit
                            affordances; Batch 5 read-only diff render via `diff` prop)
-                           / Header (spend ticker; Batch 6 Tour button) / ApiKeyBanner /
+                           / Header (spend ticker + context pill "142k / 1M" from
+                           usage.context, hidden until a turn commits; Batch 6 Tour
+                           button) / ApiKeyBanner /
                            StatusStrip (live status strip) / SettingsPanel (key mgmt +
-                           usage table + about) / CloseDialog (save-before-leaving
+                           usage table + ContextLine gauge + about) / CloseDialog (save-before-leaving
                            prompt: Save & close / Close without saving / Cancel)
                            / OnboardingOverlay (Batch 6: blocking spotlight + passive
                            step bubbles; drawers gain an openNonce prop, controls
@@ -845,8 +863,11 @@ already resolved and does nothing). 409 when nothing is running.
   Tests set `BUILD_A_SPEC_DISABLE_UPDATE_CHECK=1` in conftest.
 - **Packaging** (`packaging/windows/`): PyInstaller one-folder →
   `dist/BuildASpec`; bundles `frontend/dist` (resolved frozen via
-  `sys._MEIPASS` in `settings._resolve_frontend_dist`) and the trace
-  viewer; Inno AppId `{89E58C42-A4F6-49F8-8FCB-1147CB0186DB}` is
+  `sys._MEIPASS` in `settings._resolve_frontend_dist`), the trace
+  viewer, and the root `LICENSE` file (the MIT notice must travel with
+  every installed copy, not just the git checkout — `installer.iss`
+  picks it up for free via its wholesale `dist\BuildASpec\*` bundling);
+  Inno AppId `{89E58C42-A4F6-49F8-8FCB-1147CB0186DB}` is
   Build-a-Spec's own — NEVER change it, NEVER share it with Spec
   Critic. `check_release_version.py` gates settings/package.json/tag
   agreement and runs inside pytest (`test_version_consistency_gate`) —
@@ -1361,15 +1382,16 @@ events, no new env vars, no new Python deps (`difflib` is stdlib).
   Anchor lookup retries ~2s, follows resize and scrolling, and falls back to
   an honest "this control is not available in the current UI state" card.
 - **Completion flag** is cosmetic localStorage; `abort()` handles external
-  session/project teardown without marking completion.
+  session/project teardown without marking completion (it is now
+  `restoreOriginal({completed: false})` — see "One ending" below).
 
 ## Guided tutorial — implemented notes (real workspaces + per-chapter scenarios)
 
 The tutorial teaches against **actual document state**, not a scripted
 mock-up. It runs in a protected server-owned copy of the user's project (or a
 generated spec, or the bundled showcase), and each chapter can swap in a
-purpose-built practice copy. The original is retained and restorable
-throughout.
+purpose-built practice copy. The original is retained throughout and is
+**always** restored on exit — there is no other ending.
 
 - **Three scopes, one lease.** `SessionManager` (`backend/sessions.py`) moves
   `original` → `tutorial` → `scenario`; scenarios never nest. Every
@@ -1380,9 +1402,11 @@ throughout.
   `begin_tutorial` is idempotent per `request_id` and refuses while a chat
   turn, research, audit, or QC run is active or settling.
 - **Routes** (`backend/app.py`): `GET /api/tutorial/status`, `POST
-  /api/tutorial/{start,enrich,scenario/start,scenario/finish,restore,keep}`.
-  `enrich` is SSE. `GET /api/project/save?scope=tutorial|original` saves
-  either copy mid-tutorial.
+  /api/tutorial/{start,enrich,scenario/start,scenario/finish,restore}`.
+  `enrich` is SSE. `restore` has no `keep` counterpart — see "One ending"
+  below. `GET /api/project/save?scope=tutorial` is the only mid-tutorial
+  save; there is no original-scope download, because the original is never
+  replaced and is always there to save after the tour ends.
 - **Coverage, not decoration.** `analyze_tutorial_coverage`
   (`backend/tutorial.py`) checks 15+ teaching anchors the manifest needs
   (section number/title, substantive content, all three PARTs, sibling
@@ -1412,11 +1436,27 @@ throughout.
   pins it (`test_an_unmapped_chapter_name_does_not_silently_start_a_practice_fixture`).
 - **Frontend.** `lib/useOnboarding.ts` is the lifecycle machine (phases
   `idle`, `source-choice`, `enrichment-choice`, `preparing`, `touring`,
-  `chunk-break`, `paused`, `completion`); `OnboardingOverlay.tsx` renders the
-  spotlight, per-step actions, readiness repair, and the finish choices;
-  `lib/onboardingStorage.ts` holds the resume record keyed on
-  `TOUR_VERSION` + the workspace lease (the server is authoritative — only an
-  exact three-way match restores progress).
+  `chunk-break`, `paused`); `OnboardingOverlay.tsx` renders the
+  spotlight, per-step actions, readiness repair, and the restore
+  progress/error card; `lib/onboardingStorage.ts` holds the resume record
+  keyed on `TOUR_VERSION` + the workspace lease (the server is authoritative
+  — only an exact three-way match restores progress).
+- **One ending, one code path.** `restoreOriginal({completed})` in
+  `useOnboarding.ts` is the single terminal transition; the natural finish,
+  `end()` (the "End the guided tour?" confirm), the post-reload
+  lease-mismatch recovery, and `abort()` (New session / Open project) all
+  call it, and `finish_tutorial` has no `disposition` to pick. Only
+  `completed` differs — external teardown and reload recovery pass `false`,
+  so a tour the user never took is never marked complete (pinned by a
+  single-call-site assertion in `tour.test.ts`). There is no
+  "keep the tutorial" disposition anywhere in the stack, and no modal asking
+  which ending the user wants: **ending returns the exact retained
+  pre-tutorial `SessionState` object**, so the project comes back whole.
+  Progress and failure ride the existing `preparing`/`stage:"finishing"`
+  phase — note `retryPrepare` needs its `finishing` branch ahead of the
+  `chooseSource` fall-through, or a failed restore restarts the tutorial.
+  The `tour.finish` capability lives on the touring card's **End** button and
+  the paused pill's ✕ (both reachable states), not on a modal wrapper.
 - **Paid results are never fabricated.** `research`, `imported` and `qc`
   readiness are deliberately **not** repairable by "Build the missing
   example"; a missing result renders honest copy saying so. Two
@@ -2647,8 +2687,8 @@ zipfile stdlib), no new npm deps; three new env knobs; six new REST routes
   (workspace/doc versions/counts/flags/spend), Recent activity (newest-
   first event lines, type filter, in-flight spans), Activity log tail
   (+copy), Trace files (run list + root path + "Open trace viewer" via the
-  new `open_in_browser` js_api bridge with `window.open` fallback — the
-  shell has no reliable target=_blank), and the bundle download (plain
+  shared `open_external_link` js_api bridge with `window.open` fallback —
+  the shell has no reliable target=_blank), and the bundle download (plain
   `<a download>` + the sensitivity caveat: contains draft text and
   prompts, local-only, share deliberately — the trust posture).
 - **Trace viewer rewrite** (same route, native file): the previous

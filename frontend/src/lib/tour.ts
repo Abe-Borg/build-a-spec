@@ -135,7 +135,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "left",
         title: "This is an actual specification",
         body:
-          "The tutorial is running in a protected copy of your current project, a newly AI-generated spec, or the bundled LLM-authored showcase you selected. Every block you see is real document state. Back, pause, ask a question, or end the tour at any time; your original is restorable at the finish.",
+          "The tutorial is running in a protected copy of your current project, a newly AI-generated spec, or the bundled LLM-authored showcase you selected. Every block you see is real document state. Back, pause, ask a question, or end the tour at any time — however you end it, your project comes straight back exactly as it was.",
       },
       {
         id: "identity",
@@ -616,10 +616,10 @@ export const TOUR: readonly TourChunk[] = [
         mode: "interactive",
         anchor: "new-session",
         placement: "bottom",
-        title: "Choose what happens to the tutorial work",
+        title: "Ending the tour returns you to your project",
         body:
-          "Return to your protected project by default, or save a .baspec tutorial copy before returning. Replacing your project with the tutorial copy is intentionally last and requires a second confirmation plus the option to save the original first. If you began blank, Return restores that blank session.",
-        continueLabel: "Choose what to keep",
+          "There is one ending, and this is it. Your project comes back exactly as it was before the tour started — the same document, history, and version list — and this practice copy is discarded. Continue now, press End on any step, or start a new session or open a project from the header; every one of those puts your project back first. If you began blank, you get that blank session back. Model usage you spent during the tour still counts toward your totals. To take tutorial work with you, use Save in the panel before you finish.",
+        continueLabel: "Finish and return to my project",
       },
     ],
   },

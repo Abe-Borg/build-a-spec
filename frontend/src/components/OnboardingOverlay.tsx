@@ -431,7 +431,6 @@ export default function OnboardingOverlay({
   bumpDrawer,
 }: Props) {
   const { phase } = ob;
-  const [keepConfirm, setKeepConfirm] = useState(false);
   const [rearrangeBaseline, setRearrangeBaseline] = useState<{
     key: string;
     signature: string;
@@ -491,10 +490,6 @@ export default function OnboardingOverlay({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [phase.kind, ob]);
-
-  useEffect(() => {
-    if (phase.kind !== "completion") setKeepConfirm(false);
-  }, [phase.kind]);
 
   if (phase.kind === "idle") return null;
 
@@ -575,6 +570,7 @@ export default function OnboardingOverlay({
   }
 
   if (phase.kind === "preparing") {
+    const finishing = phase.stage === "finishing";
     const label =
       phase.stage === "starting"
         ? "Protecting the original and opening the tutorial copy…"
@@ -582,15 +578,42 @@ export default function OnboardingOverlay({
           ? "Building the missing real examples in the specification…"
           : phase.stage === "scenario"
             ? `Preparing the ${phase.label ?? "next"} chapter…`
-            : "Restoring your workspace…";
+            : "Returning you to your project…";
     return (
-      <ModalShell title={phase.error ? "The tutorial needs attention" : "Preparing actual content"} onClose={ob.requestEnd}>
+      <ModalShell
+        title={
+          phase.error
+            ? finishing
+              ? "Your project could not be returned yet"
+              : "The tutorial needs attention"
+            : "Preparing actual content"
+        }
+        // A restore in flight cannot be cancelled, and a failed one must not
+        // re-open the End confirmation it just came from.
+        onClose={
+          finishing ? (phase.error ? ob.stayInTutorial : () => {}) : ob.requestEnd
+        }
+      >
         {phase.error ? (
           <>
             <p className="text-sm leading-relaxed text-err">{phase.error}</p>
+            {finishing && (
+              <p className="mt-2 text-[11px] leading-snug text-ink-faint">
+                Your project is still protected and has not changed. If a chat
+                turn, research run, or Final QC is still going in the tutorial
+                copy, stop it or let it finish, then retry.
+              </p>
+            )}
             <div className="mt-4 flex gap-2">
-              <button onClick={ob.retryPrepare} className={primaryBtn}>Retry</button>
-              <button onClick={ob.requestEnd} className={quietBtn}>Choose what to restore</button>
+              <button onClick={ob.retryPrepare} className={primaryBtn}>
+                {finishing ? "Retry returning to my project" : "Retry"}
+              </button>
+              <button
+                onClick={finishing ? ob.stayInTutorial : ob.requestEnd}
+                className={quietBtn}
+              >
+                {finishing ? "Back to the tutorial" : "End the tour and return to my project"}
+              </button>
             </div>
           </>
         ) : (
@@ -651,61 +674,13 @@ export default function OnboardingOverlay({
         <button
           onClick={ob.requestEnd}
           aria-label="End tutorial"
+          title="End the tour and return to your project exactly as you left it"
+          data-capability="tour.finish"
           className="flex h-8 w-8 items-center justify-center rounded-full border border-edge bg-surface text-ink-dim shadow-2xl"
         >
           ✕
         </button>
       </div>
-    );
-  }
-
-  if (phase.kind === "completion") {
-    return (
-      <ModalShell title="What should happen to the tutorial workspace?" onClose={ob.requestEnd} wide>
-        <div data-capability="tour.finish">
-        {!keepConfirm ? (
-          <p className="text-sm leading-relaxed text-ink-dim">
-            Your original project is still protected. Return to it now, save the tutorial work
-            first, or explicitly replace it with this practice project.
-          </p>
-        ) : (
-          <div className="rounded-lg border border-warn/40 bg-warn/10 p-3">
-            <h3 className="text-sm font-medium text-ink">Replace the original working project?</h3>
-            <p className="mt-1 text-xs leading-relaxed text-ink-dim">
-              Keeping the tutorial makes it the active project and releases the protected original.
-              Save the original first, continue without saving it, or cancel this replacement.
-            </p>
-          </div>
-        )}
-        {phase.error && <p className="mt-3 text-sm text-err">{phase.error}</p>}
-        {!keepConfirm ? (
-          <div className="mt-4 grid gap-2">
-            <button onClick={ob.chooseRestore} disabled={phase.saving} className={primaryBtn}>
-              Return to my project
-            </button>
-            <button onClick={ob.saveCopyAndRestore} disabled={phase.saving} className={quietBtn}>
-              Save tutorial copy, then return
-            </button>
-            <button onClick={() => setKeepConfirm(true)} disabled={phase.saving} className={quietBtn}>
-              Replace my project with tutorial copy…
-            </button>
-          </div>
-        ) : (
-          <div className="mt-4 grid gap-2 sm:grid-cols-3">
-            <button onClick={ob.saveOriginalAndKeep} disabled={phase.saving} className={primaryBtn}>
-              Save original, then keep
-            </button>
-            <button onClick={ob.chooseKeep} disabled={phase.saving} className={quietBtn}>
-              Keep without saving original
-            </button>
-            <button onClick={() => setKeepConfirm(false)} disabled={phase.saving} className={quietBtn}>
-              Cancel
-            </button>
-          </div>
-        )}
-        {phase.saving && <p className="mt-3 text-xs text-ink-faint">Finishing safely…</p>}
-        </div>
-      </ModalShell>
     );
   }
 
@@ -819,7 +794,14 @@ export default function OnboardingOverlay({
           </button>
           <button onClick={ob.pause} className={quietBtn}>Pause</button>
           <span className="flex-1" />
-          <button onClick={ob.requestEnd} className={quietBtn}>End</button>
+          <button
+            onClick={ob.requestEnd}
+            className={quietBtn}
+            title="End the tour and return to your project exactly as you left it"
+            data-capability="tour.finish"
+          >
+            End
+          </button>
         </div>
       </AnchoredCard>
     </div>

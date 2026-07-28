@@ -8,12 +8,9 @@ import type {
   TutorialSource,
 } from "../types";
 import {
-  downloadTutorialCopy,
-  downloadOriginalProjectCopy,
   enrichTutorialWorkspace,
   finishTutorialScenario,
   getTutorialStatus,
-  keepTutorialWorkspace,
   restoreTutorialWorkspace,
   startTutorialScenario,
   startTutorialWorkspace,
@@ -49,8 +46,7 @@ export type OnboardingPhase =
     }
   | { kind: "touring"; chunk: number; step: number }
   | { kind: "chunk-break"; nextChunk: number }
-  | { kind: "paused"; chunk: number; step: number }
-  | { kind: "completion"; error: string | null; saving: boolean };
+  | { kind: "paused"; chunk: number; step: number };
 
 export interface OnboardingCaps {
   editDoc: (ops: EditOp[]) => Promise<void>;
@@ -84,10 +80,8 @@ export interface OnboardingApi {
   requestEnd: () => void;
   cancelEnd: () => void;
   end: () => void;
-  chooseRestore: () => void;
-  chooseKeep: () => void;
-  saveOriginalAndKeep: () => void;
-  saveCopyAndRestore: () => void;
+  /** Retry a restore that failed, or step back from one, without a prompt. */
+  stayInTutorial: () => void;
   runStepAction: (action: TourAction) => void;
   /** Reconcile a session replacement initiated by another tutorial surface
    * (currently starting a template inside the disposable template scenario). */
@@ -120,12 +114,22 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
   phaseRef.current = phase;
   const workspaceRef = useRef<WorkspaceState | null>(null);
   const enterChunkRef = useRef<((chunk: number, step?: number) => void) | null>(null);
+  const restoreOriginalRef = useRef<
+    ((opts: { completed: boolean }) => void) | null
+  >(null);
   const pendingStartChunkRef = useRef(0);
   const runRef = useRef(0);
   const lastSourceRef = useRef<TutorialSource>("showcase");
   const startRequestRef = useRef<string | null>(null);
+  // Where to put the user back when a restore fails. There is no longer a
+  // modal to dismiss to, so the last visited step is the only honest landing.
+  const lastStepRef = useRef<{ chunk: number; step: number }>({ chunk: 0, step: 0 });
+  // Remembered so retrying a failed restore keeps the original request's claim
+  // about whether the tour was actually completed.
+  const pendingCompletedRef = useRef(false);
 
   const persist = useCallback((chunk: number, step: number, paused: boolean) => {
+    lastStepRef.current = { chunk, step };
     const workspace = workspaceRef.current;
     if (
       !workspace ||
@@ -182,13 +186,12 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
               : undefined,
         };
         if (storedLeaseMismatch) {
+          // A protected workspace survived a reload but the local record that
+          // says WHERE the user was did not, so the tutorial cannot resume.
+          // Ending it returns the retained project, which is the only outcome
+          // there has ever been — so do it, rather than ask.
           clearOnboardingProgress();
-          setPhase({
-            kind: "completion",
-            saving: false,
-            error:
-              "A protected tutorial workspace was recovered after reload. Choose whether to return to your project, save the tutorial copy, or keep it.",
-          });
+          restoreOriginalRef.current?.({ completed: false });
           return;
         }
         const storedChunk = stored.chunk;
@@ -463,6 +466,11 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     else if (current.stage === "scenario" && current.targetChunk !== undefined) {
       enterChunkRef.current?.(current.targetChunk, current.targetStep ?? 0);
     }
+    // A failed restore retries the restore. Falling through to chooseSource
+    // here would start the whole tutorial over on the way OUT of it.
+    else if (current.stage === "finishing") {
+      restoreOriginalRef.current?.({ completed: pendingCompletedRef.current });
+    }
     else void chooseSource(current.source);
   }, [chooseSource, enrich]);
 
@@ -617,7 +625,9 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
       setPhase({ kind: "chunk-break", nextChunk: current.chunk + 1 });
       persist(current.chunk, current.step, false);
     } else {
-      setPhase({ kind: "completion", error: null, saving: false });
+      // The last step's Continue button says what it does, so the click is
+      // the consent; finishing restores the project with nothing else asked.
+      restoreOriginalRef.current?.({ completed: true });
     }
   }, [persist]);
 
@@ -662,49 +672,68 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
 
   const requestEnd = useCallback(() => setEndConfirm(true), []);
   const cancelEnd = useCallback(() => setEndConfirm(false), []);
-  const end = useCallback(() => {
-    runRef.current += 1;
-    setEndConfirm(false);
-    setPhase({ kind: "completion", error: null, saving: false });
-  }, []);
 
-  const finish = useCallback(
-    async (
-      choice: "restore" | "keep" | "save-restore" | "save-original-keep",
-    ) => {
+  /**
+   * The single exit from a tutorial workspace.
+   *
+   * Ending ALWAYS returns the exact retained pre-tutorial session — there is
+   * no keep-the-practice-copy outcome and nothing to choose between, so the
+   * user is never asked. The backend re-activates the very same SessionState
+   * object it stashed at start, so the project comes back whole: document,
+   * history, version list, runners and retained source bytes included.
+   *
+   * `completed` only sets the cosmetic "tour finished" flag. External teardown
+   * (New session / Open project) and post-reload cleanup pass false — those
+   * are not the user finishing the tutorial.
+   */
+  const restoreOriginal = useCallback(
+    async ({ completed }: { completed: boolean }): Promise<boolean> => {
       const workspace = workspaceRef.current;
+      setEndConfirm(false);
+      pendingCompletedRef.current = completed;
+      const settle = (session?: SessionBundle) => {
+        if (session) capsRef.current.applySession(session);
+        if (completed) markOnboardingCompleted();
+        clearOnboardingProgress();
+        workspaceRef.current = null;
+        startRequestRef.current = null;
+        runRef.current += 1;
+        setPhase({ kind: "idle" });
+      };
       if (!workspace) {
         runRef.current += 1;
-        clearOnboardingProgress();
-        setPhase({ kind: "idle" });
-        return;
+        settle();
+        return true;
       }
-      runRef.current += 1;
-      setPhase({ kind: "completion", error: null, saving: true });
+      // Bump before the first await so an in-flight enrich or scenario swap is
+      // orphaned and cannot apply a tutorial payload over the restored project.
+      const run = (runRef.current += 1);
+      setPhase({
+        kind: "preparing",
+        source: workspace.source,
+        stage: "finishing",
+        error: null,
+      });
       try {
-        if (choice === "save-restore") await downloadTutorialCopy();
-        if (choice === "save-original-keep") {
-          await downloadOriginalProjectCopy();
-        }
         const transition = () =>
-          choice === "keep" || choice === "save-original-keep"
-            ? keepTutorialWorkspace({
-                tutorialId: workspace.tutorialId,
-                workspaceId: workspace.workspaceId,
-                generation: workspace.generation,
-              })
-            : restoreTutorialWorkspace({
-                tutorialId: workspace.tutorialId,
-                workspaceId: workspace.workspaceId,
-                generation: workspace.generation,
-              });
+          restoreTutorialWorkspace({
+            tutorialId: workspace.tutorialId,
+            workspaceId: workspace.workspaceId,
+            generation: workspace.generation,
+          });
         let session: SessionBundle;
         try {
           session = await transition();
         } catch (firstError) {
           // A scenario may have settled after End was clicked. Reconcile its
-          // authoritative lease once, then resolve the same user choice.
+          // authoritative lease once, then restore against it.
           const status = await getTutorialStatus().catch(() => null);
+          if (status && !status.active) {
+            // Someone already left the tutorial (a native close, or a restore
+            // that raced this one). The original is live; that is the goal.
+            settle(status.session ?? undefined);
+            return true;
+          }
           if (
             !status?.active ||
             status.tutorial_id !== workspace.tutorialId ||
@@ -719,22 +748,40 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
             status.scope === "scenario" ? status.scenario_kind : undefined;
           session = await transition();
         }
-        capsRef.current.applySession(session);
-        markOnboardingCompleted();
-        clearOnboardingProgress();
-        workspaceRef.current = null;
-        runRef.current += 1;
-        setPhase({ kind: "idle" });
+        // A newer restore already owns the terminal state; write nothing.
+        if (runRef.current !== run) return true;
+        settle(session);
+        return true;
       } catch (error) {
+        if (runRef.current !== run) return true;
         setPhase({
-          kind: "completion",
-          saving: false,
+          kind: "preparing",
+          source: workspace.source,
+          stage: "finishing",
           error: error instanceof Error ? error.message : String(error),
         });
+        return false;
       }
     },
     [],
   );
+  restoreOriginalRef.current = (opts) => {
+    void restoreOriginal(opts);
+  };
+
+  const end = useCallback(() => {
+    void restoreOriginal({ completed: true });
+  }, [restoreOriginal]);
+
+  /** Leave a failed restore without retrying it; the tutorial is still live. */
+  const stayInTutorial = useCallback(() => {
+    const { chunk, step } = lastStepRef.current;
+    if (!workspaceRef.current) {
+      setPhase({ kind: "idle" });
+      return;
+    }
+    setPhase({ kind: "paused", chunk, step });
+  }, []);
 
   const runStepAction = useCallback(
     (action: TourAction) => {
@@ -801,38 +848,10 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     setPhase({ kind: "idle" });
   }, []);
 
-  const abort = useCallback(async (): Promise<boolean> => {
-    const workspace = workspaceRef.current;
-    runRef.current += 1;
-    setEndConfirm(false);
-    if (workspace) {
-      setPhase({
-        kind: "preparing",
-        source: workspace.source,
-        stage: "finishing",
-        error: null,
-      });
-      try {
-        const restored = await restoreTutorialWorkspace({
-          tutorialId: workspace.tutorialId,
-          workspaceId: workspace.workspaceId,
-          generation: workspace.generation,
-        });
-        capsRef.current.applySession(restored);
-      } catch (error) {
-        setPhase({
-          kind: "completion",
-          saving: false,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return false;
-      }
-    }
-    clearOnboardingProgress();
-    workspaceRef.current = null;
-    setPhase({ kind: "idle" });
-    return true;
-  }, []);
+  const abort = useCallback(
+    () => restoreOriginal({ completed: false }),
+    [restoreOriginal],
+  );
 
   return {
     phase,
@@ -853,10 +872,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     requestEnd,
     cancelEnd,
     end,
-    chooseRestore: () => void finish("restore"),
-    chooseKeep: () => void finish("keep"),
-    saveOriginalAndKeep: () => void finish("save-original-keep"),
-    saveCopyAndRestore: () => void finish("save-restore"),
+    stayInTutorial,
     runStepAction,
     syncSessionIdentity,
     acceptNativeRestore,

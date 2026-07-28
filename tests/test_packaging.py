@@ -57,6 +57,19 @@ def test_installer_appid_is_frozen():
     )
 
 
+def test_pyinstaller_spec_bundles_the_license():
+    """The MIT notice must travel with every installed copy, not just the
+    git checkout — installer.iss bundles dist/BuildASpec wholesale, so
+    getting the LICENSE file into the PyInstaller output is what actually
+    ships it."""
+    assert (REPO_ROOT / "LICENSE").is_file(), "repo root LICENSE is missing"
+    spec = (PKG / "build-a-spec.spec").read_text(encoding="utf-8")
+    assert '"LICENSE"' in spec, (
+        "the PyInstaller spec must bundle the root LICENSE file into the "
+        "frozen app"
+    )
+
+
 def test_installer_gates_webview2_on_the_bootstrapper_being_present():
     """The WebView2 bundling is preprocessor-guarded so a manual build
     without the (gitignored) bootstrapper still compiles."""

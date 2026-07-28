@@ -214,8 +214,8 @@ what the honest-framing rule above exists to prevent.)
 
 **The tutorial teaches against real document state in a protected copy of
 your work.** Pick your own spec, a freshly generated one, or the bundled
-showcase; practice on it; then choose what happens to it at the end. Your
-original is retained the whole time and restored by default.
+showcase, and practice on it. However you end the tour, your original project
+comes back exactly as it was before it started.
 
 - **Eleven chapters over a real workspace.** Start from an empty page ·
   the paper · grounding · review and compare · figures and references ·
@@ -237,10 +237,12 @@ original is retained the whole time and restored by default.
   cannot ship untaught, and a tutorial step cannot describe a control that
   does not exist. Step anchors are checked against the real DOM attributes
   too.
-- **You choose the ending.** Return to your project (default), save a
-  `.baspec` copy of the tutorial work first, or replace your project with the
-  tutorial copy — which is deliberately last, needs a second confirmation,
-  and offers to save your original first.
+- **There is one ending: your project comes back.** End the tour from any
+  step, finish the last chapter, start a new session, open a project, or close
+  the window — every one of those returns your original exactly as it was,
+  same document, same history, same version list. One short confirmation, then
+  it happens; nothing to choose and nothing to lose. Want the practice work
+  too? Save it from the panel before you finish.
 - **Resume, jump, and restart.** Pause any time; the tutorial resumes only
   when the server agrees the same protected workspace is still live. Help
   restarts it or jumps straight to any named chapter. Reduced motion is
@@ -917,3 +919,10 @@ Ported so far (adapted, same design): `api_key_store.py`, `app_paths.py`, the he
 6. **Post-ship batches (v0.6.0 → v1.0.0).** "Sonnet unleashed" no-limits context architecture (v0.6.0); streaming UX + manual editing + settings + cost meter (v0.7.0); full-section draft + keyboard review queue (v0.8.0); Final QC on Fable 5 with adversarial verification, a full audit-grade in-app/Word/JSON report, and a compact accept/dismiss action queue (v0.9.0); and the **1.0 release** — tracked-changes redline export over the normalized imported baseline or any semantic version, plus the in-app version-compare view, one diff engine behind both (v1.0.0).
 
 Build-a-Spec is an AI-assisted drafting aid, not an authority. Its output is advisory and is not a substitute for review by a licensed design professional.
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+Copyright (c) 2026 [Abraham Borg](https://github.com/Abe-Borg) ·
+[LinkedIn](https://www.linkedin.com/in/abrahamborg/)

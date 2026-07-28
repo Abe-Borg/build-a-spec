@@ -132,11 +132,15 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
   };
 
   const openViewer = () => {
-    const bridge = window.pywebview?.api?.open_in_browser;
+    // The shared external-link bridge (the shell has no reliable
+    // target=_blank); the viewer is app-served, so the app's own origin
+    // is the right absolute URL in both the shell and dev.
+    const url = new URL("/api/trace/viewer", window.location.origin).toString();
+    const bridge = window.pywebview?.api?.open_external_link;
     if (bridge) {
-      void bridge("/api/trace/viewer");
+      void bridge(url);
     } else {
-      window.open("/api/trace/viewer", "_blank", "noopener");
+      window.open(url, "_blank", "noopener");
     }
   };
 

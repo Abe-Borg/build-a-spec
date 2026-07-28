@@ -92,6 +92,12 @@ datas += [(
     os.path.join("backend", "templates", "curated"),
 )]
 
+# The MIT license text — the installed copy must carry it (permission
+# notice requirement), not just the git checkout. Lands at the top level
+# of dist/BuildASpec, which installer.iss bundles wholesale via its
+# `Source: "..\..\dist\BuildASpec\*"` entry.
+datas += [(os.path.join(_repo_root, "LICENSE"), ".")]
+
 a = Analysis(
     [os.path.join(SPECPATH, "app_entry.py")],
     pathex=[_repo_root],

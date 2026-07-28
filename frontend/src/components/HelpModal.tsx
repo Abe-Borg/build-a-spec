@@ -578,6 +578,27 @@ function About({ health }: { health: Health | null }) {
         </button>
         {updateMsg && <span className="text-xs text-ink-faint">{updateMsg}</span>}
       </div>
+      <div className="space-y-1.5 border-t border-edge pt-4 text-xs text-ink-faint">
+        <p>© 2026 Abraham Borg. Released under the MIT License.</p>
+        <p className="flex flex-wrap gap-x-4 gap-y-1">
+          <a
+            href="https://www.linkedin.com/in/abrahamborg/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-accent underline underline-offset-2 hover:text-accent-hover"
+          >
+            LinkedIn
+          </a>
+          <a
+            href="https://github.com/Abe-Borg"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-accent underline underline-offset-2 hover:text-accent-hover"
+          >
+            GitHub
+          </a>
+        </p>
+      </div>
     </div>
   );
 }

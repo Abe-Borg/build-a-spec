@@ -81,13 +81,6 @@ class SessionManager:
                 self._tutorial_source,
             )
 
-    def original_for_save(self) -> SessionState:
-        """Return the retained original only while a tutorial owns it."""
-        with self._lock:
-            if self._scope == "original" or self._original is None:
-                raise WorkspaceConflictError("No protected original project is retained.")
-            return self._original
-
     def tutorial_for_save(self) -> SessionState:
         """Return the stable tutorial base, never a disposable scenario."""
         with self._lock:
@@ -343,9 +336,14 @@ class SessionManager:
             self._activate(staged_session, "tutorial")
             return self.current()
 
-    def finish_tutorial(
-        self, expected_workspace_id: int, *, disposition: Literal["restore", "keep"]
-    ) -> WorkspaceLease:
+    def finish_tutorial(self, expected_workspace_id: int) -> WorkspaceLease:
+        """End the tutorial the only way it can end: restore the original.
+
+        The retained original object is re-activated as-is — the same identity,
+        not a copy — so the user's project comes back whole and every reference
+        held elsewhere keeps working. The tutorial copy is discarded; only its
+        paid usage delta carries over, because that spend was real.
+        """
         with self._lock:
             self._check_expected(expected_workspace_id)
             if self._scope != "tutorial" or self._tutorial is None:
@@ -358,17 +356,13 @@ class SessionManager:
             if reasons:
                 raise WorkspaceBusyError(reasons)
             tutorial = self._tutorial
-            if disposition == "restore":
-                if self._original is None:
-                    raise WorkspaceConflictError("The original workspace is unavailable.")
-                original = self._original
-                original.usage.merge_delta(
-                    self._tutorial_usage_before or {}, tutorial.usage.snapshot()
-                )
-                tutorial.invalidate_model_turn()
-                active = original
-            else:
-                active = tutorial
+            if self._original is None:
+                raise WorkspaceConflictError("The original workspace is unavailable.")
+            original = self._original
+            original.usage.merge_delta(
+                self._tutorial_usage_before or {}, tutorial.usage.snapshot()
+            )
+            tutorial.invalidate_model_turn()
             self._original = None
             self._tutorial = None
             self._scenario = None
@@ -378,7 +372,7 @@ class SessionManager:
             self._scenario_kind = None
             self._tutorial_usage_before = None
             self._scenario_usage_before = None
-            self._activate(active, "original")
+            self._activate(original, "original")
             return self.current()
 
     def force_restore_original(self) -> WorkspaceLease:

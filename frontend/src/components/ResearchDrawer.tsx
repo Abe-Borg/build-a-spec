@@ -13,7 +13,7 @@
  * Final QC drawer supersedes it (its code_compliance + completeness lenses
  * cover the audit's ground and more).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   EditOp,
   ResearchRunStatus,
@@ -294,6 +294,10 @@ export default function ResearchDrawer({
   useEffect(() => {
     if (!research) setAgentDetailId(null);
   }, [research]);
+  // Focus fallback for the modal: the opener card unmounts with the board
+  // when the run completes mid-view, so closing then restores focus to the
+  // always-rendered drawer toggle instead of dropping it on the body.
+  const collapseToggleRef = useRef<HTMLButtonElement>(null);
   const status: ResearchRunStatus = research?.status ?? "idle";
   const running = status === "running";
   const items = research?.profile?.items ?? [];
@@ -344,6 +348,7 @@ export default function ResearchDrawer({
     >
       <div className="flex items-baseline gap-2">
         <button
+          ref={collapseToggleRef}
           className="flex min-w-0 flex-1 items-baseline gap-2 text-left text-[11px] text-ink-faint transition-colors hover:text-ink-dim"
           onClick={() => setExpanded((v) => !v)}
           title="Project profile and grounded requirements research"
@@ -442,6 +447,7 @@ export default function ResearchDrawer({
         events={research?.events ?? []}
         runStatus={status}
         onClose={() => setAgentDetailId(null)}
+        restoreFallbackRef={collapseToggleRef}
       />
 
       {expanded && (

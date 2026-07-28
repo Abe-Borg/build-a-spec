@@ -9,8 +9,10 @@
  * keyboard wiring follows QCReportModal (useDialogFocus).
  */
 import { useEffect, useMemo, useRef } from "react";
+import type { RefObject } from "react";
 import type { ResearchEvent, ResearchRunStatus } from "../types";
 import { useDialogFocus } from "../lib/dialogFocus";
+import { safeHttpUrl } from "../lib/qcReport";
 import {
   ACTIVITY_LABELS,
   RETRY_REASONS,
@@ -29,6 +31,10 @@ interface Props {
   /** Run-level status: the run can end while the modal is open. */
   runStatus: ResearchRunStatus;
   onClose: () => void;
+  /** Focus restoration when the opener card is gone — the board unmounts
+   *  when the run completes mid-view, so closing then would otherwise drop
+   *  keyboard focus onto the document body. */
+  restoreFallbackRef?: RefObject<HTMLButtonElement>;
 }
 
 /** Header status pill. "interrupted" is derived, not an agent state: the
@@ -65,21 +71,30 @@ function entryContent(entry: AgentTimelineEntry) {
           Searched &ldquo;{entry.query}&rdquo;
         </span>
       );
-    case "fetch":
+    case "fetch": {
+      // The URL is copied verbatim from the streamed web-tool input, so a
+      // non-HTTP or credential-bearing value renders inert, never as a
+      // clickable link (the QC report-source posture).
+      const safe = safeHttpUrl(entry.url);
       return (
         <span className="min-w-0 break-words text-ink-dim">
           Read{" "}
-          <a
-            href={entry.url}
-            target="_blank"
-            rel="noreferrer"
-            className="text-accent hover:underline"
-            title={entry.url}
-          >
-            {trimUrl(entry.url)}
-          </a>
+          {safe ? (
+            <a
+              href={safe}
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent hover:underline"
+              title={entry.url}
+            >
+              {trimUrl(entry.url)}
+            </a>
+          ) : (
+            <span title={entry.url}>{trimUrl(entry.url)}</span>
+          )}
         </span>
       );
+    }
     case "retry":
       return (
         <span className="min-w-0 break-words text-warn">
@@ -113,6 +128,7 @@ export default function AgentActivityModal({
   events,
   runStatus,
   onClose,
+  restoreFallbackRef,
 }: Props) {
   // Live updates for free: mergeResearchEvent appends into the same array
   // identity chain, so this memo re-folds exactly once per SSE commit.
@@ -122,7 +138,7 @@ export default function AgentActivityModal({
   );
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  useDialogFocus(open, dialogRef, closeButtonRef, onClose);
+  useDialogFocus(open, dialogRef, closeButtonRef, onClose, restoreFallbackRef);
 
   const state = detail.dim?.state ?? "queued";
   const live = runStatus === "running" && state !== "done" && state !== "failed";

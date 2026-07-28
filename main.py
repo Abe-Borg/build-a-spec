@@ -21,7 +21,7 @@ import urllib.request
 
 import uvicorn
 
-from backend import settings
+from backend import diagnostics, settings
 
 
 # Native file-dialog filters. pywebview's ``parse_file_type`` validates every
@@ -86,11 +86,18 @@ def _ensure_std_streams() -> None:
 def _start_backend() -> threading.Thread:
     # Must run before uvicorn.Config configures logging (see the docstring).
     _ensure_std_streams()
+    # log_config=None: uvicorn installs no handlers of its own, so its
+    # loggers propagate to the root handler diagnostics.init_logging()
+    # attached — the only place output survives in the packaged windowed
+    # build (stdout/stderr are devnull there). access_log=False because
+    # the app's request middleware is the access log.
     config = uvicorn.Config(
         "backend.app:app",
         host=settings.HOST,
         port=settings.PORT,
-        log_level="warning",
+        log_level="info",
+        log_config=None,
+        access_log=False,
     )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -316,6 +323,33 @@ class _CloseController:
             "data_b64": base64.b64encode(payload).decode("ascii"),
         }
 
+    def open_in_browser(self, path: str) -> bool:
+        """Open an app-served path (e.g. the trace viewer) in the default
+        browser.
+
+        The pywebview window is a single-document shell — ``target=_blank``
+        has no reliable destination across its backends — so pages meant
+        for side-by-side reading (Developer tools → trace viewer) go to the
+        real browser against the same local server. Only local app paths
+        are accepted: an absolute path starting with one ``/`` (two would
+        be a scheme-relative external URL).
+        """
+        if not isinstance(path, str):
+            return False
+        path = path.strip()
+        if not path.startswith("/") or path.startswith("//"):
+            return False
+        import webbrowser
+
+        try:
+            return bool(
+                webbrowser.open(
+                    f"http://{settings.HOST}:{settings.PORT}{path}"
+                )
+            )
+        except Exception:
+            return False
+
     # --- internals ---------------------------------------------------------
     def _force_close(self) -> None:
         self._allow_close = True
@@ -413,6 +447,11 @@ class _CloseController:
 
 
 def main() -> None:
+    # Logging first: everything after this line — uvicorn, the backend,
+    # a GUI failure below — has a durable destination even in the
+    # windowed build where stdout/stderr are devnull.
+    diagnostics.init_logging()
+    diagnostics.log_startup_banner()
     _start_backend()
     if not _wait_for_health():
         raise SystemExit(
@@ -462,12 +501,23 @@ def main() -> None:
             js_api=close_controller,
         )
         close_controller._bind(window)
-        webview.start()
+        # debug=True adds the WebView2/WebKit inspector — dev mode only.
+        webview.start(debug=settings.dev_mode())
     except Exception:
-        # No usable native webview — plain browser fallback.
+        # No usable native webview — plain browser fallback. Log WHY: a
+        # swallowed GUI failure is indistinguishable from "pywebview not
+        # installed", and in the packaged build this log line is the only
+        # record of it.
+        import logging
         import webbrowser
 
+        logging.getLogger("buildaspec.main").exception(
+            "pywebview shell failed; falling back to the default browser"
+        )
         webbrowser.open(url)
+        logging.getLogger("buildaspec.main").info(
+            "browser fallback serving at %s", url
+        )
         print(f"{settings.APP_NAME} running at {url} — Ctrl+C to quit.")
         try:
             while True:

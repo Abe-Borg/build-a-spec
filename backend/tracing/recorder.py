@@ -7,11 +7,17 @@ artifacts are the project file and the export).
 
 Owns the on-disk trace directory and a background writer thread. Public
 methods (``open_span`` / ``close_span`` / ``add_event`` / ``prompt_ref``)
-enqueue work; the writer drains, serializes to JSONL, and fsyncs on
+enqueue work; the writer drains, serializes to JSONL, flushes each line
+(so a hard crash loses at most the line in flight), and fsyncs on
 ``stop()``. Public methods are safe from any thread; only the writer
-touches file handles; a ContextVar plus a thread-local stack carry the
-active span so nested capture sites inherit their parent without plumbing.
-Every failure path logs and continues — tracing must never sink the app.
+touches file handles; a ContextVar carries the active span so ``span()``
+nesting inherits its parent without plumbing. The source's thread-local
+span stack is deliberately removed: Build-a-Spec's capture hooks open
+spans on request threads and close them from daemon threads, where a
+per-thread stack never pops and later spans on a reused threadpool
+thread would inherit a stale parent — every hook passes its handle
+explicitly instead. Every failure path logs and continues — tracing must
+never sink the app.
 """
 from __future__ import annotations
 
@@ -44,24 +50,9 @@ _CURRENT_SPAN: contextvars.ContextVar[SpanHandle | None] = contextvars.ContextVa
     "build_a_spec_current_span", default=None
 )
 
-_THREAD_SPAN_STACK = threading.local()
-
-
-def _stack() -> list[SpanHandle]:
-    stack = getattr(_THREAD_SPAN_STACK, "spans", None)
-    if stack is None:
-        stack = []
-        _THREAD_SPAN_STACK.spans = stack
-    return stack
-
-
 def current_span() -> SpanHandle | None:
-    """Active SpanHandle: ContextVar first, thread-local stack fallback."""
-    ctx_value = _CURRENT_SPAN.get()
-    if ctx_value is not None:
-        return ctx_value
-    stack = _stack()
-    return stack[-1] if stack else None
+    """Active SpanHandle from the ContextVar (set only by ``span()``)."""
+    return _CURRENT_SPAN.get()
 
 
 def bind_to_current_context(fn):
@@ -142,11 +133,19 @@ class TraceRecorder:
         return self._capture_level == LEVEL_DEEP
 
     # ---- lifecycle -----------------------------------------------------
-    def start(self, *, model: str = "", module_id: str = "") -> None:
+    def start(
+        self,
+        *,
+        model: str = "",
+        module_id: str = "",
+        environment: dict[str, Any] | None = None,
+    ) -> None:
         """Spin up the writer thread and write the initial run.json.
 
         Safe to call again against the same dir — appends and records a
-        ``resumed_at`` timestamp.
+        ``resumed_at`` timestamp. ``environment`` (platform/python/frozen/
+        models…) rides run.json so a trace identifies the machine that
+        produced it without cross-referencing anything.
         """
         self._trace_dir.mkdir(parents=True, exist_ok=True)
         existing = self._read_existing_run_meta()
@@ -168,6 +167,8 @@ class TraceRecorder:
                 "app_version": self._app_version,
                 "resumed_at": [],
             }
+        if environment is not None:
+            self._run_meta["environment"] = dict(environment)
         self._write_run_meta_sync()
 
         if self._writer_thread is None or not self._writer_thread.is_alive():
@@ -224,14 +225,12 @@ class TraceRecorder:
         )
         with self._open_spans_lock:
             self._open_spans[span.span_id] = span
-        handle = SpanHandle(
+        return SpanHandle(
             span_id=span.span_id,
             kind=span.kind,
             started_at=span.started_at,
             parent_span_id=span.parent_span_id,
         )
-        _stack().append(handle)
-        return handle
 
     def close_span(
         self,
@@ -251,13 +250,21 @@ class TraceRecorder:
         span.error = error
         if outputs:
             span.outputs.update(outputs)
-        # Lenient stack pop: prefer LIFO, tolerate out-of-order closes.
-        stack = _stack()
-        for i in range(len(stack) - 1, -1, -1):
-            if stack[i].span_id == handle.span_id:
-                stack.pop(i)
-                break
         self._enqueue(FILE_SPANS, scrub_data(span.to_jsonl_dict()))
+
+    def open_span_summaries(self) -> list[dict[str, Any]]:
+        """Cheap snapshot of spans still open — the live-activity view."""
+        with self._open_spans_lock:
+            return [
+                {
+                    "span_id": span.span_id,
+                    "kind": span.kind,
+                    "name": span.name,
+                    "started_at": span.started_at,
+                    "parent_span_id": span.parent_span_id,
+                }
+                for span in self._open_spans.values()
+            ]
 
     def add_event(self, handle: SpanHandle | None, type: str, **fields: Any) -> None:
         """Append one event; ``handle=None`` tags the event with the run id."""
@@ -335,6 +342,11 @@ class TraceRecorder:
                         )
                         writer.write(line)
                         writer.write("\n")
+                        # Per-line flush so a hard kill loses at most the
+                        # line in flight — traces exist to explain exactly
+                        # those exits. fsync stays close-only (per-line
+                        # fsync would grind a spinning disk).
+                        writer.flush()
                     except Exception as exc:  # noqa: BLE001
                         _log.warning(
                             "Failed to write trace line to %s: %s", filename, exc

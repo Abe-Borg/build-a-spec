@@ -6,6 +6,7 @@ import {
   saveApiKey,
   testKey,
 } from "../lib/api";
+import DeveloperToolsModal from "./DeveloperToolsModal";
 
 interface Props {
   open: boolean;
@@ -124,6 +125,7 @@ export default function SettingsPanel({
   const [busy, setBusy] = useState(false);
   const [testResult, setTestResult] = useState<TestResult>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [devToolsOpen, setDevToolsOpen] = useState(false);
 
   const refreshStatus = useCallback(() => {
     getKeyStatus()
@@ -137,6 +139,7 @@ export default function SettingsPanel({
       setReplaceValue("");
       setTestResult(null);
       setConfirmRemove(false);
+      setDevToolsOpen(false);
     }
   }, [open, refreshStatus]);
 
@@ -194,6 +197,7 @@ export default function SettingsPanel({
     "rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm text-ink transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
 
   return (
+    <>
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-6 pt-16"
       onClick={onClose}
@@ -322,8 +326,34 @@ export default function SettingsPanel({
               </p>
             )}
           </section>
+
+          {/* --- Developer tools --- */}
+          <section data-capability="session.developer-tools">
+            <p className={label}>Developer tools</p>
+            <p className="mt-2 text-xs text-ink-faint">
+              Detailed local diagnostics for troubleshooting: environment and
+              session state, the live activity log, trace files for every run,
+              and a downloadable support bundle. Everything shown is recorded
+              on this machine only.
+            </p>
+            <button
+              className={`${btn} mt-2`}
+              onClick={() => setDevToolsOpen(true)}
+              title="Open the diagnostics view"
+            >
+              Open developer tools
+            </button>
+          </section>
         </div>
       </div>
     </div>
+    {/* Sibling of the settings backdrop (the TrustDeepDiveModal stacking
+        pattern): a child of the backdrop would bubble its own backdrop
+        click into onClose and close both. z-[60] layers above z-50. */}
+    <DeveloperToolsModal
+      open={devToolsOpen}
+      onClose={() => setDevToolsOpen(false)}
+    />
+    </>
   );
 }

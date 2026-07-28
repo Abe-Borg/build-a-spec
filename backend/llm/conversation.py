@@ -2182,6 +2182,19 @@ def stream_user_turn(
             model=model or settings.INTERVIEW_MODEL,
             history_len=len(session.history),
         )
+        # Prompt material for the turn: hash-refs at the default capture
+        # level (the stable system block costs one prompts.jsonl entry per
+        # app run), inline text in deep mode. Observation only — the
+        # request payload is built independently below.
+        _trace.turn_prompts(
+            trace_handle,
+            system_text="\n\n".join(
+                str(block.get("text", ""))
+                for block in _stable_system_blocks(session)
+            ),
+            context_text=context_text,
+            user_text=user_text,
+        )
     except Exception as exc:  # noqa: BLE001 - initialization is transactional
         session.finalize_model_turn(turn_token, committed=False)
         yield {"type": "error", "message": f"Unexpected error: {exc}"}
@@ -2273,6 +2286,7 @@ def stream_user_turn(
                         "the turn was discarded."
                     )
                 request = request_kwargs()
+            round_started = time.perf_counter()
             manager, stream = _enter_stream(
                 client, request, trace_handle
             )
@@ -2298,6 +2312,33 @@ def stream_user_turn(
             _merge_usage(usage_totals, getattr(final, "usage", None))
             content = _content_blocks_to_dicts(final.content)
             stop_reason = "user_stop" if stopped_mid_stream else final.stop_reason
+
+            # One round_end trace event per streaming round — which round
+            # stalled, where the tokens went — including pause_turn rounds.
+            round_usage: dict[str, int] = {}
+            _merge_usage(round_usage, getattr(final, "usage", None))
+            _trace.turn_round(
+                trace_handle,
+                round_index=_round,
+                stop_reason=stop_reason,
+                duration_ms=int((time.perf_counter() - round_started) * 1000),
+                usage=round_usage,
+                tool_uses=sum(
+                    1 for b in content if b.get("type") == "tool_use"
+                ),
+                web_searches=sum(
+                    1
+                    for b in content
+                    if b.get("type") == "server_tool_use"
+                    and b.get("name") == "web_search"
+                ),
+                web_fetches=sum(
+                    1
+                    for b in content
+                    if b.get("type") == "server_tool_use"
+                    and b.get("name") == "web_fetch"
+                ),
+            )
 
             if stop_reason == "pause_turn":
                 # Long server-tool work paused server-side: re-send the

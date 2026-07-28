@@ -372,7 +372,7 @@ function DataFlowDiagram() {
           Reference files · figures
         </text>
         <text x="32" y="188" {...small}>
-          API key · local trace files
+          API key · local traces &amp; logs
         </text>
 
         {/* Request / reply arrows */}
@@ -1332,8 +1332,8 @@ function Dossier() {
               "Read under a size bound and inspected as a ZIP/OPC package before anything is retained. A package that fails inspection is rejected atomically. A .docx attached as a reference passes the same inspection as a master, because it is the same attack surface.",
             ],
             [
-              "Trace files",
-              "On by default and written only to your machine’s application-state folder, with credential-shaped strings redacted. They contain your draft text — that is what makes them useful as an audit record. Disable with the BUILD_A_SPEC_TRACE environment variable.",
+              "Trace files and the activity log",
+              "Both on by default and written only to your machine’s application-state folder, with credential-shaped strings redacted. Traces contain your draft text — that is what makes them useful as an audit record — and the activity log records what the application did (requests, errors, crashes), not your content. Both are visible in Settings → Developer tools, which can also save them as one diagnostics bundle. Disable with the BUILD_A_SPEC_TRACE and BUILD_A_SPEC_LOG environment variables.",
             ],
             [
               "Project files",

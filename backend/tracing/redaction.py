@@ -14,9 +14,14 @@ from typing import Any
 
 _REDACTED = "<redacted>"
 
-# Keys whose values are secrets regardless of shape.
+# Keys whose values are secrets regardless of shape. ``token(?!s)`` is a
+# Build-a-Spec deviation from the ported pattern: the bare ``token``
+# alternation also matched every usage-count key (``input_tokens``,
+# ``output_tokens``, ``thinking_tokens`` …), silently redacting billed
+# usage out of every turn span — counts are not secrets, auth tokens
+# (``auth_token``, ``Authorization`` …) still are.
 _SECRET_KEY_PATTERN = re.compile(
-    r"(?:api[_-]?key|authorization|password|secret|token|credential)",
+    r"(?:api[_-]?key|authorization|password|secret|token(?!s)|credential)",
     re.IGNORECASE,
 )
 

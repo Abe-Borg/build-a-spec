@@ -1,4 +1,8 @@
 import type {
+  DiagnosticsActivity,
+  DiagnosticsLog,
+  DiagnosticsSnapshot,
+  DiagnosticsTraces,
   DocPayload,
   EditOp,
   Figure,
@@ -885,6 +889,38 @@ export async function dismissQc(
 export async function getReadiness(): Promise<ReadinessPayload> {
   const resp = await fetch("/api/readiness");
   if (!resp.ok) throw new Error(`readiness ${resp.status}`);
+  return resp.json();
+}
+
+// --- Developer tools / diagnostics -----------------------------------------
+
+/** Environment + session snapshot for the Developer tools modal. */
+export async function getDiagnostics(): Promise<DiagnosticsSnapshot> {
+  const resp = await fetch("/api/diagnostics");
+  if (!resp.ok) throw new Error(`diagnostics ${resp.status}`);
+  return resp.json();
+}
+
+/** Tail of the local activity log. */
+export async function getDiagnosticsLog(tail = 500): Promise<DiagnosticsLog> {
+  const resp = await fetch(`/api/diagnostics/log?tail=${tail}`);
+  if (!resp.ok) throw new Error(`diagnostics log ${resp.status}`);
+  return resp.json();
+}
+
+/** Trace-run inventory (newest first). */
+export async function getDiagnosticsTraces(): Promise<DiagnosticsTraces> {
+  const resp = await fetch("/api/diagnostics/traces");
+  if (!resp.ok) throw new Error(`diagnostics traces ${resp.status}`);
+  return resp.json();
+}
+
+/** Recent trace events + open spans of the current run. */
+export async function getDiagnosticsActivity(
+  tail = 200,
+): Promise<DiagnosticsActivity> {
+  const resp = await fetch(`/api/diagnostics/activity?tail=${tail}`);
+  if (!resp.ok) throw new Error(`diagnostics activity ${resp.status}`);
   return resp.json();
 }
 

@@ -14,6 +14,9 @@ a desktop app launch.
 from __future__ import annotations
 
 import atexit
+import os
+import platform
+import sys
 import threading
 import time
 import uuid
@@ -35,6 +38,24 @@ from .spans import (
 
 _START_LOCK = threading.Lock()
 _ATEXIT_REGISTERED = False
+
+
+def _environment_meta() -> dict[str, Any]:
+    """Machine/build identity for run.json — a trace should explain itself."""
+    from .. import settings
+
+    return {
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "port": settings.PORT,
+        "pid": os.getpid(),
+        "models": {
+            "interview": settings.INTERVIEW_MODEL,
+            "research": settings.RESEARCH_MODEL,
+            "qc": settings.QC_MODEL,
+        },
+    }
 
 
 def _ensure_recorder() -> TraceRecorder | None:
@@ -62,6 +83,7 @@ def _ensure_recorder() -> TraceRecorder | None:
             recorder.start(
                 model=settings.INTERVIEW_MODEL,
                 module_id="",
+                environment=_environment_meta(),
             )
             set_recorder(recorder)
             if not _ATEXIT_REGISTERED:
@@ -78,6 +100,23 @@ def _stop_recorder() -> None:
         if recorder is not None:
             recorder.stop()
             set_recorder(None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def app_event(event_type: str, **fields: Any) -> None:
+    """Record a run-level application event (never raises).
+
+    The one-liner the REST layer calls for every state-changing action —
+    edits, exports, project saves, QC dispositions, stops, key changes.
+    Starts the recorder if this is the first capture of the run, so a
+    launch that never reaches a chat turn still leaves a trace.
+    """
+    try:
+        recorder = _ensure_recorder()
+        if recorder is None:
+            return
+        recorder.add_event(None, event_type, **fields)
     except Exception:  # noqa: BLE001
         pass
 
@@ -119,6 +158,70 @@ def turn_end(
             outputs=outputs,
             status=STATUS_ERROR if error else STATUS_OK,
             error=error or None,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def turn_round(
+    handle: SpanHandle | None,
+    *,
+    round_index: int,
+    stop_reason: Any,
+    duration_ms: int,
+    usage: dict | None = None,
+    tool_uses: int = 0,
+    web_searches: int = 0,
+    web_fetches: int = 0,
+) -> None:
+    """One ``round_end`` event per streaming round of a turn (never raises).
+
+    The per-round record is what answers "which round stalled / where did
+    the tokens go" without reconstructing the turn from raw SSE.
+    """
+    try:
+        recorder = get_recorder()
+        if recorder is None or handle is None:
+            return
+        recorder.add_event(
+            handle,
+            "round_end",
+            round=round_index,
+            stop_reason=stop_reason,
+            ms=duration_ms,
+            usage=dict(usage) if usage else {},
+            tool_uses=tool_uses,
+            web_searches=web_searches,
+            web_fetches=web_fetches,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def turn_prompts(
+    handle: SpanHandle | None,
+    *,
+    system_text: str,
+    context_text: str,
+    user_text: str,
+) -> None:
+    """Record the turn's prompt material as one ``prompt_refs`` event.
+
+    At the default capture level each text goes through
+    ``recorder.prompt_ref`` — content-hashed into prompts.jsonl once per
+    distinct text (the stable system block therefore costs one entry per
+    app run); deep mode inlines the text into the event itself.
+    """
+    try:
+        recorder = get_recorder()
+        if recorder is None or handle is None:
+            return
+        recorder.add_event(
+            handle,
+            "prompt_refs",
+            system=recorder.prompt_ref("system", system_text),
+            project_context=recorder.prompt_ref("project_context", context_text),
+            user=recorder.prompt_ref("user", user_text),
         )
     except Exception:  # noqa: BLE001
         pass

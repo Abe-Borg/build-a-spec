@@ -11,6 +11,7 @@ export const END_USER_CAPABILITIES = [
   "tour.controls",
   "tour.finish",
   "session.api-key",
+  "session.developer-tools",
   "session.identity",
   "session.starters",
   "template.create",

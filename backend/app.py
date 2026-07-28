@@ -64,8 +64,11 @@ When ``frontend/dist`` exists (production / packaged), it is served at
 from __future__ import annotations
 
 import json
+import logging
 import re
+import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Literal
@@ -73,6 +76,7 @@ from urllib.parse import quote
 
 import anthropic
 from fastapi import Body, FastAPI, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
@@ -84,7 +88,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import settings, sessions
+from . import diagnostics, settings, sessions
 from .api_key_store import (
     delete_api_key,
     key_status,
@@ -175,6 +179,7 @@ from .templates import (
     get_template_catalog,
     template_summary,
 )
+from .tracing import capture as _trace_capture
 from .tutorial import (
     TUTORIAL_MANIFEST_VERSION,
     analyze_tutorial_coverage,
@@ -193,6 +198,22 @@ _DEV_ORIGINS = [
     "http://127.0.0.1:5173",
 ]
 
+_api_log = logging.getLogger("buildaspec.api")
+
+# Poll-driven endpoints the frontend hits every few seconds: logged at
+# DEBUG and kept out of the trace so a quiet session doesn't bury the
+# forensic record under liveness noise.
+_QUIET_PATHS = frozenset(
+    {
+        "/api/health",
+        "/api/doc/capabilities",
+        "/api/qc/status",
+        "/api/research/status",
+        "/api/readiness",
+        "/api/usage",
+    }
+)
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -200,6 +221,18 @@ class ChatRequest(BaseModel):
 
 class SaveKeyRequest(BaseModel):
     api_key: str
+
+
+_CLIENT_EVENT_KINDS = frozenset(
+    {"error", "unhandledrejection", "console.error", "console.warn"}
+)
+
+
+class ClientEventRequest(BaseModel):
+    kind: str
+    message: str
+    stack: str = ""
+    source: str = ""
 
 
 class EditDocRequest(BaseModel):
@@ -1349,6 +1382,12 @@ def create_app() -> FastAPI:
             with sessions.active_write(lease.workspace_id):
                 return await call_next(request)
         except sessions.WorkspaceConflictError as exc:
+            _trace_capture.app_event(
+                "workspace_conflict",
+                method=request.method,
+                path=request.url.path,
+                error=str(exc),
+            )
             return JSONResponse(
                 {
                     "ok": False,
@@ -1357,6 +1396,105 @@ def create_app() -> FastAPI:
                 },
                 status_code=409,
             )
+
+    # Registered AFTER the lease middleware — Starlette prepends, so the
+    # last-registered user middleware is OUTERMOST and this one also
+    # records the lease middleware's 409s. Duration is time-to-response-
+    # START: for the SSE endpoints that is time-to-first-frame, which is
+    # the correct, non-blocking reading (awaiting the body would hold the
+    # middleware open for the whole stream).
+    @app.middleware("http")
+    async def _request_diagnostics(request: Request, call_next):
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            ms = int((time.perf_counter() - started) * 1000)
+            _api_log.warning(
+                "%s %s -> unhandled %s after %dms",
+                request.method,
+                request.url.path,
+                type(exc).__name__,
+                ms,
+            )
+            _trace_capture.app_event(
+                "api_request",
+                method=request.method,
+                path=request.url.path,
+                status=500,
+                ms=ms,
+                error=type(exc).__name__,
+            )
+            raise
+        ms = int((time.perf_counter() - started) * 1000)
+        quiet = request.url.path in _QUIET_PATHS or not request.url.path.startswith(
+            "/api"
+        )
+        _api_log.log(
+            logging.DEBUG if quiet else logging.INFO,
+            "%s %s -> %d in %dms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            ms,
+        )
+        if not quiet:
+            _trace_capture.app_event(
+                "api_request",
+                method=request.method,
+                path=request.url.path,
+                status=response.status_code,
+                ms=ms,
+                query=str(request.url.query)[:200],
+            )
+        return response
+
+    async def _internal_error(request: Request, exc: Exception) -> JSONResponse:
+        """Catch-all: log the traceback, answer in the app's error idiom.
+
+        Without this an unhandled route error is a bare-text 500 the
+        frontend's ``{ok, error}`` JSON parsing chokes on. Starlette sends
+        this response and then RE-RAISES the exception by design (so the
+        server also sees it) — tests assert through
+        ``raise_server_exceptions=False``.
+        """
+        _api_log.exception(
+            "Unhandled error on %s %s", request.method, request.url.path
+        )
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": f"Internal error: {exc}",
+                "code": "internal_error",
+            },
+            status_code=500,
+        )
+
+    app.add_exception_handler(Exception, _internal_error)
+
+    async def _validation_error(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        """422s in the same idiom — from loc/msg ONLY. pydantic v2's
+        ``errors()[i]["input"]`` carries the submitted value, which on
+        ``/api/key`` would echo the key into the response and the log."""
+        detail = "; ".join(
+            f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', '')}"
+            for e in exc.errors()[:5]
+        )[:500]
+        _api_log.warning(
+            "422 on %s %s: %s", request.method, request.url.path, detail
+        )
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": f"Invalid request: {detail}",
+                "code": "validation_error",
+            },
+            status_code=422,
+        )
+
+    app.add_exception_handler(RequestValidationError, _validation_error)
 
     @app.get("/api/health")
     def health() -> dict:
@@ -1386,15 +1524,20 @@ def create_app() -> FastAPI:
         try:
             stored_in = save_api_key(body.api_key)
         except ValueError:
+            _trace_capture.app_event("key", action="save", ok=False)
             return JSONResponse(
                 {"ok": False, "error": "API key is empty."}, status_code=400
             )
         except OSError as exc:
+            _trace_capture.app_event("key", action="save", ok=False)
             return JSONResponse(
                 {"ok": False, "error": f"Could not store the key: {exc}"},
                 status_code=500,
             )
         reset_client_cache()
+        _trace_capture.app_event(
+            "key", action="save", ok=True, stored_in=stored_in
+        )
         return JSONResponse({"ok": True, "stored_in": stored_in})
 
     @app.get("/api/key/status")
@@ -1414,6 +1557,7 @@ def create_app() -> FastAPI:
         """
         cleared = delete_api_key()
         reset_client_cache()
+        _trace_capture.app_event("key", action="delete", ok=True)
         return JSONResponse({"ok": True, "cleared": cleared, **key_status()})
 
     @app.post("/api/key/test")
@@ -1432,10 +1576,17 @@ def create_app() -> FastAPI:
             probe = build_probe_client(candidate)
             probe.models.list(limit=1)
         except MissingApiKeyError as exc:
+            _trace_capture.app_event("key", action="test", ok=False)
             return JSONResponse({"ok": False, "error": str(exc)})
         except anthropic.APIStatusError as exc:
+            _trace_capture.app_event(
+                "key", action="test", ok=False, status=exc.status_code
+            )
             return JSONResponse({"ok": False, "error": exc.message})
         except anthropic.APIConnectionError:
+            _trace_capture.app_event(
+                "key", action="test", ok=False, status="connection"
+            )
             return JSONResponse(
                 {
                     "ok": False,
@@ -1444,7 +1595,9 @@ def create_app() -> FastAPI:
                 }
             )
         except Exception as exc:  # noqa: BLE001 — surfaced to the user
+            _trace_capture.app_event("key", action="test", ok=False)
             return JSONResponse({"ok": False, "error": str(exc)})
+        _trace_capture.app_event("key", action="test", ok=True)
         return JSONResponse({"ok": True})
 
     @app.post("/api/session/reset")
@@ -1460,6 +1613,7 @@ def create_app() -> FastAPI:
                 status_code=409,
             )
         session = workspace.session
+        had_content = sessions.has_unsaved_progress(session)
         if body is None:
             session.reset()
         else:
@@ -1471,6 +1625,11 @@ def create_app() -> FastAPI:
                 discipline=body.discipline,
                 project_context=body.project_context,
             )
+        _trace_capture.app_event(
+            "session_reset",
+            module_id=session.module.module_id,
+            had_content=had_content,
+        )
         return JSONResponse(
             {
                 "ok": True,
@@ -1578,6 +1737,9 @@ def create_app() -> FastAPI:
                         if body.mode == "ai_generalize"
                         else None
                     )
+            _trace_capture.app_event(
+                "template", action="preview", mode=body.mode, ok=True
+            )
             return {
                 "ok": True,
                 "preview_token": token,
@@ -1642,6 +1804,9 @@ def create_app() -> FastAPI:
             return _template_error(exc)
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
+        _trace_capture.app_event(
+            "template", action="create", id=summary.get("id"), ok=True
+        )
         return JSONResponse({"ok": True, "template": summary})
 
     @app.patch("/api/templates/{template_id:path}")
@@ -1661,6 +1826,9 @@ def create_app() -> FastAPI:
             )
         except TemplateError as exc:
             return _template_error(exc)
+        _trace_capture.app_event(
+            "template", action="update", id=template_id, ok=True
+        )
         return JSONResponse({"ok": True, "template": summary})
 
     @app.delete("/api/templates/{template_id:path}")
@@ -1669,6 +1837,9 @@ def create_app() -> FastAPI:
             get_template_catalog().delete(template_id)
         except TemplateError as exc:
             return _template_error(exc)
+        _trace_capture.app_event(
+            "template", action="delete", id=template_id, ok=True
+        )
         return JSONResponse({"ok": True})
 
     @app.get("/api/templates/{template_id:path}/export")
@@ -1677,6 +1848,9 @@ def create_app() -> FastAPI:
             payload, filename = get_template_catalog().export(template_id)
         except TemplateError as exc:
             return _template_error(exc)
+        _trace_capture.app_event(
+            "export", kind="template", id=template_id, ok=True
+        )
         return Response(
             content=payload,
             media_type=TEMPLATE_MEDIA_TYPE,
@@ -1698,6 +1872,9 @@ def create_app() -> FastAPI:
             summary = get_template_catalog().import_bytes(data)
         except TemplateError as exc:
             return _template_error(exc)
+        _trace_capture.app_event(
+            "template", action="import", id=summary.get("id"), ok=True
+        )
         return JSONResponse({"ok": True, "template": summary})
 
     @app.post("/api/templates/{template_id:path}/instantiate")
@@ -1720,6 +1897,9 @@ def create_app() -> FastAPI:
                     result = get_template_catalog().instantiate(
                         template_id, lease.session
                     )
+            _trace_capture.app_event(
+                "template", action="instantiate", id=template_id, ok=True
+            )
             return JSONResponse(
                 {"ok": True, **result, "session": _session_bundle(lease)}
             )
@@ -1805,6 +1985,12 @@ def create_app() -> FastAPI:
                 source=body.source,
             )
             coverage = analyze_tutorial_coverage(lease.session)
+            _trace_capture.app_event(
+                "tutorial",
+                action="start",
+                source=body.source,
+                needs_enrichment=not coverage.ready,
+            )
             return JSONResponse(
                 {
                     "ok": True,
@@ -1844,6 +2030,7 @@ def create_app() -> FastAPI:
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         directive = tutorial_enrichment_directive(coverage)
+        _trace_capture.app_event("tutorial", action="enrich", mode=body.mode)
         before_section = SpecSection.from_dict(lease.session.doc.doc.to_dict())
         fallback_base = sessions.clone_session_for_tutorial(lease.session)
         history_start = len(lease.session.history)
@@ -2069,6 +2256,9 @@ def create_app() -> FastAPI:
             ValueError,
         ) as exc:
             return _tutorial_error(exc)
+        _trace_capture.app_event(
+            "tutorial", action="scenario_start", chapter=chapter, kind=kind
+        )
         return JSONResponse({"ok": True, "session": _session_bundle(scenario)})
 
     @app.post("/api/tutorial/scenario/finish")
@@ -2080,6 +2270,7 @@ def create_app() -> FastAPI:
             restored = sessions.workspace_manager().pop_scenario(body.workspace_id)
         except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
             return _tutorial_error(exc)
+        _trace_capture.app_event("tutorial", action="scenario_finish")
         return JSONResponse({"ok": True, "session": _session_bundle(restored)})
 
     @app.post("/api/tutorial/restore")
@@ -2099,6 +2290,7 @@ def create_app() -> FastAPI:
             )
         except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
             return _tutorial_error(exc)
+        _trace_capture.app_event("tutorial", action="restore")
         return JSONResponse({"ok": True, "session": _session_bundle(restored)})
 
     @app.post("/api/tutorial/keep")
@@ -2118,6 +2310,7 @@ def create_app() -> FastAPI:
             )
         except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
             return _tutorial_error(exc)
+        _trace_capture.app_event("tutorial", action="keep")
         return JSONResponse({"ok": True, "session": _session_bundle(kept)})
 
     @app.post("/api/chat")
@@ -2162,10 +2355,14 @@ def create_app() -> FastAPI:
         """
         session = sessions.get_session()
         if not session.request_model_stop():
+            _trace_capture.app_event(
+                "stop_requested", target="chat", accepted=False
+            )
             return JSONResponse(
                 {"ok": False, "error": "No turn is streaming."},
                 status_code=409,
             )
+        _trace_capture.app_event("stop_requested", target="chat", accepted=True)
         return JSONResponse({"ok": True})
 
     @app.post("/api/draft/full")
@@ -2261,9 +2458,17 @@ def create_app() -> FastAPI:
                         return JSONResponse(
                             {"ok": False, "error": "Nothing to undo."}, status_code=409
                         )
-                    return JSONResponse({"ok": True, **_doc_payload(session)})
+                    payload = _doc_payload(session)
+                    version_index = session.doc.index
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
+        # After the locks release: app_event may lazily start the recorder
+        # (one-time mkdir + run.json write), which must not run under the
+        # turn-state lock.
+        _trace_capture.app_event(
+            "doc_history", action="undo", ok=True, index=version_index
+        )
+        return JSONResponse({"ok": True, **payload})
 
     @app.post("/api/doc/redo")
     def redo_doc(body: WorkspaceMutationRequest | None = None) -> JSONResponse:
@@ -2288,9 +2493,14 @@ def create_app() -> FastAPI:
                         return JSONResponse(
                             {"ok": False, "error": "Nothing to redo."}, status_code=409
                         )
-                    return JSONResponse({"ok": True, **_doc_payload(session)})
+                    payload = _doc_payload(session)
+                    version_index = session.doc.index
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
+        _trace_capture.app_event(
+            "doc_history", action="redo", ok=True, index=version_index
+        )
+        return JSONResponse({"ok": True, **payload})
 
     @app.post("/api/doc/edit")
     def edit_doc(body: EditDocRequest) -> JSONResponse:
@@ -2320,19 +2530,40 @@ def create_app() -> FastAPI:
                             status_code=409,
                         )
                     session.doc.begin_turn()
+                    edit_error = ""
                     try:
                         applied = session.apply_doc_edits(body.ops)
                     except SpecEditError as exc:
                         session.doc.rollback_turn()
-                        return JSONResponse(
-                            {"ok": False, "error": str(exc)}, status_code=400
-                        )
-                    session.doc.commit_turn()
-                    return JSONResponse(
-                        {"ok": True, "applied": applied, **_doc_payload(session)}
-                    )
+                        edit_error = str(exc)
+                        payload = None
+                    else:
+                        session.doc.commit_turn()
+                        payload = _doc_payload(session)
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
+        actions = sorted(
+            {
+                str(op.get("action", "?"))
+                for op in body.ops
+                if isinstance(op, dict)
+            }
+        )[:10]
+        if payload is None:
+            _trace_capture.app_event(
+                "doc_edit",
+                ops=len(body.ops),
+                actions=actions,
+                ok=False,
+                error=edit_error,
+            )
+            return JSONResponse(
+                {"ok": False, "error": edit_error}, status_code=400
+            )
+        _trace_capture.app_event(
+            "doc_edit", ops=len(body.ops), actions=actions, ok=True
+        )
+        return JSONResponse({"ok": True, "applied": applied, **payload})
 
     def _redline_for_export(
         store, redline: str | None, base: int | None
@@ -2500,7 +2731,15 @@ def create_app() -> FastAPI:
         # guard through generation so a concurrent edit, rerun completion, or
         # disposition cannot mix document bytes with a different QC closing.
         with session.session_state_guard():
-            return _export_docx_locked(session, redline, base, mode)
+            response = _export_docx_locked(session, redline, base, mode)
+        _trace_capture.app_event(
+            "export",
+            kind="docx",
+            mode=mode or "normalized",
+            redline=redline or "",
+            ok=response.status_code == 200,
+        )
+        return response
 
     @app.get("/api/doc/diff")
     def doc_diff(base: int, cur: int | None = None) -> JSONResponse:
@@ -2596,7 +2835,8 @@ def create_app() -> FastAPI:
                         {"ok": False, "error": f"No figure {fid!r}."},
                         status_code=404,
                     )
-                return JSONResponse({"ok": True, "figures": figures})
+            _trace_capture.app_event("figure_delete", fid=fid, ok=True)
+            return JSONResponse({"ok": True, "figures": figures})
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
 
@@ -2748,6 +2988,16 @@ def create_app() -> FastAPI:
                 "The document carries pending tracked changes; it was read "
                 "as the Accept-All-Changes view."
             )
+        _trace_capture.app_event(
+            "reference",
+            action="upload",
+            rid=doc.rid,
+            kind=doc.kind,
+            chars=doc.char_count,
+            truncated=doc.truncated,
+            warnings=len(warnings),
+            ok=True,
+        )
         return JSONResponse(
             {
                 "ok": True,
@@ -2788,16 +3038,19 @@ def create_app() -> FastAPI:
                             },
                             status_code=404,
                         )
-                return JSONResponse(
-                    {
-                        "ok": True,
-                        "reference_docs": snapshot,
-                        "suggested_prompts": list(session.suggested_prompts),
-                        "figures": session.figures.snapshot(),
-                    }
-                )
+                    suggested = list(session.suggested_prompts)
+                    figures_snapshot = session.figures.snapshot()
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
+        _trace_capture.app_event("reference", action="delete", rid=rid, ok=True)
+        return JSONResponse(
+            {
+                "ok": True,
+                "reference_docs": snapshot,
+                "suggested_prompts": suggested,
+                "figures": figures_snapshot,
+            }
+        )
 
     # --- Master-spec import (Phase 5) ---------------------------------------
 
@@ -2935,8 +3188,6 @@ def create_app() -> FastAPI:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
-        from .tracing import capture as _trace_capture
-
         _trace_capture.import_event(
             blocks=result.imported_block_count,
             warnings=len(report["warnings"]),
@@ -2989,6 +3240,7 @@ def create_app() -> FastAPI:
                 status_code=404,
             )
         filename = session.source_docx_filename or "imported-master.docx"
+        _trace_capture.app_event("export", kind="original_source", ok=True)
         return Response(
             content=session.source_docx_bytes,
             media_type=(
@@ -3114,10 +3366,16 @@ def create_app() -> FastAPI:
         if not _mutation_lease_matches(lease, body):
             return _stale_tutorial_response()
         if not lease.session.research.stop():
+            _trace_capture.app_event(
+                "stop_requested", target="research", accepted=False
+            )
             return JSONResponse(
                 {"ok": False, "error": "Research is not running."},
                 status_code=409,
             )
+        _trace_capture.app_event(
+            "stop_requested", target="research", accepted=True
+        )
         return JSONResponse({"ok": True})
 
     @app.get("/api/research/stream")
@@ -3328,10 +3586,14 @@ def create_app() -> FastAPI:
         if not _mutation_lease_matches(lease, body):
             return _stale_tutorial_response()
         if not lease.session.qc.stop():
+            _trace_capture.app_event(
+                "stop_requested", target="qc", accepted=False
+            )
             return JSONResponse(
                 {"ok": False, "error": "Final QC is not running."},
                 status_code=409,
             )
+        _trace_capture.app_event("stop_requested", target="qc", accepted=True)
         return JSONResponse({"ok": True})
 
     @app.get("/api/qc/stream")
@@ -3637,6 +3899,15 @@ def create_app() -> FastAPI:
                     )
                 record_skipped_outcomes()
 
+        outcome_counts: dict[str, int] = {}
+        for outcome in outcomes.values():
+            outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
+        _trace_capture.app_event(
+            "qc_apply",
+            requested=len(body.finding_ids),
+            outcomes=outcome_counts,
+            finding_ids=sorted(outcomes)[:20],
+        )
         return JSONResponse(
             {"ok": True, "outcomes": outcomes, **_doc_payload(session)}
         )
@@ -3720,7 +3991,9 @@ def create_app() -> FastAPI:
                     },
                     status_code=409,
                 )
-            return JSONResponse({"ok": True, "qc": _qc_snapshot_payload(session)})
+            qc_payload = _qc_snapshot_payload(session)
+        _trace_capture.app_event("qc_dismiss", finding_id=body.finding_id)
+        return JSONResponse({"ok": True, "qc": qc_payload})
 
     @app.get("/api/qc/export")
     def qc_export(run_id: str = "") -> Response:
@@ -3758,6 +4031,7 @@ def create_app() -> FastAPI:
             result_payload["export_current_state"] = current_state
             stem = section.number.replace(" ", "") or "draft"
         payload = build_qc_memo(result_payload, section, stale=stale)
+        _trace_capture.app_event("export", kind="qc_docx", stale=stale, ok=True)
         return Response(
             content=payload,
             media_type=(
@@ -3811,6 +4085,7 @@ def create_app() -> FastAPI:
                 and retained_payload.get("run_id") != report_payload.get("run_id")
             ):
                 payload["last_successful_report"] = retained_payload
+        _trace_capture.app_event("export", kind="qc_json", ok=True)
         return Response(
             content=json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
             media_type="application/json",
@@ -3872,6 +4147,12 @@ def create_app() -> FastAPI:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=409
             )
+        _trace_capture.app_event(
+            "project_save",
+            scope=scope or workspace.scope,
+            bytes=len(payload),
+            filename=filename,
+        )
         return Response(
             content=payload,
             media_type=PACKAGE_MEDIA_TYPE,
@@ -3900,9 +4181,13 @@ def create_app() -> FastAPI:
                 session.source_docx_map = None
                 session.source_patch_context = None
         except ValueError as exc:
+            _trace_capture.app_event(
+                "project_load", mode="legacy_json", ok=False, error=str(exc)
+            )
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
+        _trace_capture.app_event("project_load", mode="legacy_json", ok=True)
         return JSONResponse(
             {
                 "ok": True,
@@ -3945,10 +4230,16 @@ def create_app() -> FastAPI:
                 _stage_project_load, payload
             )
         except ProjectPackageTooLargeError as exc:
+            _trace_capture.app_event(
+                "project_load", mode="package", ok=False, error=str(exc)
+            )
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=413
             )
         except (ProjectPackageError, ValueError) as exc:
+            _trace_capture.app_event(
+                "project_load", mode="package", ok=False, error=str(exc)
+            )
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
             )
@@ -3988,6 +4279,12 @@ def create_app() -> FastAPI:
             session.source_patch_context = (
                 source_context if parsed.source_docx_bytes is not None else None
             )
+        _trace_capture.app_event(
+            "project_load",
+            mode="package",
+            ok=True,
+            source_retained=parsed.source_docx_bytes is not None,
+        )
         # Same reason as the import response: a source-backed project pays for
         # the first capability sweep here, which must not run on the loop.
         payload = await run_in_threadpool(_doc_payload, session)
@@ -3998,6 +4295,98 @@ def create_app() -> FastAPI:
                 **payload,
             }
         )
+
+    # --- Developer tools / diagnostics --------------------------------------
+    #
+    # The read-only surface behind Settings → Developer tools. All routes are
+    # plain ``def`` (file I/O belongs on a worker thread, never the event
+    # loop) and ``include_in_schema=False`` (the trace-viewer precedent —
+    # forensic plumbing, not product API).
+
+    @app.get("/api/diagnostics", include_in_schema=False)
+    def diagnostics_snapshot() -> JSONResponse:
+        """Environment + session snapshot (scrubbed; key masked, never raw)."""
+        return JSONResponse({"ok": True, **diagnostics.snapshot()})
+
+    @app.get("/api/diagnostics/log", include_in_schema=False)
+    def diagnostics_log(tail: int = 500) -> JSONResponse:
+        """Tail of the activity log (bounded read; grace when disabled)."""
+        return JSONResponse({"ok": True, **diagnostics.tail_log(tail)})
+
+    @app.get("/api/diagnostics/traces", include_in_schema=False)
+    def diagnostics_traces() -> JSONResponse:
+        """Trace-run inventory, newest first (sizes only)."""
+        return JSONResponse({"ok": True, **diagnostics.list_trace_runs()})
+
+    @app.get("/api/diagnostics/activity", include_in_schema=False)
+    def diagnostics_activity(tail: int = 200) -> JSONResponse:
+        """Recent trace events + open spans of the current run."""
+        return JSONResponse(
+            {"ok": True, **diagnostics.read_recent_trace_events(tail)}
+        )
+
+    @app.get("/api/diagnostics/bundle", include_in_schema=False)
+    def diagnostics_bundle() -> Response:
+        """The downloadable support bundle (snapshot + logs + current trace).
+
+        Contains draft text and prompts by design (the trace posture — that
+        is what makes it useful); the modal copy says so before this link.
+        Never contains key material: the snapshot is masked+scrubbed and
+        nothing ever logs the key.
+        """
+        payload, filename = diagnostics.build_bundle()
+        _trace_capture.app_event(
+            "export", kind="diagnostics_bundle", bytes=len(payload), ok=True
+        )
+        return Response(
+            content=payload,
+            media_type="application/zip",
+            headers={
+                **_attachment_headers(filename),
+                # Same posture as /api/import/original: a diagnostics bundle
+                # holds project content and must not be cached outside it.
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.post("/api/diagnostics/client-event", include_in_schema=False)
+    def diagnostics_client_event(body: ClientEventRequest) -> JSONResponse:
+        """Frontend error collector (window.onerror / console.error shim).
+
+        The client throttles and dedupes; this side just bounds, logs, and
+        traces. A broken collector must never break the app, so the shape
+        is deliberately forgiving — only oversized payloads are rejected.
+        """
+        total = len(body.kind) + len(body.message) + len(body.stack) + len(
+            body.source
+        )
+        if total > 32_000:
+            return JSONResponse(
+                {"ok": False, "error": "Client event too large."},
+                status_code=400,
+            )
+        kind = body.kind if body.kind in _CLIENT_EVENT_KINDS else "error"
+        message = body.message[:2000]
+        client_log = logging.getLogger("buildaspec.client")
+        level = logging.WARNING if kind == "console.warn" else logging.ERROR
+        if body.source and body.stack:
+            client_log.log(
+                level, "client %s at %s: %s\n%s",
+                kind, body.source[:300], message, body.stack[:4000],
+            )
+        elif body.stack:
+            client_log.log(level, "client %s: %s\n%s", kind, message, body.stack[:4000])
+        else:
+            client_log.log(level, "client %s: %s", kind, message)
+        _trace_capture.app_event(
+            "client_error",
+            kind=kind,
+            message=message,
+            stack=body.stack[:4000],
+            source=body.source[:300],
+        )
+        return JSONResponse({"ok": True})
 
     # --- Trace viewer (Phase 5) ---------------------------------------------
 
@@ -4055,6 +4444,9 @@ def create_app() -> FastAPI:
             else:
                 payload["version"] = result.info.version
                 payload["notes"] = result.info.notes
+        _trace_capture.app_event(
+            "update", action="check", status=payload["status"], forced=force
+        )
         return payload
 
     @app.post("/api/update/install")
@@ -4087,9 +4479,15 @@ def create_app() -> FastAPI:
             )
             updates.spawn_installer(installer)
         except updates.UpdateError as exc:
+            _trace_capture.app_event(
+                "update", action="install", ok=False, error=str(exc)
+            )
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=502
             )
+        _trace_capture.app_event(
+            "update", action="install", ok=True, version=result.info.version
+        )
         return JSONResponse({"ok": True, "version": result.info.version})
 
     # --- Static frontend (production / packaged) ---------------------------
@@ -4103,6 +4501,15 @@ def create_app() -> FastAPI:
         def index() -> FileResponse:
             return FileResponse(dist / "index.html")
 
+    # The trace run dir exists from boot, not first turn — a launch that
+    # crashes before any chat still leaves a run to inspect.
+    _trace_capture.app_event(
+        "server_started",
+        version=settings.VERSION,
+        port=settings.PORT,
+        frozen=bool(getattr(sys, "frozen", False)),
+        dev_mode=settings.dev_mode(),
+    )
     return app
 
 

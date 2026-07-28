@@ -172,3 +172,84 @@ def test_viewer_endpoint_serves_the_bundled_html():
     assert resp.status_code == 200
     assert "html" in resp.headers["content-type"]
     assert len(resp.content) > 1000
+
+
+def test_events_are_readable_before_stop_thanks_to_per_line_flush(tmp_path):
+    """Per-line flush: a hard crash must not lose already-recorded events.
+
+    The pre-fix writer only flushed at stop(), so anything short of a clean
+    exit lost up to a buffer of trace data — the exact scenario traces
+    exist to explain. Poll-read the file while the recorder is still live.
+    """
+    import time as _time
+
+    rec = TraceRecorder(
+        run_id="run-flush", trace_dir=tmp_path / "f", capture_level="default"
+    )
+    rec.start()
+    try:
+        rec.add_event(None, "api_request", method="GET", path="/api/doc")
+        deadline = _time.monotonic() + 2.0
+        events = []
+        while _time.monotonic() < deadline:
+            path = tmp_path / "f" / "events.jsonl"
+            if path.exists():
+                events = _read_jsonl(path)
+                if events:
+                    break
+            _time.sleep(0.02)
+        assert events and events[0]["type"] == "api_request"
+    finally:
+        rec.stop()
+
+
+def test_cross_thread_close_leaves_no_stale_parent(tmp_path):
+    """A span closed on another thread must not parent later spans.
+
+    The ported thread-local span stack pushed on the opening thread and
+    could only pop on the closing thread — research/QC/audit spans close on
+    daemon threads, so the opener's stack kept a dead handle and the next
+    span opened on that (reused) thread inherited it as parent. The stack
+    is gone; only explicit parents and the span() ContextVar remain.
+    """
+    import threading
+
+    rec = TraceRecorder(
+        run_id="run-x", trace_dir=tmp_path / "x", capture_level="default"
+    )
+    rec.start()
+    try:
+        first = rec.open_span("research", "closed elsewhere")
+        closer = threading.Thread(target=lambda: rec.close_span(first))
+        closer.start()
+        closer.join()
+        second = rec.open_span("turn", "after the cross-thread close")
+        rec.close_span(second)
+    finally:
+        rec.stop()
+    spans = {s["name"]: s for s in _read_jsonl(tmp_path / "x" / "spans.jsonl")}
+    assert spans["after the cross-thread close"]["parent_span_id"] is None
+
+
+def test_run_meta_records_the_environment(tmp_path):
+    rec = TraceRecorder(
+        run_id="run-env", trace_dir=tmp_path / "e", capture_level="default"
+    )
+    rec.start(
+        model="claude-sonnet-5",
+        environment={"platform": "TestOS-1.0", "python": "3.11.0", "pid": 42},
+    )
+    rec.stop()
+    meta = json.loads((tmp_path / "e" / "run.json").read_text())
+    assert meta["environment"]["platform"] == "TestOS-1.0"
+    assert meta["environment"]["pid"] == 42
+
+    # A resume against the same dir keeps (and may refresh) the block.
+    again = TraceRecorder(
+        run_id="run-env", trace_dir=tmp_path / "e", capture_level="default"
+    )
+    again.start(environment={"platform": "TestOS-2.0"})
+    again.stop()
+    meta = json.loads((tmp_path / "e" / "run.json").read_text())
+    assert meta["environment"]["platform"] == "TestOS-2.0"
+    assert len(meta["resumed_at"]) == 1

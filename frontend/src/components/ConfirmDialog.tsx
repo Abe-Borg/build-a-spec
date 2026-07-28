@@ -10,6 +10,7 @@ interface Props {
   danger?: boolean;
   /** Render above the guided-tour overlay (z-80) instead of the default z-60. */
   elevated?: boolean;
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -28,6 +29,7 @@ export default function ConfirmDialog({
   cancelLabel = "Cancel",
   danger = false,
   elevated = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: Props) {
@@ -66,18 +68,20 @@ export default function ConfirmDialog({
         <div className="flex items-center justify-end gap-2 border-t border-edge px-6 py-3">
           <button
             onClick={onCancel}
+            autoFocus={confirmDisabled}
             className="rounded-lg px-3 py-1.5 text-sm text-ink-dim transition-colors hover:text-ink"
           >
             {cancelLabel}
           </button>
           <button
             onClick={onConfirm}
-            autoFocus
+            autoFocus={!confirmDisabled}
+            disabled={confirmDisabled}
             className={`rounded-lg px-3 py-1.5 text-sm font-medium text-white transition-colors ${
               danger
                 ? "bg-err hover:bg-err/85"
                 : "bg-accent hover:bg-accent-hover"
-            }`}
+            } disabled:pointer-events-none disabled:opacity-40`}
           >
             {confirmLabel}
           </button>

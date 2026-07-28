@@ -18,6 +18,8 @@ import type {
   ImportReport,
   LintIssue,
   OpenItem,
+  QcApplyPreviewBasis,
+  QcApplyPreviewResult,
   QcSnapshot,
   ReadinessPayload,
   ReferenceDocMeta,
@@ -88,7 +90,11 @@ interface Props {
   onStopResearch: () => void;
   onStartQc: (acknowledgeScopeMismatch?: boolean) => void;
   onStopQc: () => void;
-  onApplyQc: (findingIds: string[]) => void;
+  onPreviewQc: (findingIds: string[]) => Promise<QcApplyPreviewResult>;
+  onApplyQc: (
+    findingIds: string[],
+    previewBasis?: QcApplyPreviewBasis,
+  ) => Promise<void>;
   onDismissQc: (findingId: string, reason: string) => Promise<void>;
   onDraftFull: () => void;
   onAskModel: (text: string) => void;
@@ -357,6 +363,7 @@ export default function ArtifactPanel({
   onStopResearch,
   onStartQc,
   onStopQc,
+  onPreviewQc,
   onApplyQc,
   onDismissQc,
   onDraftFull,
@@ -1095,8 +1102,10 @@ export default function ArtifactPanel({
         usage={usage}
         onStart={onStartQc}
         onStop={onStopQc}
+        onPreview={onPreviewQc}
         onApply={onApplyQc}
         onDismiss={onDismissQc}
+        onAskModel={onAskModel}
         onJump={scrollToElement}
         openNonce={drawerNonces?.qc}
       />

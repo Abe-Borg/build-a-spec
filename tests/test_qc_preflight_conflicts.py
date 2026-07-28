@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from backend import sessions
 from backend.app import create_app
 from backend.qc.engine import QCFinding, QCResult
+from backend.qc.op_conflicts import plan_qc_operation_batch
 from backend.qc.preflight import module_section_compatibility
 from backend.spec_doc.model import DocumentStore, SpecSection
 from backend.spec_modules.generic import GENERIC
@@ -260,6 +261,160 @@ def test_structural_collection_conflict_is_atomic(monkeypatch) -> None:
     assert response.status_code == 409
     assert response.json()["write_keys"] == ["element:pt1.a1:*"]
     assert session.doc.doc.to_dict() == before
+
+
+def test_positioned_same_parent_additions_remain_conflicts() -> None:
+    section = _store().doc
+    positioned = plan_qc_operation_batch(
+        section,
+        [
+            (
+                "positioned-a",
+                [
+                    {
+                        "action": "add_paragraph",
+                        "target_id": "pt1.a1",
+                        "text": "Insert at the first position.",
+                        "position": 0,
+                    }
+                ],
+            ),
+            (
+                "positioned-b",
+                [
+                    {
+                        "action": "add_paragraph",
+                        "target_id": "pt1.a1",
+                        "text": "Compete for the first position.",
+                        "position": 0,
+                    }
+                ],
+            ),
+        ],
+    )
+    assert len(positioned.conflicts) == 1
+    assert positioned.conflicts[0]["finding_ids"] == [
+        "positioned-a",
+        "positioned-b",
+    ]
+
+    positioned_and_append = plan_qc_operation_batch(
+        section,
+        [
+            (
+                "positioned",
+                [
+                    {
+                        "action": "add_article",
+                        "target_id": "pt1",
+                        "text": "POSITIONED ARTICLE",
+                        "position": 0,
+                    }
+                ],
+            ),
+            (
+                "append",
+                [
+                    {
+                        "action": "add_article",
+                        "target_id": "pt1",
+                        "text": "APPENDED ARTICLE",
+                    }
+                ],
+            ),
+        ],
+    )
+    assert len(positioned_and_append.conflicts) == 1
+    assert positioned_and_append.conflicts[0]["finding_ids"] == [
+        "positioned",
+        "append",
+    ]
+
+
+def test_generated_id_dependent_additions_remain_atomic(monkeypatch) -> None:
+    cases = [
+        [
+            _finding(
+                "dependent-a",
+                [
+                    {
+                        "action": "add_article",
+                        "target_id": "pt1",
+                        "text": "DEPENDENT ARTICLE A",
+                    },
+                    {
+                        "action": "add_paragraph",
+                        "target_id": "pt1.a2",
+                        "text": "Child intended for article A.",
+                    },
+                ],
+            ),
+            _finding(
+                "dependent-b",
+                [
+                    {
+                        "action": "add_article",
+                        "target_id": "pt1",
+                        "text": "DEPENDENT ARTICLE B",
+                    },
+                    {
+                        "action": "add_paragraph",
+                        "target_id": "pt1.a2",
+                        "text": "Child intended for article B.",
+                    },
+                ],
+            ),
+        ],
+        [
+            _finding(
+                "singleton-first",
+                [
+                    {
+                        "action": "add_article",
+                        "target_id": "pt1",
+                        "text": "STANDALONE ARTICLE",
+                    }
+                ],
+            ),
+            _finding(
+                "dependent-second",
+                [
+                    {
+                        "action": "add_article",
+                        "target_id": "pt1",
+                        "text": "DEPENDENT ARTICLE",
+                    },
+                    {
+                        "action": "add_paragraph",
+                        "target_id": "pt1.a2",
+                        "text": "Child intended for the dependent article.",
+                    },
+                ],
+            ),
+        ],
+    ]
+
+    for findings in cases:
+        session = sessions.get_session()
+        session.doc = _store()
+        _install_result(findings)
+        _bypass_result_contract(monkeypatch)
+        before = session.doc.doc.to_dict()
+        versions_before = len(session.doc.versions)
+        finding_ids = [finding.finding_id for finding in findings]
+
+        response = _client().post(
+            "/api/qc/apply", json={"finding_ids": finding_ids}
+        )
+
+        assert response.status_code == 409, response.text
+        body = response.json()
+        assert body["code"] == "qc_operation_conflict"
+        assert body["finding_ids"] == finding_ids
+        assert session.doc.doc.to_dict() == before
+        assert len(session.doc.versions) == versions_before
+        assert all(finding.status == "open" for finding in findings)
+        assert all(not finding.disposition_events for finding in findings)
 
 
 def test_identical_ops_execute_once_and_mark_every_finding(monkeypatch) -> None:

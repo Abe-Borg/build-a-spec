@@ -128,10 +128,12 @@ class _CloseController:
     from a worker thread; by the time it runs, the vetoed close has returned
     and the UI thread is free.
 
-    The bridge also exposes ``save_project`` (the in-app save gate) and
+    The bridge also exposes ``save_project`` (the in-app save gate),
     ``open_file`` (native Open/Import, since HTML file inputs are unreliable
-    in the webview). Only these ``js_api`` methods are public; everything else
-    is underscore-prefixed so pywebview does not expose it to JavaScript.
+    in the webview), and ``open_external_link`` (routes outbound hyperlink
+    clicks to the system browser instead of the app window). Only these
+    ``js_api`` methods are public; everything else is underscore-prefixed so
+    pywebview does not expose it to JavaScript.
     """
 
     # The frontend hook the prompt calls; returns whether it was handled so a
@@ -243,6 +245,26 @@ class _CloseController:
         ``_force_close()``.
         """
         return self._save_project_file()
+
+    def open_external_link(self, url: str) -> bool:
+        """Open a URL in the user's default system browser.
+
+        pywebview's window is otherwise just a browser: a clicked link (a
+        chat citation, a research/QC report source, the trust dossier's
+        outbound references, ...) would navigate the window itself away from
+        the app with no way back. The frontend intercepts every such click
+        and calls this instead. Only http/https URLs are honored.
+        """
+        import urllib.parse
+        import webbrowser
+
+        try:
+            parsed = urllib.parse.urlsplit(url)
+        except ValueError:
+            return False
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return False
+        return bool(webbrowser.open(url))
 
     def save_template(self, template_id: str) -> bool:
         """Export one validated catalog entry through a scoped Save dialog."""

@@ -1030,6 +1030,10 @@ declare global {
         ) => Promise<{ name: string; data_b64: string } | null>;
         /** Native Save dialog for a portable reusable starter. */
         save_template?: (templateId: string) => Promise<boolean>;
+        /** Opens a URL in the user's default system browser instead of
+         *  navigating the app window itself. Resolves true if a browser was
+         *  launched; false for a rejected (non-http/https) or malformed URL. */
+        open_external_link?: (url: string) => Promise<boolean>;
       };
     };
     buildaspecRequestClose?: (

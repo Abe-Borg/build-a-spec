@@ -68,6 +68,7 @@ import HelpModal, { type HelpTopic } from "./components/HelpModal";
 import OnboardingOverlay from "./components/OnboardingOverlay";
 import NewSessionDialog from "./components/NewSessionDialog";
 import { sourceCapabilitiesPending } from "./lib/sourceCapabilities";
+import { installExternalLinkHandler } from "./lib/externalLinks";
 import {
   useOnboarding,
   type DrawerName,
@@ -285,6 +286,11 @@ export default function App() {
     refreshReadiness,
     refreshUsage,
   ]);
+
+  // Every external link (chat citations, report sources, the trust dossier,
+  // the update banner, ...) opens in the system browser, never inside the
+  // native window — one delegated listener covers every renderer.
+  useEffect(() => installExternalLinkHandler(), []);
 
   /**
    * Poll for the imported-source permission sweep while it is still running.

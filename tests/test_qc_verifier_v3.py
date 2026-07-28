@@ -107,7 +107,7 @@ def _run(client: object) -> QCResult:
         None,
         DEFAULT_MODULE,
         client,
-        model="claude-fable-5",
+        model=settings.QC_MODEL,
         max_tokens=4096,
         version_index=store.index,
         started_at="2026-07-25T10:00:00-07:00",
@@ -138,7 +138,7 @@ def test_verdict_schema_avoids_nullable_enum_and_requires_fix_review() -> None:
         "ops_adequate",
         "ops_note",
     }
-    tool = submit_qc_verdict_tool(model="claude-fable-5")
+    tool = submit_qc_verdict_tool(model=settings.QC_MODEL)
     assert tool["input_schema"]["properties"]["revised_severity"] == revised
 
     def assert_no_nullable_enum(value: object) -> None:

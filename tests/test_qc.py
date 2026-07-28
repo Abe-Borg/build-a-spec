@@ -114,7 +114,7 @@ def _run(
         profile,
         DEFAULT_MODULE,
         client,
-        model="claude-fable-5",
+        model=settings.QC_MODEL,
         max_tokens=4096,
         version_index=version_index,
         started_at="2026-07-21 10:00",
@@ -909,7 +909,7 @@ def test_qc_result_from_dict_round_trips():
     again = QCResult.from_dict(result.to_dict())
     assert again is not None
     assert again.findings[0].title == "Round trip"
-    assert again.model == "claude-fable-5"
+    assert again.model == settings.QC_MODEL
 
 
 def test_qc_proposed_ops_allow_set_standard_suppressed():

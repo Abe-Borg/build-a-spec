@@ -12,6 +12,7 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
+from backend import settings
 from backend.app import create_app
 from backend.llm.client import AUTH_ERROR_MESSAGE
 from backend.qc.engine import QCFanoutError, run_final_qc
@@ -142,7 +143,7 @@ def test_qc_runner_surfaces_auth_error_kind_end_to_end():
         profile=None,
         module=DEFAULT_MODULE,
         client=SequencedFakeClient(_all_lenses_auth_fail()),
-        model="claude-fable-5",
+        model=settings.QC_MODEL,
         max_tokens=4096,
         version_index=0,
         on_settled=settled.set,

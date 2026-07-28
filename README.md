@@ -907,3 +907,10 @@ Ported so far (adapted, same design): `api_key_store.py`, `app_paths.py`, the he
 6. **Post-ship batches (v0.6.0 → v1.0.0).** "Sonnet unleashed" no-limits context architecture (v0.6.0); streaming UX + manual editing + settings + cost meter (v0.7.0); full-section draft + keyboard review queue (v0.8.0); Final QC on Fable 5 with adversarial verification, a full audit-grade in-app/Word/JSON report, and a compact accept/dismiss action queue (v0.9.0); and the **1.0 release** — tracked-changes redline export over the normalized imported baseline or any semantic version, plus the in-app version-compare view, one diff engine behind both (v1.0.0).
 
 Build-a-Spec is an AI-assisted drafting aid, not an authority. Its output is advisory and is not a substitute for review by a licensed design professional.
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+Copyright (c) 2026 [Abraham Borg](https://github.com/Abe-Borg) ·
+[LinkedIn](https://www.linkedin.com/in/abrahamborg/)

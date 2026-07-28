@@ -1155,11 +1155,11 @@ def _qc_snapshot_payload(session) -> dict[str, Any]:
 def _usage_payload(session: SessionState) -> dict[str, Any]:
     """The ledger snapshot plus the session context gauge.
 
-    ``context`` is the Anthropic-counted rendered-prompt size of the last
-    committed chat turn's final request against the model's context window —
-    a gauge, not spend, which is why it rides beside the ledger snapshot
-    rather than inside it. None until a turn commits (fresh session, reset,
-    or a just-loaded project).
+    ``context`` is the Anthropic-counted conversation size after the last
+    committed chat turn (its final request's full prompt plus the retained
+    reply) against the model's context window — a gauge, not spend, which is
+    why it rides beside the ledger snapshot rather than inside it. None
+    until a turn commits (fresh session, reset, or a just-loaded project).
     """
     with session.session_state_guard():
         snapshot = session.usage.snapshot()

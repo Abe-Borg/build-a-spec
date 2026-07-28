@@ -207,10 +207,11 @@ def test_research_run_rolls_up_into_ledger(monkeypatch):
 # The context gauge (overall conversation size, not spend)
 # ---------------------------------------------------------------------------
 #
-# ``context.tokens`` is the rendered-prompt size of the last committed turn's
-# FINAL request: input + cache write + cache read from that round's usage —
-# the exact Anthropic-counted size of everything sent to the model (system
-# prompt, tools, history, PROJECT CONTEXT, user text). A gauge with
+# ``context.tokens`` is the conversation size after the last committed turn:
+# the FINAL round's request (input + cache write + cache read — the exact
+# Anthropic-counted size of everything sent to the model: system prompt,
+# tools, history, PROJECT CONTEXT, user text) PLUS that round's retained
+# reply (output minus thinking, which is stripped at commit). A gauge with
 # last-round-wins semantics, deliberately different from the ledger's
 # cumulative per-round sums.
 
@@ -221,13 +222,19 @@ def test_no_context_gauge_before_any_turn():
     assert usage["context"] is None
 
 
-def test_context_gauge_reports_the_last_requests_prompt_size(monkeypatch):
+def test_context_gauge_is_the_prompt_plus_the_retained_reply(monkeypatch):
     client = _client()
     fake = FakeClient(
         [
             text_turn(
                 ["Hi."],
-                usage=token_usage(input=1200, output=400, cache_read=300, cache_write=100),
+                usage=token_usage(
+                    input=1200,
+                    output=400,
+                    cache_read=300,
+                    cache_write=100,
+                    thinking=150,
+                ),
             )
         ]
     )
@@ -235,26 +242,31 @@ def test_context_gauge_reports_the_last_requests_prompt_size(monkeypatch):
     client.post("/api/chat", json={"message": "hi"})
 
     context = client.get("/api/usage").json()["context"]
-    # 1200 fresh + 100 cache-written + 300 cache-read = the full prompt.
-    # Output tokens are NOT part of the context measurement.
-    assert context == {"tokens": 1600, "window": 1_000_000}
+    # 1200 fresh + 100 cache-written + 300 cache-read = the request's full
+    # prompt, plus the committed reply: 400 output − 150 thinking (thinking
+    # blocks are stripped at commit and never enter history).
+    assert context == {"tokens": 1850, "window": 1_000_000}
 
 
 def test_context_gauge_is_the_last_round_not_the_sum(monkeypatch):
     client = _client()
     fake = FakeClient(
         [
-            tool_turn(["Working. "], _EDITS, usage=token_usage(input=800)),
-            text_turn(["Done."], usage=token_usage(input=2000, cache_read=500)),
+            tool_turn(["Working. "], _EDITS, usage=token_usage(input=800, output=60)),
+            text_turn(
+                ["Done."], usage=token_usage(input=2000, cache_read=500, output=100)
+            ),
         ]
     )
     monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
     client.post("/api/chat", json={"message": "go"})
 
     usage = client.get("/api/usage").json()
-    # The ledger sums rounds (800 + 2000); the gauge is the final round only.
+    # The ledger sums rounds (800 + 2000); the gauge is the final round's
+    # prompt (2500) + its reply (100). Round one's 60-token reply is already
+    # inside round two's input, so counting it again would double-bill.
     assert usage["categories"]["interview"]["input_tokens"] == 2800
-    assert usage["context"]["tokens"] == 2500
+    assert usage["context"]["tokens"] == 2600
 
 
 def test_failed_turn_does_not_move_the_context_gauge(monkeypatch):

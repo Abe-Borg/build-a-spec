@@ -99,9 +99,9 @@ export interface UsageSummary {
   };
   cache_saved_usd: number;
   /**
-   * Context gauge, not spend: the Anthropic-counted rendered-prompt size of
-   * the last committed chat turn's final request (system prompt + tools +
-   * history + project context), against the model's context window. null
+   * Context gauge, not spend: the Anthropic-counted conversation size after
+   * the last committed chat turn (system prompt + tools + history + project
+   * context + the retained reply), against the model's context window. null
    * until a turn commits (fresh session, reset, or a just-loaded project).
    */
   context?: { tokens: number; window: number } | null;

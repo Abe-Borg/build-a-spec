@@ -121,9 +121,9 @@ function ContextLine({ context }: { context: UsageSummary["context"] }) {
         {context.window.toLocaleString()} tokens ({pct}%)
       </p>
       <p className="mt-0.5 text-[11px] text-ink-faint">
-        Size of the conversation sent with the last message — system prompt,
-        tools, history, project context, and attachments read so far. Counted
-        by Anthropic.
+        Size of the conversation after the last exchange — system prompt,
+        tools, history, project context, attachments read so far, and the
+        reply itself. Counted by Anthropic.
       </p>
     </div>
   );

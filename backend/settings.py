@@ -47,9 +47,11 @@ def _int_env(name: str, default: int) -> int:
 MODEL_MAX_OUTPUT_TOKENS = 128_000
 
 # Sonnet 5's context window (VERIFIED 2026-07 against the claude-api
-# reference): the denominator for the session context meter. A model fact,
-# not a knob — deliberately not env-overridable.
-MODEL_CONTEXT_WINDOW = 1_000_000
+# reference): the denominator for the session context meter. The default is
+# a model fact, not a tuning knob — the env override exists ONLY to pair
+# with a BUILD_A_SPEC_INTERVIEW_MODEL override whose window differs (e.g.
+# Haiku 4.5 is 200k).
+MODEL_CONTEXT_WINDOW = _int_env("BUILD_A_SPEC_CONTEXT_WINDOW", 1_000_000)
 
 INTERVIEW_MAX_TOKENS = _int_env(
     "BUILD_A_SPEC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS

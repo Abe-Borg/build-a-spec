@@ -164,11 +164,14 @@ backend/
                            SessionState.last_context_tokens (a gauge, not spend —
                            the ledger's snapshot/merge tutorial plumbing is
                            additive and would corrupt it): the Anthropic-counted
-                           prompt size of the last committed chat turn's final
-                           request (input+cache r/w), written only in the guarded
-                           commit block, cleared on reset/load, served as
-                           `context` {tokens, window: settings.MODEL_CONTEXT_
-                           WINDOW (1M)} | null beside the /api/usage + session-
+                           conversation size after the last committed chat turn —
+                           its final request's prompt (input + cache r/w) plus
+                           that reply's retained non-thinking output — written
+                           only in the guarded commit block, cleared on
+                           reset/load, served as `context` {tokens, window:
+                           settings.MODEL_CONTEXT_WINDOW (1M; env
+                           BUILD_A_SPEC_CONTEXT_WINDOW pairs with a model
+                           override)} | null beside the /api/usage + session-
                            bundle snapshot (app._usage_payload)
   figures.py               [Batch 8] chat-authored figures: Figure + FigureStore
                            (per-turn atomic like DocumentStore — begin/commit/

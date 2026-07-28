@@ -289,9 +289,10 @@ class SessionState:
     usage: UsageLedger = field(default_factory=UsageLedger)
     # Context gauge, not spend (which is why it lives here and not in the
     # ledger — the ledger's snapshot/merge tutorial plumbing is additive and
-    # would corrupt a gauge): the Anthropic-counted rendered-prompt size of
-    # the last committed turn's final request (input + cache write + cache
-    # read). None until a turn commits; cleared by reset and project load.
+    # would corrupt a gauge): the Anthropic-counted conversation size after
+    # the last committed turn — its final request's full prompt (input +
+    # cache write + cache read) plus that reply's retained non-thinking
+    # output. None until a turn commits; cleared by reset and project load.
     # Written only inside the generation-guarded commit block, so a zombie
     # turn can never populate a fresh session.
     last_context_tokens: int | None = None
@@ -1727,7 +1728,8 @@ def _context_tokens(usage: Any) -> int | None:
     + cache read tokens (Anthropic-counted — their sum is the full prompt).
 
     Unlike the cumulative ``_merge_usage`` totals, this is a per-request
-    gauge; the caller keeps the LAST round's value as the session context
+    gauge; the caller pairs the LAST round's value with that round's
+    retained output (``_retained_output_tokens``) as the session context
     size. None when the usage object carries none of the three fields (the
     test fakes default ``usage=None``).
     """
@@ -1745,6 +1747,26 @@ def _context_tokens(usage: Any) -> int | None:
             total += int(value)
             seen = True
     return total if seen else None
+
+
+def _retained_output_tokens(usage: Any) -> int:
+    """The response tokens that persist into history: output minus thinking.
+
+    The final round's reply is committed AFTER the request the gauge
+    measures, so without this the gauge would omit the newest assistant
+    message. Thinking tokens are subtracted because thinking blocks are
+    stripped at commit and never re-billed on later requests.
+    """
+    if usage is None:
+        return 0
+    output = getattr(usage, "output_tokens", None)
+    if not isinstance(output, (int, float)):
+        return 0
+    details = getattr(usage, "output_tokens_details", None)
+    thinking = getattr(details, "thinking_tokens", None) if details else None
+    if isinstance(thinking, (int, float)):
+        return max(0, int(output) - int(thinking))
+    return max(0, int(output))
 
 
 # --- Streaming-event translation (WI1: buttery-smooth streaming UX) ----------
@@ -2253,9 +2275,11 @@ def stream_user_turn(
     post_commit_events: list[dict[str, Any]] = []
     usage_totals: dict[str, int] = {}
     # Per-round overwrite (NOT a sum): after the loop this holds the final
-    # round's rendered-prompt size — the session's current context. Committed
-    # beside the doc/figures so a failed turn (history rolled back) leaves
-    # the previous measurement standing.
+    # round's rendered-prompt size PLUS its retained reply — the size of the
+    # conversation the turn commits. Earlier rounds' outputs are already
+    # inside later rounds' input counts, so only the final round's pair
+    # matters. Committed beside the doc/figures so a failed turn (history
+    # rolled back) leaves the previous measurement standing.
     last_round_context: int | None = None
     # Turn-local staging for suggested-reply chips: the dispatch loop records
     # each suggest_prompts call here (latest wins); a successful turn commits
@@ -2336,9 +2360,12 @@ def stream_user_turn(
                 manager.__exit__(None, None, None)
 
             _merge_usage(usage_totals, getattr(final, "usage", None))
-            round_context = _context_tokens(getattr(final, "usage", None))
+            round_usage = getattr(final, "usage", None)
+            round_context = _context_tokens(round_usage)
             if round_context is not None:
-                last_round_context = round_context
+                last_round_context = round_context + _retained_output_tokens(
+                    round_usage
+                )
             content = _content_blocks_to_dicts(final.content)
             stop_reason = "user_stop" if stopped_mid_stream else final.stop_reason
 

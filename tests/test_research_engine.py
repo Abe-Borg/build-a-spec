@@ -17,6 +17,7 @@ from backend.research import (
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE as DEFAULT_MODULE
 from tests.fakes import (
     SequencedFakeClient,
+    fetch_blocks,
     pause_response,
     research_response,
 )
@@ -234,6 +235,210 @@ def test_retryable_failure_retries_then_succeeds(monkeypatch):
     )
     assert status.status == "completed"
     assert any(i.requirement == "Recovered." for i in profile.items)
+
+
+def _dimension_events(events: list[dict], dimension_id: str) -> list[dict]:
+    return [e for e in events if e.get("dimension_id") == dimension_id]
+
+
+def test_workers_emit_live_progress_events():
+    """Workers narrate as they go: started → activity/search/fetch → the
+    coordinator's terminal event, per dimension. Events interleave freely
+    ACROSS dimensions (four threads), so assertions here are per-dimension
+    subsequences, never global order."""
+    events: list[dict] = []
+    client = SequencedFakeClient(
+        _scripts(
+            governing_codes=[
+                research_response(
+                    items=[_item("VCC 2021 governs.", ["https://a.gov"])],
+                    queries=["ashburn virginia fire code adoption"],
+                    searched_urls=["https://a.gov"],
+                    extra_blocks=fetch_blocks("https://a.gov/doc"),
+                )
+            ]
+        )
+    )
+    run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        event_sink=events.append,
+    )
+
+    # The roster event still leads, and now names every dimension.
+    assert events[0]["type"] == "research_started"
+    assert events[0]["dimension_titles"] == {
+        d.dimension_id: d.title for d in DEFAULT_MODULE.research_dimensions
+    }
+
+    # Every dimension announced itself with its budgets.
+    started = [e for e in events if e["type"] == "dimension_started"]
+    assert {e["dimension_id"] for e in started} == set(DIM_KEYS)
+    assert all(
+        e["title"] and e["max_searches"] > 0 and e["max_fetches"] > 0
+        for e in started
+    )
+
+    # Every worker event carries its dimension id.
+    worker_types = {
+        "dimension_started",
+        "dimension_activity",
+        "dimension_search",
+        "dimension_fetch",
+        "dimension_retry",
+    }
+    assert all(
+        e.get("dimension_id") for e in events if e["type"] in worker_types
+    )
+
+    # governing_codes: started first, then the exact live query and URL,
+    # all before its terminal event.
+    gov = _dimension_events(events, "governing_codes")
+    types = [e["type"] for e in gov]
+    assert types[0] == "dimension_started"
+    assert types[-1] == "dimension_complete"
+    search = next(e for e in gov if e["type"] == "dimension_search")
+    assert search["query"] == "ashburn virginia fire code adoption"
+    fetch = next(e for e in gov if e["type"] == "dimension_fetch")
+    assert fetch["url"] == "https://a.gov/doc"
+    kinds = [e["kind"] for e in gov if e["type"] == "dimension_activity"]
+    assert kinds == ["searching", "fetching", "writing"]
+
+
+def test_activity_is_emitted_on_change_only():
+    """Two consecutive searches announce ``searching`` once — the activity
+    stream reports phase changes, not every block."""
+    events: list[dict] = []
+    client = SequencedFakeClient(
+        _scripts(
+            governing_codes=[
+                research_response(
+                    items=[_item("Rule.", ["https://a.gov"])],
+                    queries=["first query", "second query"],
+                    searched_urls=["https://a.gov"],
+                )
+            ]
+        )
+    )
+    run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        event_sink=events.append,
+    )
+    gov = _dimension_events(events, "governing_codes")
+    kinds = [e["kind"] for e in gov if e["type"] == "dimension_activity"]
+    assert kinds == ["searching", "writing"]
+    queries = [e["query"] for e in gov if e["type"] == "dimension_search"]
+    assert queries == ["first query", "second query"]
+
+
+def test_retry_emits_dimension_retry_event(monkeypatch):
+    import backend.research.engine as engine
+
+    monkeypatch.setattr(engine.time, "sleep", lambda _s: None)
+    import anthropic
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    retryable = anthropic.APIConnectionError(message="reset", request=request)
+    events: list[dict] = []
+    client = SequencedFakeClient(
+        _scripts(
+            governing_codes=[
+                retryable,
+                research_response(
+                    items=[_item("Recovered.", ["https://a.gov"])],
+                    searched_urls=["https://a.gov"],
+                ),
+            ]
+        )
+    )
+    run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        event_sink=events.append,
+    )
+    gov = _dimension_events(events, "governing_codes")
+    retries = [e for e in gov if e["type"] == "dimension_retry"]
+    assert retries == [
+        {
+            "type": "dimension_retry",
+            "dimension_id": "governing_codes",
+            "attempt": 1,
+            "max_attempts": 3,
+            "reason": "connection",
+            "backoff_s": 5.0,
+        }
+    ]
+    # The retry precedes the dimension's recovery.
+    types = [e["type"] for e in gov]
+    assert types.index("dimension_retry") < types.index("dimension_complete")
+    assert next(
+        e for e in gov if e["type"] == "dimension_complete"
+    )["item_count"] == 1
+
+
+def test_malformed_stream_frames_never_fail_a_dimension():
+    """Garbage raw-stream frames are skipped by the relay — the dimension
+    still completes from the final message, and a garbled search input
+    yields no blank-query event."""
+    from types import SimpleNamespace
+
+    from tests.fakes import _synthesize_events
+
+    response = research_response(
+        items=[_item("Survives.", ["https://a.gov"])],
+        searched_urls=["https://a.gov"],
+    )
+    response.events = [
+        # A block start with no content_block at all.
+        SimpleNamespace(type="content_block_start", index=0, content_block=None),
+        # A delta with no delta payload.
+        SimpleNamespace(type="content_block_delta", index=0, delta=None),
+        # A search block whose input JSON never parses → no blank chip.
+        SimpleNamespace(
+            type="content_block_start",
+            index=1,
+            content_block=SimpleNamespace(type="server_tool_use", name="web_search"),
+        ),
+        SimpleNamespace(
+            type="content_block_delta",
+            index=1,
+            delta=SimpleNamespace(type="input_json_delta", partial_json="{not json"),
+        ),
+        SimpleNamespace(type="content_block_stop", index=1),
+        # An unknown frame type entirely.
+        SimpleNamespace(type="mystery_frame"),
+        *_synthesize_events(response.content, []),
+    ]
+    events: list[dict] = []
+    client = SequencedFakeClient(_scripts(governing_codes=[response]))
+    profile = run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        event_sink=events.append,
+    )
+    status = next(
+        s for s in profile.dimension_statuses if s.dimension_id == "governing_codes"
+    )
+    assert status.status == "completed"
+    assert any(i.requirement == "Survives." for i in profile.items)
+    # No emission from the garbage: every search event has a real query.
+    assert all(
+        e["query"] for e in events if e["type"] == "dimension_search"
+    )
 
 
 def test_retry_success_counts_billed_usage_from_abandoned_attempt(monkeypatch):

@@ -12,6 +12,7 @@ import type {
   OpenItem,
   QcSnapshot,
   ReadinessPayload,
+  ResearchEvent,
   ResearchSnapshot,
   SessionBundle,
   SourceCapabilitiesState,
@@ -83,6 +84,42 @@ import ConfirmDialog from "./components/ConfirmDialog";
 
 let nextId = 0;
 const newId = () => `m${++nextId}`;
+
+/** The research SSE events whose arrival warrants a full authoritative
+ *  snapshot refetch (status flips, profile adoption, round metadata). The
+ *  chatty live events between them — per-agent activity, searches, fetches,
+ *  retries — merge locally instead: refetching the whole snapshot (full
+ *  event log + full profile) per frame was O(frames × payload). */
+const RESEARCH_MILESTONES = new Set([
+  "research_started",
+  "dimension_complete",
+  "dimension_failed",
+  "research_complete",
+  "research_failed",
+]);
+
+/** Merge one streamed research event into the local snapshot's event log.
+ *  Never touches status/error/profile — those stay snapshot-owned
+ *  (refreshResearch is authoritative and epoch-guarded). `research_started`
+ *  restarts the local log (the server clears it per round); replay overlap
+ *  after a reconnect dedupes by seq. */
+function mergeResearchEvent(
+  prev: ResearchSnapshot | null,
+  evt: ResearchEvent,
+): ResearchSnapshot {
+  const base: ResearchSnapshot =
+    prev ?? { status: "running", error: "", events: [] };
+  if (evt.type === "research_started") return { ...base, events: [evt] };
+  const events = base.events;
+  const last = events[events.length - 1];
+  if (!last || evt.seq > last.seq) {
+    return { ...base, events: [...events, evt] };
+  }
+  const next = [...events.filter((e) => e.seq !== evt.seq), evt].sort(
+    (a, b) => a.seq - b.seq,
+  );
+  return { ...base, events: next };
+}
 
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
@@ -685,15 +722,27 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Follow the SSE stream of a running research, snapshotting as it goes. */
+  const bumpDrawer = useCallback((name: DrawerName) => {
+    setDrawerNonces((prev) => ({ ...prev, [name]: prev[name] + 1 }));
+  }, []);
+
+  /** Follow the SSE stream of a running research. Live events merge into
+   *  the local snapshot the moment they arrive (the agent board repaints
+   *  per frame); the authoritative snapshot is refetched only on milestone
+   *  events and when the stream ends. */
   const followResearch = useCallback(async () => {
     if (researchFollowRef.current) return;
     researchFollowRef.current = true;
+    const epoch = workspaceEpochRef.current;
     try {
-      for await (const _evt of streamResearch()) {
-        // Events carry deltas; the snapshot endpoint is authoritative and
-        // cheap for a local app — refresh on each frame.
-        refreshResearch();
+      for await (const evt of streamResearch()) {
+        // The sentinel has no seq; `superseded` just means a newer run's
+        // follower owns the stream now — the finally refetch catches up.
+        if (evt.type === "stream_end") continue;
+        if (workspaceEpochRef.current === epoch) {
+          setResearch((prev) => mergeResearchEvent(prev, evt));
+        }
+        if (RESEARCH_MILESTONES.has(evt.type)) refreshResearch();
       }
     } finally {
       researchFollowRef.current = false;
@@ -712,6 +761,8 @@ export default function App() {
       // researchAuthHandledRef's declaration comment: refreshResearch (not
       // an effect) is what actually reopens the modal.
       researchAuthHandledRef.current = false;
+      // Open the drawer onto the live agent board — the run is the show.
+      bumpDrawer("research");
       addNote("Started requirements research — progress in the Research panel.");
       void followResearch();
     } catch (e) {
@@ -721,7 +772,7 @@ export default function App() {
         events: prev?.events ?? [],
       }));
     }
-  }, [followResearch, addNote, health]);
+  }, [followResearch, addNote, health, bumpDrawer]);
 
   /** Stop the running research fan-out (confirmed in the drawer — loses progress). */
   const onStopResearch = useCallback(async () => {
@@ -1451,10 +1502,6 @@ export default function App() {
     (doc.section.number !== "" ||
       doc.section.title !== "" ||
       doc.parts.some((p) => p.articles.length > 0));
-
-  const bumpDrawer = useCallback((name: DrawerName) => {
-    setDrawerNonces((prev) => ({ ...prev, [name]: prev[name] + 1 }));
-  }, []);
 
   const onboarding = useOnboarding({
     editDoc: onEditDoc,

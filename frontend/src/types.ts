@@ -501,7 +501,9 @@ export interface ResearchEvent {
   done?: number;
   total?: number;
   project?: string;
-  status?: ResearchRunStatus;
+  /** On the `stream_end` sentinel; `superseded` means a newer run took
+   *  the runner over and this stream ended without draining. */
+  status?: ResearchRunStatus | "superseded";
   restored?: boolean;
   /** 1-based research round this event belongs to (rounds append). */
   round?: number;
@@ -510,6 +512,28 @@ export interface ResearchEvent {
   round_item_count?: number;
   new_item_count?: number;
   repeat_item_count?: number;
+  /** On `research_started`: the dimension id roster, plus id → human title
+   *  so the live board seeds real names before any worker has emitted. */
+  dimensions?: string[];
+  dimension_titles?: Record<string, string>;
+  /** On `dimension_started`: the dimension's web-tool budgets. */
+  max_searches?: number;
+  max_fetches?: number;
+  /** On `dimension_activity`: what that agent is doing right now. */
+  kind?: "thinking" | "searching" | "fetching" | "writing";
+  /** On `dimension_search` / `dimension_fetch`: the live query / URL. */
+  query?: string;
+  url?: string;
+  /** On `dimension_retry`: which attempt just failed (1-based), the
+   *  attempt ceiling, the failure class, and the backoff before retrying. */
+  attempt?: number;
+  max_attempts?: number;
+  reason?: string;
+  backoff_s?: number;
+  /** On `dimension_complete` / `dimension_failed`: billed web-tool
+   *  request counts for the dimension. */
+  web_search_requests?: number;
+  web_fetch_requests?: number;
 }
 
 export interface ResearchItemView {

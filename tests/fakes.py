@@ -516,6 +516,7 @@ def research_response(
     *,
     items: list[dict] | None = None,
     searched_urls: list[str] | None = None,
+    queries: list[str] | None = None,
     extra_blocks: list[SimpleNamespace] | None = None,
     stop_reason: str = "tool_use",
     searches: int | None = None,
@@ -528,8 +529,20 @@ def research_response(
     ``items`` are raw payload item dicts (the engine normalizes them).
     ``searched_urls`` become one web_search_tool_result block. ``searches``
     defaults to len(searched_urls) so the usage telemetry stays coherent.
+    ``queries`` prepend one ``server_tool_use``(web_search) block each — the
+    shape the engine's live-activity relay detects (result blocks alone
+    synthesize no stream events, so a fixture without them emits nothing).
     """
     content: list[SimpleNamespace] = []
+    for i, query in enumerate(queries or []):
+        content.append(
+            SimpleNamespace(
+                type="server_tool_use",
+                id=f"srvtoolu_research_{i}",
+                name="web_search",
+                input={"query": query},
+            )
+        )
     if searched_urls:
         content.append(search_result_block(searched_urls))
     content.extend(extra_blocks or [])
@@ -715,6 +728,18 @@ class _FakeResearchStreamCtx:
 
     def __exit__(self, *exc):
         return False
+
+    def __iter__(self):
+        """Yield the response's raw stream events (explicit or synthesized).
+
+        The research engine iterates the stream for live activity before
+        calling ``get_final_message`` (mirroring the chat loop). An explicit
+        ``events`` attribute on the scripted response overrides synthesis —
+        the malformed-frame injection hook, same as ``raw_turn``."""
+        events = getattr(self._response, "events", None)
+        if events is None:
+            events = _synthesize_events(self._response.content, [])
+        yield from events
 
     @property
     def text_stream(self):

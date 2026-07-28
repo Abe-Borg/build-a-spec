@@ -222,6 +222,7 @@ def test_research_lifecycle_stream_and_context_splice(monkeypatch):
                             ["https://dhcd.virginia.gov/vcc"],
                         )
                     ],
+                    queries=["virginia construction code edition"],
                     searched_urls=["https://dhcd.virginia.gov/vcc"],
                 )
             ]
@@ -237,6 +238,12 @@ def test_research_lifecycle_stream_and_context_splice(monkeypatch):
     assert kinds[0] == "research_started"
     assert kinds[-1] == "research_complete"
     assert kinds.count("dimension_complete") == 4
+    # Workers narrate live: every dimension announces itself, and the
+    # governing_codes search query rides the log with its real text.
+    assert kinds.count("dimension_started") == 4
+    search = next(e for e in snapshot["events"] if e["type"] == "dimension_search")
+    assert search["query"] == "virginia construction code edition"
+    assert search["dimension_id"] == "governing_codes"
 
     # The SSE stream replays the full run and closes with the sentinel.
     stream = client.get("/api/research/stream")

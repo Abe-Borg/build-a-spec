@@ -476,8 +476,8 @@ def test_a_stopped_round_is_still_tagged_with_its_round_number():
         max_tokens=4096,
         on_settled=settled.set,
     )
-    # Stop before any dimension has emitted — the terminal event is the
-    # only entry in this round's log, so it has to name the round itself.
+    # Stop while every dimension is still mid-call — the terminal event is
+    # raised outside the worker, so it has to name the round itself.
     assert runner.stop() is True
     failed = [e for e in runner.events if e["type"] == "research_failed"]
     assert len(failed) == 1
@@ -485,6 +485,10 @@ def test_a_stopped_round_is_still_tagged_with_its_round_number():
 
     release.set()
     assert settled.wait(timeout=10)
+    # The terminal event stays the log's LAST word: whatever the abandoned
+    # workers did after the stop was token-dropped, never appended.
+    assert runner.events[-1]["type"] == "research_failed"
+    assert len([e for e in runner.events if e["type"] == "research_failed"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +641,103 @@ def test_stopping_a_later_round_discards_only_that_round():
     assert settled.wait(timeout=10)
     assert [i.requirement for i in runner.profile_result.items] == ["Rule A."]
     assert runner.profile_result.round_count == 1
+
+
+def test_a_superseded_runs_late_events_never_reach_the_next_rounds_log():
+    """A stopped round's still-unwinding workers cannot pollute a later round.
+
+    Round 2 is stopped while its (blocked) workers are mid-call; round 3
+    then starts and completes. When the abandoned round-2 threads finally
+    finish — successfully, with their own would-be findings — their events
+    are token-dropped from round 3's log and their completion loses the
+    resolve race, even though the runner has long since moved on.
+    """
+    runner = ResearchRunner()
+
+    # Round 1: an ordinary completed round.
+    _run_round(
+        runner,
+        SequencedFakeClient(
+            _scripts_for_rounds(
+                {
+                    "governing_codes": research_response(
+                        items=[_item("Rule A.", ["https://a.gov"])],
+                        searched_urls=["https://a.gov"],
+                    )
+                }
+            )
+        ),
+        lambda _u: None,
+    )
+    assert runner.profile_result.round_count == 1
+
+    # Round 2: every dimension blocks until released, then SUCCEEDS with a
+    # poisoned finding — if any of it lands anywhere, the asserts see it.
+    release = threading.Event()
+    inner = SequencedFakeClient(
+        _scripts_for_rounds(
+            {
+                "governing_codes": research_response(
+                    items=[_item("Poisoned rule.", ["https://stale.gov"])],
+                    searched_urls=["https://stale.gov"],
+                )
+            }
+        )
+    )
+
+    class _BlockedSuccess:
+        def __init__(self) -> None:
+            self.messages = self
+
+        def stream(self, **request):
+            release.wait(timeout=10)
+            return inner.messages.stream(**request)
+
+    stopped_settled = threading.Event()
+    assert runner.start(
+        module=HYPERSCALE_FIRE,
+        project_profile=PROFILE,
+        client=_BlockedSuccess(),
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        on_settled=stopped_settled.set,
+    )
+    assert runner.stop() is True
+
+    # The successor run starts and completes while the stopped run's
+    # threads still block. (It reuses round number 2 — a stopped round
+    # contributed nothing, so it never claimed the number.)
+    _run_round(
+        runner,
+        SequencedFakeClient(
+            _scripts_for_rounds(
+                {
+                    "governing_codes": research_response(
+                        items=[_item("Rule C.", ["https://c.gov"])],
+                        searched_urls=["https://c.gov"],
+                    )
+                }
+            )
+        ),
+        lambda _u: None,
+    )
+    assert runner.status == "complete"
+    events_before = list(runner.events)
+
+    # Now let the stopped run unwind to its successful-looking finish.
+    release.set()
+    assert stopped_settled.wait(timeout=10)
+
+    # The successor's log is exactly what the successor wrote — nothing the
+    # abandoned run did after the stop appended to it or resolved over it.
+    assert runner.events == events_before
+    types = [e["type"] for e in runner.events]
+    assert types.count("research_complete") == 1
+    # And the profile merged rounds 1 + successor only — the poisoned
+    # round's items never arrived.
+    profile = runner.profile_result
+    assert profile.round_count == 2
+    assert [i.requirement for i in profile.items] == ["Rule A.", "Rule C."]
 
 
 # ---------------------------------------------------------------------------

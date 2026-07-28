@@ -999,8 +999,10 @@ def _readiness_payload(
             )
     elif not qc_matches_inputs:
         qc_current_detail = (
-            "Final QC is stale — the document or another review input "
-            "(research, standards, module, or source policy) has changed."
+            "Final QC is stale — the document, another review input "
+            "(research, standards, module, or source policy), or the review "
+            "configuration itself (model, effort, panel sizes, app version) "
+            "has changed since the report was produced."
         )
     else:
         qc_current_detail = (
@@ -3559,6 +3561,7 @@ def create_app() -> FastAPI:
                 client=client,
                 model=settings.QC_MODEL,
                 max_tokens=settings.QC_MAX_TOKENS,
+                effort=settings.QC_EFFORT,
                 version_index=session.doc.index,
                 discipline=effective_discipline(session),
                 source_guard=source_guard,
@@ -3693,8 +3696,9 @@ def create_app() -> FastAPI:
                     {
                         "ok": False,
                         "error": (
-                            "Final QC is stale because the document or another "
-                            "review input changed; re-run it before applying fixes."
+                            "Final QC is stale because the document, another "
+                            "review input, or the review configuration "
+                            "changed; re-run it before applying fixes."
                         ),
                     },
                     status_code=409,

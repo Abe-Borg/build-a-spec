@@ -89,6 +89,76 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.8.0",
+        date="2026-07-28",
+        headline="Final QC is much cheaper and much faster",
+        summary=(
+            "The pre-issue review pass now costs roughly a third of what it "
+            "did and finishes in a fraction of the time, without checking "
+            "any less of your section. Same five reviewers, same panel of "
+            "refuters for every finding, same audit report."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Final QC",
+                items=(
+                    ReleaseItem(
+                        title="About a third of the previous cost",
+                        body=(
+                            "A review pass sends your section to the model "
+                            "dozens of times — once per reviewer, then again "
+                            "for every reviewer who checks a finding. It was "
+                            "paying full price for your document on every "
+                            "one of those. It now sends the document once "
+                            "and refers back to it, and it runs on a model "
+                            "that costs half as much per word while being "
+                            "just as strong at review work."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Finishes in a fraction of the time",
+                        body=(
+                            "The verification stage runs twice as many "
+                            "checks at once as it used to, so a pass with "
+                            "many findings no longer queues up behind "
+                            "itself."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Nothing about the review got smaller",
+                        body=(
+                            "Five independent reviewers, a panel of two or "
+                            "three refuters for every finding they raise, a "
+                            "tie still going to the refuters, and the same "
+                            "full audit report. Only the bill and the wait "
+                            "changed."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Available on zero-retention accounts",
+                        body=(
+                            "The previous review model required 30-day data "
+                            "retention, so organisations running "
+                            "zero-data-retention had every Final QC request "
+                            "rejected. That restriction is gone."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Saved reviews will ask to be re-run",
+                        body=(
+                            "A Final QC result saved by an earlier version "
+                            "was produced by a different reviewer, so it is "
+                            "marked out of date when you open the project "
+                            "and its fixes cannot be applied until you run "
+                            "the pass again. Your document and everything "
+                            "else in the project are untouched."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.7.0",
         date="2026-07-28",
         headline="A much bigger app than 1.0",

@@ -23,7 +23,7 @@ from backend.app import _qc_source_guard, create_app
 from backend.llm.conversation import _source_editing_boundary_block
 from backend.qc.engine import (
     QCFinding,
-    _lens_user_message,
+    _lens_shared_prefix,
     _validate_ops,
 )
 from backend.qc.schema import QC_LENSES
@@ -1092,8 +1092,7 @@ def test_session_llm_and_qc_use_compact_capability_summary_without_mutation(
     assert llm_block is not None
     assert guard is not None
     assert guard.capability_summary
-    qc_message = _lens_user_message(
-        QC_LENSES[0],
+    qc_message = _lens_shared_prefix(
         session.doc.doc,
         session.module,
         None,

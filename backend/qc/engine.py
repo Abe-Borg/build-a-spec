@@ -133,9 +133,11 @@ class QCFanoutError(RuntimeError):
         self.auth_error = auth_error
 
 
-# Four streaming calls in flight is plenty and stays inside per-account
-# concurrency limits (mirrors research). Verifiers share the same cap.
-_QC_MAX_WORKERS = 4
+# Concurrent streaming calls in flight (lenses and verifiers share the pool).
+# Read through a helper rather than bound at import so an env override and
+# the tests' monkeypatching both take effect; see settings.QC_MAX_WORKERS.
+def _qc_max_workers() -> int:
+    return max(1, settings.QC_MAX_WORKERS)
 
 # pause_turn continuations per streaming call. The 2× search-budget ceiling
 # is the real runaway guard.
@@ -1636,14 +1638,20 @@ def _lens_system_prompt(module: SpecModule) -> str:
     )
 
 
-def _lens_user_message(
-    lens: QCLens,
+def _lens_shared_prefix(
     section: SpecSection,
     module: SpecModule,
     profile: RequirementsProfile | None,
     discipline: str = "",
     source_capability_summary: str = "",
 ) -> str:
+    """Everything every lens sees identically — the cached prefix.
+
+    Prompt caching is a strict prefix match, so this must lead the user turn
+    and must not vary by lens: the whole point is that the document render,
+    standards block and research profile are billed once per run instead of
+    once per call. ``_lens_request_suffix`` carries the per-lens bytes.
+    """
     # The session discipline (Batch 10, open-catalog modules) renders only
     # when non-empty — curated-module QC requests are byte-identical.
     discipline_block = (
@@ -1659,10 +1667,6 @@ def _lens_user_message(
         else ""
     )
     return (
-        f"[[QC-LENS:{lens.lens_id}]] {lens.title}\n\n"
-        "<lens_brief>\n"
-        f"{lens.brief}\n"
-        "</lens_brief>\n\n"
         f"{discipline_block}"
         "<standards_in_effect>\n"
         f"{_render_standards(module, section)}\n"
@@ -1674,6 +1678,16 @@ def _lens_user_message(
         "<specification>\n"
         f"{_render_section(section)}\n"
         "</specification>"
+    )
+
+
+def _lens_request_suffix(lens: QCLens) -> str:
+    """The per-lens tail, after the cached prefix."""
+    return (
+        f"[[QC-LENS:{lens.lens_id}]] {lens.title}\n\n"
+        "<lens_brief>\n"
+        f"{lens.brief}\n"
+        "</lens_brief>"
     )
 
 
@@ -1708,7 +1722,19 @@ def _verifier_system_prompt(module: SpecModule) -> str:
     )
 
 
-def _verifier_user_message(finding: dict, lens: QCLens, section_render: str) -> str:
+def _verifier_shared_prefix(section_render: str) -> str:
+    """The document every verifier seat sees identically — the cached prefix.
+
+    A run's verification phase is ~35 of its ~40 calls and every seat needs
+    the whole section (``already handled elsewhere in the document`` is one
+    of the refutation grounds), so this is where caching pays most. It leads
+    the user turn because the cache is a strict prefix match.
+    """
+    return "<specification>\n" f"{section_render}\n" "</specification>"
+
+
+def _verifier_request_suffix(finding: dict, lens: QCLens) -> str:
+    """The per-finding tail, after the cached document prefix."""
     element = finding.get("element_id") or "(section-level)"
     proposed_ops = json.dumps(
         finding.get("proposed_ops") or [],
@@ -1731,10 +1757,7 @@ def _verifier_user_message(finding: dict, lens: QCLens, section_render: str) -> 
         "</proposed_ops>\n\n"
         "<lens_brief>\n"
         f"{lens.brief}\n"
-        "</lens_brief>\n\n"
-        "<specification>\n"
-        f"{section_render}\n"
-        "</specification>"
+        "</lens_brief>"
     )
 
 
@@ -1787,17 +1810,53 @@ def _parse(all_responses: list[Any], tool_name: str, json_tag: re.Pattern) -> di
     return None
 
 
+def _qc_user_content(
+    shared_prefix: str, request_suffix: str, cache_ttl: str
+) -> list[dict[str, Any]]:
+    """The user turn as two text blocks, breakpoint on the shared one.
+
+    Block 0 is identical across every call that shares this lineage (the
+    four non-web lenses, or every verifier seat), so it is written to cache
+    once and read thereafter. Block 1 is the per-call tail and is never
+    cached. ``cache_ttl`` is ``"1h"`` for the verification phase, which runs
+    longer than the 5-minute default would survive.
+    """
+    cache_control: dict[str, Any] = {"type": "ephemeral"}
+    if cache_ttl:
+        cache_control["ttl"] = cache_ttl
+    return [
+        {"type": "text", "text": shared_prefix, "cache_control": cache_control},
+        {"type": "text", "text": request_suffix},
+    ]
+
+
+# NOTE — deliberately no messages-tail breakpoint here, unlike the interview
+# loop's ``_with_tail_cache_breakpoint`` (``llm/conversation.py``). A
+# pause_turn continuation does re-bill its accumulated assistant turns at
+# full input price, so one would pay off for the search-heavy compliance
+# lens. It cannot be applied as-is: the continuation branch below re-sends
+# ``response.content`` verbatim (the pause_turn contract) as SDK block
+# objects, not the serialized dicts the interview loop builds, so there is
+# no dict to hang ``cache_control`` on. Marking them would mean changing
+# what gets re-sent, which is a behavioural change to the fan-out's resume
+# path and not something a caching change should do on the side. The shared
+# document prefix is cached regardless, which is the bulk of the payload.
+
+
 def _run_streaming_call(
     client: Any,
     *,
     system_prompt: str,
-    user_message: str,
+    shared_prefix: str,
+    request_suffix: str,
     tools: list[dict],
     tool_name: str,
     json_tag: re.Pattern,
     model: str,
     max_tokens: int,
+    effort: str,
     max_searches: int,
+    cache_ttl: str = "",
     should_stop: Callable[[], bool] = lambda: False,
 ) -> _CallResult:
     """One QC call: request → pause_turn continuations → parse. Never raises.
@@ -1807,7 +1866,7 @@ def _run_streaming_call(
     its next network round yet bails immediately; one already in flight
     finishes naturally and its result is discarded by the caller.
     """
-    tools = list(tools)
+    tools = [dict(tool) for tool in tools]
     tools[-1]["cache_control"] = {"type": "ephemeral"}
     request_kwargs: dict[str, Any] = {
         "model": model,
@@ -1820,10 +1879,10 @@ def _run_streaming_call(
             }
         ],
         "tools": tools,
-        # Fable 5 runs adaptive thinking always-on; state it + the effort
-        # level explicitly (spare-no-expense: xhigh by default).
+        # Opus 5 runs adaptive thinking by default; state it + the effort
+        # level explicitly. A manual thinking budget would 400.
         "thinking": {"type": "adaptive"},
-        "output_config": {"effort": settings.QC_EFFORT},
+        "output_config": {"effort": effort},
     }
 
     search_ceiling = max(1, max_searches * 2)
@@ -1840,7 +1899,14 @@ def _run_streaming_call(
         is_last = attempt == attempts - 1
         all_responses: list[Any] = []
         try:
-            messages: list[dict] = [{"role": "user", "content": user_message}]
+            messages: list[dict] = [
+                {
+                    "role": "user",
+                    "content": _qc_user_content(
+                        shared_prefix, request_suffix, cache_ttl
+                    ),
+                }
+            ]
             completed = False
             for _ in range(QC_MAX_CONTINUATIONS + 1):
                 if should_stop():
@@ -2176,6 +2242,7 @@ def _run_lens(
     profile: RequirementsProfile | None,
     model: str,
     max_tokens: int,
+    effort: str,
     discipline: str = "",
     source_capability_summary: str = "",
     should_stop: Callable[[], bool] = lambda: False,
@@ -2195,19 +2262,20 @@ def _run_lens(
     result = _run_streaming_call(
         client,
         system_prompt=_lens_system_prompt(module),
-        user_message=_lens_user_message(
-            lens,
+        shared_prefix=_lens_shared_prefix(
             section,
             module,
             profile,
             discipline,
             source_capability_summary,
         ),
+        request_suffix=_lens_request_suffix(lens),
         tools=_lens_tools(lens, model),
         tool_name=QC_FINDINGS_TOOL_NAME,
         json_tag=_FINDINGS_JSON_TAG,
         model=model,
         max_tokens=max_tokens,
+        effort=effort,
         max_searches=lens.max_searches if lens.web else 0,
         should_stop=should_stop,
     )
@@ -2306,6 +2374,7 @@ def _verify_one(
     module: SpecModule,
     model: str,
     max_tokens: int,
+    effort: str,
     reviewer_index: int,
     should_stop: Callable[[], bool] = lambda: False,
     shared_should_stop: Callable[[], bool] = lambda: False,
@@ -2338,12 +2407,19 @@ def _verify_one(
     result = _run_streaming_call(
         client,
         system_prompt=_verifier_system_prompt(module),
-        user_message=_verifier_user_message(finding, lens, section_render),
+        shared_prefix=_verifier_shared_prefix(section_render),
+        request_suffix=_verifier_request_suffix(finding, lens),
+        # The verification phase runs longer than the 5-minute default cache
+        # entry survives, so the shared document would lapse and be rewritten
+        # mid-phase. A 1h entry costs 2x to write and breaks even after three
+        # reads; a panel run has dozens.
+        cache_ttl="1h",
         tools=tools,
         tool_name=QC_VERDICT_TOOL_NAME,
         json_tag=_VERDICT_JSON_TAG,
         model=model,
         max_tokens=max_tokens,
+        effort=effort,
         max_searches=settings.QC_MAX_SEARCHES_LENS if lens.web else 0,
         should_stop=lambda: should_stop() or shared_should_stop(),
     )
@@ -2476,6 +2552,7 @@ def build_qc_input_manifest(
     source_guard: QCSourceGuard | None = None,
     model: str,
     max_tokens: int,
+    effort: str = "",
 ) -> dict[str, Any]:
     """Canonical manifest of every material input and review rule.
 
@@ -2588,7 +2665,7 @@ def build_qc_input_manifest(
         },
         "configuration": {
             "model": model,
-            "effort": settings.QC_EFFORT,
+            "effort": effort or settings.QC_EFFORT,
             "max_tokens": int(max_tokens),
             "verifiers_standard": max(1, settings.QC_VERIFIERS_STANDARD),
             "verifiers_critical": max(1, settings.QC_VERIFIERS_CRITICAL),
@@ -2771,6 +2848,7 @@ def run_final_qc(
     *,
     model: str,
     max_tokens: int,
+    effort: str = "",
     version_index: int,
     started_at: str,
     finished_at: str,
@@ -2795,6 +2873,9 @@ def run_final_qc(
     cancelling mid-verification stops new verifier calls from starting too.
     """
     pipeline_started = time.monotonic()
+    # Pinned once per run rather than re-read at each call site, so the audit
+    # record provably describes what was sent even if the env changes mid-run.
+    effort = effort or settings.QC_EFFORT
     run_id = run_id or f"qc-run-{uuid.uuid4().hex}"
     remembered_records = (
         dict(remembered_dismissed)
@@ -2814,6 +2895,7 @@ def run_final_qc(
         source_guard=source_guard,
         model=model,
         max_tokens=max_tokens,
+        effort=effort,
     )
 
     event_sink(
@@ -2829,7 +2911,7 @@ def run_final_qc(
     # -- Phase 1: lenses (parallel) ----------------------------------------
     outcomes: dict[str, _LensOutcome] = {}
     with ThreadPoolExecutor(
-        max_workers=min(_QC_MAX_WORKERS, len(QC_LENSES))
+        max_workers=min(_qc_max_workers(), len(QC_LENSES))
     ) as pool:
         futures = {
             pool.submit(
@@ -2841,6 +2923,7 @@ def run_final_qc(
                 profile=profile,
                 model=model,
                 max_tokens=max_tokens,
+                effort=effort,
                 discipline=discipline,
                 source_capability_summary=source_capability_summary,
                 should_stop=should_stop,
@@ -2917,7 +3000,7 @@ def run_final_qc(
             input_fingerprint=qc_input_fingerprint(input_manifest),
             input_manifest=input_manifest,
             model=model,
-            effort=settings.QC_EFFORT,
+            effort=effort,
             max_tokens=max_tokens,
             duration_ms=max(
                 0, int((time.monotonic() - pipeline_started) * 1000)
@@ -2982,13 +3065,14 @@ def run_final_qc(
                     {"type": "verify_progress", "done": done, "total": total}
                 )
 
-        with ThreadPoolExecutor(max_workers=_QC_MAX_WORKERS) as pool:
+        max_workers = _qc_max_workers()
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures: dict[Any, tuple[int, int]] = {}
 
             def fill_available_slots() -> None:
                 while (
                     pending_tasks
-                    and len(futures) < _QC_MAX_WORKERS
+                    and len(futures) < max_workers
                     and not shared_failure.is_set()
                 ):
                     i, j = pending_tasks.popleft()
@@ -3001,6 +3085,7 @@ def run_final_qc(
                         module=module,
                         model=model,
                         max_tokens=max_tokens,
+                        effort=effort,
                         reviewer_index=j + 1,
                         should_stop=should_stop,
                         shared_should_stop=shared_failure.is_set,
@@ -3180,7 +3265,7 @@ def run_final_qc(
         input_fingerprint=qc_input_fingerprint(input_manifest),
         input_manifest=input_manifest,
         model=model,
-        effort=settings.QC_EFFORT,
+        effort=effort,
         max_tokens=max_tokens,
         duration_ms=max(0, int((time.monotonic() - pipeline_started) * 1000)),
         usage_totals=usage_totals,

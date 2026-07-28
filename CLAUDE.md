@@ -2983,10 +2983,35 @@ semantics, retry policy, pause_turn loop, and grounding are untouched.
   index.css, each with its own reduced-motion block immediately after:
   `.agent-dot` (soft accent box-shadow ring, 1.6s) and `.tally-flash`
   (0.6s color-from-accent, runs once per remount). Everything else reuses
-  `.status-dots`/`.status-shimmer`/`.prompt-chip-in`. No new
-  `data-capability`, no new `data-tour` (the board is passive display;
-  the tour manifest already promises "Progress streams live") — `npm
-  test`'s set-equality contract is the guard.
+  `.status-dots`/`.status-shimmer`/`.prompt-chip-in`. The board originally
+  shipped with no `data-capability`/`data-tour` (passive display) —
+  SUPERSEDED by the agent-activity modal below, which makes the cards
+  interactive under `research.agent-detail`.
+- **The cards are clickable — `AgentActivityModal` is the full per-agent
+  view.** The board fold + its vocabulary (`ACTIVITY_LABELS`,
+  `RETRY_REASONS`, `trimUrl`, `labelFromId`, `DimLive`,
+  `foldResearchBoard`) moved verbatim to `lib/researchAgents.ts`, which
+  adds `foldAgentDetail(events, dimensionId)` — the uncapped fold: a
+  chronological, timestamped timeline of ONE dimension's events (started
+  w/ budgets, every activity change, every query full-text, every URL,
+  every retry incl. backoff, the terminal telemetry), with `dim` reused
+  from `foldResearchBoard` so the modal header and the card can never
+  disagree. Pinned by `tests/researchAgents.test.ts` (registered in
+  package.json's explicit `node --test` list). `AgentCard` became a real
+  `<button>` (inner p/ul/li → block spans — a button allows no flow
+  descendants; recent URLs stay plain text) opening one drawer-owned
+  modal (`agentDetailId` state, torn down when `research` goes null),
+  rendered OUTSIDE the `running`/`expanded` gates like
+  ResearchReportModal so it survives run completion mid-view.
+  ResearchReportModal chrome + QCReportModal `useDialogFocus` wiring;
+  live via a `useMemo` re-fold per SSE merge; follow-bottom is Chat.tsx's
+  pinned-scroll pattern minus the rAF loop (this feed only grows on
+  commits); a run that ends before the agent's terminal event shows an
+  "interrupted" pill + a "Run ended before this agent finished." row —
+  never "running" for a dead run. Capability `research.agent-detail`
+  rides the EXISTING `research-run` tour step (one step, three controls
+  — the `updates.manage` precedent), so no new step, no anchor, no
+  `TOUR_VERSION` bump.
 - **Fakes**: `_FakeResearchStreamCtx` gained `__iter__` (explicit
   `.events` override for malformed-frame injection, else
   `_synthesize_events` — which already emits the start/delta/stop triple

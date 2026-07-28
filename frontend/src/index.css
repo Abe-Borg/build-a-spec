@@ -391,3 +391,154 @@ body {
     animation: none;
   }
 }
+
+/* Final QC Review Room. The drawer is a container because the document pane
+   can be only 420px wide even on a large desktop; card layout follows its
+   actual space instead of the viewport. */
+.qc-review-room,
+.qc-run-recap {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 28%, var(--color-edge));
+  border-radius: 0.75rem;
+  background:
+    radial-gradient(circle at 88% 0%, rgba(217, 119, 87, 0.11), transparent 38%),
+    color-mix(in srgb, var(--color-surface) 82%, var(--color-bg));
+  padding: 0.7rem;
+  container-type: inline-size;
+  animation: qc-room-in 0.24s ease-out both;
+}
+.qc-stage-rail {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.3rem;
+}
+.qc-run-recap.is-retained {
+  border-color: color-mix(in srgb, var(--color-edge) 88%, var(--color-accent));
+  background:
+    radial-gradient(circle at 88% 0%, rgba(217, 119, 87, 0.055), transparent 38%),
+    color-mix(in srgb, var(--color-surface) 78%, var(--color-bg));
+}
+.qc-stage {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--color-edge) 82%, transparent);
+  border-radius: 0.5rem;
+  background: rgba(38, 38, 36, 0.34);
+  padding: 0.35rem 0.4rem;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease,
+    transform 0.2s ease;
+}
+.qc-stage-index {
+  display: inline-flex;
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: 0 0 1.15rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-edge);
+  border-radius: 9999px;
+  color: var(--color-ink-faint);
+  font-size: 0.5rem;
+  font-weight: 700;
+}
+.qc-stage.is-active {
+  border-color: color-mix(in srgb, var(--color-accent) 58%, var(--color-edge));
+  background: rgba(217, 119, 87, 0.08);
+}
+.qc-stage.is-active .qc-stage-index {
+  border-color: var(--color-accent);
+  background: rgba(217, 119, 87, 0.16);
+  color: var(--color-accent);
+  animation: agent-ring 1.6s ease-out infinite;
+}
+.qc-stage.is-complete .qc-stage-index {
+  border-color: color-mix(in srgb, var(--color-ok) 65%, var(--color-edge));
+  background: rgba(127, 166, 80, 0.13);
+  color: var(--color-ok);
+}
+.qc-stage.is-failed .qc-stage-index {
+  border-color: color-mix(in srgb, var(--color-err) 65%, var(--color-edge));
+  color: var(--color-err);
+}
+.qc-lens-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.4rem;
+}
+.qc-lens-card,
+.qc-candidate-card {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--color-edge) 80%, transparent);
+  border-radius: 0.55rem;
+  background: rgba(38, 38, 36, 0.38);
+  padding: 0.5rem;
+  animation: qc-card-in 0.2s ease-out both;
+}
+.qc-lens-card.is-active {
+  border-color: color-mix(in srgb, var(--color-accent) 38%, var(--color-edge));
+  background: rgba(217, 119, 87, 0.045);
+}
+.qc-room-section {
+  border-top: 1px solid color-mix(in srgb, var(--color-edge) 70%, transparent);
+  padding-top: 0.65rem;
+  animation: qc-card-in 0.24s ease-out both;
+}
+.qc-seat-active {
+  animation: qc-seat-glow 1.6s ease-in-out infinite;
+}
+.qc-recap-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+@container (min-width: 25rem) {
+  .qc-lens-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container (min-width: 46rem) {
+  .qc-lens-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .qc-recap-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+@keyframes qc-room-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+@keyframes qc-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+@keyframes qc-seat-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(217, 119, 87, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.14);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qc-review-room,
+  .qc-run-recap,
+  .qc-lens-card,
+  .qc-candidate-card,
+  .qc-room-section,
+  .qc-seat-active,
+  .qc-stage.is-active .qc-stage-index {
+    animation: none !important;
+    transition: none !important;
+  }
+}

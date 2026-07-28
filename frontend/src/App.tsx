@@ -89,6 +89,13 @@ import {
 import CloseDialog from "./components/CloseDialog";
 import ConfirmDialog from "./components/ConfirmDialog";
 import { buildQcApplicationDigest } from "./lib/qcRemediation";
+import {
+  QC_MILESTONE_TYPES,
+  isQcActiveSnapshot,
+  mergeQcEvent,
+  qcSnapshotRunId,
+  reconcileQcSnapshotUpdate,
+} from "./lib/qcLive";
 
 let nextId = 0;
 const newId = () => `m${++nextId}`;
@@ -259,11 +266,21 @@ export default function App() {
   // effect-dependency-based reset can silently never re-fire.
   const researchAuthHandledRef = useRef(false);
   const qcAuthHandledRef = useRef(false);
+  // Synchronous QC identity for stream/fetch races. React state may batch,
+  // but a stale milestone response must be compared with every frame already
+  // accepted in this tick before it can drive UI or auth side effects.
+  const qcSnapshotRef = useRef<QcSnapshot | null>(null);
+  const qcRefreshGenerationRef = useRef(0);
   const onboardingRef = useRef<OnboardingApi | null>(null);
   // Every whole-session/tutorial transition advances this epoch. Read calls
   // and streams captured against an older workspace must never repaint the
   // newly hydrated document with discarded scenario state.
   const workspaceEpochRef = useRef(0);
+
+  const replaceQcSnapshot = useCallback((snapshot: QcSnapshot | null) => {
+    qcSnapshotRef.current = snapshot;
+    setQc(snapshot);
+  }, []);
 
   const refreshHealth = useCallback(() => {
     const epoch = workspaceEpochRef.current;
@@ -326,28 +343,44 @@ export default function App() {
       });
   }, []);
 
+  const acceptQcSnapshot = useCallback((
+    value: QcSnapshot,
+    requestGeneration = qcRefreshGenerationRef.current,
+  ) => {
+    const decision = reconcileQcSnapshotUpdate(qcSnapshotRef.current, value, {
+      requestGeneration,
+      currentGeneration: qcRefreshGenerationRef.current,
+    });
+    if (!decision.accepted) return null;
+    const accepted = decision.snapshot;
+    replaceQcSnapshot(accepted);
+    // Authentication handling runs for every fetch, not from an effect: two
+    // consecutive failures can otherwise have identical React dependencies.
+    if (accepted.status !== "failed") {
+      qcAuthHandledRef.current = false;
+    } else {
+      const kind = accepted.error_kind || accepted.latest_attempt?.error_kind;
+      if (kind === "auth_error" && !qcAuthHandledRef.current) {
+        qcAuthHandledRef.current = true;
+        setApiKeyErrorOpen(true);
+      }
+    }
+    return accepted;
+  }, [replaceQcSnapshot]);
+
   const refreshQc = useCallback(() => {
     const epoch = workspaceEpochRef.current;
+    const requestGeneration = qcRefreshGenerationRef.current;
     getQcStatus()
       .then((value) => {
         if (workspaceEpochRef.current !== epoch) return;
-        setQc(value);
-        // See refreshResearch's comment — same "runs on every fetch, not
-        // React-diffed" reasoning applies here.
-        if (value?.status !== "failed") {
-          qcAuthHandledRef.current = false;
-        } else {
-          const kind = value.error_kind || value.latest_attempt?.error_kind;
-          if (kind === "auth_error" && !qcAuthHandledRef.current) {
-            qcAuthHandledRef.current = true;
-            setApiKeyErrorOpen(true);
-          }
-        }
+        acceptQcSnapshot(value, requestGeneration);
       })
       .catch(() => {
-        if (workspaceEpochRef.current === epoch) setQc(null);
+        // A transient milestone fetch must not erase the locally merged board.
+        // The stream follower will reconcile again at the next milestone/end.
       });
-  }, []);
+  }, [acceptQcSnapshot]);
 
   const refreshReadiness = useCallback(() => {
     const epoch = workspaceEpochRef.current;
@@ -432,6 +465,13 @@ export default function App() {
     markReleaseNotesSeen().catch(() => {});
   }, []);
 
+  const bumpDrawer = useCallback((name: DrawerName) => {
+    setDrawerNonces((previous) => ({
+      ...previous,
+      [name]: previous[name] + 1,
+    }));
+  }, []);
+
   /**
    * Poll for the imported-source permission sweep while it is still running.
    *
@@ -485,16 +525,65 @@ export default function App() {
     };
   }, [sourceCapabilities, refreshDoc, refreshQc, refreshReadiness]);
 
-  /** Follow the QC run's SSE stream, snapshotting + metering as it streams. */
+  /** Follow the QC run's SSE stream. Chatty worker frames merge locally;
+   * authoritative snapshots are fetched only at milestones/end. If transport
+   * closes before an active run settles, reconnect to the replayable log. */
   const followQc = useCallback(async () => {
     if (qcFollowRef.current) return;
     qcFollowRef.current = true;
+    const epoch = workspaceEpochRef.current;
     try {
-      for await (const _evt of streamQc()) {
-        // The snapshot endpoint is authoritative and cheap for a local app;
-        // refresh on each event so lens/verify progress lands live (no dead air).
-        refreshQc();
-        refreshUsage();
+      let reconnect = true;
+      while (reconnect && workspaceEpochRef.current === epoch) {
+        reconnect = false;
+        let streamStatus: string | undefined;
+        try {
+          for await (const event of streamQc()) {
+            if (event.type === "stream_end") {
+              streamStatus = event.status;
+              continue;
+            }
+            if (workspaceEpochRef.current !== epoch) break;
+            if (
+              event.type === "qc_started" &&
+              qcSnapshotRunId(qcSnapshotRef.current) !== event.run_id
+            ) {
+              qcRefreshGenerationRef.current += 1;
+            }
+            replaceQcSnapshot(mergeQcEvent(qcSnapshotRef.current, event));
+            if (QC_MILESTONE_TYPES.has(event.type)) {
+              refreshQc();
+              refreshUsage();
+            }
+          }
+        } catch {
+          // The status probe below decides whether this transport close needs
+          // a reconnect or the server has genuinely settled.
+        }
+
+        if (
+          workspaceEpochRef.current !== epoch ||
+          streamStatus === "superseded" ||
+          streamStatus === "complete" ||
+          streamStatus === "failed"
+        ) {
+          break;
+        }
+        try {
+          const requestGeneration = qcRefreshGenerationRef.current;
+          const latest = await getQcStatus();
+          if (workspaceEpochRef.current !== epoch) break;
+          const accepted = acceptQcSnapshot(latest, requestGeneration);
+          reconnect = isQcActiveSnapshot(accepted ?? qcSnapshotRef.current);
+        } catch {
+          // A transient status failure should not strand a locally active run
+          // after the stream transport closes. Keep following until an
+          // authoritative terminal snapshot or terminal sentinel arrives.
+          reconnect = isQcActiveSnapshot(qcSnapshotRef.current);
+        }
+        if (reconnect) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+        }
       }
     } finally {
       qcFollowRef.current = false;
@@ -502,7 +591,13 @@ export default function App() {
       refreshReadiness();
       refreshUsage();
     }
-  }, [refreshQc, refreshReadiness, refreshUsage]);
+  }, [
+    acceptQcSnapshot,
+    refreshQc,
+    refreshReadiness,
+    refreshUsage,
+    replaceQcSnapshot,
+  ]);
 
   const onStartQc = useCallback(async (acknowledgeScopeMismatch = false) => {
     try {
@@ -514,21 +609,27 @@ export default function App() {
       // declaration comment: refreshQc (not an effect) is what actually
       // reopens the modal, so this reset is read on the very next poll.
       qcAuthHandledRef.current = false;
+      // Invalidate every status request that began before this successful
+      // start. Run ids are intentionally opaque and event seq restarts at 0.
+      qcRefreshGenerationRef.current += 1;
+      // A confirmed run is the show. Expand once now; if the user later
+      // collapses the drawer, no status effect opens it again.
+      bumpDrawer("qc");
       addNote("Sent to Final QC — findings will appear in the Final QC panel.");
       void followQc();
     } catch (e) {
-      setQc((prev) => ({
-        ...prev,
+      replaceQcSnapshot({
+        ...qcSnapshotRef.current,
         status: "failed",
         error: e instanceof Error ? e.message : String(e),
-        events: prev?.events ?? [],
+        events: qcSnapshotRef.current?.events ?? [],
         module_section_compatibility:
           e instanceof QcStartError && e.moduleSectionCompatibility
             ? e.moduleSectionCompatibility
-            : prev?.module_section_compatibility,
-      }));
+            : qcSnapshotRef.current?.module_section_compatibility,
+      });
     }
-  }, [followQc, addNote, health]);
+  }, [followQc, addNote, health, bumpDrawer, replaceQcSnapshot]);
 
   /** Stop Final QC while its worker preserves any completed paid activity. */
   const onStopQc = useCallback(async () => {
@@ -651,7 +752,7 @@ export default function App() {
           generation: health?.generation,
         });
         if (workspaceEpochRef.current !== epoch) return;
-        setQc(snapshot);
+        replaceQcSnapshot(snapshot);
         refreshReadiness();
       } catch (e) {
         if (workspaceEpochRef.current !== epoch) return;
@@ -670,7 +771,7 @@ export default function App() {
         throw e;
       }
     },
-    [refreshQc, refreshReadiness, health],
+    [refreshQc, refreshReadiness, health, replaceQcSnapshot],
   );
 
   const onImportMaster = useCallback(
@@ -799,10 +900,6 @@ export default function App() {
       ]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const bumpDrawer = useCallback((name: DrawerName) => {
-    setDrawerNonces((prev) => ({ ...prev, [name]: prev[name] + 1 }));
   }, []);
 
   /** Follow the SSE stream of a running research. Live events merge into
@@ -1224,7 +1321,7 @@ export default function App() {
       setMessages(rebuilt);
     }
     if (merged.research) setResearch(merged.research);
-    if (merged.qc) setQc(merged.qc);
+    if (merged.qc) replaceQcSnapshot(merged.qc);
     if (merged.readiness) setReadiness(merged.readiness);
     if (merged.usage) setUsage(merged.usage);
     if (merged.health) setHealth(merged.health);

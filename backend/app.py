@@ -1514,6 +1514,7 @@ def _qc_snapshot_payload(session) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "status": runner.get("status", "idle"),
         "error": runner.get("error", ""),
+        "error_kind": runner.get("error_kind", ""),
         "settling": bool(runner.get("settling", False)),
         "events": qc_record.get("events") or [],
         "latest_attempt": latest_attempt,

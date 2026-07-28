@@ -9,8 +9,9 @@ still running against the old session settles into an abandoned object
 
 Status vocabulary ``idle|running|complete|failed``; the SSE endpoint
 replays the event log from seq 0 and follows until terminal, closing with
-a ``stream_end`` sentinel (event types: ``qc_started``, ``lens_complete``,
-``lens_failed``, ``verify_progress``, ``qc_complete``, ``qc_failed``).
+the unchanged ``stream_end`` sentinel. The log includes the phase-terminal
+events plus observable lens/verifier activity and explicit verification and
+local-validation transitions used by the live Review Room.
 """
 from __future__ import annotations
 
@@ -354,7 +355,7 @@ class QCRunner:
             if self._cancel_event is not None:
                 self._cancel_event.set()
             self._append_event_locked(
-                {"type": "qc_failed", "error": self.error}
+                {"type": "qc_failed", "error": self.error, "settling": True}
             )
         return True
 
@@ -719,6 +720,7 @@ class QCRunner:
                 "runner": {
                     "status": self.status,
                     "error": self.error,
+                    "error_kind": self.error_kind,
                     "settling": not self._worker_settled,
                 },
                 "events": copy.deepcopy(self.events),

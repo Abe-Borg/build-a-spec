@@ -524,12 +524,6 @@ function Dossier() {
             </>,
           ]}
         />
-        <Note title="What this cannot promise" tone="warn">
-          That the output is correct. A language model can be fluent and wrong,
-          including about code editions and article numbers. The design assumes a
-          qualified reviewer reads every line — so it is built to make a guess
-          <em> easy to find</em>, not to make guessing safe.
-        </Note>
       </Section>
 
       <Section

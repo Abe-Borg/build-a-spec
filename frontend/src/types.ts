@@ -98,6 +98,13 @@ export interface UsageSummary {
     total: number;
   };
   cache_saved_usd: number;
+  /**
+   * Context gauge, not spend: the Anthropic-counted rendered-prompt size of
+   * the last committed chat turn's final request (system prompt + tools +
+   * history + project context), against the model's context window. null
+   * until a turn commits (fresh session, reset, or a just-loaded project).
+   */
+  context?: { tokens: number; window: number } | null;
 }
 
 /* --- Document model (mirrors backend/spec_doc/model.py serialization) --- */

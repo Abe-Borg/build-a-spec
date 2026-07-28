@@ -1167,6 +1167,10 @@ export default function ArtifactPanel({
   );
 }
 
+/** Cumulative cap on attached reference documents — keep in sync with
+ * MAX_REFERENCE_TOKENS in backend/reference_docs.py (the enforcing side). */
+const MAX_REFERENCE_TOKENS = 100_000;
+
 function ReferenceDocumentsStrip({
   documents,
   busy,
@@ -1192,7 +1196,8 @@ function ReferenceDocumentsStrip({
         <span className="font-medium tracking-wide uppercase">Documents</span>
         <span>{documents.length}</span>
         <span className="ml-auto tabular-nums">
-          {totalTokens.toLocaleString()} / 100,000 tokens
+          {totalTokens.toLocaleString()} / {MAX_REFERENCE_TOKENS.toLocaleString()}{" "}
+          tokens
         </span>
         <span>{expanded ? "▾" : "▸"}</span>
       </button>

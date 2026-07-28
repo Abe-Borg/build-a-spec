@@ -326,10 +326,16 @@ class ReferenceDocStore:
                 # does the standard say that?" with a page.
                 marks.append("page markers [page N] in the text")
             suffix = f" [{'; '.join(marks)}]" if marks else ""
+            # The real Anthropic-counted number (post-truncation — the same
+            # one the 100k cap and the panel use), never the pre-truncation
+            # chars/4 guess, which overstated a truncated document. The
+            # fallback covers only a hand-built record with token_count 0;
+            # from_dict already backfills legacy files.
+            tokens = doc.token_count or max(1, doc.char_count // 4)
             lines.append(
                 f"- {doc.rid} \"{doc.title}\" — {doc.kind_label()}, "
                 f"{doc.block_count} blocks, "
-                f"~{max(1, doc.char_count // 4):,} tokens{suffix}"
+                f"{tokens:,} tokens{suffix}"
             )
         return "\n".join(lines)
 

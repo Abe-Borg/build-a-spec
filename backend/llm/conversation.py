@@ -287,6 +287,14 @@ class SessionState:
     suggested_prompts: list[str] = field(default_factory=list)
     # Session-scoped billed-usage meter (WI4). Reset/load clear it.
     usage: UsageLedger = field(default_factory=UsageLedger)
+    # Context gauge, not spend (which is why it lives here and not in the
+    # ledger — the ledger's snapshot/merge tutorial plumbing is additive and
+    # would corrupt a gauge): the Anthropic-counted rendered-prompt size of
+    # the last committed turn's final request (input + cache write + cache
+    # read). None until a turn commits; cleared by reset and project load.
+    # Written only inside the generation-guarded commit block, so a zombie
+    # turn can never populate a fresh session.
+    last_context_tokens: int | None = None
     # True while a model turn owns the document store (WI2). Manual edits are
     # rejected in this window — a mid-turn manual edit would be swept into the
     # streaming turn's commit or rollback.
@@ -1232,6 +1240,8 @@ class SessionState:
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()
+        # The context gauge describes the conversation being discarded.
+        self.last_context_tokens = None
         self._active_turn_token = None
         self.turn_active = False
         self.generation += 1
@@ -1710,6 +1720,31 @@ def _merge_usage(totals: dict[str, int], usage: Any) -> None:
         value = getattr(server, key, None) if server else None
         if isinstance(value, (int, float)) and value:
             totals[key] = totals.get(key, 0) + int(value)
+
+
+def _context_tokens(usage: Any) -> int | None:
+    """Exact rendered-prompt size of ONE request: fresh input + cache write
+    + cache read tokens (Anthropic-counted — their sum is the full prompt).
+
+    Unlike the cumulative ``_merge_usage`` totals, this is a per-request
+    gauge; the caller keeps the LAST round's value as the session context
+    size. None when the usage object carries none of the three fields (the
+    test fakes default ``usage=None``).
+    """
+    if usage is None:
+        return None
+    total = 0
+    seen = False
+    for key in (
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    ):
+        value = getattr(usage, key, None)
+        if isinstance(value, (int, float)):
+            total += int(value)
+            seen = True
+    return total if seen else None
 
 
 # --- Streaming-event translation (WI1: buttery-smooth streaming UX) ----------
@@ -2217,6 +2252,11 @@ def stream_user_turn(
     committed = False
     post_commit_events: list[dict[str, Any]] = []
     usage_totals: dict[str, int] = {}
+    # Per-round overwrite (NOT a sum): after the loop this holds the final
+    # round's rendered-prompt size — the session's current context. Committed
+    # beside the doc/figures so a failed turn (history rolled back) leaves
+    # the previous measurement standing.
+    last_round_context: int | None = None
     # Turn-local staging for suggested-reply chips: the dispatch loop records
     # each suggest_prompts call here (latest wins); a successful turn commits
     # it into session.suggested_prompts, a failed turn drops it with the
@@ -2296,6 +2336,9 @@ def stream_user_turn(
                 manager.__exit__(None, None, None)
 
             _merge_usage(usage_totals, getattr(final, "usage", None))
+            round_context = _context_tokens(getattr(final, "usage", None))
+            if round_context is not None:
+                last_round_context = round_context
             content = _content_blocks_to_dicts(final.content)
             stop_reason = "user_stop" if stopped_mid_stream else final.stop_reason
 
@@ -2405,6 +2448,11 @@ def stream_user_turn(
                 # []) becomes the current chip set. Failure paths never reach
                 # this commit block, so the previous list remains untouched.
                 session.suggested_prompts = staged_suggestions
+                if last_round_context is not None:
+                    # The context gauge: prompt size of this turn's final
+                    # request. A turn whose rounds carried no usage (many
+                    # test scripts) keeps the previous measurement.
+                    session.last_context_tokens = last_round_context
                 committed = True
                 if doc_changed:
                     # Freeze the completion payload before releasing turn

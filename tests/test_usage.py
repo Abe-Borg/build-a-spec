@@ -201,3 +201,124 @@ def test_research_run_rolls_up_into_ledger(monkeypatch):
     assert research["web_search_requests"] == 4
     # Research is its own category, priced on the research model.
     assert usage["estimated_cost_usd"]["by_category"]["research"] > 0
+
+
+# ---------------------------------------------------------------------------
+# The context gauge (overall conversation size, not spend)
+# ---------------------------------------------------------------------------
+#
+# ``context.tokens`` is the rendered-prompt size of the last committed turn's
+# FINAL request: input + cache write + cache read from that round's usage —
+# the exact Anthropic-counted size of everything sent to the model (system
+# prompt, tools, history, PROJECT CONTEXT, user text). A gauge with
+# last-round-wins semantics, deliberately different from the ledger's
+# cumulative per-round sums.
+
+
+def test_no_context_gauge_before_any_turn():
+    client = _client()
+    usage = client.get("/api/usage").json()
+    assert usage["context"] is None
+
+
+def test_context_gauge_reports_the_last_requests_prompt_size(monkeypatch):
+    client = _client()
+    fake = FakeClient(
+        [
+            text_turn(
+                ["Hi."],
+                usage=token_usage(input=1200, output=400, cache_read=300, cache_write=100),
+            )
+        ]
+    )
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    client.post("/api/chat", json={"message": "hi"})
+
+    context = client.get("/api/usage").json()["context"]
+    # 1200 fresh + 100 cache-written + 300 cache-read = the full prompt.
+    # Output tokens are NOT part of the context measurement.
+    assert context == {"tokens": 1600, "window": 1_000_000}
+
+
+def test_context_gauge_is_the_last_round_not_the_sum(monkeypatch):
+    client = _client()
+    fake = FakeClient(
+        [
+            tool_turn(["Working. "], _EDITS, usage=token_usage(input=800)),
+            text_turn(["Done."], usage=token_usage(input=2000, cache_read=500)),
+        ]
+    )
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    client.post("/api/chat", json={"message": "go"})
+
+    usage = client.get("/api/usage").json()
+    # The ledger sums rounds (800 + 2000); the gauge is the final round only.
+    assert usage["categories"]["interview"]["input_tokens"] == 2800
+    assert usage["context"]["tokens"] == 2500
+
+
+def test_failed_turn_does_not_move_the_context_gauge(monkeypatch):
+    client = _client()
+    fake = FakeClient([text_turn(["Hi."], usage=token_usage(input=1000))])
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    client.post("/api/chat", json={"message": "hi"})
+    assert client.get("/api/usage").json()["context"]["tokens"] == 1000
+
+    failing = FakeClient(
+        [
+            tool_turn(["Working. "], _EDITS, usage=token_usage(input=800)),
+            RuntimeError("kaput"),
+        ]
+    )
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: failing)
+    events = _parse_sse(client.post("/api/chat", json={"message": "go"}).text)
+    assert events[-1]["type"] == "error"
+
+    usage = client.get("/api/usage").json()
+    # The spend is real (ledger grew) but history rolled back, so the gauge
+    # still describes the surviving one-turn conversation.
+    assert usage["categories"]["interview"]["input_tokens"] == 1800
+    assert usage["context"]["tokens"] == 1000
+
+
+def test_a_committed_turn_without_usage_keeps_the_previous_measurement(
+    monkeypatch,
+):
+    client = _client()
+    fake = FakeClient([text_turn(["Hi."], usage=token_usage(input=1000))])
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    client.post("/api/chat", json={"message": "hi"})
+
+    # The default fake turn carries usage=None (as most scripted tests do);
+    # a committed turn with no usage data must not zero the gauge.
+    silent = FakeClient([text_turn(["Okay."])])
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: silent)
+    client.post("/api/chat", json={"message": "again"})
+
+    assert client.get("/api/usage").json()["context"]["tokens"] == 1000
+
+
+def test_reset_clears_the_context_gauge(monkeypatch):
+    client = _client()
+    fake = FakeClient([text_turn(["Hi."], usage=token_usage(input=1000))])
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    client.post("/api/chat", json={"message": "hi"})
+    assert client.get("/api/usage").json()["context"] is not None
+
+    client.post("/api/session/reset")
+    assert client.get("/api/usage").json()["context"] is None
+
+
+def test_project_load_clears_the_context_gauge(monkeypatch):
+    client = _client()
+    fake = FakeClient([text_turn(["Hi."], usage=token_usage(input=1000))])
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    client.post("/api/chat", json={"message": "hi"})
+    assert client.get("/api/usage").json()["context"] is not None
+
+    project = json.loads(
+        json.dumps(sessions.project_payload(sessions.get_session()))
+    )
+    assert client.post("/api/project/load", json=project).json()["ok"] is True
+    # A loaded project has no measurement until its first turn commits.
+    assert client.get("/api/usage").json()["context"] is None

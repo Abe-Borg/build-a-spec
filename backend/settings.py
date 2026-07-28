@@ -46,6 +46,11 @@ def _int_env(name: str, default: int) -> int:
 # included) — a "limit" at the model maximum is no app limit at all.
 MODEL_MAX_OUTPUT_TOKENS = 128_000
 
+# Sonnet 5's context window (VERIFIED 2026-07 against the claude-api
+# reference): the denominator for the session context meter. A model fact,
+# not a knob — deliberately not env-overridable.
+MODEL_CONTEXT_WINDOW = 1_000_000
+
 INTERVIEW_MAX_TOKENS = _int_env(
     "BUILD_A_SPEC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS
 )

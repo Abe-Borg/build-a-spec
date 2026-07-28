@@ -1152,6 +1152,26 @@ def _qc_snapshot_payload(session) -> dict[str, Any]:
     return payload
 
 
+def _usage_payload(session: SessionState) -> dict[str, Any]:
+    """The ledger snapshot plus the session context gauge.
+
+    ``context`` is the Anthropic-counted rendered-prompt size of the last
+    committed chat turn's final request against the model's context window —
+    a gauge, not spend, which is why it rides beside the ledger snapshot
+    rather than inside it. None until a turn commits (fresh session, reset,
+    or a just-loaded project).
+    """
+    with session.session_state_guard():
+        snapshot = session.usage.snapshot()
+        tokens = session.last_context_tokens
+    snapshot["context"] = (
+        {"tokens": tokens, "window": settings.MODEL_CONTEXT_WINDOW}
+        if tokens is not None
+        else None
+    )
+    return snapshot
+
+
 def _session_bundle(lease: sessions.WorkspaceLease | None = None) -> dict[str, Any]:
     """One coherent hydration payload for workspace transitions."""
     lease = lease or sessions.get_workspace()
@@ -1175,7 +1195,7 @@ def _session_bundle(lease: sessions.WorkspaceLease | None = None) -> dict[str, A
             "audit": session.audit.snapshot(),
             "qc": _qc_snapshot_payload(session),
             "readiness": _readiness_payload(session),
-            "usage": session.usage.snapshot(),
+            "usage": _usage_payload(session),
             "health": {
                 "status": "ok",
                 "app": settings.APP_NAME,
@@ -3834,9 +3854,10 @@ def create_app() -> FastAPI:
 
         Session-scoped: reset and project load clear it. The dollar figures
         are estimates (labeled as such in the UI); the trace files remain the
-        permanent, exact record.
+        permanent, exact record. ``context`` (the conversation-size gauge)
+        rides the same payload — see :func:`_usage_payload`.
         """
-        return sessions.get_session().usage.snapshot()
+        return _usage_payload(sessions.get_session())
 
     # --- Project save / resume --------------------------------------------
 

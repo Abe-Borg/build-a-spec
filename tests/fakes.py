@@ -449,6 +449,22 @@ def bad_request(message: str) -> Any:
     return anthropic.BadRequestError(message, response=response, body=None)
 
 
+def auth_error(
+    message: str = (
+        '{"type": "error", "error": {"type": "authentication_error", '
+        '"message": "invalid x-api-key"}}'
+    ),
+) -> Any:
+    """A real ``anthropic.AuthenticationError`` (401) for scripting an
+    invalid/expired stored key across chat, research, and QC tests."""
+    import anthropic
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(401, request=request)
+    return anthropic.AuthenticationError(message, response=response, body=None)
+
+
 # ---------------------------------------------------------------------------
 # Phase 4: research-shaped responses (web server tools + usage telemetry)
 # ---------------------------------------------------------------------------

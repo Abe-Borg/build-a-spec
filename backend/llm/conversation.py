@@ -109,7 +109,7 @@ from ..tracing import capture as _trace
 from ..spec_modules import SpecModule, get_module
 from ..standards import standards_context_block
 from ..usage_ledger import UsageLedger
-from .client import MissingApiKeyError, get_client
+from .client import AUTH_ERROR_MESSAGE, MissingApiKeyError, get_client
 from .prompts import (
     render_system_prompt,
     sanitize_discipline,
@@ -2482,6 +2482,13 @@ def stream_user_turn(
         # The fresh/loaded session must stay exactly as the user made it —
         # nothing was applied after the generation change.
         yield {"type": "error", "message": str(exc)}
+        return
+    except anthropic.AuthenticationError:
+        yield {
+            "type": "error",
+            "message": AUTH_ERROR_MESSAGE,
+            "kind": "auth_error",
+        }
         return
     except anthropic.APIStatusError as exc:
         yield {

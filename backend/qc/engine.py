@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .. import settings
+from ..llm.client import AUTH_ERROR_MESSAGE, is_authentication_error
 from ..research.engine import RequirementsProfile, research_context_block
 from ..research.grounding import (
     STOP_CLASS_COMPLETE,
@@ -124,10 +125,12 @@ class QCFanoutError(RuntimeError):
         *,
         usage_totals: dict[str, int] | None = None,
         result: "QCResult | None" = None,
+        auth_error: bool = False,
     ) -> None:
         super().__init__(message)
         self.usage_totals = dict(usage_totals or {})
         self.result = result
+        self.auth_error = auth_error
 
 
 # Four streaming calls in flight is plenty and stays inside per-account
@@ -1907,11 +1910,16 @@ def _run_streaming_call(
         except Exception as exc:  # noqa: BLE001 — classified below
             failure_class = classify_exception(exc)
             if not is_retryable_failure_class(failure_class) or is_last:
+                message = (
+                    AUTH_ERROR_MESSAGE
+                    if is_authentication_error(exc)
+                    else f"{type(exc).__name__}: {exc}"
+                )
                 return _CallResult(
                     None,
                     all_responses,
                     [*billed, *all_responses],
-                    f"{type(exc).__name__}: {exc}",
+                    message,
                     api_request_count,
                     failure_class.value,
                 )
@@ -2851,7 +2859,11 @@ def run_final_qc(
                         title=lens.title,
                         status="failed",
                         brief=lens.brief,
-                        error=f"{type(exc).__name__}: {exc}",
+                        error=(
+                            AUTH_ERROR_MESSAGE
+                            if is_authentication_error(exc)
+                            else f"{type(exc).__name__}: {exc}"
+                        ),
                     ),
                 )
             outcomes[lens.lens_id] = outcome
@@ -2878,6 +2890,10 @@ def run_final_qc(
     completed = sum(1 for s in lens_statuses if s.status == "completed")
     if completed == 0:
         errors = "; ".join(f"{s.lens_id}: {s.error}" for s in lens_statuses)
+        failed_lenses = [s for s in lens_statuses if s.status == "failed"]
+        auth_error = bool(failed_lenses) and all(
+            s.error == AUTH_ERROR_MESSAGE for s in failed_lenses
+        )
         api_request_count = sum(
             status.api_request_count for status in lens_statuses
         )
@@ -2917,6 +2933,7 @@ def run_final_qc(
             f"All {len(lens_statuses)} QC lens(es) failed. {errors}",
             usage_totals=usage_totals,
             result=failure_result,
+            auth_error=auth_error,
         )
 
     # Merge findings in lens declaration order (deterministic).

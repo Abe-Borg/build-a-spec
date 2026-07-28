@@ -18,6 +18,16 @@ class MissingApiKeyError(RuntimeError):
     """No Anthropic API key is configured (env, keyring, or key file)."""
 
 
+# The one friendly message every 401 surface (chat, research, QC) shows
+# instead of the raw SDK exception text.
+AUTH_ERROR_MESSAGE = "Your Anthropic API key is invalid or has expired."
+
+
+def is_authentication_error(exc: BaseException) -> bool:
+    """True for a 401 from the Anthropic API (bad/expired/revoked key)."""
+    return isinstance(exc, anthropic.AuthenticationError)
+
+
 _lock = threading.Lock()
 _cached_client: anthropic.Anthropic | None = None
 _cached_key: str = ""

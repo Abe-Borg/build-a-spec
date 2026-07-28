@@ -23,6 +23,7 @@ from backend.qc.engine import (  # noqa: E402
     _VERDICT_JSON_TAG,
     _parse,
     _verifier_system_prompt,
+    _cache_control,
     _qc_user_content,
     _verifier_request_suffix,
     _verifier_shared_prefix,
@@ -33,6 +34,10 @@ from backend.qc.schema import (  # noqa: E402
     submit_qc_verdict_tool,
 )
 from backend.spec_modules import DEFAULT_MODULE  # noqa: E402
+
+# Matches the ``cache_ttl`` production verifier calls pass to
+# ``_run_streaming_call`` (``_verify_one`` in backend/qc/engine.py).
+_VERIFIER_CACHE_TTL = "1h"
 
 
 def _arguments() -> argparse.Namespace:
@@ -94,7 +99,11 @@ def main() -> int:
         ],
     }
     verdict_tool = submit_qc_verdict_tool(model=settings.QC_MODEL)
-    verdict_tool["cache_control"] = {"type": "ephemeral"}
+    # Production verifier requests run every breakpoint at 1h — the API
+    # rejects a request whose later breakpoints outlive earlier ones, so the
+    # TTL has to be uniform. Mirror that here or the canary stops testing the
+    # shape that ships (and would itself 400).
+    verdict_tool["cache_control"] = _cache_control(_VERIFIER_CACHE_TTL)
     request = {
         "model": settings.QC_MODEL,
         "max_tokens": args.max_tokens,
@@ -102,7 +111,7 @@ def main() -> int:
             {
                 "type": "text",
                 "text": _verifier_system_prompt(DEFAULT_MODULE),
-                "cache_control": {"type": "ephemeral"},
+                "cache_control": _cache_control(_VERIFIER_CACHE_TTL),
             }
         ],
         "messages": [
@@ -117,7 +126,7 @@ def main() -> int:
                         "[id: pt1.a1.p1] Provide acceptance criteria [TBD]."
                     ),
                     _verifier_request_suffix(finding, lens),
-                    "1h",
+                    _VERIFIER_CACHE_TTL,
                 ),
             }
         ],

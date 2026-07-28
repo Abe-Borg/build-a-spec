@@ -1101,6 +1101,51 @@ def test_qc_requests_cache_the_shared_prefix_across_the_whole_fan_out(
         blocks = [*request["tools"], *request["system"], *request["messages"][0]["content"]]
         assert sum("cache_control" in block for block in blocks) <= 4
 
+    # Every breakpoint in one request must carry the SAME ttl. The API
+    # requires longer-lived cache entries to precede shorter-lived ones in
+    # prompt order, and the render order is tools -> system -> messages — so
+    # default-ttl tools/system followed by a 1h user block is rejected
+    # outright, on every call, with a nonretryable 400 that trips the shared
+    # verifier circuit breaker. Uniform-per-request means there is no order
+    # to get wrong. A fake client cannot reject a malformed request, so this
+    # is the only place that constraint is enforced before it reaches a
+    # provider.
+    for request in fake.requests:
+        ttls = [
+            block["cache_control"].get("ttl")
+            for block in (
+                *request["tools"],
+                *request["system"],
+                *request["messages"][0]["content"],
+            )
+            if "cache_control" in block
+        ]
+        assert ttls, "a QC request with no breakpoint at all caches nothing"
+        assert len(set(ttls)) == 1, f"mixed cache TTLs in one request: {ttls}"
+
+    assert all(
+        block["cache_control"]["ttl"] == "1h"
+        for request in verifier_requests
+        for block in (
+            *request["tools"],
+            *request["system"],
+            *request["messages"][0]["content"],
+        )
+        if "cache_control" in block
+    )
+    # Lens calls take the 5-minute default throughout: phase 1 is five calls
+    # and does not outlive it.
+    assert all(
+        "ttl" not in block["cache_control"]
+        for request in lens_requests
+        for block in (
+            *request["tools"],
+            *request["system"],
+            *request["messages"][0]["content"],
+        )
+        if "cache_control" in block
+    )
+
 
 def test_qc_tools_are_strict_for_the_configured_model():
     """A QC model missing from the strict allowlist degrades silently.

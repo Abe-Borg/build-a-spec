@@ -1810,6 +1810,23 @@ def _parse(all_responses: list[Any], tool_name: str, json_tag: re.Pattern) -> di
     return None
 
 
+def _cache_control(cache_ttl: str) -> dict[str, Any]:
+    """One breakpoint value. A fresh dict per call — callers mutate in place.
+
+    EVERY breakpoint in a single request must be built from the same
+    ``cache_ttl``. The API requires longer-lived cache entries to appear
+    before shorter-lived ones in prompt order (tools → system → messages),
+    so a request that marks tools and system at the 5-minute default and
+    then the user turn at ``1h`` is rejected outright — not degraded, not
+    uncached. Keeping one TTL per request means there is no order to get
+    wrong. See ``_run_streaming_call``.
+    """
+    control: dict[str, Any] = {"type": "ephemeral"}
+    if cache_ttl:
+        control["ttl"] = cache_ttl
+    return control
+
+
 def _qc_user_content(
     shared_prefix: str, request_suffix: str, cache_ttl: str
 ) -> list[dict[str, Any]]:
@@ -1821,11 +1838,12 @@ def _qc_user_content(
     cached. ``cache_ttl`` is ``"1h"`` for the verification phase, which runs
     longer than the 5-minute default would survive.
     """
-    cache_control: dict[str, Any] = {"type": "ephemeral"}
-    if cache_ttl:
-        cache_control["ttl"] = cache_ttl
     return [
-        {"type": "text", "text": shared_prefix, "cache_control": cache_control},
+        {
+            "type": "text",
+            "text": shared_prefix,
+            "cache_control": _cache_control(cache_ttl),
+        },
         {"type": "text", "text": request_suffix},
     ]
 
@@ -1866,8 +1884,15 @@ def _run_streaming_call(
     its next network round yet bails immediately; one already in flight
     finishes naturally and its result is discarded by the caller.
     """
+    # One TTL for every breakpoint in the request. The API requires
+    # longer-lived cache entries to precede shorter-lived ones in prompt
+    # order, and tools render before system, which renders before messages —
+    # so marking these two at the 5-minute default while the user turn asks
+    # for 1h produces a request the provider rejects. Do not "optimise" the
+    # small blocks back down to the default: mixed TTLs here are not a
+    # cheaper cache, they are a 400 on every call in the phase.
     tools = [dict(tool) for tool in tools]
-    tools[-1]["cache_control"] = {"type": "ephemeral"}
+    tools[-1]["cache_control"] = _cache_control(cache_ttl)
     request_kwargs: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
@@ -1875,7 +1900,7 @@ def _run_streaming_call(
             {
                 "type": "text",
                 "text": system_prompt,
-                "cache_control": {"type": "ephemeral"},
+                "cache_control": _cache_control(cache_ttl),
             }
         ],
         "tools": tools,

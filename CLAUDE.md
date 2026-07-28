@@ -2851,9 +2851,21 @@ validation and readiness gate.
   the lens lineage** — its `tools` array carries web search/fetch and tools
   render ahead of system and messages, so its byte prefix diverges from the
   start. No reordering fixes that. It still caches across its own retries.
-- **1h TTL on the verifier prefix.** Phase 2 spans 10-20 minutes, so a
+- **1h TTL on the whole verifier request.** Phase 2 spans 10-20 minutes, so a
   5-minute entry would lapse mid-phase and be rewritten. 1h costs 2x to write,
-  breaks even after three reads, and a panel run has dozens.
+  breaks even after three reads, and a panel run has dozens. **The TTL is
+  uniform across every breakpoint in a request** (`_cache_control`), not just
+  the document block: the API requires longer-lived cache entries to precede
+  shorter-lived ones in prompt order, and the render order is tools → system →
+  messages, so default-TTL tools/system followed by a 1h user block is
+  **rejected outright** — a nonretryable 400 on every verifier call, which
+  trips the shared circuit breaker and settles the run partial with zero
+  actionable findings after phase 1 has already been billed. Shipped that way
+  briefly on PR #82 and was caught in review; do not "optimise" the small
+  blocks back to the default. Pinned by the mixed-TTL assertion in
+  `test_qc_requests_cache_the_shared_prefix_across_the_whole_fan_out` — the
+  fakes accept any request dict, so nothing else can catch it before a
+  provider does.
 - **No pre-warm priming (deliberate).** The first `QC_MAX_WORKERS` calls of
   each phase all miss — a cache entry is only readable once the first response
   starts streaming. That costs ~$0.46/run. A serial prime would recover it but

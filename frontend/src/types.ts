@@ -962,7 +962,6 @@ export type TutorialEvent =
        * expected workspace before the replacement session is accepted. */
       replaces_workspace_id?: number;
       replaces_generation?: number;
-      message: string;
       reason?: string;
       source?: TutorialSource;
       session: SessionBundle;

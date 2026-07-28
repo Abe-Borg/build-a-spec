@@ -68,8 +68,6 @@ export interface OnboardingCaps {
 export interface OnboardingApi {
   phase: OnboardingPhase;
   endConfirm: boolean;
-  notice: string | null;
-  dismissNotice: () => void;
   start: () => void;
   startAtChapter: (chapter: string | number) => void;
   chooseSource: (source: TutorialSource) => void;
@@ -116,7 +114,6 @@ const requestId = () =>
 export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
   const [phase, setPhase] = useState<OnboardingPhase>({ kind: "idle" });
   const [endConfirm, setEndConfirm] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
   const capsRef = useRef(caps);
   capsRef.current = caps;
   const phaseRef = useRef(phase);
@@ -215,7 +212,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
 
   const start = useCallback(() => {
     setEndConfirm(false);
-    setNotice(null);
     if (phaseRef.current.kind === "paused") {
       const current = phaseRef.current;
       runRef.current += 1;
@@ -280,7 +276,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
             event.workspace_id ?? event.session.workspace_id;
           if (replacementWorkspaceId === undefined) continue;
           capsRef.current.applySession(event.session);
-          setNotice(event.message);
           workspace.workspaceId = replacementWorkspaceId;
           workspace.generation =
             event.generation ?? event.session.generation ?? workspace.generation;
@@ -728,7 +723,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
         markOnboardingCompleted();
         clearOnboardingProgress();
         workspaceRef.current = null;
-        setNotice(null);
         runRef.current += 1;
         setPhase({ kind: "idle" });
       } catch (error) {
@@ -803,7 +797,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     workspaceRef.current = null;
     startRequestRef.current = null;
     setEndConfirm(false);
-    setNotice(null);
     capsRef.current.applySession(session);
     setPhase({ kind: "idle" });
   }, []);
@@ -837,7 +830,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     }
     clearOnboardingProgress();
     workspaceRef.current = null;
-    setNotice(null);
     setPhase({ kind: "idle" });
     return true;
   }, []);
@@ -845,8 +837,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
   return {
     phase,
     endConfirm,
-    notice,
-    dismissNotice: () => setNotice(null),
     start,
     startAtChapter,
     chooseSource,

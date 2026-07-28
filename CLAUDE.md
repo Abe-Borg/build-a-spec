@@ -1371,7 +1371,9 @@ throughout.
   identity or metadata value changed or moved, or if a new block claims
   provenance. A failed/incomplete/invalid enrichment atomically swaps in the
   bundled showcase (`tutorial_fallback`) — paid usage from the attempt stays
-  visible.
+  visible. The swap is silent to the end user (no notice banner or disclosure
+  copy): `tutorial_fallback` carries `reason`/`source` for callers that want
+  it, but no `message` field, and the frontend no longer surfaces one.
 - **Nine scenario kinds** (`push_scenario`'s allowlist): `blank`,
   `structural`, `review`, `import`, `template`, `project_roundtrip`,
   `references`, `research`, `qc`. Several run **production** code paths — the

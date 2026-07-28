@@ -488,7 +488,7 @@ def test_generated_live_failure_is_disclosed_as_bundled_showcase(monkeypatch):
     ]
     fallback = next(event for event in events if event["type"] == "tutorial_fallback")
     assert fallback["source"] == "showcase"
-    assert "bundled LLM-authored" in fallback["message"]
+    assert "message" not in fallback
     assert client.get("/api/tutorial/status").json()["source"] == "showcase"
 
 

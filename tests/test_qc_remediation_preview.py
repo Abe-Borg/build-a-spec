@@ -293,6 +293,98 @@ def test_preview_is_pure_and_plans_dedupe_conflicts_stale_and_safe_apply() -> No
     )
 
 
+def test_preview_and_bound_apply_allow_distinct_same_parent_additions() -> None:
+    findings = [
+        _finding(
+            "paragraph-a",
+            [
+                {
+                    "action": "add_paragraph",
+                    "target_id": "pt1.a1",
+                    "text": "Submit the first independent record.",
+                    "status": "confirmed",
+                }
+            ],
+        ),
+        _finding(
+            "paragraph-b",
+            [
+                {
+                    "action": "add_paragraph",
+                    "target_id": "pt1.a1",
+                    "text": "Submit the second independent record.",
+                    "status": "confirmed",
+                    "position": None,
+                }
+            ],
+        ),
+        _finding(
+            "article-a",
+            [
+                {
+                    "action": "add_article",
+                    "target_id": "pt1",
+                    "text": "FIRST INDEPENDENT ARTICLE",
+                }
+            ],
+        ),
+        _finding(
+            "article-b",
+            [
+                {
+                    "action": "add_article",
+                    "target_id": "pt1",
+                    "text": "SECOND INDEPENDENT ARTICLE",
+                }
+            ],
+        ),
+    ]
+    session, result = _install(findings)
+    client = TestClient(create_app())
+    selected_ids = [finding.finding_id for finding in findings]
+    versions_before = len(session.doc.versions)
+
+    response = client.post(
+        "/api/qc/apply/preview", json={"finding_ids": selected_ids}
+    )
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert preview["conflicts"] == []
+    assert preview["applyable_finding_ids"] == selected_ids
+    assert preview["operation_counts"] == {
+        "proposed": 4,
+        "unique": 4,
+        "duplicate": 0,
+        "applyable": 4,
+    }
+
+    applied = client.post(
+        "/api/qc/apply",
+        json={
+            "finding_ids": preview["applyable_finding_ids"],
+            "preview_basis": preview["basis"],
+        },
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["outcomes"] == {
+        finding_id: "applied" for finding_id in selected_ids
+    }
+    assert len(session.doc.versions) == versions_before + 1
+    article = session.doc.doc.parts[0].articles[0]
+    assert [paragraph.text for paragraph in article.paragraphs[-2:]] == [
+        "Submit the first independent record.",
+        "Submit the second independent record.",
+    ]
+    assert [article.title for article in session.doc.doc.parts[0].articles[-2:]] == [
+        "FIRST INDEPENDENT ARTICLE",
+        "SECOND INDEPENDENT ARTICLE",
+    ]
+    assert all(
+        result.finding(finding_id).status == "applied"  # type: ignore[union-attr]
+        for finding_id in selected_ids
+    )
+
+
 def test_preview_refuses_partial_and_stale_reports() -> None:
     client = TestClient(create_app())
     session, result = _install(

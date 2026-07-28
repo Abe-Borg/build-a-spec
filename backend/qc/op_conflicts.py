@@ -61,6 +61,45 @@ class _PlannedOperation:
     write_keys: tuple[_WriteKey, ...]
 
 
+_ADDITION_ACTIONS = frozenset({"add_article", "add_paragraph"})
+
+
+def _is_compatible_addition_overlap(
+    left: _PlannedOperation,
+    right: _PlannedOperation,
+    left_key: _WriteKey,
+    right_key: _WriteKey,
+    standalone_finding_ids: set[str],
+) -> bool:
+    """Whether an overlap is only two independent appends to one collection.
+
+    Distinct standalone, positionless additions do not overwrite an existing
+    member. Requiring every owner to contain only this one unique operation is
+    important: a multi-operation finding may target the generated id it
+    expects its own add to receive, which another same-parent add could shift.
+    Explicit insertion positions remain conflicts for the same ordering
+    reason. Keep the collection key itself so either append also still
+    conflicts with a delete or move in the same collection.
+    """
+    left_action = str(left.operation.get("action") or "")
+    right_action = str(right.operation.get("action") or "")
+    return bool(
+        left_action == right_action
+        and left_action in _ADDITION_ACTIONS
+        and all(
+            finding_id in standalone_finding_ids
+            for finding_id in (*left.finding_ids, *right.finding_ids)
+        )
+        and str(left.operation.get("target_id") or "")
+        == str(right.operation.get("target_id") or "")
+        and "position" not in left.operation
+        and "position" not in right.operation
+        and left_key.scope == right_key.scope == "collection"
+        and left_key.resource == right_key.resource
+        and left_key.field == right_key.field == "members"
+    )
+
+
 @dataclass(frozen=True)
 class QCOperationBatch:
     """A unique apply batch plus any conflicts that make it unsafe."""
@@ -186,13 +225,16 @@ def plan_qc_operation_batch(
     finding is retained so all are marked applied after that single write.
     """
     planned_by_identity: dict[str, _PlannedOperation] = {}
+    finding_operation_identities: dict[str, set[str]] = {}
     finding_ids: list[str] = []
     for finding_id, operations in findings:
         if finding_id not in finding_ids:
             finding_ids.append(finding_id)
+        identities = finding_operation_identities.setdefault(finding_id, set())
         for raw_operation in operations:
             operation = canonical_qc_operation(raw_operation)
             identity = qc_operation_identity(operation)
+            identities.add(identity)
             existing = planned_by_identity.get(identity)
             if existing is not None:
                 if finding_id not in existing.finding_ids:
@@ -206,6 +248,11 @@ def plan_qc_operation_batch(
             )
 
     planned = list(planned_by_identity.values())
+    standalone_finding_ids = {
+        finding_id
+        for finding_id, identities in finding_operation_identities.items()
+        if len(identities) == 1
+    }
     conflicts: list[dict[str, Any]] = []
     for left_index, left in enumerate(planned):
         for right in planned[left_index + 1 :]:
@@ -215,6 +262,13 @@ def plan_qc_operation_batch(
                     for left_key in left.write_keys
                     for right_key in right.write_keys
                     if left_key.overlaps(right_key)
+                    and not _is_compatible_addition_overlap(
+                        left,
+                        right,
+                        left_key,
+                        right_key,
+                        standalone_finding_ids,
+                    )
                 }
             )
             if not overlaps:

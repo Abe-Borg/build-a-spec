@@ -1011,6 +1011,113 @@ export type StreamEvent =
   | { type: "turn_complete"; stop_reason: string | null; usage?: TurnUsage }
   | { type: "error"; message: string };
 
+// --- Developer tools / diagnostics ------------------------------------------
+
+/** `GET /api/diagnostics` — environment + session snapshot. */
+export interface DiagnosticsSnapshot {
+  ok: boolean;
+  generated_at: number;
+  app: {
+    name: string;
+    version: string;
+    platform: string;
+    python: string;
+    frozen: boolean;
+    dev_mode: boolean;
+    port: number;
+    models: { interview: string; research: string; qc: string };
+  };
+  tracing: {
+    enabled: boolean;
+    level: string;
+    root: string;
+    run_id?: string;
+    run_dir?: string;
+  };
+  logging: {
+    enabled: boolean;
+    level: string;
+    dir: string;
+    file?: string;
+    size_bytes?: number;
+  };
+  key: { present: boolean; source: string; masked: string; env_locked?: boolean };
+  workspace: {
+    workspace_id: number;
+    scope: string;
+    generation: number;
+    busy: string[];
+  };
+  session: {
+    history_len: number;
+    doc_version_index: number;
+    doc_version_count: number;
+    baseline_index: number | null;
+    doc_empty: boolean;
+    figures: number;
+    references: number;
+    suggested_prompts: number;
+    turn_active: boolean;
+    stop_requested: boolean;
+    unsaved: boolean;
+    import_report_present: boolean;
+    module_id: string;
+    discipline: string;
+    source: { retained: boolean; filename: string; bytes: number };
+  };
+  usage: UsageSummary;
+}
+
+/** `GET /api/diagnostics/log` — activity-log tail. */
+export interface DiagnosticsLog {
+  ok: boolean;
+  enabled: boolean;
+  path: string | null;
+  size_bytes: number;
+  lines: string[];
+}
+
+export interface DiagnosticsTraceRun {
+  run_id: string;
+  started_at: number | null;
+  ended_at: number | null;
+  current: boolean;
+  size_bytes: number;
+  files: Record<string, number>;
+}
+
+/** `GET /api/diagnostics/traces` — run inventory, newest first. */
+export interface DiagnosticsTraces {
+  ok: boolean;
+  root: string;
+  runs: DiagnosticsTraceRun[];
+}
+
+/** One events.jsonl record: ts/span_id/type plus event-specific fields. */
+export interface DiagnosticsEvent {
+  ts: number;
+  span_id: string;
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface DiagnosticsOpenSpan {
+  span_id: string;
+  kind: string;
+  name: string;
+  started_at: number;
+  parent_span_id: string | null;
+}
+
+/** `GET /api/diagnostics/activity` — current run's recent events. */
+export interface DiagnosticsActivity {
+  ok: boolean;
+  enabled: boolean;
+  run_id?: string;
+  events: DiagnosticsEvent[];
+  spans: DiagnosticsOpenSpan[];
+}
+
 /**
  * Native bridge surfaced by the pywebview shell (undefined in a plain
  * browser / dev). `pywebview.api` exposes the close controller's methods;
@@ -1039,7 +1146,9 @@ declare global {
         save_template?: (templateId: string) => Promise<boolean>;
         /** Opens a URL in the user's default system browser instead of
          *  navigating the app window itself. Resolves true if a browser was
-         *  launched; false for a rejected (non-http/https) or malformed URL. */
+         *  launched; false for a rejected (non-http/https) or malformed URL.
+         *  Also how Developer tools opens the trace viewer (an app-served
+         *  localhost URL) — the shell has no reliable target=_blank. */
         open_external_link?: (url: string) => Promise<boolean>;
       };
     };

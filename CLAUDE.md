@@ -31,12 +31,18 @@ file is the working reference for AI-assisted development sessions.
 ## Layout
 
 ```
-main.py                    entry point: uvicorn thread + pywebview window;
+main.py                    entry point: diagnostics.init_logging() FIRST, then
+                           uvicorn thread (log_config=None so uvicorn loggers
+                           propagate to the diagnostics file handler;
+                           access_log off — the app middleware is the access
+                           log) + pywebview window (debug=dev_mode());
                            _CloseController offers to save progress on window
                            close (closing-event veto → off-thread frontend
                            prompt → js_api save_and_close/discard_and_close,
                            native save via webview.FileDialog.SAVE; never traps
-                           the user)
+                           the user); Developer tools reuses open_external_link
+                           for the trace viewer; the pywebview-fallback except
+                           now logs
 backend/
   settings.py              models (claude-sonnet-5 default), effort levels
                            (interview high / research xhigh), max_tokens at
@@ -62,7 +68,13 @@ backend/
                            endpoint — the suggest_prompts SSE event rides /api/chat);
                            Batch 10 adds an optional reset body {module_id,
                            discipline} + GET /api/modules + health.discipline +
-                           a 400 research backstop (generic module, no discipline)
+                           a 400 research backstop (generic module, no discipline);
+                           the diagnostics batch adds the _request_diagnostics
+                           middleware (per-request log + api_request trace event,
+                           quiet-path list), catch-all 500 + 422 handlers in the
+                           {ok,error,code} idiom, ~25 app_event capture sites,
+                           and GET/POST /api/diagnostics(+/log,/traces,/activity,
+                           /bundle,/client-event) behind Settings → Developer tools
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides −
@@ -147,13 +159,27 @@ backend/
                            stream_end; accept/dismiss mutators under lock;
                            Batch 7 adds stop() (same cancel_event/_try_resolve
                            pattern as research/runner.py)
-  tracing/                 [PORT: Spec Critic src/tracing/ core ≈verbatim]
+  tracing/                 [PORT: Spec Critic src/tracing/ core, since diverged]
                            recorder (JSONL spans/events/prompts + run.json,
-                           writer thread, ContextVar parents), spans (BAS
+                           writer thread, per-line flush, ContextVar parent
+                           for span() only — the ported thread-local span
+                           stack is REMOVED: capture spans close on daemon
+                           threads where it leaked stale parents), spans (BAS
                            kind vocabulary), config (BUILD_A_SPEC_TRACE*,
-                           default on), redaction (inlined credential
-                           patterns); capture.py = native never-raise hooks;
-                           viewer/trace_viewer.html bundled
+                           default on), redaction (credential patterns;
+                           token(?!s) so usage counts survive); capture.py =
+                           native never-raise hooks incl. app_event/
+                           turn_round/turn_prompts; viewer/trace_viewer.html
+                           is a native self-contained rewrite (no CDN)
+  diagnostics.py           always-on activity log (RotatingFileHandler in
+                           <state dir>/logs beside traces/, BUILD_A_SPEC_LOG*
+                           knobs, third-party loggers tamed) + crash capture
+                           (faulthandler, sys/threading excepthooks,
+                           unclean-shutdown run marker) + the read-only
+                           helpers behind /api/diagnostics* (snapshot,
+                           tail_log, list_trace_runs, read_recent_trace_
+                           events, build_bundle) — key material never enters
+                           any of it (key_status masked + scrub_data)
   app_paths.py             [PORT: Spec Critic src/core/app_paths.py]
   api_key_store.py         [PORT: Spec Critic src/core/api_key_store.py + save_api_key]
                            Batch 2 adds key_status (masked, never leaks) + delete_api_key
@@ -2543,6 +2569,173 @@ here.
   discarded on `pop_scenario`, never merged back), so repeated visits cost a
   repeated (and potentially re-billed) generation rather than ever
   duplicating figures or reference docs — an accepted tradeoff, not a bug.
+
+## Developer tools + always-on diagnostics — implemented notes (v1.6.0)
+
+Abraham's ask: "very detailed and thorough diagnostics so I can troubleshoot
+the software… capture as much as possible during each run, not just when
+things go wrong", behind a **Developer tools** button in Settings. Two halves:
+every run now leaves a rich local forensic record by default, and Settings
+gains the read-only window onto it. No new Python deps (logging/faulthandler/
+zipfile stdlib), no new npm deps; three new env knobs; six new REST routes
+(all `include_in_schema=False`, the trace-viewer precedent).
+
+- **The activity log is the new base layer** (`backend/diagnostics.py`).
+  The packaged windowed build points stdout/stderr at `os.devnull`
+  (`main._ensure_std_streams`), so before this NOTHING the app, uvicorn, or
+  an unhandled exception printed survived anywhere. `init_logging()` (first
+  thing `main()` does; idempotent, also called defensively — no-op under
+  the test env) attaches a `RotatingFileHandler` (10MB × 5, local-time
+  format with thread names) to the root logger in
+  `<user_state_dir>/BuildASpec/logs/` — the *state* root, beside `traces/`,
+  deliberately not `app_paths.app_config_dir()` (same folder on Windows).
+  Root runs at `BUILD_A_SPEC_LOG_LEVEL` (default DEBUG); chatty third-party
+  loggers (`httpx`/`httpcore`/`urllib3`/`keyring`→WARNING, `anthropic`→INFO,
+  `uvicorn.access`→WARNING…) stay tamed so DEBUG means *the app* at DEBUG.
+  uvicorn runs `log_config=None, log_level="info", access_log=False` — its
+  loggers propagate to our handler; the request middleware is the access
+  log. `BUILD_A_SPEC_LOG=0` disables (conftest sets it, the trace pattern).
+- **Crash capture**: `faulthandler.enable()` into `logs/crash-faulthandler.log`
+  (handle retained for signal-context writes), chain-preserving
+  `sys.excepthook`/`threading.excepthook` wrappers that log CRITICAL with the
+  traceback, and an atomic `run-marker.json` — next boot logs "previous run
+  (pid N…) did not shut down cleanly". `main.py`'s pywebview-fallback
+  `except Exception` (previously silent — a GUI failure was
+  indistinguishable from pywebview-not-installed) now logs the exception;
+  `webview.start(debug=settings.dev_mode())` adds the inspector in dev only.
+- **Request + error visibility.** `_request_diagnostics` middleware
+  (registered AFTER `_lease_slow_session_operations` in code — Starlette
+  prepends, so last-registered = outermost, and it records the lease 409s
+  too): one log line per request (method/path/status/duration-to-response-
+  START — for SSE that is time-to-first-frame, deliberately; never drain a
+  stream to time it) + an `api_request` trace event. `_QUIET_PATHS` (health/
+  capabilities/qc-status/research-status/readiness/usage polls) log at DEBUG
+  and skip the trace. A catch-all `Exception` handler logs the traceback and
+  returns `{ok:false, error, code:"internal_error"}` 500 so the frontend's
+  error idiom survives (Starlette sends it then re-raises by design — tests
+  use `raise_server_exceptions=False`); a `RequestValidationError` handler
+  translates 422s into the same idiom built from loc/msg ONLY (pydantic v2's
+  `errors()[i]["input"]` would echo the submitted API key — pinned by test).
+- **Recorder hardening** (backend/tracing/, deviations from the port noted
+  in docstrings): (1) per-line flush — a hard kill loses at most the line in
+  flight, previously everything since start (fsync stays close-only);
+  (2) the thread-local span stack is REMOVED — capture hooks open spans on
+  request threads and close them from daemon threads (research/QC/audit),
+  where the stack never popped and later spans on a reused threadpool
+  thread inherited a stale `parent_span_id`; every hook passes handles
+  explicitly and `span()` nesting rides the ContextVar alone (existing
+  nesting test still green); (3) `run.json` gains an `environment` block
+  (platform/python/frozen/port/pid/models); (4) `open_span_summaries()` for
+  the live-activity view; (5) redaction's bare `token` key pattern became
+  `token(?!s)` — it was silently redacting every usage count
+  (`input_tokens`…) out of every span, which would have gutted the new
+  per-round records; auth tokens still redact (pinned both ways).
+- **Capture breadth.** New never-raise hooks: `app_event(type, **fields)`
+  (run-level one-liner; lazily starts the recorder so a launch that never
+  chats still leaves a trace), `turn_round` (one `round_end` event per
+  streaming round: round #, stop_reason, ms, per-round usage, tool/web-tool
+  counts — emitted before the pause_turn branch so every round records), and
+  `turn_prompts` (one `prompt_refs` event per turn: stable system block +
+  frozen PROJECT CONTEXT + user text through `recorder.prompt_ref` —
+  hash-deduped into prompts.jsonl at the default level, the stable prompt
+  costs ONE entry per app run; deep mode inlines, making
+  `BUILD_A_SPEC_TRACE_DEEP` real for the first time. `prompt_ref` runs
+  `redaction.redact_text` — SUBSTRING-level credential redaction — before
+  hashing/storing: prompts carry whatever the user pasted into chat, this
+  is the one write path `scrub_data` does not cover, and whole-string
+  scrubbing would erase the entire prompt over one pasted key). Event vocabulary from
+  the REST layer: `api_request`, `workspace_conflict`, `server_started`
+  (end of create_app — the run dir exists from boot), `doc_edit` (op
+  count/actions/ok), `doc_history` (undo/redo), `project_save`/
+  `project_load`, `export` (docx/qc_docx/qc_json/template/original_source/
+  diagnostics_bundle), `reference` (upload/delete), `figure_delete`,
+  `qc_apply` (outcome counts)/`qc_dismiss`, `session_reset`, `template`,
+  `tutorial`, `key` (action + outcome, NEVER material), `update`,
+  `stop_requested` (chat/research/qc), `client_error`. Events emit after
+  outcomes and outside `session_state_guard()` wherever the route holds it
+  (undo/redo/edit were restructured to return after the lock) — `app_event`'s
+  lazy first-start does one-time file I/O that must not run under the
+  turn-state lock.
+- **Diagnostics REST surface** (all plain `def` — file I/O on worker
+  threads, the event-loop rule): `GET /api/diagnostics` (scrubbed snapshot:
+  app/tracing/logging/key(masked)/workspace/session/usage — field reads
+  only under the guard, never `_doc_payload`, never the capability sweep),
+  `GET /api/diagnostics/log?tail=` (seek-from-end bounded read, clamp
+  1..5000, grace when disabled/missing), `GET /api/diagnostics/traces`
+  (newest-first inventory, sizes only — never line counts),
+  `GET /api/diagnostics/activity?tail=` (current run's events read back
+  leniently after a short `recorder.flush()` barrier — per-line flush
+  makes the file readable, the barrier makes it CURRENT — plus
+  `open_span_summaries`), `GET /api/diagnostics/bundle` (zip written to a
+  TEMP FILE and streamed via `FileResponse` + background unlink — a
+  deep-trace run can be hundreds of MB and an in-memory zip would spike
+  the process exactly when the user needs it; `recorder.flush(2.0)` runs
+  before the copy so a bundle grabbed right after an incident CONTAINS
+  the incident: snapshot.json + all log files + the CURRENT trace run in
+  full + `run.json` of the 3 most recent prior runs; `_attachment_headers`
+  + no-store + nosniff, the `/api/import/original` posture; byte-scan test
+  proves the key never appears), `POST /api/diagnostics/client-event`
+  (the frontend collector's sink: bounded >32KB→400, kind-allowlisted,
+  logged + `client_error` event).
+- **Frontend collector** (`lib/clientLog.ts`, installed in `main.tsx`
+  before the root renders): `window.onerror` + `unhandledrejection` +
+  wrapped `console.error/warn` (originals first, re-entrancy flag) →
+  keepalive fetch, NOT via api.ts (helpers there throw; a reporter must
+  never throw or recurse). Client-side throttle: one per `kind:message`
+  per 10s, 40 reports/session hard cap (then one capped notice). The
+  frontend previously had zero `console.*` calls and no error record.
+- **Developer tools UI.** SettingsPanel gains a third section
+  (`data-capability="session.developer-tools"`) whose button opens
+  `DeveloperToolsModal` rendered as a SIBLING of the settings backdrop
+  (the TrustDeepDiveModal stacking pattern — a child of the backdrop would
+  bubble its backdrop click into settings' onClose; z-[60] over z-50).
+  The modal (`useDialogFocus`, role=dialog — better a11y than settings
+  itself) is single-scroll, manual-Refresh (`Promise.allSettled` over the
+  four fetches, per-section failure lines): Environment (versions/models/
+  paths/tracing/log status + copy-snapshot-JSON), Session state
+  (workspace/doc versions/counts/flags/spend), Recent activity (newest-
+  first event lines, type filter, in-flight spans), Activity log tail
+  (+copy), Trace files (run list + root path + "Open trace viewer" via the
+  shared `open_external_link` js_api bridge with `window.open` fallback —
+  the shell has no reliable target=_blank), and the bundle download (plain
+  `<a download>` + the sensitivity caveat: contains draft text and
+  prompts, local-only, share deliberately — the trust posture).
+- **Trace viewer rewrite** (same route, native file): the previous
+  634-line Spec Critic artifact read files/fields Build-a-Spec never
+  writes (findings.jsonl, mode/cycle_label — rendered "undefined"),
+  filtered on event types never emitted, and needed the Tailwind CDN to
+  style at all — in an app whose trust dossier claims the UI loads
+  nothing from the internet. The rewrite is self-contained (inline CSS,
+  zero network): real run.json fields + environment, span tree by
+  `parent_span_id` (run-level events under a synthetic root; events
+  pointing at a span that never closed get an "unclosed" node — crash
+  forensics), event timeline with filter chips built from the types
+  PRESENT in the file (new vocabulary needs no viewer edit), and
+  prompt-ref resolution ({ref} → expandable text from prompts.jsonl,
+  {inline} for deep runs).
+- **Capability contract**: `session.developer-tools` minted (three-place
+  edit: capabilities.ts, the settings section, a `ship`-chunk tour step
+  anchored on the existing `settings` data-tour). `TOUR_VERSION` 3 → 4
+  (step order changed; in-flight tutorial resume records reset — accepted).
+- **Tests.** `tests/test_diagnostics.py` (16: logging init/knobs/marker,
+  middleware log+event+quiet-list, catch-all + 422-no-echo, snapshot
+  shape + no-key-material, tail bounds/grace, traces list, activity,
+  bundle members + decompressed byte-scan for the key, collector
+  logs/bounds/coercion, capture sites, round_end ×3 + prompt_refs +
+  system-prompt dedupe across turns, workspace_conflict via the lease
+  middleware) + three in `test_tracing.py` (readable-before-stop flush,
+  cross-thread close leaves no stale parent, environment in run meta) +
+  the `token(?!s)` scrub pin. conftest adds `BUILD_A_SPEC_LOG=0`
+  (setdefault, the trace pattern); diagnostics tests opt back in with tmp
+  dirs and MUST tear down via `diagnostics.reset_for_tests()` (logging is
+  process-global; the log_env fixture does it).
+- **Privacy posture unchanged, stated in more places**: key material never
+  enters logs, traces, the snapshot, or the bundle (masked `key_status` +
+  `scrub_data` everywhere outbound); document text DOES ride traces and
+  the bundle by design (that is what makes them useful) and every surface
+  that offers them says so. TrustDeepDiveModal's trace card became "Trace
+  files and the activity log" (+ the data-flow diagram label) — keep those
+  in sync with this section.
 
 ## Commands
 

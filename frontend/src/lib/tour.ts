@@ -22,7 +22,7 @@ import {
  * with instructions that no longer match the active scenario. A bump simply
  * discards stale records, which is the correct outcome.
  */
-export const TOUR_VERSION = 3;
+export const TOUR_VERSION = 4;
 
 export interface StarterPrompt {
   label: string;
@@ -561,6 +561,16 @@ export const TOUR: readonly TourChunk[] = [
         title: "Usage remains visible",
         body:
           "The pill estimates current session spend. Settings breaks down interview, research, Final QC, and template-creation input/output/cache/web usage, estimated cache savings, and the list-pricing caveat.",
+      },
+      {
+        id: "developer-tools",
+        capabilities: ["session.developer-tools"],
+        mode: "explanatory",
+        anchor: "settings",
+        placement: "bottom",
+        title: "Developer tools when something misbehaves",
+        body:
+          "Settings also opens Developer tools: environment and session state, the live activity log, this run's trace events, the trace-file viewer, and a one-click diagnostics bundle you can save when reporting a problem. Everything it shows is recorded on your machine only — the app keeps a detailed local record of every run, not just failures.",
       },
       {
         id: "help-updates",

@@ -14,9 +14,14 @@ from typing import Any
 
 _REDACTED = "<redacted>"
 
-# Keys whose values are secrets regardless of shape.
+# Keys whose values are secrets regardless of shape. ``token(?!s)`` is a
+# Build-a-Spec deviation from the ported pattern: the bare ``token``
+# alternation also matched every usage-count key (``input_tokens``,
+# ``output_tokens``, ``thinking_tokens`` …), silently redacting billed
+# usage out of every turn span — counts are not secrets, auth tokens
+# (``auth_token``, ``Authorization`` …) still are.
 _SECRET_KEY_PATTERN = re.compile(
-    r"(?:api[_-]?key|authorization|password|secret|token|credential)",
+    r"(?:api[_-]?key|authorization|password|secret|token(?!s)|credential)",
     re.IGNORECASE,
 )
 
@@ -37,6 +42,20 @@ def scrub_value(value: Any) -> Any:
         if pattern.search(value):
             return _REDACTED
     return value
+
+
+def redact_text(text: str) -> str:
+    """Substring-level credential redaction for free text (prompt capture).
+
+    Unlike :func:`scrub_value` — which replaces a whole matching string and
+    would erase an entire prompt over one pasted key — this replaces only
+    the credential-shaped spans and keeps the surrounding text readable.
+    """
+    if not isinstance(text, str):
+        return text
+    for pattern in _SECRET_VALUE_PATTERNS:
+        text = pattern.sub(_REDACTED, text)
+    return text
 
 
 def scrub_data(data: Any, *, _depth: int = 0) -> Any:

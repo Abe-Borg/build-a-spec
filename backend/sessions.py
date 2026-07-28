@@ -451,6 +451,11 @@ def reset_session() -> None:
     _manager.force_restore_original().session.reset()
 
 
+def busy_reasons(session: SessionState) -> list[str]:
+    """Public roll-up of what is running (["chat", "research", …])."""
+    return SessionManager._busy_reasons(session)
+
+
 def has_unsaved_progress(session: SessionState) -> bool:
     """True when the session holds work worth saving before it is discarded.
 

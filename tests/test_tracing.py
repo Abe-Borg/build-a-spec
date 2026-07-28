@@ -172,3 +172,134 @@ def test_viewer_endpoint_serves_the_bundled_html():
     assert resp.status_code == 200
     assert "html" in resp.headers["content-type"]
     assert len(resp.content) > 1000
+
+
+def test_events_are_readable_before_stop_thanks_to_per_line_flush(tmp_path):
+    """Per-line flush: a hard crash must not lose already-recorded events.
+
+    The pre-fix writer only flushed at stop(), so anything short of a clean
+    exit lost up to a buffer of trace data — the exact scenario traces
+    exist to explain. Poll-read the file while the recorder is still live.
+    """
+    import time as _time
+
+    rec = TraceRecorder(
+        run_id="run-flush", trace_dir=tmp_path / "f", capture_level="default"
+    )
+    rec.start()
+    try:
+        rec.add_event(None, "api_request", method="GET", path="/api/doc")
+        deadline = _time.monotonic() + 2.0
+        events = []
+        while _time.monotonic() < deadline:
+            path = tmp_path / "f" / "events.jsonl"
+            if path.exists():
+                events = _read_jsonl(path)
+                if events:
+                    break
+            _time.sleep(0.02)
+        assert events and events[0]["type"] == "api_request"
+    finally:
+        rec.stop()
+
+
+def test_cross_thread_close_leaves_no_stale_parent(tmp_path):
+    """A span closed on another thread must not parent later spans.
+
+    The ported thread-local span stack pushed on the opening thread and
+    could only pop on the closing thread — research/QC/audit spans close on
+    daemon threads, so the opener's stack kept a dead handle and the next
+    span opened on that (reused) thread inherited it as parent. The stack
+    is gone; only explicit parents and the span() ContextVar remain.
+    """
+    import threading
+
+    rec = TraceRecorder(
+        run_id="run-x", trace_dir=tmp_path / "x", capture_level="default"
+    )
+    rec.start()
+    try:
+        first = rec.open_span("research", "closed elsewhere")
+        closer = threading.Thread(target=lambda: rec.close_span(first))
+        closer.start()
+        closer.join()
+        second = rec.open_span("turn", "after the cross-thread close")
+        rec.close_span(second)
+    finally:
+        rec.stop()
+    spans = {s["name"]: s for s in _read_jsonl(tmp_path / "x" / "spans.jsonl")}
+    assert spans["after the cross-thread close"]["parent_span_id"] is None
+
+
+def test_prompt_ref_redacts_pasted_credentials_but_keeps_the_prompt(tmp_path):
+    """A key pasted into chat must not reach prompts.jsonl (P1 review find).
+
+    prompt_ref is the one write path scrub_data does not cover — and must
+    not: whole-string scrubbing would erase the entire prompt over one
+    pasted key. Substring redaction keeps the prompt useful.
+    """
+    rec = TraceRecorder(
+        run_id="run-p", trace_dir=tmp_path / "p", capture_level="default"
+    )
+    rec.start()
+    ref = rec.prompt_ref(
+        "user", "please use sk-ant-abc123def456ghi789 as the key, thanks"
+    )
+    assert "ref" in ref
+    rec.stop()
+    prompts = _read_jsonl(tmp_path / "p" / "prompts.jsonl")
+    assert len(prompts) == 1
+    assert "sk-ant-" not in prompts[0]["text"]
+    assert "<redacted>" in prompts[0]["text"]
+    assert prompts[0]["text"].startswith("please use ")
+
+    # Deep mode inlines — same redaction at the same choke point.
+    deep = TraceRecorder(
+        run_id="run-pd", trace_dir=tmp_path / "pd", capture_level="deep"
+    )
+    deep.start()
+    inline = deep.prompt_ref("user", "key sk-ant-abc123def456ghi789 end")
+    deep.stop()
+    assert inline == {"inline": "key <redacted> end"}
+
+
+def test_flush_barrier_makes_enqueued_events_immediately_readable(tmp_path):
+    """flush() returns only once prior records are on disk — no polling."""
+    rec = TraceRecorder(
+        run_id="run-fb", trace_dir=tmp_path / "fb", capture_level="default"
+    )
+    rec.start()
+    try:
+        for i in range(25):
+            rec.add_event(None, "api_request", path=f"/x/{i}")
+        assert rec.flush(timeout=5.0) is True
+        events = _read_jsonl(tmp_path / "fb" / "events.jsonl")
+        assert len(events) == 25
+    finally:
+        rec.stop()
+    # After stop, flush degrades gracefully instead of hanging.
+    assert rec.flush(timeout=0.1) is True
+
+
+def test_run_meta_records_the_environment(tmp_path):
+    rec = TraceRecorder(
+        run_id="run-env", trace_dir=tmp_path / "e", capture_level="default"
+    )
+    rec.start(
+        model="claude-sonnet-5",
+        environment={"platform": "TestOS-1.0", "python": "3.11.0", "pid": 42},
+    )
+    rec.stop()
+    meta = json.loads((tmp_path / "e" / "run.json").read_text())
+    assert meta["environment"]["platform"] == "TestOS-1.0"
+    assert meta["environment"]["pid"] == 42
+
+    # A resume against the same dir keeps (and may refresh) the block.
+    again = TraceRecorder(
+        run_id="run-env", trace_dir=tmp_path / "e", capture_level="default"
+    )
+    again.start(environment={"platform": "TestOS-2.0"})
+    again.stop()
+    meta = json.loads((tmp_path / "e" / "run.json").read_text())
+    assert meta["environment"]["platform"] == "TestOS-2.0"
+    assert len(meta["resumed_at"]) == 1

@@ -574,7 +574,8 @@ Shipped in v0.5.0 (Phase 5) and still current:
   empty blocks, but it is not a proof that the full Word package was preserved.
 - **Compliance audit.** One click audits the draft against the Phase 4 requirements profile, with Spec Critic's trust model intact: only **grounded** requirements control; `[UNVERIFIED]` items can at most earn a confirm-with-authority advisory; `[PROCESS]` items are excluded. Output: a coverage matrix (`represented / missing / contradicted / unclear`, every controlling requirement always classified — a skipped one reports `unclear`, never invisible) with evidence quotes + click-to-jump element ids, advisory findings, a staleness marker when the draft moves past the audited version, and a **compliance closing section in the `.docx` export**. Full multi-spec reviews still belong to Spec Critic.
 - **Windows packaging + auto-update.** Spec Critic's release pipeline, cloned: PyInstaller one-folder build (`packaging/windows/build-a-spec.spec`, bundling the built frontend + pywebview/WebView2), Inno Setup installer with its own stable AppId, and the serverless GitHub-Releases updater — `latest.json` manifest fetched https-only (redirect-downgrade guarded), installer **SHA-256-verified before it ever runs**, once-a-day throttle, skip-this-version, and an update pill in the header. `docs/RELEASE_WINDOWS.md` is the runbook; `--version`/`--selfcheck` smoke-test the frozen exe; a version-consistency gate keeps settings/package.json/tag aligned (and runs in pytest).
-- **Session tracing.** The ported Spec Critic tracing core (JSONL spans + events, background writer, credential redaction, prompt-hash dedup, deep mode) records turns, tool dispatches, research runs, audits, and imports — local-only, env-gated (`BUILD_A_SPEC_TRACE`, default on), with the bundled HTML viewer at `GET /api/trace/viewer`.
+- **Session tracing.** The ported Spec Critic tracing core (JSONL spans + events, background writer, credential redaction, prompt-hash dedup, deep mode) records turns — now with per-round detail and prompt material — plus every REST request and state-changing action (edits, exports, project saves/loads, QC dispositions, stops, key changes, frontend errors), research runs, audits, Final QC, and imports — local-only, env-gated (`BUILD_A_SPEC_TRACE`, default on), with a self-contained HTML viewer at `GET /api/trace/viewer` (no network, dynamic event filters).
+- **Always-on activity log + Developer tools.** Every run also writes a rotating local log (`BUILD_A_SPEC_LOG`, default on: requests, errors with tracebacks, crashes via `faulthandler` and exception hooks, an unclean-shutdown marker) — the only place output survives in the packaged windowed build, where stdout/stderr go to devnull. **Settings → Developer tools** shows the environment and session snapshot, recent trace activity, the log tail, the trace-run list (with the viewer), and downloads a one-click **diagnostics bundle** (.zip of snapshot + logs + the current trace). Local-only; the bundle contains draft text and prompts (the trace posture) and never key material. Logs may reference document titles and file paths — treat the log folder like the trace folder.
 
 Shipped in v0.4.0 (Phase 4) and still current (the near-verbatim port of Spec Critic's requirements-research fan-out, pointed at drafting):
 
@@ -657,6 +658,10 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          locale, fingerprint                     [ported from Spec Critic]
   api_key_store.py       key resolution: env -> keyring -> file   [ported from Spec Critic]
   app_paths.py           platformdirs config locations            [ported from Spec Critic]
+  diagnostics.py         always-on rotating activity log + crash capture
+                         (faulthandler, exception hooks, unclean-shutdown
+                         marker) + the /api/diagnostics* snapshot/tail/
+                         trace-list/bundle helpers behind Developer tools
   sessions.py            active-session store (single session)
   spec_modules/
     base.py              frozen SpecModule + import-time registry validation
@@ -690,9 +695,11 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
     recorder.py, spans.py, config.py, redaction.py
                          JSONL span/event recorder, env-gated, credential
                          scrubbing                           [ported from Spec Critic]
-    capture.py           Build-a-Spec capture hooks (turns, tools, research,
-                         audits, imports) — never raise
-    viewer/trace_viewer.html  the bundled HTML trace viewer  [ported from Spec Critic]
+    capture.py           Build-a-Spec capture hooks (turns + rounds + prompts,
+                         tools, app events, research, audits, QC, imports) —
+                         never raise
+    viewer/trace_viewer.html  self-contained HTML trace viewer (native rewrite —
+                         no network, dynamic event filters, prompt-ref resolution)
   spec_doc/
     model.py             SectionFormat tree, stable ids (+ the `imported` status),
                          transactional edit ops (incl. set_standard_edition /
@@ -867,6 +874,9 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_TRACE` | on | Session tracing (JSONL spans/events, local-only). Traces may contain document text; treat them as sensitive project data. `0` disables. |
 | `BUILD_A_SPEC_TRACE_DEEP` | off | Inline prompts in traces (implies trace on and is especially sensitive). |
 | `BUILD_A_SPEC_TRACE_DIR` | state dir | Where trace runs are written. |
+| `BUILD_A_SPEC_LOG` | on | The rotating activity log (requests, errors, crashes; local-only, beside the traces). `0` disables. |
+| `BUILD_A_SPEC_LOG_LEVEL` | DEBUG | Log level for the activity log (chatty third-party loggers stay tamed regardless). |
+| `BUILD_A_SPEC_LOG_DIR` | state dir | Where the log files (and crash/run-marker files) are written. |
 | `BUILD_A_SPEC_UPDATE_URL` | GitHub latest | Override the update-manifest URL. |
 | `BUILD_A_SPEC_DISABLE_UPDATE_CHECK` | off | Truthy disables update checks entirely. |
 

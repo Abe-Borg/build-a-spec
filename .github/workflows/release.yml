@@ -165,6 +165,22 @@ jobs:
             throw "installer not produced at dist/installer/BuildASpecSetup.exe"
           }
 
+      - name: Render release notes
+        shell: pwsh
+        run: |
+          # One source of truth: backend/release_notes.py ships INSIDE the
+          # build (the app's What's-new modal reads it with no network), and
+          # the same entry renders both the manifest summary a not-yet-updated
+          # app sees and the GitHub Release body. The script exits non-zero if
+          # the version has no entry, so a release page can never go out with
+          # no notes on it.
+          python packaging/windows/render_release_notes.py `
+            --version "${{ steps.ver.outputs.version }}" `
+            --notes-out "release-notes.txt" `
+            --body-out "release-body.md"
+          if ($LASTEXITCODE -ne 0) { throw "release notes render failed" }
+          Get-Content release-body.md
+
       - name: Generate update manifest (latest.json)
         shell: pwsh
         run: |
@@ -175,7 +191,7 @@ jobs:
             --installer "dist/installer/BuildASpecSetup.exe" `
             --url "$downloadUrl" `
             --out "dist/installer/latest.json" `
-            --notes "Build-a-Spec ${{ steps.ver.outputs.version }} — see the release page for details." `
+            --notes-file "release-notes.txt" `
             --published-at (Get-Date -Format 'yyyy-MM-dd')
           Get-Content dist/installer/latest.json
 
@@ -196,29 +212,13 @@ jobs:
           name: Build-a-Spec ${{ steps.ver.outputs.version }}
           draft: false
           prerelease: false
-          # GitHub prepends `body` to the auto-generated changelog when both
-          # are set, so the install/SmartScreen notes lead and the changelog
-          # follows.
+          # GitHub prepends the body to the auto-generated changelog when both
+          # are set, so the human release notes lead, the install/SmartScreen
+          # instructions follow, and the commit changelog comes last.
+          # `body_path` is rendered from backend/release_notes.py two steps
+          # up — the same entry the app shows in its own What's-new modal.
           generate_release_notes: true
+          body_path: release-body.md
           files: |
             dist/installer/BuildASpecSetup.exe
             dist/installer/latest.json
-          body: |
-            ## Install (Windows)
-
-            1. Download **BuildASpecSetup.exe** below and run it.
-            2. The app is not code-signed, so Windows SmartScreen shows
-               **"Windows protected your PC"** on first run — click
-               **More info → Run anyway**. This is expected; downloads are
-               SHA-256-verified against `latest.json` before the in-app
-               updater ever launches a future update.
-            3. No Python, Node, or other tooling is required — everything is
-               bundled. The installer adds the Microsoft Edge WebView2
-               runtime automatically if your machine doesn't already have it
-               (current Windows 10/11 already do).
-
-            After installing, launch **Build-a-Spec** from the Start menu and
-            enter your Anthropic API key when prompted.
-
-            `latest.json` is the update manifest consumed by the built-in
-            updater — it is not something you need to download.

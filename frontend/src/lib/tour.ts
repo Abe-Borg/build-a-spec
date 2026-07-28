@@ -580,7 +580,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Help, the trust dossier, and updates",
         body:
-          "The five Help topics cover the workflow in place, and can restart this tutorial or jump straight to any chapter. “Why trust it” links to a full dossier that answers, action by action, what runs on your machine, what leaves it, where each word came from, which parts involve no AI at all, and how to verify any of it yourself. About contains the manual update check and release information; the header shows an available update and installs it when the platform allows, or links to the releases page when it does not.",
+          "The five Help topics cover the workflow in place, and can restart this tutorial or jump straight to any chapter. “Why trust it” links to a full dossier that answers, action by action, what runs on your machine, what leaves it, where each word came from, which parts involve no AI at all, and how to verify any of it yourself. The header shows an available update and installs it when the platform allows, or links to the releases page when it does not; after an update, release notes open by themselves, and Settings can reopen them any time.",
       },
     ],
   },

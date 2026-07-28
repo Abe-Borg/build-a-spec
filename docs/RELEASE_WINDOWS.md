@@ -23,24 +23,54 @@ and — on a tag build — publishes a GitHub Release with both assets.
 
 ### Cut a release
 
-1. Bump `VERSION` in `backend/settings.py` **and** `version` in
+1. **Write the release notes** — add a `ReleaseNote` entry for the new
+   version at the top of `RELEASE_NOTES` in `backend/release_notes.py`.
+   This is not optional: `tests/test_release_notes.py::
+   test_the_shipped_notes_describe_the_shipped_version` fails a version
+   with no entry, and the workflow's render step exits non-zero, because a
+   release with no notes puts an empty "What's new" modal in front of every
+   user who updates. Write for a spec author, not a developer — what they
+   can now *do*, not the subsystem that changed.
+2. Bump `VERSION` in `backend/settings.py` **and** `version` in
    `frontend/package.json` to the same value, then
    `cd frontend && npm install --package-lock-only` to refresh the lock.
    (`tests/test_updates.py::test_version_consistency_gate` enforces the
    match; a mismatch would ship an app that permanently sees itself as out
    of date.)
-2. Commit to `master` (through a PR — CI runs the tests and the gate).
-3. Tag and push:
+3. Commit to `master` (through a PR — CI runs the tests and the gate).
+4. Tag and push:
 
    ```bash
    git tag v0.9.0
    git push origin v0.9.0
    ```
 
-4. Watch **Actions → Release (Windows)**. On success it creates the
-   Release for the tag with `BuildASpecSetup.exe` + `latest.json` attached,
-   auto-generated release notes, and the install/SmartScreen instructions
-   appended.
+5. Watch **Actions → Release (Windows)**. On success it creates the
+   Release for the tag with `BuildASpecSetup.exe` + `latest.json` attached.
+   The release body is your `release_notes.py` entry, followed by the
+   install/SmartScreen instructions
+   (`packaging/windows/release_install_notes.md`), followed by GitHub's
+   auto-generated commit changelog.
+
+### Where release notes end up
+
+One entry in `backend/release_notes.py` feeds three surfaces, so they can
+never disagree:
+
+| Surface | Rendered by | Seen by |
+|---|---|---|
+| The app's **What's new** modal | the bundled module itself | a user who just updated (opens once), or anyone via Settings → What's new |
+| `latest.json`'s `notes` field | `manifest_summary()` | a user who has **not** updated yet — the update pill's tooltip |
+| The GitHub Release body | `markdown_notes()` | anyone on the releases page |
+
+`packaging/windows/render_release_notes.py` produces the last two at build
+time. The app never fetches its own notes — they ship inside the build, so a
+freshly-updated app can show them with no network at all.
+
+The "has this user seen it" marker is `last_seen_version` in the update
+state file (`update_check.json`, beside the API key). A fresh install is
+deliberately shown nothing; the app distinguishes it from an upgrade by
+sampling whether that file existed at boot.
 
 The workflow needs no secrets — the built-in `GITHUB_TOKEN` (with
 `contents: write`, declared in the workflow) creates the Release.
@@ -175,14 +205,24 @@ profile and launch once. **Do not change the AppId GUID in
 ### 5. Manifest
 
 ```bat
+python packaging\windows\render_release_notes.py ^
+    --version 0.9.0 ^
+    --notes-out release-notes.txt ^
+    --body-out release-body.md
+
 python packaging\windows\make_manifest.py ^
     --version 0.9.0 ^
     --installer dist\installer\BuildASpecSetup.exe ^
     --url https://github.com/Abe-Borg/build-a-spec/releases/download/v0.9.0/BuildASpecSetup.exe ^
     --out latest.json ^
-    --notes "Short release notes." ^
+    --notes-file release-notes.txt ^
     --published-at 2026-07-21
 ```
+
+`--notes` still takes a literal string, but prefer `--notes-file` so the
+manifest, the release page, and the app's own What's-new modal all come from
+the same `backend/release_notes.py` entry. `release-body.md` is the release
+body to paste in step 6.
 
 The `--url` must be the final release-asset URL (tag path shown), and it
 must be https — `parse_manifest` refuses anything else.

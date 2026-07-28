@@ -28,6 +28,7 @@ import type {
   TutorialStartPayload,
   TutorialStatusPayload,
   TutorialSource,
+  ReleaseNotesPayload,
   UpdateCheckPayload,
   UsageSummary,
 } from "../types";
@@ -882,6 +883,25 @@ export async function checkUpdate(force = false): Promise<UpdateCheckPayload> {
   const resp = await fetch(`/api/update/check${force ? "?force=true" : ""}`);
   if (!resp.ok) throw new Error(`update check ${resp.status}`);
   return resp.json();
+}
+
+/**
+ * Release notes bundled with this build.
+ *
+ * Default: only what the user has not seen (drives the one-time What's-new
+ * modal after an update). `all` forces the current version's entry, which is
+ * what the Settings button asks for.
+ */
+export async function getReleaseNotes(
+  all = false,
+): Promise<ReleaseNotesPayload> {
+  const resp = await fetch(`/api/release-notes${all ? "?all=true" : ""}`);
+  if (!resp.ok) throw new Error(`release notes ${resp.status}`);
+  return resp.json();
+}
+
+export async function markReleaseNotesSeen(): Promise<void> {
+  await fetch("/api/release-notes/seen", { method: "POST" });
 }
 
 export async function installUpdate(): Promise<void> {

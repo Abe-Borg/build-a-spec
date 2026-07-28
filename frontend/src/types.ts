@@ -858,6 +858,33 @@ export interface UpdateCheckPayload {
   error?: string;
 }
 
+export interface ReleaseItem {
+  title: string;
+  body: string;
+}
+
+export interface ReleaseSection {
+  title: string;
+  items: ReleaseItem[];
+}
+
+export interface ReleaseNote {
+  version: string;
+  date: string;
+  headline: string;
+  summary: string;
+  sections: ReleaseSection[];
+}
+
+export interface ReleaseNotesPayload {
+  ok: boolean;
+  current: string;
+  last_seen: string;
+  /** True only on the launch check, when there is something unseen to show. */
+  pending: boolean;
+  entries: ReleaseNote[];
+}
+
 export interface ProjectLoadResult extends DocPayload {
   chat: { role: Role; text: string }[];
 }

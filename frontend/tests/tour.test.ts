@@ -205,6 +205,23 @@ test("the tutorial has exactly one ending, and it is a restore", () => {
   // would restart the whole tutorial on the way out of it.
   assert.match(hook, /current\.stage === "finishing"[\s\S]{0,200}restoreOriginal/);
 
+  // Restores are serialized, so a double-clicked End cannot fire a second
+  // request that 409s against the workspace the first one just finished.
+  assert.match(hook, /restoreInFlightRef/);
+
+  // Finding the tutorial already gone still has to rehydrate from an
+  // authoritative payload: /api/tutorial/status omits `session` once the
+  // tutorial is over, so settling from it would close the overlay while the
+  // panel still rendered the discarded practice copy.
+  assert.match(hook, /const restored = await getSessionBundle\(\)/);
+  assert.match(hook, /settle\(restored\)/);
+  assert.doesNotMatch(hook, /settle\(status\.session/);
+
+  // Every settle that follows an await is generation-guarded. acceptNativeRestore
+  // is not a restore call, so it bypasses the in-flight serialization and can
+  // apply newer state mid-fetch; an unguarded settle would overwrite it.
+  assert.match(hook, /if \(runRef\.current !== run\) return true;\s*\n\s*settle\(restored\)/);
+
   // The capability moved to the real End controls, not a modal wrapper.
   assert.match(overlay, /data-capability="tour\.finish"/);
   assert.doesNotMatch(overlay, /<div data-capability="tour\.finish">/);

@@ -1883,6 +1883,106 @@ def _qc_user_content(
     ]
 
 
+def _safe_stream_json(text: str) -> dict[str, Any]:
+    """Parse one streamed server-tool input; return ``{}`` on garbage."""
+    try:
+        value = json.loads(text)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+_ACTIVITY_FOR_BLOCK: dict[tuple[str, str], str] = {
+    ("server_tool_use", "web_search"): "searching",
+    ("server_tool_use", "web_fetch"): "fetching",
+}
+_ACTIVITY_FOR_TYPE: dict[str, str] = {
+    "thinking": "thinking",
+    "text": "writing",
+    "tool_use": "writing",
+}
+
+
+def _relay_stream_activity(
+    stream: Any,
+    *,
+    event_prefix: str,
+    event_fields: dict[str, Any],
+    event_sink: EventSink,
+    activity_state: dict[str, str],
+) -> None:
+    """Drain raw SDK frames and relay observable QC worker activity.
+
+    Only server-tool input JSON is buffered; generated text/thinking deltas
+    and output-tool payloads are never emitted or accumulated. A malformed
+    individual frame is ignored, while an exception raised by stream
+    iteration itself deliberately escapes into the normal retry classifier.
+    """
+    json_buffers: dict[int, str] = {}
+    block_kinds: dict[int, tuple[str, str]] = {}
+    for event in stream:
+        try:
+            event_type = getattr(event, "type", None)
+            if event_type == "content_block_start":
+                block = getattr(event, "content_block", None)
+                index = getattr(event, "index", 0)
+                block_type = getattr(block, "type", None) or ""
+                block_name = getattr(block, "name", "") or ""
+                block_kinds[index] = (block_type, block_name)
+                if block_type == "server_tool_use":
+                    json_buffers[index] = ""
+                kind = _ACTIVITY_FOR_BLOCK.get(
+                    (block_type, block_name)
+                ) or _ACTIVITY_FOR_TYPE.get(block_type, "")
+                if kind and kind != activity_state.get("kind"):
+                    activity_state["kind"] = kind
+                    event_sink(
+                        {
+                            "type": f"{event_prefix}_activity",
+                            **event_fields,
+                            "kind": kind,
+                        }
+                    )
+            elif event_type == "content_block_delta":
+                delta = getattr(event, "delta", None)
+                if getattr(delta, "type", None) == "input_json_delta":
+                    index = getattr(event, "index", 0)
+                    if index in json_buffers:
+                        json_buffers[index] += (
+                            getattr(delta, "partial_json", "") or ""
+                        )
+            elif event_type == "content_block_stop":
+                index = getattr(event, "index", 0)
+                block_type, block_name = block_kinds.get(index, ("", ""))
+                if block_type != "server_tool_use":
+                    continue
+                payload = _safe_stream_json(json_buffers.pop(index, ""))
+                if block_name == "web_search":
+                    query = str(
+                        payload.get("query") or payload.get("q") or ""
+                    ).strip()
+                    if query:
+                        event_sink(
+                            {
+                                "type": f"{event_prefix}_search",
+                                **event_fields,
+                                "query": query,
+                            }
+                        )
+                elif block_name == "web_fetch":
+                    url = str(payload.get("url") or "").strip()
+                    if url:
+                        event_sink(
+                            {
+                                "type": f"{event_prefix}_fetch",
+                                **event_fields,
+                                "url": url,
+                            }
+                        )
+        except Exception:  # noqa: BLE001 - one malformed frame is non-fatal
+            continue
+
+
 # NOTE — deliberately no messages-tail breakpoint here, unlike the interview
 # loop's ``_with_tail_cache_breakpoint`` (``llm/conversation.py``). A
 # pause_turn continuation does re-bill its accumulated assistant turns at
@@ -1909,7 +2009,10 @@ def _run_streaming_call(
     max_tokens: int,
     effort: str,
     max_searches: int,
+    event_prefix: str,
+    event_fields: dict[str, Any],
     cache_ttl: str = "",
+    event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> _CallResult:
     """One QC call: request → pause_turn continuations → parse. Never raises.
@@ -1950,6 +2053,7 @@ def _run_streaming_call(
     attempts = max(1, policy.max_attempts)
     billed: list[Any] = []
     api_request_count = 0
+    activity_state: dict[str, str] = {"kind": ""}
 
     for attempt in range(attempts):
         if should_stop():
@@ -1981,6 +2085,13 @@ def _run_streaming_call(
                 with client.messages.stream(
                     messages=messages, **request_kwargs
                 ) as stream:
+                    _relay_stream_activity(
+                        stream,
+                        event_prefix=event_prefix,
+                        event_fields=event_fields,
+                        event_sink=event_sink,
+                        activity_state=activity_state,
+                    )
                     response = stream.get_final_message()
                 all_responses.append(response)
                 stop_class = classify_stop_reason(
@@ -2050,11 +2161,21 @@ def _run_streaming_call(
                     failure_class.value,
                 )
             billed.extend(all_responses)
-            time.sleep(
-                compute_backoff_seconds(
-                    policy, attempt=attempt, failure_class=failure_class
-                )
+            backoff = compute_backoff_seconds(
+                policy, attempt=attempt, failure_class=failure_class
             )
+            event_sink(
+                {
+                    "type": f"{event_prefix}_retry",
+                    **event_fields,
+                    "attempt": attempt + 1,
+                    "max_attempts": attempts,
+                    "reason": failure_class.value,
+                    "backoff_s": round(backoff, 1),
+                }
+            )
+            activity_state["kind"] = ""
+            time.sleep(backoff)
     return _CallResult(
         None,
         [],
@@ -2068,6 +2189,12 @@ def _web_search_count(response: Any) -> int:
     usage = getattr(response, "usage", None)
     server = getattr(usage, "server_tool_use", None) if usage else None
     return int(getattr(server, "web_search_requests", 0) or 0)
+
+
+def _web_fetch_count(response: Any) -> int:
+    usage = getattr(response, "usage", None)
+    server = getattr(usage, "server_tool_use", None) if usage else None
+    return int(getattr(server, "web_fetch_requests", 0) or 0)
 
 
 def _sum_billed(responses: list[Any]) -> dict[str, int]:
@@ -2306,9 +2433,19 @@ def _run_lens(
     discipline: str = "",
     source_capability_summary: str = "",
     today: str = "",
+    event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> _LensOutcome:
     """One lens's full lifecycle. Never raises (KeyboardInterrupt aside)."""
+    event_sink(
+        {
+            "type": "lens_started",
+            "lens_id": lens.lens_id,
+            "title": lens.title,
+            "max_searches": lens.max_searches if lens.web else 0,
+            "max_fetches": lens.max_fetches if lens.web else 0,
+        }
+    )
     if should_stop():
         return _LensOutcome(
             lens=lens,
@@ -2329,7 +2466,10 @@ def _run_lens(
             profile,
             discipline,
             source_capability_summary,
-            today,
+            # Keyword, not positional: this is the last parameter of a
+            # builder under active edit, and a new one inserted ahead of it
+            # would bind silently and wrongly.
+            today=today,
         ),
         request_suffix=_lens_request_suffix(lens),
         tools=_lens_tools(lens, model),
@@ -2339,6 +2479,9 @@ def _run_lens(
         max_tokens=max_tokens,
         effort=effort,
         max_searches=lens.max_searches if lens.web else 0,
+        event_prefix="lens",
+        event_fields={"lens_id": lens.lens_id},
+        event_sink=event_sink,
         should_stop=should_stop,
     )
     usage = _sum_billed(result.billed)
@@ -2437,11 +2580,18 @@ def _verify_one(
     model: str,
     max_tokens: int,
     effort: str,
+    candidate_id: str,
     reviewer_index: int,
     today: str = "",
+    event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
     shared_should_stop: Callable[[], bool] = lambda: False,
 ) -> _VerifierOutcome:
+    worker_fields = {
+        "candidate_id": candidate_id,
+        "reviewer_index": reviewer_index,
+    }
+    event_sink({"type": "verifier_started", **worker_fields})
     if shared_should_stop():
         return _VerifierOutcome(
             verdict=QCVerdict(
@@ -2484,6 +2634,9 @@ def _verify_one(
         max_tokens=max_tokens,
         effort=effort,
         max_searches=settings.QC_MAX_SEARCHES_LENS if lens.web else 0,
+        event_prefix="verifier",
+        event_fields=worker_fields,
+        event_sink=event_sink,
         should_stop=lambda: should_stop() or shared_should_stop(),
     )
     usage = _sum_billed(result.billed)
@@ -3002,6 +3155,7 @@ def run_final_qc(
                 discipline=discipline,
                 source_capability_summary=source_capability_summary,
                 today=today,
+                event_sink=event_sink,
                 should_stop=should_stop,
             ): lens
             for lens in QC_LENSES
@@ -3038,7 +3192,16 @@ def run_final_qc(
                     "lens_id": lens.lens_id,
                     "title": lens.title,
                     "finding_count": status.finding_count,
+                    "candidate_count": status.finding_count,
+                    "reviewed_check_count": len(status.reviewed_checks),
                     "grounded_count": status.grounded_count,
+                    "search_count": sum(
+                        _web_search_count(response) for response in outcome.billed
+                    ),
+                    "fetch_count": sum(
+                        _web_fetch_count(response) for response in outcome.billed
+                    ),
+                    "request_count": status.api_request_count,
                     "error": status.error,
                     "done": len(outcomes),
                     "total": len(QC_LENSES),
@@ -3108,9 +3271,39 @@ def run_final_qc(
     section_render = _render_section(section)
 
     # -- Phase 2: verification (parallel across all findings' verifiers) ----
+    candidate_ids = {
+        index: f"candidate-{index + 1}"
+        for index in range(len(raw_findings))
+    }
+    candidate_roster = [
+        {
+            "candidate_id": candidate_ids[index],
+            "title": finding["title"],
+            "original_severity": finding["severity"],
+            "lens_id": lens.lens_id,
+            "panel_size": _panel_size(finding["severity"]),
+            "threshold": (_panel_size(finding["severity"]) // 2) + 1,
+        }
+        for index, (lens, finding) in enumerate(raw_findings)
+    ]
+    total_seats = sum(candidate["panel_size"] for candidate in candidate_roster)
+    max_workers = _qc_max_workers()
+    event_sink(
+        {
+            "type": "verification_started",
+            "candidates": candidate_roster,
+            "total_candidates": len(candidate_roster),
+            "total_seats": total_seats,
+            "max_workers": max_workers,
+        }
+    )
     verdicts: dict[int, list[QCVerdict]] = {
         i: [] for i in range(len(raw_findings))
     }
+    candidate_outcomes: dict[int, str] = {}
+    done = 0
+    total = len(raw_findings)
+    event_sink({"type": "verify_progress", "done": 0, "total": total})
     if raw_findings:
         tasks: list[tuple[int, int]] = []
         for i, (lens, finding) in enumerate(raw_findings):
@@ -3120,9 +3313,6 @@ def run_final_qc(
             i: _panel_size(f["severity"])
             for i, (_l, f) in enumerate(raw_findings)
         }
-        done = 0
-        total = len(raw_findings)
-        event_sink({"type": "verify_progress", "done": 0, "total": total})
         pending_tasks = deque(tasks)
         shared_failure = threading.Event()
         shared_failure_error = ""
@@ -3132,16 +3322,61 @@ def run_final_qc(
             outcome: _VerifierOutcome,
         ) -> None:
             nonlocal done
-            verdicts[finding_index].append(outcome.verdict)
+            verdict = outcome.verdict
+            verdicts[finding_index].append(verdict)
             _merge_usage(usage_totals, _sum_billed(outcome.billed))
+            complete_event: dict[str, Any] = {
+                "type": "verifier_complete",
+                "candidate_id": candidate_ids[finding_index],
+                "reviewer_index": verdict.reviewer_index,
+                "status": verdict.status,
+                "error": verdict.error,
+            }
+            if verdict.status == "completed":
+                complete_event.update(
+                    {
+                        "upholds": verdict.upholds,
+                        "revised_severity": verdict.revised_severity or None,
+                        "ops_adequate": verdict.ops_adequate,
+                    }
+                )
+            event_sink(complete_event)
             remaining[finding_index] -= 1
             if remaining[finding_index] == 0:
+                panel = verdicts[finding_index]
+                panel_size = _panel_size(
+                    raw_findings[finding_index][1]["severity"]
+                )
+                completed_verdicts = [
+                    item for item in panel if item.status == "completed"
+                ]
+                upholds = sum(1 for item in completed_verdicts if item.upholds)
+                threshold = (panel_size // 2) + 1
+                panel_complete = len(panel) == panel_size and all(
+                    item.status == "completed" for item in panel
+                )
+                candidate_outcome = (
+                    "inconclusive"
+                    if not panel_complete
+                    else ("upheld" if upholds >= threshold else "refuted")
+                )
+                candidate_outcomes[finding_index] = candidate_outcome
+                event_sink(
+                    {
+                        "type": "candidate_complete",
+                        "candidate_id": candidate_ids[finding_index],
+                        "outcome": candidate_outcome,
+                        "panel_size": panel_size,
+                        "threshold": threshold,
+                        "completed_seats": len(completed_verdicts),
+                        "upholds": upholds,
+                    }
+                )
                 done += 1
                 event_sink(
                     {"type": "verify_progress", "done": done, "total": total}
                 )
 
-        max_workers = _qc_max_workers()
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures: dict[Any, tuple[int, int]] = {}
 
@@ -3162,8 +3397,10 @@ def run_final_qc(
                         model=model,
                         max_tokens=max_tokens,
                         effort=effort,
+                        candidate_id=candidate_ids[i],
                         reviewer_index=j + 1,
                         today=today,
+                        event_sink=event_sink,
                         should_stop=should_stop,
                         shared_should_stop=shared_failure.is_set,
                     )
@@ -3215,10 +3452,34 @@ def run_final_qc(
                     )
                 )
 
+    verification_counts = {
+        outcome: sum(1 for value in candidate_outcomes.values() if value == outcome)
+        for outcome in ("upheld", "refuted", "inconclusive")
+    }
+    completed_seats = sum(
+        1
+        for panel in verdicts.values()
+        for verdict in panel
+        if verdict.status == "completed"
+    )
+    event_sink(
+        {
+            "type": "verification_complete",
+            "total_candidates": len(raw_findings),
+            "total_seats": total_seats,
+            "completed_seats": completed_seats,
+            **verification_counts,
+        }
+    )
+    validation_total = verification_counts["upheld"]
+    event_sink({"type": "validation_started", "total": validation_total})
+
     # -- Resolve survivors + refuted + infrastructure-inconclusive ---------
     survivors: list[QCFinding] = []
     refuted: list[QCFinding] = []
     inconclusive: list[QCFinding] = []
+    validation_done = 0
+    validation_counts = {"safe_fix": 0, "advisory": 0, "manual": 0}
     for i, (lens, finding) in enumerate(raw_findings):
         panel = sorted(verdicts[i], key=lambda verdict: verdict.reviewer_index)
         size = _panel_size(finding["severity"])
@@ -3280,6 +3541,36 @@ def run_final_qc(
         if survives:
             if obj.ops_semantic_status == "approved":
                 _validate_ops(obj, section, source_guard)
+            if obj.ops_valid:
+                validation_outcome = "safe_fix"
+                validation_reason = ""
+            elif obj.proposed_ops:
+                validation_outcome = "advisory"
+                validation_reason = (
+                    obj.ops_invalid_reason
+                    if obj.ops_semantic_status == "approved"
+                    else (
+                        "Verifier panel did not unanimously approve the "
+                        "proposed operations."
+                    )
+                )
+            else:
+                validation_outcome = "manual"
+                validation_reason = "No local operation was proposed."
+            validation_done += 1
+            validation_counts[validation_outcome] += 1
+            event_sink(
+                {
+                    "type": "validation_progress",
+                    "candidate_id": candidate_ids[i],
+                    "done": validation_done,
+                    "total": validation_total,
+                    "outcome": validation_outcome,
+                    "ops_semantic_status": obj.ops_semantic_status,
+                    "ops_valid": obj.ops_valid,
+                    "reason": validation_reason,
+                }
+            )
             carried_dismissal = _validated_remembered_dismissal(
                 remembered_records.get(obj.finding_id)
             )
@@ -3291,6 +3582,17 @@ def run_final_qc(
             refuted.append(obj)
         else:
             inconclusive.append(obj)
+
+    event_sink(
+        {
+            "type": "validation_complete",
+            "total": validation_total,
+            "done": validation_done,
+            "safe_fix_count": validation_counts["safe_fix"],
+            "advisory_count": validation_counts["advisory"],
+            "manual_count": validation_counts["manual"],
+        }
+    )
 
     # Severity order: most-severe first (survivors), preserving lens order
     # within a severity band.

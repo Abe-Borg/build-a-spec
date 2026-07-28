@@ -479,10 +479,63 @@ actions.
   limitations — such as absent research context, failed calls, incomplete web
   retrieval or grounding, and document staleness — so the user can tell the
   difference between "no defect found" and "not fully checked."
-- **No dead air — a QC run takes minutes and shows it.** The drawer streams
-  lens-by-lens status and a live "Verifying findings… (7/12)" counter over the
-  same SSE machinery the research phase uses; the header spend ticker moves as
-  the run streams.
+- **No dead air — Final QC runs in an inline Review Room.** Starting QC opens
+  the drawer once and replaces the readiness checklist with a compact,
+  truthful three-stage rail: **Specialist lenses → Adversarial panels → Local
+  fix validation**. The specification stays visible. Five responsive lens
+  cards move from queued to running to settled using real provider-stream
+  activity, search, fetch and retry events; each card keeps at most three
+  recent query/source labels (display-only, never transient links) and settles
+  into its actual reviewed-check, candidate, grounding, request and tool
+  counts. There is no timer-driven or synthetic progress.
+- **Adversarial review is visible seat by seat.** The verification phase begins
+  with the complete candidate roster, using run-local ids such as
+  `candidate-1` without changing a finding's durable content-addressed id.
+  Candidates are grouped as in review, waiting and resolved; every row names
+  its severity and originating lens and shows each expected verifier as
+  queued, active, upheld, not upheld, failed or cancelled. A panel becomes
+  **Upheld**, **Refuted** or **Inconclusive** only after every expected seat is
+  accounted for. An empty roster still advances honestly through verification
+  and validation instead of making phases disappear.
+- **Fix validation is the real local dry run.** Upheld candidates proceed to
+  the existing deterministic/source-preservation checks, with live local
+  progress distinguishing safe fixes from advisory or manual outcomes. When
+  the attempt completes, the board resolves into a concise recap — completed
+  lenses, reviewed candidates, upheld/refuted/inconclusive totals and safe
+  fixes — followed by the existing remediation queue and user-opened full
+  report controls.
+- **The live contract is additive and stays on the existing channel.**
+  `/api/qc/status` remains the authoritative snapshot and `/api/qc/stream`
+  remains the SSE feed. Lens activity adds `lens_started`, `lens_activity`,
+  `lens_search`, `lens_fetch` and `lens_retry`; panels add
+  `verification_started`, `verifier_started`, `verifier_activity`,
+  `verifier_search`, `verifier_fetch`, `verifier_retry`,
+  `verifier_complete`, `candidate_complete` and `verification_complete`; local
+  checks add `validation_started`, `validation_progress` and
+  `validation_complete`. Existing terminal events, billing, retry and
+  cancellation rules remain intact, including the exact `stream_end`
+  sentinel. Events expose observable work and outcomes, never prompts, notes,
+  token text or hidden reasoning.
+- **Chatty streams do not make the UI race itself.** The client appends events
+  locally by `seq`, deduplicates replayed frames, reconciles same-run snapshots
+  without replacing a longer local log, refetches full status/report data only
+  at milestones and stream completion, and reconnects an unexpectedly closed
+  follower while the authoritative attempt is still running or settling.
+  After Stop, the board remains visible under a clear “finishing already-paid
+  in-flight work” notice and actions stay locked until
+  `qc_attempt_settled`. The stop-emitted `qc_failed` frame carries
+  `settling: true`, so the client can preserve that truthful state even if a
+  milestone refresh fails. Stale responses and events from a superseded run
+  cannot overwrite the current report or leak into the next attempt: the
+  client advances a request generation at every successful/new streamed run
+  and ignores every side effect (including authentication prompts) from an
+  older generation's response.
+- **Motion and announcements remain accessible.** The Review Room reuses the
+  research board's warm surfaces, breathing agent dot, shimmer, tally flash
+  and entry motion, with reduced-motion fallbacks for every animation. Text
+  accompanies every status symbol, card grids follow drawer/container width,
+  and one aggregate polite live region announces progress without stealing
+  focus, scrolling the document or flooding a screen reader.
 - **Migration note:** the QC `code_compliance` + `completeness` lenses
   supersede the Phase 5 compliance audit. The audit button is retired from the
   UI (the Research drawer keeps research only); the `/api/audit/*` endpoints
@@ -696,10 +749,12 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          normalization (never chain-of-thought)
     engine.py            run_final_qc: lens fan-out -> adversarial verification
                          -> ops validation -> audit-grade QCResult with versioned
-                         input/run identity, evidence and seat telemetry
+                         input/run identity, evidence and seat telemetry; raw
+                         provider streams relay observable lens/verifier activity
                                                         [pattern: research/engine.py]
     runner.py            session-bound QC lifecycle: daemon thread, event log,
-                         SSE follow                       [pattern: research/runner.py]
+                         run-token-isolated SSE follow + exact stream_end
+                                                        [pattern: research/runner.py]
   settings.py            models (interview + research), ports, env overrides,
                          frozen-app path resolution
   updates.py             GitHub-Releases manifest updater: https-only fetch,
@@ -799,6 +854,8 @@ frontend/                Vite + React + TypeScript + Tailwind v4
                          document-order walk (port of iter_paragraphs)
   src/lib/qcReport.ts    pure Final QC report formatting, coverage, source-link,
                          operation, usage, and limitations helpers
+  src/lib/qcLive.ts      typed live-event merge, same-run snapshot reconciliation,
+                         milestone policy, and pure three-stage Review Room fold
   src/lib/capabilities.ts  the end-user capability vocabulary; the tutorial
                          covers it and a test enforces both directions
   src/lib/tour.ts        the versioned tutorial manifest: starter prompts,
@@ -817,8 +874,9 @@ frontend/                Vite + React + TypeScript + Tailwind v4
                          ReviewDrawer (keyboard review walk),
                          IssuesDrawer (lint + standards strip),
                          ResearchDrawer (profile + research),
-                         QCDrawer (readiness checklist, lens progress, compact
-                         accept/dismiss fix queue), QCReportModal (complete
+                         QCDrawer (three-stage Final QC Review Room, readiness,
+                         run recap, compact accept/dismiss fix queue),
+                         QCReportModal (complete
                          audit-grade in-app report + Word/JSON downloads),
                          SpecDocument (SectionFormat rendering + ◆ chips
                          + the read-only compare/diff render)
@@ -940,6 +998,15 @@ Hermetic by default — no API key, no network. `tests/conftest.py` injects a pl
 ```
 venv\Scripts\python -m pytest -q
 ```
+
+The live Final QC suite uses scripted streams to cover activity/search/fetch
+relay, retries and malformed frames; complete and empty candidate rosters;
+verifier-seat and validation outcomes; SSE replay, stop settlement and
+superseded-run isolation. Frontend unit tests exercise the pure event fold,
+`seq` deduplication and snapshot reconciliation without relying on animation
+timing. UI changes must also pass `npm test` and `npm run build`; Review Room
+visual checks include the 420px document-pane minimum, wider layouts, keyboard
+navigation and reduced motion.
 
 The paid provider-schema smoke test is separate and explicitly opt-in; it
 sends one low-token QC verifier request and never runs a full Final QC:

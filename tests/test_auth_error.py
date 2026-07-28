@@ -12,7 +12,7 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import settings
+from backend import sessions, settings
 from backend.app import create_app
 from backend.llm.client import AUTH_ERROR_MESSAGE
 from backend.qc.engine import QCFanoutError, run_final_qc
@@ -159,7 +159,23 @@ def test_qc_runner_surfaces_auth_error_kind_end_to_end():
     snapshot = runner.snapshot()
     assert snapshot["error_kind"] == "auth_error"
     assert snapshot["latest_attempt"]["error_kind"] == "auth_error"
+    assert (
+        runner.audit_record_snapshot()["runner"]["error_kind"]
+        == "auth_error"
+    )
 
     failed_events = [e for e in runner.events if e["type"] == "qc_failed"]
     assert len(failed_events) == 1
     assert failed_events[0]["error_kind"] == "auth_error"
+
+
+def test_qc_status_snapshot_keeps_top_level_auth_error_kind():
+    session = sessions.get_session()
+    session.qc.status = QC_STATUS_FAILED
+    session.qc.error = AUTH_ERROR_MESSAGE
+    session.qc.error_kind = "auth_error"
+
+    snapshot = _client().get("/api/qc/status").json()
+
+    assert snapshot["status"] == "failed"
+    assert snapshot["error_kind"] == "auth_error"

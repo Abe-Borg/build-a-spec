@@ -194,12 +194,18 @@ backend/
                            into _run_lens/_verify_one (same cooperative pattern
                            as research/engine.py); Batch 10 threads discipline into
                            the lens user message (<project_discipline>, only when
-                           non-empty)
+                           non-empty); the Review Room batch relays observable
+                           activity/search/fetch/retry frames from each open lens
+                           and verifier stream, plus explicit verification and
+                           local-validation phase events (never hidden reasoning)
   qc/runner.py             [Batch 4, pattern: research/runner.py] QCRunner:
                            daemon thread, event log, snapshot, SSE follow +
                            stream_end; accept/dismiss mutators under lock;
                            Batch 7 adds stop() (same cancel_event/_try_resolve
-                           pattern as research/runner.py)
+                           pattern as research/runner.py); Review Room keeps the
+                           existing endpoints and run-token isolation, exposes
+                           top-level error_kind, and holds stopped attempts in a
+                           truthful settling state until in-flight work unwinds
   tracing/                 [PORT: Spec Critic src/tracing/ core, since diverged]
                            recorder (JSONL spans/events/prompts + run.json,
                            writer thread, per-line flush, ContextVar parent
@@ -413,13 +419,19 @@ frontend/src/
                            wiring, send → Promise<boolean> (clean-turn signal);
                            addNote posts a terse, non-conversational chat marker
                            when research / Final QC starts (acknowledges the
-                           panel-button click in the chat window)
+                           panel-button click in the chat window); Final QC follows
+                           its chatty SSE log locally, reconciles milestone
+                           snapshots, reconnects unexpected closes while running
+                           or settling, and auto-expands once on successful start
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
                            draftFull; key status/delete/test; usage; Batch 4 qc
                            start/status/stream/apply/dismiss + readiness; Batch 5
                            getDocDiff; Batch 7 stopChat/stopResearch/stopQc (409
                            from an already-settled run/turn is swallowed, not
                            thrown); resetSession(opts?) retains compatibility APIs
+  lib/qcLive.ts            Final QC's pure live-state layer: discriminated event
+                           fold, seq-deduplicating merge, same-run snapshot
+                           reconciliation, milestone policy and three-stage board
   lib/useSmoothText.ts     [Batch 2] rAF typewriter smoothing + reduced-motion +
                            splitStableTail (cheap-markdown prefix/tail split)
   lib/reviewQueue.ts       [Batch 3] pure buildQueue(doc, mode) — the review
@@ -484,10 +496,13 @@ frontend/src/
                            the completed profile's items by dimension/agent with
                            per-dimension telemetry + full item detail; the same
                            profile already rides the chat model's per-turn context)
-                           / QCDrawer (Batch 4: readiness
-                           checklist, lens progress, compact accept/dismiss fix
-                           queue, hold-to-apply-criticals; Batch 7 adds a
-                           Stop button while running, gated by ConfirmDialog) /
+                           / QCDrawer (Batch 4: readiness and compact
+                           accept/dismiss fix queue, hold-to-apply-criticals;
+                           Batch 7 adds a Stop button while running, gated by
+                           ConfirmDialog; Review Room replaces readiness during an
+                           attempt with specialist cards → candidate verifier
+                           panels → local fix validation, then a recap and the
+                           existing remediation controls) /
                            QCReportModal (complete read-only Final QC audit report,
                            no content truncation, DOCX + JSON downloads) /
                            SpecDocument (paper rendering + inline manual-edit
@@ -3020,6 +3035,119 @@ semantics, retry policy, pause_turn loop, and grounding are untouched.
   `stream_end` exact-dict pin (test_research_api); the trace-capture fix
   (test_tracing). Frontend pinned by `npm run build` + `npm test` (the
   no-vitest convention stands).
+
+## Final QC Review Room — live three-stage contract
+
+The live-research parity follow-up turns Final QC's existing drawer into an
+inline command center without adding a route, dependency or environment knob.
+The transport remains `GET /api/qc/status` plus `GET /api/qc/stream`; report
+identity, finding identity, billing, retries, verification math, cancellation,
+run-token isolation and the existing `stream_end` shape remain authoritative.
+The new frames describe observable provider/tool work and deterministic local
+validation only. Prompts, submitted notes, thinking/token text and hidden
+reasoning never cross this channel, and the UI never invents progress to fill
+quiet time.
+
+- **The event vocabulary is additive and phase-complete.** Lens workers emit
+  `lens_started`, `lens_activity` (only when activity kind changes),
+  `lens_search`, `lens_fetch` and `lens_retry`. `lens_started` carries the
+  lens id/title and its search/fetch ceilings; search and fetch carry the
+  observed query/URL; retry carries attempt, ceiling, observable reason and
+  backoff. Existing `lens_complete` / `lens_failed` terminal frames keep their
+  prior fields and add the factual `reviewed_check_count`, `candidate_count`,
+  `grounded_count`, `search_count`, `fetch_count` and `request_count` telemetry.
+  Phase-one futures still interleave, so tests assert per-worker order, never a
+  global lens ordering.
+- **Verification begins with the whole roster.** `verification_started`
+  carries `candidates[]` plus aggregate candidate/seat/worker totals. Each
+  roster row has deterministic run-local `candidate_id` (`candidate-1`, …),
+  title, original severity, originating `lens_id`, `panel_size` and
+  `threshold`; it does not replace the final finding's content-addressed id.
+  `verifier_started`, `verifier_activity`, `verifier_search`,
+  `verifier_fetch` and `verifier_retry` identify a seat by `candidate_id` plus
+  `reviewer_index`. `verifier_complete` exposes seat status and infrastructure
+  error, and only for a completed seat its uphold vote, revised severity and
+  fix-adequacy result — never the submitted verifier note.
+  `candidate_complete` records the fully accounted panel's outcome, size,
+  threshold, completed seats and uphold count; `verification_complete` records
+  total/completed seats and upheld/refuted/inconclusive candidate totals.
+  The legacy `verify_progress` frames remain compatible.
+- **Local fix checks are an explicit third phase.** `validation_started`
+  declares the number of upheld candidates to inspect;
+  `validation_progress` identifies the candidate and real done/total counters,
+  then classifies the dry-run result as `safe_fix`, `advisory` or `manual`
+  alongside `ops_semantic_status`, `ops_valid` and the observable reason.
+  `validation_complete` closes the phase with category totals. A run with zero
+  candidates still emits `verification_started`, `verify_progress` `0/0`,
+  `verification_complete`, `validation_started` and `validation_complete` in
+  order. These empty transitions are immediate truth, not animation dwell.
+- **Raw stream relay follows Research's proven shape.** Each lens/verifier call
+  iterates the already-open SDK stream before requesting its final message.
+  Content-block starts announce observable activity; server-tool JSON deltas
+  are buffered narrowly enough to emit live search/fetch inputs at block stop;
+  final structured finding/verdict payloads are not copied into activity
+  frames. Per-frame decoding is defensive, so malformed optional telemetry is
+  ignored, while a real iterator/request failure escapes into the unchanged
+  retry classifier. Change-only activity suppresses duplicate noise and retry
+  resets the worker's activity memory so the next attempt can announce itself.
+- **Runner and API truth win over presentation.** Every event remains in the
+  append-only, monotonically sequenced runner log and is gated by the current
+  run token, preventing late workers from a stopped/superseded attempt from
+  contaminating another run. `/api/qc/status` includes the runner's top-level
+  `error_kind` (as does latest-attempt evidence) so authentication failure copy
+  does not depend on scraping a message. A Stop resolves the visible attempt
+  as cancelled; its `qc_failed` frame carries `settling: true` until
+  already-paid in-flight work has unwound and `qc_attempt_settled` lands.
+  Action/start controls remain locked for that interval. The live board stays
+  mounted instead of implying that provider work ended synchronously.
+- **The client treats the event log as local live state.** `QcEvent` is a
+  discriminated union for every legacy and new frame. `lib/qcLive.ts` keeps the
+  pure helpers: `mergeQcEvent` appends by `seq`, ignores replay duplicates and
+  restarts only for a genuinely new run while terminal frames also update the
+  local lifecycle if a refresh fails; `reconcileQcSnapshot` rejects an entire
+  same-run response when its event watermark trails the local log (including
+  stale report/result/attempt fields), applies the client's explicit refresh
+  generation across different runs, and reports whether a response was
+  accepted so stale authentication state cannot drive UI side effects; and
+  `foldQcLiveState` derives
+  phases, five lens cards, candidate panels/seats, retries/tools, validation,
+  settling and complete/failed/cancelled/partial outcomes from the append-only
+  log. Chatty
+  frames merge immediately; full snapshots/report data are refetched only at
+  milestones and stream completion. If the follower closes unexpectedly while
+  a snapshot is still running or settling, it reconnects and safely dedupes the
+  replay.
+- **The drawer renders what the fold knows — and nothing more.** A successful
+  start auto-expands Final QC once; a later user collapse is respected. While
+  work is live, the readiness checklist yields to a compact phase rail and the
+  active stage. Specialist cards show queued/running/completed/failed, current
+  activity, retries, up to three inert query/source labels and completed work
+  totals. Candidate rows are grouped into In review, Waiting and Resolved and
+  show two or three numbered seats as queued, active, upheld, not upheld,
+  failed or cancelled. **Upheld**, **Refuted** and **Inconclusive** appear only
+  after all expected seats are accounted for. Validation rows show real local
+  outcomes. Once settled, the live board becomes a concise lens/candidate/
+  adjudication/safe-fix recap before the unchanged guided-remediation queue and
+  user-opened full-report controls; readiness then returns.
+- **Accessibility is part of the state contract.** The warm research-board
+  surfaces, breathing `.agent-dot`, shimmer, `.tally-flash` and entry motion
+  are reused, with reduced-motion overrides for every animation. Layout keys
+  off the drawer container (including the 420px minimum pane), not the browser
+  viewport. Symbols always have text labels; transient URLs are inert; one
+  aggregate polite live region announces useful progress. Event arrival never
+  steals focus or auto-scrolls the specification.
+- **Tests pin truthfulness and races, not animation timing.** Engine coverage
+  includes change-only activity, search/fetch payloads, retries, malformed
+  frames, interleaved workers, candidate rosters, all seat outcomes, shared
+  verifier failure, validation and the zero-candidate sequence. Runner/API
+  coverage pins full replay, the exact terminal sentinel, stop settlement,
+  superseded-run isolation, partial reports, top-level authentication errors
+  and absence of late-event leakage. Frontend pure-helper tests cover folding,
+  dynamic panels, retries, refuted versus inconclusive, duplicate/out-of-order
+  frames, same-run reconciliation, generation-guarded run replacement, settling and
+  empty phases. Required verification is the targeted QC Python suites, full
+  `npm test`, `npm run build`, then full pytest; visual QA covers narrow/wide
+  drawers, keyboard use and reduced motion.
 
 ## Final QC cost + speed — implemented notes (v1.8.0)
 

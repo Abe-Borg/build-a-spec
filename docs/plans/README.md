@@ -47,6 +47,21 @@ as-built annotations.
    `claude-sonnet-5`. There is NO user-facing model picker and none may
    be added. The single exception is Batch 4's Final QC, which runs on
    `claude-fable-5`. `stream_user_turn(model=...)` is the routing seam.
+   - **Superseded 2026-07-28 (confirmed with Abraham) — Final QC's model
+     only.** The exception now names `claude-opus-5`. Everything else in
+     the rule stands unchanged: one model for the whole app, no picker,
+     one deliberate exception for the pre-issue review, same routing seam.
+     Fable 5 was chosen in Batch 4 as the most capable review model when
+     cost was explicitly the wrong thing to optimise. What changed is the
+     evidence, not the priority: Opus 5 is half the token rate and is
+     specifically strong at review work (high precision *and* high recall
+     on real defects), so the pass got cheaper without getting weaker —
+     rather than trading review quality for money. It also drops Fable's
+     30-day data-retention requirement, which had made Final QC
+     unavailable to zero-data-retention organisations entirely.
+   - Note this is NOT a relaxation of rule 5. A run still has no cap on
+     lenses, findings, panel size, or tokens; what changed is the price of
+     each call and how many times the same document gets paid for.
 5. **No-limits posture (frozen, 2026-07-21):** the app imposes no
    quality limits on the model. `max_tokens` defaults sit at the model
    ceiling; the only permissible caps are runaway circuit breakers sized

@@ -1,4 +1,4 @@
-"""Final QC on Fable 5 (Batch 4): the spare-no-expense pre-issue review.
+"""Final QC on Opus 5: the pre-issue review pass.
 
 A user-triggered lens fan-out + adversarial verification pass over one draft
 section, producing a versioned, auditable report plus an accept/dismiss fix

@@ -380,7 +380,7 @@ function HowItWorks() {
           },
           {
             t: "Two models, one job each",
-            d: "The interview and drafting run on Claude Sonnet 5. Final QC runs a fleet of Claude Fable 5 reviewers — the one place a second model appears.",
+            d: "The interview and drafting run on Claude Sonnet 5. Final QC runs a fleet of Claude Opus 5 reviewers — the one place a second model appears.",
           },
           {
             t: "Domain knowledge lives in spec modules",
@@ -466,7 +466,7 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
           },
           {
             t: "QC findings are adversarially verified",
-            d: "Every candidate finding faces a panel of independent Fable 5 refuters. A tie goes to the refuters, so plausible-but-wrong noise never reaches you — only real, actionable defects survive. Refuted findings stay in the report rather than being quietly deleted.",
+            d: "Every candidate finding faces a panel of independent Opus 5 refuters. A tie goes to the refuters, so plausible-but-wrong noise never reaches you — only real, actionable defects survive. Refuted findings stay in the report rather than being quietly deleted.",
           },
           {
             t: "The checks that gate a section aren’t model output",
@@ -553,7 +553,7 @@ function About({ health }: { health: Health | null }) {
         </div>
         <div className="flex gap-3">
           <dt className="w-28 flex-none text-ink-faint">Final QC</dt>
-          <dd className="text-ink">Claude Fable 5</dd>
+          <dd className="text-ink">Claude Opus 5</dd>
         </div>
         <div className="flex gap-3">
           <dt className="w-28 flex-none text-ink-faint">Scope</dt>

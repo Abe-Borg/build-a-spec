@@ -31,6 +31,15 @@ def _client(*, ran_before: bool) -> TestClient:
     return TestClient(app)
 
 
+def _shipped_versions() -> list[str]:
+    """Every entry in the shipped changelog, newest first.
+
+    The back-catalogue grows every release, so tests assert against this
+    rather than against a literal list — otherwise each release breaks them.
+    """
+    return [note.version for note in release_notes.RELEASE_NOTES]
+
+
 # --------------------------------------------------------------------------
 # The entry itself
 # --------------------------------------------------------------------------
@@ -71,8 +80,10 @@ def test_entries_are_ordered_newest_first_and_parse_as_versions():
 
 
 def test_an_upgrade_from_the_last_release_is_announced():
+    """Upgrading off the immediately-previous release announces just this one."""
+    previous = release_notes.RELEASE_NOTES[1].version
     pending = release_notes.resolve_pending(
-        current=settings.VERSION, last_seen="1.0.0", ran_before=True
+        current=settings.VERSION, last_seen=previous, ran_before=True
     )
     assert [n.version for n in pending] == [settings.VERSION]
 
@@ -96,7 +107,7 @@ def test_an_upgrade_off_a_build_without_the_marker_gets_the_full_history():
     pending = release_notes.resolve_pending(
         current=settings.VERSION, last_seen="", ran_before=True
     )
-    assert [n.version for n in pending] == [settings.VERSION]
+    assert [n.version for n in pending] == _shipped_versions()
 
 
 def test_the_current_version_is_announced_only_once():
@@ -124,7 +135,8 @@ def test_a_corrupt_last_seen_version_degrades_instead_of_raising():
     pending = release_notes.resolve_pending(
         current=settings.VERSION, last_seen="not-a-version", ran_before=True
     )
-    assert [n.version for n in pending] == [settings.VERSION]
+    # An unreadable bound degrades to "no bound", i.e. the full history.
+    assert [n.version for n in pending] == _shipped_versions()
 
 
 # --------------------------------------------------------------------------
@@ -140,7 +152,7 @@ def test_launch_check_announces_then_stays_quiet(state_file):
     assert first["ok"] is True
     assert first["pending"] is True
     assert first["current"] == settings.VERSION
-    assert [e["version"] for e in first["entries"]] == [settings.VERSION]
+    assert [e["version"] for e in first["entries"]] == _shipped_versions()
 
     assert client.post("/api/release-notes/seen").json() == {
         "ok": True,
@@ -168,7 +180,7 @@ def test_settings_can_reopen_the_notes_after_they_are_dismissed(state_file):
     client.post("/api/release-notes/seen")
 
     payload = client.get("/api/release-notes?all=true").json()
-    assert [e["version"] for e in payload["entries"]] == [settings.VERSION]
+    assert [e["version"] for e in payload["entries"]] == _shipped_versions()
     # Not "pending": the user asked, the app did not volunteer.
     assert payload["pending"] is False
 

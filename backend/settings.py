@@ -17,16 +17,19 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Build-a-Spec"
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 
 # --- Models -----------------------------------------------------------------
 
 MODEL_SONNET_5 = "claude-sonnet-5"
 MODEL_OPUS_48 = "claude-opus-4-8"
-# Batch 4 "Final QC" runs on Fable 5 — the one place a model other than
-# Sonnet 5 appears (frozen decision). Thinking is always-on on Fable 5;
-# requests state adaptive thinking + an effort level, never a manual budget.
 MODEL_FABLE_5 = "claude-fable-5"
+# "Final QC" runs on Opus 5 — the one place a model other than Sonnet 5
+# appears (frozen decision 2026-07-21, model superseded 2026-07-28: Fable 5
+# → Opus 5 at half the token rate, for a review pass Opus 5 is explicitly
+# strong at). Thinking is on by default on Opus 5; requests state adaptive
+# thinking + an effort level, never a manual budget (a manual budget 400s).
+MODEL_OPUS_5 = "claude-opus-5"
 
 INTERVIEW_MODEL_DEFAULT = MODEL_SONNET_5
 INTERVIEW_MODEL = (
@@ -112,15 +115,26 @@ RESEARCH_MAX_TOKENS = _int_env(
 )
 RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "high")
 
-# --- Final QC (Batch 4: spare-no-expense pre-issue review on Fable 5) --------
+# --- Final QC (the pre-issue review pass, on Opus 5) -------------------------
 
 # The one model other than Sonnet 5 in the app (frozen decision). A
 # user-triggered lens fan-out + adversarial verification pass before a
-# section goes out the door. Fable 5's adaptive thinking is always-on;
-# depth is set via output_config effort (default xhigh — quality over cost).
-QC_MODEL = os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip() or MODEL_FABLE_5
+# section goes out the door. Opus 5 runs adaptive thinking by default;
+# depth is set via output_config effort.
+#
+# Effort is "high" (2026-07-28, was "xhigh"): a run fans out to ~40 calls —
+# five lenses plus two or three verifier seats per finding — so xhigh's extra
+# reasoning depth compounded across the whole fan-out, and thinking bills as
+# output. Same reasoning that dialed RESEARCH_EFFORT back at four calls.
+QC_MODEL = os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip() or MODEL_OPUS_5
 QC_MAX_TOKENS = _int_env("BUILD_A_SPEC_QC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS)
-QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "xhigh")
+QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "high")
+
+# Concurrent streaming calls in flight across a QC fan-out (lenses share the
+# pool with verifiers). Phase 2 is ~35 of a run's ~40 calls, so this is what
+# sets its wall clock. Opus 5 draws on its own rate-limit bucket rather than
+# the Opus 4.x pool, so raise this only against measured ITPM/OTPM headroom.
+QC_MAX_WORKERS = max(1, _int_env("BUILD_A_SPEC_QC_MAX_WORKERS", 8))
 
 # Adversarial verification panel sizes. Medium/low findings face
 # QC_VERIFIERS_STANDARD refuters; critical/high face QC_VERIFIERS_CRITICAL.
@@ -144,9 +158,14 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4)
 # lists an intro rate ($2/$10 per MTok through 2026-08-31); we deliberately
 # use the POST-intro numbers ($3/$15) so the meter never under-reports.
 # Cache read is 0.1× input; cache write (5-minute ephemeral TTL) is 1.25×
-# input. Fable 5 ($10/$50) is Batch 4's Final-QC model. Web search bills
+# input. Opus 5 ($5/$25) is the Final-QC model; Fable 5 ($10/$50) is retained
+# because BUILD_A_SPEC_QC_MODEL can still select it. Web search bills
 # $10 / 1,000 requests ($0.01 each); web fetch has no per-request fee (token
 # cost only). Keep this current when Anthropic's list pricing moves.
+#
+# A model absent from this table is metered at MODEL_SONNET_5's rates
+# (``usage_ledger._rates``) — every QC dollar figure would silently
+# under-report, so a new QC model MUST land here in the same change.
 PRICING: dict[str, dict[str, float]] = {
     MODEL_SONNET_5: {
         "input": 3.0 / 1_000_000,
@@ -165,6 +184,12 @@ PRICING: dict[str, dict[str, float]] = {
         "output": 50.0 / 1_000_000,
         "cache_read": 1.00 / 1_000_000,
         "cache_write": 12.50 / 1_000_000,
+    },
+    MODEL_OPUS_5: {
+        "input": 5.0 / 1_000_000,
+        "output": 25.0 / 1_000_000,
+        "cache_read": 0.50 / 1_000_000,
+        "cache_write": 6.25 / 1_000_000,
     },
 }
 

@@ -268,7 +268,7 @@ class SessionState:
     project_context: str = ""
     research: ResearchRunner = field(default_factory=ResearchRunner)
     audit: AuditRunner = field(default_factory=AuditRunner)
-    # Final QC on Fable 5 (Batch 4). Replaced on reset/load like the other
+    # Final QC on Opus 5. Replaced on reset/load like the other
     # runners so an in-flight run settles into the abandoned object.
     qc: QCRunner = field(default_factory=QCRunner)
     # Chat-authored figures (diagrams/schematics/tables). Like the document

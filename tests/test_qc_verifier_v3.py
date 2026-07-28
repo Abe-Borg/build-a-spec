@@ -12,7 +12,7 @@ from backend.qc.engine import (
     QC_REPORT_SCHEMA_VERSION,
     QCResult,
     _verifier_system_prompt,
-    _verifier_user_message,
+    _verifier_request_suffix,
     run_final_qc,
 )
 from backend.qc.schema import (
@@ -21,10 +21,12 @@ from backend.qc.schema import (
     normalize_verdict,
     submit_qc_verdict_tool,
 )
+from backend import settings
 from backend.spec_doc.model import DocumentStore
 from backend.spec_modules import DEFAULT_MODULE
 from tests.fakes import (
     SequencedFakeClient,
+    _user_text,
     qc_findings_response,
     qc_verdict_response,
 )
@@ -105,7 +107,7 @@ def _run(client: object) -> QCResult:
         None,
         DEFAULT_MODULE,
         client,
-        model="claude-fable-5",
+        model=settings.QC_MODEL,
         max_tokens=4096,
         version_index=store.index,
         started_at="2026-07-25T10:00:00-07:00",
@@ -136,7 +138,7 @@ def test_verdict_schema_avoids_nullable_enum_and_requires_fix_review() -> None:
         "ops_adequate",
         "ops_note",
     }
-    tool = submit_qc_verdict_tool(model="claude-fable-5")
+    tool = submit_qc_verdict_tool(model=settings.QC_MODEL)
     assert tool["input_schema"]["properties"]["revised_severity"] == revised
 
     def assert_no_nullable_enum(value: object) -> None:
@@ -206,7 +208,7 @@ def test_verifier_prompt_includes_complete_untrusted_operations() -> None:
     lens = next(
         lens for lens in QC_LENSES if lens.lens_id == "coordination_consistency"
     )
-    message = _verifier_user_message(finding, lens, "rendered section")
+    message = _verifier_request_suffix(finding, lens)
     assert '<proposed_ops trust="untrusted-data">' in message
     assert (
         '"action":"replace","status":"confirmed",'
@@ -277,7 +279,7 @@ class _InvalidRequestVerifierClient(SequencedFakeClient):
         self.verifier_request_count = 0
 
     def stream(self, **request):
-        user_message = str((request.get("messages") or [{}])[0].get("content") or "")
+        user_message = _user_text(request.get("messages") or [])
         if "[[QC-VERIFY:" not in user_message:
             return super().stream(**request)
         with self._lock:
@@ -289,16 +291,14 @@ class _InvalidRequestVerifierClient(SequencedFakeClient):
 class _SynchronizedInvalidRequestVerifierClient(
     _InvalidRequestVerifierClient
 ):
-    """Release the first four verifier requests together like a provider 400."""
+    """Release one full pool's worth of verifier requests like a provider 400."""
 
     def __init__(self, scripts: dict[str, list]):
         super().__init__(scripts)
-        self._verifier_barrier = threading.Barrier(4)
+        self._verifier_barrier = threading.Barrier(settings.QC_MAX_WORKERS)
 
     def stream(self, **request):
-        user_message = str(
-            (request.get("messages") or [{}])[0].get("content") or ""
-        )
+        user_message = _user_text(request.get("messages") or [])
         if "[[QC-VERIFY:" not in user_message:
             return SequencedFakeClient.stream(self, **request)
         with self._lock:
@@ -314,7 +314,7 @@ def test_invalid_request_circuit_breaker_caps_calls_and_preserves_every_seat() -
 
     result = _run(client)
 
-    assert client.verifier_request_count == 4
+    assert client.verifier_request_count == settings.QC_MAX_WORKERS
     assert result.execution_status == "partial"
     assert result.findings == []
     assert result.refuted == []
@@ -373,7 +373,7 @@ def test_output_and_ordinary_call_failures_do_not_trip_shared_breaker() -> None:
     verifier_requests = [
         request
         for request in client.requests
-        if "[[QC-VERIFY:" in str(request["messages"][0]["content"])
+        if "[[QC-VERIFY:" in _user_text(request["messages"])
     ]
     assert len(verifier_requests) == 9
     assert {finding.title for finding in result.inconclusive} == {

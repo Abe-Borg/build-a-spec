@@ -11,7 +11,7 @@ import pytest
 from docx import Document
 from fastapi.testclient import TestClient
 
-from backend import sessions
+from backend import sessions, settings
 from backend.app import create_app
 from backend.qc.engine import (
     QCFanoutError,
@@ -114,7 +114,7 @@ def _run(
         profile,
         DEFAULT_MODULE,
         client,
-        model="claude-fable-5",
+        model=settings.QC_MODEL,
         max_tokens=4096,
         version_index=version_index,
         started_at="2026-07-21 10:00",
@@ -662,11 +662,12 @@ def test_qc_prefers_document_identity_over_legacy_discipline(monkeypatch):
     assert client.post("/api/qc/start").json()["ok"] is True
     assert _wait_qc(client)["status"] == "complete"
     assert len(fake.requests) == len(QC_LENSES)
+    # The discipline rides the cached shared prefix (block 0 of the user turn).
     assert all(
         "<project_discipline>\nStructural\n</project_discipline>"
-        in req["messages"][0]["content"]
+        in req["messages"][0]["content"][0]["text"]
         and "<project_discipline>\nElectrical\n</project_discipline>"
-        not in req["messages"][0]["content"]
+        not in req["messages"][0]["content"][0]["text"]
         for req in fake.requests
     )
 
@@ -814,7 +815,7 @@ def test_qc_report_export_smoke(monkeypatch):
     assert any("Edition fix" in t for t in texts)
 
 
-def test_qc_usage_rolls_up_under_fable_pricing(monkeypatch):
+def test_qc_usage_rolls_up_under_the_qc_model_pricing(monkeypatch):
     client = _client()
     _seed_doc(client, monkeypatch)
     scripts = _qc_scripts(
@@ -838,9 +839,14 @@ def test_qc_usage_rolls_up_under_fable_pricing(monkeypatch):
     qc = usage["categories"]["qc"]
     assert qc["input_tokens"] == 5000  # 4000 lens + 2 × 500 verifiers
     assert qc["output_tokens"] == 800
-    # Priced on Fable 5 ($10/M in, $50/M out): 5000*10e-6 + 800*50e-6.
+    # The QC model MUST carry its own PRICING entry. A model absent from the
+    # table is silently metered at Sonnet 5's rates (``usage_ledger._rates``
+    # falls back via ``dict.get``) and the resulting cost_basis still passes
+    # every audit-integrity gate — so the wrong number would ship unnoticed.
+    assert settings.QC_MODEL in settings.PRICING
+    rates = settings.PRICING[settings.QC_MODEL]
     assert usage["estimated_cost_usd"]["by_category"]["qc"] == round(
-        5000 * 10e-6 + 800 * 50e-6, 6
+        5000 * rates["input"] + 800 * rates["output"], 6
     )
 
 
@@ -903,7 +909,7 @@ def test_qc_result_from_dict_round_trips():
     again = QCResult.from_dict(result.to_dict())
     assert again is not None
     assert again.findings[0].title == "Round trip"
-    assert again.model == "claude-fable-5"
+    assert again.model == settings.QC_MODEL
 
 
 def test_qc_proposed_ops_allow_set_standard_suppressed():
@@ -975,28 +981,187 @@ def test_qc_proposed_ops_retain_valid_same_parent_move():
 # ---------------------------------------------------------------------------
 
 
-def test_lens_user_message_carries_discipline_only_when_stated():
+def test_lens_shared_prefix_carries_discipline_only_when_stated():
     from backend.llm.conversation import SessionState
-    from backend.qc.engine import _lens_user_message
+    from backend.qc.engine import _lens_shared_prefix
     from backend.spec_doc.model import SpecSection
 
     section = SpecSection()
-    lens = QC_LENSES[0]
     module = SessionState().module  # the curated default
 
-    without = _lens_user_message(lens, section, module, None)
+    without = _lens_shared_prefix(section, module, None)
     assert "<project_discipline>" not in without
 
-    with_discipline = _lens_user_message(
-        lens, section, module, None, "Electrical"
+    with_discipline = _lens_shared_prefix(section, module, None, "Electrical")
+    # The discipline leads the cached prefix, ahead of the standards block.
+    assert with_discipline.startswith(
+        "<project_discipline>\nElectrical\n</project_discipline>\n\n"
+        "<standards_in_effect>"
     )
-    assert (
-        "<project_discipline>\nElectrical\n</project_discipline>"
-        in with_discipline
-    )
-    # The discipline block sits immediately after the brief (the lens
-    # brief text itself legitimately mentions <standards_in_effect>, so a
-    # naive index-ordering check would trip on it).
-    assert "</lens_brief>\n\n<project_discipline>" in with_discipline
     # Empty discipline (the curated case) is byte-identical to before.
-    assert _lens_user_message(lens, section, module, None, "") == without
+    assert _lens_shared_prefix(section, module, None, "") == without
+
+
+def test_lens_shared_prefix_is_identical_across_lenses():
+    """The cached block must not vary by lens, or nothing is ever reused."""
+    from backend.llm.conversation import SessionState
+    from backend.qc.engine import _lens_request_suffix, _lens_shared_prefix
+    from backend.spec_doc.model import SpecSection
+
+    section = SpecSection()
+    module = SessionState().module
+    prefixes = {
+        _lens_shared_prefix(section, module, None, "Electrical")
+        for _lens in QC_LENSES
+    }
+    assert len(prefixes) == 1
+    # ...and the per-lens bytes really do differ, so the split is load-bearing.
+    assert len({_lens_request_suffix(lens) for lens in QC_LENSES}) == len(
+        QC_LENSES
+    )
+
+
+def test_qc_requests_cache_the_shared_prefix_across_the_whole_fan_out(
+    monkeypatch,
+):
+    """The document is billed once per lineage, not once per call.
+
+    A QC run is ~40 calls and every one needs the whole section. Before the
+    breakpoint moved onto the user turn, each call re-sent the document at
+    full input price. The cache is a strict prefix match, so this asserts
+    the two things that make the saving real: the shared block carries a
+    breakpoint, and it is byte-identical across every call that shares a
+    lineage. A reordering regression would show up only as a bill that
+    failed to drop, which nothing else would catch.
+    """
+    client = _client()
+    _seed_doc(client, monkeypatch)
+    scripts = _qc_scripts(
+        code_compliance=[
+            qc_findings_response(
+                "code_compliance",
+                findings=[_finding("A finding", "issue", severity="medium")],
+            )
+        ],
+    )
+    scripts["A finding"] = [
+        qc_verdict_response(True),
+        qc_verdict_response(True),
+    ]
+    fake = SequencedFakeClient(scripts)
+    monkeypatch.setattr("backend.app.get_client", lambda: fake)
+    client.post("/api/qc/start")
+    assert _wait_qc(client)["status"] == "complete"
+
+    lens_requests, verifier_requests = [], []
+    for request in fake.requests:
+        blocks = request["messages"][0]["content"]
+        # Every QC user turn is [shared prefix (cached), per-call tail].
+        assert [block["type"] for block in blocks] == ["text", "text"]
+        assert blocks[0]["cache_control"]["type"] == "ephemeral"
+        assert "cache_control" not in blocks[1]
+        (
+            verifier_requests
+            if "[[QC-VERIFY:" in blocks[1]["text"]
+            else lens_requests
+        ).append(request)
+
+    assert len(lens_requests) == len(QC_LENSES)
+    assert len(verifier_requests) == 2
+
+    # The four web-toolless lenses share one lineage. code_compliance cannot
+    # join it: its tools array carries web search/fetch and tools render
+    # ahead of system and messages, so its byte prefix diverges from the
+    # start. It still caches across its own pause_turn continuations.
+    non_web = [
+        request
+        for request in lens_requests
+        if not any(
+            str(tool.get("type", "")).startswith("web_")
+            for tool in request["tools"]
+        )
+    ]
+    assert len(non_web) == len(QC_LENSES) - 1
+    assert len({request["messages"][0]["content"][0]["text"] for request in non_web}) == 1
+    assert len({request["system"][0]["text"] for request in non_web}) == 1
+
+    # Every verifier seat shares one lineage, and its entry has to outlive
+    # the 5-minute default: the verification phase runs far longer than that.
+    assert (
+        len({r["messages"][0]["content"][0]["text"] for r in verifier_requests})
+        == 1
+    )
+    assert all(
+        r["messages"][0]["content"][0]["cache_control"]["ttl"] == "1h"
+        for r in verifier_requests
+    )
+
+    # Four breakpoints is the API ceiling (tools + system + prefix + tail).
+    for request in fake.requests:
+        blocks = [*request["tools"], *request["system"], *request["messages"][0]["content"]]
+        assert sum("cache_control" in block for block in blocks) <= 4
+
+    # Every breakpoint in one request must carry the SAME ttl. The API
+    # requires longer-lived cache entries to precede shorter-lived ones in
+    # prompt order, and the render order is tools -> system -> messages — so
+    # default-ttl tools/system followed by a 1h user block is rejected
+    # outright, on every call, with a nonretryable 400 that trips the shared
+    # verifier circuit breaker. Uniform-per-request means there is no order
+    # to get wrong. A fake client cannot reject a malformed request, so this
+    # is the only place that constraint is enforced before it reaches a
+    # provider.
+    for request in fake.requests:
+        ttls = [
+            block["cache_control"].get("ttl")
+            for block in (
+                *request["tools"],
+                *request["system"],
+                *request["messages"][0]["content"],
+            )
+            if "cache_control" in block
+        ]
+        assert ttls, "a QC request with no breakpoint at all caches nothing"
+        assert len(set(ttls)) == 1, f"mixed cache TTLs in one request: {ttls}"
+
+    assert all(
+        block["cache_control"]["ttl"] == "1h"
+        for request in verifier_requests
+        for block in (
+            *request["tools"],
+            *request["system"],
+            *request["messages"][0]["content"],
+        )
+        if "cache_control" in block
+    )
+    # Lens calls take the 5-minute default throughout: phase 1 is five calls
+    # and does not outlive it.
+    assert all(
+        "ttl" not in block["cache_control"]
+        for request in lens_requests
+        for block in (
+            *request["tools"],
+            *request["system"],
+            *request["messages"][0]["content"],
+        )
+        if "cache_control" in block
+    )
+
+
+def test_qc_tools_are_strict_for_the_configured_model():
+    """A QC model missing from the strict allowlist degrades silently.
+
+    ``_STRICT_CAPABLE_MODELS`` gates ``strict: true``; an id absent from it
+    just omits the key, so payloads stop being schema-guaranteed with no
+    error and no 400 — normalize_* then clamps the damage invisibly.
+    """
+    from backend.qc.schema import submit_qc_findings_tool, submit_qc_verdict_tool
+
+    for tool in (
+        submit_qc_findings_tool(model=settings.QC_MODEL),
+        submit_qc_verdict_tool(model=settings.QC_MODEL),
+    ):
+        assert tool.get("strict") is True, (
+            f"{settings.QC_MODEL} is not in _STRICT_CAPABLE_MODELS "
+            "(backend/research/schema.py) — QC tools lost their strict shape."
+        )
+

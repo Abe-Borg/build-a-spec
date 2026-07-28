@@ -668,6 +668,31 @@ def qc_verdict_response(
     )
 
 
+def _user_text(messages: list) -> str:
+    """The first user turn's text, whether it is a string or content blocks.
+
+    QC caches its shared document/standards/profile prefix by splitting the
+    user turn into two text blocks (``backend/qc/engine.py``), so routing on
+    ``content`` alone would see a list and match nothing. Every text block is
+    joined in order, which keeps the routing keys (``[[QC-LENS:...]]``,
+    ``[[QC-VERIFY:...]]``, finding titles) findable wherever they land.
+    """
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n\n".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        return ""
+    return ""
+
+
 class SequencedFakeClient:
     """Fake client whose scripted turns are keyed by dimension.
 
@@ -689,12 +714,7 @@ class SequencedFakeClient:
     def stream(self, **request):
         with self._lock:
             self.requests.append(request)
-            first_user = ""
-            for message in request.get("messages", []):
-                if message.get("role") == "user":
-                    content = message.get("content")
-                    first_user = content if isinstance(content, str) else ""
-                    break
+            first_user = _user_text(request.get("messages", []))
             for key, queue in self._scripts.items():
                 if key in first_user:
                     if not queue:

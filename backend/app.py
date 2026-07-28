@@ -1455,7 +1455,7 @@ def create_app() -> FastAPI:
                 {
                     "ok": False,
                     "code": "tutorial_active",
-                    "error": "Return to or keep the tutorial workspace before starting a new session.",
+                    "error": "End the tour and return to your project before starting a new session.",
                 },
                 status_code=409,
             )
@@ -2095,30 +2095,11 @@ def create_app() -> FastAPI:
                 )
                 current_workspace_id = tutorial_lease.workspace_id
             restored = sessions.workspace_manager().finish_tutorial(
-                current_workspace_id, disposition="restore"
+                current_workspace_id
             )
         except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
             return _tutorial_error(exc)
         return JSONResponse({"ok": True, "session": _session_bundle(restored)})
-
-    @app.post("/api/tutorial/keep")
-    def tutorial_keep(body: TutorialRequest) -> JSONResponse:
-        lease = sessions.get_workspace()
-        if not _tutorial_request_is_current(lease, body):
-            return _stale_tutorial_response()
-        try:
-            current_workspace_id = body.workspace_id
-            if lease.scope == "scenario":
-                tutorial_lease = sessions.workspace_manager().pop_scenario(
-                    current_workspace_id
-                )
-                current_workspace_id = tutorial_lease.workspace_id
-            kept = sessions.workspace_manager().finish_tutorial(
-                current_workspace_id, disposition="keep"
-            )
-        except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
-            return _tutorial_error(exc)
-        return JSONResponse({"ok": True, "session": _session_bundle(kept)})
 
     @app.post("/api/chat")
     def chat(body: ChatRequest) -> StreamingResponse:
@@ -3843,21 +3824,23 @@ def create_app() -> FastAPI:
     @app.get("/api/project/save")
     def project_save(scope: str | None = None) -> Response:
         workspace = sessions.get_workspace()
-        if workspace.scope != "original" and scope not in {"tutorial", "original"}:
+        if workspace.scope != "original" and scope != "tutorial":
             return JSONResponse(
                 {
                     "ok": False,
                     "code": "tutorial_active",
-                    "error": "Choose Save tutorial copy or return to your project before saving.",
+                    "error": (
+                        "A tutorial workspace is active. Use Save in the panel to "
+                        "download the tutorial copy, or end the tour to return to "
+                        "your project and save that."
+                    ),
                 },
                 status_code=409,
             )
         try:
             session = (
-                sessions.workspace_manager().original_for_save()
-                if workspace.scope != "original" and scope == "original"
-                else sessions.workspace_manager().tutorial_for_save()
-                if workspace.scope != "original" and scope == "tutorial"
+                sessions.workspace_manager().tutorial_for_save()
+                if workspace.scope != "original"
                 else workspace.session
             )
         except sessions.WorkspaceConflictError as exc:
@@ -3887,7 +3870,7 @@ def create_app() -> FastAPI:
                 {
                     "ok": False,
                     "code": "tutorial_active",
-                    "error": "Resolve the tutorial before opening another project.",
+                    "error": "End the tour and return to your project before opening another one.",
                 },
                 status_code=409,
             )
@@ -3929,7 +3912,7 @@ def create_app() -> FastAPI:
                 {
                     "ok": False,
                     "code": "tutorial_active",
-                    "error": "Resolve the tutorial before opening another project.",
+                    "error": "End the tour and return to your project before opening another one.",
                 },
                 status_code=409,
             )

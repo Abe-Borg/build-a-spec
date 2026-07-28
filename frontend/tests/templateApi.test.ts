@@ -31,6 +31,6 @@ test("tutorial API carries idempotent workspace identity through every transitio
   assert.match(api, /workspace_id/);
   assert.match(api, /\/api\/tutorial\/scenario\/start/);
   assert.match(api, /\/api\/tutorial\/scenario\/finish/);
+  // Restore is the only terminal transition — there is no keep counterpart.
   assert.match(api, /\/api\/tutorial\/restore/);
-  assert.match(api, /\/api\/tutorial\/keep/);
 });

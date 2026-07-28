@@ -456,52 +456,6 @@ export const restoreTutorialWorkspace = (args: {
     generation: args.generation,
   });
 
-export const keepTutorialWorkspace = (args: {
-  tutorialId: string;
-  workspaceId?: number;
-  generation?: number;
-}) =>
-  tutorialTransition("/api/tutorial/keep", {
-    tutorial_id: args.tutorialId,
-    workspace_id: args.workspaceId,
-    generation: args.generation,
-  });
-
-/** Download the tutorial copy without changing the active tutorial scope. */
-export async function downloadTutorialCopy(): Promise<void> {
-  const resp = await fetch("/api/project/save?scope=tutorial");
-  if (!resp.ok) throw new Error(`tutorial save failed (${resp.status})`);
-  const blob = await resp.blob();
-  const cd = resp.headers.get("Content-Disposition") ?? "";
-  const filename = /filename="?([^";]+)"?/.exec(cd)?.[1] ?? "tutorial.baspec";
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-/** Save the protected pre-tutorial project before replacing it with the tutorial. */
-export async function downloadOriginalProjectCopy(): Promise<void> {
-  const resp = await fetch("/api/project/save?scope=original");
-  if (!resp.ok) throw new Error(`original project save failed (${resp.status})`);
-  const blob = await resp.blob();
-  const cd = resp.headers.get("Content-Disposition") ?? "";
-  const filename =
-    /filename="?([^";]+)"?/.exec(cd)?.[1] ?? "original-project.baspec";
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 /* --- Reusable spec starters (templates) --- */
 
 export async function listTemplates(): Promise<{

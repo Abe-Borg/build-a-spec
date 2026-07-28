@@ -130,9 +130,7 @@ def test_restore_returns_the_exact_original_object_and_merges_only_usage_delta()
     tutorial_lease.session.usage.add(
         "template", {"input_tokens": 4, "output_tokens": 2}, count_turn=True
     )
-    restored = manager.finish_tutorial(
-        tutorial_lease.workspace_id, disposition="restore"
-    )
+    restored = manager.finish_tutorial(tutorial_lease.workspace_id)
 
     assert restored.scope == "original"
     assert restored.session is original
@@ -275,9 +273,10 @@ def test_scenario_never_nests_and_returns_to_the_exact_tutorial_base():
     assert "Scenario-only edit." not in str(returned.session.doc.to_dict())
 
 
-def test_workspace_id_lease_rejects_late_work_and_keep_promotes_tutorial_object():
+def test_workspace_id_lease_rejects_late_work_and_finish_restores_the_original():
     manager = SessionManager()
     original_lease = manager.current()
+    original_object = original_lease.session
     tutorial_lease = manager.begin_tutorial(
         staged_session=build_showcase_session(), request_id="lease-contract"
     )
@@ -288,10 +287,11 @@ def test_workspace_id_lease_rejects_late_work_and_keep_promotes_tutorial_object(
         with manager.active_write(original_lease.workspace_id):
             pass
 
-    kept_object = tutorial_lease.session
-    kept = manager.finish_tutorial(tutorial_lease.workspace_id, disposition="keep")
-    assert kept.scope == "original"
-    assert kept.session is kept_object
+    # Finishing has one outcome: the retained original object comes back.
+    restored = manager.finish_tutorial(tutorial_lease.workspace_id)
+    assert restored.scope == "original"
+    assert restored.session is original_object
+    assert restored.session is not tutorial_lease.session
 
 
 def test_generation_lease_rejects_delayed_work_after_in_place_replacement():
@@ -1010,7 +1010,12 @@ def test_chapter_scenarios_exercise_production_round_trips_and_restore_base(
     assert restored.status_code == 200, restored.text
 
 
-def test_replace_completion_can_save_the_protected_original_first():
+def test_mid_tutorial_save_offers_only_the_tutorial_copy_and_ending_restores():
+    """Saving mid-tutorial writes the practice copy; ending returns the project.
+
+    There is deliberately no way to download or promote the tutorial over the
+    retained original, so the two removed back doors are asserted closed here.
+    """
     original = sessions.get_session()
     original.history.append(
         {"role": "user", "content": [{"type": "text", "text": "retain me"}]}
@@ -1020,31 +1025,89 @@ def test_replace_completion_can_save_the_protected_original_first():
     started = client.post(
         "/api/tutorial/start",
         json={
-            "request_id": "save-original-contract",
+            "request_id": "single-ending-contract",
             "source": "showcase",
             "workspace_id": original_lease.workspace_id,
             "generation": original_lease.generation,
         },
     ).json()
+    session = started["session"]
 
     blocked = client.get("/api/project/save")
     assert blocked.status_code == 409
-    saved = client.get("/api/project/save?scope=original")
+    assert blocked.json()["code"] == "tutorial_active"
+    # Both removed back doors stay closed.
+    assert client.get("/api/project/save?scope=original").status_code == 409
+    assert (
+        client.post(
+            "/api/tutorial/keep",
+            json={
+                "tutorial_id": started["tutorial_id"],
+                "workspace_id": session["workspace_id"],
+                "generation": session["generation"],
+            },
+        ).status_code
+        == 404
+    )
+    # The one mid-tutorial save that survives is the practice copy.
+    saved = client.get("/api/project/save?scope=tutorial")
     assert saved.status_code == 200
-    parsed = parse_project_package(saved.content)
-    assert parsed.project["history"][0]["content"][0]["text"] == "retain me"
+    assert "retain me" not in str(parse_project_package(saved.content).project["history"])
 
-    session = started["session"]
-    kept = client.post(
-        "/api/tutorial/keep",
+    restored = client.post(
+        "/api/tutorial/restore",
         json={
             "tutorial_id": started["tutorial_id"],
             "workspace_id": session["workspace_id"],
             "generation": session["generation"],
         },
     )
-    assert kept.status_code == 200
-    assert "retain me" not in str(sessions.get_session().history)
+    assert restored.status_code == 200, restored.text
+    assert sessions.get_workspace().scope == "original"
+    assert sessions.get_session() is original
+    assert "retain me" in str(sessions.get_session().history)
+
+
+def test_ending_from_inside_a_live_scenario_still_returns_the_exact_original():
+    """End is reachable on every step, so scenario -> original is a main path."""
+    original = sessions.get_session()
+    original.history.append(
+        {"role": "user", "content": [{"type": "text", "text": "real work"}]}
+    )
+    client = TestClient(create_app())
+    original_lease = sessions.get_workspace()
+    started = client.post(
+        "/api/tutorial/start",
+        json={
+            "request_id": "scenario-ending-contract",
+            "source": "showcase",
+            "workspace_id": original_lease.workspace_id,
+            "generation": original_lease.generation,
+        },
+    ).json()
+    scenario = client.post(
+        "/api/tutorial/scenario/start",
+        json={
+            "tutorial_id": started["tutorial_id"],
+            "workspace_id": started["session"]["workspace_id"],
+            "generation": started["session"]["generation"],
+            "chapter": "import",
+        },
+    ).json()["session"]
+    assert scenario["workspace_scope"] == "scenario"
+
+    restored = client.post(
+        "/api/tutorial/restore",
+        json={
+            "tutorial_id": started["tutorial_id"],
+            "workspace_id": scenario["workspace_id"],
+            "generation": scenario["generation"],
+        },
+    )
+    assert restored.status_code == 200, restored.text
+    assert sessions.get_workspace().scope == "original"
+    assert sessions.get_session() is original
+    assert "real work" in str(original.history)
 
 
 def test_blank_practice_copy_is_empty_but_keeps_the_drafting_identity():

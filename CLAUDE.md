@@ -1336,15 +1336,16 @@ events, no new env vars, no new Python deps (`difflib` is stdlib).
   Anchor lookup retries ~2s, follows resize and scrolling, and falls back to
   an honest "this control is not available in the current UI state" card.
 - **Completion flag** is cosmetic localStorage; `abort()` handles external
-  session/project teardown without marking completion.
+  session/project teardown without marking completion (it is now
+  `restoreOriginal({completed: false})` — see "One ending" below).
 
 ## Guided tutorial — implemented notes (real workspaces + per-chapter scenarios)
 
 The tutorial teaches against **actual document state**, not a scripted
 mock-up. It runs in a protected server-owned copy of the user's project (or a
 generated spec, or the bundled showcase), and each chapter can swap in a
-purpose-built practice copy. The original is retained and restorable
-throughout.
+purpose-built practice copy. The original is retained throughout and is
+**always** restored on exit — there is no other ending.
 
 - **Three scopes, one lease.** `SessionManager` (`backend/sessions.py`) moves
   `original` → `tutorial` → `scenario`; scenarios never nest. Every
@@ -1355,9 +1356,11 @@ throughout.
   `begin_tutorial` is idempotent per `request_id` and refuses while a chat
   turn, research, audit, or QC run is active or settling.
 - **Routes** (`backend/app.py`): `GET /api/tutorial/status`, `POST
-  /api/tutorial/{start,enrich,scenario/start,scenario/finish,restore,keep}`.
-  `enrich` is SSE. `GET /api/project/save?scope=tutorial|original` saves
-  either copy mid-tutorial.
+  /api/tutorial/{start,enrich,scenario/start,scenario/finish,restore}`.
+  `enrich` is SSE. `restore` has no `keep` counterpart — see "One ending"
+  below. `GET /api/project/save?scope=tutorial` is the only mid-tutorial
+  save; there is no original-scope download, because the original is never
+  replaced and is always there to save after the tour ends.
 - **Coverage, not decoration.** `analyze_tutorial_coverage`
   (`backend/tutorial.py`) checks 15+ teaching anchors the manifest needs
   (section number/title, substantive content, all three PARTs, sibling
@@ -1387,11 +1390,27 @@ throughout.
   pins it (`test_an_unmapped_chapter_name_does_not_silently_start_a_practice_fixture`).
 - **Frontend.** `lib/useOnboarding.ts` is the lifecycle machine (phases
   `idle`, `source-choice`, `enrichment-choice`, `preparing`, `touring`,
-  `chunk-break`, `paused`, `completion`); `OnboardingOverlay.tsx` renders the
-  spotlight, per-step actions, readiness repair, and the finish choices;
-  `lib/onboardingStorage.ts` holds the resume record keyed on
-  `TOUR_VERSION` + the workspace lease (the server is authoritative — only an
-  exact three-way match restores progress).
+  `chunk-break`, `paused`); `OnboardingOverlay.tsx` renders the
+  spotlight, per-step actions, readiness repair, and the restore
+  progress/error card; `lib/onboardingStorage.ts` holds the resume record
+  keyed on `TOUR_VERSION` + the workspace lease (the server is authoritative
+  — only an exact three-way match restores progress).
+- **One ending, one code path.** `restoreOriginal({completed})` in
+  `useOnboarding.ts` is the single terminal transition; the natural finish,
+  `end()` (the "End the guided tour?" confirm), the post-reload
+  lease-mismatch recovery, and `abort()` (New session / Open project) all
+  call it, and `finish_tutorial` has no `disposition` to pick. Only
+  `completed` differs — external teardown and reload recovery pass `false`,
+  so a tour the user never took is never marked complete (pinned by a
+  single-call-site assertion in `tour.test.ts`). There is no
+  "keep the tutorial" disposition anywhere in the stack, and no modal asking
+  which ending the user wants: **ending returns the exact retained
+  pre-tutorial `SessionState` object**, so the project comes back whole.
+  Progress and failure ride the existing `preparing`/`stage:"finishing"`
+  phase — note `retryPrepare` needs its `finishing` branch ahead of the
+  `chooseSource` fall-through, or a failed restore restarts the tutorial.
+  The `tour.finish` capability lives on the touring card's **End** button and
+  the paused pill's ✕ (both reachable states), not on a modal wrapper.
 - **Paid results are never fabricated.** `research`, `imported` and `qc`
   readiness are deliberately **not** repairable by "Build the missing
   example"; a missing result renders honest copy saying so. Two

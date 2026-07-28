@@ -1120,7 +1120,8 @@ function Dossier() {
             <>
               It runs against a <b className="text-ink">protected copy</b> of your
               work, a freshly generated example, or a bundled showcase — your
-              original is restorable at the finish. The tour itself is scripted
+              original is held aside untouched and comes back whenever the tour
+              ends. The tour itself is scripted
               data in the application: it explains and highlights, and never sends
               chat, edits your document, or spends anything on your behalf. The
               one optional step that can call the model is clearly offered as a
@@ -1129,7 +1130,7 @@ function Dossier() {
           }
           sent="Nothing, unless you choose the optional model-assisted step."
           model="None by default."
-          bounds="Ending the tour is always one click away, and the confirmation states that no project changes were made."
+          bounds="Ending the tour is always one click away, and it has exactly one outcome: your project returns exactly as it was, with the practice copy discarded. Nothing you do in the tutorial can replace it."
         />
 
         <Runtime

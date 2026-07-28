@@ -725,7 +725,8 @@ function Dossier() {
               cached and billed at a fraction after the first call; (b) the{" "}
               <b className="text-ink">conversation so far</b>; and (c) a{" "}
               <b className="text-ink">PROJECT CONTEXT block</b> attached to your
-              newest message, containing the standards editions in effect, which
+              newest message, containing the current date and time from your own
+              computer’s clock, the standards editions in effect, which
               project-profile fields are still missing, the imported-source
               boundary if any, the grounded research profile if any, the full
               text of every provision with its id and status, the deterministic
@@ -802,8 +803,8 @@ function Dossier() {
           }
           sent={
             <>
-              The dimension’s instruction with your project profile substituted
-              in, plus the discipline. Your draft section is{" "}
+              Today’s date, then the dimension’s instruction with your project
+              profile substituted in, plus the discipline. Your draft section is{" "}
               <b className="text-ink">not</b> sent — research looks outward, at
               the jurisdiction, not at your text.
             </>
@@ -873,8 +874,9 @@ function Dossier() {
           }
           sent={
             <>
-              The full document rendering, the standards editions in effect, the
-              grounded research profile, the discipline, and each lens’s brief.
+              Today’s date, the full document rendering, the standards editions
+              in effect, the grounded research profile, the discipline, and each
+              lens’s brief.
               Then, per finding, the finding itself plus the document context the
               verifier needs.
             </>

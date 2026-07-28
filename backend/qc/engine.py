@@ -75,6 +75,11 @@ from ..research.schema import (
     build_web_search_tool,
     extract_tool_use_block,
 )
+from ..runtime_context import (
+    current_date_iso,
+    current_datetime,
+    date_context_block,
+)
 from ..spec_doc.model import (
     SpecEditError,
     SpecSection,
@@ -815,6 +820,15 @@ class QCResult:
     input_manifest: dict[str, Any] = field(default_factory=dict)
     model: str = ""
     effort: str = ""
+    # The calendar date the run put in front of every lens and verifier
+    # seat, which now materially affects their edition-currency judgements.
+    # Recorded but NOT fingerprinted — hashing it would flip every retained
+    # result stale at each midnight and demand a paid re-run of a review
+    # that has not gone out of date. It cannot be reconstructed from
+    # ``started_at``: that is UTC (an audit timestamp) while this is the
+    # user's local date (context), so they disagree by a day for an evening
+    # run west of UTC.
+    context_date: str = ""
     max_tokens: int = 0
     duration_ms: int = 0
     usage_totals: dict[str, int] = field(default_factory=dict)
@@ -1173,6 +1187,7 @@ class QCResult:
             "input_manifest": dict(self.input_manifest),
             "model": self.model,
             "effort": self.effort,
+            "context_date": self.context_date,
             "max_tokens": self.max_tokens,
             "duration_ms": self.duration_ms,
             "usage_totals": dict(self.usage_totals),
@@ -1313,6 +1328,9 @@ class QCResult:
                 ),
                 model=str(data.get("model", "") or ""),
                 effort=str(data.get("effort", "") or ""),
+                # Absent from every pre-1.8.0 record, so "" (rendered "Not
+                # recorded") is the honest read, not a defaulted-to-today lie.
+                context_date=str(data.get("context_date", "") or ""),
                 max_tokens=_persisted_nonnegative_int(
                     data.get("max_tokens", 0), field_name="max_tokens"
                 ),
@@ -1644,6 +1662,7 @@ def _lens_shared_prefix(
     profile: RequirementsProfile | None,
     discipline: str = "",
     source_capability_summary: str = "",
+    today: str = "",
 ) -> str:
     """Everything every lens sees identically — the cached prefix.
 
@@ -1651,6 +1670,14 @@ def _lens_shared_prefix(
     and must not vary by lens: the whole point is that the document render,
     standards block and research profile are billed once per run instead of
     once per call. ``_lens_request_suffix`` carries the per-lens bytes.
+
+    ``today`` leads it because a review of a spec's code citations is a
+    judgement about currency, and the reviewer needs to know the date to
+    make it. It is safe in a cached prefix only because ``run_final_qc``
+    reads the clock ONCE and threads the result here — a per-call read
+    would fork the lineage across midnight, and a per-call timestamp would
+    miss the cache on every one of the run's ~40 calls, undoing the whole
+    v1.8.0 cost reduction. Date only, never a time, for the same reason.
     """
     # The session discipline (Batch 10, open-catalog modules) renders only
     # when non-empty — curated-module QC requests are byte-identical.
@@ -1666,7 +1693,9 @@ def _lens_shared_prefix(
         if source_capability_summary
         else ""
     )
+    date_block = f"<current_date>\n{today}\n</current_date>\n\n" if today else ""
     return (
+        f"{date_block}"
         f"{discipline_block}"
         "<standards_in_effect>\n"
         f"{_render_standards(module, section)}\n"
@@ -1722,15 +1751,21 @@ def _verifier_system_prompt(module: SpecModule) -> str:
     )
 
 
-def _verifier_shared_prefix(section_render: str) -> str:
+def _verifier_shared_prefix(section_render: str, today: str = "") -> str:
     """The document every verifier seat sees identically — the cached prefix.
 
     A run's verification phase is ~35 of its ~40 calls and every seat needs
     the whole section (``already handled elsewhere in the document`` is one
     of the refutation grounds), so this is where caching pays most. It leads
     the user turn because the cache is a strict prefix match.
+
+    ``today`` carries the run's single clock reading (see
+    :func:`_lens_shared_prefix`). A seat asked to refute "this cites a
+    superseded edition" cannot judge it without the date, and this prefix
+    is exactly where an inconsistent reading would be most expensive.
     """
-    return "<specification>\n" f"{section_render}\n" "</specification>"
+    date_block = f"<current_date>\n{today}\n</current_date>\n\n" if today else ""
+    return f"{date_block}<specification>\n{section_render}\n</specification>"
 
 
 def _verifier_request_suffix(finding: dict, lens: QCLens) -> str:
@@ -2397,6 +2432,7 @@ def _run_lens(
     effort: str,
     discipline: str = "",
     source_capability_summary: str = "",
+    today: str = "",
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> _LensOutcome:
@@ -2430,6 +2466,10 @@ def _run_lens(
             profile,
             discipline,
             source_capability_summary,
+            # Keyword, not positional: this is the last parameter of a
+            # builder under active edit, and a new one inserted ahead of it
+            # would bind silently and wrongly.
+            today=today,
         ),
         request_suffix=_lens_request_suffix(lens),
         tools=_lens_tools(lens, model),
@@ -2542,6 +2582,7 @@ def _verify_one(
     effort: str,
     candidate_id: str,
     reviewer_index: int,
+    today: str = "",
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
     shared_should_stop: Callable[[], bool] = lambda: False,
@@ -2579,7 +2620,7 @@ def _verify_one(
     result = _run_streaming_call(
         client,
         system_prompt=_verifier_system_prompt(module),
-        shared_prefix=_verifier_shared_prefix(section_render),
+        shared_prefix=_verifier_shared_prefix(section_render, today),
         request_suffix=_verifier_request_suffix(finding, lens),
         # The verification phase runs longer than the 5-minute default cache
         # entry survives, so the shared document would lapse and be rewritten
@@ -3051,6 +3092,18 @@ def run_final_qc(
     # Pinned once per run rather than re-read at each call site, so the audit
     # record provably describes what was sent even if the env changes mid-run.
     effort = effort or settings.QC_EFFORT
+    # Same discipline, load-bearing for a different reason: this string leads
+    # both cached shared prefixes, so re-reading the clock per call would
+    # fork the lens and verifier cache lineages the moment a run crossed
+    # midnight. ONE reading feeds both the prefix and the persisted
+    # `context_date`, so the audit record cannot disagree with what the
+    # reviewers were actually told. Deliberately NOT folded into the input
+    # manifest below: hashing it would flip every retained result stale at
+    # each midnight, forcing a paid re-run of a review that has not actually
+    # gone out of date. Recorded, not fingerprinted.
+    run_clock = current_datetime()
+    today = date_context_block(run_clock)
+    context_date = current_date_iso(run_clock)
     run_id = run_id or f"qc-run-{uuid.uuid4().hex}"
     remembered_records = (
         dict(remembered_dismissed)
@@ -3101,6 +3154,7 @@ def run_final_qc(
                 effort=effort,
                 discipline=discipline,
                 source_capability_summary=source_capability_summary,
+                today=today,
                 event_sink=event_sink,
                 should_stop=should_stop,
             ): lens
@@ -3345,6 +3399,7 @@ def run_final_qc(
                         effort=effort,
                         candidate_id=candidate_ids[i],
                         reviewer_index=j + 1,
+                        today=today,
                         event_sink=event_sink,
                         should_stop=should_stop,
                         shared_should_stop=shared_failure.is_set,
@@ -3590,6 +3645,7 @@ def run_final_qc(
         input_manifest=input_manifest,
         model=model,
         effort=effort,
+        context_date=context_date,
         max_tokens=max_tokens,
         duration_ms=max(0, int((time.monotonic() - pipeline_started) * 1000)),
         usage_totals=usage_totals,

@@ -137,6 +137,10 @@ export type QcReportResult = Omit<
   run_id?: string;
   execution_status?: string;
   effort?: string;
+  /** Local date the run supplied to every lens and verifier seat. Absent on
+   *  pre-1.8.0 records, and never equal to `started_at`'s UTC calendar date
+   *  for an evening run west of UTC. */
+  context_date?: string;
   max_tokens?: number;
   duration_ms?: number;
   input_fingerprint?: string;

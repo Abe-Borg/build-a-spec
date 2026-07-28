@@ -90,6 +90,14 @@ backend/
   project_profile.py       [PORT: Spec Critic src/core/project_profile.py]
                            ProjectProfile: US/CA tables, country/state
                            normalization, web_search_user_location, fingerprint
+  runtime_context.py       the wall clock, for the model's benefit: local
+                           timezone-aware current_datetime (injectable `now`)
+                           + current_date_iso + date_context_block(with_time)
+                           and the shared DATE_AWARENESS_DIRECTIVE. No I/O, no
+                           app imports. Four consumers (chat context, research
+                           fan-out, QC fan-out, the deprecated audit); the two
+                           fan-outs read it ONCE per run and thread the string,
+                           because it leads their cached shared prefixes
   research/engine.py       [PORT: Spec Critic src/research/requirements_research.py]
                            the fan-out: ThreadPoolExecutor over module dimensions,
                            pause_turn continuation loop, 2× search-budget ceiling,
@@ -599,6 +607,14 @@ tests/
                            (accumulate, meter each round once, failed and
                            stopped rounds keep the rest), and the whole thing
                            over the API + a save/resume that keeps counting
+  test_runtime_date.py     the model is told what day it is: helper units
+                           (local + aware, injected now, zone label), the date
+                           in chat context but NOT the cached system prompt +
+                           no fossilization into history, and the counter-clock
+                           pins — one read per research round (== the round's
+                           own research_date stamp) and one per QC run (both
+                           cached prefixes), plus the deliberate
+                           not-in-the-input-manifest decision
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -3242,6 +3258,98 @@ Frontend build job, before the build), so a gap fails the PR rather than
 shipping — but find out locally, not from a red check. The workflow pins
 **Node 22**: `npm test` runs `node --test` directly over the `.ts` test files
 and depends on type stripping, which Node 20 cannot do.
+
+## Runtime date awareness — implemented notes (the app knows what day it is)
+
+Reported symptom (Abraham): the app doesn't seem to know the current date
+and time at run time, "and it will affect the code cycles it is aware of."
+Correct, and it was a total gap — the string "current date" appeared nowhere
+in any prompt the app sent. A model has no clock, so every judgement about
+edition currency was being made against the shape of its training data,
+which is frozen and drifts further out of date with every month a build
+stays in the field. For a tool whose whole domain revises on fixed
+multi-year cycles (NFPA 13 every three years, the I-codes every three),
+that is a wrong answer delivered with total confidence, and it gets worse
+on its own. No new deps, no new endpoint, no new SSE event, no
+project-format bump.
+
+- **`backend/runtime_context.py` is the one place the app reads the wall
+  clock for the model's benefit.** `current_datetime` (aware, with an
+  injectable `now` so tests pin a date without monkeypatching a module
+  globally), `current_date_iso`, and `date_context_block(with_time=)` —
+  the rendered stamp followed by `DATE_AWARENESS_DIRECTIVE`. Pure, no app
+  imports, no I/O.
+- **Local time, not UTC.** This is a desktop app; "today" means the user's
+  today, and a UTC reading is a day ahead for every user in the Americas
+  each evening. The zone is named in the stamp (`local time, PDT,
+  UTC-07:00`, degrading to whatever the platform supplies) so the model is
+  never guessing which clock it is reading. Audit timestamps —
+  `QCResult.started_at`, the redline `w:date` — stay UTC: those are
+  records, not context.
+- **The date is necessary but not sufficient, so the directive ships with
+  it.** Stating the date alone leaves the model free to keep treating its
+  own recollection as current. `DATE_AWARENESS_DIRECTIVE` is shared
+  verbatim by all four surfaces — the date is authoritative and supersedes
+  any trained sense of the present; a revision cycle recalled as pending
+  may have closed; never call an edition current from memory alone; and
+  when the elapsed time makes a newer edition likely, **say so rather than
+  quietly drafting to either one**. That last clause is the whole point
+  for this app: a jurisdiction on an older edition is normal, so a newer
+  publication is a question to raise, never grounds to change a recorded
+  edition unasked. One shared constant so the posture cannot drift into
+  four subtly different ones.
+- **Never in the stable system prompt.** That block carries
+  `cache_control` and must stay byte-identical for the session, so the
+  date renders into dynamic context only — first in every turn's PROJECT
+  CONTEXT, ahead of `PROJECT IDENTITY`, because everything under it is
+  dated (the editions in effect, the research profile's as-of stamps, the
+  model's own currency judgement). It costs nothing there: the whole block
+  is stripped again at commit, so it never fossilizes a stale date into
+  history. The stable prompt gained the date-free half — `_STANDARDS_POLICY`
+  now says editions are on cycles, that the app runs long after training,
+  and to measure the recorded editions against the date the context opens
+  with.
+- **Chat gets the time, the fan-outs get only the date, and that
+  asymmetry is load-bearing.** Time of day cannot change the answer to a
+  code-cycle question, and it is precisely the component that would churn
+  a cached prefix on every single call.
+- **The fan-outs read the clock ONCE per run and thread the string** —
+  the same discipline v1.8.0 applied to `effort`, for a sharper reason.
+  `run_final_qc` pins `today = date_context_block()` beside `effort` and
+  threads it to `_run_lens`/`_verify_one` → `_lens_shared_prefix` /
+  `_verifier_shared_prefix`, where it LEADS both cached prefixes. Reading
+  the clock inside the prefix builders would look correct in review and
+  pass every same-day test, then silently fork both cache lineages on any
+  run that crossed midnight — a regression visible only as a bill that
+  failed to drop. `run_requirements_research` does the same, and reuses
+  the one reading for the round's own `research_date` stamp, so a round
+  that starts at 23:59 can't research "yesterday" and file under "today"
+  (this replaced the stray `time.strftime` there).
+- **Recorded on the QC result, deliberately NOT in its input manifest.**
+  Hashing the date would flip every retained Final QC result stale at each
+  midnight and demand a re-run of a review that costs real money and has
+  not actually gone out of date. So `QCResult.context_date` persists the
+  local date the run gave its reviewers, and the fingerprint ignores it —
+  recorded, not fingerprinted, pinned by a test so a later "the manifest
+  should cover every input" pass has to argue with it. `started_at` does
+  NOT stand in for it (a first draft of this claimed it did, caught in
+  review): that field is a UTC audit timestamp while the context date is
+  the user's local one, so they are different calendar days for an evening
+  run west of UTC. ONE `current_datetime()` reading feeds both the prompt
+  and the record, so the two can never disagree. Surfaced as "Current date
+  supplied to reviewers" in the Word memo and the report modal, and absent
+  (→ "Not recorded") on every pre-1.8.0 record rather than defaulted to
+  today.
+- **The deprecated compliance audit got it too** (`build_audit_user_message`),
+  reading inline since it is a single uncached call. It is superseded by the
+  QC lenses but still reachable, and it would otherwise have been the one
+  surface left judging currency against training data.
+- **Tests**: `tests/test_runtime_date.py` (11). Seven fail against the
+  pre-fix code. The two that matter most use a **counter clock** — a fake
+  that hands out a different day on every call — so any refactor toward a
+  per-call read shows up as four disagreeing dimension dates, or as more
+  than one reading inside a QC run, rather than passing quietly until the
+  next midnight run.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

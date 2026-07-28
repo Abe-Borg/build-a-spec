@@ -792,6 +792,10 @@ export interface QcResultView {
   input_manifest: Record<string, unknown>;
   model: string;
   effort: string;
+  /** Local date the run supplied to every lens and verifier seat, which
+   *  drives their edition-currency judgements. Optional: absent on every
+   *  pre-1.8.0 record, and never derivable from `started_at` (UTC). */
+  context_date?: string;
   max_tokens: number;
   duration_ms: number;
   usage_totals: Record<string, number>;

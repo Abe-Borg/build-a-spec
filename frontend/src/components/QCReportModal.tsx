@@ -978,6 +978,7 @@ export default function QCReportModal({
               <DataField label="Execution status">{executionStatus}</DataField>
               <DataField label="Model">{recorded(report.model)}</DataField>
               <DataField label="Effort">{recorded(report.effort)}</DataField>
+              <DataField label="Current date supplied to reviewers">{recorded(report.context_date)}</DataField>
               <DataField label="Maximum output tokens">{formatInteger(report.max_tokens)}</DataField>
               <DataField label="Recorded duration">{formatDuration(duration)}</DataField>
               <DataField label="Started at">{formatTimestamp(report.started_at)}</DataField>

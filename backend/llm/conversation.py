@@ -104,6 +104,7 @@ from ..research.resend_sanitizer import (
     sanitize_messages_for_resend,
 )
 from ..research.schema import build_web_fetch_tool, build_web_search_tool
+from ..runtime_context import date_context_block
 from ..suggestions import SUGGEST_PROMPTS_TOOL, SuggestError, validate_prompts
 from ..tracing import capture as _trace
 from ..spec_modules import SpecModule, get_module
@@ -1405,7 +1406,16 @@ def _turn_context_text(session: SessionState) -> str:
     """
     doc = session.doc.doc
     unstructured = session.import_is_unstructured()
-    parts = [_project_identity_block(session)]
+    # First, because everything below it is dated: the editions in effect,
+    # the research profile's as-of stamps, and the model's own judgement
+    # about which edition is current all depend on knowing what "now" is.
+    # It renders here rather than in the stable system prompt for the usual
+    # reason (that block is cached and must not vary), and it costs nothing
+    # to repeat: the whole context block is stripped again at commit.
+    parts = [
+        date_context_block(with_time=True),
+        _project_identity_block(session),
+    ]
     if (
         getattr(session.module, "open_catalog", False)
         and not effective_discipline(session)

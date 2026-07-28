@@ -617,12 +617,19 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
 
 - **The model sees the whole document, every turn.** The truncated outline
   is gone from the drafting context: a PROJECT CONTEXT block in each
-  turn's user message carries the full text of every provision (ids,
-  statuses, ◆research-provenance chips), the standards editions in
-  effect, the research profile, the live lint report, and the open-item
-  list. The model can no longer edit a paragraph it can't see — and it
-  fixes its own stale citations and placeholders because the lint now
-  talks to it, not just to you.
+  turn's user message carries the current date and time, the full text of
+  every provision (ids, statuses, ◆research-provenance chips), the
+  standards editions in effect, the research profile, the live lint
+  report, and the open-item list. The model can no longer edit a paragraph
+  it can't see — and it fixes its own stale citations and placeholders
+  because the lint now talks to it, not just to you.
+- **It also knows what day it is.** A model has no clock, so without being
+  told it judges "is this the current edition?" against training data that
+  gets staler every month — and codes revise on multi-year cycles. Every
+  chat turn, every research dimension, and every Final QC reviewer is now
+  given the real date off your machine, plus the standing instruction to
+  treat a plausibly-superseded edition as a question to raise rather than
+  something to quietly redraft around.
 - **Prompt-cache restructure that pays for all of it.** The dynamic
   context used to sit between the cached system prompt and the message
   history, busting the cache for the whole history every doc-changing

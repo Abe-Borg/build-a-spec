@@ -1872,6 +1872,16 @@ def _qc_render_identity(
             "Reasoning effort",
             "Not recorded" if legacy else qc_result.get("effort") or "Not recorded",
         ),
+        # The reviewers judge edition currency against this, and it is the
+        # user's local date — not the UTC calendar date of "Started" above.
+        (
+            "Current date supplied to reviewers",
+            (
+                "Not recorded"
+                if legacy
+                else qc_result.get("context_date") or "Not recorded"
+            ),
+        ),
         (
             "Maximum output tokens",
             (

@@ -165,23 +165,53 @@ test("review tutorial does not offer a one-click confirmation shortcut", () => {
   assert.doesNotMatch(hook, /confirm-first/);
 });
 
-test("workspace lifecycle protects current work and offers explicit outcomes", () => {
+test("workspace lifecycle protects current work and always restores it", () => {
   assert.match(hook, /startTutorialWorkspace/);
   assert.match(hook, /enrichTutorialWorkspace/);
   assert.match(hook, /startTutorialScenario/);
   assert.match(hook, /finishTutorialScenario/);
   assert.match(hook, /restoreTutorialWorkspace/);
-  assert.match(hook, /keepTutorialWorkspace/);
   assert.match(overlay, /Use my current spec/);
   assert.match(overlay, /Generate a tutorial spec with AI/);
   assert.match(overlay, /Use bundled showcase/);
   assert.match(tour, /id:\s*"paper"[\s\S]*?scenario:\s*"structural"/);
-  assert.match(overlay, /Return to my project/);
-  assert.match(overlay, /Save original, then keep/);
-  assert.match(overlay, /Keep without saving original/);
-  assert.match(overlay, /Replace the original working project/);
-  assert.match(overlay, /Save tutorial copy, then return/);
-  assert.match(overlay, /Replace my project with tutorial copy/);
+});
+
+test("the tutorial has exactly one ending, and it is a restore", () => {
+  // Nothing may reintroduce a second disposition or a modal that asks which
+  // one the user wants. Ending returns the pre-tutorial project, always.
+  assert.doesNotMatch(hook, /keepTutorialWorkspace|downloadOriginalProjectCopy/);
+  assert.doesNotMatch(hook, /kind:\s*"completion"/);
+  assert.doesNotMatch(hook, /chooseKeep|saveOriginalAndKeep|saveCopyAndRestore/);
+  assert.doesNotMatch(api, /tutorial\/keep|scope=original/);
+  assert.doesNotMatch(overlay, /What should happen to the tutorial workspace/);
+  assert.doesNotMatch(overlay, /Save tutorial copy, then return/);
+  assert.doesNotMatch(overlay, /Replace my project with tutorial copy/);
+  assert.doesNotMatch(overlay, /Replace the original working project/);
+  assert.doesNotMatch(overlay, /keepConfirm/);
+
+  // Progress and failure both ride the existing preparing/finishing stage,
+  // so there is no dedicated end-of-tour surface to grow options back onto.
+  assert.match(hook, /stage:\s*"finishing"/);
+  assert.match(tour, /continueLabel:\s*"Finish and return to my project"/);
+
+  // Every trigger shares one implementation. Only the cosmetic completion
+  // flag varies, so there is exactly one place it can be set.
+  assert.match(hook, /restoreOriginal/);
+  assert.equal([...hook.matchAll(/markOnboardingCompleted\(\)/g)].length, 1);
+  assert.match(hook, /abort[\s\S]{0,160}restoreOriginal\(\{\s*completed:\s*false/);
+
+  // A failed restore retries the restore. Falling through to chooseSource
+  // would restart the whole tutorial on the way out of it.
+  assert.match(hook, /current\.stage === "finishing"[\s\S]{0,200}restoreOriginal/);
+
+  // The capability moved to the real End controls, not a modal wrapper.
+  assert.match(overlay, /data-capability="tour\.finish"/);
+  assert.doesNotMatch(overlay, /<div data-capability="tour\.finish">/);
+
+  // The one surviving prompt must not advertise a choice that is gone.
+  assert.match(app, /End the guided tour\?/);
+  assert.doesNotMatch(app, /choose what to keep/i);
 });
 
 test("rearrangement is a required real-document exercise", () => {

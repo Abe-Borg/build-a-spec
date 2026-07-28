@@ -214,8 +214,8 @@ what the honest-framing rule above exists to prevent.)
 
 **The tutorial teaches against real document state in a protected copy of
 your work.** Pick your own spec, a freshly generated one, or the bundled
-showcase; practice on it; then choose what happens to it at the end. Your
-original is retained the whole time and restored by default.
+showcase, and practice on it. However you end the tour, your original project
+comes back exactly as it was before it started.
 
 - **Eleven chapters over a real workspace.** Start from an empty page ·
   the paper · grounding · review and compare · figures and references ·
@@ -237,10 +237,12 @@ original is retained the whole time and restored by default.
   cannot ship untaught, and a tutorial step cannot describe a control that
   does not exist. Step anchors are checked against the real DOM attributes
   too.
-- **You choose the ending.** Return to your project (default), save a
-  `.baspec` copy of the tutorial work first, or replace your project with the
-  tutorial copy — which is deliberately last, needs a second confirmation,
-  and offers to save your original first.
+- **There is one ending: your project comes back.** End the tour from any
+  step, finish the last chapter, start a new session, open a project, or close
+  the window — every one of those returns your original exactly as it was,
+  same document, same history, same version list. One short confirmation, then
+  it happens; nothing to choose and nothing to lose. Want the practice work
+  too? Save it from the panel before you finish.
 - **Resume, jump, and restart.** Pause any time; the tutorial resumes only
   when the server agrees the same protected workspace is still live. Help
   restarts it or jumps straight to any named chapter. Reduced motion is

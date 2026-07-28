@@ -1491,9 +1491,10 @@ export default function App() {
         title="End the guided tour?"
         body={
           <>
-            You can restart it anytime from the{" "}
-            <b className="text-ink">Tour</b> button in the header. Your
-            original project remains protected until you choose what to keep.
+            Your project comes back exactly as it was before the tour started
+            — the same document, history, and version list — and this practice
+            copy is discarded. You can restart the tour anytime from the{" "}
+            <b className="text-ink">Tour</b> button in the header.
           </>
         }
         confirmLabel="End tour"

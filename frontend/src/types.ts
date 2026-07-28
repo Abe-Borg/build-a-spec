@@ -803,24 +803,192 @@ export interface QcResultView {
   dismissed_ids: string[];
 }
 
-export interface QcEvent {
-  seq: number;
-  ts: string;
-  type: string;
-  lens_id?: string;
-  title?: string;
-  finding_count?: number;
-  grounded_count?: number;
-  error?: string;
-  done?: number;
-  total?: number;
-  lenses?: { lens_id: string; title: string }[];
-  open_criticals?: number;
-  status?: QcRunStatus;
-  run_id?: string;
-  protocol_version?: string;
-  execution_status?: string;
+/** One candidate as introduced at the start of adversarial verification.
+ * `candidate_id` is run-local UI identity; it never replaces the final,
+ * content-addressed `finding_id` written to the audit report. */
+export interface QcCandidateRosterEntry {
+  candidate_id: string;
+  title: string;
+  original_severity: string;
+  lens_id: string;
+  panel_size: number;
+  threshold: number;
 }
+
+export type QcWorkerActivityKind =
+  | "thinking"
+  | "searching"
+  | "fetching"
+  | "writing";
+
+export type QcValidationOutcome = "safe_fix" | "advisory" | "manual";
+
+/** Logged frames carry seq/ts. The terminal `stream_end` sentinel is emitted
+ * by the SSE iterator rather than retained in the log, so those fields are
+ * deliberately optional at the union boundary. */
+interface QcEventBase {
+  seq?: number;
+  ts?: string;
+}
+
+interface QcLensEventBase extends QcEventBase {
+  lens_id: string;
+}
+
+interface QcVerifierEventBase extends QcEventBase {
+  candidate_id: string;
+  reviewer_index: number;
+}
+
+/** Every Final QC frame the current and legacy backends can emit. Keeping the
+ * discriminator closed makes live-state folding exhaustive without treating
+ * model- or tool-authored payload text as displayable UI. */
+export type QcEvent =
+  | (QcEventBase & {
+      type: "qc_started";
+      run_id: string;
+      protocol_version?: string;
+      lenses: { lens_id: string; title: string }[];
+      research_profile_present?: boolean;
+    })
+  | (QcLensEventBase & {
+      type: "lens_started";
+      title?: string;
+      max_searches?: number;
+      max_fetches?: number;
+    })
+  | (QcLensEventBase & {
+      type: "lens_activity";
+      kind?: QcWorkerActivityKind;
+    })
+  | (QcLensEventBase & { type: "lens_search"; query?: string })
+  | (QcLensEventBase & { type: "lens_fetch"; url?: string })
+  | (QcLensEventBase & {
+      type: "lens_retry";
+      attempt?: number;
+      max_attempts?: number;
+      reason?: string;
+      backoff_s?: number;
+    })
+  | (QcLensEventBase & {
+      type: "lens_complete" | "lens_failed";
+      title?: string;
+      finding_count?: number;
+      grounded_count?: number;
+      reviewed_check_count?: number;
+      candidate_count?: number;
+      search_count?: number;
+      fetch_count?: number;
+      request_count?: number;
+      error?: string;
+      done?: number;
+      total?: number;
+    })
+  | (QcEventBase & {
+      /** Legacy aggregate progress retained for old/replayed event logs. */
+      type: "verify_progress";
+      done?: number;
+      total?: number;
+    })
+  | (QcEventBase & {
+      type: "verification_started";
+      candidates: QcCandidateRosterEntry[];
+      total_candidates?: number;
+      total_seats?: number;
+      max_workers?: number;
+    })
+  | (QcVerifierEventBase & { type: "verifier_started" })
+  | (QcVerifierEventBase & {
+      type: "verifier_activity";
+      kind?: QcWorkerActivityKind;
+    })
+  | (QcVerifierEventBase & { type: "verifier_search"; query?: string })
+  | (QcVerifierEventBase & { type: "verifier_fetch"; url?: string })
+  | (QcVerifierEventBase & {
+      type: "verifier_retry";
+      attempt?: number;
+      max_attempts?: number;
+      reason?: string;
+      backoff_s?: number;
+    })
+  | (QcVerifierEventBase & {
+      type: "verifier_complete";
+      status: "completed" | "failed" | "cancelled" | string;
+      error?: string;
+      /** Present only for a completed seat. */
+      upholds?: boolean;
+      revised_severity?: string | null;
+      ops_adequate?: boolean;
+    })
+  | (QcEventBase & {
+      type: "candidate_complete";
+      candidate_id: string;
+      outcome: "upheld" | "refuted" | "inconclusive";
+      panel_size?: number;
+      threshold?: number;
+      completed_seats?: number;
+      upholds?: number;
+    })
+  | (QcEventBase & {
+      type: "verification_complete";
+      total_candidates?: number;
+      total_seats?: number;
+      completed_seats?: number;
+      upheld?: number;
+      refuted?: number;
+      inconclusive?: number;
+    })
+  | (QcEventBase & { type: "validation_started"; total?: number })
+  | (QcEventBase & {
+      type: "validation_progress";
+      candidate_id: string;
+      done?: number;
+      total?: number;
+      outcome?: QcValidationOutcome;
+      ops_semantic_status?: QcOpsSemanticStatus | string;
+      ops_valid?: boolean;
+      reason?: string;
+    })
+  | (QcEventBase & {
+      type: "validation_complete";
+      total?: number;
+      done?: number;
+      safe_fix_count?: number;
+      advisory_count?: number;
+      manual_count?: number;
+    })
+  | (QcEventBase & {
+      type: "qc_complete";
+      run_id?: string;
+      execution_status?: string;
+      finding_count?: number;
+      refuted_count?: number;
+      inconclusive_count?: number;
+      open_criticals?: number;
+      restored?: boolean;
+    })
+  | (QcEventBase & {
+      type: "qc_failed";
+      error?: string;
+      error_kind?: "auth_error" | "";
+      /** Stop won the runner race, but already-paid work is still attaching. */
+      settling?: boolean;
+    })
+  | (QcEventBase & {
+      type: "qc_attempt_settled";
+      run_id?: string;
+      status?: string;
+      execution_status?: string;
+      report_available?: boolean;
+      finding_count?: number;
+      refuted_count?: number;
+      inconclusive_count?: number;
+    })
+  | (QcEventBase & {
+      type: "stream_end";
+      status?: QcRunStatus | "superseded";
+      run_id?: string;
+    });
 
 export interface QcSnapshot {
   status: QcRunStatus;

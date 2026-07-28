@@ -135,6 +135,7 @@ def test_terminal_finalization_and_audit_snapshot_are_one_coherent_state() -> No
     assert record["runner"] == {
         "status": "complete",
         "error": "",
+        "error_kind": "",
         "settling": False,
     }
     assert record["events"][-1]["type"] == "qc_complete"
@@ -171,7 +172,9 @@ def test_cancelled_worker_preserves_paid_partial_without_replacing_success() -> 
     )
     assert runner.stop()
     stream = runner.sse_events(poll_interval=0.001, timeout_s=1)
-    assert next(stream)["type"] == "qc_failed"
+    stopped_event = next(stream)
+    assert stopped_event["type"] == "qc_failed"
+    assert stopped_event["settling"] is True
     assert runner.audit_record_snapshot()["runner"]["settling"] is True
     # A replacement cannot steal the runner/stream while the paid worker is
     # still assembling its final partial audit record.
@@ -256,6 +259,7 @@ def test_settled_partial_is_latest_but_never_replaces_retained_success() -> None
     assert record["runner"] == {
         "status": STATUS_COMPLETE,
         "error": "",
+        "error_kind": "",
         "settling": False,
     }
     assert runner.result is retained

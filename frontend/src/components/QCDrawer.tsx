@@ -23,9 +23,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type {
+  QcAttemptSnapshot,
   QcModuleSectionCompatibility,
   QcApplyPreviewBasis,
   QcApplyPreviewResult,
+  QcResultView,
   QcSnapshot,
   ReadinessPayload,
   Severity,
@@ -54,6 +56,14 @@ import {
   qcDecisionContextByElement,
   type QcRemediationBucket,
 } from "../lib/qcRemediation";
+import {
+  foldQcLiveState,
+  qcRecapDisposition,
+  type QcCandidateLiveState,
+  type QcLensLiveState,
+  type QcLiveState,
+  type QcVerifierSeatLiveState,
+} from "../lib/qcLive";
 import { useDialogFocus } from "../lib/dialogFocus";
 import ConfirmDialog from "./ConfirmDialog";
 import QCReportModal from "./QCReportModal";
@@ -136,14 +146,6 @@ const sevChip: Record<Severity, string> = {
   low: "border-ink-faint/50 bg-ink-faint/10 text-ink-faint",
 };
 
-const LENS_ORDER = [
-  "code_compliance",
-  "coordination_consistency",
-  "completeness",
-  "enforceability_language",
-  "provenance_hygiene",
-];
-
 function opPreview(op: Record<string, unknown>): string {
   const action = String(op.action ?? "");
   const target = String(op.target_id ?? "");
@@ -162,6 +164,518 @@ function promptExcerpt(value: string | undefined, limit = 800): string {
   const normalized = (value ?? "").replace(/\s+/g, " ").trim();
   if (normalized.length <= limit) return normalized;
   return `${normalized.slice(0, limit - 1).trimEnd()}…`;
+}
+
+const QC_ACTIVITY_LABELS: Record<string, string> = {
+  thinking: "Thinking through the specification…",
+  searching: "Searching for authoritative guidance…",
+  fetching: "Reading a source…",
+  writing: "Writing the review record…",
+};
+
+const QC_RETRY_LABELS: Record<string, string> = {
+  rate_limit: "rate limited",
+  server_error: "provider error",
+  connection: "connection dropped",
+};
+
+function displayLiveSource(value: string): string {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.replace(/^www\./, "");
+    const path = url.pathname.replace(/\/$/, "");
+    return path && path !== "/" ? `${host}${path}` : host;
+  } catch {
+    return value;
+  }
+}
+
+function lensStatusLabel(lens: QcLensLiveState): string {
+  if (lens.status === "completed") return "Completed";
+  if (lens.status === "failed") return "Failed";
+  if (lens.status === "running") return "Running";
+  return "Queued";
+}
+
+function QcLensCard({ lens }: { lens: QcLensLiveState }) {
+  const dotClass =
+    lens.status === "completed"
+      ? "bg-ok"
+      : lens.status === "failed"
+        ? "bg-err"
+        : lens.status === "running"
+          ? "agent-dot"
+          : "bg-ink-faint";
+  return (
+    <article className={`qc-lens-card ${lens.status === "running" ? "is-active" : ""}`}>
+      <div className="flex items-start gap-2">
+        <span
+          className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`}
+          aria-hidden="true"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <h4 className="text-[11px] font-semibold leading-snug text-ink">
+              {lens.title}
+            </h4>
+            <span className="shrink-0 text-[9px] font-medium tracking-wide text-ink-faint uppercase">
+              {lensStatusLabel(lens)}
+            </span>
+          </div>
+          {lens.status === "queued" && (
+            <p className="mt-1 text-[10px] text-ink-faint">Waiting for a specialist…</p>
+          )}
+          {lens.status === "running" && lens.retry && (
+            <p className="mt-1 text-[10px] leading-relaxed text-warn">
+              Retrying {lens.retry.attempt}/{lens.retry.maxAttempts} —{" "}
+              {QC_RETRY_LABELS[lens.retry.reason] || lens.retry.reason || "temporary failure"}
+            </p>
+          )}
+          {lens.status === "running" && !lens.retry && (
+            <p className="mt-1 flex items-center gap-1.5 text-[10px] text-ink-dim">
+              <span className="status-dots" aria-hidden="true"><span /><span /><span /></span>
+              <span className="status-shimmer">
+                {QC_ACTIVITY_LABELS[lens.activity] || "Starting the review…"}
+              </span>
+            </p>
+          )}
+          {lens.status === "running" && lens.recent.length > 0 && (
+            <ul className="mt-1.5 space-y-0.5">
+              {lens.recent.map((item) => (
+                <li
+                  key={`${item.kind}-${item.seq}`}
+                  className="prompt-chip-in truncate text-[10px] text-ink-faint"
+                  title={item.text}
+                >
+                  <span className="mr-1 text-ink-faint/70" aria-hidden="true">
+                    {item.kind === "search" ? "⌕" : "▤"}
+                  </span>
+                  {item.kind === "search" ? `“${item.text}”` : displayLiveSource(item.text)}
+                </li>
+              ))}
+            </ul>
+          )}
+          {lens.status === "completed" && (
+            <p className="mt-1 text-[10px] leading-relaxed text-ink-faint">
+              <span className="text-ok">✓</span> {lens.reviewedChecks} checks ·{" "}
+              <span key={`c-${lens.candidates}`} className="tally-flash">
+                {lens.candidates} candidate{lens.candidates === 1 ? "" : "s"}
+              </span>{" "}
+              · {lens.grounded} grounded · {lens.searches} search
+              {lens.searches === 1 ? "" : "es"} · {lens.fetches} fetch
+              {lens.fetches === 1 ? "" : "es"} · {lens.requests} request
+              {lens.requests === 1 ? "" : "s"}
+            </p>
+          )}
+          {lens.status === "failed" && (
+            <p className="mt-1 text-[10px] leading-relaxed text-err">
+              × {lens.error || "This specialist did not complete."}
+            </p>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function seatDisplay(seat: QcVerifierSeatLiveState): {
+  label: string;
+  tone: string;
+} {
+  if (seat.status === "upheld") return { label: "upheld", tone: "text-accent border-accent/35 bg-accent/8" };
+  if (seat.status === "not_upheld") return { label: "not upheld", tone: "text-ink-dim border-edge bg-bg/30" };
+  if (seat.status === "failed") return { label: "failed", tone: "text-err border-err/35 bg-err/8" };
+  if (seat.status === "cancelled") return { label: "cancelled", tone: "text-warn border-warn/35 bg-warn/8" };
+  if (seat.status === "active") {
+    const active = seat.retry
+      ? `retry ${seat.retry.attempt}/${seat.retry.maxAttempts}`
+      : seat.activity === "searching"
+        ? "searching"
+        : seat.activity === "fetching"
+          ? "reading"
+          : "active";
+    return { label: active, tone: "text-accent border-accent/40 bg-accent/8 qc-seat-active" };
+  }
+  return { label: "queued", tone: "text-ink-faint border-edge/70 bg-bg/20" };
+}
+
+function QcVerifierSeat({ seat }: { seat: QcVerifierSeatLiveState }) {
+  const display = seatDisplay(seat);
+  const recent = seat.recent[0];
+  const details = [
+    `Reviewer ${seat.index}: ${display.label}`,
+    seat.revisedSeverity ? `revised severity ${seat.revisedSeverity}` : "",
+    seat.opsAdequate === true
+      ? "fix approved"
+      : seat.opsAdequate === false
+        ? "fix not approved"
+        : "",
+    seat.error,
+    recent?.text ?? "",
+  ].filter(Boolean);
+  const title = details.join(" · ");
+  return (
+    <span
+      className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${display.tone}`}
+      title={title}
+      aria-label={details.slice(0, 3).join(", ")}
+    >
+      <span className="font-semibold tabular-nums">{seat.index}</span>
+      <span className="truncate">{display.label}</span>
+    </span>
+  );
+}
+
+function candidateOutcome(candidate: QcCandidateLiveState): {
+  label: string;
+  tone: string;
+} {
+  if (candidate.outcome === "upheld") return { label: "Upheld", tone: "text-accent" };
+  if (candidate.outcome === "refuted") return { label: "Refuted", tone: "text-ink-faint" };
+  if (candidate.outcome === "inconclusive") return { label: "Inconclusive", tone: "text-warn" };
+  return { label: "In review", tone: "text-accent" };
+}
+
+function QcCandidateCard({
+  candidate,
+  lensTitle,
+}: {
+  candidate: QcCandidateLiveState;
+  lensTitle: string;
+}) {
+  const outcome = candidateOutcome(candidate);
+  const severity = candidate.originalSeverity.toLowerCase() as Severity;
+  const severityClass = sevChip[severity] ?? sevChip.low;
+  return (
+    <article className="qc-candidate-card">
+      <div className="flex min-w-0 items-start gap-2">
+        <span className={`shrink-0 rounded border px-1 py-px text-[8px] font-semibold uppercase ${severityClass}`}>
+          {candidate.originalSeverity || "review"}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <h5 className="min-w-0 text-[11px] font-medium leading-snug text-ink">
+              {candidate.title}
+            </h5>
+            <span className={`shrink-0 text-[9px] font-semibold ${outcome.tone}`}>
+              {candidate.outcome ? (candidate.outcome === "upheld" ? "● " : candidate.outcome === "refuted" ? "— " : "! ") : ""}
+              {outcome.label}
+            </span>
+          </div>
+          <p className="mt-0.5 truncate text-[9px] text-ink-faint">
+            {lensTitle} · {candidate.panelSize}-seat panel · {candidate.threshold} to uphold
+          </p>
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {candidate.seats.map((seat) => (
+              <QcVerifierSeat key={seat.index} seat={seat} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function QcCandidateGroup({
+  title,
+  candidates,
+  live,
+}: {
+  title: string;
+  candidates: QcCandidateLiveState[];
+  live: QcLiveState;
+}) {
+  if (candidates.length === 0) return null;
+  const lensTitles = new Map(live.lenses.map((lens) => [lens.id, lens.title]));
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-2">
+        <h4 className="text-[9px] font-semibold tracking-[0.12em] text-ink-faint uppercase">
+          {title}
+        </h4>
+        <span className="rounded-full bg-raised px-1.5 py-px text-[8px] tabular-nums text-ink-faint">
+          {candidates.length}
+        </span>
+      </div>
+      <div className="space-y-1.5">
+        {candidates.map((candidate) => (
+          <QcCandidateCard
+            key={candidate.id}
+            candidate={candidate}
+            lensTitle={lensTitles.get(candidate.lensId) || titleFromLens(candidate.lensId)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function titleFromLens(id: string): string {
+  return id
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((word) => word[0].toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function QcReviewRoom({ live }: { live: QcLiveState }) {
+  const phaseTitle =
+    live.phase === "verification"
+      ? "Adversarial panels"
+      : live.phase === "validation"
+        ? "Local fix validation"
+        : "Specialist review";
+  const verificationVisible =
+    live.phase === "verification" ||
+    live.phase === "validation" ||
+    live.candidates.length > 0;
+  const validationVisible = live.phase === "validation" || live.validation.length > 0;
+  const specialistActive = live.phase === "idle" || live.phase === "lenses";
+  return (
+    <section className="qc-review-room" aria-label="Live Final QC Review Room">
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {live.liveMessage}
+      </p>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[9px] font-semibold tracking-[0.15em] text-accent uppercase">
+            Review Room
+          </p>
+          <h3 className="mt-0.5 text-[12px] font-semibold text-ink">{phaseTitle}</h3>
+        </div>
+        <span className="rounded-full border border-accent/30 bg-accent/8 px-2 py-0.5 text-[9px] font-medium text-accent">
+          Live
+        </span>
+      </div>
+      <ol className="qc-stage-rail" aria-label="Final QC stages">
+        {live.stages.map((stage, index) => (
+          <li
+            key={stage.id}
+            className={`qc-stage ${stage.status === "active" ? "is-active" : ""} ${stage.status === "complete" ? "is-complete" : ""} ${stage.status === "failed" ? "is-failed" : ""}`}
+            aria-current={stage.status === "active" ? "step" : undefined}
+          >
+            <span className="qc-stage-index" aria-hidden="true">
+              {stage.status === "complete" ? "✓" : index + 1}
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-[9px] font-semibold text-ink-dim">
+                {stage.label}
+              </span>
+              <span className="block text-[8px] tabular-nums text-ink-faint">
+                <span className="capitalize">{stage.status}</span>
+                {" · "}
+                {stage.total === 0 && stage.status === "complete"
+                  ? "none required"
+                  : `${stage.done}/${stage.total}`}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ol>
+
+      <div className="mt-2.5 flex flex-col gap-3">
+        {specialistActive ? (
+          <section aria-labelledby="qc-live-lenses">
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <h4 id="qc-live-lenses" className="text-[10px] font-semibold text-ink-dim">
+                Specialist lenses
+              </h4>
+              <span className="text-[9px] tabular-nums text-ink-faint">
+                {live.stages[0].done} of {live.stages[0].total} finished
+              </span>
+            </div>
+            <div className="qc-lens-grid">
+              {live.lenses.map((lens) => <QcLensCard key={lens.id} lens={lens} />)}
+            </div>
+          </section>
+        ) : (
+          <section aria-labelledby="qc-live-lenses-settled">
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <h4 id="qc-live-lenses-settled" className="text-[10px] font-semibold text-ink-dim">
+                Specialist lenses
+              </h4>
+              <span className="text-[9px] tabular-nums text-ink-faint">
+                {live.stages[0].done} of {live.stages[0].total} finished
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {live.lenses.map((lens) => (
+                <span
+                  key={lens.id}
+                  className={`rounded-full border px-1.5 py-0.5 text-[8px] ${
+                    lens.status === "completed"
+                      ? "border-ok/30 bg-ok/5 text-ok"
+                      : lens.status === "failed"
+                        ? "border-err/30 bg-err/5 text-err"
+                        : "border-edge bg-bg/25 text-ink-faint"
+                  }`}
+                  title={`${lens.title}: ${lensStatusLabel(lens)}`}
+                >
+                  {lens.status === "completed" ? "✓" : lens.status === "failed" ? "×" : "○"}{" "}
+                  {lens.title} · {lens.status === "completed" ? "done" : lens.status}
+                </span>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {verificationVisible && (
+          <section
+            className={`qc-room-section ${live.phase === "validation" ? "order-2" : ""}`}
+            aria-labelledby="qc-live-panels"
+          >
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <h4 id="qc-live-panels" className="text-[10px] font-semibold text-ink-dim">
+                Adversarial panels
+              </h4>
+              <span className="text-[9px] tabular-nums text-ink-faint">
+                {live.stages[1].done} of {live.stages[1].total} resolved
+              </span>
+            </div>
+            {live.candidates.length === 0 ? (
+              <p className="rounded border border-ok/25 bg-ok/5 px-2 py-1.5 text-[10px] text-ok">
+                ✓ No lens candidates needed an adversarial panel.
+              </p>
+            ) : (
+              <div className="space-y-2.5">
+                <QcCandidateGroup title="In review" candidates={live.inReview} live={live} />
+                <QcCandidateGroup title="Waiting" candidates={live.waiting} live={live} />
+                <QcCandidateGroup title="Resolved" candidates={live.resolved} live={live} />
+              </div>
+            )}
+          </section>
+        )}
+
+        {validationVisible && (
+          <section
+            className={`qc-room-section ${live.phase === "validation" ? "order-1" : ""}`}
+            aria-labelledby="qc-live-validation"
+          >
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <h4 id="qc-live-validation" className="text-[10px] font-semibold text-ink-dim">
+                Local fix validation
+              </h4>
+              <span className="text-[9px] tabular-nums text-ink-faint">
+                {live.stages[2].done} of {live.stages[2].total} checked
+              </span>
+            </div>
+            {live.stages[2].total === 0 ? (
+              <p className="rounded border border-edge bg-bg/25 px-2 py-1.5 text-[10px] text-ink-faint">
+                No upheld candidates required local fix validation.
+              </p>
+            ) : (
+              <div className="space-y-1">
+                {live.validation.map((item) => (
+                  <div key={item.candidateId} className="flex items-start gap-2 rounded border border-edge/70 bg-bg/25 px-2 py-1.5">
+                    <span className={`mt-0.5 shrink-0 text-[10px] ${item.status === "safe_fix" ? "text-ok" : item.status === "manual" || item.status === "advisory" ? "text-warn" : "text-accent"}`} aria-hidden="true">
+                      {item.status === "safe_fix" ? "✓" : item.status === "manual" || item.status === "advisory" ? "!" : "○"}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[10px] font-medium text-ink-dim">{item.title}</p>
+                      <p className="text-[9px] text-ink-faint">
+                        {item.status === "safe_fix"
+                          ? "Safe mechanical fix"
+                          : item.status === "advisory"
+                            ? "Advisory — proposed fix is not safely applicable"
+                            : item.status === "manual"
+                              ? "Manual professional review"
+                              : "Checking proposed operations…"}
+                        {item.reason ? ` · ${item.reason}` : ""}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function QcRunRecap({
+  live,
+  report,
+  attempt,
+}: {
+  live: QcLiveState;
+  report: QcResultView;
+  attempt?: QcAttemptSnapshot | null;
+}) {
+  const liveAttempt =
+    live.runId &&
+    (live.runState === "complete" ||
+      live.runState === "partial" ||
+      live.runState === "failed" ||
+      live.runState === "cancelled")
+      ? { run_id: live.runId, status: live.runState }
+      : null;
+  const disposition = qcRecapDisposition(report, liveAttempt ?? attempt);
+  const useLiveTotals = Boolean(live.runId && live.runId === report.run_id);
+  const lensesCompleted = useLiveTotals
+    ? live.totals.lensesCompleted
+    : report.lens_statuses.filter((lens) => lens.status === "completed").length;
+  const upheld = useLiveTotals ? live.totals.upheld : report.findings.length;
+  const refuted = useLiveTotals ? live.totals.refuted : report.refuted.length;
+  const inconclusive = useLiveTotals
+    ? live.totals.inconclusive
+    : report.inconclusive.length;
+  const candidates = useLiveTotals
+    ? live.totals.candidates
+    : upheld + refuted + inconclusive;
+  const safeFixes = useLiveTotals
+    ? live.totals.safeFixes
+    : report.findings.filter(
+        (finding) =>
+          finding.ops_semantic_status === "approved" && finding.ops_valid,
+      ).length;
+  const stats = [
+    [lensesCompleted, "lenses complete"],
+    [candidates, "candidates reviewed"],
+    [upheld, "upheld"],
+    [refuted, "refuted"],
+    [inconclusive, "inconclusive"],
+    [safeFixes, "safe fixes"],
+  ] as const;
+  const statusTone =
+    disposition.tone === "ok"
+      ? "bg-ok/15 text-ok"
+      : disposition.tone === "error"
+        ? "bg-err/15 text-err"
+        : disposition.tone === "warn"
+          ? "bg-warn/15 text-warn"
+          : "bg-bg/50 text-ink-faint";
+  return (
+    <section
+      className={`qc-run-recap mb-2.5 ${disposition.retained ? "is-retained" : ""}`}
+      aria-label={disposition.retained ? "Retained Final QC remediation recap" : "Final QC run recap"}
+    >
+      <div className="flex items-baseline justify-between gap-2">
+        <div>
+          <p className="text-[9px] font-semibold tracking-[0.15em] text-accent uppercase">
+            {disposition.retained ? "Retained queue recap" : "Review Room recap"}
+          </p>
+          <h3 className="mt-0.5 text-[12px] font-semibold text-ink">
+            {disposition.title}
+          </h3>
+        </div>
+        <span className={`rounded-full px-2 py-0.5 text-[9px] font-medium ${statusTone}`}>
+          {disposition.status}
+        </span>
+      </div>
+      <dl className="qc-recap-grid mt-2">
+        {stats.map(([value, label]) => (
+          <div key={label} className="rounded border border-edge/70 bg-bg/25 px-2 py-1.5">
+            <dt className="text-[8px] leading-tight text-ink-faint">{label}</dt>
+            <dd key={`${label}-${value}`} className="tally-flash mt-0.5 text-[14px] font-semibold tabular-nums text-ink">
+              {value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
 }
 
 export default function QCDrawer({
@@ -311,19 +825,11 @@ export default function QCDrawer({
     0,
   );
 
-  // Live lens + verify progress from the SSE event log.
-  const { lensState, verify } = useMemo(() => {
-    const state: Record<string, "pending" | "done" | "failed"> = {};
-    for (const id of LENS_ORDER) state[id] = "pending";
-    let v: { done: number; total: number } | null = null;
-    for (const e of qc?.events ?? []) {
-      if (e.type === "lens_complete" && e.lens_id) state[e.lens_id] = "done";
-      if (e.type === "lens_failed" && e.lens_id) state[e.lens_id] = "failed";
-      if (e.type === "verify_progress" && e.total != null)
-        v = { done: e.done ?? 0, total: e.total };
-    }
-    return { lensState: state, verify: v };
-  }, [qc?.events]);
+  const live = useMemo(
+    () => foldQcLiveState(qc?.events ?? [], qc ?? undefined),
+    [qc],
+  );
+  const active = running || settling;
 
   const previewSelectedFixes = async () => {
     if (
@@ -477,11 +983,13 @@ export default function QCDrawer({
           </span>
           <span className="truncate">
             {settling
-              ? "stop requested · preserving paid activity…"
-              : running && verify
-              ? `verifying findings… (${verify.done}/${verify.total})`
+              ? "stop requested · finishing in-flight work…"
+              : running && live.phase === "verification"
+                ? `adversarial panels · ${live.stages[1].done}/${live.stages[1].total}`
+              : running && live.phase === "validation"
+                ? `validating fixes · ${live.stages[2].done}/${live.stages[2].total}`
               : running
-                ? "reviewing…"
+                ? `specialist lenses · ${live.stages[0].done}/${live.stages[0].total}`
                 : result
                   ? `${openFindings.length} open finding${openFindings.length === 1 ? "" : "s"}` +
                     (openCriticalCount ? ` · ${openCriticalCount} critical` : "") +
@@ -522,10 +1030,9 @@ export default function QCDrawer({
       {settling && (
         <p
           className="status-shimmer mt-1 rounded border border-warn/40 bg-warn/10 px-2 py-1 text-[11px] font-medium text-warn"
-          role="status"
         >
-          Stop requested; preserving completed and billed Final QC activity…
-          Re-run and disposition controls will unlock after the worker settles.
+          Stop requested — finishing already-paid in-flight work and preserving
+          the audit record. Controls unlock after the worker settles.
         </p>
       )}
 
@@ -563,7 +1070,7 @@ export default function QCDrawer({
           className="mt-1.5 max-h-[28rem] space-y-3 overflow-y-auto pb-1"
         >
           {/* Issue readiness */}
-          {readiness && (
+          {readiness && !active && (
             <div
               className="rounded-lg border border-edge bg-surface/50 p-2.5"
               data-tour="readiness"
@@ -605,48 +1112,19 @@ export default function QCDrawer({
           )}
 
           {/* Cost expectation (idle only) */}
-          {status !== "running" && !settling && !result && (
+          {!active && !result && (
             <p className="text-[11px] text-ink-faint italic">{costLine}</p>
           )}
 
-          {/* Running: lens rows + verify counter */}
-          {running && (
-            <div className="rounded-lg border border-edge bg-surface/50 p-2.5">
-              <ul className="space-y-0.5">
-                {LENS_ORDER.map((id) => {
-                  const s = lensState[id];
-                  return (
-                    <li
-                      key={id}
-                      className="flex items-baseline gap-2 text-[11px] text-ink-dim"
-                    >
-                      <span
-                        className={`h-1.5 w-1.5 shrink-0 translate-y-[-1px] rounded-full ${
-                          s === "done"
-                            ? "bg-ok"
-                            : s === "failed"
-                              ? "bg-err"
-                              : "animate-pulse bg-accent/60"
-                        }`}
-                      />
-                      <span>{id.replace(/_/g, " ")}</span>
-                      <span className="text-ink-faint">
-                        {s === "done" ? "✓" : s === "failed" ? "failed" : "…"}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-              {verify && (
-                <p className="status-shimmer mt-1.5 text-[11px]">
-                  Verifying findings… ({verify.done}/{verify.total})
-                </p>
-              )}
-            </div>
-          )}
+          {active && <QcReviewRoom live={live} />}
 
-          {primaryReport && !running && !result && (
+          {primaryReport && !active && !result && (
             <div className="rounded-lg border border-warn/40 bg-warn/10 p-2.5 text-[11px] text-warn">
+              <QcRunRecap
+                live={live}
+                report={primaryReport}
+                attempt={qc?.latest_attempt}
+              />
               <p className="leading-relaxed">
                 A paid {primaryReport.execution_status || "partial"} audit
                 report was preserved for run {primaryReport.run_id || "ID not recorded"},
@@ -663,8 +1141,13 @@ export default function QCDrawer({
           )}
 
           {/* Complete: findings */}
-          {result && !running && (
+          {result && !active && (
             <div data-capability="qc.actions">
+              <QcRunRecap
+                live={live}
+                report={primaryReport ?? result}
+                attempt={qc?.latest_attempt}
+              />
               {stale && (
                 <p className="rounded border border-warn/40 bg-warn/10 px-2 py-1 text-[11px] font-medium text-warn">
                   The document has changed since this QC ran (v

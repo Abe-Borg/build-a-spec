@@ -61,6 +61,7 @@ class ResearchRunner:
         self._round_number = 0
         self.status = STATUS_IDLE
         self.error = ""
+        self.error_kind = ""
         self.profile_result: RequirementsProfile | None = None
         self.events: list[dict[str, Any]] = []
 
@@ -110,6 +111,7 @@ class ResearchRunner:
                 return False
             self.status = STATUS_RUNNING
             self.error = ""
+            self.error_kind = ""
             self.events = []
             round_number = (
                 self.profile_result.round_count + 1
@@ -143,9 +145,14 @@ class ResearchRunner:
                 )
             except ResearchFanoutError as exc:
                 message = self._failure_message(str(exc))
-                if self._try_resolve(STATUS_FAILED, error=message):
+                kind = "auth_error" if getattr(exc, "auth_error", False) else ""
+                if self._try_resolve(STATUS_FAILED, error=message, error_kind=kind):
                     self._emit(
-                        {"type": "research_failed", "error": message},
+                        {
+                            "type": "research_failed",
+                            "error": message,
+                            **({"error_kind": kind} if kind else {}),
+                        },
                         round_number=round_number,
                     )
                     _trace.research_end(
@@ -222,6 +229,7 @@ class ResearchRunner:
         status: str,
         *,
         error: str = "",
+        error_kind: str = "",
         adopt: Callable[
             [RequirementsProfile | None], RequirementsProfile
         ] | None = None,
@@ -246,6 +254,7 @@ class ResearchRunner:
                 return False
             self.status = status
             self.error = error
+            self.error_kind = error_kind
             if adopt is not None:
                 self.profile_result = adopt(self.profile_result)
             return True
@@ -305,6 +314,7 @@ class ResearchRunner:
         with self._lock:
             self.status = STATUS_COMPLETE
             self.error = ""
+            self.error_kind = ""
             self.profile_result = profile
             self.events = []
         self._emit(
@@ -337,6 +347,7 @@ class ResearchRunner:
             payload: dict[str, Any] = {
                 "status": self.status,
                 "error": self.error,
+                "error_kind": self.error_kind,
                 "events": list(self.events),
             }
             result = self.profile_result

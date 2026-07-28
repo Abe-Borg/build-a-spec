@@ -104,6 +104,9 @@ export default function App() {
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [update, setUpdate] = useState<UpdateCheckPayload | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // A gentle nudge shown the moment chat, research, or Final QC fails
+  // because the stored API key is invalid/expired (never the raw 401 text).
+  const [apiKeyErrorOpen, setApiKeyErrorOpen] = useState(false);
   const [helpTopic, setHelpTopic] = useState<HelpTopic | null>(null);
   // Shown when the pywebview shell reports a window-close with unsaved work.
   const [closePromptOpen, setClosePromptOpen] = useState(false);
@@ -363,6 +366,34 @@ export default function App() {
       refreshUsage();
     }
   }, [refreshQc, refreshReadiness, refreshUsage]);
+
+  // Same gentle nudge as chat's error branch, edge-triggered off the polled
+  // snapshot: fires once per failed run (not once per poll tick), reset the
+  // moment status leaves "failed" so a fresh attempt can trigger it again.
+  const researchAuthHandledRef = useRef(false);
+  useEffect(() => {
+    if (research?.status !== "failed") {
+      researchAuthHandledRef.current = false;
+      return;
+    }
+    if (research.error_kind === "auth_error" && !researchAuthHandledRef.current) {
+      researchAuthHandledRef.current = true;
+      setApiKeyErrorOpen(true);
+    }
+  }, [research?.status, research?.error_kind]);
+
+  const qcAuthHandledRef = useRef(false);
+  useEffect(() => {
+    if (qc?.status !== "failed") {
+      qcAuthHandledRef.current = false;
+      return;
+    }
+    const kind = qc.error_kind || qc.latest_attempt?.error_kind;
+    if (kind === "auth_error" && !qcAuthHandledRef.current) {
+      qcAuthHandledRef.current = true;
+      setApiKeyErrorOpen(true);
+    }
+  }, [qc?.status, qc?.error_kind, qc?.latest_attempt?.error_kind]);
 
   const onStartQc = useCallback(async (acknowledgeScopeMismatch = false) => {
     try {
@@ -833,6 +864,7 @@ export default function App() {
             streaming: false,
             status: null,
           });
+          if (evt.kind === "auth_error") setApiKeyErrorOpen(true);
           // A failed turn rolled the document back server-side — but the
           // spend was real, so refresh the meter too.
           refreshDoc();
@@ -1506,6 +1538,37 @@ export default function App() {
         cancelLabel="Continue tour"
         onConfirm={onboarding.end}
         onCancel={onboarding.cancelEnd}
+      />
+      <ConfirmDialog
+        open={apiKeyErrorOpen}
+        title="Your API key needs attention"
+        body={
+          <>
+            Your Anthropic API key appears to be invalid or has expired, so
+            that last request couldn't go through.
+            <ol className="mt-2 list-decimal space-y-1 pl-5">
+              <li>
+                Open{" "}
+                <a
+                  href="https://console.anthropic.com/settings/keys"
+                  className="text-accent underline"
+                >
+                  the Anthropic Console
+                </a>{" "}
+                and generate a new key (or check that the existing one is
+                still active).
+              </li>
+              <li>Paste it into Settings here, and it'll be used right away.</li>
+            </ol>
+          </>
+        }
+        confirmLabel="Open Settings"
+        cancelLabel="Dismiss"
+        onConfirm={() => {
+          setApiKeyErrorOpen(false);
+          setSettingsOpen(true);
+        }}
+        onCancel={() => setApiKeyErrorOpen(false)}
       />
       <ConfirmDialog
         open={tutorialCloseBlocked}

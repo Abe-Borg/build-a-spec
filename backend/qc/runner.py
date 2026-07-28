@@ -58,11 +58,13 @@ class QCRunner:
         self._worker_settled = True
         self.status = STATUS_IDLE
         self.error = ""
+        self.error_kind = ""
         self.result: QCResult | None = None
         self.latest_attempt_result: QCResult | None = None
         self.latest_attempt_run_id = ""
         self.latest_attempt_status = ""
         self.latest_attempt_error = ""
+        self.latest_attempt_error_kind = ""
         self.latest_attempt_started_at = ""
         self.latest_attempt_finished_at = ""
         self.events: list[dict[str, Any]] = []
@@ -113,6 +115,7 @@ class QCRunner:
                 return False
             self.status = STATUS_RUNNING
             self.error = ""
+            self.error_kind = ""
             self._worker_settled = False
             # Preserve the last completed report until the re-run succeeds.
             # A costly failed re-run must not erase the user's prior audit
@@ -128,6 +131,7 @@ class QCRunner:
             self.latest_attempt_run_id = run_id
             self.latest_attempt_status = STATUS_RUNNING
             self.latest_attempt_error = ""
+            self.latest_attempt_error_kind = ""
             self.latest_attempt_started_at = started_at
             self.latest_attempt_finished_at = ""
 
@@ -164,15 +168,21 @@ class QCRunner:
                         pass
                 if exc.result is not None:
                     exc.result.finished_at = _now_iso()
+                kind = "auth_error" if exc.auth_error else ""
                 if self._finalize_attempt(
                     run_token,
                     runner_status=STATUS_FAILED,
                     attempt_status="failed",
                     error=str(exc),
+                    error_kind=kind,
                     result=exc.result,
                     install_result=False,
                     cancel_event=cancel_event,
-                    terminal_event={"type": "qc_failed", "error": str(exc)},
+                    terminal_event={
+                        "type": "qc_failed",
+                        "error": str(exc),
+                        **({"error_kind": kind} if kind else {}),
+                    },
                 ):
                     _trace.qc_end(
                         trace_handle, status=STATUS_FAILED, error=str(exc)
@@ -243,6 +253,7 @@ class QCRunner:
         runner_status: str,
         attempt_status: str,
         error: str = "",
+        error_kind: str = "",
         result: QCResult | None = None,
         install_result: bool,
         cancel_event: threading.Event,
@@ -271,6 +282,11 @@ class QCRunner:
                     if cancelled
                     else error
                 )
+            )
+            self.latest_attempt_error_kind = (
+                self.error_kind
+                if cancelled and self.error
+                else ("" if cancelled else error_kind)
             )
             self.latest_attempt_finished_at = _now_iso()
             if result is not None:
@@ -305,6 +321,7 @@ class QCRunner:
                 return False
             self.status = runner_status
             self.error = error
+            self.error_kind = error_kind
             if (
                 install_result
                 and result is not None
@@ -367,11 +384,13 @@ class QCRunner:
                 if self.status == STATUS_COMPLETE
                 else f"Restored Final QC attempt is {attempt_status}."
             )
+            self.error_kind = ""
             self.result = result if retain_result else None
             self.latest_attempt_result = result
             self.latest_attempt_run_id = result.run_id
             self.latest_attempt_status = attempt_status
             self.latest_attempt_error = self.error
+            self.latest_attempt_error_kind = ""
             self.latest_attempt_started_at = result.started_at
             self.latest_attempt_finished_at = result.finished_at
             self.events = []
@@ -475,6 +494,9 @@ class QCRunner:
                     "The saved project captured an in-progress attempt; it "
                     "cannot resume and must be run again."
                 )
+            # Not persisted in the project file — a restored attempt is never
+            # treated as a fresh auth-error occurrence (no modal on load).
+            self.latest_attempt_error_kind = ""
             self.latest_attempt_started_at = str(
                 payload.get("started_at") or ""
             )
@@ -493,6 +515,9 @@ class QCRunner:
                 self.error = self.latest_attempt_error or (
                     f"Latest saved Final QC attempt is {self.latest_attempt_status}."
                 )
+            # Not persisted — a restored/reconciled attempt never replays as
+            # a fresh auth-error occurrence.
+            self.error_kind = ""
 
     # -- mutation (accept / dismiss; guarded) --------------------------------
 
@@ -628,6 +653,7 @@ class QCRunner:
             payload: dict[str, Any] = {
                 "status": self.status,
                 "error": self.error,
+                "error_kind": self.error_kind,
                 "events": list(self.events),
             }
             result = self.result
@@ -647,6 +673,7 @@ class QCRunner:
             "run_id": self.latest_attempt_run_id,
             "status": self.latest_attempt_status,
             "error": self.latest_attempt_error,
+            "error_kind": self.latest_attempt_error_kind,
             "started_at": self.latest_attempt_started_at,
             "finished_at": self.latest_attempt_finished_at,
             "report_available": self.latest_attempt_result is not None,

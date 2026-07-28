@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .. import settings
+from ..llm.client import AUTH_ERROR_MESSAGE, is_authentication_error
 from ..project_profile import ProjectProfile
 from ..spec_modules import ResearchDimension, SpecModule
 from ..usage_ledger import usage_to_dict
@@ -80,6 +81,10 @@ def _noop_sink(_event: dict) -> None:
 
 class ResearchFanoutError(RuntimeError):
     """Every research dimension failed — nothing was adopted."""
+
+    def __init__(self, message: str, *, auth_error: bool = False) -> None:
+        super().__init__(message)
+        self.auth_error = auth_error
 
 
 # Fan-out width: research calls are long-lived streaming requests; four in
@@ -1134,8 +1139,13 @@ def _run_dimension(
         except Exception as exc:  # noqa: BLE001 — classified below
             failure_class = classify_exception(exc)
             if not is_retryable_failure_class(failure_class) or is_last_attempt:
+                message = (
+                    AUTH_ERROR_MESSAGE
+                    if is_authentication_error(exc)
+                    else f"{type(exc).__name__}: {exc}"
+                )
                 return _failed(
-                    f"{type(exc).__name__}: {exc}",
+                    message,
                     responses=[*billed_responses, *all_responses],
                 )
             billed_responses.extend(all_responses)
@@ -1219,7 +1229,11 @@ def run_requirements_research(
                         dimension_id=dimension.dimension_id,
                         status="failed",
                         title=dimension.title,
-                        error=f"{type(exc).__name__}: {exc}",
+                        error=(
+                            AUTH_ERROR_MESSAGE
+                            if is_authentication_error(exc)
+                            else f"{type(exc).__name__}: {exc}"
+                        ),
                     )
                 )
             outcomes[dimension.dimension_id] = outcome
@@ -1251,8 +1265,13 @@ def run_requirements_research(
 
     if completed_count == 0:
         errors = "; ".join(f"{s.dimension_id}: {s.error}" for s in statuses)
+        failed = [s for s in statuses if s.status == "failed"]
+        auth_error = bool(failed) and all(
+            s.error == AUTH_ERROR_MESSAGE for s in failed
+        )
         raise ResearchFanoutError(
-            f"All {len(statuses)} research dimension(s) failed. {errors}"
+            f"All {len(statuses)} research dimension(s) failed. {errors}",
+            auth_error=auth_error,
         )
 
     # Every profile carries its round record from birth — a fan-out is one

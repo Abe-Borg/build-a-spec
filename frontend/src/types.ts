@@ -571,6 +571,7 @@ export interface ResearchProfileView {
 export interface ResearchSnapshot {
   status: ResearchRunStatus;
   error: string;
+  error_kind?: "auth_error" | "";
   events: ResearchEvent[];
   profile?: ResearchProfileView;
 }
@@ -800,6 +801,7 @@ export interface QcEvent {
 export interface QcSnapshot {
   status: QcRunStatus;
   error: string;
+  error_kind?: "auth_error" | "";
   /** Stop was requested but the worker is still attaching paid activity. */
   settling?: boolean;
   events: QcEvent[];
@@ -821,6 +823,7 @@ export interface QcAttemptSnapshot {
   run_id: string;
   status: string;
   error: string;
+  error_kind?: "auth_error" | "";
   started_at: string;
   finished_at: string;
   report_available: boolean;
@@ -1009,7 +1012,7 @@ export type StreamEvent =
   | { type: "open_questions"; items: OpenItem[] }
   | { type: "lint"; items: LintIssue[]; standards: StandardInfo[] }
   | { type: "turn_complete"; stop_reason: string | null; usage?: TurnUsage }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; kind?: "auth_error" };
 
 // --- Developer tools / diagnostics ------------------------------------------
 

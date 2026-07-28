@@ -45,6 +45,11 @@ from typing import Any, Callable
 from .. import settings
 from ..llm.client import AUTH_ERROR_MESSAGE, is_authentication_error
 from ..project_profile import ProjectProfile
+from ..runtime_context import (
+    current_date_iso,
+    current_datetime,
+    date_context_block,
+)
 from ..spec_modules import ResearchDimension, SpecModule
 from ..usage_ledger import usage_to_dict
 from .grounding import (
@@ -799,14 +804,24 @@ def build_dimension_user_message(
     profile: ProjectProfile,
     dimension: ResearchDimension,
     discipline: str = "",
+    *,
+    today: str = "",
 ) -> str:
-    """Project header + the dimension's formatted brief.
+    """Date + project header + the dimension's formatted brief.
 
     ``discipline`` (Batch 10) is the session-selected discipline for
     open-catalog modules. The kwarg is set unconditionally — a template
     referencing ``{discipline}`` must never KeyError at run time — but the
     header names it only when non-empty, so curated-module messages are
     byte-identical to before.
+
+    ``today`` is the run's single clock reading, rendered by
+    :func:`backend.runtime_context.date_context_block`. This whole phase
+    exists to establish which editions a jurisdiction has adopted *now*,
+    so a researcher that does not know the date is checking currency
+    against its training data. Passed in rather than read here so all four
+    dimensions of a round agree, including one that crosses midnight; an
+    empty value renders nothing, keeping direct callers unchanged.
     """
     kwargs = module.basis.format_kwargs()
     kwargs.update(profile.prompt_format_kwargs())
@@ -817,6 +832,8 @@ def build_dimension_user_message(
     )
     if discipline:
         header += f" Discipline: {discipline}."
+    if today:
+        header = f"{today}\n\n{header}"
     body = dimension.prompt_template.format(**kwargs)
     return f"{header}\n\n{body}"
 
@@ -1042,6 +1059,7 @@ def _run_dimension(
     model: str,
     max_tokens: int,
     discipline: str = "",
+    today: str = "",
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> _DimensionOutcome:
@@ -1082,7 +1100,7 @@ def _run_dimension(
 
     system_prompt = build_research_system_prompt(module)
     user_message = build_dimension_user_message(
-        module, profile, dimension, discipline
+        module, profile, dimension, discipline, today=today
     )
 
     def _failed(error: str, *, responses: list[Any] | None = None) -> _DimensionOutcome:
@@ -1354,6 +1372,14 @@ def run_requirements_research(
             f"Module {module.module_id!r} defines no research dimensions."
         )
 
+    # One clock reading for the whole round, so every dimension is told the
+    # same date and the round's own `research_date` stamp cannot disagree
+    # with the date its workers were briefed on — a round that starts at
+    # 23:59 would otherwise research "yesterday" and file under "today".
+    stamped_at = current_datetime()
+    today_block = date_context_block(stamped_at)
+    research_date = current_date_iso(stamped_at)
+
     # Echo the parsed location the moment research starts: a typo'd city
     # must be visible before spend accumulates.
     event_sink(
@@ -1384,6 +1410,7 @@ def run_requirements_research(
                 model=model,
                 max_tokens=max_tokens,
                 discipline=discipline,
+                today=today_block,
                 event_sink=event_sink,
                 should_stop=should_stop,
             ): dimension
@@ -1451,7 +1478,7 @@ def run_requirements_research(
         RequirementsProfile(
             items=items,
             dimension_statuses=statuses,
-            research_date=time.strftime("%Y-%m-%d"),
+            research_date=research_date,
             project=profile.to_dict(),
         ),
     )

@@ -37,6 +37,7 @@ from ..research.retry_policy import (
     is_retryable_failure_class,
 )
 from ..research.schema import extract_tool_use_block
+from ..runtime_context import date_context_block
 from ..spec_doc.model import SpecSection
 from ..spec_modules import SpecModule
 from ..usage_ledger import usage_to_dict
@@ -307,9 +308,17 @@ def build_audit_user_message(
         if discipline
         else ""
     )
+    # A single-call pass with nothing cached, so unlike the QC fan-out this
+    # can read the clock inline. Deprecated path (the QC lenses supersede
+    # it), carried along so a session that still runs it isn't the one
+    # surface left judging edition currency against training data.
+    date_block = (
+        f"<current_date>\n{date_context_block()}\n</current_date>\n\n"
+    )
     return (
         "Audit the following draft against the project requirements "
         "profile.\n\n"
+        f"{date_block}"
         f"{discipline_block}"
         "<project_requirements_profile>\n"
         f"{render_profile_block(profile)}\n"

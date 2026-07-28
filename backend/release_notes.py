@@ -96,7 +96,9 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
             "The pre-issue review pass now costs roughly a third of what it "
             "did and finishes in a fraction of the time, without checking "
             "any less of your section. Same five reviewers, same panel of "
-            "refuters for every finding, same audit report."
+            "refuters for every finding, same audit report. The assistant "
+            "also knows today's date now, which changes how it talks about "
+            "code editions."
         ),
         sections=(
             ReleaseSection(
@@ -152,6 +154,38 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "and its fixes cannot be applied until you run "
                             "the pass again. Your document and everything "
                             "else in the project are untouched."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Code editions",
+                items=(
+                    ReleaseItem(
+                        title="The assistant knows what today's date is",
+                        body=(
+                            "It never did before. An AI model has no clock, "
+                            "so left to itself it judges whether an edition "
+                            "is current against material it learned during "
+                            "training — which gets further out of date every "
+                            "month the app stays installed. It is now told "
+                            "the real date off your own machine at the start "
+                            "of every chat turn, every research run, and "
+                            "every Final QC review."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A likely newer edition is raised, not assumed",
+                        body=(
+                            "Codes and standards revise on multi-year "
+                            "cycles. When enough time has passed that a "
+                            "newer edition of something you are citing has "
+                            "probably been published, the assistant now says "
+                            "so and offers to check, instead of either "
+                            "quietly drafting to the old one or switching "
+                            "you to a new one you never adopted. Your "
+                            "recorded editions still only change when you "
+                            "say so."
                         ),
                     ),
                 ),

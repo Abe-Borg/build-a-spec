@@ -57,6 +57,7 @@ export const END_USER_CAPABILITIES = [
   "qc.stop",
   "qc.findings",
   "qc.actions",
+  "qc.remediation",
   "qc.report",
   "readiness.checklist",
   "export.clean",
@@ -73,4 +74,3 @@ export type EndUserCapabilityId = (typeof END_USER_CAPABILITIES)[number];
 
 /** Typed helper for React's data-capability attribute. */
 export const capability = <T extends EndUserCapabilityId>(id: T): T => id;
-

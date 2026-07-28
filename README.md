@@ -407,8 +407,23 @@ actions.
   (blank/whitespace reasons are rejected) and is
   remembered by content-addressed id, so a re-run that regenerates the same
   finding auto-marks it dismissed. Open, applied, dismissed, advisory,
-  invalid, no-op, and stale outcomes remain in the report. An "Apply all
-  criticals" press-and-hold handles the urgent set at once.
+  invalid, no-op, and stale outcomes remain in the report. Individual actions
+  remain available when a reviewer wants to handle one finding at a time.
+- **Guided remediation turns the audit into a short decision workflow.** Open
+  findings are separated into fixes that are ready to apply, explicit
+  TBD/assumption items that need a project decision, and findings that still
+  require professional review. Users can select the ready fixes once, request
+  a server-authoritative no-change preview, and confirm the conflict-free set
+  as one undoable document version. The preview de-duplicates identical
+  operations and excludes every finding involved in a competing write instead
+  of guessing which edit should win. The confirmation is bound to that exact
+  preview, and source-backed projects pass the imported-Word preservation gate
+  before a fix is advertised as safe. Decision items can prefill the chat with
+  the finding, affected provision, review rationale, current text, and missing
+  fact so the user supplies the knowledge while the assistant does the
+  drafting. After application, chat records a concise finding-by-finding
+  change receipt and explains skipped outcomes; the paid Final QC rerun
+  remains an explicit user choice.
 - **Module scope is checked without rewriting the specification.** For curated
   modules with a closed section catalog, import, QC status, and QC start compare
   the normalized specification section number with that catalog. A mismatch is

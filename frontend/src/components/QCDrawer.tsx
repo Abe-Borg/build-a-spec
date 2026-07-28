@@ -9,21 +9,23 @@
  * the user opts in explicitly. Running → the five lens rows with live status,
  * then a
  * "Verifying findings…" counter (fed by the SSE stream). Complete → findings
- * grouped by severity, each with a jump-to-element ref, collapsible
- * rationale, an Apply fix (with an ops preview) / Dismiss action, an "Apply
- * all criticals" hold-to-confirm, and the refuted findings collapsed for
- * transparency, while infrastructure-inconclusive candidates stay in their
- * own non-actionable warning bucket. A staleness banner shows when the
- * document has moved on from the version QC reviewed.
+ * are triaged into ready fixes, project decisions, and professional review.
+ * Ready fixes default selected, receive a free combined-batch preview, and
+ * apply after one confirmation; every finding still exposes its rationale,
+ * operation preview, individual Apply / Dismiss actions, and report trail.
+ * Refuted and infrastructure-inconclusive candidates remain disclosed. A
+ * staleness banner shows when the document has moved on from the version QC
+ * reviewed.
  *
- * Reuses Batch 2's status machinery (no dead air — a QC run takes minutes and
- * the drawer shows lens-by-lens progress the whole time) and Batch 3's
- * hold-to-confirm affordance.
+ * Reuses Batch 2's status machinery: a run takes minutes, and the drawer shows
+ * lens-by-lens progress the whole time instead of leaving dead air.
  */
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type {
   QcModuleSectionCompatibility,
+  QcApplyPreviewBasis,
+  QcApplyPreviewResult,
   QcSnapshot,
   ReadinessPayload,
   Severity,
@@ -47,6 +49,11 @@ import {
   type QcOperationEvaluation,
   type QcReportFinding,
 } from "../lib/qcReport";
+import {
+  classifyQcRemediation,
+  qcDecisionContextByElement,
+  type QcRemediationBucket,
+} from "../lib/qcRemediation";
 import { useDialogFocus } from "../lib/dialogFocus";
 import ConfirmDialog from "./ConfirmDialog";
 import QCReportModal from "./QCReportModal";
@@ -63,15 +70,18 @@ interface Props {
   usage: UsageSummary | null;
   onStart: (acknowledgeScopeMismatch: boolean) => void;
   onStop: () => void;
-  onApply: (findingIds: string[]) => void;
+  onPreview: (findingIds: string[]) => Promise<QcApplyPreviewResult>;
+  onApply: (
+    findingIds: string[],
+    previewBasis?: QcApplyPreviewBasis,
+  ) => Promise<void>;
   onDismiss: (findingId: string, reason: string) => Promise<void>;
+  onAskModel: (text: string) => void;
   onJump: (elementId: string) => void;
   /** Guided-tour "ensure open" (Batch 6): a bump expands the drawer. */
   openNonce?: number;
 }
 
-const HOLD_MS = 800;
-const SEVERITY_ORDER: Severity[] = ["critical", "high", "medium", "low"];
 const QC_BUSY_MESSAGE = "Wait for the current action to finish.";
 
 function qcOperationGate(
@@ -148,6 +158,12 @@ function opPreview(op: Record<string, unknown>): string {
   return `${action} ${target}`;
 }
 
+function promptExcerpt(value: string | undefined, limit = 800): string {
+  const normalized = (value ?? "").replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit - 1).trimEnd()}…`;
+}
+
 export default function QCDrawer({
   qc,
   readiness,
@@ -159,8 +175,10 @@ export default function QCDrawer({
   usage,
   onStart,
   onStop,
+  onPreview,
   onApply,
   onDismiss,
+  onAskModel,
   onJump,
   openNonce,
 }: Props) {
@@ -173,27 +191,28 @@ export default function QCDrawer({
   const [openRationale, setOpenRationale] = useState<Record<string, boolean>>({});
   const [showRefuted, setShowRefuted] = useState(false);
   const [showInconclusive, setShowInconclusive] = useState(false);
-  const [holding, setHolding] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [selectedReadyIds, setSelectedReadyIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [batchPreview, setBatchPreview] =
+    useState<QcApplyPreviewResult | null>(null);
+  const [batchPreviewPending, setBatchPreviewPending] = useState(false);
+  const [batchPreviewError, setBatchPreviewError] = useState("");
+  const [applyPending, setApplyPending] = useState(false);
   const [dismissTarget, setDismissTarget] = useState<QcReportFinding | null>(null);
   const [dismissReason, setDismissReason] = useState("");
   const [dismissPending, setDismissPending] = useState(false);
   const [dismissError, setDismissError] = useState("");
   const drawerToggleRef = useRef<HTMLButtonElement>(null);
-  const holdTimer = useRef<number | undefined>(undefined);
-  const latestApplyAll = useRef({
-    busy: true,
-    findingIds: [] as string[],
-    onApply,
-  });
-  useEffect(() => () => window.clearTimeout(holdTimer.current), []);
+  const applyPendingRef = useRef(false);
 
   const status = qc?.status ?? "idle";
   const running = status === "running";
   const settling = qc?.settling ?? false;
-  const interactionBusy = busy || settling;
+  const interactionBusy = busy || settling || applyPending;
   const result = qc?.result;
   const moduleSectionCompatibility = qc?.module_section_compatibility;
   const primaryReport = qcPrimaryReport(qc);
@@ -201,12 +220,16 @@ export default function QCDrawer({
   const refuted = result ? qcSubstantivelyRefutedCandidates(result) : [];
   const inconclusive = result ? qcInconclusiveCandidates(result) : [];
   const openFindings = findings.filter((f) => f.status === "open");
-  const openCriticals = openFindings.filter((f) => f.severity === "critical");
+  const openCriticalCount = openFindings.filter(
+    (f) => f.severity === "critical",
+  ).length;
   const stale =
     result != null &&
     ((qc?.stale ?? false) ||
       (doc != null && result.version_index !== doc.version.index));
   const applyStateStale = result != null && (doc == null || stale);
+  const auditComplete = result?.execution_status === "complete";
+  const remediationAvailable = auditComplete && !applyStateStale;
   const findingOperationEvaluations = new Map(
     findings.map((finding) => [
       finding.finding_id,
@@ -216,7 +239,14 @@ export default function QCDrawer({
   const findingDecisions = new Map(
     findings.map((finding) => {
       const evaluation = findingOperationEvaluations.get(finding.finding_id)!;
-      const operationGate = qcOperationGate(finding, evaluation);
+      const operationGate: SourceOperationCapability = !auditComplete
+        ? {
+            allowed: false,
+            blocker: "qc_audit_incomplete",
+            message:
+              "This QC audit did not complete, so its proposed operations cannot be applied.",
+          }
+        : qcOperationGate(finding, evaluation);
       return [
         finding.finding_id,
         operationGate.allowed
@@ -230,17 +260,56 @@ export default function QCDrawer({
       ];
     }),
   );
-  const applicableCriticals = openCriticals.filter(
-    (finding) => findingDecisions.get(finding.finding_id)?.allowed,
+  const decisionContexts = useMemo(
+    () => qcDecisionContextByElement(doc),
+    [doc],
   );
-  const firstCriticalDenial = openCriticals
-    .map((finding) => findingDecisions.get(finding.finding_id))
-    .find((decision) => decision && !decision.allowed);
-  latestApplyAll.current = {
-    busy: interactionBusy,
-    findingIds: applicableCriticals.map((finding) => finding.finding_id),
-    onApply,
-  };
+  const remediationEntries = openFindings.map((finding) => ({
+    finding,
+    classification: classifyQcRemediation(
+      finding,
+      findingDecisions.get(finding.finding_id)?.allowed === true,
+      decisionContexts.get(finding.element_id),
+    ),
+  }));
+  const readyEntries = remediationAvailable
+    ? remediationEntries.filter(
+        (entry) => entry.classification.bucket === "ready",
+      )
+    : [];
+  const decisionEntries = remediationAvailable
+    ? remediationEntries.filter(
+        (entry) => entry.classification.bucket === "needs_decision",
+      )
+    : [];
+  const manualEntries = remediationAvailable
+    ? remediationEntries.filter(
+        (entry) => entry.classification.bucket === "manual_review",
+      )
+    : [];
+  const resolvedFindings = findings.filter(
+    (finding) => finding.status !== "open",
+  );
+  const readyIdKey = readyEntries
+    .map((entry) => entry.finding.finding_id)
+    .join("\u001f");
+  useEffect(() => {
+    setSelectedReadyIds(
+      new Set(readyEntries.map((entry) => entry.finding.finding_id)),
+    );
+    setBatchPreview(null);
+    setBatchPreviewError("");
+    // The key intentionally represents the complete eligible set. Individual
+    // checkbox changes do not reset the user's selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result?.run_id, readyIdKey]);
+  const selectedReadyEntries = readyEntries.filter((entry) =>
+    selectedReadyIds.has(entry.finding.finding_id),
+  );
+  const selectedOperationCount = selectedReadyEntries.reduce(
+    (total, entry) => total + entry.finding.proposed_ops.length,
+    0,
+  );
 
   // Live lens + verify progress from the SSE event log.
   const { lensState, verify } = useMemo(() => {
@@ -256,19 +325,60 @@ export default function QCDrawer({
     return { lensState: state, verify: v };
   }, [qc?.events]);
 
-  const startHoldApplyCriticals = () => {
-    if (interactionBusy || applicableCriticals.length === 0) return;
-    setHolding(true);
-    holdTimer.current = window.setTimeout(() => {
-      setHolding(false);
-      const latest = latestApplyAll.current;
-      if (latest.busy || latest.findingIds.length === 0) return;
-      latest.onApply([...latest.findingIds]);
-    }, HOLD_MS);
+  const previewSelectedFixes = async () => {
+    if (
+      interactionBusy ||
+      applyPending ||
+      batchPreviewPending ||
+      selectedReadyEntries.length === 0
+    ) {
+      return;
+    }
+    const findingIds = selectedReadyEntries.map(
+      (entry) => entry.finding.finding_id,
+    );
+    setBatchPreviewPending(true);
+    setBatchPreviewError("");
+    try {
+      const preview = await onPreview(findingIds);
+      setBatchPreview(preview);
+    } catch (error) {
+      setBatchPreviewError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setBatchPreviewPending(false);
+    }
   };
-  const cancelHold = () => {
-    setHolding(false);
-    window.clearTimeout(holdTimer.current);
+
+  const applyFindingIds = async (
+    findingIds: string[],
+    previewBasis?: QcApplyPreviewBasis,
+  ) => {
+    if (interactionBusy || applyPendingRef.current || findingIds.length === 0) {
+      return;
+    }
+    applyPendingRef.current = true;
+    setApplyPending(true);
+    try {
+      await onApply([...findingIds], previewBasis);
+    } finally {
+      applyPendingRef.current = false;
+      setApplyPending(false);
+    }
+  };
+
+  const applyPreviewedFixes = () => {
+    const preview = batchPreview;
+    const findingIds = preview?.applyable_finding_ids ?? [];
+    if (
+      interactionBusy ||
+      applyPending ||
+      !preview ||
+      findingIds.length === 0
+    ) return;
+    setBatchPreview(null);
+    void applyFindingIds(findingIds, preview.basis);
   };
 
   const observedCost = usage?.estimated_cost_usd.by_category.qc;
@@ -301,22 +411,9 @@ export default function QCDrawer({
       ? "Stop requested; the paid partial audit record is still being preserved."
       : running
         ? "Final QC is already running."
-        : busy
+        : interactionBusy
           ? QC_BUSY_MESSAGE
           : "Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Fable 5 (uses your API key)";
-
-  const applyAllDisabled = interactionBusy || applicableCriticals.length === 0;
-  const applyAllTitle =
-    applicableCriticals.length === 0 && firstCriticalDenial
-      ? sourceCapabilityTitle(
-          firstCriticalDenial,
-          "Apply currently applicable critical findings",
-        )
-      : settling
-        ? "Stop requested; wait while paid Final QC activity is preserved."
-        : busy
-        ? QC_BUSY_MESSAGE
-        : "Press and hold to apply only the critical findings that are currently applicable; the server validates the combined batch again.";
 
   // The start button opens the confirmation dialog; the run only fires once
   // the user confirms in it (Fable 5 is expensive and a pass takes minutes).
@@ -324,6 +421,39 @@ export default function QCDrawer({
     setConfirmOpen(false);
     onStart(acknowledgeScopeMismatch);
   };
+
+  const remediationSections: {
+    id: QcRemediationBucket;
+    title: string;
+    description: string;
+    entries: typeof remediationEntries;
+    tone: string;
+  }[] = [
+    {
+      id: "ready",
+      title: "Ready to apply",
+      description:
+        "Reviewer-approved fixes that pass deterministic validation against the current specification.",
+      entries: readyEntries,
+      tone: "border-ok/40 bg-ok/5 text-ok",
+    },
+    {
+      id: "needs_decision",
+      title: "Needs your decision",
+      description:
+        "Unresolved project facts, [TBD] values, or assumptions. Supply the fact; the program can do the drafting.",
+      entries: decisionEntries,
+      tone: "border-warn/40 bg-warn/5 text-warn",
+    },
+    {
+      id: "manual_review",
+      title: "Manual professional review",
+      description:
+        "Findings without a safe executable fix. A qualified reviewer must decide the technical response.",
+      entries: manualEntries,
+      tone: "border-edge bg-bg/30 text-ink-dim",
+    },
+  ];
 
   return (
     <>
@@ -354,7 +484,7 @@ export default function QCDrawer({
                 ? "reviewing…"
                 : result
                   ? `${openFindings.length} open finding${openFindings.length === 1 ? "" : "s"}` +
-                    (openCriticals.length ? ` · ${openCriticals.length} critical` : "") +
+                    (openCriticalCount ? ` · ${openCriticalCount} critical` : "") +
                     (inconclusive.length ? ` · ${inconclusive.length} inconclusive` : "")
                   : primaryReport
                     ? `${primaryReport.execution_status || "preserved"} report available · no action queue`
@@ -575,40 +705,110 @@ export default function QCDrawer({
                 <p className="text-[11px] text-ink-dim">{result.summary}</p>
               )}
 
-              {openCriticals.length >= 2 && (
-                <span
-                  className="block w-full"
-                  title={applyAllDisabled ? applyAllTitle : undefined}
+              {remediationAvailable && openFindings.length > 0 && (
+                <section
+                  className="rounded-lg border border-accent/35 bg-accent/5 p-2.5"
+                  aria-labelledby="qc-remediation-title"
+                  data-capability="qc.remediation"
                 >
-                  <button
-                    className="relative w-full overflow-hidden rounded-md border border-err/50 bg-err/10 px-2 py-1 text-[11px] text-err transition-colors hover:border-err disabled:pointer-events-none disabled:opacity-40"
-                    onPointerDown={startHoldApplyCriticals}
-                    onPointerUp={cancelHold}
-                    onPointerLeave={cancelHold}
-                    onPointerCancel={cancelHold}
-                    disabled={applyAllDisabled}
-                    title={applyAllDisabled ? undefined : applyAllTitle}
-                  >
-                    <span
-                      className="absolute inset-y-0 left-0 bg-err/25"
-                      style={{
-                        width: holding ? "100%" : "0%",
-                        transition: holding
-                          ? `width ${HOLD_MS}ms linear`
-                          : "width 120ms ease-out",
-                      }}
-                    />
-                    <span className="relative">
-                      {holding
-                        ? "Keep holding…"
-                        : `Hold to apply ${applicableCriticals.length} currently applicable critical${applicableCriticals.length === 1 ? "" : "s"}`}
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3
+                        id="qc-remediation-title"
+                        className="text-[12px] font-semibold text-ink"
+                      >
+                        Guided remediation
+                      </h3>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-ink-dim">
+                        You approve the changes; the program handles the exact
+                        drafting, validation, application, and audit trail.
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full border border-edge bg-bg/50 px-2 py-0.5 text-[9px] font-medium text-ink-faint">
+                      {openFindings.length} open
                     </span>
-                  </button>
-                </span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-3 gap-1.5">
+                    <RemediationCount
+                      count={readyEntries.length}
+                      label="Ready to apply"
+                      tone="text-ok"
+                    />
+                    <RemediationCount
+                      count={decisionEntries.length}
+                      label="Needs your decision"
+                      tone="text-warn"
+                    />
+                    <RemediationCount
+                      count={manualEntries.length}
+                      label="Professional review"
+                      tone="text-ink-dim"
+                    />
+                  </div>
+                  {readyEntries.length > 0 && (
+                    <div className="mt-2 rounded border border-ok/30 bg-ok/5 p-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[11px] text-ink-dim">
+                          <span className="font-medium text-ink">
+                            {selectedReadyEntries.length} of {readyEntries.length}
+                          </span>{" "}
+                          ready fixes selected · {selectedOperationCount} proposed
+                          operation{selectedOperationCount === 1 ? "" : "s"}
+                        </p>
+                        <button
+                          className="text-[10px] text-accent hover:underline disabled:pointer-events-none disabled:opacity-40"
+                          disabled={interactionBusy || batchPreviewPending}
+                          onClick={() => {
+                            setSelectedReadyIds(
+                              selectedReadyEntries.length === readyEntries.length
+                                ? new Set()
+                                : new Set(
+                                    readyEntries.map(
+                                      (entry) => entry.finding.finding_id,
+                                    ),
+                                  ),
+                            );
+                            setBatchPreviewError("");
+                          }}
+                        >
+                          {selectedReadyEntries.length === readyEntries.length
+                            ? "Clear selection"
+                            : "Select all ready"}
+                        </button>
+                      </div>
+                      <button
+                        className="mt-2 w-full rounded-md border border-ok/50 bg-ok/10 px-2 py-1.5 text-[11px] font-medium text-ok transition-colors hover:bg-ok/15 disabled:pointer-events-none disabled:opacity-40"
+                        disabled={
+                          interactionBusy ||
+                          batchPreviewPending ||
+                          selectedReadyEntries.length === 0
+                        }
+                        onClick={() => void previewSelectedFixes()}
+                      >
+                        {batchPreviewPending
+                          ? "Checking the combined batch…"
+                          : `Review and apply ${selectedReadyEntries.length} selected verified ${selectedReadyEntries.length === 1 ? "fix" : "fixes"}`}
+                      </button>
+                      <p className="mt-1 text-[10px] text-ink-faint">
+                        Preview is free and makes no change. The server checks
+                        duplicates and conflicts before you confirm one
+                        undoable document version.
+                      </p>
+                    </div>
+                  )}
+                  {batchPreviewError && (
+                    <p
+                      role="alert"
+                      className="mt-2 rounded border border-err/40 bg-err/10 px-2 py-1.5 text-[11px] text-err"
+                    >
+                      Could not preview this batch. Nothing was changed. {batchPreviewError}
+                    </p>
+                  )}
+                </section>
               )}
 
               {/* The findings queue itself. It wraps the empty-state lines as
-                  well as the severity bands so the capability always resolves
+                  well as the remediation buckets so the capability always resolves
                   to something visible — a completed run with zero surviving
                   findings is a real, and reportable, outcome. */}
               <div data-capability="qc.findings">
@@ -630,15 +830,178 @@ export default function QCDrawer({
                 </p>
               )}
 
-              {SEVERITY_ORDER.map((sev) => {
-                const band = findings.filter((f) => f.severity === sev);
-                if (band.length === 0) return null;
+              {!remediationAvailable && openFindings.length > 0 && (
+                <section
+                  className="mt-2 rounded-lg border border-warn/40 bg-warn/5 p-2"
+                  aria-labelledby="qc-rerun-required"
+                >
+                  <h3
+                    id="qc-rerun-required"
+                    className="text-[11px] font-semibold text-warn"
+                  >
+                    Rerun required before remediation ({openFindings.length})
+                  </h3>
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-ink-dim">
+                    {auditComplete
+                      ? "The specification or another review input changed after this run. These historical findings remain available for inspection, but they are not reclassified as manual-review work and cannot be applied until Final QC is rerun."
+                      : "This review did not finish, so it cannot establish a safe remediation plan. These partial findings remain available for inspection; complete Final QC before classifying or applying them."}
+                  </p>
+                  <div className="mt-1.5 space-y-1.5">
+                    {openFindings.map((f) => {
+                      const decision = findingDecisions.get(f.finding_id)!;
+                      return (
+                        <FindingCard
+                          key={f.finding_id}
+                          finding={f}
+                          busy={interactionBusy || !auditComplete}
+                          decision={decision}
+                          operationEvaluation={findingOperationEvaluations.get(f.finding_id)!}
+                          remediationNote={
+                            auditComplete
+                              ? "Rerun Final QC against the current specification before deciding how to resolve this finding."
+                              : "Complete Final QC before treating this finding as actionable."
+                          }
+                          open={!!openRationale[f.finding_id]}
+                          onToggle={() =>
+                            setOpenRationale((current) => ({
+                              ...current,
+                              [f.finding_id]: !current[f.finding_id],
+                            }))
+                          }
+                          onApply={() => undefined}
+                          onDismiss={() => {
+                            setDismissTarget(f);
+                            setDismissReason("");
+                            setDismissError("");
+                          }}
+                          onJump={onJump}
+                        />
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+
+              {remediationSections.map((section) => {
+                if (section.entries.length === 0) return null;
                 return (
-                  <div key={sev} className="space-y-1.5">
-                    <p className="text-[10px] font-semibold tracking-wide text-ink-faint uppercase">
-                      {sev} ({band.length})
-                    </p>
-                    {band.map((f) => (
+                  <section
+                    key={section.id}
+                    className={`mt-2 rounded-lg border p-2 ${section.tone}`}
+                    aria-labelledby={`qc-bucket-${section.id}`}
+                  >
+                    <div className="mb-1.5">
+                      <h3
+                        id={`qc-bucket-${section.id}`}
+                        className="text-[11px] font-semibold"
+                      >
+                        {section.title} ({section.entries.length})
+                      </h3>
+                      <p className="mt-0.5 text-[10px] leading-relaxed opacity-85">
+                        {section.description}
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      {section.entries.map(({ finding: f, classification }) => {
+                        const decision = findingDecisions.get(f.finding_id)!;
+                        const isDecision = section.id === "needs_decision";
+                        const remediationNote =
+                          section.id === "ready"
+                            ? "Approved by the verifier panel and validated against the current specification."
+                            : isDecision
+                              ? classification.decisionSignals.join("; ")
+                              : decision.message;
+                        return (
+                          <FindingCard
+                            key={f.finding_id}
+                            finding={f}
+                            busy={interactionBusy || batchPreviewPending}
+                            decision={decision}
+                            operationEvaluation={findingOperationEvaluations.get(f.finding_id)!}
+                            remediationBucket={section.id}
+                            remediationNote={remediationNote}
+                            batchSelection={
+                              section.id === "ready"
+                                ? {
+                                    selected: selectedReadyIds.has(f.finding_id),
+                                    disabled: interactionBusy || batchPreviewPending,
+                                    onChange: (selected) => {
+                                      setSelectedReadyIds((current) => {
+                                        const next = new Set(current);
+                                        if (selected) next.add(f.finding_id);
+                                        else next.delete(f.finding_id);
+                                        return next;
+                                      });
+                                      setBatchPreviewError("");
+                                    },
+                                  }
+                                : undefined
+                            }
+                            open={!!openRationale[f.finding_id]}
+                            onToggle={() =>
+                              setOpenRationale((m) => ({
+                                ...m,
+                                [f.finding_id]: !m[f.finding_id],
+                              }))
+                            }
+                            onApply={() => {
+                              if (interactionBusy || !decision.allowed) return;
+                              void applyFindingIds([f.finding_id]);
+                            }}
+                            onDismiss={() => {
+                              setDismissTarget(f);
+                              setDismissReason("");
+                              setDismissError("");
+                            }}
+                            onResolveInChat={
+                              isDecision
+                                ? () => {
+                                    const target = f.element_id || "the section";
+                                    const signal =
+                                      classification.decisionSignals.join("; ");
+                                    const currentProvision = promptExcerpt(
+                                      decisionContexts.get(f.element_id)?.text,
+                                    );
+                                    const proposedChanges = f.proposed_ops
+                                      .map((operation) => opPreview(operation))
+                                      .join("; ");
+                                    const evidence = [
+                                      `Finding: ${f.title} (${f.finding_id})`,
+                                      `Affected provision: ${target}`,
+                                      `Issue identified by Final QC: ${promptExcerpt(f.issue)}`,
+                                      `Review rationale: ${promptExcerpt(f.rationale)}`,
+                                      currentProvision
+                                        ? `Current provision text: ${currentProvision}`
+                                        : "",
+                                      proposedChanges
+                                        ? `Proposed-operation context: ${promptExcerpt(proposedChanges)}`
+                                        : "Proposed-operation context: Final QC did not supply an executable fix.",
+                                      `Missing-decision signal: ${signal}`,
+                                    ]
+                                      .filter(Boolean)
+                                      .join("\n");
+                                    onAskModel(
+                                      `Help me resolve this Final QC finding using the retained review evidence below.\n\n${evidence}\n\nAsk only for the missing project fact or confirmation; do not invent or silently default a value. Once I answer, update the specification to resolve the finding and briefly explain what changed and why.`,
+                                    );
+                                  }
+                                : undefined
+                            }
+                            onJump={onJump}
+                          />
+                        );
+                      })}
+                    </div>
+                  </section>
+                );
+              })}
+
+              {resolvedFindings.length > 0 && (
+                <details className="mt-2 rounded border border-edge bg-bg/20 p-2">
+                  <summary className="cursor-pointer text-[11px] text-ink-faint hover:text-ink-dim">
+                    Applied or dismissed findings ({resolvedFindings.length})
+                  </summary>
+                  <div className="mt-1.5 space-y-1.5">
+                    {resolvedFindings.map((f) => (
                       <FindingCard
                         key={f.finding_id}
                         finding={f}
@@ -652,22 +1015,14 @@ export default function QCDrawer({
                             [f.finding_id]: !m[f.finding_id],
                           }))
                         }
-                        onApply={() => {
-                          const decision = findingDecisions.get(f.finding_id);
-                          if (interactionBusy || !decision?.allowed) return;
-                          onApply([f.finding_id]);
-                        }}
-                        onDismiss={() => {
-                          setDismissTarget(f);
-                          setDismissReason("");
-                          setDismissError("");
-                        }}
+                        onApply={() => undefined}
+                        onDismiss={() => undefined}
                         onJump={onJump}
                       />
                     ))}
                   </div>
-                );
-              })}
+                </details>
+              )}
               </div>
 
               {inconclusive.length > 0 && (
@@ -728,6 +1083,27 @@ export default function QCDrawer({
       )}
     </div>
 
+    <ConfirmDialog
+      open={batchPreview != null}
+      title="Apply verified Final QC fixes?"
+      body={
+        batchPreview ? <BatchPreviewSummary preview={batchPreview} /> : null
+      }
+      confirmLabel={
+        batchPreview?.applyable_finding_ids.length
+          ? `Apply ${batchPreview.applyable_finding_ids.length} verified ${batchPreview.applyable_finding_ids.length === 1 ? "fix" : "fixes"}`
+          : "No compatible fixes"
+      }
+      cancelLabel="Close"
+      confirmDisabled={
+        interactionBusy ||
+        !batchPreview ||
+        batchPreview.applyable_finding_ids.length === 0
+      }
+      onConfirm={applyPreviewedFixes}
+      onCancel={() => setBatchPreview(null)}
+    />
+
     {confirmOpen && (
       <ConfirmQCModal
         isRerun={!!primaryReport}
@@ -781,6 +1157,134 @@ export default function QCDrawer({
       }}
     />
     </>
+  );
+}
+
+function RemediationCount({
+  count,
+  label,
+  tone,
+}: {
+  count: number;
+  label: string;
+  tone: string;
+}) {
+  return (
+    <div className="rounded border border-edge bg-bg/45 px-2 py-1.5 text-center">
+      <p className={`text-base font-semibold leading-none ${tone}`}>{count}</p>
+      <p className="mt-1 text-[9px] leading-tight text-ink-faint">{label}</p>
+    </div>
+  );
+}
+
+function BatchPreviewSummary({ preview }: { preview: QcApplyPreviewResult }) {
+  const selected = preview.basis.selected_finding_ids.length;
+  const applyable = preview.applyable_finding_ids.length;
+  const excluded = preview.decisions.filter((decision) => !decision.applyable);
+  const visibleApplyable = preview.decisions
+    .filter((decision) => decision.applyable)
+    .slice(0, 6);
+  return (
+    <div className="space-y-3">
+      <p>
+        The server checked all {selected} selected {selected === 1 ? "finding" : "findings"}.{" "}
+        <strong className="text-ink">
+          {applyable} {applyable === 1 ? "fix is" : "fixes are"} compatible
+        </strong>{" "}
+        and ready for one undoable document version.
+      </p>
+      <div className="grid grid-cols-3 gap-1.5 text-center text-[11px]">
+        <div className="rounded border border-edge bg-bg/40 p-1.5">
+          <strong className="block text-ink">
+            {preview.operation_counts.proposed}
+          </strong>
+          proposed operations
+        </div>
+        <div className="rounded border border-edge bg-bg/40 p-1.5">
+          <strong className="block text-ink">
+            {preview.operation_counts.applyable}
+          </strong>
+          operations to apply
+        </div>
+        <div className="rounded border border-edge bg-bg/40 p-1.5">
+          <strong className="block text-ink">
+            {preview.operation_counts.duplicate}
+          </strong>
+          duplicates removed
+        </div>
+      </div>
+      {visibleApplyable.length > 0 && (
+        <div>
+          <p className="text-[11px] font-semibold tracking-wide text-ink-faint uppercase">
+            Will apply
+          </p>
+          <ul className="mt-1 max-h-32 space-y-1 overflow-y-auto text-[11px]">
+            {visibleApplyable.map((decision) => (
+              <li key={decision.finding_id} className="text-ink-dim">
+                <span className="font-medium text-ok">
+                  [{decision.severity}]
+                </span>{" "}
+                {decision.title || decision.finding_id}
+              </li>
+            ))}
+          </ul>
+          {applyable > visibleApplyable.length && (
+            <p className="mt-1 text-[10px] text-ink-faint">
+              …and {applyable - visibleApplyable.length} more selected fixes.
+            </p>
+          )}
+        </div>
+      )}
+      {preview.applyable_operations.length > 0 && (
+        <div>
+          <p className="text-[11px] font-semibold tracking-wide text-ink-faint uppercase">
+            Exact edits in the safe batch
+          </p>
+          <ul className="mt-1 max-h-28 space-y-1 overflow-y-auto rounded border border-edge bg-bg/35 p-1.5 text-[11px] text-ink-dim">
+            {preview.applyable_operations.slice(0, 6).map((operation, index) => (
+              <li key={`${index}-${JSON.stringify(operation)}`}>
+                {opPreview(operation)}
+              </li>
+            ))}
+          </ul>
+          {preview.applyable_operations.length > 6 && (
+            <p className="mt-1 text-[10px] text-ink-faint">
+              …and {preview.applyable_operations.length - 6} more exact edits.
+            </p>
+          )}
+        </div>
+      )}
+      {excluded.length > 0 && (
+        <div className="rounded border border-warn/35 bg-warn/5 p-2">
+          <p className="text-[11px] font-medium text-warn">
+            {excluded.length} selected {excluded.length === 1 ? "finding is" : "findings are"} excluded from this application
+          </p>
+          <ul className="mt-1 max-h-28 space-y-1 overflow-y-auto text-[11px] text-ink-dim">
+            {excluded.slice(0, 6).map((decision) => (
+              <li key={decision.finding_id}>
+                {decision.title || decision.finding_id}: {decision.reason}
+              </li>
+            ))}
+          </ul>
+          {excluded.length > 6 && (
+            <p className="mt-1 text-[10px] text-ink-faint">
+              …and {excluded.length - 6} more exclusions.
+            </p>
+          )}
+        </div>
+      )}
+      {preview.conflicts.length > 0 && (
+        <p className="rounded border border-err/35 bg-err/5 px-2 py-1.5 text-[11px] text-err">
+          {preview.conflicts.length} operation {preview.conflicts.length === 1 ? "conflict was" : "conflicts were"} found. Every implicated finding is excluded; the program does not choose a winner for you.
+        </p>
+      )}
+      <p className="text-[11px] text-ink-faint">
+        The server will require this exact preview to remain current and will
+        revalidate it at Apply time. The full report keeps the reason for every
+        change. This action does not start another paid Final QC run; reruns
+        always require a separate confirmation.
+      </p>
+    </div>
   );
 }
 
@@ -1156,20 +1660,32 @@ function FindingCard({
   busy,
   decision,
   operationEvaluation,
+  remediationBucket,
+  remediationNote,
+  batchSelection,
   open,
   onToggle,
   onApply,
   onDismiss,
+  onResolveInChat,
   onJump,
 }: {
   finding: QcReportFinding;
   busy: boolean;
   decision: SourceOperationCapability;
   operationEvaluation: QcOperationEvaluation;
+  remediationBucket?: QcRemediationBucket;
+  remediationNote?: string;
+  batchSelection?: {
+    selected: boolean;
+    disabled: boolean;
+    onChange: (selected: boolean) => void;
+  };
   open: boolean;
   onToggle: () => void;
   onApply: () => void;
   onDismiss: () => void;
+  onResolveInChat?: () => void;
   onJump: (elementId: string) => void;
 }) {
   const rationaleId = useId();
@@ -1211,7 +1727,13 @@ function FindingCard({
           ? "no automatic fix"
           : operationEvaluation.semanticStatus === "not_evaluated"
             ? "fix not evaluated"
-            : "legacy fix record";
+          : "legacy fix record";
+  const remediationTone =
+    remediationBucket === "ready"
+      ? "border-ok/30 bg-ok/5 text-ok"
+      : remediationBucket === "needs_decision"
+        ? "border-warn/35 bg-warn/5 text-warn"
+        : "border-edge bg-bg/30 text-ink-dim";
   return (
     <div
       className={`rounded-lg border border-edge bg-surface/40 p-2 ${
@@ -1219,6 +1741,16 @@ function FindingCard({
       }`}
     >
       <div className="flex items-baseline gap-2">
+        {batchSelection && (
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 shrink-0 accent-[var(--color-ok)]"
+            checked={batchSelection.selected}
+            disabled={batchSelection.disabled}
+            onChange={(event) => batchSelection.onChange(event.target.checked)}
+            aria-label={`Include ${finding.title} in the verified-fix batch`}
+          />
+        )}
         <span
           className={`shrink-0 rounded border px-1 py-px text-[9px] font-semibold uppercase ${sevChip[finding.severity]}`}
         >
@@ -1251,6 +1783,16 @@ function FindingCard({
           {fixStateLabel}
         </span>
       </div>
+
+      {remediationNote && (
+        <p className={`mt-1 rounded border px-1.5 py-1 text-[10px] ${remediationTone}`}>
+          {remediationBucket === "needs_decision"
+            ? `Needs your decision because ${remediationNote}.`
+            : remediationBucket === "manual_review"
+              ? `Not automated: ${remediationNote}`
+              : remediationNote}
+        </p>
+      )}
 
       <p className="mt-1 text-[11px] text-ink-dim">{finding.issue}</p>
 
@@ -1353,6 +1895,16 @@ function FindingCard({
               Apply fix
             </button>
           </span>
+          {onResolveInChat && (
+            <button
+              className={cardBtn}
+              onClick={onResolveInChat}
+              disabled={busy}
+              title="Prefill the chat with a focused request for the missing project facts"
+            >
+              Resolve in chat
+            </button>
+          )}
           <button className={cardBtn} onClick={onDismiss} disabled={busy}>
             Dismiss
           </button>

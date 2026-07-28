@@ -10,6 +10,8 @@ import type {
   ReferenceDocMeta,
   LintIssue,
   OpenItem,
+  QcApplyPreviewBasis,
+  QcApplyPreviewResult,
   QcSnapshot,
   ReadinessPayload,
   ResearchSnapshot,
@@ -29,6 +31,7 @@ import {
   checkUpdate,
   getReleaseNotes,
   markReleaseNotesSeen,
+  previewQcApply,
   deleteFigure,
   dismissQc,
   downloadProjectFile,
@@ -84,6 +87,7 @@ import {
 } from "./lib/projectHeading";
 import CloseDialog from "./components/CloseDialog";
 import ConfirmDialog from "./components/ConfirmDialog";
+import { buildQcApplicationDigest } from "./lib/qcRemediation";
 
 let nextId = 0;
 const newId = () => `m${++nextId}`;
@@ -505,37 +509,51 @@ export default function App() {
     };
   }, []);
 
+  const onPreviewQc = useCallback(
+    (findingIds: string[]): Promise<QcApplyPreviewResult> =>
+      previewQcApply(findingIds, {
+        workspaceId: health?.workspace_id,
+        generation: health?.generation,
+      }),
+    [health],
+  );
+
   const onApplyQc = useCallback(
-    async (findingIds: string[]) => {
+    async (
+      findingIds: string[],
+      previewBasis?: QcApplyPreviewBasis,
+    ) => {
       const epoch = workspaceEpochRef.current;
+      const findingContext = Object.fromEntries(
+        (qc?.result?.findings ?? []).map((finding) => [
+          finding.finding_id,
+          {
+            title: finding.title,
+            issue: finding.issue,
+            severity: finding.severity,
+            element_id: finding.element_id,
+          },
+        ]),
+      );
       try {
         const payload = await applyQc(findingIds, {
           workspaceId: health?.workspace_id,
           generation: health?.generation,
-        });
+        }, previewBasis);
         if (workspaceEpochRef.current !== epoch) return;
         applyDocPayload(payload);
         refreshQc();
         refreshReadiness();
-        const outcomeLabels: Record<string, string> = {
-          applied: "applied",
-          already_applied: "not changed (already applied)",
-          no_ops: "not changed (no validated mechanical fix)",
-          stale: "not changed (operation no longer applied cleanly)",
-          unknown: "not changed (finding not found)",
-        };
-        const lines = Object.entries(payload.outcomes).map(
-          ([findingId, outcome]) =>
-            `- ${findingId}: ${outcomeLabels[outcome] ?? outcome}`,
+        const digest = buildQcApplicationDigest(
+          payload.outcomes,
+          findingContext,
         );
         setMessages((prev) => [
           ...prev,
           {
             id: newId(),
             role: "assistant",
-            text:
-              "Final QC application result (also recorded in the QC report):\n" +
-              (lines.length ? lines.join("\n") : "- No findings were selected."),
+            text: digest.text,
           },
         ]);
       } catch (e) {
@@ -546,7 +564,7 @@ export default function App() {
           {
             id: newId(),
             role: "assistant",
-            text: `Could not apply the fix: ${
+            text: `Could not confirm the Final QC application result. The document was refreshed; review it before retrying: ${
               e instanceof Error ? e.message : String(e)
             }`,
             error: true,
@@ -556,7 +574,7 @@ export default function App() {
     },
     // applyDocPayload is stable in practice; listing it is noise.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [refreshQc, refreshReadiness, refreshDoc, health],
+    [refreshQc, refreshReadiness, refreshDoc, health, qc],
   );
 
   const onDismissQc = useCallback(
@@ -1728,6 +1746,7 @@ export default function App() {
           onStopResearch={onStopResearch}
           onStartQc={onStartQc}
           onStopQc={onStopQc}
+          onPreviewQc={onPreviewQc}
           onApplyQc={onApplyQc}
           onDismissQc={onDismissQc}
           onDraftFull={onDraftFull}

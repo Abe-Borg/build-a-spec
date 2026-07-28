@@ -48,6 +48,7 @@ Endpoints (all JSON unless noted):
 - ``POST /api/qc/stop``        → stop the running Final QC pass; preserves the
   cancelled attempt identity and any partial audit record that settles (409
   if none is running).
+- ``POST /api/qc/apply/preview`` → plan a safe, read-only fix batch.
 - ``POST /api/qc/apply``       → apply accepted findings' fixes (one undo step).
 - ``POST /api/qc/dismiss``     → dismiss a finding (remembered across re-runs).
 - ``GET  /api/qc/export``      → the detailed QC report as ``.docx``.
@@ -63,6 +64,7 @@ When ``frontend/dist`` exists (production / packaged), it is served at
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -71,7 +73,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal
 from urllib.parse import quote
 
 import anthropic
@@ -262,10 +264,81 @@ class SessionResetRequest(BaseModel):
     project_context: str = ""
 
 
+class QcApplyPreviewBasis(BaseModel):
+    """Immutable facts that the read-only remediation plan was built from."""
+
+    workspace_id: int
+    generation: int
+    run_id: str
+    input_fingerprint: str
+    document_version: int
+    document_fingerprint: str
+    result_fingerprint: str
+    selected_finding_ids: list[str]
+    binding_fingerprint: str
+
+
 class QcApplyRequest(BaseModel):
     finding_ids: list[str]
+    preview_basis: QcApplyPreviewBasis | None = None
     workspace_id: int | None = None
     generation: int | None = None
+
+
+class QcApplyPreviewDecision(BaseModel):
+    """One selected finding's predicted outcome in the planned batch."""
+
+    finding_id: str
+    title: str
+    severity: str
+    status: str
+    outcome: Literal[
+        "applyable",
+        "unknown",
+        "no_ops",
+        "already_applied",
+        "not_open",
+        "conflict",
+        "stale",
+        "source_blocked",
+    ]
+    reason_code: str
+    reason: str
+    applyable: bool
+    proposed_operation_count: int
+    apply_operation_count: int
+    duplicate_operation_count: int
+    conflicts_with: list[str]
+
+
+class QcApplyPreviewOperationCounts(BaseModel):
+    proposed: int
+    unique: int
+    duplicate: int
+    applyable: int
+
+
+class QcApplyPreviewDeduplication(BaseModel):
+    operation: dict[str, Any]
+    finding_ids: list[str]
+    occurrence_count: int
+
+
+class QcApplyPreviewConflict(BaseModel):
+    write_keys: list[str]
+    finding_ids: list[str]
+    operations: list[dict[str, Any]]
+
+
+class QcApplyPreviewResponse(BaseModel):
+    ok: Literal[True] = True
+    basis: QcApplyPreviewBasis
+    decisions: list[QcApplyPreviewDecision]
+    operation_counts: QcApplyPreviewOperationCounts
+    deduplications: list[QcApplyPreviewDeduplication]
+    conflicts: list[QcApplyPreviewConflict]
+    applyable_finding_ids: list[str]
+    applyable_operations: list[dict[str, Any]]
 
 
 class QcStartRequest(BaseModel):
@@ -648,6 +721,287 @@ def _qc_result_is_audit_complete(result) -> bool:
         and result.execution_status == "complete"
         and result.is_complete()
     )
+
+
+def _json_fingerprint(value: object) -> str:
+    """Content-address a JSON-compatible snapshot for preview binding."""
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _dry_run_qc_apply_findings(
+    working: SpecSection,
+    findings: list[tuple[str, list[dict[str, Any]]]],
+) -> tuple[
+    list[dict[str, Any]],
+    list[str],
+    dict[str, str],
+    dict[str, int],
+    SpecSection,
+]:
+    """Dry-run ordered findings with the same dedupe used by mutation.
+
+    Returns canonical operations, findings that can be dispositioned as
+    applied, per-finding stale errors, and each finding's contribution to the
+    unique operation batch. A duplicate-only finding is still applyable: the
+    shared operation executes once while every finding that owns it can be
+    dispositioned.
+    """
+    combined_ops: list[dict[str, Any]] = []
+    applyable_ids: list[str] = []
+    stale_errors: dict[str, str] = {}
+    operation_counts: dict[str, int] = {}
+    successful_identities: set[str] = set()
+    for finding_id, proposed_ops in findings:
+        normalized = [
+            canonical_qc_operation(operation) for operation in proposed_ops
+        ]
+        local_identities: set[str] = set()
+        novel_ops: list[dict[str, Any]] = []
+        for operation in normalized:
+            identity = qc_operation_identity(operation)
+            if (
+                identity in successful_identities
+                or identity in local_identities
+            ):
+                continue
+            local_identities.add(identity)
+            novel_ops.append(operation)
+        try:
+            if novel_ops:
+                working, _applied = apply_edits(working, novel_ops)
+        except SpecEditError as exc:
+            stale_errors[finding_id] = str(exc)
+            operation_counts[finding_id] = 0
+            continue
+        combined_ops.extend(novel_ops)
+        successful_identities.update(local_identities)
+        applyable_ids.append(finding_id)
+        operation_counts[finding_id] = len(novel_ops)
+    return (
+        combined_ops,
+        applyable_ids,
+        stale_errors,
+        operation_counts,
+        working,
+    )
+
+
+def _qc_apply_preview_plan(
+    result,
+    working: SpecSection,
+    selected_ids: list[str],
+    *,
+    candidate_validator: Callable[[SpecSection], None] | None = None,
+) -> dict[str, Any]:
+    """Build a read-only, conflict-free remediation plan for a QC result."""
+    decisions_by_id: dict[str, dict[str, Any]] = {}
+    eligible_findings: list[tuple[str, list[dict[str, Any]]]] = []
+    for finding_id in selected_ids:
+        finding = result.finding(finding_id)
+        if finding is None:
+            decisions_by_id[finding_id] = {
+                "finding_id": finding_id,
+                "title": "",
+                "severity": "",
+                "status": "unknown",
+                "outcome": "unknown",
+                "reason_code": "finding_unknown",
+                "reason": "The retained Final QC result has no such finding.",
+                "applyable": False,
+                "proposed_operation_count": 0,
+                "apply_operation_count": 0,
+                "duplicate_operation_count": 0,
+                "conflicts_with": [],
+            }
+            continue
+
+        decision = {
+            "finding_id": finding_id,
+            "title": finding.title,
+            "severity": finding.severity,
+            "status": finding.status,
+            "outcome": "no_ops",
+            "reason_code": "no_operations",
+            "reason": "This finding has no executable proposed operations.",
+            "applyable": False,
+            "proposed_operation_count": len(finding.proposed_ops),
+            "apply_operation_count": 0,
+            "duplicate_operation_count": 0,
+            "conflicts_with": [],
+        }
+        decisions_by_id[finding_id] = decision
+        if not finding.proposed_ops:
+            continue
+        if getattr(finding, "ops_semantic_status", "") != "approved":
+            decision["reason_code"] = "operations_not_approved"
+            decision["reason"] = (
+                "The verifier panel did not semantically approve this "
+                "finding's complete operation set."
+            )
+            if str(getattr(finding, "ops_semantic_reason", "") or "").strip():
+                decision["reason"] += (
+                    " " + str(finding.ops_semantic_reason).strip()
+                )
+            continue
+        if not finding.ops_valid:
+            decision["reason_code"] = "operations_invalid"
+            decision["reason"] = (
+                "The proposed operations did not pass mechanical validation."
+            )
+            if str(getattr(finding, "ops_invalid_reason", "") or "").strip():
+                decision["reason"] += (
+                    " " + str(finding.ops_invalid_reason).strip()
+                )
+            continue
+        if finding.status == "applied":
+            decision["outcome"] = "already_applied"
+            decision["reason_code"] = "already_applied"
+            decision["reason"] = "This finding is already marked applied."
+            continue
+        if finding.status != "open":
+            decision["outcome"] = "not_open"
+            decision["reason_code"] = "finding_not_open"
+            decision["reason"] = (
+                f"This finding is {finding.status!r}; only open findings may "
+                "be applied."
+            )
+            continue
+        eligible_findings.append((finding_id, finding.proposed_ops))
+
+    identity_records: dict[str, dict[str, Any]] = {}
+    seen_identities: set[str] = set()
+    proposed_operation_count = 0
+    for finding_id, proposed_ops in eligible_findings:
+        duplicate_count = 0
+        for raw_operation in proposed_ops:
+            operation = canonical_qc_operation(raw_operation)
+            identity = qc_operation_identity(operation)
+            proposed_operation_count += 1
+            record = identity_records.setdefault(
+                identity,
+                {
+                    "operation": operation,
+                    "finding_ids": [],
+                    "occurrence_count": 0,
+                },
+            )
+            record["occurrence_count"] += 1
+            if finding_id not in record["finding_ids"]:
+                record["finding_ids"].append(finding_id)
+            if identity in seen_identities:
+                duplicate_count += 1
+            else:
+                seen_identities.add(identity)
+        decisions_by_id[finding_id]["duplicate_operation_count"] = (
+            duplicate_count
+        )
+
+    batch = plan_qc_operation_batch(working, eligible_findings)
+    conflict_ids = {
+        finding_id
+        for conflict in batch.conflicts
+        for finding_id in conflict["finding_ids"]
+    }
+    conflicts_with: dict[str, set[str]] = {
+        finding_id: set() for finding_id in conflict_ids
+    }
+    for conflict in batch.conflicts:
+        involved = list(conflict["finding_ids"])
+        for finding_id in involved:
+            conflicts_with.setdefault(finding_id, set()).update(
+                other_id for other_id in involved if other_id != finding_id
+            )
+    for finding_id in conflict_ids:
+        decision = decisions_by_id[finding_id]
+        related = sorted(conflicts_with.get(finding_id, set()))
+        decision["outcome"] = "conflict"
+        decision["reason_code"] = "operation_conflict"
+        decision["reason"] = (
+            "This finding's proposed operations conflict with another "
+            "selected finding."
+            if related
+            else "This finding contains proposed operations that conflict "
+            "with one another."
+        )
+        decision["conflicts_with"] = related
+
+    nonconflicting = [
+        item for item in eligible_findings if item[0] not in conflict_ids
+    ]
+    safe_batch = plan_qc_operation_batch(working, nonconflicting)
+    # Removing every owner named by the original conflict plan must leave a
+    # conflict-free subset. Fail closed if a future planner changes that
+    # invariant instead of presenting a batch that apply would reject.
+    if safe_batch.conflicts:  # pragma: no cover - defensive contract guard
+        raise RuntimeError("QC preview conflict exclusion was incomplete.")
+    (
+        applyable_operations,
+        applyable_ids,
+        stale_errors,
+        per_finding_apply_counts,
+        applyable_candidate,
+    ) = _dry_run_qc_apply_findings(working, nonconflicting)
+    for finding_id in applyable_ids:
+        decision = decisions_by_id[finding_id]
+        decision["outcome"] = "applyable"
+        decision["reason_code"] = "ready"
+        decision["reason"] = (
+            "These approved operations apply cleanly in the selected, "
+            "non-conflicting batch."
+        )
+        decision["applyable"] = True
+        decision["apply_operation_count"] = per_finding_apply_counts[
+            finding_id
+        ]
+    for finding_id, error in stale_errors.items():
+        decision = decisions_by_id[finding_id]
+        decision["outcome"] = "stale"
+        decision["reason_code"] = "operations_stale"
+        decision["reason"] = (
+            "The proposed operations no longer apply cleanly in the selected "
+            f"batch: {error}"
+        )
+
+    source_error = ""
+    if applyable_ids and candidate_validator is not None:
+        try:
+            candidate_validator(applyable_candidate)
+        except SpecEditError as exc:
+            source_error = str(exc)
+    if source_error:
+        for finding_id in applyable_ids:
+            decision = decisions_by_id[finding_id]
+            decision["outcome"] = "source_blocked"
+            decision["reason_code"] = "source_preservation_rejected"
+            decision["reason"] = source_error
+            decision["applyable"] = False
+            decision["apply_operation_count"] = 0
+        applyable_ids = []
+        applyable_operations = []
+
+    return {
+        "decisions": [decisions_by_id[value] for value in selected_ids],
+        "operation_counts": {
+            "proposed": proposed_operation_count,
+            "unique": len(batch.operations),
+            "duplicate": proposed_operation_count - len(batch.operations),
+            "applyable": len(applyable_operations),
+        },
+        "deduplications": [
+            record
+            for record in identity_records.values()
+            if record["occurrence_count"] > 1
+        ],
+        "conflicts": list(batch.conflicts),
+        "applyable_finding_ids": applyable_ids,
+        "applyable_operations": applyable_operations,
+    }
 
 
 def _qc_export_current_state(
@@ -1408,6 +1762,7 @@ def create_app() -> FastAPI:
             ("POST", "/api/audit/start"),
             ("POST", "/api/qc/start"),
             ("POST", "/api/qc/stop"),
+            ("POST", "/api/qc/apply/preview"),
             ("POST", "/api/qc/apply"),
             ("POST", "/api/qc/dismiss"),
         }
@@ -3631,6 +3986,153 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @app.post(
+        "/api/qc/apply/preview",
+        response_model=QcApplyPreviewResponse,
+    )
+    def qc_apply_preview(body: QcApplyRequest):
+        """Plan selected Final-QC fixes without mutating document or audit.
+
+        The preview uses the same audit/current-input gates, conflict planner,
+        canonical operation identities, and transactional dry-run as apply.
+        It excludes every finding implicated in a conflict rather than
+        choosing a winner, then returns the remaining applyable batch with an
+        immutable confirmation basis. Bound batch apply recomputes this plan,
+        and every apply path still repeats the final mutation validation.
+        """
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        _settle_source_capabilities(session)
+        with session.session_state_guard():
+            if session.turn_active:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "A model turn is streaming — preview fixes "
+                        "once it finishes.",
+                    },
+                    status_code=409,
+                )
+            if session.qc.status == "running" or session.qc.is_settling:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Final QC is still settling its stopped attempt — "
+                            "wait for paid audit evidence to attach before "
+                            "previewing a retained report."
+                            if session.qc.is_settling
+                            else "Final QC is running — wait for the active "
+                            "attempt before previewing an older report."
+                        ),
+                    },
+                    status_code=409,
+                )
+            result = session.qc.result
+            if result is None:
+                return JSONResponse(
+                    {"ok": False, "error": "No QC result to preview."},
+                    status_code=409,
+                )
+            if not _qc_result_is_audit_complete(result):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "The retained Final QC result is not an "
+                            "audit-complete current-schema report; re-run "
+                            "Final QC before previewing fixes."
+                        ),
+                    },
+                    status_code=409,
+                )
+            if not _qc_matches_current_inputs(session, result, block=True):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Final QC is stale because the document or another "
+                            "review input changed; re-run it before previewing "
+                            "fixes."
+                        ),
+                    },
+                    status_code=409,
+                )
+            selected_ids = list(dict.fromkeys(body.finding_ids))
+            result_record = result.to_dict()
+            result_fingerprint = _json_fingerprint(result_record)
+            generation = session.generation
+            version_index = session.doc.index
+            version_record = session.doc.versions[version_index]
+            working = SpecSection.from_dict(version_record)
+            document_fingerprint = qc_version_fingerprint(working)
+
+        plan = _qc_apply_preview_plan(
+            result,
+            working,
+            selected_ids,
+            candidate_validator=lambda candidate: (
+                session.validate_source_backed_candidate(
+                    candidate,
+                    current=working,
+                )
+            ),
+        )
+
+        # A read-only result must still describe one coherent state. The
+        # operation dry-run happens outside the state lock, so repeat the
+        # complete binding check before returning it just as apply does before
+        # committing a version.
+        # Keep manager -> session lock ordering consistent with the rest of
+        # the application. The request middleware holds an active workspace
+        # lease for this route, so the captured lease cannot transition before
+        # the guarded coherence check finishes.
+        current_lease = sessions.get_workspace()
+        with session.session_state_guard():
+            if (
+                current_lease.session is not session
+                or current_lease.workspace_id != lease.workspace_id
+                or session.turn_active
+                or session.qc.status == "running"
+                or session.qc.is_settling
+                or not _qc_result_is_audit_complete(result)
+                or not _qc_matches_current_inputs(session, result, block=True)
+                or session.generation != generation
+                or session.doc.index != version_index
+                or session.doc.versions[version_index] is not version_record
+                or session.doc.doc.to_dict() != version_record
+                or session.qc.result is not result
+                or result.to_dict() != result_record
+            ):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            "The session or QC result changed while previewing "
+                            "the fixes; request a fresh preview."
+                        ),
+                    },
+                    status_code=409,
+                )
+
+        binding_values = {
+            "workspace_id": lease.workspace_id,
+            "generation": generation,
+            "run_id": result.run_id,
+            "input_fingerprint": result.input_fingerprint,
+            "document_version": version_index,
+            "document_fingerprint": document_fingerprint,
+            "result_fingerprint": result_fingerprint,
+            "selected_finding_ids": selected_ids,
+        }
+        basis = {
+            **binding_values,
+            "binding_fingerprint": _json_fingerprint(binding_values),
+        }
+        return QcApplyPreviewResponse(basis=basis, **plan)
+
     @app.post("/api/qc/apply")
     def qc_apply(body: QcApplyRequest) -> JSONResponse:
         """Apply accepted findings' validated ops as ONE undoable version.
@@ -3638,7 +4140,9 @@ def create_app() -> FastAPI:
         The result must match the current version index and deterministic
         document fingerprint; stale results are rejected before any dry-run.
         Each selected finding is then re-dry-run and the accepted set commits
-        atomically. Rejected (409) while a model turn streams.
+        atomically. When ``preview_basis`` is supplied, the original preview
+        is recomputed and the submitted ids must exactly match its safe set.
+        Rejected (409) while a model turn streams.
         """
         lease = sessions.get_workspace()
         if not _mutation_lease_matches(lease, body):
@@ -3711,6 +4215,66 @@ def create_app() -> FastAPI:
             # the potentially expensive QC dry-run below is in progress.
             version_record = session.doc.versions[version_index]
             working = SpecSection.from_dict(version_record)
+
+        def preview_binding_error(code: str, message: str) -> JSONResponse:
+            return JSONResponse(
+                {"ok": False, "code": code, "error": message},
+                status_code=409,
+            )
+
+        if body.preview_basis is not None:
+            basis = body.preview_basis
+            binding_values = basis.model_dump(
+                exclude={"binding_fingerprint"}
+            )
+            if (
+                basis.binding_fingerprint != _json_fingerprint(binding_values)
+                or basis.selected_finding_ids
+                != list(dict.fromkeys(basis.selected_finding_ids))
+            ):
+                return preview_binding_error(
+                    "qc_preview_binding_invalid",
+                    "The Final QC preview binding was changed or is invalid; "
+                    "request a fresh preview.",
+                )
+
+            current_document_fingerprint = qc_version_fingerprint(working)
+            if (
+                basis.workspace_id != lease.workspace_id
+                or basis.generation != generation
+                or basis.run_id != result.run_id
+                or basis.input_fingerprint != result.input_fingerprint
+                or basis.document_version != version_index
+                or basis.document_fingerprint
+                != current_document_fingerprint
+                or basis.result_fingerprint
+                != _json_fingerprint(result_record)
+            ):
+                return preview_binding_error(
+                    "qc_preview_stale",
+                    "The session, document, or Final QC result no longer "
+                    "matches the confirmed preview; request a fresh preview.",
+                )
+
+            confirmed_plan = _qc_apply_preview_plan(
+                result,
+                working,
+                basis.selected_finding_ids,
+                candidate_validator=lambda candidate: (
+                    session.validate_source_backed_candidate(
+                        candidate,
+                        current=working,
+                    )
+                ),
+            )
+            if body.finding_ids != confirmed_plan["applyable_finding_ids"]:
+                return preview_binding_error(
+                    "qc_preview_selection_mismatch",
+                    "The submitted Final QC fixes do not exactly match the "
+                    "safe set from the confirmed preview; request a fresh "
+                    "preview.",
+                )
+
         outcomes: dict[str, str] = {}
         skipped_events: list[tuple[str, str, str]] = []
         eligible_findings: list[tuple[str, list[dict[str, Any]]]] = []
@@ -3794,41 +4358,26 @@ def create_app() -> FastAPI:
         # applied. Exact operations already accepted for an earlier finding
         # are omitted from later batches, so destructive/additive duplicates
         # execute once while every owning finding can still be dispositioned.
-        combined_ops: list[dict[str, Any]] = []
-        applied_ids: list[str] = []
-        successful_identities: set[str] = set()
-        for finding_id, proposed_ops in eligible_findings:
-            previously_successful = set(successful_identities)
-            normalized = [
-                canonical_qc_operation(operation)
-                for operation in proposed_ops
-            ]
-            novel_ops = [
-                operation
-                for operation in normalized
-                if qc_operation_identity(operation) not in previously_successful
-            ]
-            try:
-                if novel_ops:
-                    working, _applied = apply_edits(working, novel_ops)
-            except SpecEditError:
-                outcomes[finding_id] = "stale"
-                skipped_events.append(
-                    (
-                        finding_id,
-                        "apply_stale",
-                        "The proposed operations no longer applied cleanly in "
-                        "the selected batch; nothing from this finding was "
-                        "applied.",
-                    )
-                )
-                continue
-            combined_ops.extend(novel_ops)
-            successful_identities.update(
-                qc_operation_identity(operation) for operation in normalized
-            )
-            applied_ids.append(finding_id)
+        (
+            combined_ops,
+            applied_ids,
+            stale_errors,
+            _per_finding_operation_counts,
+            _validated_candidate,
+        ) = _dry_run_qc_apply_findings(working, eligible_findings)
+        for finding_id in applied_ids:
             outcomes[finding_id] = "applied"
+        for finding_id in stale_errors:
+            outcomes[finding_id] = "stale"
+            skipped_events.append(
+                (
+                    finding_id,
+                    "apply_stale",
+                    "The proposed operations no longer applied cleanly in "
+                    "the selected batch; nothing from this finding was "
+                    "applied.",
+                )
+            )
 
         def record_skipped_outcomes() -> None:
             """Append outcome events while ``session_state_guard`` is held."""
@@ -3850,6 +4399,9 @@ def create_app() -> FastAPI:
                     or session.qc.status == "running"
                     or session.qc.is_settling
                     or not _qc_result_is_audit_complete(result)
+                    or not _qc_matches_current_inputs(
+                        session, result, block=True
+                    )
                     or session.generation != generation
                     or session.doc.index != version_index
                     or session.doc.versions[version_index] is not version_record
@@ -3894,6 +4446,9 @@ def create_app() -> FastAPI:
                     session.qc.status == "running"
                     or session.qc.is_settling
                     or not _qc_result_is_audit_complete(result)
+                    or not _qc_matches_current_inputs(
+                        session, result, block=True
+                    )
                     or session.generation != generation
                     or session.doc.index != version_index
                     or session.doc.versions[session.doc.index]

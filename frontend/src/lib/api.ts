@@ -10,6 +10,8 @@ import type {
   ImportResultPayload,
   KeyStatus,
   ProjectLoadResult,
+  QcApplyPreviewBasis,
+  QcApplyPreviewResult,
   QcApplyResult,
   QcEvent,
   QcModuleSectionCompatibility,
@@ -800,8 +802,31 @@ export async function* streamQc(): AsyncGenerator<QcEvent> {
 export async function applyQc(
   findingIds: string[],
   lease: WorkspaceLeaseInput = {},
+  previewBasis?: QcApplyPreviewBasis,
 ): Promise<QcApplyResult> {
   const resp = await fetch("/api/qc/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      finding_ids: findingIds,
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+      preview_basis: previewBasis,
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `QC apply failed (${resp.status})`);
+  }
+  return data;
+}
+
+/** Preview a combined QC batch without mutating the document. */
+export async function previewQcApply(
+  findingIds: string[],
+  lease: WorkspaceLeaseInput = {},
+): Promise<QcApplyPreviewResult> {
+  const resp = await fetch("/api/qc/apply/preview", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -812,7 +837,7 @@ export async function applyQc(
   });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
-    throw new Error(data.error ?? `QC apply failed (${resp.status})`);
+    throw new Error(data.error ?? `QC apply preview failed (${resp.status})`);
   }
   return data;
 }

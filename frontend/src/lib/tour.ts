@@ -501,15 +501,15 @@ export const TOUR: readonly TourChunk[] = [
       },
       {
         id: "qc-findings",
-        capabilities: ["qc.findings", "qc.actions"],
+        capabilities: ["qc.findings", "qc.actions", "qc.remediation"],
         mode: "interactive",
         anchor: "qc-drawer",
         drawer: "qc",
         readiness: "qc",
         placement: "top",
-        title: "Findings carry evidence and disposition",
+        title: "Findings become a guided remediation plan",
         body:
-          "Work the severity queue, jump to the block, inspect rationale, sources, operation preview, and semantic/mechanical status. Apply one fix as one undo or hold to batch criticals. Dismissal requires a persisted reason; inconclusive and refuted candidates remain disclosed.",
+          "Open findings are separated into verified fixes ready to apply, project facts that need your decision, and items for professional review. Select safe fixes, preview deduplication and conflicts, then confirm one undoable batch; or apply and dismiss individually. TBD and assumption items can prefill a focused chat request while the complete rationale, evidence, inconclusive candidates, and refutations remain available.",
       },
       {
         id: "qc-report",

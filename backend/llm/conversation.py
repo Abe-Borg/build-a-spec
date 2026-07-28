@@ -600,6 +600,84 @@ class SessionState:
             )
         return self.source_patch_context
 
+    def validate_source_backed_candidate(
+        self,
+        candidate: SpecSection,
+        *,
+        current: SpecSection | None = None,
+    ) -> None:
+        """Read-only source-preservation gate for a complete candidate.
+
+        ``apply_doc_edits`` and Final-QC remediation preview share this exact
+        combined-document validation. Supplying ``current`` lets a caller
+        validate an immutable snapshot built outside the live store; the
+        caller remains responsible for a coherence check before using the
+        answer.
+        """
+        if not self._active_source_scope():
+            return
+        before = current if current is not None else self.doc.doc
+        # Metadata is workspace state, not source-body XML. Decide that
+        # exemption from the complete before/after semantic projections,
+        # never from action names, so a mixed batch still enters the full
+        # source gate whenever its final body would differ.
+        body_changed = semantic_body_projection(
+            candidate
+        ) != semantic_body_projection(before)
+        if not body_changed:
+            return
+        baseline_index = self.doc.baseline_index
+        try:
+            if (
+                isinstance(baseline_index, bool)
+                or not isinstance(baseline_index, int)
+                or not 0 <= baseline_index < len(self.doc.versions)
+            ):
+                raise SourcePatchError(
+                    "source",
+                    "baseline_unavailable",
+                    "the imported semantic baseline is unavailable",
+                )
+            try:
+                baseline = SpecSection.from_dict(
+                    self.doc.versions[baseline_index]
+                )
+            except (TypeError, ValueError) as baseline_exc:
+                raise SourcePatchError(
+                    "source",
+                    "baseline_unavailable",
+                    "the imported semantic baseline is unavailable",
+                ) from baseline_exc
+            if (
+                not isinstance(self.source_docx_bytes, bytes)
+                or not isinstance(self.source_docx_map, SourceBodyMap)
+            ):
+                raise SourcePatchError(
+                    "source",
+                    "source_unavailable",
+                    "the exact imported DOCX and source map are unavailable",
+                )
+            context = self.ensure_source_patch_context(baseline=baseline)
+            if context is None:
+                raise SourcePatchError(
+                    "source",
+                    "source_unavailable",
+                    "the exact imported DOCX and source map are unavailable",
+                )
+            validate_source_transition(
+                source_bytes=self.source_docx_bytes,
+                source_map=self.source_docx_map,
+                baseline=baseline,
+                current=candidate,
+                context=context,
+            )
+        except SourcePatchError as exc:
+            detail = exc.detail.rstrip(".")
+            raise SpecEditError(
+                f"Source-backed edit rejected for {exc.uid!r} "
+                f"[{exc.blocker}]: {detail}. Nothing was applied."
+            ) from exc
+
     def apply_doc_edits(self, edits: Any) -> list[dict[str, Any]]:
         """The single guarded entry point for model and manual edit batches.
 
@@ -617,65 +695,7 @@ class SessionState:
             # untouched until both the ordinary edit validator and the DOCX
             # preservation gate have accepted the whole transaction.
             candidate, _candidate_ops = apply_edits(self.doc.doc, edits)
-            # Metadata is workspace state, not source-body XML. Decide that
-            # exemption from the complete before/after semantic projections,
-            # never from action names, so a mixed batch still enters the full
-            # source gate whenever its final body would differ.
-            body_changed = semantic_body_projection(
-                candidate
-            ) != semantic_body_projection(self.doc.doc)
-            if body_changed:
-                baseline_index = self.doc.baseline_index
-                try:
-                    if (
-                        isinstance(baseline_index, bool)
-                        or not isinstance(baseline_index, int)
-                        or not 0 <= baseline_index < len(self.doc.versions)
-                    ):
-                        raise SourcePatchError(
-                            "source",
-                            "baseline_unavailable",
-                            "the imported semantic baseline is unavailable",
-                        )
-                    try:
-                        baseline = SpecSection.from_dict(
-                            self.doc.versions[baseline_index]
-                        )
-                    except (TypeError, ValueError) as baseline_exc:
-                        raise SourcePatchError(
-                            "source",
-                            "baseline_unavailable",
-                            "the imported semantic baseline is unavailable",
-                        ) from baseline_exc
-                    if (
-                        not isinstance(self.source_docx_bytes, bytes)
-                        or not isinstance(self.source_docx_map, SourceBodyMap)
-                    ):
-                        raise SourcePatchError(
-                            "source",
-                            "source_unavailable",
-                            "the exact imported DOCX and source map are unavailable",
-                        )
-                    context = self.ensure_source_patch_context(baseline=baseline)
-                    if context is None:
-                        raise SourcePatchError(
-                            "source",
-                            "source_unavailable",
-                            "the exact imported DOCX and source map are unavailable",
-                        )
-                    validate_source_transition(
-                        source_bytes=self.source_docx_bytes,
-                        source_map=self.source_docx_map,
-                        baseline=baseline,
-                        current=candidate,
-                        context=context,
-                    )
-                except SourcePatchError as exc:
-                    detail = exc.detail.rstrip(".")
-                    raise SpecEditError(
-                        f"Source-backed edit rejected for {exc.uid!r} "
-                        f"[{exc.blocker}]: {detail}. Nothing was applied."
-                    ) from exc
+            self.validate_source_backed_candidate(candidate)
         return self.doc.apply_edits(edits)
 
     def _active_source_scope(self) -> bool:

@@ -1095,6 +1095,7 @@ export default function ArtifactPanel({
         qc={qc}
         readiness={readiness}
         doc={doc}
+        profileComplete={profileComplete}
         busy={busy}
         sourceExpected={activeSourceExpected}
         sourceCapabilities={sourceCapabilities}

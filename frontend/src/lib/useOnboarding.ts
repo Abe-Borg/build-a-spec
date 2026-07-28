@@ -730,6 +730,12 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
             // stale document as though it were the user's project.
             const restored = await getSessionBundle().catch(() => null);
             if (!restored) throw firstError;
+            // Same guard as the success path below, and it is not redundant
+            // here: acceptNativeRestore is not a restore call, so it slips
+            // past the in-flight serialization and can apply newer state
+            // while this fetch is still open. Settling anyway would overwrite
+            // it with a bundle read before it existed.
+            if (runRef.current !== run) return true;
             settle(restored);
             return true;
           }

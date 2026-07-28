@@ -217,6 +217,11 @@ test("the tutorial has exactly one ending, and it is a restore", () => {
   assert.match(hook, /settle\(restored\)/);
   assert.doesNotMatch(hook, /settle\(status\.session/);
 
+  // Every settle that follows an await is generation-guarded. acceptNativeRestore
+  // is not a restore call, so it bypasses the in-flight serialization and can
+  // apply newer state mid-fetch; an unguarded settle would overwrite it.
+  assert.match(hook, /if \(runRef\.current !== run\) return true;\s*\n\s*settle\(restored\)/);
+
   // The capability moved to the real End controls, not a modal wrapper.
   assert.match(overlay, /data-capability="tour\.finish"/);
   assert.doesNotMatch(overlay, /<div data-capability="tour\.finish">/);

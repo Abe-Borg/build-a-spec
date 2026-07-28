@@ -820,8 +820,11 @@ already resolved and does nothing). 409 when nothing is running.
   Tests set `BUILD_A_SPEC_DISABLE_UPDATE_CHECK=1` in conftest.
 - **Packaging** (`packaging/windows/`): PyInstaller one-folder →
   `dist/BuildASpec`; bundles `frontend/dist` (resolved frozen via
-  `sys._MEIPASS` in `settings._resolve_frontend_dist`) and the trace
-  viewer; Inno AppId `{89E58C42-A4F6-49F8-8FCB-1147CB0186DB}` is
+  `sys._MEIPASS` in `settings._resolve_frontend_dist`), the trace
+  viewer, and the root `LICENSE` file (the MIT notice must travel with
+  every installed copy, not just the git checkout — `installer.iss`
+  picks it up for free via its wholesale `dist\BuildASpec\*` bundling);
+  Inno AppId `{89E58C42-A4F6-49F8-8FCB-1147CB0186DB}` is
   Build-a-Spec's own — NEVER change it, NEVER share it with Spec
   Critic. `check_release_version.py` gates settings/package.json/tag
   agreement and runs inside pytest (`test_version_consistency_gate`) —

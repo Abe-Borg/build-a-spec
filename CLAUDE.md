@@ -12,7 +12,7 @@ file is the working reference for AI-assisted development sessions.
   a placeholder `ANTHROPIC_API_KEY`; anything touching the API monkeypatches
   `backend.llm.conversation.get_client` with a fake streaming client.
   `tools/qc_verifier_canary.py --run` is the sole explicit paid exception: one
-  low-token Fable verifier request for provider-side strict-schema acceptance,
+  low-token QC verifier request for provider-side strict-schema acceptance,
   never a full Final QC run. Without `--run` it performs no request.
 - Reused Spec Critic code is **copied in and adapted**, never imported across
   repos. When porting a file, keep its design and docstring posture, update
@@ -150,11 +150,12 @@ backend/
                            completeness lenses supersede it; endpoints retained
   qc/schema.py             [Batch 4] QCLens defs (5 lenses) + submit_qc_findings /
                            submit_qc_verdict strict tools (strict conventions from
-                           research/schema; Fable added to _STRICT_CAPABLE_MODELS) +
+                           research/schema; Opus 5 added to _STRICT_CAPABLE_MODELS) +
                            observable reviewed-check/finding/verdict normalization
                            (no hidden reasoning) + median-severity math
   qc/engine.py             [Batch 4, pattern: research/engine.py] run_final_qc:
-                           lens fan-out (ThreadPool cap 4, pause_turn loop, 2×
+                           lens fan-out (ThreadPool cap settings.QC_MAX_WORKERS
+                           = 8, pause_turn loop, 2×
                            search ceiling, PDF elision, retry policy, grounding) →
                            adversarial verification panel (tie→refuters) → ops
                            dry-run validation → audit-grade QCResult (versioned
@@ -496,7 +497,7 @@ tests/
                            kills, median severity), ops validation, apply (one undo
                            step + stale skip), dismiss memory, runner lifecycle,
                            coverage-blocked readiness, full Word + JSON reports,
-                           audit-record persistence, Fable-priced usage
+                           audit-record persistence, QC-model-priced usage
   test_qc_audit_report.py  [Batch 4] audit-grade identity/evidence/coverage,
                            full Word + JSON fidelity, failed-latest vs retained
                            success, persistence hardening, dispositions and cost
@@ -952,7 +953,7 @@ Interview policy (decided 2026-07-21, conversation w/ Abraham):
 - **Model routing (revised 2026-07-21, w/ Abraham).** Everything runs on
   Sonnet 5 — no user-facing model picker, ever. The one exception is the
   "Final QC" pass (shipped Batch 4, v0.9.0): a user-triggered,
-  spare-no-expense multi-agent review on Fable 5 (`claude-fable-5`) before a
+  multi-agent review on Opus 5 (`claude-opus-5`) before a
   section goes out the door. It runs on its own channel (`backend/qc/`),
   NOT through `stream_user_turn` — the interview loop stays Sonnet-only.
 
@@ -1004,7 +1005,8 @@ Interview policy (decided 2026-07-21, conversation w/ Abraham):
   status flip so a poller that sees `complete` finds the ledger updated).
   Reset/load clear it; not persisted. `settings.PRICING` (`VERIFY`-checked
   2026-07: Sonnet 5 at post-intro $3/$15, cache read 0.1×, cache write
-  1.25×, web search $0.01/req, Fable 5 $10/$50 staged for Batch 4) drives
+  1.25×, web search $0.01/req, Opus 5 $5/$25 for Final QC, Fable 5 $10/$50)
+  drives
   the estimate. `GET /api/usage` → categories/totals/turns/estimate/
   cache-saved. Header shows a live `≈ $X` ticker; the settings Usage table
   breaks it down. Estimates are labeled estimates; traces stay the exact
@@ -1069,15 +1071,16 @@ status. Frozen decisions honored throughout.
 - **No new SSE events, no new env vars, no new Python deps.** Only new REST
   route: `POST /api/draft/full`.
 
-## Batch 4 — implemented notes (v0.9.0: Final QC on Fable 5)
+## Batch 4 — implemented notes (v0.9.0: Final QC; model updated in v1.8.0)
 
-The one place a model other than Sonnet 5 appears (frozen decision):
-`settings.QC_MODEL` defaults to `MODEL_FABLE_5` ("claude-fable-5"), added to
-`schema._STRICT_CAPABLE_MODELS`. Fable 5's adaptive thinking is always-on;
-QC requests state `thinking: {type: adaptive}` + `output_config.effort`
-(`QC_EFFORT`, default xhigh) — never a manual budget (a `{type: disabled}`
-would 400; the engine never sends it). Pricing was already in the Batch 2
-table ($10/$50; VERIFIED against the claude-api reference 2026-07).
+The one place a model other than Sonnet 5 appears (frozen decision).
+**Model superseded in v1.8.0 — see "Final QC cost + speed" below:**
+`settings.QC_MODEL` now defaults to `MODEL_OPUS_5` ("claude-opus-5"), added
+to `schema._STRICT_CAPABLE_MODELS`, priced $5/$25 in `settings.PRICING`.
+Opus 5 runs adaptive thinking by default; QC requests state
+`thinking: {type: adaptive}` + `output_config.effort` (`QC_EFFORT`, default
+`high` since v1.8.0) — never a manual budget (it would 400; the engine never
+sends it). Batch 4 originally shipped on Fable 5 at `xhigh`.
 
 ### Audit-grade Final QC report extension (implemented 2026-07-24)
 
@@ -1235,7 +1238,8 @@ for, promise, serialize, or display private chain-of-thought.
   A dead/cancelled/missing verifier makes the candidate infrastructure-
   inconclusive and the run partial; it is never treated as substantive
   refutation evidence. Verifications for all findings flatten into
-  ONE bounded thread pool (per-`(finding, verifier)` task) with at most four
+  ONE bounded thread pool (per-`(finding, verifier)` task) with at most
+  settings.QC_MAX_WORKERS
   submitted futures; `verify_progress`
   {done,total} fires as each finding's panel resolves. Surviving severity =
   `median_severity([original, *upheld revisions])`; both original and final
@@ -1291,11 +1295,11 @@ for, promise, serialize, or display private chain-of-thought.
 - **Tracing.** A `qc` span (`KIND_QC`) with mirrored `qc_progress` events;
   hooks never raise (`capture.qc_start/qc_event/qc_end`).
 - **Deliberate non-ports.** Server-side refusal `fallbacks` (recommended for
-  Fable 5 by the claude-api skill) is NOT wired: it needs the beta endpoint
-  and is out of the batch's plan scope; a refusal surfaces as an incomplete
-  stop_reason → the lens fails clean under the existing failure policy.
-  Fable 5 requires 30-day data retention — a ZDR org 400s every QC request
-  (operational caveat, not a code concern).
+  both Fable 5 and Opus 5 by the claude-api skill) is NOT wired: it needs the
+  beta endpoint and is out of the batch's plan scope; a refusal surfaces as an
+  incomplete stop_reason → the lens fails clean under the existing failure
+  policy. The Fable-era 30-day-retention caveat no longer applies: Opus 5 has
+  no retention requirement, so ZDR orgs can run Final QC (v1.8.0).
 
 ## Batch 5 — implemented notes (v1.0.0: redline export + version diff)
 
@@ -1583,7 +1587,7 @@ batch: no new SSE event types, no new env vars, no new Python deps.
   `ResearchDrawer` / `QCDrawer` show a **Stop** button only while running,
   gated by the new `ConfirmDialog` (generic reusable confirm modal —
   backdrop/Escape cancel, danger-red confirm) spelling out that progress is
-  discarded (the QC dialog also notes the Fable 5 spend already incurred
+  discarded (the QC dialog also notes the QC spend already incurred
   isn't refunded). `POST /api/research/stop` / `POST /api/qc/stop` call
   `ResearchRunner.stop()` / `QCRunner.stop()`, which resolve the run as
   `failed` (`"Stopped by user — progress was discarded."`) through a
@@ -1606,7 +1610,7 @@ batch: no new SSE event types, no new env vars, no new Python deps.
   `_run_lens`, `_verify_one`) is checked at each worker's entry and before
   each retry attempt / pause_turn continuation, so anything that hasn't
   started its next network call yet bails immediately and for free; a call
-  already in flight (bounded by the `ThreadPoolExecutor` cap of 4) completes
+  already in flight (bounded by the `ThreadPoolExecutor` worker cap) completes
   naturally and its result is simply discarded. Restructuring the ported
   research/QC engines to interrupt an in-flight streaming call the way the
   chat loop now does would touch the "hard-won" fan-out machinery for
@@ -2461,7 +2465,7 @@ outside the modal.
   document.
 - **Every number is real** and traceable to the code it describes: 8/4 chat web
   allowances, 50 tool rounds, 40/12 governing-codes budget, 16 continuations,
-  4 concurrent research dimensions, 5 lenses at 4 concurrent, 3/2 verifier
+  4 concurrent research dimensions, 5 lenses at 8 concurrent, 3/2 verifier
   seats, tie-to-refuters. When one of those settings moves, this modal moves
   with it — a trust document that has drifted from the code is worse than none.
 - **One hand-authored inline SVG** (the data-flow diagram: your computer →
@@ -2821,6 +2825,85 @@ project-format bump; two REST routes and one new capability-free modal.
   theme-grouped list ("since 1.0"), not six per-version sections for
   releases nobody had. Future entries are per-version as normal; the data
   model was per-version from the start.
+
+## Final QC cost + speed — implemented notes (v1.8.0)
+
+Reported ask (Abraham): Final QC is expensive and slow, and may be hitting
+diminishing returns. A run is **~40 calls** — five lenses plus two or three
+verifier seats per finding — and every one carried the full document render
+at full input price. Modelled at ~$15.80 and 20-40 minutes; now ~$5.40 and
+~3x faster through phase 2. **No review rigor was traded away**: same five
+lenses, same seat counts, same grounding, adversarial verification, ops
+validation and readiness gate.
+
+- **Caching covered the wrong 5-10% of each request.** `cache_control` sat
+  on `system` and `tools` only (2,356 of ~24,000 tokens per lens call; 612
+  of ~12,600 per verifier call). The document, standards block and research
+  profile rode in the user message as a bare string. The cache is a **strict
+  prefix match**, so shared content has to physically lead: `_lens_user_message`
+  / `_verifier_user_message` are split into `_lens_shared_prefix` +
+  `_lens_request_suffix` and `_verifier_shared_prefix` +
+  `_verifier_request_suffix`, and the user turn is now two text blocks
+  (`_qc_user_content`) with the breakpoint on block 0. **The order reversed** —
+  the `[[QC-LENS:...]]` marker used to lead.
+- **Two lineages, not one.** The four web-toolless lenses share a cached
+  prefix; every verifier seat shares another. `code_compliance` **cannot join
+  the lens lineage** — its `tools` array carries web search/fetch and tools
+  render ahead of system and messages, so its byte prefix diverges from the
+  start. No reordering fixes that. It still caches across its own retries.
+- **1h TTL on the verifier prefix.** Phase 2 spans 10-20 minutes, so a
+  5-minute entry would lapse mid-phase and be rewritten. 1h costs 2x to write,
+  breaks even after three reads, and a panel run has dozens.
+- **No pre-warm priming (deliberate).** The first `QC_MAX_WORKERS` calls of
+  each phase all miss — a cache entry is only readable once the first response
+  starts streaming. That costs ~$0.46/run. A serial prime would recover it but
+  add ~60s to the phase this change exists to speed up.
+- **No messages-tail breakpoint (deliberate).** The interview loop's
+  `_with_tail_cache_breakpoint` cannot be ported as-is: QC's pause_turn branch
+  re-sends `response.content` **verbatim as SDK block objects**, not the
+  serialized dicts `conversation.py` builds, so there is no dict to hang
+  `cache_control` on. Marking them would mean changing what gets re-sent —
+  a behavioural change to the resume path, not a caching change. See the NOTE
+  above `_run_streaming_call`.
+- **Effort `xhigh` -> `high`**, and threaded as a run parameter through
+  `QCRunner.start` -> `run_final_qc` -> `_run_lens`/`_verify_one` ->
+  `_run_streaming_call` and `build_qc_input_manifest`, instead of being
+  re-read from module scope at four sites. Thinking bills as output, so
+  `xhigh` across ~40 calls compounded the same way it did across research's
+  four (PR #78). Pinning it per-run also means the audit record provably
+  describes what was sent rather than what the env said at each read.
+- **Concurrency 4 -> `settings.QC_MAX_WORKERS` (default 8, env-overridable).**
+  Was a bare `_QC_MAX_WORKERS` module constant. **Phase-2-only speedup** —
+  phase 1 is five lenses gated by `code_compliance` alone. Opus 5 draws on its
+  own rate-limit bucket rather than the Opus 4.x pool, hence 8 not 12.
+- **Two silent failure modes, both now covered by tests.** A QC model absent
+  from `settings.PRICING` is metered at Sonnet 5 rates via `_rates`'s
+  `dict.get` fallback — and the resulting `cost_basis` still passes every
+  audit-integrity gate, so the wrong dollar figure ships unnoticed. A model
+  absent from `_STRICT_CAPABLE_MODELS` just omits `strict: true`, degrading
+  payload conformance with no error. **A new QC model must land in both.**
+- **Retained QC results go stale, by design.** `model` and `effort` are inside
+  the hashed `input_manifest.configuration`, so every saved `.baspec` result
+  flips stale and `POST /api/qc/apply` 409s. That is correct — an Opus/high
+  review is not a Fable/xhigh review — and unavoidable anyway, since
+  `application_version` is hashed too. What was wrong was the copy: it blamed
+  "the document or another review input", which is false when only the config
+  moved. Both messages now name the configuration.
+- **`tests/fakes.py` was the blocker.** `SequencedFakeClient` routed by
+  substring-matching a **string** user message and coerced anything else to
+  `""`, so block content would have matched no script and taken the entire QC
+  suite down at once. `_user_text()` now flattens text blocks; it is also the
+  right helper for tests that were matching against a `str(...)` repr by
+  accident.
+- **Deferred, on purpose** (revisit with real run data): Sonnet 5 for the
+  verifier seats (~18% once on Opus 5 — the seat also sets `ops_adequate`, the
+  only semantic gate before an auto-applied edit, and a weaker model biases an
+  already kill-biased panel further toward refuting, silently); reducing
+  `QC_VERIFIERS_STANDARD` 2 -> 1; and the **threshold inversion** —
+  `(size // 2) + 1` means a medium finding needs 2 of 2 (unanimous) while a
+  critical needs 2 of 3 (majority), so the extra critical seat buys leniency,
+  not rigor. Real bug; changing survival semantics alongside a model swap
+  would make regressions impossible to attribute.
 
 ## Commands
 

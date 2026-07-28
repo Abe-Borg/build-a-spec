@@ -1,10 +1,10 @@
 /**
- * Final QC on Fable 5 (Batch 4): one button, a fleet of Fable 5 reviewers,
+ * Final QC on Opus 5: one button, a fleet of Opus 5 reviewers,
  * an accept/dismiss fix queue, and an issue-readiness checklist.
  *
  * Idle → a "Send to Final QC" button + a cost expectation line + the
  * readiness checklist. The button never launches a run directly: because a
- * pass runs on Fable 5 (expensive) and takes minutes, it opens a confirmation
+ * pass runs on Opus 5 (expensive) and takes minutes, it opens a confirmation
  * dialog that spells out what the pass does, why it costs, and why it's slow —
  * the user opts in explicitly. Running → the five lens rows with live status,
  * then a
@@ -274,8 +274,8 @@ export default function QCDrawer({
   const observedCost = usage?.estimated_cost_usd.by_category.qc;
   const costLine =
     observedCost && observedCost > 0
-      ? `Runs on Claude Fable 5 — the strongest model. This session's QC: ≈ $${observedCost.toFixed(2)}.`
-      : "Runs on Claude Fable 5 — the strongest model.";
+      ? `Runs on Claude Opus 5 — a stronger reviewer than the drafter. This session's QC: ≈ $${observedCost.toFixed(2)}.`
+      : "Runs on Claude Opus 5 — a stronger reviewer than the drafter.";
 
   // Cost-focused line for the confirmation dialog (the model name is already
   // stated there). A re-run folds the session's prior QC spend in.
@@ -303,7 +303,7 @@ export default function QCDrawer({
         ? "Final QC is already running."
         : busy
           ? QC_BUSY_MESSAGE
-          : "Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Fable 5 (uses your API key)";
+          : "Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Opus 5 (uses your API key)";
 
   const applyAllDisabled = interactionBusy || applicableCriticals.length === 0;
   const applyAllTitle =
@@ -319,7 +319,7 @@ export default function QCDrawer({
         : "Press and hold to apply only the critical findings that are currently applicable; the server validates the combined batch again.";
 
   // The start button opens the confirmation dialog; the run only fires once
-  // the user confirms in it (Fable 5 is expensive and a pass takes minutes).
+  // the user confirms in it (Opus 5 is expensive and a pass takes minutes).
   const confirmStart = (acknowledgeScopeMismatch: boolean) => {
     setConfirmOpen(false);
     onStart(acknowledgeScopeMismatch);
@@ -340,7 +340,7 @@ export default function QCDrawer({
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
           aria-controls="final-qc-drawer-body"
-          title="Final QC — a fleet of Fable 5 reviewers before the section goes out the door"
+          title="Final QC — a fleet of Opus 5 reviewers before the section goes out the door"
         >
           <span className="shrink-0 font-medium tracking-wide uppercase">
             Final QC
@@ -414,7 +414,7 @@ export default function QCDrawer({
               read-only audit report when the worker can return it
             </strong>{" "}
             — it cannot establish issue readiness or create an actionable
-            finding queue, and the Fable 5 spend already incurred is not
+            finding queue, and the spend already incurred is not
             refunded. You&apos;ll need a complete re-run before issue.
           </p>
         }
@@ -930,8 +930,9 @@ function DismissQCModal({
 }
 
 /**
- * Pre-flight confirmation for a Final QC pass. A run is expensive (Fable 5)
- * and slow (minutes), so this dialog states plainly what the pass does, why it
+ * Pre-flight confirmation for a Final QC pass. A run is expensive (Opus 5,
+ * dozens of calls) and slow (minutes), so this dialog states plainly what the
+ * pass does, why it
  * costs, and why it takes a while, and makes the user opt in. Mirrors the
  * SettingsPanel overlay pattern (backdrop click / ✕ / Escape all cancel).
  */
@@ -1079,8 +1080,9 @@ function ConfirmQCModal({
           <p>
             Final QC is a spare-no-expense review of the whole section before it
             goes out the door. It runs on{" "}
-            <strong className="text-ink">Claude Fable 5</strong>, the most
-            capable model — not the Sonnet&nbsp;5 model that runs the interview.
+            <strong className="text-ink">Claude Opus 5</strong>, a stronger
+            reasoning model than the Sonnet&nbsp;5 model that drafts — the
+            point of the pass is to catch what the drafter missed.
           </p>
 
           <div className="space-y-1.5">
@@ -1106,11 +1108,12 @@ function ConfirmQCModal({
           <div className="space-y-1.5">
             <p className={sectionLabel}>Why it&apos;s expensive</p>
             <p>
-              Fable&nbsp;5 costs several times more per token than the interview
-              model, and a pass is not a single call — it&apos;s the five
-              reviewers plus a panel of verifiers for every finding they raise,
-              each reasoning at the highest effort. That adds up to dozens of
-              model calls, billed to your own Anthropic API key.
+              Opus&nbsp;5 costs more per token than the interview model, and a
+              pass is not a single call — it&apos;s the five reviewers plus a
+              panel of verifiers for every finding they raise. That adds up to
+              dozens of model calls, billed to your own Anthropic API key. Your
+              document is sent once per stage rather than once per call, which
+              keeps most of that from being charged at full rate.
             </p>
             <p className="text-ink-faint italic">{costEstimate}</p>
           </div>

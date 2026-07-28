@@ -1,7 +1,7 @@
 """One-request live canary for the production Final-QC verifier schema.
 
 This is intentionally opt-in and bounded. It does not run a Final QC report;
-it submits one low-token Fable verifier request with the production strict
+it submits one low-token QC verifier request with the production strict
 tool schema so provider-side request-shape regressions are caught separately
 from hermetic fakes.
 """
@@ -23,7 +23,9 @@ from backend.qc.engine import (  # noqa: E402
     _VERDICT_JSON_TAG,
     _parse,
     _verifier_system_prompt,
-    _verifier_user_message,
+    _qc_user_content,
+    _verifier_request_suffix,
+    _verifier_shared_prefix,
 )
 from backend.qc.schema import (  # noqa: E402
     QC_LENSES,
@@ -106,13 +108,16 @@ def main() -> int:
         "messages": [
             {
                 "role": "user",
-                "content": _verifier_user_message(
-                    finding,
-                    lens,
-                    (
+                # Mirrors the production two-block user turn (cached shared
+                # document prefix + per-finding tail) so the canary exercises
+                # the real request shape, not a simplified one.
+                "content": _qc_user_content(
+                    _verifier_shared_prefix(
                         "SECTION 21 13 13 - WET-PIPE SPRINKLER SYSTEMS\n"
                         "[id: pt1.a1.p1] Provide acceptance criteria [TBD]."
                     ),
+                    _verifier_request_suffix(finding, lens),
+                    "1h",
                 ),
             }
         ],

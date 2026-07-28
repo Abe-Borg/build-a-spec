@@ -425,7 +425,7 @@ function DataFlowDiagram() {
           interview · drafting · research
         </text>
         <text x="412" y="136" {...small}>
-          Claude Fable 5
+          Claude Opus 5
         </text>
         <text x="412" y="152" {...faint}>
           Final QC only
@@ -609,14 +609,14 @@ function Dossier() {
               <>
                 Claude Sonnet 5 <Mono>(claude-sonnet-5)</Mono>
               </>,
-              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “high” for the interview and “xhigh” for research.",
+              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “high” for both the interview and research.",
             ],
             [
               "Final QC only",
               <>
-                Claude Fable 5 <Mono>(claude-fable-5)</Mono>
+                Claude Opus 5 <Mono>(claude-opus-5)</Mono>
               </>,
-              "The single most capable review model, used deliberately for the one pass where cost is the wrong thing to optimise. It never touches the interview loop, and it is the only place a second model appears.",
+              "A stronger reasoning model than the one that drafts, chosen for a pass that has to catch what the drafter missed — it is measurably good at finding real defects without inventing them. It never touches the interview loop, and it is the only place a second model appears.",
             ],
           ]}
         />
@@ -808,7 +808,7 @@ function Dossier() {
               the jurisdiction, not at your text.
             </>
           }
-          model="Claude Sonnet 5, effort “xhigh” — four concurrent long-running conversations."
+          model="Claude Sonnet 5, effort “high” — four concurrent long-running conversations."
           bounds={
             <>
               Per-dimension search budgets (up to 40 searches and 12 fetches for
@@ -837,8 +837,9 @@ function Dossier() {
               reviewed mid-review. Then three phases:
               <br />
               <br />
-              <b className="text-ink">1 · Five lenses, run concurrently</b> (four
-              at a time). Five independent Fable 5 reviewers, none of which sees
+              <b className="text-ink">1 · Five lenses, run concurrently</b>{" "}
+              (eight calls in flight at a time, shared with stage 2). Five
+              independent Opus 5 reviewers, none of which sees
               the others’ output: code &amp; standard compliance; PART 1/2/3
               coordination and
               consistency; completeness against scope and grounded research;
@@ -880,9 +881,12 @@ function Dossier() {
           }
           model={
             <>
-              Claude Fable 5, effort “xhigh” — five lens calls plus two or three
-              verifier calls <em>per finding</em>. This is the most expensive
-              action in the app, by design.
+              Claude Opus 5, effort “high” — five lens calls plus two or three
+              verifier calls <em>per finding</em>. This is still the most
+              expensive action in the app. Your document is sent once per
+              stage rather than once per call: the API caches it and every
+              later call in that stage reads the cached copy at a tenth of the
+              price.
             </>
           }
           bounds={
@@ -1340,7 +1344,7 @@ function Dossier() {
             ],
             [
               "Data handling at Anthropic",
-              "Your requests are governed by Anthropic’s commercial API terms and privacy policy, linked below. One operational note worth knowing in advance: the Final QC model requires 30-day data retention, so an organisation running zero-data-retention will have every Final QC request rejected by the API. Everything else in the app is unaffected.",
+              "Your requests are governed by Anthropic’s commercial API terms and privacy policy, linked below. Every model the app uses, including the Final QC reviewer, is available to organisations running zero data retention.",
             ],
           ]}
         />
@@ -1367,8 +1371,8 @@ function Dossier() {
               turn is cheap; a full-section draft is one large turn; a research
               run is four long agents in parallel; and{" "}
               <b className="text-ink">Final QC is by far the most expensive
-              action</b> — a premium model, five lenses, and two to three
-              additional reviewers for every finding.
+              action</b> — a stronger model than the one that drafts, five
+              lenses, and two to three additional reviewers for every finding.
             </>,
             <>
               <b className="text-ink">The meter is an estimate, computed

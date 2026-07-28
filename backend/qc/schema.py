@@ -1,6 +1,6 @@
 """Final-QC lens definitions, output tools, and payload normalization.
 
-Batch 4. The QC pass is a lens fan-out (five independent Fable 5 calls)
+The QC pass is a lens fan-out (five independent Opus 5 calls)
 followed by an adversarial verification panel per finding; this module owns
 the lens briefs, the two strict output tools (``submit_qc_findings`` /
 ``submit_qc_verdict``), and the parse-time normalization that clamps model
@@ -9,7 +9,7 @@ output to the contract.
 Schema conventions are copied from :mod:`backend.research.schema` — the
 strict-mode subset (every property required, optionals nullable, no numeric
 constraints; clamp at parse). ``strict: true`` attaches only for the known
-strict-capable models (Fable 5 is one; see ``_STRICT_CAPABLE_MODELS``).
+strict-capable models (Opus 5 is one; see ``_STRICT_CAPABLE_MODELS``).
 ``proposed_ops`` mirrors the ``apply_spec_edits`` op vocabulary so a finding
 can carry a ready-to-apply fix; the engine dry-runs those ops against a
 document snapshot before ever offering them (never trusts them raw).

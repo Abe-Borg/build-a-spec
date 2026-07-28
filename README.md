@@ -316,20 +316,21 @@ baseline is the extracted SectionFormat tree — not the uploaded Word package.
 This is the **1.0 release milestone**. Cut the first Windows build per
 `docs/RELEASE_WINDOWS.md` after this lands.
 
-## Shipped in v0.9.0 (Batch 4: Final QC on Fable 5) and still current
+## Shipped in v0.9.0 (Batch 4: Final QC) and still current
 
-**One button, a fleet of Fable 5 reviewers, a full audit-grade report, and a
+**One button, a fleet of Opus 5 reviewers, a full audit-grade report, and a
 compact accept/dismiss action queue.** The one place a model other than Sonnet
-5 appears: a user-triggered, spare-no-expense last quality-control pass before
-a section goes out the door. The report is a first-class product surface, not
+5 appears: a user-triggered last quality-control pass before a section goes
+out the door. The report is a first-class product surface, not
 an incidental memo: it shows what was reviewed, which evidence was retrieved,
 how every candidate finding was challenged, what the run could not establish,
 and exactly what happened to every proposed fix. The compact queue remains
 beside it for fast remediation without making the user mine the report for
 actions.
 
-- **Five lenses, in parallel, on the strongest model.** "Send to Final QC"
-  fans out five independent Fable 5 reviews of the whole section: **code
+- **Five lenses, in parallel, on a stronger reviewer than the drafter.**
+  "Send to Final QC" fans out five independent Opus 5 reviews of the whole
+  section: **code
   compliance** (verifies every citation/edition against the standards'
   *actual current content* via web search — the big search allowance),
   **coordination & consistency** (PART 1/2/3 alignment, dangling
@@ -358,7 +359,7 @@ actions.
   attempts, so failed fetches and evidence from an abandoned retry remain
   visible for cost/accountability without being allowed to ground a finding.
 - **Adversarial verification is seat-by-seat and auditable.** Every candidate
-  finding faces a panel of independent Fable 5 refuters prompted to *refute*
+  finding faces a panel of independent Opus 5 refuters prompted to *refute*
   it (2 for medium/low, 3 for critical/high). The report preserves every
   expected verifier seat, including its success, verdict, severity revision,
   proposed-fix adequacy decision and note, usage, or failure. A tie on a fully
@@ -371,7 +372,8 @@ actions.
   evidence against a finding.
   This is the "as many agents as necessary" clause: total calls = 5 lenses +
   Σ panel sizes, with no cap on findings count (the runaway guards are
-  per-call). The verifier queue keeps at most four provider requests in flight;
+  per-call). The verifier queue keeps at most `BUILD_A_SPEC_QC_MAX_WORKERS`
+  provider requests in flight (default 8);
   one immediate, nonretryable shared request-shape rejection opens a phase
   circuit breaker, preserves zero-request records for every unstarted seat, and
   settles the attempt partial instead of repeating the same bad request across
@@ -888,9 +890,10 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
-| `BUILD_A_SPEC_QC_MODEL` | `claude-fable-5` | Model for the Final QC pass (the one non-Sonnet surface). |
+| `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5` | Model for the Final QC pass (the one non-Sonnet surface). |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Per-call QC output ceiling (model max — no app limit). |
-| `BUILD_A_SPEC_QC_EFFORT` | `xhigh` | Adaptive-thinking effort for QC lenses/verifiers. |
+| `BUILD_A_SPEC_QC_EFFORT` | `high` | Adaptive-thinking effort for QC lenses/verifiers. |
+| `BUILD_A_SPEC_QC_MAX_WORKERS` | `8` | Concurrent QC calls in flight (lenses share the pool with verifiers). |
 | `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings. |
 | `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings. |
 | `BUILD_A_SPEC_QC_MAX_SEARCHES_COMPLIANCE` | `24` | web_search allowance for the code-compliance lens (runaway guard). |
@@ -917,7 +920,7 @@ venv\Scripts\python -m pytest -q
 ```
 
 The paid provider-schema smoke test is separate and explicitly opt-in; it
-sends one low-token Fable verifier request and never runs a full Final QC:
+sends one low-token QC verifier request and never runs a full Final QC:
 
 ```
 venv\Scripts\python tools\qc_verifier_canary.py --run
@@ -944,7 +947,7 @@ Ported so far (adapted, same design): `api_key_store.py`, `app_paths.py`, the he
 3. **Phase 3 — Spec modules.** Registry-validated `SpecModule` (interview playbook, section catalog, code basis, pinned standards editions — NFPA 13-2025 default, jurisdiction-adopted editions override via `set_standard_edition` with the adoption basis recorded, never silently); live deterministic linting of the draft with an issues drawer and standards strip. *(Shipped in v0.3.0.)*
 4. **Phase 4 — Research agents.** Port of the requirements-research fan-out: grounded web-search agents for governing codes, AHJ, client/insurer, and site environment, launched on demand from a conversationally-recorded project profile; accepted-vs-cited citation grounding; results in a panel drawer, spliced into drafting context, linked to provisions via `source_item_id`, and feeding jurisdiction edition overrides. *(Shipped in v0.4.0.)*
 5. **Phase 5 — Ship.** Master-spec import with gap-and-adapt (imported provenance status, Accept-All tracked-changes handling), the compliance audit of the draft against the researched profile (coverage matrix + export closing section), Windows packaging/installer with the SHA-256-verified auto-updater, and session tracing with the bundled viewer. *(Shipped in v0.5.0.)*
-6. **Post-ship batches (v0.6.0 → v1.0.0).** "Sonnet unleashed" no-limits context architecture (v0.6.0); streaming UX + manual editing + settings + cost meter (v0.7.0); full-section draft + keyboard review queue (v0.8.0); Final QC on Fable 5 with adversarial verification, a full audit-grade in-app/Word/JSON report, and a compact accept/dismiss action queue (v0.9.0); and the **1.0 release** — tracked-changes redline export over the normalized imported baseline or any semantic version, plus the in-app version-compare view, one diff engine behind both (v1.0.0).
+6. **Post-ship batches (v0.6.0 → v1.0.0).** "Sonnet unleashed" no-limits context architecture (v0.6.0); streaming UX + manual editing + settings + cost meter (v0.7.0); full-section draft + keyboard review queue (v0.8.0); Final QC with adversarial verification, a full audit-grade in-app/Word/JSON report, and a compact accept/dismiss action queue (v0.9.0); and the **1.0 release** — tracked-changes redline export over the normalized imported baseline or any semantic version, plus the in-app version-compare view, one diff engine behind both (v1.0.0).
 
 Build-a-Spec is an AI-assisted drafting aid, not an authority. Its output is advisory and is not a substitute for review by a licensed design professional.
 

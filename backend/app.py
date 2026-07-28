@@ -42,7 +42,7 @@ Endpoints (all JSON unless noted):
 - ``GET  /api/research/stream`` → SSE follow of the active/last run.
 - ``POST /api/research/stop``  → stop the running research fan-out (discards
   whatever it found so far; 409 if none is running).
-- ``POST /api/qc/start``       → launch Final QC on Fable 5 (Batch 4).
+- ``POST /api/qc/start``       → launch Final QC on Opus 5.
 - ``GET  /api/qc/status``      → QC state + event log + result view.
 - ``GET  /api/qc/stream``      → SSE follow of the active/last QC run.
 - ``POST /api/qc/stop``        → stop the running Final QC pass; preserves the
@@ -3484,13 +3484,13 @@ def create_app() -> FastAPI:
     def audit_status() -> dict:
         return sessions.get_session().audit.snapshot()
 
-    # --- Final QC on Fable 5 (Batch 4) --------------------------------------
+    # --- Final QC on Opus 5 -------------------------------------------------
 
     @app.post("/api/qc/start")
     def qc_start(
         body: QcStartRequest | None = Body(default=None),
     ) -> JSONResponse:
-        """Launch the spare-no-expense Final-QC pass on Fable 5.
+        """Launch the Final-QC pass on Opus 5.
 
         Research is NOT required — when absent, the completeness lens adapts
         and the result is flagged ``research_profile_present: false``. Gates:

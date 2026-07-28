@@ -718,7 +718,7 @@ export async function deleteReference(
   };
 }
 
-/* --- Final QC on Fable 5 (Batch 4) --- */
+/* --- Final QC on Opus 5 --- */
 
 export class QcStartError extends Error {
   readonly status: number;

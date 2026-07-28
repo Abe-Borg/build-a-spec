@@ -1,7 +1,7 @@
 """Final-QC engine: lens fan-out → adversarial verification → ops validation.
 
 Batch 4. A user-triggered, spare-no-expense review of ONE draft section on
-Fable 5 before it goes out the door. Structurally a sibling of
+Opus 5 before it goes out the door. Structurally a sibling of
 :mod:`backend.research.engine`: a synchronous function fanning streaming
 calls out on a small thread pool, with the ``pause_turn`` continuation loop,
 the 2× search-budget runaway ceiling, PDF-elision on resume, and the ported
@@ -10,14 +10,14 @@ realtime retry policy lifted verbatim-in-shape. The runner
 
 Three phases:
 
-1. **Lenses** — five independent Fable calls (code_compliance,
+1. **Lenses** — five independent Opus 5 calls (code_compliance,
    coordination_consistency, completeness, enforceability_language,
    provenance_hygiene), each over the full document rendering + standards +
    research profile + its brief. One lens failing never cancels the others;
    all five failing fails the run clean (:exc:`QCFanoutError`). Findings are
    grounded against the URLs each lens actually retrieved (same trust model
    as research — ungrounded citations are leads, not facts).
-2. **Verification** — every finding faces a panel of independent Fable
+2. **Verification** — every finding faces a panel of independent Opus 5
    refuters (``QC_VERIFIERS_STANDARD`` for medium/low,
    ``QC_VERIFIERS_CRITICAL`` for critical/high) prompted to REFUTE it. A tie
    goes to the refuters. Substantively refuted findings are retained under

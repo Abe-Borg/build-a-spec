@@ -368,8 +368,12 @@ export default function App() {
   }, [refreshQc, refreshReadiness, refreshUsage]);
 
   // Same gentle nudge as chat's error branch, edge-triggered off the polled
-  // snapshot: fires once per failed run (not once per poll tick), reset the
-  // moment status leaves "failed" so a fresh attempt can trigger it again.
+  // snapshot: fires once per failed run (not once per poll tick). Reset two
+  // ways — the effect below resets it once status leaves "failed", and
+  // onStartResearch resets it the moment a fresh attempt is requested (a
+  // retry can fail on auth fast enough that no snapshot ever observes
+  // anything but "failed", so the effect's deps never change and never
+  // re-fire on their own).
   const researchAuthHandledRef = useRef(false);
   useEffect(() => {
     if (research?.status !== "failed") {
@@ -401,6 +405,10 @@ export default function App() {
         workspaceId: health?.workspace_id,
         generation: health?.generation,
       });
+      // See researchAuthHandledRef's comment above — a fresh attempt can
+      // fail on auth fast enough to never show as anything but "failed",
+      // so clear the dedup ref here rather than rely only on the effect.
+      qcAuthHandledRef.current = false;
       addNote("Sent to Final QC — findings will appear in the Final QC panel.");
       void followQc();
     } catch (e) {
@@ -697,6 +705,9 @@ export default function App() {
         workspaceId: health?.workspace_id,
         generation: health?.generation,
       });
+      // See qcAuthHandledRef's start-site reset above: a fast repeat auth
+      // failure can otherwise never re-trigger the modal.
+      researchAuthHandledRef.current = false;
       addNote("Started requirements research — progress in the Research panel.");
       void followResearch();
     } catch (e) {

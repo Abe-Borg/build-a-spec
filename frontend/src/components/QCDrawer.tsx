@@ -275,7 +275,7 @@ export default function QCDrawer({
   const costLine =
     observedCost && observedCost > 0
       ? `Runs on Claude Fable 5 — the strongest model. This session's QC: ≈ $${observedCost.toFixed(2)}.`
-      : "Runs on Claude Fable 5 — the strongest model. Typically a few dollars per pass.";
+      : "Runs on Claude Fable 5 — the strongest model.";
 
   // Cost-focused line for the confirmation dialog (the model name is already
   // stated there). A re-run folds the session's prior QC spend in.

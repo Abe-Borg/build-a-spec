@@ -462,3 +462,24 @@ def version_is_skipped(state: dict, version: str) -> bool:
 def mark_skipped(state: dict, version: str) -> dict:
     state["skipped_version"] = version
     return state
+
+
+# --------------------------------------------------------------------------
+# "What's new" bookkeeping (see backend/release_notes.py)
+# --------------------------------------------------------------------------
+
+
+def last_seen_version(state: dict) -> str:
+    """The newest version whose release notes the user has been shown.
+
+    Absent on any state file written before this feature existed — which is
+    exactly what ``release_notes.resolve_pending`` uses to tell an upgrade
+    from a fresh install.
+    """
+    value = state.get("last_seen_version")
+    return str(value).strip() if isinstance(value, str) else ""
+
+
+def mark_version_seen(state: dict, version: str) -> dict:
+    state["last_seen_version"] = version
+    return state

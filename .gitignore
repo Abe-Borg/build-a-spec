@@ -20,3 +20,8 @@ dist/
 *.spec.bak
 # Build-time download, fetched by the release workflow — never committed.
 packaging/windows/MicrosoftEdgeWebview2Setup.exe
+
+# Release-time renderings of backend/release_notes.py (see
+# packaging/windows/render_release_notes.py) — regenerated per build.
+/release-notes.txt
+/release-body.md

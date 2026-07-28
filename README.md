@@ -1,6 +1,6 @@
 # Build-a-Spec
 
-**v1.5.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.7.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
@@ -120,6 +120,31 @@ sheet, a previous project's section, or meeting notes.
   standard still offers to save before you start over.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
+
+## Shipped in v1.7.0 (Release notes in the app)
+
+The app tells you what changed when it updates, instead of leaving the notes
+on a web page you never visit.
+
+- **A "What's new" screen after an update.** The first launch of a new
+  version opens the release notes for it, grouped by theme. Dismiss it and
+  it stays dismissed; **Settings → What's new** reopens it any time.
+- **The notes ship inside the build.** They are not fetched — a freshly
+  updated app can show them with no network at all, which keeps the
+  "nothing reaches the internet except model work and the disclosed update
+  check" claim in the trust dossier true.
+- **One source of truth.** `backend/release_notes.py` renders three
+  surfaces: the in-app modal, the `notes` field in `latest.json` (what an
+  app that has *not* updated yet shows you about the pending version), and
+  the GitHub Release body. A version with no notes entry fails the test
+  suite and the release workflow, so a release can't ship with an empty
+  What's-new screen.
+- **A fresh install is not shown a back catalogue.** Only an upgrade opens
+  the notes; the app tells the two apart by whether it had ever run on the
+  machine before.
+
+Writing them is step 1 of the release runbook — see
+[docs/RELEASE_WINDOWS.md](docs/RELEASE_WINDOWS.md).
 
 ## Shipped in v1.5.0 (Batch 10: Generic any-discipline module)
 

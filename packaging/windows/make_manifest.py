@@ -86,15 +86,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--url", required=True, help="https download URL")
     parser.add_argument("--out", required=True, help="output path for latest.json")
     parser.add_argument("--notes", default="", help="short release notes")
+    parser.add_argument(
+        "--notes-file",
+        default="",
+        help=(
+            "read the notes from this UTF-8 file instead of --notes; the "
+            "release workflow renders it from backend/release_notes.py so "
+            "the manifest and the app agree"
+        ),
+    )
     parser.add_argument("--published-at", default="", help="ISO date of the release")
     args = parser.parse_args(argv)
+
+    notes = args.notes
+    if args.notes_file:
+        notes = Path(args.notes_file).read_text(encoding="utf-8").strip()
 
     manifest = write_manifest(
         version=args.version,
         installer=args.installer,
         url=args.url,
         out_path=args.out,
-        notes=args.notes,
+        notes=notes,
         published_at=args.published_at,
     )
     print(f"wrote {args.out}: v{manifest['version']} sha256={manifest['sha256']}")

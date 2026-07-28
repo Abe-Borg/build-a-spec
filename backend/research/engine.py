@@ -921,6 +921,118 @@ def _sum_token_usage(responses: list[Any]) -> dict[str, int]:
     return totals
 
 
+def _safe_json(text: str) -> dict[str, Any]:
+    """Parse an accumulated tool-input JSON fragment; ``{}`` on garbage."""
+    try:
+        value = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+# What a worker is doing right now, keyed off the block that just started.
+# Research's only client tool is the output tool, so any ``tool_use`` block
+# means the model is writing up its findings.
+_ACTIVITY_FOR_BLOCK: dict[tuple[str, str], str] = {
+    ("server_tool_use", "web_search"): "searching",
+    ("server_tool_use", "web_fetch"): "fetching",
+}
+_ACTIVITY_FOR_TYPE: dict[str, str] = {
+    "thinking": "thinking",
+    "text": "writing",
+    "tool_use": "writing",
+}
+
+
+def _relay_stream_activity(
+    stream: Any,
+    *,
+    dimension_id: str,
+    event_sink: EventSink,
+    activity_state: dict[str, str],
+) -> None:
+    """Iterate raw stream events, emitting live per-dimension activity.
+
+    Adapted from :func:`backend.llm.conversation._stream_events` — the
+    research subset: ``dimension_activity`` on block-kind changes (change
+    only, remembered in ``activity_state`` so continuations don't repeat
+    themselves) plus live ``dimension_search``/``dimension_fetch`` the
+    instant a server-tool block's input completes. No text/thinking deltas,
+    no drafting progress. Input JSON is buffered for ``server_tool_use``
+    blocks ONLY — the output tool streams the entire findings payload,
+    which would be accumulated for nothing.
+
+    Per-event parsing is defensive: a malformed frame is skipped, never a
+    dimension failure. Errors raised by the stream iteration itself
+    propagate — those are real request failures and take the same
+    retry-classification path ``get_final_message()`` errors take. Never
+    breaks out early: the call always drains naturally (no mid-call
+    interruption — the runner's run-token guard drops post-stop events
+    instead).
+    """
+    json_buffers: dict[int, str] = {}
+    block_kinds: dict[int, tuple[str, str]] = {}
+    for event in stream:
+        try:
+            etype = getattr(event, "type", None)
+            if etype == "content_block_start":
+                block = getattr(event, "content_block", None)
+                index = getattr(event, "index", 0)
+                btype = getattr(block, "type", None) or ""
+                bname = getattr(block, "name", "") or ""
+                block_kinds[index] = (btype, bname)
+                if btype == "server_tool_use":
+                    json_buffers[index] = ""
+                kind = _ACTIVITY_FOR_BLOCK.get(
+                    (btype, bname)
+                ) or _ACTIVITY_FOR_TYPE.get(btype, "")
+                if kind and kind != activity_state.get("kind"):
+                    activity_state["kind"] = kind
+                    event_sink(
+                        {
+                            "type": "dimension_activity",
+                            "dimension_id": dimension_id,
+                            "kind": kind,
+                        }
+                    )
+            elif etype == "content_block_delta":
+                delta = getattr(event, "delta", None)
+                if getattr(delta, "type", None) == "input_json_delta":
+                    index = getattr(event, "index", 0)
+                    if index in json_buffers:
+                        json_buffers[index] += (
+                            getattr(delta, "partial_json", "") or ""
+                        )
+            elif etype == "content_block_stop":
+                index = getattr(event, "index", 0)
+                btype, bname = block_kinds.get(index, ("", ""))
+                if btype != "server_tool_use":
+                    continue
+                payload = _safe_json(json_buffers.pop(index, ""))
+                if bname == "web_search":
+                    query = str(payload.get("query", "") or "").strip()
+                    if query:
+                        event_sink(
+                            {
+                                "type": "dimension_search",
+                                "dimension_id": dimension_id,
+                                "query": query,
+                            }
+                        )
+                elif bname == "web_fetch":
+                    url = str(payload.get("url", "") or "").strip()
+                    if url:
+                        event_sink(
+                            {
+                                "type": "dimension_fetch",
+                                "dimension_id": dimension_id,
+                                "url": url,
+                            }
+                        )
+        except Exception:  # noqa: BLE001 — a malformed frame never fails a dimension
+            continue
+
+
 def _run_dimension(
     client: Any,
     *,
@@ -930,14 +1042,20 @@ def _run_dimension(
     model: str,
     max_tokens: int,
     discipline: str = "",
+    event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> _DimensionOutcome:
     """One dimension's full lifecycle: request → continuations → parse → ground.
 
     Never raises (KeyboardInterrupt/SystemExit excepted): every failure
     path returns a ``failed`` outcome so the fan-out's partial-failure
-    policy is enforced in one place. Runs on a worker thread — no event
-    emission here; telemetry rides the outcome back to the coordinator.
+    policy is enforced in one place. Runs on a worker thread; OUTCOME
+    telemetry still rides back to the coordinator (which emits
+    ``dimension_complete``/``dimension_failed``), while live progress —
+    ``dimension_started``, ``dimension_activity``, ``dimension_search``,
+    ``dimension_fetch``, ``dimension_retry`` — is emitted here through
+    ``event_sink`` as it happens (the runner's ``_emit`` is lock-guarded
+    and safe for parallel workers).
 
     ``should_stop`` is a cooperative-cancellation check (user-initiated stop,
     :meth:`backend.research.runner.ResearchRunner.stop`): checked before each
@@ -949,6 +1067,18 @@ def _run_dimension(
     """
     max_searches = dimension.max_searches or RESEARCH_DEFAULT_MAX_SEARCHES
     max_fetches = dimension.max_fetches or RESEARCH_DEFAULT_MAX_FETCHES
+    event_sink(
+        {
+            "type": "dimension_started",
+            "dimension_id": dimension.dimension_id,
+            "title": dimension.title,
+            "max_searches": max_searches,
+            "max_fetches": max_fetches,
+        }
+    )
+    # The worker's last-emitted activity kind — dimension_activity fires on
+    # change only, so continuations don't repeat themselves.
+    activity_state: dict[str, str] = {"kind": ""}
 
     system_prompt = build_research_system_prompt(module)
     user_message = build_dimension_user_message(
@@ -1036,6 +1166,16 @@ def _run_dimension(
                 with client.messages.stream(
                     messages=messages, **request_kwargs
                 ) as stream:
+                    # Live activity rides the raw events; the SDK keeps
+                    # accumulating, so get_final_message() afterwards
+                    # returns the same fully-drained message as before
+                    # (the chat loop's proven iterate-then-final pattern).
+                    _relay_stream_activity(
+                        stream,
+                        dimension_id=dimension.dimension_id,
+                        event_sink=event_sink,
+                        activity_state=activity_state,
+                    )
                     response = stream.get_final_message()
                 all_responses.append(response)
                 stop_class = classify_stop_reason(
@@ -1155,6 +1295,19 @@ def _run_dimension(
             backoff = compute_backoff_seconds(
                 policy, attempt=attempt, failure_class=failure_class
             )
+            event_sink(
+                {
+                    "type": "dimension_retry",
+                    "dimension_id": dimension.dimension_id,
+                    "attempt": attempt + 1,
+                    "max_attempts": attempts_planned,
+                    "reason": failure_class.value,
+                    "backoff_s": round(backoff, 1),
+                }
+            )
+            # The fresh attempt starts a new conversation — its first
+            # phase should re-announce itself even if it matches.
+            activity_state["kind"] = ""
             time.sleep(backoff)
     return _failed(
         f"Research failed after {attempts_planned} attempts.",
@@ -1180,13 +1333,20 @@ def run_requirements_research(
 ) -> RequirementsProfile:
     """Run every module research dimension in parallel; merge the results.
 
-    ``event_sink`` receives progress dicts (``research_started`` /
-    ``dimension_complete`` / ``dimension_failed``) as dimensions finish;
+    ``event_sink`` receives progress dicts: ``research_started`` (with the
+    id→title roster), then live per-worker activity as it happens
+    (``dimension_started`` / ``dimension_activity`` / ``dimension_search``
+    / ``dimension_fetch`` / ``dimension_retry``), then
+    ``dimension_complete`` / ``dimension_failed`` as dimensions finish;
     the terminal event is the runner's job (it knows whether the result
-    was adopted). Failure policy: per-dimension failures are recorded in
-    ``dimension_statuses``; if EVERY dimension fails this raises
-    :exc:`ResearchFanoutError` (a total cancellation via ``should_stop``
-    takes this same path — every dimension reports "Cancelled by user.").
+    was adopted). Worker events interleave freely ACROSS dimensions but
+    each carries its ``dimension_id``, and a dimension's terminal event
+    always follows all of its own live events (the coordinator emits it
+    after the worker's future resolves). Failure policy: per-dimension
+    failures are recorded in ``dimension_statuses``; if EVERY dimension
+    fails this raises :exc:`ResearchFanoutError` (a total cancellation via
+    ``should_stop`` takes this same path — every dimension reports
+    "Cancelled by user.").
     """
     dimensions = module.research_dimensions
     if not dimensions:
@@ -1201,6 +1361,12 @@ def run_requirements_research(
             "type": "research_started",
             "project": profile.display_line(),
             "dimensions": [d.dimension_id for d in dimensions],
+            # id → human title, so the live board can seed real names
+            # before any worker has emitted (additive — `dimensions`
+            # stays the plain id list existing consumers read).
+            "dimension_titles": {
+                d.dimension_id: d.title for d in dimensions
+            },
         }
     )
 
@@ -1218,6 +1384,7 @@ def run_requirements_research(
                 model=model,
                 max_tokens=max_tokens,
                 discipline=discipline,
+                event_sink=event_sink,
                 should_stop=should_stop,
             ): dimension
             for dimension in dimensions

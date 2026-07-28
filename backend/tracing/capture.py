@@ -280,7 +280,13 @@ def research_event(handle: SpanHandle | None, event: dict) -> None:
         recorder = get_recorder()
         if recorder is None or handle is None:
             return
-        recorder.add_event(handle, "research_progress", **dict(event))
+        # The sink event's own "type" key would collide with add_event's
+        # positional ``type`` parameter — rename it to ``event_type``.
+        fields = dict(event)
+        event_type = str(fields.pop("type", "") or "")
+        if event_type:
+            fields["event_type"] = event_type
+        recorder.add_event(handle, "research_progress", **fields)
     except Exception:  # noqa: BLE001
         pass
 
@@ -350,7 +356,12 @@ def qc_event(handle: SpanHandle | None, event: dict) -> None:
         recorder = get_recorder()
         if recorder is None or handle is None:
             return
-        recorder.add_event(handle, "qc_progress", **dict(event))
+        # Same "type"-key collision as research_event — see there.
+        fields = dict(event)
+        event_type = str(fields.pop("type", "") or "")
+        if event_type:
+            fields["event_type"] = event_type
+        recorder.add_event(handle, "qc_progress", **fields)
     except Exception:  # noqa: BLE001
         pass
 

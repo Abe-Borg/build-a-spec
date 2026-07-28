@@ -103,7 +103,17 @@ backend/
                            — cooperative, not mid-call interruption); Batch 10
                            threads discipline into the dimension kwargs (set
                            unconditionally — no KeyError) + the header line
-                           (only when non-empty — curated runs byte-identical)
+                           (only when non-empty — curated runs byte-identical);
+                           the live-visibility batch makes workers NARRATE:
+                           _run_dimension takes event_sink, emits
+                           dimension_started/retry, and _relay_stream_activity
+                           (copy-adapted from conversation._stream_events)
+                           iterates the raw stream INSIDE the existing `with`
+                           before get_final_message() — live activity/search/
+                           fetch events, server-tool inputs buffered ONLY,
+                           per-frame try/except (a malformed frame never fails
+                           a dimension), no early break (stop semantics
+                           unchanged)
   research/grounding.py    [PORT: source_grounding.py + verifier collectors]
                            normalize_url, validate_cited_sources, evidence
                            collectors, stop-reason classes
@@ -123,7 +133,16 @@ backend/
                            callable that folds the round in under the same CAS
                            lock, the meter still gets the round's OWN usage
                            (the merged total is cumulative), and a
-                           failed/stopped round says earlier rounds survived
+                           failed/stopped round says earlier rounds survived.
+                           The live-visibility batch adds a per-start run
+                           token (QCRunner pattern, one notch stronger:
+                           _try_resolve CLEARS it on any terminal win): _emit
+                           drops stale-token events, so a stopped run's
+                           still-unwinding workers can neither append to a
+                           later round's log nor — via the token check in
+                           _try_resolve — adopt their discarded round once
+                           the next one is RUNNING; sse_events binds to the
+                           token at call time and closes `superseded`
   updates.py               [PORT ≈verbatim: Spec Critic src/core/updates.py]
                            GitHub-Releases manifest updater: https-only +
                            redirect-downgrade guard, SHA-256 verify before
@@ -182,7 +201,12 @@ backend/
                            default on), redaction (credential patterns;
                            token(?!s) so usage counts survive); capture.py =
                            native never-raise hooks incl. app_event/
-                           turn_round/turn_prompts; viewer/trace_viewer.html
+                           turn_round/turn_prompts; research_event/qc_event
+                           rename the sink event's "type" key to event_type
+                           (it collided with add_event's positional arg — a
+                           swallowed TypeError meant NO research/QC progress
+                           event ever reached a trace until the
+                           live-visibility batch); viewer/trace_viewer.html
                            is a native self-contained rewrite (no CDN)
   diagnostics.py           always-on activity log (RotatingFileHandler in
                            <state dir>/logs beside traces/, BUILD_A_SPEC_LOG*
@@ -438,7 +462,15 @@ frontend/src/
                            Batch 4; also hosts the project-profile form for direct
                            upfront entry; Batch 7 adds a Stop button while running,
                            gated by ConfirmDialog; a "View report" button opens
-                           ResearchReportModal) / ResearchReportModal (the full
+                           ResearchReportModal; the live-visibility batch turns
+                           the running body into the per-agent board —
+                           foldResearchBoard over research.events → AgentCard
+                           per dimension with breathing .agent-dot, status-dots
+                           + shimmer activity line, sliding recent queries/URLs,
+                           .tally-flash counters, retry notices, and the report
+                           modal's exact telemetry line on completion; the
+                           header summary + start label read the fold's
+                           done/total, never events[last]) / ResearchReportModal (the full
                            research findings report — a read-only modal grouping
                            the completed profile's items by dimension/agent with
                            per-dimension telemetry + full item detail; the same
@@ -603,16 +635,33 @@ Research has its own channel (a run outlives any one chat turn):
 running), `GET /api/research/status` (snapshot: status/error/events/
 profile view), and `GET /api/research/stream` — an SSE stream that replays
 the run's event log from seq 0 and follows until terminal, closing with a
-`stream_end` sentinel (event types: `research_started`,
+`stream_end` sentinel. Coordinator/runner event types: `research_started`
+(now also `dimension_titles: {id: title}` beside the `dimensions` id list),
 `dimension_complete`, `dimension_failed`, `research_complete`,
-`research_failed`). Every event carries the 1-based `round` it belongs to;
+`research_failed`. The live-visibility batch adds WORKER events, emitted by
+each dimension thread as it works (all carry `dimension_id`; they
+interleave freely across dimensions, but a dimension's terminal event
+always follows its own live ones): `dimension_started` {title,
+max_searches, max_fetches}, `dimension_activity` {kind: thinking|searching|
+fetching|writing, on change only}, `dimension_search` {query} /
+`dimension_fetch` {url} (detected live from the raw stream, chat-loop
+style), and `dimension_retry` {attempt, max_attempts, reason, backoff_s}.
+The `stream_end` sentinel is still exactly `{type, status}` — `status` may
+now be `superseded` when a NEWER run takes the runner over mid-stream
+(`sse_events` binds to the run token at call time, the QC shape). Every
+event carries the 1-based `round` it belongs to;
 `research_complete` reports the CUMULATIVE `item_count`/`grounded_count`
 plus that round's own `round_item_count`/`new_item_count`/
 `repeat_item_count`. The event log is per-round (cleared at each start —
 the accumulated knowledge is in the profile, not the log), and the
 snapshot's `profile` gains `rounds[]` plus per-item `research_date` /
 `round_index`. Starting a round does NOT clear the previous profile:
-pressing Research again appends (see "Research rounds" below).
+pressing Research again appends (see "Research rounds" below). The
+frontend follows the stream by MERGING event payloads into local state by
+`seq` (replay-safe) and refetching the authoritative snapshot only on
+milestone events — refetching per frame was O(frames × payload) once the
+log turned chatty. `ResearchDrawer` folds `events` into a live per-agent
+board (see "Live research visibility" below).
 
 Final QC (Batch 4) has the same channel shape (a QC run also outlives a
 chat turn): `POST /api/qc/start` accepts optional
@@ -2825,6 +2874,133 @@ project-format bump; two REST routes and one new capability-free modal.
   theme-grouped list ("since 1.0"), not six per-version sections for
   releases nobody had. Future entries are per-version as normal; the data
   model was per-version from the start.
+
+## Live research visibility — implemented notes (the per-agent board)
+
+Abraham's ask: research takes minutes and the user saw nothing between
+`research_started` and the first `dimension_complete` — "I want users to
+know what is happening, in as much detail as possible, without breaking my
+app." Research only (QC parity is a noted follow-up); panel board only (no
+live modal, no chat ticker — both offered, declined). No new endpoints, no
+new deps, no new env vars, no new SSE channel; the fan-out's stop
+semantics, retry policy, pause_turn loop, and grounding are untouched.
+
+- **Workers narrate through the existing sink.** Five new worker event
+  types (all carry `dimension_id`; see the research-channel paragraph for
+  payloads): `dimension_started`, `dimension_activity` (on change only —
+  per-worker last-kind memory, reset after a retry so attempt 2
+  re-announces), `dimension_search`/`dimension_fetch` (live, not post-hoc),
+  `dimension_retry`. `research_started` gains `dimension_titles` so the
+  board seeds real names before any worker speaks. Deliberately NOT added:
+  continuation/grounding events (activity + search ticks already prove
+  liveness; grounding is local milliseconds already summarized in
+  `dimension_complete`). ~200–800 events/round worst case, ≤~120KB — the
+  log is per-round and cleared at each start.
+- **The engine iterates the stream it already had open.**
+  `_relay_stream_activity` (engine.py, copy-adapted from
+  `conversation._stream_events` per the copy-don't-import posture) runs
+  INSIDE the existing `with client.messages.stream(...)` before
+  `get_final_message()` — the chat loop's proven iterate-then-final shape
+  (the SDK accumulates during iteration, so the final message is
+  byte-identical to before). Detection triple: `content_block_start`
+  records (type, name) and announces the activity kind;
+  `input_json_delta` accumulates ONLY for `server_tool_use` blocks (the
+  output tool streams the whole findings payload — never buffer it);
+  `content_block_stop` parses the buffer and emits the query/URL, skipping
+  empties. Every frame is wrapped per-event try/except — a malformed frame
+  is skipped, never a dimension failure (pinned) — while iteration errors
+  propagate into the existing retry classifier exactly as
+  `get_final_message` errors always did. No `should_stop` inside
+  iteration, no early break: Batch 7's no-mid-call-interruption decision
+  stands; post-stop EMISSION is what changed, and the runner drops it.
+- **The runner got the QC run token, one notch stronger.** Multiplying
+  event volume made two latent races load-bearing: a stopped run's
+  still-unwinding workers appending to the NEXT round's cleared log
+  (before: ≤4 stale frames; now: a flood), and — genuinely pre-existing —
+  a stopped round's late thread passing `_try_resolve`'s status CAS once
+  the next round is RUNNING and adopting its discarded profile.
+  `ResearchRunner` mints an unforgeable token per `start()`; `_emit`
+  drops mismatches (and the trace mirror with them); `_try_resolve`
+  checks it AND clears it on any terminal win, so after `stop()`'s
+  terminal event nothing from the ended run lands anywhere.
+  `sse_events()` became bind-at-call (the QC shape — an outer function
+  captures the token under lock and returns the inner generator, because
+  a lazy generator "bound" inside Starlette's response iterator binds
+  nothing), closing `stream_end {status: "superseded"}` when a newer live
+  run appears; the sentinel stays exactly `{type, status}` (pinned by
+  `test_research_api`'s exact-dict assert — never add a key to it).
+- **The trace-capture bug is fixed because these events are the payoff.**
+  `capture.research_event`/`qc_event` passed the sink event dict as
+  `**kwargs` into `recorder.add_event(handle, type, ...)` — every event
+  carries a `"type"` key, so every call TypeError'd into the never-raise
+  except and NO research/QC progress event had ever reached a trace. The
+  hooks now pop it into `event_type`; the new fine-grained events land in
+  `research_progress` trace events for the diagnostics surface (pinned by
+  a test that fails against the old code).
+- **The frontend merges payloads instead of refetching per frame.**
+  `followResearch` used to discard every SSE payload and refetch the FULL
+  snapshot (whole log + whole profile) per frame — O(frames × payload)
+  once the log turned chatty. Now `mergeResearchEvent` appends by `seq`
+  into local state (replay-from-0 on reconnect dedupes; `research_started`
+  restarts the local log; epoch-guarded like every other stream), and the
+  authoritative snapshot is refetched only on the five milestone events +
+  the stream's end. Status/error/profile stay snapshot-owned — the merge
+  never touches them. The refetch itself lands through
+  `reconcileResearchSnapshot` (review finding, fixed before merge): the
+  fetch is async and its worst case fires on `research_started` — the
+  exact moment all four workers burst — so a response captured early but
+  resolved late would wholesale-replace a longer local log and march the
+  board backward until the next milestone, minutes away. Same round +
+  longer local log ⇒ both are prefixes of the same append-only server
+  array, so the local events are kept and only status/error/profile adopt
+  the fetch; a different round (or an empty side) adopts the fetch
+  wholesale.
+- **The drawer's running body is the agent board.** `foldResearchBoard`
+  (a pure `useMemo` fold over `research.events`, the QCDrawer lens-row
+  precedent) seeds one `AgentCard` per dimension from `research_started`:
+  queued → "Waiting for an agent…"; running → breathing `.agent-dot` +
+  status-dots + shimmering StatusStrip-vocabulary activity line
+  ("Thinking… / Searching the web… / Reading a source… / Writing up
+  findings…"), the last 3 live queries ("quoted") / URLs (host/path,
+  full text on hover) sliding in via `.prompt-chip-in`, live tallies
+  flashing accent per increment (`.tally-flash` retriggered by
+  `key={count}` remounts), and a warn retry line ("Retrying (attempt
+  2/3) — rate limited…"); done → the report modal's EXACT telemetry line
+  ("✓ N findings · M grounded · X searches · Y fetches" — the live view
+  visually becomes the report); failed → the err line. The header
+  summary and start-button label read the fold's done/total — the old
+  `events[events.length-1].done` derivation silently regresses once the
+  last event is almost never a `dimension_*`. The drawer auto-opens on
+  start (`bumpDrawer("research")` in `onStartResearch` — the declaration
+  moved above the research callbacks; referencing it from a deps array
+  1400 lines before its `const` was a first-render TDZ crash). Failed/
+  stopped runs yield the board to the existing error line + retained
+  earlier-round findings.
+- **Animation stays inside the house style.** Two new keyframes in
+  index.css, each with its own reduced-motion block immediately after:
+  `.agent-dot` (soft accent box-shadow ring, 1.6s) and `.tally-flash`
+  (0.6s color-from-accent, runs once per remount). Everything else reuses
+  `.status-dots`/`.status-shimmer`/`.prompt-chip-in`. No new
+  `data-capability`, no new `data-tour` (the board is passive display;
+  the tour manifest already promises "Progress streams live") — `npm
+  test`'s set-equality contract is the guard.
+- **Fakes**: `_FakeResearchStreamCtx` gained `__iter__` (explicit
+  `.events` override for malformed-frame injection, else
+  `_synthesize_events` — which already emits the start/delta/stop triple
+  for `server_tool_use`); `research_response` gained `queries=` (prepends
+  `server_tool_use`(web_search) blocks — result blocks alone synthesize
+  no stream events, so a fixture without it emits no live search).
+- **Tests**: engine live-emission matrix (per-dimension subsequences,
+  never global order — four threads interleave), activity-on-change-only,
+  retry event, malformed-frame survival (test_research_engine); the
+  supersession race — a stopped round's blocked-then-successful client
+  released only after the next round completes, proving both the log
+  token drop and the adopt token check (test_research_rounds); the
+  stopped-round test now also pins `research_failed` as the log's LAST
+  word after the workers unwind; live query over the API + the untouched
+  `stream_end` exact-dict pin (test_research_api); the trace-capture fix
+  (test_tracing). Frontend pinned by `npm run build` + `npm test` (the
+  no-vitest convention stands).
 
 ## Final QC cost + speed — implemented notes (v1.8.0)
 

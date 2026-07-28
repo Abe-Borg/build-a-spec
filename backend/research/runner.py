@@ -10,7 +10,11 @@ pattern from the conversation engine, applied to research.
 
 Event log entries are plain dicts ``{seq, ts, type, ...}``; the SSE
 endpoint replays them from any ``seq`` and follows until the run reaches a
-terminal state, so a page reload (or a test) can always catch up.
+terminal state, so a page reload (or a test) can always catch up. Workers
+emit fine-grained live progress (dimension started/activity/search/fetch/
+retry), so each run is identified by an unforgeable per-start token: a
+stopped run's still-unwinding threads can neither append to a later
+round's log nor resolve over it.
 """
 from __future__ import annotations
 
@@ -59,6 +63,12 @@ class ResearchRunner:
         # The round the active run is (1-based) — so a terminal event
         # raised outside the worker, i.e. stop(), can name its round too.
         self._round_number = 0
+        # Unforgeable identity of the run in flight (QCRunner pattern):
+        # minted per start(), cleared on any terminal resolve. Worker
+        # events and the worker's own resolution carry it, so a stopped
+        # run's still-unwinding threads can neither append to a later
+        # round's log nor adopt their discarded round into its profile.
+        self._run_token: object | None = None
         self.status = STATUS_IDLE
         self.error = ""
         self.error_kind = ""
@@ -67,14 +77,29 @@ class ResearchRunner:
 
     # -- events --------------------------------------------------------------
 
-    def _emit(self, event: dict[str, Any], *, round_number: int = 0) -> None:
+    def _emit(
+        self,
+        event: dict[str, Any],
+        *,
+        round_number: int = 0,
+        run_token: object | None = None,
+    ) -> bool:
+        """Append to the event log; True if the event landed.
+
+        A ``run_token`` that no longer matches the runner's current one is
+        a stale worker talking past its run's end — the event is dropped.
+        Token-free emits (stop's terminal event, restore) always land.
+        """
         with self._lock:
+            if run_token is not None and run_token is not self._run_token:
+                return False
             event = dict(event)
             event["seq"] = len(self.events)
             event["ts"] = time.strftime("%H:%M:%S")
             if round_number:
                 event["round"] = round_number
             self.events.append(event)
+            return True
 
     def events_since(self, seq: int) -> list[dict[str, Any]]:
         with self._lock:
@@ -121,6 +146,8 @@ class ResearchRunner:
             self._round_number = round_number
             cancel_event = threading.Event()
             self._cancel_event = cancel_event
+            run_token = object()
+            self._run_token = run_token
 
         trace_handle = _trace.research_start(
             project=project_profile.display_line(),
@@ -128,8 +155,10 @@ class ResearchRunner:
         )
 
         def _sink(event: dict) -> None:
-            self._emit(event, round_number=round_number)
-            _trace.research_event(trace_handle, event)
+            # A dropped (stale-token) event stays out of the trace too —
+            # the trace mirrors the log, not the abandoned worker.
+            if self._emit(event, round_number=round_number, run_token=run_token):
+                _trace.research_event(trace_handle, event)
 
         def _work() -> None:
             try:
@@ -146,7 +175,12 @@ class ResearchRunner:
             except ResearchFanoutError as exc:
                 message = self._failure_message(str(exc))
                 kind = "auth_error" if getattr(exc, "auth_error", False) else ""
-                if self._try_resolve(STATUS_FAILED, error=message, error_kind=kind):
+                if self._try_resolve(
+                    STATUS_FAILED,
+                    error=message,
+                    error_kind=kind,
+                    run_token=run_token,
+                ):
                     self._emit(
                         {
                             "type": "research_failed",
@@ -160,7 +194,9 @@ class ResearchRunner:
                     )
             except Exception as exc:  # noqa: BLE001 — surfaced, never raised
                 message = self._failure_message(f"{type(exc).__name__}: {exc}")
-                if self._try_resolve(STATUS_FAILED, error=message):
+                if self._try_resolve(
+                    STATUS_FAILED, error=message, run_token=run_token
+                ):
                     self._emit(
                         {"type": "research_failed", "error": message},
                         round_number=round_number,
@@ -188,7 +224,12 @@ class ResearchRunner:
                     merged = append_research_round(previous, result)
                     return merged
 
-                if self._try_resolve(STATUS_COMPLETE, adopt=_adopt) and merged:
+                if (
+                    self._try_resolve(
+                        STATUS_COMPLETE, adopt=_adopt, run_token=run_token
+                    )
+                    and merged
+                ):
                     latest = merged.rounds[-1] if merged.rounds else None
                     self._emit(
                         {
@@ -233,6 +274,7 @@ class ResearchRunner:
         adopt: Callable[
             [RequirementsProfile | None], RequirementsProfile
         ] | None = None,
+        run_token: object | None = None,
     ) -> bool:
         """Atomically move RUNNING -> a terminal status; False if it lost the race.
 
@@ -240,7 +282,11 @@ class ResearchRunner:
         (success, failure, or :meth:`stop`) — whichever caller acquires the
         lock first while status is still ``running`` wins; a losing caller's
         result/error is silently discarded rather than clobbering whatever
-        already resolved it.
+        already resolved it. A worker passes its ``run_token`` so that a
+        stopped round's late-finishing thread also loses once the NEXT
+        round is running — the status check alone would let it through
+        then. Winning clears the token: after a terminal event, nothing
+        (log entries included) may arrive from the ended run.
 
         ``adopt`` (the success path) maps the accumulated profile to its
         replacement — the round-append merge — and runs INSIDE the same
@@ -252,9 +298,12 @@ class ResearchRunner:
         with self._lock:
             if self.status != STATUS_RUNNING:
                 return False
+            if run_token is not None and run_token is not self._run_token:
+                return False
             self.status = status
             self.error = error
             self.error_kind = error_kind
+            self._run_token = None
             if adopt is not None:
                 self.profile_result = adopt(self.profile_result)
             return True
@@ -317,6 +366,7 @@ class ResearchRunner:
             self.error_kind = ""
             self.profile_result = profile
             self.events = []
+            self._run_token = None
         self._emit(
             {
                 "type": "research_complete",
@@ -358,26 +408,53 @@ class ResearchRunner:
     def sse_events(
         self, *, poll_interval: float = 0.2, timeout_s: float = 1800.0
     ) -> "Any":
-        """Yield event dicts from seq 0, following until terminal + drained.
+        """Return a generator of event dicts from seq 0 until terminal + drained.
 
-        Generator for the SSE endpoint: replays the existing log, then
-        polls for new entries until the run is terminal and fully drained
-        (or ``timeout_s`` elapses — a safety valve, far beyond any real
-        run). A terminal ``stream_end`` sentinel closes the stream so
-        clients need no timeout logic of their own.
+        Binds to the run in flight AT CALL TIME (the QC runner's shape):
+        the run token is captured here, before the inner generator is
+        handed to Starlette, so a queued response can never silently
+        attach to a replacement run. The stream replays the existing log,
+        then polls for new entries until the run is terminal and fully
+        drained (or ``timeout_s`` elapses — a safety valve, far beyond any
+        real run). A terminal ``stream_end`` sentinel closes the stream so
+        clients need no timeout logic of their own; if a NEWER run takes
+        the runner over mid-stream, the sentinel says ``superseded``
+        instead (same two keys — the sentinel never gains a field).
         """
-        seq = 0
-        deadline = time.monotonic() + timeout_s
-        while True:
-            for event in self.events_since(seq):
-                seq = event["seq"] + 1
-                yield event
-            if self.is_terminal and seq >= len(self.events):
-                break
-            if time.monotonic() > deadline:
-                break
-            time.sleep(poll_interval)
-        yield {"type": "stream_end", "status": self.status}
+        with self._lock:
+            # None while idle/terminal — then any future live token is
+            # someone else's run and ends this stream as superseded.
+            bound_token = self._run_token
+
+        def _stream() -> Any:
+            seq = 0
+            deadline = time.monotonic() + timeout_s
+            while True:
+                with self._lock:
+                    current_token = self._run_token
+                    superseded = (
+                        current_token is not None
+                        and current_token is not bound_token
+                    )
+                    pending = [] if superseded else list(self.events[seq:])
+                    status = self.status
+                    drained = (
+                        not superseded
+                        and status in _TERMINAL
+                        and seq + len(pending) >= len(self.events)
+                    )
+                if superseded:
+                    yield {"type": "stream_end", "status": "superseded"}
+                    return
+                for event in pending:
+                    seq = event["seq"] + 1
+                    yield event
+                if drained or time.monotonic() > deadline:
+                    break
+                time.sleep(poll_interval)
+            yield {"type": "stream_end", "status": status}
+
+        return _stream()
 
 
 def _dimension_view(status: Any) -> dict[str, Any]:

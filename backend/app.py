@@ -3399,9 +3399,14 @@ def create_app() -> FastAPI:
     @app.get("/api/research/stream")
     def research_stream() -> StreamingResponse:
         runner = sessions.get_session().research
+        # Bind the stream to the run in flight NOW (QC precedent): calling
+        # `sse_events` inside the response iterator would defer the binding
+        # until Starlette begins streaming and could silently attach a
+        # queued response to a replacement run.
+        bound_events = runner.sse_events()
 
         def event_stream() -> Iterator[str]:
-            for event in runner.sse_events():
+            for event in bound_events:
                 yield _sse(event)
 
         return StreamingResponse(

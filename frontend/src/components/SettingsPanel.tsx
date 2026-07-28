@@ -104,6 +104,31 @@ function UsageTable({ usage }: { usage: UsageSummary }) {
   );
 }
 
+/** The conversation-size gauge — a context readout, not a spend row. */
+function ContextLine({ context }: { context: UsageSummary["context"] }) {
+  if (!context) {
+    return (
+      <p className="mt-3 text-[11px] text-ink-faint">
+        Context: — (no turn this session yet)
+      </p>
+    );
+  }
+  const pct = ((context.tokens / context.window) * 100).toFixed(1);
+  return (
+    <div className="mt-3">
+      <p className="text-[11px] text-ink">
+        Context: {context.tokens.toLocaleString()} /{" "}
+        {context.window.toLocaleString()} tokens ({pct}%)
+      </p>
+      <p className="mt-0.5 text-[11px] text-ink-faint">
+        Size of the conversation after the last exchange — system prompt,
+        tools, history, project context, attachments read so far, and the
+        reply itself. Counted by Anthropic.
+      </p>
+    </div>
+  );
+}
+
 const SOURCE_LABEL: Record<KeyStatus["source"], string> = {
   env: "Environment variable (read-only)",
   keyring: "OS credential manager",
@@ -315,7 +340,10 @@ export default function SettingsPanel({
           <section data-capability="usage.details">
             <p className={label}>Usage this session</p>
             {usage ? (
-              <UsageTable usage={usage} />
+              <>
+                <UsageTable usage={usage} />
+                <ContextLine context={usage.context ?? null} />
+              </>
             ) : (
               <p className="mt-2 text-xs text-ink-faint">
                 No spend recorded yet this session.

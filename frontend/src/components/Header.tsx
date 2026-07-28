@@ -16,6 +16,16 @@ interface Props {
   onStartTour: () => void;
 }
 
+/** Compact token count for the context pill: 142_304 → "142k", 1e6 → "1M". */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000;
+    return `${Number.isInteger(m) || m >= 10 ? m.toFixed(0) : m.toFixed(1)}M`;
+  }
+  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  return String(n);
+}
+
 export default function Header({
   health,
   projectHeading,
@@ -31,6 +41,7 @@ export default function Header({
 }: Props) {
   const spend = usage?.estimated_cost_usd.total ?? 0;
   const spendLabel = spend > 0 ? `≈ $${spend.toFixed(2)}` : "—";
+  const ctx = usage?.context ?? null;
   const updateAvailable =
     update?.status === "UPDATE_AVAILABLE" && !!update.version;
   return (
@@ -107,6 +118,17 @@ export default function Header({
           {spendLabel}
           <span className="ml-1 text-ink-faint">this session</span>
         </button>
+        {ctx && (
+          <button
+            onClick={onOpenSettings}
+            title={`Conversation context after the last turn: ${ctx.tokens.toLocaleString()} of ${ctx.window.toLocaleString()} tokens (${((ctx.tokens / ctx.window) * 100).toFixed(1)}%)`}
+            data-capability="usage.details"
+            className="rounded-full border border-edge bg-raised px-3 py-1 text-xs text-ink-dim tabular-nums transition-colors hover:border-accent hover:text-accent"
+          >
+            {fmtTokens(ctx.tokens)} / {fmtTokens(ctx.window)}
+            <span className="ml-1 text-ink-faint">context</span>
+          </button>
+        )}
         {health && (
           <span className="flex items-center gap-2 rounded-full border border-edge bg-raised px-3 py-1 text-xs text-ink-dim">
             <span

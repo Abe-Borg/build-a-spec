@@ -942,7 +942,12 @@ export default function App() {
     setPreservationReady(false);
     setSourceCapabilities(null);
     setTemplateOrigin(null);
+    // The previous session's meter (spend pill + context gauge) must not
+    // linger over a fresh session; clear immediately, then refetch the
+    // server's zeroed snapshot.
+    setUsage(null);
     refreshDoc();
+    refreshUsage();
     refreshResearch();
     refreshQc();
     refreshReadiness();

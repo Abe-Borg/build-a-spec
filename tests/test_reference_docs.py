@@ -237,6 +237,25 @@ def test_oversized_text_is_truncated_loudly_never_silently():
     assert "has NOT been read" in doc.text
 
 
+def test_the_context_stub_shows_the_real_token_count_not_a_chars_guess():
+    """The stub the model reads must carry the same Anthropic-counted number
+    the 100k cap and the panel use — the old ``~chars/4`` guess was computed
+    from the PRE-truncation length, so a truncated document's stub advertised
+    tokens for text the model can never read."""
+    store = ReferenceDocStore()
+    doc = store.add(
+        filename="huge.docx",
+        text="x" * (MAX_TEXT_CHARS + 5_000),
+        block_count=1,
+        token_count=12_345,
+    )
+
+    stub = store.context_stubs()
+    assert doc.truncated is True
+    assert "12,345 tokens" in stub
+    assert f"~{doc.char_count // 4:,} tokens" not in stub
+
+
 def test_token_counter_payload_is_the_exact_retained_truncated_text():
     source = "x" * (MAX_TEXT_CHARS + 5_000)
     retained, total, truncated = prepare_reference_text(source)

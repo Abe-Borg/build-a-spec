@@ -159,7 +159,20 @@ backend/
                            Batch 2 adds key_status (masked, never leaks) + delete_api_key
   usage_ledger.py          [Batch 2] session-scoped billed-usage ledger (interview/
                            research/audit/qc), thread-safe, cost estimate from
-                           settings.PRICING; not persisted (per-session meter)
+                           settings.PRICING; not persisted (per-session meter).
+                           The context gauge is deliberately NOT here: it lives on
+                           SessionState.last_context_tokens (a gauge, not spend —
+                           the ledger's snapshot/merge tutorial plumbing is
+                           additive and would corrupt it): the Anthropic-counted
+                           conversation size after the last committed chat turn —
+                           its final request's prompt (input + cache r/w) plus
+                           that reply's retained non-thinking output — written
+                           only in the guarded commit block, cleared on
+                           reset/load, served as `context` {tokens, window:
+                           settings.MODEL_CONTEXT_WINDOW (1M; env
+                           BUILD_A_SPEC_CONTEXT_WINDOW pairs with a model
+                           override)} | null beside the /api/usage + session-
+                           bundle snapshot (app._usage_payload)
   figures.py               [Batch 8] chat-authored figures: Figure + FigureStore
                            (per-turn atomic like DocumentStore — begin/commit/
                            rollback, monotonic never-reused ids, validation, CSV
@@ -182,7 +195,9 @@ backend/
                            arrive over REST, not in a turn) — reset in place only.
                            The body never enters PROJECT CONTEXT and is elided
                            from committed history (PDF posture); the model re-reads
-                           on demand
+                           on demand. context_stubs() shows the REAL Anthropic-
+                           counted token_count (post-truncation — the number the
+                           100k cap and the panel use), never a chars/4 guess
   reference_extract.py     the attachment → text boundary: REFERENCE_KINDS
                            (.docx/.pdf/.txt/.xml/.csv) + labels, kind-for-filename,
                            sanitize_reference_filename (keeps the file's own
@@ -397,9 +412,11 @@ frontend/src/
                            no content truncation, DOCX + JSON downloads) /
                            SpecDocument (paper rendering + inline manual-edit
                            affordances; Batch 5 read-only diff render via `diff` prop)
-                           / Header (spend ticker; Batch 6 Tour button) / ApiKeyBanner /
+                           / Header (spend ticker + context pill "142k / 1M" from
+                           usage.context, hidden until a turn commits; Batch 6 Tour
+                           button) / ApiKeyBanner /
                            StatusStrip (live status strip) / SettingsPanel (key mgmt +
-                           usage table + about) / CloseDialog (save-before-leaving
+                           usage table + ContextLine gauge + about) / CloseDialog (save-before-leaving
                            prompt: Save & close / Close without saving / Cancel)
                            / OnboardingOverlay (Batch 6: blocking spotlight + passive
                            step bubbles; drawers gain an openNonce prop, controls

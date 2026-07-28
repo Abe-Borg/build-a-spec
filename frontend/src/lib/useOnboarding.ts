@@ -10,6 +10,7 @@ import type {
 import {
   enrichTutorialWorkspace,
   finishTutorialScenario,
+  getSessionBundle,
   getTutorialStatus,
   restoreTutorialWorkspace,
   startTutorialScenario,
@@ -127,6 +128,8 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
   // Remembered so retrying a failed restore keeps the original request's claim
   // about whether the tour was actually completed.
   const pendingCompletedRef = useRef(false);
+  // Serializes restores — see restoreOriginal.
+  const restoreInFlightRef = useRef<Promise<boolean> | null>(null);
 
   const persist = useCallback((chunk: number, step: number, paused: boolean) => {
     lastStepRef.current = { chunk, step };
@@ -673,20 +676,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
   const requestEnd = useCallback(() => setEndConfirm(true), []);
   const cancelEnd = useCallback(() => setEndConfirm(false), []);
 
-  /**
-   * The single exit from a tutorial workspace.
-   *
-   * Ending ALWAYS returns the exact retained pre-tutorial session — there is
-   * no keep-the-practice-copy outcome and nothing to choose between, so the
-   * user is never asked. The backend re-activates the very same SessionState
-   * object it stashed at start, so the project comes back whole: document,
-   * history, version list, runners and retained source bytes included.
-   *
-   * `completed` only sets the cosmetic "tour finished" flag. External teardown
-   * (New session / Open project) and post-reload cleanup pass false — those
-   * are not the user finishing the tutorial.
-   */
-  const restoreOriginal = useCallback(
+  const runRestore = useCallback(
     async ({ completed }: { completed: boolean }): Promise<boolean> => {
       const workspace = workspaceRef.current;
       setEndConfirm(false);
@@ -730,8 +720,17 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
           const status = await getTutorialStatus().catch(() => null);
           if (status && !status.active) {
             // Someone already left the tutorial (a native close, or a restore
-            // that raced this one). The original is live; that is the goal.
-            settle(status.session ?? undefined);
+            // that raced this one). The goal state is reached — but the status
+            // payload carries no session once the tutorial is gone, so it
+            // cannot rehydrate us. Fetch the authoritative bundle instead;
+            // settling without one would close the overlay while the panel
+            // still rendered the discarded practice copy, which is exactly the
+            // confusion this whole path exists to prevent. If even that fails
+            // we fall through to the retryable error card rather than show a
+            // stale document as though it were the user's project.
+            const restored = await getSessionBundle().catch(() => null);
+            if (!restored) throw firstError;
+            settle(restored);
             return true;
           }
           if (
@@ -764,6 +763,41 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
       }
     },
     [],
+  );
+
+  /**
+   * The single exit from a tutorial workspace.
+   *
+   * Ending ALWAYS returns the exact retained pre-tutorial session — there is
+   * no keep-the-practice-copy outcome and nothing to choose between, so the
+   * user is never asked. The backend re-activates the very same SessionState
+   * object it stashed at start, so the project comes back whole: document,
+   * history, version list, runners and retained source bytes included.
+   *
+   * `completed` only sets the cosmetic "tour finished" flag. External teardown
+   * (New session / Open project) and post-reload cleanup pass false — those
+   * are not the user finishing the tutorial.
+   *
+   * Restores are serialized. Every caller wants the same outcome, so a second
+   * one — a double-clicked End, or an abort landing on top of an in-flight
+   * finish — joins the running attempt rather than firing a request that would
+   * 409 against the workspace the first attempt just finished.
+   */
+  const restoreOriginal = useCallback(
+    ({ completed }: { completed: boolean }): Promise<boolean> => {
+      const inFlight = restoreInFlightRef.current;
+      if (inFlight) return inFlight;
+      const attempt = runRestore({ completed });
+      restoreInFlightRef.current = attempt;
+      const clear = () => {
+        if (restoreInFlightRef.current === attempt) {
+          restoreInFlightRef.current = null;
+        }
+      };
+      attempt.then(clear, clear);
+      return attempt;
+    },
+    [runRestore],
   );
   restoreOriginalRef.current = (opts) => {
     void restoreOriginal(opts);

@@ -13,9 +13,10 @@
  * Final QC drawer supersedes it (its code_compliance + completeness lenses
  * cover the audit's ground and more).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   EditOp,
+  ResearchEvent,
   ResearchRunStatus,
   ResearchSnapshot,
   SpecDoc,
@@ -42,6 +43,262 @@ const statusLabel: Record<ResearchRunStatus, string> = {
   complete: "complete",
   failed: "failed",
 };
+
+/* --- The live agent board (folded from the run's event stream) --- */
+
+/** What each research agent shows while it works (StatusStrip vocabulary). */
+const ACTIVITY_LABELS: Record<string, string> = {
+  thinking: "Thinking…",
+  searching: "Searching the web…",
+  fetching: "Reading a source…",
+  writing: "Writing up findings…",
+};
+
+const RETRY_REASONS: Record<string, string> = {
+  rate_limit: "rate limited",
+  server_error: "provider error",
+  connection: "connection dropped",
+};
+
+/** Most-recent live queries/URLs shown per agent card. */
+const RECENT_CAP = 3;
+
+interface DimLive {
+  id: string;
+  title: string;
+  state: "queued" | "running" | "done" | "failed";
+  /** Last dimension_activity kind; "" before the first block streams. */
+  activity: string;
+  /** Live tick counts (events seen), vs the billed totals on completion. */
+  searches: number;
+  fetches: number;
+  /** Newest-first live queries/URLs, capped at RECENT_CAP. */
+  recent: { kind: "search" | "fetch"; text: string; seq: number }[];
+  retry: { attempt: number; max: number; reason: string } | null;
+  itemCount: number;
+  groundedCount: number;
+  billedSearches: number;
+  billedFetches: number;
+  error: string;
+}
+
+interface ResearchBoard {
+  dims: DimLive[];
+  doneCount: number;
+  total: number;
+  totalSearches: number;
+  totalFetches: number;
+}
+
+/** Legacy fallback so a card never reads as raw snake_case (mirrors the
+ *  report modal's dimensionLabel). */
+function labelFromId(id: string): string {
+  return id
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((w) => w[0].toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/** Show a fetched URL as host/path; the full URL rides the title. */
+function trimUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    const path = u.pathname.replace(/\/$/, "");
+    return path && path !== "/" ? `${host}${path}` : host;
+  } catch {
+    return url;
+  }
+}
+
+/** Fold the run's event log into per-agent live state. Events interleave
+ *  freely across dimensions (four workers), but each carries its
+ *  dimension_id and a dimension's terminal event follows its live ones, so
+ *  a single forward pass is exact. The roster seeds from research_started
+ *  (ids + titles), so all cards exist from the first frame. */
+function foldResearchBoard(events: ResearchEvent[]): ResearchBoard {
+  const dims = new Map<string, DimLive>();
+  const ensure = (id: string, title?: string): DimLive => {
+    let dim = dims.get(id);
+    if (!dim) {
+      dim = {
+        id,
+        title: "",
+        state: "queued",
+        activity: "",
+        searches: 0,
+        fetches: 0,
+        recent: [],
+        retry: null,
+        itemCount: 0,
+        groundedCount: 0,
+        billedSearches: 0,
+        billedFetches: 0,
+        error: "",
+      };
+      dims.set(id, dim);
+    }
+    if (title && !dim.title) dim.title = title;
+    return dim;
+  };
+  for (const e of events) {
+    if (e.type === "research_started") {
+      for (const id of e.dimensions ?? []) ensure(id, e.dimension_titles?.[id]);
+      continue;
+    }
+    if (!e.dimension_id) continue;
+    switch (e.type) {
+      case "dimension_started": {
+        const dim = ensure(e.dimension_id, e.title);
+        dim.state = "running";
+        break;
+      }
+      case "dimension_activity": {
+        const dim = ensure(e.dimension_id);
+        dim.activity = e.kind ?? "";
+        dim.retry = null;
+        break;
+      }
+      case "dimension_search": {
+        const dim = ensure(e.dimension_id);
+        dim.searches += 1;
+        dim.activity = "searching";
+        dim.retry = null;
+        dim.recent = [
+          { kind: "search" as const, text: e.query ?? "", seq: e.seq },
+          ...dim.recent,
+        ].slice(0, RECENT_CAP);
+        break;
+      }
+      case "dimension_fetch": {
+        const dim = ensure(e.dimension_id);
+        dim.fetches += 1;
+        dim.activity = "fetching";
+        dim.retry = null;
+        dim.recent = [
+          { kind: "fetch" as const, text: e.url ?? "", seq: e.seq },
+          ...dim.recent,
+        ].slice(0, RECENT_CAP);
+        break;
+      }
+      case "dimension_retry": {
+        const dim = ensure(e.dimension_id);
+        dim.retry = {
+          attempt: e.attempt ?? 0,
+          max: e.max_attempts ?? 0,
+          reason: e.reason ?? "",
+        };
+        dim.activity = "";
+        break;
+      }
+      case "dimension_complete":
+      case "dimension_failed": {
+        const dim = ensure(e.dimension_id, e.title);
+        dim.state = e.type === "dimension_complete" ? "done" : "failed";
+        dim.itemCount = e.item_count ?? 0;
+        dim.groundedCount = e.grounded_count ?? 0;
+        dim.billedSearches = e.web_search_requests ?? 0;
+        dim.billedFetches = e.web_fetch_requests ?? 0;
+        dim.error = e.error ?? "";
+        dim.retry = null;
+        break;
+      }
+    }
+  }
+  const list = [...dims.values()];
+  return {
+    dims: list,
+    doneCount: list.filter((d) => d.state === "done" || d.state === "failed")
+      .length,
+    total: list.length,
+    totalSearches: list.reduce((n, d) => n + d.searches, 0),
+    totalFetches: list.reduce((n, d) => n + d.fetches, 0),
+  };
+}
+
+function AgentCard({ dim }: { dim: DimLive }) {
+  const dotClass =
+    dim.state === "done"
+      ? "bg-ok"
+      : dim.state === "failed"
+        ? "bg-err"
+        : dim.state === "running"
+          ? "agent-dot"
+          : "bg-ink-faint";
+  return (
+    <div className="rounded-lg border border-edge bg-surface/50 p-2.5">
+      <div className="flex items-baseline gap-2">
+        <span
+          className={`h-1.5 w-1.5 shrink-0 translate-y-[-1px] rounded-full ${dotClass}`}
+          aria-hidden="true"
+        />
+        <span className="min-w-0 truncate text-[11px] font-medium text-ink-dim">
+          {dim.title || labelFromId(dim.id)}
+        </span>
+        {(dim.searches > 0 || dim.fetches > 0) && dim.state === "running" && (
+          <span className="ml-auto flex shrink-0 gap-1 text-[10px] text-ink-faint tabular-nums">
+            <span key={`s${dim.searches}`} className="tally-flash">
+              {dim.searches} {dim.searches === 1 ? "search" : "searches"}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span key={`f${dim.fetches}`} className="tally-flash">
+              {dim.fetches} {dim.fetches === 1 ? "source" : "sources"}
+            </span>
+          </span>
+        )}
+      </div>
+      {dim.state === "queued" && (
+        <p className="mt-1 text-[11px] text-ink-faint">Waiting for an agent…</p>
+      )}
+      {dim.state === "running" && !dim.retry && (
+        <p
+          className="mt-1 flex items-center gap-1.5 text-[11px] text-ink-dim"
+          aria-live="polite"
+        >
+          <span className="status-dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          <span className="status-shimmer">
+            {ACTIVITY_LABELS[dim.activity] ?? "Starting…"}
+          </span>
+        </p>
+      )}
+      {dim.state === "running" && dim.retry && (
+        <p className="mt-1 text-[11px] text-warn">
+          Retrying (attempt {dim.retry.attempt}/{dim.retry.max}) —{" "}
+          {RETRY_REASONS[dim.retry.reason] ?? dim.retry.reason}…
+        </p>
+      )}
+      {dim.state === "running" && dim.recent.length > 0 && (
+        <ul className="mt-1 space-y-0.5">
+          {dim.recent.map((r) => (
+            <li
+              key={r.seq}
+              className="prompt-chip-in truncate text-[11px] text-ink-faint"
+              title={r.text}
+            >
+              {r.kind === "search" ? <>&ldquo;{r.text}&rdquo;</> : trimUrl(r.text)}
+            </li>
+          ))}
+        </ul>
+      )}
+      {dim.state === "done" && (
+        <p className="mt-1 text-[11px] text-ink-faint">
+          ✓ {dim.itemCount} finding{dim.itemCount === 1 ? "" : "s"} ·{" "}
+          {dim.groundedCount} grounded · {dim.billedSearches} search
+          {dim.billedSearches === 1 ? "" : "es"} · {dim.billedFetches} fetch
+          {dim.billedFetches === 1 ? "" : "es"}
+        </p>
+      )}
+      {dim.state === "failed" && (
+        <p className="mt-1 text-[11px] text-err">✗ {dim.error || "failed"}</p>
+      )}
+    </div>
+  );
+}
 
 function profileLine(doc: SpecDoc | null): string {
   const p = doc?.project_profile;
@@ -184,7 +441,13 @@ export default function ResearchDrawer({
   const items = research?.profile?.items ?? [];
   const grounded = items.filter((i) => i.grounded).length;
   const profile = profileLine(doc);
-  const lastEvent = research?.events[research.events.length - 1];
+  // The live agent board, folded from the run's event stream. Also the
+  // source of the done/total progress label — the log now carries chatty
+  // live events, so "the last event" no longer implies a dimension event.
+  const board = useMemo(
+    () => foldResearchBoard(research?.events ?? []),
+    [research?.events],
+  );
   // Rounds accumulate: a further run adds to these findings, never
   // replaces them. Legacy payloads carry no rounds — treat a profile
   // without them as the one round it is.
@@ -203,8 +466,8 @@ export default function ResearchDrawer({
           ? `Run another round of research (uses your API key). It ADDS to the ${items.length} finding(s) you already have — nothing is replaced, and a requirement found again is confirmed in place.`
           : "Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).";
   const startLabel = running
-    ? lastEvent?.done != null
-      ? `Researching… (${lastEvent.done}/${lastEvent.total})`
+    ? board.total > 0
+      ? `Researching… (${board.doneCount}/${board.total})`
       : "Research in progress…"
     : rounds > 0
       ? `Research again (round ${rounds + 1})`
@@ -236,8 +499,11 @@ export default function ResearchDrawer({
             {statusLabel[status]}
             {rounds > 0 && ` · ${grounded}/${items.length} grounded`}
             {rounds > 1 && ` over ${rounds} rounds`}
-            {running && lastEvent?.done != null &&
-              ` (${lastEvent.done}/${lastEvent.total} dimensions)`}
+            {running && board.total > 0 && (
+              <span className="status-shimmer">
+                {` · ${board.doneCount}/${board.total} agents · ${board.totalSearches} searches · ${board.totalFetches} sources`}
+              </span>
+            )}
           </span>
           <span className="ml-auto shrink-0">{expanded ? "▾" : "▸"}</span>
         </button>
@@ -321,19 +587,24 @@ export default function ResearchDrawer({
       {expanded && research && (
         <div className="mt-1.5 max-h-64 space-y-2 overflow-y-auto pb-1">
           {running && (
-            <ul className="space-y-0.5">
-              {research.events.map((e) => (
-                <li key={e.seq} className="text-[11px] text-ink-faint">
-                  {e.ts}{" "}
-                  {e.type === "research_started" &&
-                    `Researching ${e.project ?? ""}…`}
-                  {e.type === "dimension_complete" &&
-                    `✓ ${e.title ?? e.dimension_id}: ${e.item_count} item(s), ${e.grounded_count} grounded`}
-                  {e.type === "dimension_failed" &&
-                    `✗ ${e.title ?? e.dimension_id}: ${e.error}`}
-                </li>
+            <div className="space-y-1.5">
+              {board.total === 0 && (
+                <p
+                  className="flex items-center gap-1.5 text-[11px] text-ink-dim"
+                  role="status"
+                >
+                  <span className="status-dots" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                  <span className="status-shimmer">Starting research…</span>
+                </p>
+              )}
+              {board.dims.map((d) => (
+                <AgentCard key={d.id} dim={d} />
               ))}
-            </ul>
+            </div>
           )}
 
           {research.profile && (

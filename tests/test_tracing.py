@@ -115,6 +115,55 @@ def test_capture_hooks_record_when_enabled(monkeypatch, tmp_path):
         set_recorder(None)
 
 
+def test_research_and_qc_progress_events_reach_the_trace(monkeypatch, tmp_path):
+    """The sink event's "type" key must not collide with add_event's.
+
+    Every research/QC sink event carries a "type" key; passing the dict as
+    **kwargs to ``add_event(handle, type, ...)`` raised a TypeError that the
+    never-raise hooks swallowed — so no progress event ever reached a trace.
+    The hooks now rename it to ``event_type``.
+    """
+    monkeypatch.setenv(config.ENV_TRACE, "1")
+    monkeypatch.setenv(config.ENV_TRACE_DIR, str(tmp_path))
+    set_recorder(None)
+    try:
+        research_handle = capture.research_start(project="Ashburn DC", dimensions=4)
+        assert research_handle is not None
+        capture.research_event(
+            research_handle,
+            {
+                "type": "dimension_search",
+                "dimension_id": "governing_codes",
+                "query": "virginia statewide fire prevention code edition",
+            },
+        )
+        capture.research_end(research_handle, status="complete", items=1)
+
+        qc_handle = capture.qc_start(lenses=5)
+        assert qc_handle is not None
+        capture.qc_event(qc_handle, {"type": "lens_complete", "lens_id": "completeness"})
+        capture.qc_end(qc_handle, status="complete", findings=0)
+
+        rec = recorder_module.get_recorder()
+        assert rec is not None
+        rec.stop()
+
+        run_dirs = list(tmp_path.iterdir())
+        assert len(run_dirs) == 1
+        events = _read_jsonl(run_dirs[0] / "events.jsonl")
+        research_events = [e for e in events if e["type"] == "research_progress"]
+        assert len(research_events) == 1
+        assert research_events[0]["event_type"] == "dimension_search"
+        assert research_events[0]["dimension_id"] == "governing_codes"
+        assert "fire prevention" in research_events[0]["query"]
+        qc_events = [e for e in events if e["type"] == "qc_progress"]
+        assert len(qc_events) == 1
+        assert qc_events[0]["event_type"] == "lens_complete"
+        assert qc_events[0]["lens_id"] == "completeness"
+    finally:
+        set_recorder(None)
+
+
 def test_turns_trace_end_to_end_through_the_engine(monkeypatch, tmp_path):
     """A real (fake-client) chat turn produces a turn span + tool event."""
     monkeypatch.setenv(config.ENV_TRACE, "1")

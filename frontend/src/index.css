@@ -353,3 +353,41 @@ body {
     -webkit-text-fill-color: var(--color-ink-dim);
   }
 }
+
+/* Research agent board: the active agent's status dot breathes a soft
+   accent ring while it works… */
+.agent-dot {
+  background: var(--color-accent);
+  animation: agent-ring 1.6s ease-out infinite;
+}
+@keyframes agent-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.45);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 5px rgba(217, 119, 87, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-dot {
+    animation: none;
+  }
+}
+
+/* …and a live tally flashes accent for a beat when its count lands (the
+   span remounts per increment via key={count}, retriggering the run-once
+   animation). */
+.tally-flash {
+  animation: tally-flash 0.6s ease-out 1;
+}
+@keyframes tally-flash {
+  from {
+    color: var(--color-accent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tally-flash {
+    animation: none;
+  }
+}

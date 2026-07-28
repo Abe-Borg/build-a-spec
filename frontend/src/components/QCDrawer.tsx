@@ -50,6 +50,7 @@ import {
 import { useDialogFocus } from "../lib/dialogFocus";
 import ConfirmDialog from "./ConfirmDialog";
 import QCReportModal from "./QCReportModal";
+import Tip from "./Tip";
 
 interface Props {
   qc: QcSnapshot | null;
@@ -291,11 +292,18 @@ export default function QCDrawer({
       ? "Re-run Final QC"
       : "Send to Final QC";
   const startDisabled = !profileComplete || running || interactionBusy;
-  const startTitle = !profileComplete
+  // Carried by the <Tip> wrapper, not the button: a disabled button is inert
+  // and the shared style adds `disabled:pointer-events-none`, so a native
+  // title on it never fires — exactly when the explanation is most needed.
+  const startTip = !profileComplete
     ? "Complete the project profile first — city, state, country, and client — before sending the section to Final QC."
     : settling
       ? "Stop requested; the paid partial audit record is still being preserved."
-      : "Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Fable 5 (uses your API key)";
+      : running
+        ? "Final QC is already running."
+        : busy
+          ? QC_BUSY_MESSAGE
+          : "Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Fable 5 (uses your API key)";
 
   const applyAllDisabled = interactionBusy || applicableCriticals.length === 0;
   const applyAllTitle =
@@ -356,18 +364,19 @@ export default function QCDrawer({
           </span>
           <span className="ml-auto shrink-0">{expanded ? "▾" : "▸"}</span>
         </button>
-        <button
-          className={`shrink-0 rounded-md border px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none disabled:opacity-40 ${
-            primaryReport
-              ? "border-edge bg-raised text-ink-dim hover:border-accent hover:text-accent"
-              : "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25"
-          }`}
-          onClick={() => setConfirmOpen(true)}
-          disabled={startDisabled}
-          title={startTitle}
-        >
-          {startLabel}
-        </button>
+        <Tip tip={startTip} className="shrink-0">
+          <button
+            className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none disabled:opacity-40 ${
+              primaryReport
+                ? "border-edge bg-raised text-ink-dim hover:border-accent hover:text-accent"
+                : "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25"
+            }`}
+            onClick={() => setConfirmOpen(true)}
+            disabled={startDisabled}
+          >
+            {startLabel}
+          </button>
+        </Tip>
         {running && (
           <button
             className="shrink-0 rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-err hover:text-err"

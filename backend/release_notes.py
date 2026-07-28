@@ -326,11 +326,14 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                         ),
                     ),
                     ReleaseItem(
-                        title="Clearer Final QC",
+                        title="Final QC can now do the safe fixing",
                         body=(
-                            "Final QC now tells you why it is unavailable "
-                            "when it is, and the advisory issues list "
-                            "collapses when you want it out of the way."
+                            "A completed review separates fixes it can apply "
+                            "safely from project decisions and professional "
+                            "review. Preview the safe set for free, approve "
+                            "one undoable batch, and get a receipt explaining "
+                            "every applied or skipped finding; paid reruns "
+                            "remain a separate choice."
                         ),
                     ),
                 ),

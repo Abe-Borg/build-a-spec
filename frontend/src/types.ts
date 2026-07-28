@@ -858,6 +858,67 @@ export interface QcApplyResult extends DocPayload {
   outcomes: Record<string, string>;
 }
 
+export interface QcApplyPreviewBasis {
+  workspace_id: number;
+  generation: number;
+  run_id: string;
+  input_fingerprint: string;
+  document_version: number;
+  document_fingerprint: string;
+  result_fingerprint: string;
+  selected_finding_ids: string[];
+  binding_fingerprint: string;
+}
+
+export type QcApplyPreviewOutcome =
+  | "applyable"
+  | "unknown"
+  | "no_ops"
+  | "already_applied"
+  | "not_open"
+  | "conflict"
+  | "stale"
+  | "source_blocked";
+
+export interface QcApplyPreviewDecision {
+  finding_id: string;
+  title: string;
+  severity: string;
+  status: string;
+  outcome: QcApplyPreviewOutcome;
+  reason_code: string;
+  reason: string;
+  applyable: boolean;
+  proposed_operation_count: number;
+  apply_operation_count: number;
+  duplicate_operation_count: number;
+  conflicts_with: string[];
+}
+
+export interface QcApplyPreviewResult {
+  ok: true;
+  basis: QcApplyPreviewBasis;
+  decisions: QcApplyPreviewDecision[];
+  operation_counts: {
+    proposed: number;
+    unique: number;
+    duplicate: number;
+    applyable: number;
+  };
+  deduplications: {
+    operation: Record<string, unknown>;
+    finding_ids: string[];
+    occurrence_count: number;
+  }[];
+  conflicts: {
+    write_keys: string[];
+    finding_ids: string[];
+    operations: Record<string, unknown>[];
+  }[];
+  applyable_finding_ids: string[];
+  applyable_operations: Record<string, unknown>[];
+}
+
 /* --- Issue readiness checklist (Batch 4) --- */
 
 export interface ReadinessCheck {

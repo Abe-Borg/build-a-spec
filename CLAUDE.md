@@ -52,7 +52,8 @@ backend/
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
                            /api/draft/full (Batch 3 directive); doc/undo/redo/edit,
                            docx export, project save/load endpoints; Batch 4 adds
-                           /api/qc/start|status|stream|apply|dismiss|export +
+                           /api/qc/start|status|stream|apply|apply/preview|
+                           dismiss|export +
                            /api/qc/export.json + /api/readiness (audit endpoints
                            kept, deprecated); Batch 5
                            adds GET /api/doc/diff + ?redline=master|version on
@@ -2178,8 +2179,9 @@ No new deps, no new SSE event, one new REST route.
   stay allowed (they do not touch the retained Word body — so the review
   walk's confirmations keep working while the sweep runs). An underived
   permission can only make the UI *more* restrictive. Authority never moved:
-  `apply_doc_edits` still runs `validate_source_transition` over the complete
-  proposed final state on every body change, exactly as
+  `apply_doc_edits` and the read-only Final-QC remediation preview share
+  `validate_source_backed_candidate`, which runs `validate_source_transition`
+  over the complete proposed final state on every body change, exactly as
   `docs/DOCX_FIDELITY.md` says ("capability reports are UI guidance, not
   authorization").
 - **Who blocks and who does not.** `_source_editing_boundary_block` (every
@@ -2190,8 +2192,9 @@ No new deps, no new SSE event, one new REST route.
   recorded inputs no longer match", i.e. stale, which is conservative and,
   after an import (empty document required) or a body change (QC stale
   anyway), also correct. The paths that ACT on the answer — `POST
-  /api/qc/start`, `POST /api/qc/apply`, and both QC exports — pass
-  `block=True`, and all four call `_settle_source_capabilities(session)`
+  /api/qc/start`, `POST /api/qc/apply/preview`, `POST /api/qc/apply`, and both
+  QC exports — pass `block=True`, and all five call
+  `_settle_source_capabilities(session)`
   **before** taking `session_state_guard()` so they never hold
   `_turn_state_lock` across a sweep (that lock is what `claim_model_turn`
   needs, so holding it was a second, independent way to freeze the chat).

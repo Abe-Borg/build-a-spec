@@ -372,6 +372,54 @@ def test_qc_apply_path_uses_the_same_source_guard(tmp_path):
     assert _source_export(client).content == source
 
 
+def test_qc_preview_runs_the_combined_source_guard_read_only(tmp_path):
+    client = _client()
+    source = make_fidelity_master(tmp_path)
+    _import_master(client, source)
+    before = client.get("/api/doc").json()["doc"]
+    finding_id = "qc-source-preview-guard"
+    session = sessions.get_session()
+    result = audit_grade_qc_result(
+        session,
+        [
+            QCFinding(
+                finding_id=finding_id,
+                lens_id="constructability",
+                severity="high",
+                element_id="pt1.a1.p1",
+                title="Remove the provision",
+                issue="Fixture finding proposes an unsafe source edit.",
+                rationale="Exercise the read-only combined source guard.",
+                proposed_ops=[
+                    {"action": "delete", "target_id": "pt1.a1.p1"}
+                ],
+                ops_valid=True,
+            )
+        ],
+    )
+    session.qc.restore(result)
+    before_result = result.to_dict()
+
+    response = client.post(
+        "/api/qc/apply/preview", json={"finding_ids": [finding_id]}
+    )
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert preview["applyable_finding_ids"] == []
+    assert preview["applyable_operations"] == []
+    assert preview["operation_counts"]["applyable"] == 0
+    assert preview["decisions"][0]["outcome"] == "source_blocked"
+    assert preview["decisions"][0]["reason_code"] == (
+        "source_preservation_rejected"
+    )
+    assert "source-backed edit rejected" in preview["decisions"][0][
+        "reason"
+    ].lower()
+    assert client.get("/api/doc").json()["doc"] == before
+    assert result.to_dict() == before_result
+    assert _source_export(client).content == source
+
+
 def test_hyperlink_target_fails_closed_instead_of_rewriting_relationship_markup(
     tmp_path,
 ):

@@ -267,14 +267,7 @@ function EmptyState({
         data-tour="first-article"
         data-capability="document.first-article"
       >
-        <p className="text-xs font-semibold tracking-wide text-paper-ink uppercase">
-          Add the first article
-        </p>
-        <p className="mt-1 text-xs leading-relaxed text-paper-dim">
-          Start the section yourself, then add provisions and subparagraphs
-          directly on the page.
-        </p>
-        <div className="mt-3 flex flex-wrap items-end gap-2">
+        <div className="flex flex-wrap items-end gap-2">
           <label className="min-w-36 flex-1 text-[11px] font-medium text-paper-dim">
             PART
             <select

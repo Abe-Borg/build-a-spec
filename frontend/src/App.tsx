@@ -173,6 +173,15 @@ export default function App() {
   const manualEditBusyRef = useRef(false);
   const researchFollowRef = useRef(false);
   const qcFollowRef = useRef(false);
+  // Dedup for the gentle auth-error modal (chat, research, QC): a failed
+  // snapshot fires it once, not once per poll tick. Checked and cleared
+  // inline inside refreshResearch/refreshQc's own callback (never inside a
+  // useEffect keyed on the snapshot's fields) — two consecutive fast auth
+  // failures can produce byte-identical status/error_kind values, and a
+  // ref write alone never causes React to re-run an effect, so an
+  // effect-dependency-based reset can silently never re-fire.
+  const researchAuthHandledRef = useRef(false);
+  const qcAuthHandledRef = useRef(false);
   const onboardingRef = useRef<OnboardingApi | null>(null);
   // Every whole-session/tutorial transition advances this epoch. Read calls
   // and streams captured against an older workspace must never repaint the
@@ -194,7 +203,21 @@ export default function App() {
     const epoch = workspaceEpochRef.current;
     getResearchStatus()
       .then((value) => {
-        if (workspaceEpochRef.current === epoch) setResearch(value);
+        if (workspaceEpochRef.current !== epoch) return;
+        setResearch(value);
+        // Runs on every fetch, not gated by React's effect-dependency
+        // diffing — so a second fast auth failure (identical status/
+        // error_kind to the first) still opens the modal, as long as
+        // onStartResearch cleared the ref for this attempt.
+        if (value?.status !== "failed") {
+          researchAuthHandledRef.current = false;
+        } else if (
+          value.error_kind === "auth_error" &&
+          !researchAuthHandledRef.current
+        ) {
+          researchAuthHandledRef.current = true;
+          setApiKeyErrorOpen(true);
+        }
       })
       .catch(() => {
         if (workspaceEpochRef.current === epoch) setResearch(null);
@@ -230,7 +253,19 @@ export default function App() {
     const epoch = workspaceEpochRef.current;
     getQcStatus()
       .then((value) => {
-        if (workspaceEpochRef.current === epoch) setQc(value);
+        if (workspaceEpochRef.current !== epoch) return;
+        setQc(value);
+        // See refreshResearch's comment — same "runs on every fetch, not
+        // React-diffed" reasoning applies here.
+        if (value?.status !== "failed") {
+          qcAuthHandledRef.current = false;
+        } else {
+          const kind = value.error_kind || value.latest_attempt?.error_kind;
+          if (kind === "auth_error" && !qcAuthHandledRef.current) {
+            qcAuthHandledRef.current = true;
+            setApiKeyErrorOpen(true);
+          }
+        }
       })
       .catch(() => {
         if (workspaceEpochRef.current === epoch) setQc(null);
@@ -367,40 +402,16 @@ export default function App() {
     }
   }, [refreshQc, refreshReadiness, refreshUsage]);
 
-  // Same gentle nudge as chat's error branch, edge-triggered off the polled
-  // snapshot: fires once per failed run (not once per poll tick), reset the
-  // moment status leaves "failed" so a fresh attempt can trigger it again.
-  const researchAuthHandledRef = useRef(false);
-  useEffect(() => {
-    if (research?.status !== "failed") {
-      researchAuthHandledRef.current = false;
-      return;
-    }
-    if (research.error_kind === "auth_error" && !researchAuthHandledRef.current) {
-      researchAuthHandledRef.current = true;
-      setApiKeyErrorOpen(true);
-    }
-  }, [research?.status, research?.error_kind]);
-
-  const qcAuthHandledRef = useRef(false);
-  useEffect(() => {
-    if (qc?.status !== "failed") {
-      qcAuthHandledRef.current = false;
-      return;
-    }
-    const kind = qc.error_kind || qc.latest_attempt?.error_kind;
-    if (kind === "auth_error" && !qcAuthHandledRef.current) {
-      qcAuthHandledRef.current = true;
-      setApiKeyErrorOpen(true);
-    }
-  }, [qc?.status, qc?.error_kind, qc?.latest_attempt?.error_kind]);
-
   const onStartQc = useCallback(async (acknowledgeScopeMismatch = false) => {
     try {
       await startQc(acknowledgeScopeMismatch, {
         workspaceId: health?.workspace_id,
         generation: health?.generation,
       });
+      // Clear the auth-modal dedup ref for this fresh attempt — see its
+      // declaration comment: refreshQc (not an effect) is what actually
+      // reopens the modal, so this reset is read on the very next poll.
+      qcAuthHandledRef.current = false;
       addNote("Sent to Final QC — findings will appear in the Final QC panel.");
       void followQc();
     } catch (e) {
@@ -697,6 +708,10 @@ export default function App() {
         workspaceId: health?.workspace_id,
         generation: health?.generation,
       });
+      // Clear the auth-modal dedup ref for this fresh attempt — see
+      // researchAuthHandledRef's declaration comment: refreshResearch (not
+      // an effect) is what actually reopens the modal.
+      researchAuthHandledRef.current = false;
       addNote("Started requirements research — progress in the Research panel.");
       void followResearch();
     } catch (e) {

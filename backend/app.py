@@ -1867,10 +1867,6 @@ def create_app() -> FastAPI:
                     yield _sse(
                         {
                             "type": "tutorial_fallback",
-                            "message": (
-                                "Bundled LLM-authored examples were added around "
-                                "the unchanged protected spec without an API call."
-                            ),
                             "reason": "bundled_enrichment_selected",
                             "replaces_workspace_id": lease.workspace_id,
                             "replaces_generation": lease.generation,
@@ -1968,11 +1964,6 @@ def create_app() -> FastAPI:
                     yield _sse(
                         {
                             "type": "tutorial_fallback",
-                            "message": (
-                                "The live enrichment did not produce every safe "
-                                "tutorial fixture, so bundled LLM-authored examples were "
-                                "added around the unchanged protected spec."
-                            ),
                             "reason": failure or "incomplete_enrichment",
                             "replaces_workspace_id": lease.workspace_id,
                             "replaces_generation": lease.generation,

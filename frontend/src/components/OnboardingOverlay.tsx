@@ -734,20 +734,6 @@ export default function OnboardingOverlay({
           </span>
           {step.optionalReason && <span className="text-[10px] text-ink-faint">Optional: {step.optionalReason}</span>}
         </div>
-        {ob.notice && (
-          <div className="mt-2 rounded-lg border border-warn/40 bg-warn/10 p-2.5">
-            <div className="flex items-start gap-2">
-              <p className="flex-1 text-xs leading-relaxed text-ink-dim">{ob.notice}</p>
-              <button
-                onClick={ob.dismissNotice}
-                aria-label="Dismiss tutorial notice"
-                className="rounded px-1 text-ink-faint hover:bg-raised hover:text-ink"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        )}
         {ready && !missing ? (
           <p className="mt-2 text-sm leading-relaxed text-ink-dim">{step.body}</p>
         ) : missing && ready ? (

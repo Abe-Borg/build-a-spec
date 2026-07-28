@@ -488,8 +488,39 @@ def test_generated_live_failure_is_disclosed_as_bundled_showcase(monkeypatch):
     ]
     fallback = next(event for event in events if event["type"] == "tutorial_fallback")
     assert fallback["source"] == "showcase"
-    assert "bundled LLM-authored" in fallback["message"]
+    assert "message" not in fallback
     assert client.get("/api/tutorial/status").json()["source"] == "showcase"
+
+
+def test_explicit_bundled_enrichment_choice_carries_no_disclosure_message():
+    client = TestClient(create_app())
+    original = sessions.get_workspace()
+    started = client.post(
+        "/api/tutorial/start",
+        json={
+            "request_id": "bundled-enrichment-choice",
+            "source": "generated",
+            "workspace_id": original.workspace_id,
+            "generation": original.generation,
+        },
+    ).json()
+    response = client.post(
+        "/api/tutorial/enrich",
+        json={
+            "tutorial_id": started["tutorial_id"],
+            "workspace_id": started["workspace_id"],
+            "generation": started["generation"],
+            "mode": "bundled",
+        },
+    )
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    fallback = next(event for event in events if event["type"] == "tutorial_fallback")
+    assert fallback["reason"] == "bundled_enrichment_selected"
+    assert "message" not in fallback
 
 
 def test_successful_live_enrichment_finishes_with_authoritative_session(monkeypatch):

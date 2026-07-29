@@ -1,6 +1,6 @@
 # Phase 1 — Provider stream safety
 
-- Status: in progress (1.1–1.2 complete; 1.3–1.4 planned)
+- Status: in progress (1.1–1.3 complete; 1.4 planned)
 - Prerequisite: repository baseline green
 - Risk: critical; this phase changes provider tool configuration, continuation
   requests, and committed conversation history
@@ -316,11 +316,34 @@ venv\Scripts\python -m pytest -q tests/test_app.py tests/test_streaming.py
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete** (2026-07-29)
+- Commit/PR: branch `claude/deep-dive-remediation-plans-omivzu`
+- Tests: `tests/test_app.py` gains
+  `test_chat_carries_the_container_through_a_turn_and_drops_it_next_turn` —
+  one turn of three rounds (pause with `cont_chat_1` → resume → a
+  continuation after a client `tool_result`) proving the id is *retained*
+  across the turn rather than re-read per round, then a second user turn
+  that starts clean, then the negative assertions that it reaches neither
+  `system`, `tools`, `messages`, committed history, nor the saved project
+  file. `test_pause_turn_resumes_and_emits_web_activity` gains one line:
+  a pause carrying no container does not make one up. Full gate green:
+  `pytest -q` 1146 passed, 9 skipped. No frontend change.
 - Deviations:
-- Manual QA owed:
+  - Reuses `research/grounding.response_container_id` from Chunk 1.2
+    instead of a chat-local reader, so all three channels share one
+    definition of the retain-latest-nonblank rule.
+  - The plan suggested expanding
+    `test_pause_turn_resumes_and_emits_web_activity`; it offered "or add a
+    neighboring test", and a neighbour was the better fit — the contract
+    needs a three-round turn plus a second turn, which would have buried
+    the existing test's actual subject (live web activity).
+  - No trace assertion was needed: `_enter_stream` never traces request
+    kwargs (only a note on the thinking.display degrade path), so there is
+    no payload for the container to leak into. Verified by reading, and the
+    request-level negative assertions cover the rest.
+- Manual QA owed: none specific to this chunk; the pause contract is
+  hermetic for the same reason as 1.2. Phase 1's shared live canary
+  (Chunk 6.5) still applies.
 
 ## Chunk 1.4 — Dangling server-tool history scrub and legacy repair
 

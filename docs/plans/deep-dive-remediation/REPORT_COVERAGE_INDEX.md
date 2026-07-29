@@ -1,10 +1,12 @@
 # Source report coverage index
 
-This index accounts for every titled finding in
-`BUILDASPEC_DEEP_DIVE_REPORT.md` plus the cross-lens cost improvement called out
-in its run-forensics summary. Later verifier corrections in the report control
-severity and scope. “Consolidated” means the heading shares one implementation
-with another heading; it does not mean the behavior is ignored.
+This index accounts for every titled finding in the 2026-07-28 diagnostics
+review plus the cross-lens cost improvement called out in its run-forensics
+summary. The review itself is not in this repository; these plans are
+self-contained and carry the findings they act on. Later verifier corrections
+in that review control severity and scope. “Consolidated” means the heading
+shares one implementation with another heading; it does not mean the behavior
+is ignored.
 
 ## Run-forensics observations
 

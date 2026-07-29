@@ -27,6 +27,9 @@ file is the working reference for AI-assisted development sessions.
   (`code_cycles.StandardEdition`), which will be ported in Phase 3.
 - Keep `README.md`, `requirements.txt`, and this file current when the
   implementation, dependencies, or conventions change.
+- Commit style is a standing owner preference (Abraham): commit messages are
+  sassy, spicy, and funny where warranted — especially when something fought
+  back — never obnoxious.
 
 ## Layout
 
@@ -1182,6 +1185,39 @@ verdicts, model-submitted findings/verdict notes, errors, usage, and
 deterministic validation/disposition events. Prompts and UI copy must not ask
 for, promise, serialize, or display private chain-of-thought.
 
+**The reporting contract.** (Preserved verbatim-in-substance from the
+2026-07-24 audit-grade amendment when its plan file was retired — it is the
+maintenance contract, and the bullets below are how it is implemented.) Final
+QC has two coordinated outputs: a full, first-class audit report — the trust
+and traceability surface — and a compact action queue of surviving findings —
+the remediation surface. The queue never replaces or truncates the report. The
+report must preserve enough detail to answer: *what ran, against what, what did
+it check, what evidence did it retrieve, how was each result adjudicated, and
+what happened next?* Four rules follow, and they bind every future change:
+
+- **Word may summarize; it may never omit.** Word can format or condense dense
+  structures for readability, but must not silently drop failures, incomplete
+  coverage, refuted candidates, validation errors, or limitations. JSON is the
+  lossless record for downstream audit and integration.
+- **Success is not coverage.** A successful HTTP response or a verifier
+  majority is not proof of complete coverage. A runner-level terminal failure
+  keeps using the runner status/error channel and never fabricates a canonical
+  completed report. Every surface must distinguish "checked and passed" from
+  "not checked" and from "could not complete."
+- **Never infer evidence the API did not give.** The report distinguishes
+  cited URLs, actually retrieved URLs, and URLs accepted by grounding. It never
+  converts an aggregate `grounded` boolean into a claim that every source was
+  accepted, and never invents a one-to-one query→source causal mapping the API
+  did not provide.
+- **Refuted means excluded from the action queue, not deleted from the audit
+  trail.** A refuted candidate keeps its issue, rationale, element anchor,
+  original severity, sources/grounding, full verifier-seat ledger, threshold/
+  outcome and fix proposal, plus the recorded basis for refutation. Fix records
+  keep the exact proposed `apply_spec_edits` operations (not merely a prose
+  preview); open, applied, dismissed, advisory/no-op, invalid and stale
+  outcomes stay distinguishable; and dismiss memory never erases the original
+  proposal or its validation history.
+
 - **Versioned run/input envelope.** `QCResult` carries
   `schema_version=3`, `protocol_version="final-qc/3"`, a UUID `run_id`,
   `execution_status` (`complete|partial|failed|cancelled`),
@@ -1365,7 +1401,10 @@ for, promise, serialize, or display private chain-of-thought.
 - **Migration — the compliance audit is deprecated.** The `code_compliance`
   + `completeness` lenses supersede it. The audit BUTTON is retired from the
   UI (`ResearchDrawer` is research-only; the frontend no longer calls
-  `/api/audit/*`); the endpoints + `AuditRunner` remain untouched. The main
+  `/api/audit/*`). The removal had to be wholesale rather than button-only
+  because `tsconfig` sets `noUnusedLocals`/`noUnusedParameters`, so the audit
+  state, handlers and `api.ts` functions could not be left orphaned behind a
+  hidden button. The endpoints + `AuditRunner` remain untouched. The main
   export closing renders the QC summary when a QC result exists, else falls
   back to the audit closing (`build_docx(..., qc_result=...)`).
 - **Persistence + serialization.** `QCResult.to_dict`/`from_dict` round-trip

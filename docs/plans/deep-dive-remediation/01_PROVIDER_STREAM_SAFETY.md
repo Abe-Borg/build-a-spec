@@ -457,7 +457,7 @@ venv\Scripts\python -m pytest -q
 ### Implementation record
 
 - Status: **complete** (2026-07-29)
-- Commit/PR: branch `claude/deep-dive-remediation-plans-omivzu`
+- Commit/PR: `2f759e3` — PR #91
 - Tests: `tests/test_server_tool_pairing.py` (new, 11) covers the pure
   invariant in both directions — complete pair in one message, pair split
   across a `pause_turn`, unpaired use removed while a sibling pair

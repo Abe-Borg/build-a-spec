@@ -337,16 +337,23 @@ export function reconcileQcSnapshotUpdate(
   const events = normalizedEvents([...(fetched.events ?? []), ...previous.events]);
   const fetchedSettled = events.some((event) => event.type === "qc_attempt_settled");
   const keepPreviousStatus = statusRank(previous.status) > statusRank(fetched.status);
+  const status = keepPreviousStatus ? previous.status : fetched.status;
   return {
     accepted: true,
     snapshot: {
       ...fetched,
-      status: keepPreviousStatus ? previous.status : fetched.status,
+      status,
       error: keepPreviousStatus ? previous.error : fetched.error,
       error_kind: keepPreviousStatus ? previous.error_kind : fetched.error_kind,
-      settling: fetchedSettled
-        ? false
-        : Boolean(fetched.settling || previous.settling),
+      // Settlement is sticky ONLY for a terminal stopped attempt, until its
+      // settled event arrives. A running snapshot clears an erroneous prior
+      // bit rather than OR-ing it forward — otherwise one bad `settling`
+      // (an older backend, a replayed pre-fix frame) would latch the
+      // Review Room into stop language for the rest of the session.
+      settling:
+        fetchedSettled || status === "running"
+          ? false
+          : Boolean(fetched.settling || previous.settling),
       events,
     },
   };
@@ -359,10 +366,29 @@ export function reconcileQcSnapshot(
   return reconcileQcSnapshotUpdate(previous, fetched).snapshot;
 }
 
+/**
+ * Stop settlement: a TERMINAL attempt whose already-paid in-flight work is
+ * still attaching itself.
+ *
+ * The `status !== "running"` half is what makes it mean that. `settling`
+ * alone used to be true for the whole of every ordinary run — it only said
+ * "a worker thread exists" — which showed a run-long "Stop requested"
+ * banner the first time anyone ran Final QC. The backend predicate is fixed
+ * too; this keeps the UI honest against an older backend, a replayed
+ * pre-fix snapshot, or a future regression on either side.
+ */
+export function isQcStopSettling(
+  snapshot: Pick<QcSnapshot, "status" | "settling"> | null | undefined,
+): boolean {
+  return Boolean(
+    snapshot && snapshot.status !== "running" && snapshot.settling === true,
+  );
+}
+
 export function isQcActiveSnapshot(
   snapshot: QcSnapshot | null | undefined,
 ): boolean {
-  return snapshot?.status === "running" || snapshot?.settling === true;
+  return snapshot?.status === "running" || isQcStopSettling(snapshot);
 }
 
 export interface QcRecapDisposition {
@@ -830,7 +856,7 @@ export function foldQcLiveState(
           verificationTotals.inconclusive || event.inconclusive_count || 0;
         break;
       case "qc_failed":
-        runState = snapshot?.settling ? "settling" : "failed";
+        runState = isQcStopSettling(snapshot) ? "settling" : "failed";
         error = event.error ?? error;
         break;
       case "qc_attempt_settled":
@@ -873,7 +899,7 @@ export function foldQcLiveState(
     (lens) => lens.status === "completed",
   ).length;
 
-  if (snapshot?.settling) runState = "settling";
+  if (isQcStopSettling(snapshot)) runState = "settling";
   else if (snapshot?.status === "running" && runState === "idle") {
     runState = "running";
     phase = "lenses";

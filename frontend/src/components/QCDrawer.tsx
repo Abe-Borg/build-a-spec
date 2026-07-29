@@ -58,6 +58,7 @@ import {
 } from "../lib/qcRemediation";
 import {
   foldQcLiveState,
+  isQcStopSettling,
   qcRecapDisposition,
   type QcCandidateLiveState,
   type QcLensLiveState,
@@ -725,7 +726,9 @@ export default function QCDrawer({
 
   const status = qc?.status ?? "idle";
   const running = status === "running";
-  const settling = qc?.settling ?? false;
+  // Stop settlement only — never an ordinary run. Drives the start-button
+  // label, the warning banner, the busy gate, and the aria-live message.
+  const settling = isQcStopSettling(qc);
   const interactionBusy = busy || settling || applyPending;
   const result = qc?.result;
   const moduleSectionCompatibility = qc?.module_section_compatibility;

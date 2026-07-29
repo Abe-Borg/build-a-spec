@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   foldQcLiveState,
+  isQcActiveSnapshot,
+  isQcStopSettling,
   mergeQcEvent,
   qcRecapDisposition,
   reconcileQcSnapshot,
@@ -288,6 +290,71 @@ test("QC snapshot reconciliation retains settlement until its terminal frame", (
     ],
   };
   assert.equal(reconcileQcSnapshot(previous, settled).settling, false);
+});
+
+test("stop settlement is a terminal state, never an ordinary run", () => {
+  // The four rows of the state contract. `settling` alone was true for the
+  // whole of every normal run, which put a run-long "Stop requested —
+  // finishing already-paid in-flight work" banner in front of anyone who
+  // ran Final QC for the first time.
+  assert.equal(
+    isQcStopSettling({ status: "running", settling: false }),
+    false,
+    "normal active run",
+  );
+  assert.equal(
+    isQcStopSettling({ status: "running", settling: true }),
+    false,
+    "a running snapshot is never settling, whatever the bit says",
+  );
+  assert.equal(
+    isQcStopSettling({ status: "complete", settling: false }),
+    false,
+    "normal completed run",
+  );
+  assert.equal(
+    isQcStopSettling({ status: "failed", settling: true }),
+    true,
+    "user stop won, worker still unwinding",
+  );
+  assert.equal(
+    isQcStopSettling({ status: "failed", settling: false }),
+    false,
+    "stopped worker fully attached",
+  );
+  assert.equal(isQcStopSettling(null), false);
+
+  // The active gate still covers both states — start/apply/dismiss must
+  // stay blocked through a genuine settlement.
+  assert.equal(isQcActiveSnapshot({ status: "running", settling: false }), true);
+  assert.equal(isQcActiveSnapshot({ status: "failed", settling: true }), true);
+  assert.equal(isQcActiveSnapshot({ status: "failed", settling: false }), false);
+});
+
+test("a normal running run folds to running, not settling", () => {
+  const events: QcEvent[] = [started()];
+  // A pre-fix backend (or a replayed stale frame) can still assert the bit
+  // on a running snapshot; the Review Room must not believe it.
+  const live = foldQcLiveState(events, {
+    status: "running",
+    settling: true,
+    error: "",
+  });
+  assert.equal(live.runState, "running");
+  assert.equal(live.settling, false);
+});
+
+test("a running snapshot clears an erroneous prior settling bit", () => {
+  const previous: QcSnapshot = {
+    status: "running",
+    error: "",
+    settling: true,
+    events: [started()],
+  };
+  const fetched: QcSnapshot = { ...previous, settling: false };
+  // Settlement is sticky only for a TERMINAL stopped attempt — otherwise one
+  // bad bit would latch the drawer into stop language for the session.
+  assert.equal(reconcileQcSnapshot(previous, fetched).settling, false);
 });
 
 test("stopping preserves the active Review Room phase until settlement", () => {

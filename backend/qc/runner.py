@@ -645,11 +645,30 @@ class QCRunner:
     def is_terminal(self) -> bool:
         return self.status in _TERMINAL
 
+    def _is_settling_locked(self) -> bool:
+        """Stop settlement: a TERMINAL run whose worker has not unwound yet.
+
+        The qualifier is the whole point. ``_worker_settled`` is False for
+        the entire duration of a perfectly ordinary run too — it only says
+        "a worker thread exists" — so reading it alone told every caller a
+        stop had been requested during every normal Final QC run. That
+        reached the double-start 409 copy, the readiness `qc_current`
+        detail, and a run-long "Stop requested — finishing already-paid
+        in-flight work" banner in the Review Room.
+
+        Settling means the user stopped and the paid in-flight work is
+        still attaching itself. Callers that want to block BOTH states
+        (start, apply, dismiss, export) keep asking
+        ``status == "running" or is_settling``; only the copy they choose
+        depends on this.
+        """
+        return self.status in _TERMINAL and not self._worker_settled
+
     @property
     def is_settling(self) -> bool:
         """Whether a stopped worker still owns a final report attachment."""
         with self._lock:
-            return not self._worker_settled
+            return self._is_settling_locked()
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -721,7 +740,9 @@ class QCRunner:
                     "status": self.status,
                     "error": self.error,
                     "error_kind": self.error_kind,
-                    "settling": not self._worker_settled,
+                    # Same predicate as ``is_settling`` — deliberately not a
+                    # second expression that can drift from it.
+                    "settling": self._is_settling_locked(),
                 },
                 "events": copy.deepcopy(self.events),
                 "result": retained,

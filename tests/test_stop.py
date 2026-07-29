@@ -491,6 +491,42 @@ def test_research_stop_discards_running_work_and_allows_immediate_restart(
 # ---------------------------------------------------------------------------
 
 
+def test_a_normal_qc_run_never_reports_a_stop_it_did_not_get(monkeypatch):
+    """The three backend surfaces that used to claim every run was stopped.
+
+    `settling` was read straight off `_worker_settled`, which is False for
+    the whole of any ordinary run — so the double-start 409, the readiness
+    `qc_current` detail, and the Review Room's banner all announced a stop
+    the first time anyone ran Final QC.
+    """
+    client = _client()
+    _seed_doc(client, monkeypatch)
+
+    release = threading.Event()
+    monkeypatch.setattr("backend.app.get_client", lambda: _Blocking(release))
+    try:
+        assert client.post("/api/qc/start").json()["ok"] is True
+
+        snapshot = client.get("/api/qc/status").json()
+        assert snapshot["status"] == "running"
+        assert snapshot["settling"] is False
+
+        detail = next(
+            check["detail"]
+            for check in client.get("/api/readiness").json()["checks"]
+            if check["id"] == "qc_current"
+        )
+        assert "running" in detail.lower()
+        assert "stop" not in detail.lower() and "settl" not in detail.lower()
+
+        second = client.post("/api/qc/start")
+        assert second.status_code == 409
+        assert second.json()["error"] == "Final QC is already running."
+    finally:
+        release.set()
+        sessions.get_session().qc._thread.join(timeout=5)
+
+
 def test_qc_stop_discards_running_work_and_allows_immediate_restart(monkeypatch):
     client = _client()
     _seed_doc(client, monkeypatch)

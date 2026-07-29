@@ -1314,7 +1314,12 @@ def _readiness_payload(
                 f"{evidence_detail} No audit-complete retained result is available."
             )
         elif latest_status == "running":
-            qc_current_detail = "Final QC is running and has not settled."
+            # Deliberately avoids "settled": in this subsystem settling is a
+            # term of art for a STOPPED attempt unwinding its paid work, and
+            # this branch is the ordinary running case.
+            qc_current_detail = (
+                "Final QC is running; no completed report is available yet."
+            )
         elif latest_status == "complete":
             qc_current_detail = (
                 "The latest attempt is labeled complete, but no validated "

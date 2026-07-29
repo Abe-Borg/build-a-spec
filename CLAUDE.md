@@ -3378,6 +3378,19 @@ dicts, plus the documentation that key makes true.
   a project file. With direct callers no container is expected at all —
   this exists so the *next* code-execution-called tool doesn't need an
   incident first.
+- **The chat loop closes the third path (Chunk 1.3).** `stream_user_turn`
+  keeps the same `container_id` as a plain turn-local, refreshed from
+  whichever message the round selected — `get_final_message()` normally,
+  `current_message_snapshot` on a user stop, because that is what actually
+  arrived. `request_kwargs` takes it as a **parameter** rather than closing
+  over it: a closure would bind whatever the variable held whenever the
+  request was later built, which Phase 6's move of request construction
+  outside the turn-state lock would turn into a real bug. The reset needs
+  no bookkeeping at all — a new `stream_user_turn` is a new conversation
+  and a fresh `""` — and the scope is the whole TURN, so a continuation
+  after a client `tool_result` reuses the id just as a `pause_turn` resume
+  does. `_enter_stream`'s thinking.display degrade rebuilds kwargs with
+  `{**kwargs, ...}`, so the container survives that retry.
 - **Tests.** Exact-dict assertions, not just the one key, because the tool
   bytes lead the cached prefix: `test_research_engine.py`
   (`test_web_tools_declare_direct_callers_on_every_research_request` over all

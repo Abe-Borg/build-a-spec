@@ -99,6 +99,7 @@ from ..spec_doc.source_patch import (
 from ..compliance import AuditRunner
 from ..qc import QCRunner
 from ..research import ResearchRunner, research_context_block
+from ..research.grounding import response_container_id
 from ..research.resend_sanitizer import (
     elide_all_pdf_sources,
     sanitize_messages_for_resend,
@@ -2303,11 +2304,19 @@ def stream_user_turn(
                     "the turn was discarded."
                 )
 
-    def request_kwargs() -> dict[str, Any]:
+    def request_kwargs(container_id: str = "") -> dict[str, Any]:
+        """Build one round's request.
+
+        ``container_id`` is passed in rather than closed over: it is
+        turn-local state that changes between rounds, and a closure over it
+        would quietly bind whatever the variable happened to hold when the
+        request was later built — a real hazard once Phase 6 moves request
+        construction outside the turn-state lock.
+        """
         messages = sanitize_messages_for_resend(
             list(session.history) + new_messages
         )
-        return {
+        kwargs: dict[str, Any] = {
             "model": model or settings.INTERVIEW_MODEL,
             "max_tokens": max_tokens or settings.INTERVIEW_MAX_TOKENS,
             "system": _stable_system_blocks(session),
@@ -2316,8 +2325,23 @@ def stream_user_turn(
             "thinking": _thinking_param(),
             "output_config": {"effort": settings.INTERVIEW_EFFORT},
         }
+        if container_id:
+            # Top level only — never inside system, tools, or messages. A
+            # pending code-execution-called server tool can only be resumed
+            # inside the container it started in.
+            kwargs["container"] = container_id
+        return kwargs
 
     stop_reason: str | None = None
+    # The provider continuation container for THIS turn, if the model's
+    # server-tool work ever runs in one. Turn-local by construction: a new
+    # ``stream_user_turn`` starts a new conversation and a fresh "", so the
+    # reset needs no bookkeeping. Later rounds of this turn — a pause_turn
+    # resume, or a continuation after a client tool_result — reuse it. It
+    # never enters the message list, committed history, prompts, traces, or
+    # the project file. With ``allowed_callers: ["direct"]`` on both web
+    # tools none is expected; see ``research/grounding.response_container_id``.
+    container_id = ""
     doc_changed = False
     committed = False
     post_commit_events: list[dict[str, Any]] = []
@@ -2384,7 +2408,7 @@ def stream_user_turn(
                         "The session was reset while this turn was streaming; "
                         "the turn was discarded."
                     )
-                request = request_kwargs()
+                request = request_kwargs(container_id)
             round_started = time.perf_counter()
             manager, stream = _enter_stream(
                 client, request, trace_handle
@@ -2407,6 +2431,14 @@ def stream_user_turn(
                 )
             finally:
                 manager.__exit__(None, None, None)
+
+            # Refresh before the round branches: whether this round pauses,
+            # dispatches a client tool, or ends the turn, the next request
+            # in it must carry the container. Latest nonblank wins — a
+            # response that omits the field has not revoked it. The stopped
+            # path reads the snapshot for the same reason it reads its
+            # content: it is what actually arrived.
+            container_id = response_container_id(final) or container_id
 
             _merge_usage(usage_totals, getattr(final, "usage", None))
             round_usage = getattr(final, "usage", None)

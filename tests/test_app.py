@@ -809,12 +809,83 @@ def test_pause_turn_resumes_and_emits_web_activity(monkeypatch):
     resumed = fake.messages.requests[1]["messages"]
     assert resumed[-1]["role"] == "assistant"
     assert resumed[-1]["content"][0]["type"] == "server_tool_use"
+    # A pause that carried no container does not make one up.
+    assert all("container" not in r for r in fake.messages.requests)
 
     # The server-tool blocks survive into committed history (they carry
     # the retrieval record), unlike thinking blocks.
     history = sessions.get_session().history
     types = {b["type"] for m in history for b in m["content"]}
     assert "server_tool_use" in types and "web_search_tool_result" in types
+
+
+def test_chat_carries_the_container_through_a_turn_and_drops_it_next_turn(
+    monkeypatch,
+):
+    """The chat loop's half of the continuation-container contract.
+
+    Direct callers mean none is expected in practice; this is the
+    defense-in-depth read, and the interesting part is the scope. The
+    container belongs to ONE turn: every later round of it — a pause_turn
+    resume *and* a continuation after a client tool_result — reuses the id,
+    and the next user turn, which is a new conversation, starts clean.
+    """
+    fake = FakeClient(
+        [
+            raw_turn(
+                chat_search_blocks("NFPA 13 obstruction rules", ["https://nfpa.org"]),
+                stop_reason="pause_turn",
+                container="cont_chat_1",
+            ),
+            tool_turn(
+                [],
+                {
+                    "edits": [
+                        {
+                            "action": "replace",
+                            "target_id": "sec",
+                            "text": "WET-PIPE SPRINKLER SYSTEMS",
+                            "numbering": "21 13 13",
+                        }
+                    ]
+                },
+            ),
+            text_turn(["Recorded the section header."]),
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+    client = _client()
+    assert client.post("/api/chat", json={"message": "check that"}).status_code == 200
+
+    requests = fake.messages.requests
+    assert len(requests) == 3
+    # Round 0 has nothing to know about yet.
+    assert "container" not in requests[0]
+    # Round 1 resumes the pause inside the container it started in.
+    assert requests[1]["container"] == "cont_chat_1"
+    # Round 2 follows a client tool_result — still the same turn, and
+    # neither the tool_turn nor the tool dispatch supplied a container, so
+    # this only passes if the id is retained rather than re-read per round.
+    assert requests[2]["messages"][-1]["content"][0]["type"] == "tool_result"
+    assert requests[2]["container"] == "cont_chat_1"
+
+    # A second user turn is a new conversation: no inherited container.
+    fake2 = FakeClient([text_turn(["Anything else?"])])
+    _patch_client(monkeypatch, fake2)
+    assert client.post("/api/chat", json={"message": "next"}).status_code == 200
+    assert "container" not in fake2.messages.requests[0]
+
+    # The id is a request argument and nothing more: it never reaches the
+    # cached prefix, the conversation, committed history, or the saved
+    # project file.
+    for request in requests:
+        assert "cont_chat_1" not in str(request["system"])
+        assert "cont_chat_1" not in str(request["tools"])
+        assert "cont_chat_1" not in str(request["messages"])
+    assert "cont_chat_1" not in str(sessions.get_session().history)
+    saved = client.get("/api/project/save")
+    assert saved.status_code == 200
+    assert "cont_chat_1" not in saved.text
 
 
 def test_tail_cache_breakpoint_rides_requests_not_history(monkeypatch):

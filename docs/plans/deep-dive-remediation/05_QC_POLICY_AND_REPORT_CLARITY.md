@@ -53,14 +53,17 @@ fully completed panel; inconclusive remains infrastructure failure. The two
 stay distinct outcomes with distinct copy.
 
 **Evidence rule (severity-gated).** A critical/high refutation is recorded as
-refuted only when at least one completed refuting seat persisted supporting
-evidence (retrieved sources or an internal-document cross-reference captured
-in its verdict record). When no refuting seat carries evidence, the candidate
-resolves **disputed** with reason `insufficient_refutation_evidence` instead
-of refuted. This encodes the RF-001 lesson from the reviewed run: three seats
-refuted a life-safety-adjacent finding with zero searches and zero sources —
-an under-evidenced refutation that a human should have seen. Medium/low
-refutations are not evidence-gated.
+refuted only when at least one completed refuting seat carries **validated
+supporting evidence** — a structured evidence link in its verdict record, not
+mere tool activity. A search that returned nothing useful, or a retrieval of
+an unrelated page, is an activity record and never satisfies the gate. When no
+refuting seat carries validated evidence, the candidate resolves **disputed**
+with reason `insufficient_refutation_evidence` instead of refuted. This
+encodes the RF-001 lesson from the reviewed run: three seats refuted a
+life-safety-adjacent finding with zero searches and zero sources — an
+under-evidenced refutation that a human should have seen — and closes the
+adjacent loophole where one token search would have laundered the same
+refutation. Medium/low refutations are not evidence-gated.
 
 **Disputed semantics.** A disputed candidate:
 
@@ -102,10 +105,30 @@ not filed as a bug.
    - final outcome decision; and
    - persisted `verification_outcome` / `verification_threshold` fields
      (persist the full rule identity, not just an integer threshold).
-2. Determine seat evidence from persisted verdict records only (retrieved
-   sources, search records, or captured cross-reference notes) — never from
+2. Extend the v4 verdict contract with a structured evidence field so the
+   gate validates cited evidence, not activity records:
+   - `QCVerdict` gains `refutation_evidence` — a list of entries, each either
+     `{type: "source", url}` or `{type: "document_ref", reference}` — and the
+     `submit_qc_verdict` strict tool schema (`backend/qc/schema.py`) gains the
+     matching optional field with prompt guidance: a refuting seat on a
+     critical/high candidate must cite what supports its refutation.
+   - Validate every entry before it can satisfy the gate, mirroring the
+     existing grounding posture: a `source` entry counts only when its
+     normalized URL matches a source that seat actually retrieved/accepted
+     (`validate_cited_sources` semantics); a `document_ref` entry counts only
+     when it resolves against the reviewed document snapshot. Invalid or
+     unresolvable entries are retained in the record but marked not-validated
+     and do not satisfy the gate.
+   - Raw `search_queries`/`retrieved_sources` and the free-form note remain
+     persisted operational records; they never satisfy the gate by
+     themselves.
+   - A v4 refuting seat that omits the field simply carries no evidence — on
+     a critical/high candidate that fails toward disputed, never toward
+     refuted.
+   Determine everything from persisted verdict records only — never from
    un-persisted stream content; the report must be able to justify every
-   outcome from serialized data alone.
+   outcome (including per-entry validation results) from serialized data
+   alone.
 3. Update `_structural_verification_outcome`:
    - schema v4 validates outcomes against the v4 helper, including disputed
      and the evidence rule;
@@ -125,9 +148,14 @@ not filed as a bug.
    v4.
 8. Rewrite/add tests:
    - every row of the outcome table, both panel sizes;
-   - critical 1–2 with an evidenced refuting seat → refuted; the same votes
-     with zero evidenced refuting seats → disputed with
-     `insufficient_refutation_evidence` (the RF-001 shape);
+   - critical 1–2 with a refuting seat citing a validated source (URL matches
+     that seat's retrieved sources) → refuted; the same votes with zero
+     evidence entries → disputed with `insufficient_refutation_evidence` (the
+     RF-001 shape); the same votes where the only refuting-seat activity is
+     searches/retrievals with no validated evidence entry → still disputed
+     (activity is not evidence); a `document_ref` that resolves against the
+     reviewed snapshot → refuted; an unresolvable or unretrieved citation →
+     retained but not-validated, gate unsatisfied;
    - failed/missing seats remain inconclusive regardless of apparent votes;
    - a disputed candidate blocks `qc_audit_complete`, is excluded from Apply,
      and appears in its own report appendix and drawer group;
@@ -147,6 +175,7 @@ not filed as a bug.
 ### Files
 
 - `backend/qc/engine.py`
+- `backend/qc/schema.py` (`submit_qc_verdict` evidence field + normalization)
 - `backend/qc/runner.py` (snapshot outcome vocabulary)
 - `backend/app.py` (readiness copy; the gate itself is Chunk 5.4)
 - `backend/spec_doc/docx_export.py`

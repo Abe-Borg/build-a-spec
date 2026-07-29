@@ -131,16 +131,19 @@ and should not be relitigated by an implementation agent:
    readiness.
 3. **Every dimension is required by default; all four shipped dimensions are
    required.** `ResearchDimension.required` defaults to `True`; a module may
-   declare a dimension optional only explicitly with a documented rationale,
-   and registry validation enforces that. There is no silent fail-open
+   declare a dimension optional only explicitly with a machine-readable
+   rationale (`optional_rationale`, nonblank, enforced by registry validation
+   — a source comment is not enforceable). There is no silent fail-open
    default. Malformed research state fails closed for readiness while project
    loading stays permissive.
 4. **QC panels resolve upheld / disputed / refuted / inconclusive.** Standard
    two-seat panels: 2–0 upheld, 1–1 disputed, 0–2 refuted. Critical/high
    three-seat panels: 3–0 upheld, 2–1 disputed (human review), 0–1 uphold
-   refuted subject to the evidence rule. A critical/high refutation with no
-   evidenced refuting seat resolves disputed
-   (`insufficient_refutation_evidence`) instead. Disputed blocks
+   refuted subject to the evidence rule. A critical/high refutation counts as
+   evidenced only through a validated structured evidence link (a cited source
+   the seat actually retrieved, or a resolvable document reference) — tool
+   activity alone never qualifies — otherwise the candidate resolves disputed
+   (`insufficient_refutation_evidence`). Disputed blocks
    `qc_audit_complete`, is excluded from auto-apply, and requires human
    disposition. Rationale: a majority formula is algebraically the shipped
    inversion, and unanimity-to-survive silently kills majority-upheld severe

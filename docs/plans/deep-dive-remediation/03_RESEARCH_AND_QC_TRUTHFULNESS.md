@@ -22,8 +22,9 @@ the runner's cumulative partial-success/retry behavior remains intact.
   required: on the projects these modules serve, AHJ requirements, owner and
   insurer standards, and site/seismic/freeze factors are not inherently
   optional coverage any more than governing codes are. A module may declare a
-  dimension optional only explicitly, with the rationale documented beside the
-  declaration — there is no silent fail-open default.
+  dimension optional only explicitly, with a machine-readable rationale
+  (`optional_rationale`) that registry validation enforces — there is no
+  silent fail-open default.
 - Readiness is green only when runner state is complete, a coherent profile is
   present, and every required dimension has cumulative status `completed`.
 - Optional incomplete dimensions are named in a passing warning. A reviewer
@@ -113,12 +114,19 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_resear
 
 ### Implementation
 
-1. Add `required: bool = True` to
-   `backend/spec_modules/base.py::ResearchDimension` and document that it is an
-   issue-readiness policy, not a fan-out failure policy. Required-by-default is
-   the frozen decision: a dimension may opt out only explicitly, and the module
-   must carry a documented rationale beside any `required=False` declaration.
-   Registry validation rejects an optional dimension without one.
+1. Add `required: bool = True` and `optional_rationale: str = ""` to
+   `backend/spec_modules/base.py::ResearchDimension` and document that they
+   are an issue-readiness policy, not a fan-out failure policy.
+   Required-by-default is the frozen decision: a dimension may opt out only
+   explicitly, and the rationale must be **machine-readable** — a source
+   comment beside the declaration is invisible to registry validation, so the
+   rationale lives in the field. Validation enforces the pairing both ways:
+   `required=False` with a blank `optional_rationale` fails registration
+   (startup failure, per the module-registry posture), and a nonblank
+   rationale on a required dimension also fails (a stale rationale must not
+   outlive an un-opt-out). The rationale rides the manifest facts and the
+   readiness warning copy so a declared-optional gap can say why it is
+   optional.
 2. Extend module registry validation to require an actual boolean. Keep old
    module constructors source-compatible through the default.
 3. Leave every dimension in `backend/spec_modules/generic.py` and
@@ -182,8 +190,9 @@ venv\Scripts\python -m pytest -q tests/test_spec_modules.py tests/test_research_
 - A later successful round for that dimension restores readiness.
 - A later failed rerun does not revoke cumulative completion.
 - A declared-optional failed dimension (test-only module fixture) produces
-  truthful passing detail, and registry validation rejects an optional
-  dimension without a documented rationale.
+  truthful passing detail that includes its `optional_rationale`; registry
+  validation rejects `required=False` with a blank rationale and a nonblank
+  rationale on a required dimension.
 - Structurally invalid research facts read as not-research-complete without
   blocking project load.
 - No runner status or round accumulation semantics changed.

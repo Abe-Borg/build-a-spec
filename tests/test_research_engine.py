@@ -299,6 +299,93 @@ def test_retryable_failure_retries_then_succeeds(monkeypatch):
     assert any(i.requirement == "Recovered." for i in profile.items)
 
 
+def test_pause_continuation_echoes_the_container_and_a_retry_drops_it(monkeypatch):
+    """The provider continuation container, end to end for one dimension.
+
+    Defense-in-depth: with ``allowed_callers: ["direct"]`` no container is
+    expected. But a code-execution-called server tool can only be resumed
+    inside the container it started in, so if one ever arrives the resume
+    has to echo it — and a *retry*, which abandons the conversation for a
+    fresh one, must not.
+
+    One scripted dimension covers the whole contract: pause with a
+    container, pause without one (not a revocation), a retryable failure,
+    then success on a clean attempt.
+    """
+    import backend.research.engine as engine
+
+    monkeypatch.setattr(engine.time, "sleep", lambda _s: None)
+    import anthropic
+    import httpx
+
+    http_request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    retryable = anthropic.APIConnectionError(message="reset", request=http_request)
+    first_pause = pause_response(
+        searched_urls=["https://a.gov/one"], container="cont_research_1"
+    )
+    client = SequencedFakeClient(
+        _scripts(
+            governing_codes=[
+                first_pause,
+                # Omits the field — the container is not revoked, so the
+                # next request must still carry it.
+                pause_response(searched_urls=["https://a.gov/two"]),
+                retryable,
+                research_response(
+                    items=[_item("Recovered.", ["https://a.gov/one"])],
+                    searched_urls=["https://a.gov/one"],
+                ),
+            ]
+        )
+    )
+    profile = _run(client)
+    status = next(
+        s for s in profile.dimension_statuses if s.dimension_id == "governing_codes"
+    )
+    assert status.status == "completed"
+
+    requests = [
+        req
+        for req in client.requests
+        if DIM_KEYS["governing_codes"] in req["messages"][0]["content"]
+    ]
+    assert len(requests) == 4
+    # 1: opening request, no container to know about yet.
+    assert "container" not in requests[0]
+    # 2: the paused response supplied one.
+    assert requests[1]["container"] == "cont_research_1"
+    # 3: the second pause omitted it; the latest nonblank id is retained.
+    assert requests[2]["container"] == "cont_research_1"
+    # 4: a fresh retry attempt — a new conversation, so no inherited id.
+    assert "container" not in requests[3]
+
+    # The pause contract itself is unchanged: the paused assistant content
+    # is re-sent verbatim, with no synthetic user turn wedged in.
+    assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant"]
+    assert requests[1]["messages"][1]["content"] == first_pause.content
+
+    # The container is a top-level request argument and nothing else — it
+    # must never reach the cached prefix or the conversation.
+    for request in requests:
+        assert "container" not in str(request["system"])
+        assert "container" not in str(request["tools"])
+        assert "cont_research_1" not in str(request["messages"])
+
+
+def test_a_dimension_without_any_container_is_unaffected():
+    """The normal direct-caller path: no container key on any request."""
+    client = SequencedFakeClient(
+        _scripts(
+            governing_codes=[
+                pause_response(searched_urls=["https://a.gov/one"]),
+                research_response(items=[], searched_urls=["https://a.gov/one"]),
+            ]
+        )
+    )
+    _run(client)
+    assert all("container" not in req for req in client.requests)
+
+
 def _dimension_events(events: list[dict], dimension_id: str) -> list[dict]:
     return [e for e in events if e.get("dimension_id") == dimension_id]
 

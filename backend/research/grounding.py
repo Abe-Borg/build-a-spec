@@ -346,6 +346,41 @@ def web_fetch_count(message) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Provider continuation container
+# ---------------------------------------------------------------------------
+
+
+def response_container_id(message) -> str:
+    """The provider container id carried by a response, or ``""``.
+
+    A server-tool call made through the code-execution caller runs inside a
+    provider-side container. Resuming a ``pause_turn`` that still has such a
+    call pending requires that id back on the continuation request — without
+    it the resume fails with a nonretryable 400, which is exactly how two
+    research dimensions died in the run that prompted this work.
+
+    Build-a-Spec pins ``allowed_callers: ["direct"]`` on both web tools
+    (``schema.WEB_TOOL_ALLOWED_CALLERS``), so no container is expected in
+    practice. This read is the defense-in-depth half: any response that does
+    carry one — a future code-execution-called tool, a provider-side shape
+    change, or an owner re-enabling dynamic filtering — resumes correctly
+    without another incident first.
+
+    Blank rather than ``None`` when absent, so a caller can write
+    ``container_id = response_container_id(r) or container_id`` and keep the
+    most recent nonblank id across a continuation whose response omits it.
+    Duck-typed over SDK objects and plain dicts, like everything else here.
+    """
+    container = getattr(message, "container", None)
+    if container is None and isinstance(message, dict):
+        container = message.get("container")
+    value = getattr(container, "id", None)
+    if value is None and isinstance(container, dict):
+        value = container.get("id")
+    return str(value).strip() if value else ""
+
+
+# ---------------------------------------------------------------------------
 # Stop-reason classification
 # ---------------------------------------------------------------------------
 

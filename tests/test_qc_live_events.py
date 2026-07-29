@@ -355,6 +355,86 @@ def test_malformed_frames_are_ignored_and_stream_failure_retries(monkeypatch) ->
     assert not _events_for(events, type="lens_search", lens_id="completeness")
 
 
+def _lens_requests(client: SequencedFakeClient, lens_id: str) -> list[dict]:
+    """Captured requests belonging to one lens, in order."""
+    key = _LENS_KEYS[lens_id]
+    return [
+        request
+        for request in client.requests
+        if key
+        in "\n\n".join(
+            block.get("text", "")
+            for block in request["messages"][0]["content"]
+            if isinstance(block, dict)
+        )
+    ]
+
+
+def test_qc_pause_continuation_echoes_the_container_and_a_retry_drops_it(
+    monkeypatch,
+) -> None:
+    """QC's continuation obeys the same container contract as research.
+
+    A code-execution-called server tool can only be resumed inside the
+    container it started in. With direct callers none is expected, so this
+    is the defense-in-depth half — and the reset boundary is the part worth
+    pinning: a retry abandons the conversation, so it must not inherit the
+    failed attempt's container.
+    """
+    import backend.qc.engine as engine
+
+    monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
+    http_request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    retryable = anthropic.APIConnectionError(message="reset", request=http_request)
+
+    first_pause = qc_findings_response(
+        "code_compliance",
+        findings=[],
+        stop_reason="pause_turn",
+        container="cont_qc_1",
+    )
+    client = SequencedFakeClient(
+        _scripts(
+            code_compliance=[
+                first_pause,
+                # No container field — not a revocation.
+                qc_findings_response(
+                    "code_compliance", findings=[], stop_reason="pause_turn"
+                ),
+                retryable,
+                qc_findings_response("code_compliance", findings=[]),
+            ]
+        )
+    )
+    events: list[dict] = []
+    _run_client(client, events)
+
+    requests = _lens_requests(client, "code_compliance")
+    assert len(requests) == 4
+    assert "container" not in requests[0]
+    assert requests[1]["container"] == "cont_qc_1"
+    assert requests[2]["container"] == "cont_qc_1"
+    assert "container" not in requests[3]
+
+    # The pause contract is unchanged, and the container never enters the
+    # cached prefix or the conversation.
+    assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant"]
+    assert requests[1]["messages"][1]["content"] == first_pause.content
+    for request in requests:
+        assert "cont_qc_1" not in str(request["messages"])
+        assert "cont_qc_1" not in str(request["system"])
+        assert "cont_qc_1" not in str(request["tools"])
+
+    # Every other lens ran container-free, as they always have.
+    for lens in QC_LENSES:
+        if lens.lens_id == "code_compliance":
+            continue
+        assert all(
+            "container" not in request
+            for request in _lens_requests(client, lens.lens_id)
+        )
+
+
 def test_failed_verifier_makes_panel_inconclusive_without_fix_validation() -> None:
     title = "Candidate with a broken seat"
     scripts = _scripts(

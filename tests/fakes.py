@@ -320,23 +320,46 @@ def _synthesize_events(
     return events
 
 
+def _container(container: str | None) -> dict:
+    """The optional ``container=`` kwarg, as response attributes.
+
+    A provider response carries ``container.id`` only when a server tool ran
+    through the code-execution caller; the engines must echo it back on a
+    pause_turn continuation. Absent — the normal case, since both web tools
+    pin ``allowed_callers: ["direct"]`` — the attribute is simply not set,
+    so every existing fixture stays byte-for-byte what it was.
+    """
+    if container is None:
+        return {}
+    return {"container": SimpleNamespace(id=container)}
+
+
+def _container_of(turn: SimpleNamespace) -> dict:
+    """Carry a scripted turn's container onto a rebuilt final message."""
+    container = getattr(turn, "container", None)
+    return {} if container is None else {"container": container}
+
+
 def raw_turn(
     content: list[SimpleNamespace],
     *,
     stop_reason: str,
     chunks: list[str] | None = None,
     events: list[SimpleNamespace] | None = None,
+    container: str | None = None,
 ) -> SimpleNamespace:
     """A scripted response with arbitrary content blocks (thinking,
     server tools, pause_turn shapes) for the chat loop's fake client.
 
     ``events`` overrides the synthesized raw-event stream when a test needs
-    a precise ordering (e.g. thinking → text → tool)."""
+    a precise ordering (e.g. thinking → text → tool). ``container`` scripts
+    a provider continuation container id (see :func:`_container`)."""
     return SimpleNamespace(
         chunks=list(chunks or []),
         content=list(content),
         stop_reason=stop_reason,
         events=events,
+        **_container(container),
     )
 
 
@@ -384,10 +407,14 @@ class _FakeStreamCtx:
         yield from self._turn.chunks
 
     def get_final_message(self):
+        # ``container`` is threaded through rather than dropped: the chat
+        # loop reads it off the final message to carry a paused turn's
+        # provider container onto the continuation request.
         return SimpleNamespace(
             content=self._turn.content,
             stop_reason=self._turn.stop_reason,
             usage=getattr(self._turn, "usage", None),
+            **_container_of(self._turn),
         )
 
     @property
@@ -523,6 +550,7 @@ def research_response(
     fetches: int = 0,
     tokens: dict[str, int] | None = None,
     tool_name: str = "submit_requirements_research",
+    container: str | None = None,
 ) -> SimpleNamespace:
     """A terminal research response: search results + the output tool call.
 
@@ -562,11 +590,15 @@ def research_response(
             fetches,
             **(tokens or {}),
         ),
+        **_container(container),
     )
 
 
 def pause_response(
-    *, searched_urls: list[str] | None = None, searches: int | None = None
+    *,
+    searched_urls: list[str] | None = None,
+    searches: int | None = None,
+    container: str | None = None,
 ) -> SimpleNamespace:
     """A ``pause_turn`` response mid-research (server tools still running)."""
     content: list[SimpleNamespace] = []
@@ -576,6 +608,7 @@ def pause_response(
         content=content,
         stop_reason="pause_turn",
         usage=usage(searches if searches is not None else len(searched_urls or [])),
+        **_container(container),
     )
 
 
@@ -590,6 +623,7 @@ def qc_findings_response(
     searches: int | None = None,
     fetches: int = 0,
     tokens: dict[str, int] | None = None,
+    container: str | None = None,
 ) -> SimpleNamespace:
     """A terminal Final-QC lens response: search results + submit_qc_findings.
 
@@ -633,6 +667,7 @@ def qc_findings_response(
             fetches,
             **(tokens or {}),
         ),
+        **_container(container),
     )
 
 
@@ -645,6 +680,7 @@ def qc_verdict_response(
     ops_note: str = "",
     stop_reason: str = "tool_use",
     tokens: dict[str, int] | None = None,
+    container: str | None = None,
 ) -> SimpleNamespace:
     """A Final-QC verifier response: a submit_qc_verdict tool call."""
     return SimpleNamespace(
@@ -665,6 +701,7 @@ def qc_verdict_response(
         ],
         stop_reason=stop_reason,
         usage=usage(**(tokens or {})),
+        **_container(container),
     )
 
 
@@ -701,6 +738,14 @@ class SequencedFakeClient:
     nondeterministically. This client inspects the request's first user
     message and pops from the matching dimension's own queue (matched by
     ``key`` substring). Thread-safe.
+
+    Captured requests SNAPSHOT their ``messages`` list. Both engines append
+    to one list across a pause_turn continuation, so capturing it by
+    reference makes every request in an attempt show that attempt's *final*
+    conversation — a per-request assertion ("this continuation re-sent
+    exactly the paused content") would then quietly be asserting something
+    else. The message dicts themselves are never mutated in place (the
+    resend sanitizer builds new ones), so a shallow copy is enough.
     """
 
     def __init__(self, scripts: dict[str, list]):
@@ -713,7 +758,10 @@ class SequencedFakeClient:
 
     def stream(self, **request):
         with self._lock:
-            self.requests.append(request)
+            captured = dict(request)
+            if isinstance(captured.get("messages"), list):
+                captured["messages"] = list(captured["messages"])
+            self.requests.append(captured)
             first_user = _user_text(request.get("messages", []))
             for key, queue in self._scripts.items():
                 if key in first_user:
@@ -732,7 +780,12 @@ class SequencedFakeClient:
         if isinstance(turn, Exception):
             raise turn
         return _FakeStreamCtx(
-            SimpleNamespace(chunks=[], content=turn.content, stop_reason=turn.stop_reason)
+            SimpleNamespace(
+                chunks=[],
+                content=turn.content,
+                stop_reason=turn.stop_reason,
+                **_container_of(turn),
+            )
         ) if not hasattr(turn, "usage") else _FakeResearchStreamCtx(turn)
 
 

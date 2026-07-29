@@ -60,6 +60,7 @@ from ..research.grounding import (
     classify_stop_reason,
     collect_search_evidence_detailed,
     normalize_url,
+    response_container_id,
     validate_cited_sources,
 )
 from ..research.resend_sanitizer import sanitize_messages_for_resend
@@ -2021,6 +2022,12 @@ def _run_streaming_call(
     attempt and each pause_turn continuation — a call that hasn't started
     its next network round yet bails immediately; one already in flight
     finishes naturally and its result is discarded by the caller.
+
+    A ``pause_turn`` resume re-declares the provider container id when the
+    paused response carried one: a pending code-execution-called server tool
+    can only be resumed inside the container it started in. The id is
+    attempt-local — a retry starts a fresh conversation and must not inherit
+    it — and never enters messages, cacheable content, or ``QCResult``.
     """
     # One TTL for every breakpoint in the request. The API requires
     # longer-lived cache entries to precede shorter-lived ones in prompt
@@ -2062,6 +2069,10 @@ def _run_streaming_call(
             )
         is_last = attempt == attempts - 1
         all_responses: list[Any] = []
+        # Reset per ATTEMPT, never per continuation — same rule as the
+        # research fan-out. A retry is a new conversation and must not
+        # inherit the failed attempt's provider container.
+        container_id = ""
         try:
             messages: list[dict] = [
                 {
@@ -2082,8 +2093,16 @@ def _run_streaming_call(
                         api_request_count,
                     )
                 api_request_count += 1
+                # Fresh copy per request. ``request_kwargs`` — and with it
+                # every cache breakpoint above — stays byte-identical for
+                # the whole attempt; the container is a top-level argument
+                # beside it, never inside the system block, the tools, or
+                # ``_qc_user_content``.
+                stream_kwargs = dict(request_kwargs)
+                if container_id:
+                    stream_kwargs["container"] = container_id
                 with client.messages.stream(
-                    messages=messages, **request_kwargs
+                    messages=messages, **stream_kwargs
                 ) as stream:
                     _relay_stream_activity(
                         stream,
@@ -2094,6 +2113,9 @@ def _run_streaming_call(
                     )
                     response = stream.get_final_message()
                 all_responses.append(response)
+                # Latest nonblank wins: a continuation that omits the field
+                # has not revoked the container.
+                container_id = response_container_id(response) or container_id
                 stop_class = classify_stop_reason(
                     getattr(response, "stop_reason", None)
                 )

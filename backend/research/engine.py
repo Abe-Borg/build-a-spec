@@ -59,6 +59,7 @@ from .grounding import (
     collect_fetch_evidence_detailed,
     collect_search_evidence_detailed,
     dedupe_searched_sources,
+    response_container_id,
     validate_cited_sources,
     web_fetch_count,
     web_search_count,
@@ -1176,6 +1177,12 @@ def _run_dimension(
             )
         is_last_attempt = attempt == attempts_planned - 1
         all_responses: list[Any] = []
+        # Reset per ATTEMPT, never per continuation. A retry abandons the
+        # failed attempt's conversation and starts a new one, so inheriting
+        # its container would point the fresh request at a provider-side
+        # context that no longer belongs to it. Continuations *within* this
+        # attempt do carry it — that is the whole obligation.
+        container_id = ""
         try:
             messages: list[dict] = [{"role": "user", "content": user_message}]
             completed = False
@@ -1185,8 +1192,16 @@ def _run_dimension(
                         "Cancelled by user.",
                         responses=[*billed_responses, *all_responses],
                     )
+                # Fresh copy per request: ``request_kwargs`` stays byte-
+                # identical for the whole attempt (it leads the cached
+                # prefix), and the container rides beside it as a top-level
+                # argument — never inside the system block, the tools, or
+                # any cacheable content.
+                stream_kwargs = dict(request_kwargs)
+                if container_id:
+                    stream_kwargs["container"] = container_id
                 with client.messages.stream(
-                    messages=messages, **request_kwargs
+                    messages=messages, **stream_kwargs
                 ) as stream:
                     # Live activity rides the raw events; the SDK keeps
                     # accumulating, so get_final_message() afterwards
@@ -1200,6 +1215,10 @@ def _run_dimension(
                     )
                     response = stream.get_final_message()
                 all_responses.append(response)
+                # Keep the latest nonblank id: a continuation that omits the
+                # field has not revoked the container, it just didn't repeat
+                # itself.
+                container_id = response_container_id(response) or container_id
                 stop_class = classify_stop_reason(
                     getattr(response, "stop_reason", None)
                 )
@@ -1220,7 +1239,11 @@ def _run_dimension(
                     # Resume per the pause_turn contract: re-send the
                     # assistant content, no synthetic user turn. Oversized
                     # fetched PDFs are elided first so the continuation
-                    # cannot 400 on the API's inbound page limit.
+                    # cannot 400 on the API's inbound page limit, and the
+                    # next request re-declares ``container_id`` when the
+                    # paused response supplied one — a pending
+                    # code-execution-called server tool can only be resumed
+                    # inside the container it started in.
                     messages.append(
                         {"role": "assistant", "content": response.content}
                     )

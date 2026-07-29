@@ -324,7 +324,7 @@ tests and phase gate are recorded in the phase file.
 
 | Chunk | Status | Commit/PR | Notes |
 |---|---|---|---|
-| 1.1 | planned | | direct callers — land first |
+| 1.1 | **complete** | `4bd0c18` (PR #88) | direct callers shipped in all three channels; ZDR claims reconciled |
 | 1.2 | planned | | |
 | 1.3 | planned | | |
 | 1.4 | planned | | |

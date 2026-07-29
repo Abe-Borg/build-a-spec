@@ -11,6 +11,13 @@ from backend.research import (
     research_context_block,
     run_requirements_research,
 )
+from backend.research.schema import (
+    RESEARCH_TOOL_NAME,
+    WEB_BLOCKED_DOMAINS,
+    WEB_FETCH_MAX_CONTENT_TOKENS,
+    build_web_fetch_tool,
+    build_web_search_tool,
+)
 # DIM_KEYS route scripted turns by hyperscale_fire dimension message substrings,
 # so bind the fire module explicitly (the registry default is now generic, whose
 # dimension messages are discipline-parameterized and would not match).
@@ -141,6 +148,61 @@ def test_partial_failure_keeps_going_total_failure_raises():
     )
     with pytest.raises(ResearchFanoutError, match="All 4"):
         _run(all_fail)
+
+
+def test_web_tools_declare_direct_callers_on_every_research_request():
+    """Both web tools pin ``allowed_callers: ["direct"]``, byte-exactly.
+
+    Left unset, the ``_20260209`` versions default to the code-execution
+    caller: pause_turn continuations would then need the provider container
+    id (a nonretryable 400 without it) and per-search inputs would stop
+    streaming. Asserting the whole dict — not just the one key — is
+    deliberate: the tool bytes lead the cached prefix, so an unnoticed
+    change here silently rewrites every cache lineage.
+    """
+    client = SequencedFakeClient(_scripts())
+    _run(client)
+
+    assert len(client.requests) == 4
+    for request in client.requests:
+        by_name = {tool.get("name"): tool for tool in request["tools"]}
+        assert by_name["web_search"] == {
+            "type": "web_search_20260209",
+            "name": "web_search",
+            "allowed_callers": ["direct"],
+            "blocked_domains": list(WEB_BLOCKED_DOMAINS),
+            "max_uses": by_name["web_search"]["max_uses"],
+            "user_location": PROFILE.web_search_user_location(),
+        }
+        assert by_name["web_fetch"] == {
+            "type": "web_fetch_20260209",
+            "name": "web_fetch",
+            "allowed_callers": ["direct"],
+            "blocked_domains": list(WEB_BLOCKED_DOMAINS),
+            "max_uses": by_name["web_fetch"]["max_uses"],
+            "citations": {"enabled": True},
+            "max_content_tokens": WEB_FETCH_MAX_CONTENT_TOKENS,
+        }
+        # The caller mode never rides the cache breakpoint — that stays on
+        # the output tool, which is last.
+        assert "cache_control" not in by_name["web_search"]
+        assert "cache_control" not in by_name["web_fetch"]
+        assert request["tools"][-1]["name"] == RESEARCH_TOOL_NAME
+
+
+def test_builders_are_the_only_source_of_the_web_tool_shape():
+    """A caller cannot silently opt back into the provider default."""
+    search = build_web_search_tool(max_uses=3)
+    fetch = build_web_fetch_tool(max_uses=2)
+    assert search["allowed_callers"] == ["direct"]
+    assert fetch["allowed_callers"] == ["direct"]
+    # Copies, not the shared tuple: a consumer mutating one request's tool
+    # list must not reach across into another's.
+    assert search["allowed_callers"] is not fetch["allowed_callers"]
+    search["allowed_callers"].append("code_execution_20260120")
+    assert build_web_search_tool(max_uses=3)["allowed_callers"] == ["direct"]
+    # Omitting user_location is still supported (the chat loop's shape).
+    assert "user_location" not in search
 
 
 def test_pause_turn_continuation_pools_grounding_across_responses():

@@ -649,7 +649,14 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
   research phase) for mid-interview verification — a UL category, a
   manufacturer datasheet, a standard designation — with `pause_turn`
   continuation handling and inline 🔍 activity chips in the chat. The
-  systematic research fan-out stays button-triggered.
+  systematic research fan-out stays button-triggered. Both tools declare
+  `allowed_callers: ["direct"]`: the model invokes them itself, with no
+  server-side code-execution container in the loop. That is what keeps the
+  per-search inputs streaming (the 🔍 chips and the research agent board are
+  built from them), keeps a paused turn resumable without a provider
+  container id, and keeps the whole app zero-data-retention eligible — one
+  declaration in `research/schema.py` covers the interview, the research
+  fan-out, and Final QC alike.
 - **Research budgets doubled** (per-dimension searches now 16–40, fetches
   8–12, continuation ceiling 16) and research runs at `high` effort —
   background work where latency is free and quality is the point.
@@ -792,7 +799,9 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
     resend_sanitizer.py  fetched-PDF elision before continuation resume
                                                                   [ported from Spec Critic]
     schema.py            submit_requirements_research strict tool + web server-tool
-                         builders + domain blocklist              [ported from Spec Critic]
+                         builders + domain blocklist + the direct-caller pin
+                         (WEB_TOOL_ALLOWED_CALLERS) shared by chat/research/QC
+                                                                  [ported from Spec Critic]
     runner.py            session-bound background run: thread, event log, SSE follow
   compliance/            [deprecated — superseded by qc/; endpoints retained]
     checker.py           the audit call: controlling-set rules, coverage matrix,

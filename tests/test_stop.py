@@ -328,6 +328,41 @@ def test_stop_in_the_gap_after_a_paused_response_drops_the_pending_search():
     assert _outgoing_history_is_valid(fake2.messages.requests[0])
 
 
+def test_a_pending_search_is_resent_verbatim_on_a_pause_resume():
+    """The normal (un-stopped) continuation must keep the pending call.
+
+    This is the shape the earlier fixtures never had: a pause whose search
+    genuinely has not returned. The provider resumes from that trailing
+    ``server_tool_use``, so a scrub that removes it aborts the work.
+    """
+    session = sessions.get_session()
+    pending = SimpleNamespace(
+        type="server_tool_use",
+        id="srvtoolu_pending",
+        name="web_search",
+        input={"query": "still running"},
+    )
+    fake = FakeClient(
+        [
+            raw_turn([text_block("Searching."), pending], stop_reason="pause_turn"),
+            text_turn(["Found it."]),
+        ]
+    )
+    events = _run_turn(session, fake, "look it up")
+    assert events[-1]["type"] == "turn_complete"
+
+    # The continuation re-sent the paused content verbatim, pending call
+    # included.
+    resumed = fake.messages.requests[1]["messages"][-1]
+    assert resumed["role"] == "assistant"
+    assert [b["type"] for b in resumed["content"]] == ["text", "server_tool_use"]
+    assert resumed["content"][1]["id"] == "srvtoolu_pending"
+
+    # Once the turn ends, the still-unanswered call does NOT reach history —
+    # committed state has no pause left to resume.
+    assert _server_tool_uses(session.history) == []
+
+
 def test_a_completed_search_survives_the_same_truncation():
     """The scrub must not punish a search that actually finished.
 

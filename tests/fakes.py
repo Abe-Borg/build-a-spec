@@ -647,11 +647,27 @@ def pause_response(
     searched_urls: list[str] | None = None,
     searches: int | None = None,
     container: str | None = None,
+    pending_query: str = "",
 ) -> SimpleNamespace:
-    """A ``pause_turn`` response mid-research (server tools still running)."""
+    """A ``pause_turn`` response mid-research (server tools still running).
+
+    ``pending_query`` appends a trailing ``server_tool_use`` with NO result
+    — the reason a turn pauses at all, and the block the provider resumes
+    from. Fixtures without it model a pause whose searches all came back,
+    which is the easier half.
+    """
     content: list[SimpleNamespace] = []
     if searched_urls:
         content.append(search_result_block(searched_urls))
+    if pending_query:
+        content.append(
+            SimpleNamespace(
+                type="server_tool_use",
+                id=_srvtoolu_id("pending"),
+                name="web_search",
+                input={"query": pending_query},
+            )
+        )
     return SimpleNamespace(
         content=content,
         stop_reason="pause_turn",

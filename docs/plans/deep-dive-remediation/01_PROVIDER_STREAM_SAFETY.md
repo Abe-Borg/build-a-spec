@@ -499,6 +499,18 @@ venv\Scripts\python -m pytest -q
     from the engine scenarios.
   - `tests/test_project_package.py` untouched — `test_app.py` already had
     the HTTP save/load round-trip idiom these two scenarios needed.
+  - **The resend guard exempts a trailing assistant message
+    (`protect_trailing_assistant=True`)** — a correction made in review on
+    PR #91. The plan's "final guard over the outgoing request" is right for
+    history, but `sanitize_messages_for_resend` is also what builds a
+    `pause_turn` continuation, and a pause happens *because* a server tool
+    has not finished: that message's trailing result-less
+    `server_tool_use` is the block the provider resumes from. Scrubbing it
+    aborted the work in all three channels. The five original fixtures
+    could not catch it — every scripted pause either carried complete
+    pairs or no `server_tool_use` at all — so `pause_response` gained a
+    `pending_query=` kwarg and three unit tests plus one chat and one
+    research test now pin the verbatim resend.
   - **Fixture realism was load-bearing, not cosmetic.**
     `search_result_block` carried no `tool_use_id` and `chat_search_blocks`
     reused a single `srvtoolu_fake` id, so every scripted pair read as

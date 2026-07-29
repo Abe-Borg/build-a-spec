@@ -89,14 +89,36 @@ def _referenced_tool_use_ids(messages: list[Any]) -> set[str]:
 
 
 def without_unpaired_server_tool_uses(
-    messages: list[Any], *, placeholder: str = DEFAULT_PLACEHOLDER
+    messages: list[Any],
+    *,
+    placeholder: str = DEFAULT_PLACEHOLDER,
+    protect_trailing_assistant: bool = False,
 ) -> list[Any]:
     """Drop unpaired ``server_tool_use`` blocks and orphaned server results.
 
     Pairing is computed across the WHOLE list, so a use and result split by
     a ``pause_turn`` stay together. Returns the same list object when there
     is nothing to remove — the common case by a wide margin.
+
+    ``protect_trailing_assistant`` exempts a final assistant message from
+    every removal, and is **required** on the outgoing-request path. A
+    ``pause_turn`` response pauses precisely *because* a server tool has not
+    finished, so its trailing ``server_tool_use`` is legitimately
+    result-less — and it is the block the provider looks for to resume the
+    work. Scrubbing it is not a repair, it is deleting the resume signal.
+    A trailing assistant message only occurs at all when resuming a pause
+    (the contract forbids a synthetic user turn), so this exemption is
+    narrow: everything earlier in the conversation is still checked, which
+    is what catches a poisoned history.
     """
+    protected_index = -1
+    if (
+        protect_trailing_assistant
+        and messages
+        and _get(messages[-1], "role") == "assistant"
+    ):
+        protected_index = len(messages) - 1
+
     referenced = _referenced_tool_use_ids(messages)
 
     retained_use_ids: set[str] = set()
@@ -130,6 +152,8 @@ def without_unpaired_server_tool_uses(
     changed = False
     sanitized = list(messages)
     for index, message in enumerate(messages):
+        if index == protected_index:
+            continue
         content = _get(message, "content") or []
         kept = [block for block in content if _keep(block)]
         if len(kept) == len(content):

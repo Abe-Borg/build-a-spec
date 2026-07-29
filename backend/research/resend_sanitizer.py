@@ -159,8 +159,17 @@ def sanitize_messages_for_resend(messages: list[dict]) -> list[dict]:
     scrubbing cannot heal a project file that was already saved with one —
     so every outgoing request is checked here too, and an in-memory history
     that somehow still carries one cannot turn into a 400.
+
+    A trailing assistant message is exempt, because this function is also
+    what builds a ``pause_turn`` continuation. A pause happens *because* a
+    server tool has not finished, so that message's last
+    ``server_tool_use`` is legitimately result-less and is the block the
+    provider resumes from — removing it would abort the very work the
+    continuation exists to finish.
     """
-    messages = without_unpaired_server_tool_uses(messages)
+    messages = without_unpaired_server_tool_uses(
+        messages, protect_trailing_assistant=True
+    )
     found: list[dict[str, Any]] = []
     for msg_idx, message in enumerate(messages):
         if _get(message, "role") != "assistant":

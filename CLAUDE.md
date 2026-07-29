@@ -785,7 +785,17 @@ already resolved and does nothing). 409 when nothing is running.
   in `_tool_result` are eligible to be dropped as orphans, so unknown blocks
   and citations are left alone. It is copy-on-write and does not rebuild
   surviving blocks — research and QC re-send `response.content` as SDK
-  objects, and the pause contract says verbatim. The load-boundary repair
+  objects, and the pause contract says verbatim. **The outgoing-request
+  boundary passes `protect_trailing_assistant=True`, and must.** A
+  `pause_turn` pauses *because* a server tool has not finished, so that
+  message's trailing `server_tool_use` is legitimately result-less and is
+  the block the provider resumes from — scrubbing it deletes the resume
+  signal and aborts the work the continuation exists to finish (caught in
+  review on PR #91; the fixtures hid it because every scripted pause
+  either had complete pairs or no `server_tool_use` at all). The exemption
+  is narrow: a trailing assistant message only occurs while resuming a
+  pause, and everything earlier is still checked, which is what catches a
+  poisoned history. The load-boundary repair
   logs to `buildaspec.project` (never silent) and does **not** rewrite the
   user's file until they next save; it uses `logging` rather than
   `capture.app_event` because `load_project` runs inside

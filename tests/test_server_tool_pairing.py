@@ -162,6 +162,60 @@ def test_an_unmappable_result_without_an_id_is_kept():
     assert without_unpaired_server_tool_uses(messages) is messages
 
 
+def test_a_pending_pause_turn_call_is_protected_on_the_outgoing_path():
+    """The pause contract beats the pairing invariant, and must.
+
+    A ``pause_turn`` pauses *because* a server tool has not finished, so the
+    trailing ``server_tool_use`` is legitimately result-less — and it is the
+    block the provider looks for to resume. Scrubbing it deletes the resume
+    signal, aborting the work the continuation exists to finish.
+    """
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "look it up"}]},
+        _assistant(
+            {"type": "text", "text": "Searching."}, _use("srvtoolu_pending")
+        ),
+    ]
+    assert (
+        without_unpaired_server_tool_uses(
+            messages, protect_trailing_assistant=True
+        )
+        is messages
+    )
+    # Without the exemption it would be stripped — that is the whole point
+    # of the flag, so pin the difference rather than just the fixed state.
+    assert without_unpaired_server_tool_uses(messages) is not messages
+
+
+def test_the_exemption_covers_only_the_trailing_message():
+    """Poison earlier in the conversation is still caught."""
+    messages = [
+        _assistant(_use("srvtoolu_old_poison")),
+        {"role": "user", "content": [{"type": "text", "text": "next"}]},
+        _assistant({"type": "text", "text": "hi"}, _use("srvtoolu_pending")),
+    ]
+    scrubbed = without_unpaired_server_tool_uses(
+        messages, protect_trailing_assistant=True
+    )
+    assert _types(scrubbed) == [
+        ["text"],  # emptied → placeholder
+        ["text"],
+        ["text", "server_tool_use"],  # the live pause, untouched
+    ]
+
+
+def test_the_exemption_does_nothing_when_the_turn_is_not_a_pause():
+    """A trailing USER message means no pause is in flight."""
+    messages = [
+        _assistant(_use("srvtoolu_dangling")),
+        {"role": "user", "content": [{"type": "text", "text": "next"}]},
+    ]
+    scrubbed = without_unpaired_server_tool_uses(
+        messages, protect_trailing_assistant=True
+    )
+    assert _types(scrubbed) == [["text"], ["text"]]
+
+
 def test_an_emptied_assistant_message_gets_the_callers_placeholder():
     messages = [_assistant(_use("srvtoolu_gone"))]
     scrubbed = without_unpaired_server_tool_uses(

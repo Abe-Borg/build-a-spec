@@ -56,6 +56,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator
@@ -1840,6 +1841,30 @@ def _safe_json(text: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _start_input(block: Any) -> dict[str, Any]:
+    """A COPY of a start frame's already-complete tool input, or ``{}``.
+
+    A server tool invoked through the code-execution caller can deliver its
+    whole input on ``content_block_start`` and stream no
+    ``input_json_delta`` frames at all — which used to leave the chat chip
+    saying "Searching the web…" with nothing in it. Both web tools pin
+    ``allowed_callers: ["direct"]`` (``research/schema.py``), so this is the
+    fallback for any future code-execution-called tool or provider-side
+    shape drift, not the expected path.
+
+    Copied, never retained by reference: the SDK accumulates into the block
+    object as the stream advances.
+
+    The ``isinstance`` test is load-bearing on the real SDK path, not just
+    against a sloppy fake. ``ServerToolUseBlock.input`` is declared
+    ``Dict[str, object]``, but raw stream events are built with
+    ``construct_type_unchecked`` — no validation — so a non-mapping value
+    arrives untouched, and ``dict("…")`` raises.
+    """
+    value = getattr(block, "input", None)
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
 def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
     """Translate one round's raw stream events into UI event dicts.
 
@@ -1850,66 +1875,100 @@ def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
     block's input finishes (``content_block_stop``) — not derived after the
     round from the final message. Empty thinking deltas (``display:
     omitted``) are dropped so they don't prematurely clear the status strip.
+
+    A server-tool input arrives either as streamed ``input_json_delta``
+    frames (the direct-caller shape both web tools pin) or complete on the
+    start frame (the code-execution caller); both are tracked, the streamed
+    deltas win when a stream supplies both, and every index is dropped at
+    ``content_block_stop`` so a long turn never retains a finished edit
+    batch's JSON. A block whose input is missing entirely still emits its
+    chip with empty text — the round DID search, and saying so with no
+    label beats saying nothing.
+
+    Per-event parsing is defensive: a frame this relay cannot decode is
+    skipped, never a turn failure (the research/QC relays adapted from this
+    one have always said so; here it was implicit and one non-string
+    ``partial_json`` away from being untrue).
+
+    The boundary is exact and deliberate. The SDK accumulates and snapshots
+    each raw frame INSIDE ``next(stream)``, before yielding it
+    (``anthropic/lib/streaming/_messages.py::__stream__``), so anything that
+    breaks the SDK's own accumulator raises during iteration and is not
+    caught here. That is correct: an unparseable stream is a failed request
+    and must reach the caller's error/retry path exactly as a
+    ``get_final_message()`` failure does. What the SDK does NOT do is
+    validate raw event shapes (``construct_type_unchecked``), so frames it
+    happily hands over can still be nonsense — that is this relay's job.
     """
     json_buffers: dict[int, str] = {}
+    start_inputs: dict[int, dict[str, Any]] = {}
     block_kinds: dict[int, tuple[str, str]] = {}
     last_progress = time.monotonic()
     for event in stream:
-        etype = getattr(event, "type", None)
-        if etype == "content_block_start":
-            block = getattr(event, "content_block", None)
-            index = getattr(event, "index", 0)
-            btype = getattr(block, "type", None) or ""
-            bname = getattr(block, "name", "") or ""
-            block_kinds[index] = (btype, bname)
-            json_buffers[index] = ""
-            if btype == "thinking":
-                yield {"type": "status", "kind": "thinking"}
-            elif btype == "text":
-                yield {"type": "status", "kind": "writing"}
-            elif btype == "tool_use" and bname == "apply_spec_edits":
-                yield {"type": "status", "kind": "drafting", "progress_chars": 0}
-            elif btype == "tool_use" and bname == "create_figure":
-                yield {"type": "status", "kind": "drawing"}
-            elif btype == "server_tool_use" and bname == "web_search":
-                yield {"type": "status", "kind": "searching"}
-            elif btype == "server_tool_use" and bname == "web_fetch":
-                yield {"type": "status", "kind": "fetching"}
-        elif etype == "content_block_delta":
-            delta = getattr(event, "delta", None)
-            dtype = getattr(delta, "type", None)
-            index = getattr(event, "index", 0)
-            if dtype == "text_delta":
-                text = getattr(delta, "text", "") or ""
-                if text:
-                    yield {"type": "text_delta", "text": text}
-            elif dtype == "thinking_delta":
-                text = getattr(delta, "thinking", "") or ""
-                if text:
-                    yield {"type": "thinking_delta", "text": text}
-            elif dtype == "input_json_delta":
-                json_buffers[index] = json_buffers.get(index, "") + (
-                    getattr(delta, "partial_json", "") or ""
-                )
-                if block_kinds.get(index) == ("tool_use", "apply_spec_edits"):
-                    now = time.monotonic()
-                    if now - last_progress >= _DRAFT_PROGRESS_INTERVAL_S:
-                        last_progress = now
-                        yield {
-                            "type": "status",
-                            "kind": "drafting",
-                            "progress_chars": len(json_buffers[index]),
-                        }
-        elif etype == "content_block_stop":
-            index = getattr(event, "index", 0)
-            btype, bname = block_kinds.get(index, ("", ""))
-            if btype != "server_tool_use":
-                continue
-            payload = _safe_json(json_buffers.get(index, ""))
-            if bname == "web_search":
-                yield {"type": "web_search", "query": str(payload.get("query", ""))}
-            elif bname == "web_fetch":
-                yield {"type": "web_fetch", "url": str(payload.get("url", ""))}
+        try:
+            etype = getattr(event, "type", None)
+            if etype == "content_block_start":
+                block = getattr(event, "content_block", None)
+                index = getattr(event, "index", 0)
+                btype = getattr(block, "type", None) or ""
+                bname = getattr(block, "name", "") or ""
+                block_kinds[index] = (btype, bname)
+                json_buffers[index] = ""
+                if btype == "server_tool_use":
+                    started = _start_input(block)
+                    if started:
+                        start_inputs[index] = started
+                if btype == "thinking":
+                    yield {"type": "status", "kind": "thinking"}
+                elif btype == "text":
+                    yield {"type": "status", "kind": "writing"}
+                elif btype == "tool_use" and bname == "apply_spec_edits":
+                    yield {"type": "status", "kind": "drafting", "progress_chars": 0}
+                elif btype == "tool_use" and bname == "create_figure":
+                    yield {"type": "status", "kind": "drawing"}
+                elif btype == "server_tool_use" and bname == "web_search":
+                    yield {"type": "status", "kind": "searching"}
+                elif btype == "server_tool_use" and bname == "web_fetch":
+                    yield {"type": "status", "kind": "fetching"}
+            elif etype == "content_block_delta":
+                delta = getattr(event, "delta", None)
+                dtype = getattr(delta, "type", None)
+                index = getattr(event, "index", 0)
+                if dtype == "text_delta":
+                    text = getattr(delta, "text", "") or ""
+                    if text:
+                        yield {"type": "text_delta", "text": text}
+                elif dtype == "thinking_delta":
+                    text = getattr(delta, "thinking", "") or ""
+                    if text:
+                        yield {"type": "thinking_delta", "text": text}
+                elif dtype == "input_json_delta":
+                    json_buffers[index] = json_buffers.get(index, "") + (
+                        getattr(delta, "partial_json", "") or ""
+                    )
+                    if block_kinds.get(index) == ("tool_use", "apply_spec_edits"):
+                        now = time.monotonic()
+                        if now - last_progress >= _DRAFT_PROGRESS_INTERVAL_S:
+                            last_progress = now
+                            yield {
+                                "type": "status",
+                                "kind": "drafting",
+                                "progress_chars": len(json_buffers[index]),
+                            }
+            elif etype == "content_block_stop":
+                index = getattr(event, "index", 0)
+                btype, bname = block_kinds.pop(index, ("", ""))
+                streamed = _safe_json(json_buffers.pop(index, ""))
+                started = start_inputs.pop(index, {})
+                if btype != "server_tool_use":
+                    continue
+                payload = streamed or started
+                if bname == "web_search":
+                    yield {"type": "web_search", "query": str(payload.get("query", ""))}
+                elif bname == "web_fetch":
+                    yield {"type": "web_fetch", "url": str(payload.get("url", ""))}
+        except Exception:  # noqa: BLE001 — a malformed frame never fails a turn
+            continue
 
 
 # thinking.display capability probe. Sonnet 5 accepts ``summarized``; a model

@@ -1,6 +1,6 @@
 # Phase 2 — Live state and stream resilience
 
-- Status: in progress (2.2 complete; 2.1, 2.3, 2.4 planned)
+- Status: in progress (2.1 and 2.2 complete; 2.3, 2.4 planned)
 - Prerequisite: Phase 1 complete
 - Risk: high user-visible impact; backend run results must remain unchanged
 
@@ -83,11 +83,120 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_qc_liv
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete** (2026-07-29)
+- Commit/PR: `0cfad61` — PR #93
+- Tests: seven new, four of which fail against the pre-fix code (the other
+  three are precedence/absence guards that pin the new reader against a
+  future inversion — proven load-bearing by deleting the `isinstance`
+  guard and watching them go red).
+  `tests/test_research_engine.py` gains
+  `test_start_input_only_frames_still_emit_the_real_query_and_url` (exact
+  `dimension_search`/`dimension_fetch` dicts from a start-input-only
+  stream, plus the activity spine and the untouched findings),
+  `test_streamed_deltas_win_and_an_absent_input_says_nothing`
+  (precedence, a block with neither shape, and a non-mapping start input
+  that must still announce its activity — i.e. rejected by the reader,
+  not swallowed by the frame's `try/except`), and
+  `test_a_finished_block_is_forgotten_at_stop` (a repeat
+  `content_block_stop` has nothing left to replay — the observable proof
+  that every tracking dict pops).
+  `tests/test_qc_live_events.py` gains
+  `test_start_input_only_frames_emit_real_lens_and_seat_activity` (both
+  `event_prefix` values in one run — a lens card and a verifier seat —
+  plus the unchanged `upheld` adjudication) and
+  `test_qc_streamed_deltas_win_and_an_absent_input_says_nothing`.
+  `tests/test_streaming.py` gains
+  `test_start_input_only_web_activity_emits_the_real_query_and_url`,
+  `test_malformed_frames_the_relay_decodes_never_fail_a_chat_turn`, and
+  `test_a_real_sdk_start_frame_with_a_non_mapping_input_is_survivable`
+  (added in review — see the last deviation).
+  Focused run green (`test_research_engine` / `test_qc_live_events` /
+  `test_streaming` — 40 passed); full gate green: `pytest -q` 1178
+  passed, 9 skipped; `npm test` 96 passed; `npm run build` clean (no
+  frontend change — run as a regression check, not because this chunk
+  touched the UI).
 - Deviations:
-- Manual QA owed:
+  - **The chat relay was not already malformed-frame-safe, so it is
+    now.** Plan step 6 says "malformed frames remain nonfatal" as a
+    preservation item and acceptance criterion 4 names the chat turn —
+    but `_stream_events` had no per-event guard, and
+    `json_buffers.get(index, "") + (getattr(delta, "partial_json", "")
+    or "")` raises `TypeError` on a non-string `partial_json`, taking the
+    whole turn with it. The new test proves that: against the pre-fix
+    code it fails with `'error' == 'turn_complete'`. The loop body is now
+    wrapped in the same `except Exception: continue` the research and QC
+    relays (adapted *from this one*) have always had. Stream ITERATION
+    errors still escape, which is the property that matters.
+  - **`_start_input` is a local helper in each of the three relay
+    modules**, not shared through `research/grounding.py` the way Chunk
+    1.2's `response_container_id` is. Grounding reads facts off finalized
+    *messages*; this reads a raw *stream frame*, a different provider
+    surface. More to the point, the three relays are deliberately
+    triplicated (CLAUDE.md: "copy-adapted from
+    `conversation._stream_events`") and already carry three deliberately
+    different `_safe_json`-family parsers — QC's tolerates `TypeError`
+    and accepts a `q` alias, research's does not. Adding one shared
+    import beside three divergent local ones would have been the
+    inconsistent choice. QC's is named `_start_block_input` because
+    `_start_input` would read like "the input that starts a QC run".
+  - **`block_kinds` is popped at stop too**, not just the payload dicts.
+    The plan says "pop the index from all tracking dictionaries"; doing
+    it for real is what makes `test_a_finished_block_is_forgotten_at_stop`
+    a genuine test rather than a tautology — with `start_inputs` in play,
+    a surviving `block_kinds` entry would let a repeat stop re-emit the
+    start copy. The pops happen **before** the
+    `if btype != "server_tool_use": continue`, so a text/thinking block
+    releases its index as well. Chat's pop also frees a completed
+    `apply_spec_edits` batch's JSON, which is the largest buffer in the
+    turn.
+  - **`tests/fakes.py` gained `code_execution_tool_events`**, a standalone
+    builder rather than an option on `_synthesize_events`. Synthesis is
+    driven by a scripted turn's *content*, which cannot express "this
+    block streamed no deltas" — every existing fixture would have had to
+    grow a flag. The builder pairs with the existing `events=` override
+    idiom that the malformed-frame tests already use, and its docstring
+    names the direct-caller counterpart so the two shapes are documented
+    together. `block_start_event` took a keyword-only `input=`; absent
+    (every existing call site) the started block carries no `input`
+    attribute at all, exactly as the direct-caller wire does.
+  - Precedence is `streamed or started`, per plan step 4 — a stream that
+    somehow supplied both is taken at its deltas. Absence behavior stays
+    deliberately non-uniform: research and QC skip, chat still emits its
+    chip with empty text.
+  - **Acceptance criterion 4 is scoped to frames the relay decodes, and
+    that scoping is deliberate** — raised in review on PR #93, where an
+    automated reviewer read "No malformed frame can fail a chat turn,
+    dimension, lens, or verifier" literally and asked for the stream
+    ITERATION to be guarded too. It must not be. The SDK accumulates and
+    snapshots every raw frame inside `next(stream)` and only then yields
+    it (`anthropic/lib/streaming/_messages.py::__stream__` calls
+    `accumulate_event` before `yield`, verified against 0.120.2), so a
+    frame that breaks the SDK's own accumulator raises during iteration —
+    which is a **failed request**, and all three relays document that
+    those escape into the retry classifier on purpose. Catching them
+    would silently kill the retry pinned by
+    `test_malformed_frames_are_ignored_and_stream_failure_retries`, and
+    would change billed retry behavior, which this phase forbids.
+    The reviewer's second point was fair and was fixed: the chat test was
+    named `..._a_malformed_stream_frame_never_fails_a_chat_turn`, which
+    over-claimed, and its `partial_json=7` frame is one today's SDK would
+    raise on first. It is now
+    `test_malformed_frames_the_relay_decodes_never_fail_a_chat_turn`, with
+    the boundary written into the docstring, and a **new** test builds a
+    genuine `RawContentBlockStartEvent`/`ServerToolUseBlock` rather than a
+    `SimpleNamespace`. That one matters: `ServerToolUseBlock.input` is
+    declared `Dict[str, object]` but raw events are built with
+    `construct_type_unchecked` (no validation), so a non-mapping `input`
+    reaches the app on a real SDK object with nothing upstream rejecting
+    it — `_start_input`'s `isinstance(..., Mapping)` is the only guard,
+    and deleting it turns that test red. The three helper docstrings now
+    say so.
+- Manual QA owed: Phase 2's list — start research and confirm visible
+  query and URL labels populate. Note this is the *direct-caller* path
+  (Chunk 1.1), which the live canary in Chunk 6.5 already covers; the
+  code-execution path this chunk adds cannot be exercised without
+  re-enabling dynamic filtering, which is an owner decision and out of
+  scope. It is proven hermetically, which is the point of the fixture.
 
 ## Chunk 2.2 — Correct QC settling semantics
 

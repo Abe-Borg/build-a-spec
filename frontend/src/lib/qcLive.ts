@@ -345,15 +345,18 @@ export function reconcileQcSnapshotUpdate(
       status,
       error: keepPreviousStatus ? previous.error : fetched.error,
       error_kind: keepPreviousStatus ? previous.error_kind : fetched.error_kind,
-      // Settlement is sticky ONLY for a terminal stopped attempt, until its
-      // settled event arrives. A running snapshot clears an erroneous prior
-      // bit rather than OR-ing it forward — otherwise one bad `settling`
-      // (an older backend, a replayed pre-fix frame) would latch the
-      // Review Room into stop language for the rest of the session.
+      // Settlement is sticky ONLY for a snapshot that was ALREADY a
+      // terminal stopped attempt, until its settled event arrives. Note
+      // `isQcStopSettling(previous)` rather than `previous.settling`: the
+      // stale bit to defend against is a running-and-settling snapshot from
+      // an older backend, and testing the reconciled status instead would
+      // re-admit it the moment the run went terminal — a normal completion
+      // emits no `qc_attempt_settled`, so it would then latch on forever
+      // and leave the drawer showing stop language after the run ended.
       settling:
         fetchedSettled || status === "running"
           ? false
-          : Boolean(fetched.settling || previous.settling),
+          : Boolean(fetched.settling || isQcStopSettling(previous)),
       events,
     },
   };

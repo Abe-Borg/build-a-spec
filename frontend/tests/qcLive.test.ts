@@ -357,6 +357,32 @@ test("a running snapshot clears an erroneous prior settling bit", () => {
   assert.equal(reconcileQcSnapshot(previous, fetched).settling, false);
 });
 
+test("a normal completion drops a stale running settling bit", () => {
+  // The latch this guards: a pre-fix backend reports running+settling, then
+  // the run completes normally. A normal terminal run emits no
+  // `qc_attempt_settled`, so carrying the bit forward on the strength of the
+  // *reconciled* status would leave the drawer in stop language, and active,
+  // for good.
+  const previous: QcSnapshot = {
+    status: "running",
+    error: "",
+    settling: true,
+    events: [started()],
+  };
+  for (const terminal of ["complete", "failed"] as const) {
+    const fetched: QcSnapshot = {
+      status: terminal,
+      error: "",
+      settling: false,
+      events: [started(), { type: "qc_complete", seq: 1 }],
+    };
+    const merged = reconcileQcSnapshot(previous, fetched);
+    assert.equal(merged.settling, false, terminal);
+    assert.equal(isQcStopSettling(merged), false, terminal);
+    assert.equal(isQcActiveSnapshot(merged), false, terminal);
+  }
+});
+
 test("stopping preserves the active Review Room phase until settlement", () => {
   const events: QcEvent[] = [
     started(),

@@ -207,6 +207,14 @@ Pop-Location
   - `tests/test_qc_audit_report.py` untouched — it exercises report
     projections, and the runner-integrity file already owned the state
     table.
+  - **The reconcile carries settlement on `isQcStopSettling(previous)`, not
+    `previous.settling`** — a correction made in review on PR #92. Gating
+    on the *reconciled* status re-admitted the stale bit the moment a run
+    went terminal: a normal completion emits no `qc_attempt_settled`, so
+    the bit would then latch on forever and leave the drawer in stop
+    language, and active, after the run ended. The stale input this
+    defends against is specifically a running-and-settling snapshot, so
+    the test has to be on the previous snapshot's own state.
 - Manual QA owed: Phase 2's list — run a normal Final QC and confirm no
   stop/settling language anywhere, then stop one and confirm the real
   settlement language persists until paid in-flight work attaches.

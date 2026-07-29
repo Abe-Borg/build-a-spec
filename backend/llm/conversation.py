@@ -100,6 +100,9 @@ from ..compliance import AuditRunner
 from ..qc import QCRunner
 from ..research import ResearchRunner, research_context_block
 from ..research.grounding import response_container_id
+from .server_tool_pairing import (
+    without_unpaired_server_tool_uses as _without_unpaired_server_tool_uses,
+)
 from ..research.resend_sanitizer import (
     elide_all_pdf_sources,
     sanitize_messages_for_resend,
@@ -1684,6 +1687,12 @@ def _committed_messages(
       :func:`_elide_figure_tool_inputs`) — the figure store holds it.
     - ``read_reference_doc`` tool results shed the document body (see
       :func:`_elide_reference_tool_results`) — the reference store holds it.
+    - Unpaired ``server_tool_use`` blocks and orphaned server results are
+      removed (see :func:`_without_unpaired_server_tool_uses`). The stop and
+      truncation paths already scrub before they append, so this is the
+      final invariant guard over the whole turn rather than the fix: nothing
+      reaches ``session.history`` — and therefore nothing reaches the saved
+      project file — that would make every later request invalid.
     """
     committed: list[dict[str, Any]] = [
         {"role": "user", "content": [{"type": "text", "text": user_text}]}
@@ -1700,8 +1709,10 @@ def _committed_messages(
         if not content:
             content = [{"type": "text", "text": "[Model reasoning omitted.]"}]
         committed.append({"role": "assistant", "content": content})
-    return _elide_reference_tool_results(
-        _elide_figure_tool_inputs(elide_all_pdf_sources(committed))
+    return _without_unpaired_server_tool_uses(
+        _elide_reference_tool_results(
+            _elide_figure_tool_inputs(elide_all_pdf_sources(committed))
+        )
     )
 
 
@@ -2389,6 +2400,12 @@ def stream_user_turn(
                             ],
                         }
                     )
+                # A stop caught between rounds can land right after a paused
+                # response whose server tools never came back — the use is
+                # in the trailing assistant message with no result anywhere.
+                new_messages[:] = _without_unpaired_server_tool_uses(
+                    new_messages, placeholder="[Generation stopped by user.]"
+                )
                 break
             # Never dead air between rounds: from send to first token there is
             # always a live status. A pause_turn resume keeps server work
@@ -2506,6 +2523,14 @@ def stream_user_turn(
                     )
                 ] or [{"type": "text", "text": fallback}]
                 new_messages.append({"role": "assistant", "content": content})
+                # The same cut can leave a SERVER tool call unanswered —
+                # stopping while the UI said "Searching the web…" is the
+                # ordinary way to produce one. Scrubbed turn-wide, because a
+                # pause_turn may have put the use in an earlier message and
+                # its result would have arrived in this one.
+                new_messages[:] = _without_unpaired_server_tool_uses(
+                    new_messages, placeholder=fallback
+                )
                 break
             new_messages.append({"role": "assistant", "content": content})
 

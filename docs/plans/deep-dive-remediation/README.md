@@ -327,7 +327,7 @@ tests and phase gate are recorded in the phase file.
 | 1.1 | **complete** | `4bd0c18` (PR #88) | direct callers shipped in all three channels; ZDR claims reconciled |
 | 1.2 | **complete** | `f0a5ac5` (PR #89) | research + QC continuation containers, attempt-local |
 | 1.3 | **complete** | `d39e778` (PR #90) | chat continuation container, turn-local |
-| 1.4 | planned | | |
+| 1.4 | **complete** | branch `claude/deep-dive-remediation-plans-omivzu` | server-tool pairing at four boundaries + legacy repair — **Phase 1 done** |
 | 2.1 | planned | | |
 | 2.2 | planned | | |
 | 2.3 | planned | | |

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import io
 import json
+import logging
+from types import SimpleNamespace
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -520,6 +522,103 @@ def test_project_save_and_resume_round_trip(monkeypatch):
     # History resumed in API shape (tool_use/tool_result intact).
     history = sessions.get_session().history
     assert [m["role"] for m in history] == ["user", "assistant", "user", "assistant"]
+
+
+def test_a_stopped_web_turn_cannot_poison_the_saved_project(monkeypatch):
+    """Save/resume after stopping mid-search, end to end over HTTP.
+
+    A dangling ``server_tool_use`` written to a project file used to be
+    permanent: every request built from that history is a 400, so the file
+    was unopenable-in-practice forever after.
+    """
+    fake = FakeClient(
+        [
+            raw_turn(
+                [
+                    text_block("Looking that up."),
+                    # A search that never returned — the shape a stop
+                    # while the UI says "Searching the web…" produces.
+                    SimpleNamespace(
+                        type="server_tool_use",
+                        id="srvtoolu_interrupted",
+                        name="web_search",
+                        input={"query": "NFPA 13"},
+                    ),
+                ],
+                stop_reason="max_tokens",
+            )
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+    client = _client()
+    assert client.post("/api/chat", json={"message": "check"}).status_code == 200
+
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
+    assert "srvtoolu_interrupted" not in json.dumps(project)
+
+    client.post("/api/session/reset")
+    assert client.post("/api/project/load", json=project).status_code == 200
+
+    fake2 = FakeClient([text_turn(["Resumed cleanly."])])
+    _patch_client(monkeypatch, fake2)
+    assert client.post("/api/chat", json={"message": "carry on"}).status_code == 200
+    sent = fake2.messages.requests[0]["messages"]
+    assert not [
+        b
+        for m in sent
+        for b in (m.get("content") or [])
+        if isinstance(b, dict) and b.get("type") == "server_tool_use"
+    ]
+
+
+def test_loading_a_legacy_poisoned_project_repairs_it_and_says_so(
+    monkeypatch, caplog
+):
+    """The other half: a file already on disk from before the fix.
+
+    Commit-time scrubbing cannot reach it, so the load boundary repairs the
+    history in memory — loudly, and without rewriting the user's file until
+    they next save normally.
+    """
+    client = _client()
+    _seed_doc_via_chat(client, monkeypatch)
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
+
+    # Hand-build the poison a pre-fix build would have written.
+    project["history"].append(
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me check."},
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_legacy_dangling",
+                    "name": "web_search",
+                    "input": {"query": "obstruction"},
+                },
+            ],
+        }
+    )
+    client.post("/api/session/reset")
+
+    with caplog.at_level(logging.WARNING, logger="buildaspec.project"):
+        assert client.post("/api/project/load", json=project).status_code == 200
+    assert any(
+        "unpaired server tool call" in record.getMessage()
+        for record in caplog.records
+    ), "the repair must never be silent"
+
+    history = sessions.get_session().history
+    assert "srvtoolu_legacy_dangling" not in json.dumps(history)
+    # The rest of the turn survived — repair, not deletion.
+    assert history[-1]["content"][0]["text"] == "Let me check."
+
+    # And the next turn's outgoing request is valid, which is the whole point.
+    fake = FakeClient([text_turn(["Recovered."])])
+    _patch_client(monkeypatch, fake)
+    assert client.post("/api/chat", json={"message": "again"}).status_code == 200
+    sent = fake.messages.requests[0]["messages"]
+    assert "srvtoolu_legacy_dangling" not in json.dumps(sent, default=str)
 
 
 def test_project_load_rejects_garbage(monkeypatch):

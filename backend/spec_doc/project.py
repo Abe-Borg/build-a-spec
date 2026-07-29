@@ -10,11 +10,19 @@ blocks, in order.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+from ..llm.server_tool_pairing import (
+    count_unpaired_server_tool_uses,
+    without_unpaired_server_tool_uses,
+)
+
+_log = logging.getLogger("buildaspec.project")
 
 PROJECT_KIND = "buildaspec-project"
 PROJECT_FORMAT = 1
@@ -336,6 +344,26 @@ def load_project(data: Any, session) -> None:
     if restored_qc is not None:
         restored_qc_runner.restore(restored_qc)
     restored_qc_runner.restore_attempt(data.get("qc_latest_attempt"))
+
+    # Repair a history poisoned by the stop bug this predates. A dangling
+    # ``server_tool_use`` makes every request built from this history a 400,
+    # so a project saved with one used to be permanently unusable — and
+    # commit-time scrubbing cannot reach a file that is already on disk.
+    # Copy-on-write: the repair rides the live session, and the file is only
+    # rewritten when the user next saves normally.
+    repaired = without_unpaired_server_tool_uses(history)
+    if repaired is not history:
+        # Never silent. Counts and roles only — no draft text reaches the
+        # activity log. (The `logging` channel rather than a trace event on
+        # purpose: `load_project` runs inside `session_state_guard()`, and
+        # `capture.app_event` can do first-call file I/O, which must not
+        # happen under that lock.)
+        _log.warning(
+            "Repaired %d unpaired server tool call(s) in a loaded project's "
+            "history; the file is unchanged until the next save.",
+            count_unpaired_server_tool_uses(history),
+        )
+        history = repaired
 
     session.history.clear()
     session.history.extend(history)

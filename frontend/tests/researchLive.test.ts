@@ -323,6 +323,59 @@ test("a round-less snapshot on either side adopts the fetch", () => {
   assert.equal(reconcileResearchSnapshot(local, fetched), fetched);
 });
 
+test("a shorter same-round log from ANOTHER workspace still reads as stale", () => {
+  // Round number is the reconcile identity, and it says nothing across
+  // workspaces: two projects both sit at round 1, and a RESTORED project's
+  // whole log is one research_complete at seq 0 (ResearchRunner.restore
+  // empties events first). So opening project B over researched project A
+  // arrives here indistinguishable from a late fetch, and is rejected —
+  // permanently, since a restored run never streams. Reconcile cannot fix
+  // that; the workspace transition has to clear the snapshot, which is what
+  // the next test checks.
+  const projectA: ResearchSnapshot = {
+    status: "complete",
+    error: "",
+    events: [started(1), evt(1, "dimension_complete"), evt(2, "research_complete")],
+    profile: profile(31),
+  };
+  const projectB: ResearchSnapshot = {
+    status: "complete",
+    error: "",
+    events: [evt(0, "research_complete", { round: 1, restored: true })],
+    profile: profile(4),
+  };
+  const notCleared = reconcileResearchSnapshotUpdate(projectA, projectB);
+  assert.equal(notCleared.accepted, false);
+  assert.equal(notCleared.snapshot.profile?.item_count, 31);
+
+  // Cleared first, it adopts — this is the whole mechanism.
+  const cleared = reconcileResearchSnapshotUpdate(null, projectB);
+  assert.equal(cleared.accepted, true);
+  assert.equal(cleared.snapshot.profile?.item_count, 4);
+});
+
+test("every workspace transition clears the research snapshot", async () => {
+  // Cross-file, so no unit test can reach it: the guarantee above lives in
+  // App.tsx's advanceWorkspaceEpoch, the one helper all three transitions
+  // call. Asserted against the source text for the same reason tour.test.ts
+  // scans production files — the alternative is a browser-driven suite this
+  // repo deliberately does not have.
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+  const body = source.match(
+    /const advanceWorkspaceEpoch = useCallback\(\(\) => \{([\s\S]*?)\n {2}\}, \[/,
+  );
+  assert.ok(body, "advanceWorkspaceEpoch should be a useCallback in App.tsx");
+  assert.match(body[1], /replaceResearchSnapshot\(null\)/);
+  assert.match(body[1], /workspaceEpochRef\.current \+= 1/);
+  assert.match(body[1], /researchStreamRef\.current\?\.abort\(\)/);
+
+  // …and nothing bumps the epoch behind its back.
+  const bumps = source.match(/workspaceEpochRef\.current \+= 1/g) ?? [];
+  assert.equal(bumps.length, 1, "the epoch may only be advanced by the helper");
+});
+
 test("milestone set is exactly the five snapshot-worthy frames", () => {
   assert.deepEqual([...RESEARCH_MILESTONE_TYPES].sort(), [
     "dimension_complete",

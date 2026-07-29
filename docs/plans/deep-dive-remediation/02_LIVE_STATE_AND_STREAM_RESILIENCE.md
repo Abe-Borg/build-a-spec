@@ -463,6 +463,24 @@ Pop-Location
     `workspaceEpochRef.current += 1`** so the abort cannot be forgotten at
     a fourth site. QC's follower is deliberately left on its epoch-check-
     plus-`break`; converting it is its own change.
+  - **The transition also CLEARS the research snapshot** — a P1 caught in
+    review on PR #94, and a bug this chunk introduced. Round number is the
+    reconcile identity and it means nothing across workspaces: two
+    projects both sit at round 1, and a restored project's entire log is a
+    single `research_complete` at seq 0 (`ResearchRunner.restore` empties
+    `events` first). So opening project B over researched project A
+    arrived at reconcile as same-round-with-a-shorter-log — indistinguishable
+    from a late fetch — and the new watermark rule rejected it
+    **permanently**, since a restored run never streams and nothing else
+    reset the ref. The pre-2.3 code half-adopted instead, which was also
+    wrong but self-corrected. Clearing in `advanceWorkspaceEpoch` is the
+    identity reset; reconcile then sees `previous === null` and adopts.
+    QC needs no equivalent — its run ids are UUIDs, so two workspaces
+    never compare as the same run. `advanceWorkspaceEpoch` moved below
+    `replaceResearchSnapshot` for it: a `useCallback` dependency array is
+    evaluated at render time in declaration order, and naming a later
+    `const` there is the first-render TDZ crash CLAUDE.md already records
+    from the research-drawer work.
   - **`refreshResearch`'s catch no longer nulls the snapshot** — it used
     to erase a live board on one dropped poll. It now does nothing, which
     is the `refreshQc` posture and what acceptance criterion 3 asks for.

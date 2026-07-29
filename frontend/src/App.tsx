@@ -229,16 +229,6 @@ export default function App() {
   // newly hydrated document with discarded scenario state.
   const workspaceEpochRef = useRef(0);
 
-  /** Advance the workspace epoch and cut loose anything still reading for
-   *  the old one. Every session/tutorial/project transition goes through
-   *  here so the abort cannot be forgotten at a new call site. (QC's
-   *  follower still relies on its epoch check plus a `break`; giving it the
-   *  same abort is a separate change.) */
-  const advanceWorkspaceEpoch = useCallback(() => {
-    workspaceEpochRef.current += 1;
-    researchStreamRef.current?.abort();
-  }, []);
-
   const replaceQcSnapshot = useCallback((snapshot: QcSnapshot | null) => {
     qcSnapshotRef.current = snapshot;
     setQc(snapshot);
@@ -251,6 +241,31 @@ export default function App() {
     },
     [],
   );
+
+  /** Advance the workspace epoch and cut loose everything still bound to the
+   *  old one. Every session/tutorial/project transition goes through here so
+   *  none of this can be forgotten at a new call site.
+   *
+   *  Clearing the research snapshot is part of the transition, not tidiness.
+   *  Research's reconcile identity is the ROUND NUMBER, which says nothing
+   *  across workspaces: two projects both sit at round 1, and a restored
+   *  project's whole log is a single `research_complete` at seq 0
+   *  (`ResearchRunner.restore` empties `events` first). Left pointing at the
+   *  outgoing project, the same-round watermark rule would read the incoming
+   *  snapshot as stale and reject it — permanently, because a restored run
+   *  never streams and nothing else would reset the ref. Clearing IS the
+   *  identity reset; reconcile then sees `previous === null` and adopts.
+   *  (QC needs no equivalent: its run ids are UUIDs, so two workspaces never
+   *  compare as the same run.)
+   *
+   *  Declared after `replaceResearchSnapshot` deliberately — a `useCallback`
+   *  dependency array is evaluated at render time, in declaration order, so
+   *  naming a later `const` here is a first-render TDZ crash. */
+  const advanceWorkspaceEpoch = useCallback(() => {
+    workspaceEpochRef.current += 1;
+    researchStreamRef.current?.abort();
+    replaceResearchSnapshot(null);
+  }, [replaceResearchSnapshot]);
 
   const refreshHealth = useCallback(() => {
     const epoch = workspaceEpochRef.current;

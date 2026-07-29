@@ -17,10 +17,22 @@ the runner's cumulative partial-success/retry behavior remains intact.
 - Runner `complete` means at least one dimension completed in the latest round.
 - Profile dimension statuses are cumulative: a dimension completed in any
   earlier round remains completed.
-- `ResearchDimension.required` defines issue-critical coverage.
+- `ResearchDimension.required` defines issue-critical coverage, and it
+  **defaults to required**. Every dimension in both shipped modules is
+  required: on the projects these modules serve, AHJ requirements, owner and
+  insurer standards, and site/seismic/freeze factors are not inherently
+  optional coverage any more than governing codes are. A module may declare a
+  dimension optional only explicitly, with the rationale documented beside the
+  declaration — there is no silent fail-open default.
 - Readiness is green only when runner state is complete, a coherent profile is
   present, and every required dimension has cumulative status `completed`.
-- Optional incomplete dimensions are named in a passing warning.
+- Optional incomplete dimensions are named in a passing warning. A reviewer
+  waiver flow for missing optional coverage is a possible future enhancement;
+  it is out of scope for this program, and truthful surfacing ships first.
+- Malformed or structurally invalid research state fails **closed for
+  readiness** (research is not complete) while remaining **open for project
+  loading** (a corrupt optional structure never blocks a project from
+  opening) — the codebase's existing lenient-loader posture.
 - Pressing Research again remains the remediation path.
 
 ## Chunk 3.1 — Name incomplete coverage and persist manifest facts
@@ -50,9 +62,14 @@ the runner's cumulative partial-success/retry behavior remains intact.
 4. Keep the profile's existing full-data fingerprint. Adding manifest fields
    intentionally changes the full QC input fingerprint for new runs; do not
    mutate an already persisted report.
-5. Add tests for fully complete byte identity, one incomplete dimension,
+5. Make partial failure observable in diagnostics, not only in prompts and
+   reports: include the failed dimension ids/titles and a sanitized error kind
+   (never raw provider payloads or key material) in the research trace span
+   close and in the `/api/diagnostics` snapshot's session block, so a support
+   bundle answers "which coverage failed" without opening a project.
+6. Add tests for fully complete byte identity, one incomplete dimension,
    multiple incomplete dimensions, cumulative completion after a later retry,
-   and QC lens prompt inclusion.
+   QC lens prompt inclusion, and the diagnostics snapshot facts.
 
 ### Files
 
@@ -60,10 +77,14 @@ the runner's cumulative partial-success/retry behavior remains intact.
 - `backend/research/schema.py` only if context trimming requires a named
   protected-prefix seam
 - `backend/qc/engine.py`
+- `backend/research/runner.py` and/or `backend/tracing/capture.py` (span-close
+  facts)
+- `backend/diagnostics.py` (snapshot facts)
 - `tests/test_research_engine.py`
 - `tests/test_research_rounds.py`
 - `tests/test_qc_manifest_integrity.py`
 - `tests/test_qc_audit_report.py`
+- `tests/test_diagnostics.py`
 - `CLAUDE.md`
 
 ### Focused verification
@@ -92,34 +113,45 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_resear
 
 ### Implementation
 
-1. Add `required: bool = False` to
+1. Add `required: bool = True` to
    `backend/spec_modules/base.py::ResearchDimension` and document that it is an
-   issue-readiness policy, not a fan-out failure policy.
+   issue-readiness policy, not a fan-out failure policy. Required-by-default is
+   the frozen decision: a dimension may opt out only explicitly, and the module
+   must carry a documented rationale beside any `required=False` declaration.
+   Registry validation rejects an optional dimension without one.
 2. Extend module registry validation to require an actual boolean. Keep old
    module constructors source-compatible through the default.
-3. Mark `governing_codes` required in:
-   - `backend/spec_modules/generic.py`; and
-   - `backend/spec_modules/hyperscale_fire.py`.
+3. Leave every dimension in `backend/spec_modules/generic.py` and
+   `backend/spec_modules/hyperscale_fire.py` required (the default). Do not add
+   any `required=False` declaration in this program.
 4. Add a small pure helper near readiness derivation that joins module
    dimensions to cumulative profile statuses by `dimension_id` and returns:
    - all incomplete statuses;
    - incomplete required dimensions; and
    - unknown/missing required status records (fail closed).
-5. Rewrite only the `research_complete` readiness check in
+5. Validate the research facts the readiness/manifest path consumes,
+   structurally: dimension ids unique; completed and failed sets disjoint;
+   counts consistent with the id lists; every required dimension id resolvable
+   against the module. A record that fails validation is treated as not
+   research-complete (fail closed for readiness, with a detail message naming
+   the inconsistency) while project load remains permissive per the final
+   product rule.
+6. Rewrite only the `research_complete` readiness check in
    `backend/app.py::_readiness_payload`:
    - non-complete runner status: fail with existing status;
    - complete runner with no profile: fail with an evidence-missing message;
+   - structurally invalid research facts: fail with the validation detail;
    - incomplete required dimension: fail and name it, with “press Research
      again to retry” guidance;
    - only optional incomplete dimensions: pass but explicitly state `N of M`
      and name the absent optional areas;
    - all dimensions complete: retain “Requirements research complete.”
-6. Use cumulative `profile_result.dimension_statuses`; never judge only the
+7. Use cumulative `profile_result.dimension_statuses`; never judge only the
    latest round event. A failed extra round must not regress an earlier
    completed required dimension.
-7. Update manifest fields added in Chunk 3.1 with required-policy ids/titles.
+8. Update manifest fields added in Chunk 3.1 with required-policy ids/titles.
    The current module policy, not a hard-coded id, determines them.
-8. Preserve legacy behavior through profile deserialization: pre-round profiles
+9. Preserve legacy behavior through profile deserialization: pre-round profiles
    already synthesize completed statuses. Add an explicit legacy test.
 
 ### Files
@@ -145,11 +177,15 @@ venv\Scripts\python -m pytest -q tests/test_spec_modules.py tests/test_research_
 
 ### Acceptance criteria
 
-- A never-completed `governing_codes` dimension blocks readiness even when
-  another dimension completed.
-- A later successful governing-codes round restores readiness.
+- Any never-completed required dimension (all four, in both shipped modules)
+  blocks readiness even when another dimension completed.
+- A later successful round for that dimension restores readiness.
 - A later failed rerun does not revoke cumulative completion.
-- An optional failed dimension produces truthful passing detail.
+- A declared-optional failed dimension (test-only module fixture) produces
+  truthful passing detail, and registry validation rejects an optional
+  dimension without a documented rationale.
+- Structurally invalid research facts read as not-research-complete without
+  blocking project load.
 - No runner status or round accumulation semantics changed.
 
 ### Implementation record

@@ -1,6 +1,6 @@
 # Phase 1 — Provider stream safety
 
-- Status: in progress (1.1 complete; 1.2–1.4 planned)
+- Status: in progress (1.1–1.2 complete; 1.3–1.4 planned)
 - Prerequisite: repository baseline green
 - Risk: critical; this phase changes provider tool configuration, continuation
   requests, and committed conversation history
@@ -216,11 +216,60 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_qc_ver
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete** (2026-07-29)
+- Commit/PR: `f0a5ac5` — PR #89
+- Tests: `tests/test_research_engine.py` gains
+  `test_pause_continuation_echoes_the_container_and_a_retry_drops_it` —
+  one scripted dimension covering the whole contract in order (pause with
+  `cont_research_1` → pause *without* the field, retained → retryable
+  failure → clean retry that carries nothing) plus the assertions that the
+  paused assistant content is re-sent verbatim and the id reaches neither
+  `system`, `tools`, nor `messages` — and
+  `test_a_dimension_without_any_container_is_unaffected` (the normal
+  direct-caller path emits no `container` key at all).
+  `tests/test_qc_live_events.py` gains the QC equivalent,
+  `test_qc_pause_continuation_echoes_the_container_and_a_retry_drops_it`,
+  which additionally pins that the four non-web lenses stay container-free.
+  Focused run green (research engine / QC verifier v3 / QC live events / QC
+  / research API / research rounds / stop — 99 passed); full gate green:
+  `pytest -q` 1145 passed, 9 skipped. No frontend change, so `npm test` /
+  `npm run build` were not required.
 - Deviations:
-- Manual QA owed:
+  - `response_container_id` lives in `research/grounding.py`, not
+    duplicated in both engines. That module already owns "read one fact off
+    a provider response" (`web_search_count`, `classify_stop_reason`, the
+    evidence collectors) and both engines already import from it, so the
+    retain-latest-nonblank rule has exactly one definition.
+  - It returns `""` rather than `str | None`, which makes the retention
+    rule a plain `container_id = response_container_id(r) or container_id`.
+    The plan's `str | None` was a typing detail; the behavior it specifies
+    is unchanged.
+  - `research_response` also took the `container=` kwarg (the plan listed
+    four factories). An asymmetric fakes module is a trap, and the kwarg is
+    byte-compatible when absent.
+  - **`SequencedFakeClient` now snapshots each captured request's
+    `messages` list.** Not in the plan, but required to make the plan's own
+    "the assistant pause content is still resent verbatim" bullet
+    assertable: both engines append to a single list across continuations,
+    so capturing it by reference made every request in an attempt show that
+    attempt's *final* conversation. The first draft of the research test
+    asserted `["user", "assistant"]` and got `["user", "assistant",
+    "assistant"]` — the aliasing, not a bug in the engine. A shallow copy
+    is enough (the message dicts are never mutated in place; the resend
+    sanitizer builds new ones).
+  - `_FakeStreamCtx.get_final_message` and `SequencedFakeClient`'s
+    non-`usage` fallback both rebuilt the response and dropped `container`;
+    they now carry it through. Not needed by this chunk's paths (research
+    and QC take `_FakeResearchStreamCtx`, which returns the response as-is)
+    but required by Chunk 1.3's chat loop, and a fake that silently drops
+    the field under test is worse than no fake.
+  - `tests/test_qc_verifier_v3.py` untouched — the plan said "and/or", and
+    `test_qc_live_events.py` already had the engine-level harness with
+    request capture the test needs.
+- Manual QA owed: none specific to this chunk. The provider cannot be made
+  to return `pause_turn` on demand, which is exactly why the contract is
+  proven hermetically; Phase 1's shared live canary (Chunk 6.5) confirms a
+  natural pause opportunistically.
 
 ## Chunk 1.3 — Chat continuation container (defense-in-depth)
 

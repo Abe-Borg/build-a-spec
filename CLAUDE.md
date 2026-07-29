@@ -3360,6 +3360,24 @@ dicts, plus the documentation that key makes true.
   depends on the models **and** this caller mode. Re-enabling dynamic
   filtering is an owner decision (token savings vs. ZDR + the container
   obligation) and must re-qualify those claims in the same change.
+- **Continuation containers ride along as defense-in-depth (Chunk 1.2).**
+  `grounding.response_container_id` reads `container.id` off a response
+  (duck-typed, blank when absent); `research/engine._run_dimension` and
+  `qc/engine._run_streaming_call` each keep an **attempt-local**
+  `container_id`, build a fresh `stream_kwargs = dict(request_kwargs)` per
+  request, and add a top-level `container` key only when nonblank. Three
+  rules make it correct: (1) the refresh is `response_container_id(r) or
+  container_id`, so a continuation that omits the field has not *revoked*
+  the container; (2) the reset lives inside the retry loop and outside the
+  continuation loop — a retry abandons the conversation, so inheriting the
+  failed attempt's container would point a fresh request at a context that
+  is no longer its own; (3) `request_kwargs` is never mutated, so the
+  cached prefix (tools → system → the shared user block) stays byte-
+  identical and the container touches nothing cacheable. It is never
+  serialized into messages, history, `QCResult`, `RequirementsProfile`, or
+  a project file. With direct callers no container is expected at all —
+  this exists so the *next* code-execution-called tool doesn't need an
+  incident first.
 - **Tests.** Exact-dict assertions, not just the one key, because the tool
   bytes lead the cached prefix: `test_research_engine.py`
   (`test_web_tools_declare_direct_callers_on_every_research_request` over all
@@ -3369,7 +3387,19 @@ dicts, plus the documentation that key makes true.
   and its two verifier seats, and that the other four lenses carry no web
   tools at all), and the chat request assertion in `test_app.py`. The live
   direct-mode canary (Chunk 6.5) is the paid confirmation and is not required
-  to land this.
+  to land this. Chunk 1.2 adds the container round-trip in
+  `test_research_engine.py` and `test_qc_live_events.py`: one scripted
+  dimension/lens covers pause-with-container → pause-without (retained) →
+  retryable failure → clean retry (dropped), plus a no-container path that
+  must stay untouched. `tests/fakes.py` gained an optional `container=` on
+  `research_response` / `pause_response` / `qc_findings_response` /
+  `qc_verdict_response` / `raw_turn` (absent → the attribute is not set, so
+  every existing fixture is byte-identical), and `SequencedFakeClient` now
+  **snapshots** each captured request's `messages` list — the engines append
+  to one list across continuations, so capturing by reference made every
+  request in an attempt show that attempt's final conversation, which would
+  have made "this continuation re-sent exactly the paused content" quietly
+  assert something else.
 
 ## Commands
 

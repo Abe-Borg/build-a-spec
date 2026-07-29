@@ -1,7 +1,9 @@
 # Deep-dive remediation program
 
 - Owner: Abraham
-- Source review: `BUILDASPEC_DEEP_DIVE_REPORT.md`, dated 2026-07-28
+- Source review: the diagnostics/code review dated 2026-07-28. It is not in
+  this repository; these plans are self-contained and an implementation agent
+  does not need it.
 - Repository baseline inspected for this plan: `6f10c94`
 - Plan status: ready for implementation
 

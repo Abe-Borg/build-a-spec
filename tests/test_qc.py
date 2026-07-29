@@ -1147,6 +1147,58 @@ def test_qc_requests_cache_the_shared_prefix_across_the_whole_fan_out(
     )
 
 
+def test_qc_web_tools_declare_direct_callers_in_both_phases(monkeypatch):
+    """Every QC call carrying web tools pins ``allowed_callers: ["direct"]``.
+
+    Both phases matter: the ``code_compliance`` lens does the searching, and
+    its findings' verifier seats get their own small allowance. Under the
+    provider default (a code-execution caller) a paused call on either would
+    need a container id neither phase sends, and the Review Room's live
+    query/URL labels would have nothing to render.
+    """
+    client = _client()
+    _seed_doc(client, monkeypatch)
+    scripts = _qc_scripts(
+        code_compliance=[
+            qc_findings_response(
+                "code_compliance",
+                findings=[_finding("A finding", "issue", severity="medium")],
+            )
+        ],
+    )
+    scripts["A finding"] = [qc_verdict_response(True), qc_verdict_response(True)]
+    fake = SequencedFakeClient(scripts)
+    monkeypatch.setattr("backend.app.get_client", lambda: fake)
+    client.post("/api/qc/start")
+    assert _wait_qc(client)["status"] == "complete"
+
+    web_requests = [
+        request
+        for request in fake.requests
+        if any(
+            str(tool.get("type", "")).startswith("web_") for tool in request["tools"]
+        )
+    ]
+    # One web lens + its two verifier seats. The other four lenses reason
+    # from the document alone and carry no web tools at all.
+    assert len(web_requests) == 3
+    for request in web_requests:
+        web_tools = [
+            tool
+            for tool in request["tools"]
+            if str(tool.get("type", "")).startswith("web_")
+        ]
+        assert {tool["type"] for tool in web_tools} == {
+            "web_search_20260209",
+            "web_fetch_20260209",
+        }
+        assert all(tool["allowed_callers"] == ["direct"] for tool in web_tools)
+        # QC never sends a locale — only research knows the project's.
+        assert all("user_location" not in tool for tool in web_tools)
+
+    assert len(fake.requests) - len(web_requests) == len(QC_LENSES) - 1
+
+
 def test_qc_tools_are_strict_for_the_configured_model():
     """A QC model missing from the strict allowlist degrades silently.
 

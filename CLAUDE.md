@@ -132,7 +132,10 @@ backend/
   research/retry_policy.py [PORT: verification/retry_policy.py realtime subset]
   research/resend_sanitizer.py  [PORT ≈verbatim: fetched-PDF elision; pypdf]
   research/schema.py       [PORT: structured_schemas.py research slice +
-                           api_config.py web-tool builders + domain blocklist]
+                           api_config.py web-tool builders + domain blocklist];
+                           WEB_TOOL_ALLOWED_CALLERS pins direct invocation on
+                           both web tools — the one choke point all three
+                           channels (chat / research / QC) build them from
   research/runner.py       session-bound run lifecycle: daemon thread, event
                            log, snapshot, SSE follow generator (Build-a-Spec
                            native — no Spec Critic source); Batch 7 adds stop()
@@ -1419,7 +1422,11 @@ what happened next?* Four rules follow, and they bind every future change:
   beta endpoint and is out of the batch's plan scope; a refusal surfaces as an
   incomplete stop_reason → the lens fails clean under the existing failure
   policy. The Fable-era 30-day-retention caveat no longer applies: Opus 5 has
-  no retention requirement, so ZDR orgs can run Final QC (v1.8.0).
+  no retention requirement, so ZDR orgs can run Final QC (v1.8.0). **The
+  model was only half of that claim** — the `code_compliance` lens carries
+  the web tools, whose caller mode is the other half; both are ZDR-eligible
+  only with `allowed_callers: ["direct"]` (see "Server-tool caller mode"
+  below). A change to either half re-opens the claim.
 
 ## Batch 5 — implemented notes (v1.0.0: redline export + version diff)
 
@@ -3303,6 +3310,66 @@ validation and readiness gate.
   critical needs 2 of 3 (majority), so the extra critical seat buys leniency,
   not rigor. Real bug; changing survival semantics alongside a model swap
   would make regressions impossible to attribute.
+
+## Server-tool caller mode — implemented notes (direct callers)
+
+Deep-dive remediation Chunk 1.1, and the first change of that program. Both
+web server tools now declare `allowed_callers: ["direct"]`. No new endpoint,
+no new SSE event, no new env knob, no new dep — one key added in two builder
+dicts, plus the documentation that key makes true.
+
+- **The provider default was the bug.** Left unset, `web_search_20260209` /
+  `web_fetch_20260209` default to the **code-execution caller** ("dynamic
+  filtering"), which runs a server-side code-execution container under the
+  hood. That default cost three separate things, all observed in production:
+  (1) **reliability** — resuming a `pause_turn` that has a pending
+  code-execution-called tool use requires the response's provider container
+  id on the continuation request; no fan-out sent one, so a paused dimension
+  died on a nonretryable 400 (two research dimensions lost in the reviewed
+  run); (2) **visibility** — a code-execution caller does not stream
+  per-search `input_json_delta`, so the live query/URL labels on the research
+  agent board and in the QC Review Room had nothing to render; (3) **ZDR** —
+  dynamic filtering is not zero-data-retention-eligible by default, while the
+  trust dossier claimed every part of the app is. Direct callers remove all
+  three at the source, which is why this lands before the container
+  propagation of Chunks 1.2–1.3 — those stay as defense-in-depth for any
+  future code-execution-called tool, not as the fix.
+- **One choke point, three channels.** `WEB_TOOL_ALLOWED_CALLERS` in
+  `backend/research/schema.py` is the single declaration; both builders spread
+  a fresh `list(...)` of it, so a consumer mutating one request's tool list
+  can't reach across into another's. Every consumer — the interview's
+  `_chat_tools()`, `research/engine._run_dimension`, and QC's `_lens_tools` /
+  verifier seats — goes through those builders. **Never hand-roll a web-tool
+  dict**: it would silently take the provider default again, and nothing
+  except a live 400 would say so.
+- **Cache consequence, stated once.** Tools render ahead of system and
+  messages, so changing the tool bytes invalidates every previously cached
+  prefix. Each lineage (chat session, research dimension, the four
+  web-toolless QC lenses, `code_compliance`, the verifier seats) writes one
+  fresh entry and then behaves exactly as before. One-time and expected — not
+  a regression in the v1.8.0 caching work.
+- **`tool_choice` stays absent, for a new reason.** The old comment said the
+  API rejects a forcing/parallel-disable `tool_choice` combined with dynamic
+  filtering — true, and now moot. Direct callers lift the constraint, but the
+  behavior is deliberately unchanged: the system prompt tells the model to
+  end its turn with the output tool and the tagged-JSON fallback catches a
+  text detour, and that fallback is what makes the loop robust. Adding a
+  forcing choice is a behavioral change, not a cleanup.
+- **The ZDR claim is now true and is coupled.** `TrustDeepDiveModal`'s
+  data-handling table and the Final QC note above both say ZDR eligibility
+  depends on the models **and** this caller mode. Re-enabling dynamic
+  filtering is an owner decision (token savings vs. ZDR + the container
+  obligation) and must re-qualify those claims in the same change.
+- **Tests.** Exact-dict assertions, not just the one key, because the tool
+  bytes lead the cached prefix: `test_research_engine.py`
+  (`test_web_tools_declare_direct_callers_on_every_research_request` over all
+  four dimensions, plus a builder unit test proving the returned list is a
+  copy), `test_qc.py`
+  (`test_qc_web_tools_declare_direct_callers_in_both_phases` — the web lens
+  and its two verifier seats, and that the other four lenses carry no web
+  tools at all), and the chat request assertion in `test_app.py`. The live
+  direct-mode canary (Chunk 6.5) is the paid confirmation and is not required
+  to land this.
 
 ## Commands
 

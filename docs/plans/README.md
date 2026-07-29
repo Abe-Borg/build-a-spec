@@ -5,9 +5,10 @@ Owner: Abraham.
 ## Active
 
 **[Deep-dive remediation](deep-dive-remediation/README.md)** — the only live
-program. Six sequential phases, 22 chunks, none started. Its README carries the
-handoff prompt, the frozen decisions, the finding-coverage matrix and the phase
-gates; start there, not here.
+program. Six phases, 24 chunks; **Chunk 1.1 (direct server-tool callers) is
+complete**, the rest are planned. Its README carries the handoff prompt, the
+frozen decisions, the finding-coverage matrix, the dependency edges and the
+phase gates; start there, not here.
 
 ## Retired
 

@@ -2387,6 +2387,12 @@ def _source_checks(
 
 
 def _lens_tools(lens: QCLens, model: str) -> list[dict]:
+    # The builders pin ``allowed_callers: ["direct"]`` (see
+    # ``research/schema.WEB_TOOL_ALLOWED_CALLERS``) — QC gets the same
+    # caller mode as research and chat, from the same choke point. Never
+    # hand-roll a web-tool dict here; it would silently take the provider
+    # default (a code-execution caller), whose pause_turn continuations
+    # need a provider container id this call does not send.
     tools: list[dict] = []
     if lens.web:
         tools.append(build_web_search_tool(max_uses=lens.max_searches))

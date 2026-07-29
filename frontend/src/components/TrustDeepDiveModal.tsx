@@ -1197,7 +1197,7 @@ function Dossier() {
             [
               "Web search / web fetch",
               "Look something up mid-interview.",
-              "Executed on Anthropic’s servers under a shared domain blocklist, capped per round, and the model is instructed never to paste retrieved content into a provision.",
+              "Executed on Anthropic’s servers under a shared domain blocklist, capped per round, and the model is instructed never to paste retrieved content into a provision. The model calls both tools directly — no code-execution sandbox runs on its behalf, which is why each query and source URL is visible to you as it happens.",
             ],
           ]}
         />
@@ -1346,7 +1346,7 @@ function Dossier() {
             ],
             [
               "Data handling at Anthropic",
-              "Your requests are governed by Anthropic’s commercial API terms and privacy policy, linked below. Every model the app uses, including the Final QC reviewer, is available to organisations running zero data retention.",
+              "Your requests are governed by Anthropic’s commercial API terms and privacy policy, linked below. The app is zero-data-retention eligible end to end: every model it uses, including the Final QC reviewer, is available under zero data retention, and the two web tools are configured to be invoked directly by the model rather than through Anthropic’s server-side code-execution sandbox — a mode that is not zero-retention eligible by default.",
             ],
           ]}
         />

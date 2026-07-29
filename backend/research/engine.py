@@ -1133,9 +1133,13 @@ def _run_dimension(
         requirements_research_tool(model=model),
     ]
     tools[-1]["cache_control"] = {"type": "ephemeral"}
-    # No ``tool_choice`` — the ``_20260209`` web server tools run dynamic
-    # filtering (programmatic tool calling under the hood) and the API
-    # rejects a forcing/parallel-disable tool_choice combined with it.
+    # No ``tool_choice``: the system prompt instructs the model to end its
+    # turn with the research tool, and the tagged-JSON fallback catches a
+    # text detour. Forcing one was impossible while the web tools ran
+    # dynamic filtering (which rejects a forcing/parallel-disable
+    # tool_choice); ``WEB_TOOL_ALLOWED_CALLERS`` lifts that constraint, but
+    # the behavior is deliberately unchanged — the fallback is what makes
+    # the loop robust, not the absence of a forcing choice.
     request_kwargs: dict = {
         "model": model,
         "max_tokens": max_tokens,

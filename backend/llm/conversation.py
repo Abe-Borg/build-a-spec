@@ -137,6 +137,11 @@ def _chat_tools() -> list[dict[str, Any]]:
     ``suggest_prompts`` and then ``read_reference_doc`` are appended LAST, in
     that order, so each addition leaves the existing tool bytes intact as a
     stable cached prefix.
+
+    The two web tools come from the shared builders, which pin
+    ``allowed_callers: ["direct"]`` (see
+    ``research/schema.WEB_TOOL_ALLOWED_CALLERS``) — the interview, research,
+    and Final QC all invoke them the same way.
     """
     return [
         APPLY_SPEC_EDITS_TOOL,

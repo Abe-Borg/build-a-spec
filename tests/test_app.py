@@ -126,6 +126,20 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
         "suggest_prompts",
         "read_reference_doc",
     ]
+    # Both web tools invoke directly. The provider default for the
+    # ``_20260209`` versions is a code-execution caller, whose pause_turn
+    # continuations need a container id the chat loop does not send — and
+    # which stops streaming the per-search inputs the 🔍 chips are built
+    # from. Same builders, same mode, as research and Final QC.
+    web_tools = [t for t in request["tools"] if t["name"] in ("web_search", "web_fetch")]
+    assert [t["type"] for t in web_tools] == [
+        "web_search_20260209",
+        "web_fetch_20260209",
+    ]
+    assert all(t["allowed_callers"] == ["direct"] for t in web_tools)
+    # No per-turn locale here: it would bust the cached tool prefix for the
+    # whole session (see ``_chat_tools``).
+    assert all("user_location" not in t for t in web_tools)
     # Adaptive thinking with the summarized-display opt-in (the "see what
     # the model is thinking" stream) at the configured effort.
     assert request["thinking"] == {"type": "adaptive", "display": "summarized"}

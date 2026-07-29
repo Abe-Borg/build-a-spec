@@ -1,6 +1,6 @@
 # Phase 1 — Provider stream safety
 
-- Status: planned
+- Status: in progress (1.1 complete; 1.2–1.4 planned)
 - Prerequisite: repository baseline green
 - Risk: critical; this phase changes provider tool configuration, continuation
   requests, and committed conversation history
@@ -120,11 +120,47 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_resear
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete** (2026-07-29)
+- Commit/PR: branch `claude/deep-dive-remediation-plans-omivzu`
+- Tests: `tests/test_research_engine.py` gains
+  `test_web_tools_declare_direct_callers_on_every_research_request` (exact
+  tool dicts on all four dimension requests) and
+  `test_builders_are_the_only_source_of_the_web_tool_shape` (builder unit:
+  the returned `allowed_callers` list is a fresh copy, so a consumer
+  mutating one request's tools can't reach into another's).
+  `tests/test_qc.py` gains
+  `test_qc_web_tools_declare_direct_callers_in_both_phases` (the
+  `code_compliance` lens plus its two verifier seats; also pins that the
+  other four lenses carry no web tools). `tests/test_app.py`'s chat-request
+  assertion now covers the two web tools' type and caller mode. Focused run
+  green (`test_research_engine` / `test_research_api` / `test_qc` /
+  `test_app`, 84 passed); full gate green — `pytest -q` 1142 passed,
+  9 skipped; `npm test` 92 passed; `npm run build` clean.
 - Deviations:
-- Manual QA owed:
+  - The literal is a named constant,
+    `research/schema.WEB_TOOL_ALLOWED_CALLERS`, rather than being inlined
+    twice. One declaration, one place for the rationale; both builders
+    spread a fresh `list(...)` of it.
+  - `backend/llm/conversation.py::_chat_tools` also got a docstring pointer
+    (the plan listed only the two engines' comments). Chat is the third
+    consumer and the acceptance criterion covers it, so the reader who
+    finds the tool list there needs the same pointer.
+  - `tests/test_app.py` was added to the test set for the same reason —
+    the plan's file list stopped at research and QC, but "every research,
+    QC, **and chat** request" is the stated criterion.
+  - `tests/test_research_api.py` deliberately unchanged: the API path runs
+    the same `_run_dimension`, and the engine test already asserts the
+    exact dicts across all four dimensions. A second assertion there would
+    duplicate coverage, not add it.
+  - `backend/release_notes.py` deliberately unchanged. Its v1.8.0 item
+    ("Available on zero-retention accounts") is a **model**-scoped claim —
+    Fable 5 required 30-day retention, Opus 5 does not — and that was and
+    remains accurate. The app-level ZDR statement lives in the trust
+    dossier, which is updated. Editing a shipped changelog entry rewrites
+    what users already read, for no accuracy gain.
+- Manual QA owed: the live direct-mode canary (Chunk 6.5) — paid and
+  owner-authorized. Assert a search-heavy research dimension completes with
+  streamed query/URL deltas and no container-id 400.
 
 ## Chunk 1.2 — Research and QC continuation containers (defense-in-depth)
 

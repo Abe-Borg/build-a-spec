@@ -13,11 +13,16 @@ Conventions preserved from the source:
 - ``strict: true`` is attached only for models known to support structured
   outputs (a misconfigured model override degrades to a lenient tool, never
   an API rejection).
-- Research sends NO ``tool_choice`` — the ``_20260209`` web server tools
-  run dynamic filtering (programmatic tool calling under the hood) and the
-  API rejects a forcing/parallel-disable tool_choice combined with it. The
-  system prompt instructs the model to end its turn with the research
-  tool; the tagged-JSON fallback stays reachable for text detours.
+- Research sends NO ``tool_choice``. The system prompt instructs the model
+  to end its turn with the research tool; the tagged-JSON fallback stays
+  reachable for text detours. (Forcing one was impossible while the web
+  tools ran dynamic filtering, which rejects a forcing/parallel-disable
+  ``tool_choice``; ``WEB_TOOL_ALLOWED_CALLERS`` lifts that constraint, but
+  the behavior is deliberately unchanged — see below.)
+
+Both web server tools declare ``allowed_callers: ["direct"]`` — see
+:data:`WEB_TOOL_ALLOWED_CALLERS` for why that is not the default and what
+the default cost.
 """
 from __future__ import annotations
 
@@ -228,6 +233,31 @@ WEB_BLOCKED_DOMAINS: tuple[str, ...] = (
 # research input window.
 WEB_FETCH_MAX_CONTENT_TOKENS = 50_000
 
+# The model invokes both web tools DIRECTLY. Left unset, the ``_20260209``
+# versions default to the code-execution caller ("dynamic filtering"), which
+# runs a server-side code-execution container under the hood. That default
+# cost this app three things, all of them observed in production:
+#
+# 1. Reliability. Resuming a ``pause_turn`` with a pending code-execution-
+#    called tool use requires the response's provider container id on the
+#    continuation request. Neither fan-out sent one, so a paused dimension
+#    died on a nonretryable 400 (two dimensions lost in the reviewed run).
+# 2. Visibility. A code-execution caller does not stream per-search
+#    ``input_json_delta``, so the live query/URL labels the research board
+#    and the QC Review Room render had nothing to show.
+# 3. ZDR. Dynamic filtering is not zero-data-retention-eligible by default,
+#    while the app's trust dossier claims every part of it is.
+#
+# Direct callers remove all three at the source. Re-enabling dynamic
+# filtering is an owner decision, not a tuning pass: it must land together
+# with container propagation on every continuation path AND a re-qualified
+# ZDR claim in the same change.
+#
+# One-time cost of setting it: the tool bytes changed, so every previously
+# cached prefix (tools render first, ahead of system and messages) stops
+# matching once and is rewritten. Expected, per cache lineage.
+WEB_TOOL_ALLOWED_CALLERS: tuple[str, ...] = ("direct",)
+
 
 def build_web_search_tool(
     *, max_uses: int, user_location: dict | None = None
@@ -236,11 +266,13 @@ def build_web_search_tool(
 
     ``user_location`` comes from ``ProjectProfile.web_search_user_location``
     so every research search runs as the project's own locale — the whole
-    point of the phase.
+    point of the phase. ``allowed_callers`` pins direct invocation
+    (:data:`WEB_TOOL_ALLOWED_CALLERS`).
     """
     tool: dict[str, Any] = {
         "type": "web_search_20260209",
         "name": "web_search",
+        "allowed_callers": list(WEB_TOOL_ALLOWED_CALLERS),
         "blocked_domains": list(WEB_BLOCKED_DOMAINS),
         "max_uses": max_uses,
     }
@@ -255,10 +287,13 @@ def build_web_fetch_tool(*, max_uses: int) -> dict[str, Any]:
     Generally available — no ``anthropic-beta`` header (sending a retired
     beta value is rejected with HTTP 400). Citations enabled so cited URLs
     land in the grounding partition like search citations do.
+    ``allowed_callers`` pins direct invocation
+    (:data:`WEB_TOOL_ALLOWED_CALLERS`).
     """
     return {
         "type": "web_fetch_20260209",
         "name": "web_fetch",
+        "allowed_callers": list(WEB_TOOL_ALLOWED_CALLERS),
         "blocked_domains": list(WEB_BLOCKED_DOMAINS),
         "max_uses": max_uses,
         "citations": {"enabled": True},

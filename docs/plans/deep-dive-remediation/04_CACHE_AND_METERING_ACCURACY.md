@@ -122,15 +122,22 @@ Each chat request should contain copy-on-write breakpoints at:
 3. the tail of the full current request, including the fresh PROJECT CONTEXT
    and continuation messages.
 
-All three use `{"type": "ephemeral", "ttl": "1h"}`. Stored history never
-carries `cache_control`.
+All three use the same TTL, sourced from one setting
+(`BUILD_A_SPEC_CHAT_CACHE_TTL`, default `"1h"`), so the policy can be
+re-tuned against real session economics without a code change. The TTL is
+**uniform within every request** regardless of the configured value — mixed
+TTLs impose a provider ordering constraint (longer-lived entries must precede
+shorter-lived ones) whose violation is a nonretryable 400, the exact failure
+mode PR #82's review caught. Stored history never carries `cache_control`.
 
 ### Implementation
 
 1. Copy-adapt QC's `_cache_control` shape into
    `backend/llm/conversation.py`; do not import a QC-private helper.
 2. Make `_stable_system_blocks` and `_with_tail_cache_breakpoint` accept/use one
-   cache TTL source, defaulting to the chosen one-hour interview policy.
+   cache TTL source, read from the new setting (default one hour). Validate the
+   setting to the provider-supported values and fall back loudly to the
+   default on an invalid value.
 3. Add a copy-on-write committed-history helper or replace the tail helper with
    a clearly named multi-breakpoint builder. It must receive the committed
    history boundary explicitly rather than trying to infer it from roles.
@@ -163,6 +170,7 @@ carries `cache_control`.
 ### Files
 
 - `backend/llm/conversation.py`
+- `backend/settings.py` (`BUILD_A_SPEC_CHAT_CACHE_TTL`)
 - `tests/test_app.py`
 - `tests/test_session_modules.py`
 - `tests/test_project_package.py`
@@ -179,7 +187,8 @@ venv\Scripts\python -m pytest -q tests/test_app.py tests/test_session_modules.py
 
 - A second/third turn has a committed-history breakpoint before the fresh
   context and a tail breakpoint after it.
-- All chat breakpoints are one hour; no mixed-TTL request can be built.
+- All chat breakpoints share the configured TTL (default one hour); no
+  mixed-TTL request can be built at any setting.
 - Stored/saved history remains annotation-free.
 - Context refresh, thinking preservation within a turn, PDF elision, and turn
   atomicity remain unchanged.
@@ -253,6 +262,16 @@ When a stream is closed immediately, the SDK snapshot usually lacks the final
 `message_delta` output count. Exact provider output usage is unavailable. The
 fix must improve the estimate without presenting it as exact.
 
+### Separation rule (binding)
+
+Provider-reported token counts and heuristic estimates never share a field.
+`output_tokens` always holds exactly what the provider reported — on a stopped
+turn that is the snapshot placeholder, and it stays that way. The estimate
+lands in a separate `estimated_output_tokens` counter with an explicit
+disclosure flag, and every aggregate that includes it says so. Blending
+`ceil(chars / 4)` into a provider total would corrupt the one number that can
+be reconciled against provider records.
+
 ### Implementation
 
 1. Add a deterministic private estimator for the serialized assistant content
@@ -261,21 +280,29 @@ fix must improve the estimate without presenting it as exact.
    input. A conservative `ceil(character_count / 4)` heuristic is acceptable
    unless the installed SDK exposes a reliable running output count.
 2. On `stopped_mid_stream` only:
-   - compare the estimate with the snapshot's reported `output_tokens`;
-   - add the larger value to round/turn usage, without double-adding the
-     snapshot placeholder; and
-   - use it in the last-round context gauge after subtracting any separately
-     estimated thinking portion only if that portion can be identified
-     honestly. Otherwise document the gauge as an upper estimate.
-3. Add a disclosure field such as `usage_estimated: true` on the
-   `turn_complete` and round trace event. If useful for diagnostics, record
-   `estimated_output_tokens` as a separate informational counter while pricing
-   only `output_tokens`.
-4. Do not estimate on normal terminal responses; exact provider usage wins.
+   - record `estimated_output_tokens = max(0, estimate - reported)` beside the
+     untouched provider-reported usage — never overwrite or inflate
+     `output_tokens`;
+   - set `usage_estimated: true` on the round/turn usage record;
+   - have the ledger carry the estimated component as its own labeled bucket:
+     priced at the same output rate but reported as an estimated addition in
+     `/api/usage`, the header ticker, and the Settings usage table (which
+     already label totals as estimates); and
+   - use reported-plus-estimated for the last-round context gauge, documented
+     as an upper estimate.
+3. Propagate the disclosure end to end: `turn_complete.usage`, the round trace
+   event, and any aggregate that includes an estimated component must carry
+   the flag/counter so downstream consumers can separate exact from estimated
+   spend.
+4. Do not estimate on normal terminal responses; exact provider usage wins and
+   the estimated counter stays absent/zero.
 5. Add tests with a long stopped snapshot, a tiny provider placeholder, a
    provider count larger than the heuristic, thinking/tool input, and a normal
-   end turn. Assert monotonicity and disclosure, not tokenizer-level exactness.
-6. Update ledger/docs wording so session cost remains explicitly an estimate.
+   end turn. Assert that `output_tokens` always equals the provider-reported
+   value, that the estimated counter is separate and disclosed, and
+   monotonicity — not tokenizer-level exactness.
+6. Update ledger/docs wording so session cost remains explicitly an estimate
+   and names the estimated-output component.
 
 ### Files
 
@@ -296,7 +323,10 @@ Then run the full standard verification commands from the master plan.
 
 ### Acceptance criteria
 
-- Stopping after substantial output no longer records only the SDK placeholder.
+- Stopping after substantial output no longer under-reports spend: the
+  estimated component is visible in usage and cost surfaces.
+- `output_tokens` always equals the provider-reported value; the estimate
+  lives only in `estimated_output_tokens`.
 - Normal completed responses use exact usage unchanged.
 - Every estimated record is explicitly labeled estimated.
 - Estimated output is counted once in cost and context metrics.

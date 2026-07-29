@@ -2,15 +2,27 @@
 
 - Status: planned
 - Prerequisite: repository baseline green
-- Risk: critical; this phase changes provider continuation requests and
-  committed conversation history
+- Risk: critical; this phase changes provider tool configuration, continuation
+  requests, and committed conversation history
 
 ## Goal
 
-Make the current `web_search_20260209` and `web_fetch_20260209` tools safe in
-all three consumers. A paused server-tool call must resume inside the same
-provider container, while a stopped or truncated chat turn must never save a
-server tool use that has no matching result.
+Make the `web_search_20260209` and `web_fetch_20260209` tools safe in all
+three consumers, in two layers:
+
+1. **Restore direct tool invocation first.** The `_20260209` versions default
+   to `allowed_callers: ["code_execution_20260120"]` (dynamic filtering), which
+   runs server-side code execution under the hood. Anthropic documents that
+   this mode is **not ZDR-eligible by default** and that resuming a pause with
+   pending code-execution-called tool uses requires the provider container id —
+   the exact 400 that killed two research dimensions in the reviewed run.
+   Setting `allowed_callers: ["direct"]` removes the container requirement at
+   the source, restores the documented ZDR posture, and restores per-search
+   `input_json_delta` streaming (the live query/URL labels Phase 2 also hardens).
+2. **Keep container propagation and history scrubbing as defense-in-depth.** A
+   paused server-tool call must resume inside the same provider container when
+   one exists, and a stopped or truncated chat turn must never save a server
+   tool use that has no matching result — regardless of caller mode.
 
 This phase fixes the two production-loss mechanisms in Section A of the source
 report. Complete it before changing activity UI, research readiness, caching,
@@ -45,7 +57,76 @@ baseline has already shifted slightly.
   `QCResult`, `RequirementsProfile`, or project files.
 - Tests must prove a fresh retry does not inherit a failed attempt's id.
 
-## Chunk 1.1 — Research and QC continuation containers
+## Chunk 1.1 — Direct server-tool callers (reliability + ZDR)
+
+### Decision being implemented
+
+Frozen decision: the shipped web tools run with `allowed_callers: ["direct"]`.
+Dynamic filtering's token savings are real but unproven for this workload, and
+its code-execution caller is what produced the nonretryable container-id 400,
+the invisible live queries, and the undocumented non-ZDR posture. Re-enabling
+dynamic filtering later is an explicit owner decision, contingent on the
+container support (Chunks 1.2–1.3) being live and canary-verified.
+
+### Implementation
+
+1. In `backend/research/schema.py`, add `"allowed_callers": ["direct"]` to both
+   web-tool builder dicts (`web_search_20260209` and `web_fetch_20260209`).
+   Every consumer — research dimensions, the QC `code_compliance` lens, and the
+   chat loop — receives the tools through these builders, so one change covers
+   all three channels.
+2. Update the module docstring and the engine comments that describe
+   "programmatic tool calling under the hood": with direct callers there is no
+   code-execution container by default, and per-search inputs stream as
+   `input_json_delta` again.
+3. Reconcile the ZDR claims: update the `CLAUDE.md` Final QC note and any
+   README/release-note/trust-dossier wording so the ZDR statement matches the
+   shipped tool configuration. If dynamic filtering is ever re-enabled, those
+   claims must be re-qualified in the same commit.
+4. Note the cache consequence in the commit message and docs: changing the
+   tool definition changes the request's tool bytes, so previously cached
+   prefixes stop matching and subsequent requests write fresh entries. This is
+   expected and one-time per cache lineage.
+5. Tests: assert the exact tool dicts (including `allowed_callers`) that each
+   engine sends, via the fake client's captured request kwargs. Existing
+   streaming fixtures already model direct-shaped delta streams and must pass
+   unchanged.
+
+### Files
+
+- `backend/research/schema.py`
+- `backend/research/engine.py` (comments)
+- `backend/qc/engine.py` (comments)
+- `tests/test_research_engine.py`
+- `tests/test_research_api.py`
+- `tests/test_qc.py`
+- `CLAUDE.md`, `README.md`
+
+### Focused verification
+
+```powershell
+venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_research_api.py tests/test_qc.py
+```
+
+### Acceptance criteria
+
+- Every research, QC, and chat request that carries web tools declares
+  `allowed_callers: ["direct"]` on both tools.
+- No documentation still claims ZDR compatibility for a configuration that
+  does not have it.
+- The live direct-mode canary (Phase 6.5) is the paid confirmation that
+  research completes without a container-id 400 and that query/URL deltas
+  stream; it is not required to land this chunk.
+
+### Implementation record
+
+- Status: planned
+- Commit/PR:
+- Tests:
+- Deviations:
+- Manual QA owed:
+
+## Chunk 1.2 — Research and QC continuation containers (defense-in-depth)
 
 ### Implementation
 
@@ -105,7 +186,7 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_qc_ver
 - Deviations:
 - Manual QA owed:
 
-## Chunk 1.2 — Chat continuation container
+## Chunk 1.3 — Chat continuation container (defense-in-depth)
 
 ### Implementation
 
@@ -156,7 +237,7 @@ venv\Scripts\python -m pytest -q tests/test_app.py tests/test_streaming.py
 - Deviations:
 - Manual QA owed:
 
-## Chunk 1.3 — Dangling server-tool history scrub
+## Chunk 1.4 — Dangling server-tool history scrub and legacy repair
 
 ### Design
 
@@ -164,45 +245,83 @@ A valid server-tool pair can cross assistant-message boundaries after a
 `pause_turn`, so a per-message filter is incorrect. Implement one turn-wide
 helper that:
 
-1. collects every `tool_use_id` from `web_search_tool_result` and
-   `web_fetch_tool_result` blocks across all messages in the turn; then
-2. removes only `server_tool_use` blocks whose `id` is absent from that global
-   result-id set.
+1. collects every `tool_use_id` from **every recognized server-result family**
+   across all messages in the turn — `web_search_tool_result`,
+   `web_fetch_tool_result`, and the code-execution result families
+   (`bash_code_execution_tool_result`, `text_editor_code_execution_tool_result`,
+   and any future `*_tool_result` block carrying a `tool_use_id`) — so a
+   completed code-execution use is never mistaken for a dangling one;
+2. preserves complete use/result pairs exactly as received;
+3. removes `server_tool_use` blocks whose `id` is absent from that global
+   result-id set; and
+4. removes orphaned server-result blocks whose `tool_use_id` matches no
+   retained `server_tool_use` — an unpaired result is as invalid on resend as
+   an unpaired use.
 
-Blocks with unknown types remain untouched. A helper that cannot identify a
-mapping must fail safe for the dangling use without deleting completed result
-or citation blocks.
+Blocks with genuinely unknown types remain untouched. A helper that cannot
+identify a mapping must fail safe for the dangling use without deleting
+completed result or citation blocks.
+
+### Legacy poisoned-history repair
+
+The stop bug may already have written a dangling `server_tool_use` into a
+saved `.baspec`. Committed-history scrubbing alone cannot heal those files, so
+apply the same pairing helper defensively at the two read boundaries:
+
+- during project load, over the restored chat history (log a sanitized
+  diagnostics event when anything was repaired — never silently); and
+- in `sanitize_messages_for_resend`, as a final guard over the outgoing
+  request, so even an unrepaired in-memory history cannot poison a request.
+
+Repair is copy-on-write and must not rewrite the saved file until the user
+next saves normally.
 
 ### Implementation
 
 1. Add a private copy-on-write scrubber in
    `backend/llm/conversation.py`. Give it a name that states the pairing rule,
    such as `_without_unpaired_server_tool_uses`.
-2. Use it in all three chat safety layers:
+2. Use it in all four safety layers:
    - the mid-stream `user_stop`/`max_tokens` truncation path before the
      assistant message is appended;
    - the between-round stop path, including a trailing paused assistant
-     message; and
-   - `_committed_messages` as the final invariant guard over the entire turn.
+     message;
+   - `_committed_messages` as the final invariant guard over the entire turn;
+     and
+   - the legacy read boundaries described above (project load and
+     `sanitize_messages_for_resend`).
 3. If a scrub empties the terminal assistant content, use the existing
    user-stop or truncation placeholder. Do not introduce adjacent user roles.
 4. Preserve the existing removal of client `tool_use`, thinking, context,
    fetched PDF bodies, reference bodies, and heavy figure inputs.
-5. Add scripted tests for:
+5. Give the fakes realistic wire shapes: scripted `server_tool_use` blocks and
+   result blocks must carry matching `srvtoolu_`-style ids (never placeholder
+   collisions), and paused fixtures must preserve any scripted container so the
+   Chunk 1.2/1.3 threading stays covered by the same scenarios.
+6. Add scripted tests for:
    - stop after `server_tool_use` start but before a result;
    - `max_tokens` with a bare server tool use;
    - stop in the gap immediately after a paused response;
    - a valid use/result pair in one assistant message;
    - a valid pair split across two assistant messages by `pause_turn`;
+   - a completed code-execution-family pair that must be preserved intact;
+   - an orphaned server-result block that must be removed with its lost use;
    - a follow-up user turn after each unsafe stop/truncation, proving the
      captured outgoing history validates and the turn succeeds;
-   - project save/load after a stopped web turn, proving poison cannot persist.
-6. Update the conversation invariants in `CLAUDE.md`: stop strips both dangling
-   client and server tool calls, with global pairing across the turn.
+   - project save/load after a stopped web turn, proving poison cannot persist;
+     and
+   - loading a hand-built legacy project containing a dangling
+     `server_tool_use`, proving the load repairs it, logs the repair, and the
+     next turn's outgoing request validates.
+7. Update the conversation invariants in `CLAUDE.md`: stop strips both dangling
+   client and server tool calls, with global pairing across the turn and
+   defensive repair at load/resend.
 
 ### Files
 
 - `backend/llm/conversation.py`
+- `backend/research/resend_sanitizer.py` (resend-boundary guard seam)
+- `backend/spec_doc/project.py` or the session load path that restores history
 - `tests/fakes.py`
 - `tests/test_stop.py`
 - `tests/test_app.py`
@@ -230,11 +349,15 @@ venv\Scripts\python -m pytest -q
 ## Phase 1 manual QA
 
 These steps are paid/provider-dependent and are deferred to Phase 6.5 unless
-the owner explicitly authorizes them earlier:
+the owner explicitly authorizes them earlier. The provider cannot be forced to
+return `pause_turn` on demand, so pause-continuation correctness is proven by
+the hermetic contract tests above; the live canary asserts what is
+deterministic and verifies a natural pause opportunistically:
 
-- Run a search-heavy research dimension long enough to produce `pause_turn` and
-  confirm it resumes instead of returning the container-id 400.
+- Run a search-heavy research dimension in direct mode and confirm it
+  completes, query/URL deltas stream, and no container-id 400 occurs. If a
+  natural `pause_turn` occurs, confirm its continuation succeeds.
 - Stop chat while the UI says “Searching the web…”, then send another message
   and save/reopen the project.
 - Exercise a web-enabled Final QC lens and inspect diagnostics for successful
-  continuation.
+  completion.

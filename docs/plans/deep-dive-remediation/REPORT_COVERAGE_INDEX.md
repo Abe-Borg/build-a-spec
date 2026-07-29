@@ -2,20 +2,22 @@
 
 This index accounts for every titled finding in the 2026-07-28 diagnostics
 review plus the cross-lens cost improvement called out in its run-forensics
-summary. The review itself is not in this repository; these plans are
-self-contained and carry the findings they act on. Later verifier corrections
-in that review control severity and scope. “Consolidated” means the heading
-shares one implementation with another heading; it does not mean the behavior
-is ignored.
+summary, and — as of the 2026-07-29 revision — the adjudication addenda from
+the second review (Section H). The reviews themselves are not in this
+repository; these plans are self-contained and carry the findings they act on.
+Later verifier corrections and the adjudication control severity and scope.
+“Consolidated” means the heading shares one implementation with another
+heading; it does not mean the behavior is ignored.
 
 ## Run-forensics observations
 
 | Observation | Disposition |
 |---|---|
 | No crashes; empty faulthandler log; ResizeObserver browser noise | No change. These are healthy/benign facts. |
-| Two research dimensions failed with container-id 400 | Chunks 1.1 and 1.2 fix every consumer; 1.3 prevents persistent chat poison. |
-| Live research board recorded activity but no queries/URLs | Chunk 2.1. |
+| Two research dimensions failed with container-id 400 | Chunk 1.1 removes the failing caller mode at the source; 1.2-1.3 keep container support as defense-in-depth; 1.4 prevents and repairs persistent chat poison. |
+| Live research board recorded activity but no queries/URLs | Chunk 1.1 restores direct-mode delta streaming; Chunk 2.1 adds the start-input fallback as defense-in-depth. |
 | QC readiness/report contradicted the partial research manifest | Chunks 3.1-3.3. |
+| Report said "Issue readiness: Yes" beside "OPEN FINDINGS REMAIN" | Chunk 5.4 (adjudication addition R29). |
 | Terminal events absent from `events.jsonl` | Narrowed by the report's refutation: Chunk 6.1 closes stop spans; normal terminal outcomes remain span closes. |
 | Final QC cost grew with 45 candidates and no cross-lens dedup | Chunk 5.2 adds conservative lineage-preserving consolidation. |
 | Morning stop returned 409 after the run had settled | No change; report identifies this as harmless. |
@@ -24,14 +26,14 @@ is ignored.
 
 | Source finding heading (abridged) | Disposition |
 |---|---|
-| Research `pause_turn` drops response container id | Chunk 1.1. |
-| User stop/max-tokens persists pending `server_tool_use` | Chunk 1.3. |
-| Between-round stop after `pause_turn` persists pending server tool | Consolidated into Chunk 1.3's turn-wide pairing scrub. |
-| QC `pause_turn` drops code-execution container id (critical entry) | Chunk 1.1. |
-| Same missing container in Final QC `_run_streaming_call` (high entry) | Duplicate; Chunk 1.1. |
-| Chat tool loop resends `pause_turn` without container (high entry) | Chunk 1.2. |
-| Chat omits container but low search volume hides it (medium entry) | Duplicate; Chunk 1.2. |
-| Web-tool builders choose container-backed versions with no downstream support | Design-side duplicate; Chunks 1.1-1.2 plus invariant docs. |
+| Research `pause_turn` drops response container id | Chunks 1.1 (root cause removed) and 1.2 (defense-in-depth). |
+| User stop/max-tokens persists pending `server_tool_use` | Chunk 1.4. |
+| Between-round stop after `pause_turn` persists pending server tool | Consolidated into Chunk 1.4's turn-wide pairing scrub. |
+| QC `pause_turn` drops code-execution container id (critical entry) | Chunks 1.1 and 1.2. |
+| Same missing container in Final QC `_run_streaming_call` (high entry) | Duplicate; Chunks 1.1 and 1.2. |
+| Chat tool loop resends `pause_turn` without container (high entry) | Chunks 1.1 and 1.3. |
+| Chat omits container but low search volume hides it (medium entry) | Duplicate; Chunks 1.1 and 1.3. |
+| Web-tool builders choose container-backed versions with no downstream support | Root cause; Chunk 1.1 changes the caller mode, 1.2-1.3 add support, invariant docs updated. |
 
 ## B — Live visibility and UI failures
 
@@ -47,10 +49,10 @@ is ignored.
 
 | Source finding heading (abridged) | Disposition |
 |---|---|
-| Readiness passes `research_complete` when half failed | Chunks 3.1-3.2. Required missing coverage fails; optional missing coverage is truthfully named. |
+| Readiness passes `research_complete` when half failed | Chunks 3.1-3.2. Required missing coverage fails; declared-optional missing coverage is truthfully named. |
 | QC report derives no limitation from failed research dimensions | Chunks 3.1 and 3.3. |
 | Drafting context gives only a count, not missing coverage names | Chunk 3.1. |
-| Partial-complete has no must-have dimension | Chunk 3.2; `governing_codes` is required in both shipped modules. |
+| Partial-complete has no must-have dimension | Chunk 3.2; every dimension is required by default and all four shipped dimensions are required. |
 
 ## D — Cost architecture and metering
 
@@ -68,7 +70,7 @@ is ignored.
 
 | Source finding heading (abridged) | Disposition |
 |---|---|
-| Verification threshold inversion | Chunk 5.1 under schema/protocol v4. |
+| Verification threshold inversion | Chunk 5.1 under schema/protocol v4: the upheld/disputed/refuted/inconclusive outcome scheme plus the severity-gated evidence rule. |
 | Terminal research/QC events bypass trace mirror | Broad claim superseded by Section G; genuine explicit-stop span gap fixed in Chunk 6.1. |
 | Reviewed version 1-based, active version 0-based | Chunk 5.3. |
 | Per-lens and run-total request labels describe different populations | Chunk 5.3, extended for consolidation records. |
@@ -89,6 +91,38 @@ is ignored.
 | QC apply and `/api/doc` build mutable payload outside lock | Chunk 6.3 coherent payload capture. |
 | DOCX export performs raw ZIP/render under turn lock | Chunk 6.4 snapshot/render split for both source and normalized paths. |
 | Chat request kwargs parse fetched PDFs under turn lock | Chunk 6.4 detached sanitize/build plus pre-send revalidation. |
+
+## H — Adjudication addenda (2026-07-29)
+
+(Placed before Section G in reading order only because the addenda modify
+dispositions above; Section G's refutations remain binding non-goals.)
+
+Findings and corrections that emerged from the second review and the
+subsequent three-way adjudication, now first-class rows in the master matrix:
+
+| Adjudicated item | Disposition |
+|---|---|
+| `_20260209` dynamic filtering is not ZDR-eligible by default; the app claims ZDR compatibility | Chunk 1.1 (R28): `allowed_callers: ["direct"]` in both web-tool builders, ZDR claims reconciled. |
+| Sanitizer pairing must cover every server-result family, drop orphaned results, and repair legacy saved histories | Chunk 1.4 (R34): breadth + load/resend repair boundaries. |
+| Issue readiness contradicts the report sign-off (open findings) | Chunk 5.4 (R29): readiness split; masthead and sign-off derive from one helper. |
+| RF-001 was an under-evidenced refutation, not a proven false negative | Chunk 5.1 (R31): severity-gated evidence rule; an evidence-free critical/high refutation resolves disputed. |
+| Panel disagreement on severe findings must be visible, not rounded away | Chunk 5.1 (R15 revision): the disputed outcome. Both the majority-equivalent formula and unanimity-to-survive were rejected. |
+| Identical proposed operations must not gate duplicate recognition | Chunk 5.2 (R26 revision): defect-level grouping; operations reconciled after adjudication; SF-009/SF-023 regression fixture. |
+| Report is unreadable at 6,570 paragraphs | Chunk 5.4 (R32): executive layer added; full annex unchanged. |
+| Post-apply reports need pre-remediation labeling | Chunk 5.4 (R30, scoped): fingerprint staleness already forces re-runs; labeling and disposition lineage added. |
+| Support bundles cannot answer "which research coverage failed" | Chunk 3.1 (R33): failed-dimension facts in span close + diagnostics snapshot. |
+| A duplicate surviving consolidation must stay visible | Chunk 5.2 (R35): `duplicate_provision` advisory lint. |
+| Stopped-turn estimates must not blend into provider-reported usage | Chunk 4.4 (R14 revision): separate disclosed `estimated_output_tokens`. |
+| The live API cannot be forced to `pause_turn` | Frozen decision 12: hermetic forced-pause contract tests + opportunistic live verification. |
+
+Withdrawn or corrected during adjudication (no implementation action):
+
+| Claim | Resolution |
+|---|---|
+| "Uphold when upholds > refutes, ties to refuters" fixes the inversion | Withdrawn — algebraically identical to the shipped `(size // 2) + 1`. |
+| "Critical/high panels require unanimous uphold, else refuted" | Superseded by the disputed outcome — unanimity-to-survive silently kills majority-upheld severe findings. |
+| RF-001 is a demonstrated technical false negative; the data model conflates validity with fix adequacy | Withdrawn — the record separates `upholds` from `ops_adequate` and the refute rationales stand on the finding's merits. The accurate framing (under-evidenced refutation) drives R31. |
+| Rename `grounded` to `retrieval_confirmed` | Deferred — Chunk 5.3 adds a glossary/methodology clarification instead of a schema-breaking rename. |
 
 ## G — Claims explicitly refuted by the source report
 

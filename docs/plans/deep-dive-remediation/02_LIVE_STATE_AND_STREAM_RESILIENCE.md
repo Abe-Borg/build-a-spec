@@ -19,9 +19,16 @@ budgets, or billed provider usage.
 ### Root cause
 
 The current relays reconstruct tool input only from `input_json_delta`. With
-the code-execution caller used by the `_20260209` tools, the full input can be
-present on `content_block_start.content_block.input` and no JSON deltas follow.
-Research and QC then suppress empty payloads; chat emits a blank chip.
+the code-execution caller previously used by the `_20260209` tools, the full
+input can be present on `content_block_start.content_block.input` and no JSON
+deltas follow. Research and QC then suppress empty payloads; chat emits a
+blank chip.
+
+After Chunk 1.1 switches the tools to `allowed_callers: ["direct"]`, deltas
+are again the documented streaming shape, so this chunk is defense-in-depth:
+it keeps the labels truthful for any future code-execution-called tool, any
+provider-side shape drift, and any re-enable of dynamic filtering. Implement
+it fully; do not skip it because direct mode restored the deltas.
 
 ### Implementation
 
@@ -83,6 +90,15 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_qc_liv
 - Manual QA owed:
 
 ## Chunk 2.2 — Correct QC settling semantics
+
+### Urgency
+
+This chunk is independent of 2.1 and may land immediately after Chunk 1.1 —
+do not hold it behind the rest of this phase. The wrong semantics already ship
+today on two backend surfaces (the double-start 409 copy and the readiness
+`qc_current` detail claim a stop was requested during every normal run), and
+the Review Room frontend turns the same bit into a run-long "Stop requested —
+finishing already-paid in-flight work" banner the first time it runs.
 
 ### State contract
 
@@ -189,13 +205,27 @@ Pop-Location
      `running` and the workspace epoch is unchanged;
    - on status-probe failure, reconnect if the local snapshot is active; and
    - keep the existing final refresh of research and usage.
-5. Make `refreshResearch` generation-aware and do not drive auth-modal or other
+5. Give the follower an identity and an abort path: each `followResearch`
+   invocation owns an `AbortController` (or equivalent epoch token), a newer
+   follower or a workspace-epoch change aborts the old stream instead of
+   letting two readers race, and a synchronous snapshot ref (the QC
+   `researchSnapshotRef` pattern) backs every decision the loop makes between
+   renders so it never reads stale React state.
+6. Type `stream_end` as a proper discriminated union in `frontend/src/types.ts`
+   (terminal vs `running` timeout vs `superseded`) so classification is
+   compiler-checked rather than string-matched inline.
+7. Handle equal-watermark upgrades explicitly: when the fetched and local
+   watermarks match, adopt the response only if it does not regress lifecycle
+   state — a terminal local status or an adopted profile must never be replaced
+   by a running/older payload with the same sequence.
+8. Make `refreshResearch` generation-aware and do not drive auth-modal or other
    side effects from a rejected stale response.
-6. Add `frontend/tests/researchLive.test.ts` to the explicit `npm test` command
+9. Add `frontend/tests/researchLive.test.ts` to the explicit `npm test` command
    in `frontend/package.json`.
-7. Test terminal-over-running races for round 1 and later rounds, a different
-   round replacement, generation rejection, stream-end status classification,
-   and profile preservation.
+10. Test terminal-over-running races for round 1 and later rounds, a different
+    round replacement, generation rejection, abort-on-epoch-change, stream-end
+    status classification, equal-watermark non-regression, and profile
+    preservation.
 
 ### Files
 
@@ -237,19 +267,25 @@ Pop-Location
 
 ### Implementation
 
-1. In `frontend/src/lib/qcLive.ts::mergeQcEvent`, before calling
-   `normalizedEvents`, detect the common replay case:
-   - event has a numeric sequence at or below the local maximum; and
-   - an event with that exact sequence already exists.
-   Return the original snapshot object unchanged. The runner log is append-only,
-   so a replay duplicate cannot update authoritative content.
-2. Reserve the map/re-sort path for a genuine missing/out-of-order sequence.
-3. Apply the same rule to `mergeResearchEvent` in the new research live module.
-4. Tests must assert referential identity (`result === previous`) and event-array
+1. Check run/round identity **before** any sequence comparison: a frame from a
+   different run or round must take the reset path, never the dedupe path, so
+   sequence collisions across runs cannot masquerade as duplicates.
+2. In `frontend/src/lib/qcLive.ts::mergeQcEvent`, maintain a per-snapshot
+   sequence index (a `Set`/max-watermark pair, or a keyed map) so the replay
+   check is a direct lookup. Calling `maxEventSeq`/`Array.find` per frame is
+   itself O(n) and would keep replay quadratic; the point of this chunk is a
+   constant-time duplicate test. On a duplicate, return the original snapshot
+   object unchanged — the runner log is append-only, so a replay duplicate
+   cannot update authoritative content.
+3. Reserve the map/re-sort path for a genuine missing/out-of-order sequence.
+4. Apply the same rule to `mergeResearchEvent` in the new research live module.
+5. Tests must assert referential identity (`result === previous`) and event-array
    identity for duplicates, correct insertion for a genuine gap, and new-run
    reset behavior.
-5. Add a non-timing stress test that replays a large dense log and proves every
-   duplicate returns the same object. Do not use elapsed-time thresholds in CI.
+6. Add a non-timing bounded-access test: instrument the merge (a counting proxy
+   over the event array or index) and prove that replaying a large dense log
+   performs O(1) work per duplicate frame — no full-array scan or rebuild. Do
+   not use elapsed-time thresholds in CI.
 6. If profiling still shows excessive React work, batch events at the stream
    reader boundary as a separate measured follow-up; do not complicate this
    chunk speculatively.

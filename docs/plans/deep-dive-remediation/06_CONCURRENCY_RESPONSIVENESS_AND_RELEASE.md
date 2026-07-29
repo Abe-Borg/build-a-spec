@@ -1,7 +1,11 @@
 # Phase 6 — Concurrency, responsiveness, and release
 
 - Status: planned
-- Prerequisites: Phases 1-5 complete
+- Prerequisites: Chunk 6.5 requires Phases 1-5 complete. Chunks 6.1-6.4 depend
+  only on Phase 1 (6.1 additionally interacts with Chunk 4.3's metering seam —
+  coordinate, don't serialize). Pulling 6.1 forward early is encouraged: the
+  runner-settlement races it fixes get more load-bearing as Phase 2 multiplies
+  event volume.
 - Risk: medium; race fixes are low-frequency but touch ownership and snapshot
   boundaries. Use deterministic barriers in tests, never probabilistic sleeps.
 
@@ -366,16 +370,22 @@ Pop-Location
 3. Search for stale patterns and review every intentional remaining match:
 
 ```powershell
-rg -n "pause_turn|messages\.stream|server_tool_use|cache_control|settling|\(size // 2\) \+ 1|_transitioning|session_state_guard" backend frontend/src tests
+rg -n "pause_turn|messages\.stream|server_tool_use|allowed_callers|cache_control|settling|\(size // 2\) \+ 1|_panel_outcome|_transitioning|session_state_guard" backend frontend/src tests
 ```
 
 4. Confirm:
-   - every provider continuation site carries a turn/attempt-local container;
+   - both web tools declare `allowed_callers: ["direct"]` in every consumer,
+     and no ZDR claim outlives a configuration that breaks it;
+   - every provider continuation site carries a turn/attempt-local container
+     (defense-in-depth even in direct mode);
    - no stop/truncation path filters only `tool_use` while retaining dangling
-     server tools;
-   - all interview breakpoints use one-hour TTL;
-   - old four-rate and new five-rate audit bases have tests;
-   - v3/v4 threshold handling is explicit;
+     server tools, and the load/resend repair boundaries are active;
+   - all interview breakpoints share the configured TTL (default one hour);
+   - old four-rate and new five-rate audit bases have tests, and
+     provider-reported usage is never blended with estimates;
+   - v3/v4 outcome handling (including disputed and the evidence rule) is
+     explicit;
+   - issue readiness, masthead, and sign-off derive from one helper;
    - no normal terminal event was redundantly mirrored solely to satisfy the
      refuted trace claim; and
    - no change weakened `finding_id` or duplicated paid-run start guards.
@@ -404,10 +414,20 @@ rg -n "pause_turn|messages\.stream|server_tool_use|cache_control|settling|\(size
 These tests can incur substantial spend. Obtain explicit approval before
 starting them and capture diagnostics for comparison.
 
-1. **Research continuation and activity**
+The provider cannot be forced to return `pause_turn` on demand, so the
+pause-continuation contract is proven by the hermetic fakes (forced pause,
+continuation-shape assertions, invalid-continuation rejection). The live
+canary asserts what is deterministic — direct-mode completion, streamed
+query/URL deltas, no container error — and verifies a natural pause's
+continuation opportunistically when one occurs. This class of failure came
+from provider-side behavior shifting under a pinned tool version; rerun the
+research canary after any future change to the web-tool definitions.
+
+1. **Research continuation and activity (direct-mode canary)**
    - Run all dimensions on a realistic project.
    - Confirm no container-id 400, all expected dimensions complete or fail for
      a substantive reason, and query/URL labels plus trace counts populate.
+   - If a natural `pause_turn` occurs, confirm its continuation succeeds.
 2. **Chat stop recovery**
    - Trigger web search, stop while searching, send a follow-up, save the
      project, reopen it, and send another follow-up.
@@ -422,7 +442,7 @@ starting them and capture diagnostics for comparison.
    - In a separate authorized run, stop mid-flight and confirm genuine settling
      until the partial report attaches.
 5. **Truthful partial research report**
-   - Use a controlled partial fixture/session with required governing-codes
+   - Use a controlled partial fixture/session with a required dimension's
      coverage missing.
    - Confirm model context, readiness, modal Limitations, JSON manifest, Word
      identity/Limitations/readiness all agree.
@@ -433,9 +453,10 @@ starting them and capture diagnostics for comparison.
      boundary and only incremental creation; verify the one-hour subtotal and
      list-price estimate against provider records.
 7. **QC v4**
-   - Confirm current reports say `final-qc/4`, thresholds are severity-correct,
-     and a saved v3 report is historical/readable but requests a rerun for
-     current readiness.
+   - Confirm current reports say `final-qc/4`, outcomes follow the v4 table
+     (including a disputed candidate blocking readiness until dispositioned),
+     the masthead and sign-off agree, and a saved v3 report is
+     historical/readable but requests a rerun for current readiness.
 8. **Responsiveness**
    - While chat streams, import a large template, export a large source DOCX,
      and request stop in separate trials.
@@ -449,7 +470,8 @@ starting them and capture diagnostics for comparison.
 ### Final acceptance criteria
 
 - All automated gates are green with no new skips/xfails.
-- Every R01-R26 row in the master coverage matrix has a landed change and test.
+- Every R01-R26 and R28-R35 row in the master coverage matrix has a landed
+  change and test.
 - R27's refuted/non-goal behavior remains unchanged.
 - Manual tests are either checked off with diagnostic evidence or explicitly
   listed as owner-owed; none are silently assumed.

@@ -1,5 +1,11 @@
 # Implementation plans — batches 2 through 5
 
+> Post-v1.8 diagnostics remediation is planned separately in
+> [`deep-dive-remediation/README.md`](deep-dive-remediation/README.md). That
+> program consolidates the 2026-07-28 diagnostics/code-review findings into
+> sequential, handoff-ready chunks; the historical batch table below remains
+> unchanged.
+
 Owner: Abraham. These plans were written 2026-07-21 against the v0.6.0
 ("Sonnet unleashed") codebase, to be executed by Claude Code agents — one
 batch per working session, in order. Each plan is self-contained: goal,

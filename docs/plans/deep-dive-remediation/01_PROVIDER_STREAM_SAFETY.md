@@ -217,7 +217,7 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_qc_ver
 ### Implementation record
 
 - Status: **complete** (2026-07-29)
-- Commit/PR: branch `claude/deep-dive-remediation-plans-omivzu`
+- Commit/PR: `f0a5ac5` — PR #89
 - Tests: `tests/test_research_engine.py` gains
   `test_pause_continuation_echoes_the_container_and_a_retry_drops_it` —
   one scripted dimension covering the whole contract in order (pause with

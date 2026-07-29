@@ -325,7 +325,7 @@ tests and phase gate are recorded in the phase file.
 | Chunk | Status | Commit/PR | Notes |
 |---|---|---|---|
 | 1.1 | **complete** | `4bd0c18` (PR #88) | direct callers shipped in all three channels; ZDR claims reconciled |
-| 1.2 | **complete** | branch `claude/deep-dive-remediation-plans-omivzu` | research + QC continuation containers, attempt-local |
+| 1.2 | **complete** | `f0a5ac5` (PR #89) | research + QC continuation containers, attempt-local |
 | 1.3 | planned | | |
 | 1.4 | planned | | |
 | 2.1 | planned | | |

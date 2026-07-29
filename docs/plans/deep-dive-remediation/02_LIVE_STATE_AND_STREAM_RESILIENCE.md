@@ -84,7 +84,7 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_qc_liv
 ### Implementation record
 
 - Status: **complete** (2026-07-29)
-- Commit/PR: `PENDING` — PR #PENDING
+- Commit/PR: `0cfad61` — PR #93
 - Tests: seven new, four of which fail against the pre-fix code (the other
   three are precedence/absence guards that pin the new reader against a
   future inversion — proven load-bearing by deleting the `isinstance`

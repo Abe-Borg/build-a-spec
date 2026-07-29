@@ -317,7 +317,7 @@ venv\Scripts\python -m pytest -q tests/test_app.py tests/test_streaming.py
 ### Implementation record
 
 - Status: **complete** (2026-07-29)
-- Commit/PR: branch `claude/deep-dive-remediation-plans-omivzu`
+- Commit/PR: `d39e778` — PR #90
 - Tests: `tests/test_app.py` gains
   `test_chat_carries_the_container_through_a_turn_and_drops_it_next_turn` —
   one turn of three rounds (pause with `cont_chat_1` → resume → a

@@ -372,6 +372,42 @@ def test_pause_continuation_echoes_the_container_and_a_retry_drops_it(monkeypatc
         assert "cont_research_1" not in str(request["messages"])
 
 
+def test_a_pending_search_is_resent_verbatim_on_a_research_pause():
+    """The fan-out resends paused content verbatim, pending call included.
+
+    Research shares ``sanitize_messages_for_resend`` with the chat loop, so
+    the server-tool pairing guard there must not touch the message being
+    resumed — the trailing result-less ``server_tool_use`` is what the
+    provider picks the work back up from.
+    """
+    paused = pause_response(
+        searched_urls=["https://a.gov/one"], pending_query="still running"
+    )
+    client = SequencedFakeClient(
+        _scripts(
+            governing_codes=[
+                paused,
+                research_response(items=[], searched_urls=["https://a.gov/one"]),
+            ]
+        )
+    )
+    _run(client)
+
+    requests = [
+        req
+        for req in client.requests
+        if DIM_KEYS["governing_codes"] in req["messages"][0]["content"]
+    ]
+    assert len(requests) == 2
+    resumed = requests[1]["messages"][1]
+    assert resumed["role"] == "assistant"
+    assert resumed["content"] == paused.content
+    assert any(
+        getattr(block, "type", "") == "server_tool_use"
+        for block in resumed["content"]
+    )
+
+
 def test_a_dimension_without_any_container_is_unaffected():
     """The normal direct-caller path: no container key on any request."""
     client = SequencedFakeClient(

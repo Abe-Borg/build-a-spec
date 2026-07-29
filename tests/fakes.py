@@ -9,6 +9,7 @@ Critic's suite.
 """
 from __future__ import annotations
 
+import itertools
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -141,6 +142,9 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
     )
 
 
+_SRVTOOLU_COUNTER = itertools.count(1)
+
+
 def text_block(text: str) -> SimpleNamespace:
     return SimpleNamespace(type="text", text=text)
 
@@ -218,16 +222,19 @@ def thinking_block(thinking: str = "", signature: str = "sig-fake") -> SimpleNam
     return SimpleNamespace(type="thinking", thinking=thinking, signature=signature)
 
 
-def chat_search_blocks(query: str, urls: list[str]) -> list[SimpleNamespace]:
+def chat_search_blocks(
+    query: str, urls: list[str], *, tool_use_id: str = ""
+) -> list[SimpleNamespace]:
     """A ``server_tool_use``(web_search) + result pair for the chat loop."""
+    use_id = tool_use_id or _srvtoolu_id("chat")
     return [
         SimpleNamespace(
             type="server_tool_use",
-            id="srvtoolu_fake",
+            id=use_id,
             name="web_search",
             input={"query": query},
         ),
-        search_result_block(urls),
+        search_result_block(urls, tool_use_id=use_id),
     ]
 
 
@@ -497,23 +504,52 @@ def auth_error(
 # ---------------------------------------------------------------------------
 
 
-def search_result_block(urls: list[str]) -> SimpleNamespace:
-    """A ``web_search_tool_result`` block whose results carry ``urls``."""
-    return SimpleNamespace(
+def _srvtoolu_id(prefix: str) -> str:
+    """A unique ``srvtoolu_``-style id.
+
+    Unique per call on purpose: a shared placeholder id would make two
+    independent server-tool calls in one turn look like one, which the
+    pairing invariant reads as a completed pair when it is nothing of the
+    kind.
+    """
+    return f"srvtoolu_{prefix}_{next(_SRVTOOLU_COUNTER)}"
+
+
+def search_result_block(
+    urls: list[str], *, tool_use_id: str = ""
+) -> SimpleNamespace:
+    """A ``web_search_tool_result`` block whose results carry ``urls``.
+
+    ``tool_use_id`` names the ``server_tool_use`` this answers — the real
+    wire shape, and what makes the pair survive the server-tool pairing
+    invariant (``backend/llm/server_tool_pairing.py``). Omitted only where a
+    test deliberately scripts an orphaned result.
+    """
+    block = SimpleNamespace(
         type="web_search_tool_result",
         content=[
             SimpleNamespace(type="web_search_result", url=url, title=f"t:{url}")
             for url in urls
         ],
     )
+    if tool_use_id:
+        block.tool_use_id = tool_use_id
+    return block
 
 
-def fetch_blocks(url: str) -> list[SimpleNamespace]:
+def fetch_blocks(url: str, *, tool_use_id: str = "") -> list[SimpleNamespace]:
     """A ``server_tool_use``(web_fetch) + result pair for ``url``."""
+    use_id = tool_use_id or _srvtoolu_id("fetch")
     return [
-        SimpleNamespace(type="server_tool_use", name="web_fetch", input={"url": url}),
+        SimpleNamespace(
+            type="server_tool_use",
+            id=use_id,
+            name="web_fetch",
+            input={"url": url},
+        ),
         SimpleNamespace(
             type="web_fetch_tool_result",
+            tool_use_id=use_id,
             content={"type": "web_fetch_result", "url": url},
         ),
     ]
@@ -562,16 +598,28 @@ def research_response(
     synthesize no stream events, so a fixture without them emits nothing).
     """
     content: list[SimpleNamespace] = []
-    for i, query in enumerate(queries or []):
+    query_list = list(queries or [])
+    for i, query in enumerate(query_list):
+        # Use then its own result, the order and pairing the API produces.
+        # The retrieved URLs ride the FIRST search; any later ones return an
+        # empty result, which is a real outcome and leaves evidence counts
+        # exactly as they were before ids existed here.
+        use_id = _srvtoolu_id("research")
         content.append(
             SimpleNamespace(
                 type="server_tool_use",
-                id=f"srvtoolu_research_{i}",
+                id=use_id,
                 name="web_search",
                 input={"query": query},
             )
         )
-    if searched_urls:
+        content.append(
+            search_result_block(
+                searched_urls if i == 0 else [], tool_use_id=use_id
+            )
+        )
+    if searched_urls and not query_list:
+        # No scripted queries: the bare result block the grounding tests use.
         content.append(search_result_block(searched_urls))
     content.extend(extra_blocks or [])
     if items is not None:
@@ -599,11 +647,27 @@ def pause_response(
     searched_urls: list[str] | None = None,
     searches: int | None = None,
     container: str | None = None,
+    pending_query: str = "",
 ) -> SimpleNamespace:
-    """A ``pause_turn`` response mid-research (server tools still running)."""
+    """A ``pause_turn`` response mid-research (server tools still running).
+
+    ``pending_query`` appends a trailing ``server_tool_use`` with NO result
+    — the reason a turn pauses at all, and the block the provider resumes
+    from. Fixtures without it model a pause whose searches all came back,
+    which is the easier half.
+    """
     content: list[SimpleNamespace] = []
     if searched_urls:
         content.append(search_result_block(searched_urls))
+    if pending_query:
+        content.append(
+            SimpleNamespace(
+                type="server_tool_use",
+                id=_srvtoolu_id("pending"),
+                name="web_search",
+                input={"query": pending_query},
+            )
+        )
     return SimpleNamespace(
         content=content,
         stop_reason="pause_turn",

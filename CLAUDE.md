@@ -389,6 +389,13 @@ backend/
                            project.py change); Batch 9 adds an optional
                            suggested_prompts key (omitted when empty;
                            restore_prompts on load, assigned unconditionally)
+  llm/server_tool_pairing.py
+                           the use/result pairing invariant: turn-wide,
+                           copy-on-write, duck-typed over dicts + SDK blocks.
+                           Its own module because three packages need it
+                           (conversation, resend_sanitizer, project load) and
+                           a private helper in conversation.py could not be
+                           reached from resend_sanitizer without a cycle
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
                            FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message);
@@ -759,6 +766,41 @@ already resolved and does nothing). 409 when nothing is running.
   `begin_turn` self-heals from an abandoned backup). A truncated response
   (`max_tokens`) strips unexecuted `tool_use` blocks before commit — a
   dangling tool call would invalidate every later request.
+- **Server-tool calls are paired turn-wide, and unpaired ones never
+  commit.** A `server_tool_use` block whose result never arrived is as
+  invalid on the wire as a dangling client `tool_use`, and the truncation
+  filter above only ever removed the client kind — so stopping while the UI
+  said "Searching the web…" wrote one into history, and from there into the
+  saved project, making **every** later request in that project a 400.
+  `llm/server_tool_pairing.without_unpaired_server_tool_uses` is the one
+  helper, applied at four boundaries: the mid-stream `user_stop`/`max_tokens`
+  truncation, the between-round stop, `_committed_messages` (the final
+  invariant guard over the whole turn), and — for files already written by a
+  pre-fix build — project load plus `sanitize_messages_for_resend`. Three
+  rules make it safe: pairing is computed across **every message it is
+  given**, because a `pause_turn` legitimately splits a use from its result
+  across two assistant messages; a use counts as paired when *anything*
+  references its id, so an unrecognized or error-shaped result family can
+  never make a completed call look dangling; and only blocks whose type ends
+  in `_tool_result` are eligible to be dropped as orphans, so unknown blocks
+  and citations are left alone. It is copy-on-write and does not rebuild
+  surviving blocks — research and QC re-send `response.content` as SDK
+  objects, and the pause contract says verbatim. **The outgoing-request
+  boundary passes `protect_trailing_assistant=True`, and must.** A
+  `pause_turn` pauses *because* a server tool has not finished, so that
+  message's trailing `server_tool_use` is legitimately result-less and is
+  the block the provider resumes from — scrubbing it deletes the resume
+  signal and aborts the work the continuation exists to finish (caught in
+  review on PR #91; the fixtures hid it because every scripted pause
+  either had complete pairs or no `server_tool_use` at all). The exemption
+  is narrow: a trailing assistant message only occurs while resuming a
+  pause, and everything earlier is still checked, which is what catches a
+  poisoned history. The load-boundary repair
+  logs to `buildaspec.project` (never silent) and does **not** rewrite the
+  user's file until they next save; it uses `logging` rather than
+  `capture.app_event` because `load_project` runs inside
+  `session_state_guard()` and `app_event`'s lazy first-call file I/O must
+  not happen under that lock.
 - **User stop is the one deliberate exception to "every failure rolls back"
   (Batch 7).** `POST /api/chat/stop` sets `SessionState.stop_requested`
   (a `threading.Event`, cleared at the start of every turn); the round loop

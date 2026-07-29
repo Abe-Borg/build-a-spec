@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import threading
 import time
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -16,6 +17,7 @@ from tests.fakes import (
     SequencedFakeClient,
     block_start_event,
     block_stop_event,
+    chat_search_blocks,
     text_delta_event,
     text_turn,
     tool_turn,
@@ -171,6 +173,221 @@ def test_chat_stop_between_rounds_after_tool_dispatch_keeps_history_alternating(
     finally:
         conv.get_client = orig_get_client
     assert events2[-1]["type"] == "turn_complete"
+
+
+# ---------------------------------------------------------------------------
+# Stopping mid-search: the dangling server_tool_use class
+# ---------------------------------------------------------------------------
+
+
+def _run_turn(session, fake, text: str) -> list[dict]:
+    """Drive one turn against ``fake``, restoring the client factory after."""
+    import backend.llm.conversation as conv
+
+    orig = conv.get_client
+    conv.get_client = lambda: fake  # type: ignore[assignment]
+    try:
+        return list(stream_user_turn(session, text))
+    finally:
+        conv.get_client = orig
+
+
+def _server_tool_uses(messages) -> list[str]:
+    return [
+        b.get("id")
+        for m in messages
+        for b in (m.get("content") or [])
+        if b.get("type") == "server_tool_use"
+    ]
+
+
+def _outgoing_history_is_valid(request: dict) -> bool:
+    """Every ``server_tool_use`` in a captured request has a result."""
+    referenced = {
+        b.get("tool_use_id")
+        for m in request["messages"]
+        for b in (m.get("content") or [])
+        if isinstance(b, dict) and b.get("tool_use_id")
+    }
+    return all(
+        use_id in referenced
+        for use_id in _server_tool_uses(request["messages"])
+    )
+
+
+def _stop_mid_search_turn(session, *, stop_reason: str):
+    """A turn whose response opens a web search that never returns a result.
+
+    ``stop_reason="end_turn"`` + a user stop mid-stream is the reported bug
+    (stopping while the UI says "Searching the web…"); ``max_tokens`` is the
+    same shape reached without any user action.
+    """
+    search_use = SimpleNamespace(
+        type="server_tool_use",
+        id="srvtoolu_interrupted",
+        name="web_search",
+        input={"query": "NFPA 13 obstruction"},
+    )
+    events = [
+        block_start_event(0, "text"),
+        text_delta_event(0, "Let me check that."),
+        block_stop_event(0),
+        block_start_event(1, "server_tool_use", "web_search"),
+        block_stop_event(1),
+    ]
+    return raw_turn(
+        [text_block("Let me check that."), search_use],
+        stop_reason=stop_reason,
+        events=events,
+    )
+
+
+def test_stop_mid_search_never_commits_a_dangling_server_tool_use():
+    session = sessions.get_session()
+    fake = FakeClient([_stop_mid_search_turn(session, stop_reason="end_turn")])
+
+    import backend.llm.conversation as conv
+
+    orig = conv.get_client
+    conv.get_client = lambda: fake  # type: ignore[assignment]
+    try:
+        for event in stream_user_turn(session, "check that"):
+            if event["type"] == "text_delta":
+                session.stop_requested.set()
+            assert event["type"] != "error"
+    finally:
+        conv.get_client = orig
+
+    # The search call is gone; the text the user actually saw survives.
+    assert _server_tool_uses(session.history) == []
+    assert session.history[-1]["role"] == "assistant"
+    assert any(
+        b.get("type") == "text" for b in session.history[-1]["content"]
+    )
+
+    # And the session is usable: the next turn's outgoing history validates
+    # and the turn succeeds. Before the scrub this request was a 400.
+    fake2 = FakeClient([text_turn(["Still here."])])
+    events2 = _run_turn(session, fake2, "and then?")
+    assert events2[-1]["type"] == "turn_complete"
+    assert _outgoing_history_is_valid(fake2.messages.requests[0])
+
+
+def test_max_tokens_mid_search_never_commits_a_dangling_server_tool_use():
+    session = sessions.get_session()
+    fake = FakeClient([_stop_mid_search_turn(session, stop_reason="max_tokens")])
+    events = _run_turn(session, fake, "check that")
+    assert events[-1]["type"] == "turn_complete"
+
+    assert _server_tool_uses(session.history) == []
+    fake2 = FakeClient([text_turn(["Still here."])])
+    assert _run_turn(session, fake2, "again")[-1]["type"] == "turn_complete"
+    assert _outgoing_history_is_valid(fake2.messages.requests[0])
+
+
+def test_stop_in_the_gap_after_a_paused_response_drops_the_pending_search():
+    """The between-rounds stop path, landing right after a pause_turn.
+
+    The paused message holds a use whose result would have arrived in the
+    round the user just cancelled — the one case where the dangling block is
+    in an EARLIER message than the one the stop appends, which is why the
+    scrub is turn-wide rather than applied to the terminal message.
+    """
+    session = sessions.get_session()
+    paused = raw_turn(
+        [
+            SimpleNamespace(
+                type="server_tool_use",
+                id="srvtoolu_paused",
+                name="web_search",
+                input={"query": "still running"},
+            )
+        ],
+        stop_reason="pause_turn",
+    )
+    fake = FakeClient([paused, text_turn(["Should not be reached."])])
+
+    import backend.llm.conversation as conv
+
+    orig = conv.get_client
+    conv.get_client = lambda: fake  # type: ignore[assignment]
+    try:
+        for event in stream_user_turn(session, "look it up"):
+            # Stop as soon as the paused round's status arrives, so the
+            # between-rounds check fires before round 1 streams.
+            if event["type"] == "status":
+                session.stop_requested.set()
+            assert event["type"] != "error"
+    finally:
+        conv.get_client = orig
+
+    assert _server_tool_uses(session.history) == []
+    assert session.history[-1]["role"] == "assistant"
+    fake2 = FakeClient([text_turn(["Fine."])])
+    assert _run_turn(session, fake2, "next")[-1]["type"] == "turn_complete"
+    assert _outgoing_history_is_valid(fake2.messages.requests[0])
+
+
+def test_a_pending_search_is_resent_verbatim_on_a_pause_resume():
+    """The normal (un-stopped) continuation must keep the pending call.
+
+    This is the shape the earlier fixtures never had: a pause whose search
+    genuinely has not returned. The provider resumes from that trailing
+    ``server_tool_use``, so a scrub that removes it aborts the work.
+    """
+    session = sessions.get_session()
+    pending = SimpleNamespace(
+        type="server_tool_use",
+        id="srvtoolu_pending",
+        name="web_search",
+        input={"query": "still running"},
+    )
+    fake = FakeClient(
+        [
+            raw_turn([text_block("Searching."), pending], stop_reason="pause_turn"),
+            text_turn(["Found it."]),
+        ]
+    )
+    events = _run_turn(session, fake, "look it up")
+    assert events[-1]["type"] == "turn_complete"
+
+    # The continuation re-sent the paused content verbatim, pending call
+    # included.
+    resumed = fake.messages.requests[1]["messages"][-1]
+    assert resumed["role"] == "assistant"
+    assert [b["type"] for b in resumed["content"]] == ["text", "server_tool_use"]
+    assert resumed["content"][1]["id"] == "srvtoolu_pending"
+
+    # Once the turn ends, the still-unanswered call does NOT reach history —
+    # committed state has no pause left to resume.
+    assert _server_tool_uses(session.history) == []
+
+
+def test_a_completed_search_survives_the_same_truncation():
+    """The scrub must not punish a search that actually finished.
+
+    Same truncation branch as the dangling case above — the only difference
+    is that this response's search came back — so it pins that the branch
+    removes the unpaired call rather than every server-tool block near a
+    cut-off response.
+    """
+    session = sessions.get_session()
+    fake = FakeClient(
+        [
+            raw_turn(
+                [
+                    *chat_search_blocks("obstruction rules", ["https://nfpa.org"]),
+                    text_block("Obstruction rules confirmed."),
+                ],
+                stop_reason="max_tokens",
+            ),
+        ]
+    )
+    events = _run_turn(session, fake, "check")
+    assert events[-1]["type"] == "turn_complete"
+    types = {b["type"] for m in session.history for b in m["content"]}
+    assert "server_tool_use" in types and "web_search_tool_result" in types
+    assert _server_tool_uses(session.history) != []
 
 
 # ---------------------------------------------------------------------------

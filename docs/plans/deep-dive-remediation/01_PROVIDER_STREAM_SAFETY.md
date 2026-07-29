@@ -1,6 +1,6 @@
 # Phase 1 — Provider stream safety
 
-- Status: in progress (1.1–1.3 complete; 1.4 planned)
+- Status: **complete** (1.1–1.4 landed 2026-07-29)
 - Prerequisite: repository baseline green
 - Risk: critical; this phase changes provider tool configuration, continuation
   requests, and committed conversation history
@@ -453,6 +453,76 @@ venv\Scripts\python -m pytest -q tests/test_stop.py tests/test_app.py tests/test
 ```powershell
 venv\Scripts\python -m pytest -q
 ```
+
+### Implementation record
+
+- Status: **complete** (2026-07-29)
+- Commit/PR: `2f759e3` — PR #91
+- Tests: `tests/test_server_tool_pairing.py` (new, 11) covers the pure
+  invariant in both directions — complete pair in one message, pair split
+  across a `pause_turn`, unpaired use removed while a sibling pair
+  survives, three code-execution result families (including an invented
+  future one) preserved, orphaned result removed, client `tool_use`/
+  `tool_result` untouched, unknown/citation blocks untouched, unmappable
+  id-less result kept, caller placeholder on an emptied message, and SDK
+  block objects returned by identity. `tests/test_stop.py` adds the four
+  engine scenarios (stop mid-search, `max_tokens` mid-search, stop in the
+  gap after a paused response, and a *completed* search surviving the same
+  truncation branch), each proving the follow-up turn's captured outgoing
+  history validates. `tests/test_app.py` adds the two project-boundary
+  scenarios (a stopped web turn cannot poison the saved project; a
+  hand-built legacy poisoned project is repaired, logged, and the next
+  request is valid). Full gate green: `pytest -q` 1163 passed, 9 skipped.
+  No frontend change.
+- Deviations:
+  - **The helper lives in a new module,
+    `backend/llm/server_tool_pairing.py`, not privately in
+    `conversation.py`.** It cannot: `conversation.py` imports
+    `research/resend_sanitizer.py`, so the resend-boundary guard the plan
+    asks for would have been an import cycle. `conversation.py` imports it
+    under the plan's name (`_without_unpaired_server_tool_uses`), so the
+    call sites read as specified.
+  - Result families are matched by the `_tool_result` **suffix** plus a
+    type-blind "does anything reference this id" check, rather than an
+    enumerated list. The plan's list already had "and any future
+    `*_tool_result` block" in it; making that the rule rather than a
+    footnote is what keeps an error-shaped result (e.g.
+    `web_fetch_tool_result_error`, which does not end in `_tool_result`)
+    from making a completed call look dangling.
+  - The load-boundary repair logs through `logging` (`buildaspec.project`),
+    not `capture.app_event`. `load_project` runs inside
+    `session_state_guard()`, and CLAUDE.md's diagnostics rules say
+    `app_event`'s lazy first-call file I/O must not run under that lock.
+    The activity log is what a support bundle reads anyway.
+  - `tests/test_server_tool_pairing.py` is a new file (the plan listed only
+    existing ones); the pure invariant deserved unit coverage separate
+    from the engine scenarios.
+  - `tests/test_project_package.py` untouched — `test_app.py` already had
+    the HTTP save/load round-trip idiom these two scenarios needed.
+  - **The resend guard exempts a trailing assistant message
+    (`protect_trailing_assistant=True`)** — a correction made in review on
+    PR #91. The plan's "final guard over the outgoing request" is right for
+    history, but `sanitize_messages_for_resend` is also what builds a
+    `pause_turn` continuation, and a pause happens *because* a server tool
+    has not finished: that message's trailing result-less
+    `server_tool_use` is the block the provider resumes from. Scrubbing it
+    aborted the work in all three channels. The five original fixtures
+    could not catch it — every scripted pause either carried complete
+    pairs or no `server_tool_use` at all — so `pause_response` gained a
+    `pending_query=` kwarg and three unit tests plus one chat and one
+    research test now pin the verbatim resend.
+  - **Fixture realism was load-bearing, not cosmetic.**
+    `search_result_block` carried no `tool_use_id` and `chat_search_blocks`
+    reused a single `srvtoolu_fake` id, so every scripted pair read as
+    dangling and the first run of the suite deleted them. Both now mint
+    unique `srvtoolu_`-style ids and pair properly (plan step 5).
+    `research_response` interleaves each scripted query's use with its own
+    result — the URLs ride the first, later searches return empty results
+    (a real outcome), so evidence counts are unchanged.
+- Manual QA owed: Phase 1's shared live canary (Chunk 6.5) — in particular
+  "stop chat while the UI says Searching the web…, then send another
+  message and save/reopen the project", which is now covered hermetically
+  but is worth one real confirmation.
 
 ## Phase 1 manual QA
 

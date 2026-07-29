@@ -28,6 +28,8 @@ import dataclasses
 import io
 from typing import Any
 
+from ..llm.server_tool_pairing import without_unpaired_server_tool_uses
+
 # Mirror of the Messages API's per-request PDF page ceiling (total across
 # every PDF in the request, not per document).
 MAX_RESEND_PDF_PAGES = 600
@@ -146,12 +148,28 @@ def elide_all_pdf_sources(messages: list[dict]) -> list[dict]:
 
 
 def sanitize_messages_for_resend(messages: list[dict]) -> list[dict]:
-    """Ensure a continuation resume request fits the API's PDF page limit.
+    """Make an outgoing request safe: PDF page limit + server-tool pairing.
 
     Returns ``messages`` unchanged (same object) when nothing needs
     eliding. When eliding, returns a new list rebuilding only the affected
     messages; the input and underlying response objects are never mutated.
+
+    The pairing pass is the last line of defence rather than the fix. A
+    dangling ``server_tool_use`` is invalid on the wire, and commit-time
+    scrubbing cannot heal a project file that was already saved with one —
+    so every outgoing request is checked here too, and an in-memory history
+    that somehow still carries one cannot turn into a 400.
+
+    A trailing assistant message is exempt, because this function is also
+    what builds a ``pause_turn`` continuation. A pause happens *because* a
+    server tool has not finished, so that message's last
+    ``server_tool_use`` is legitimately result-less and is the block the
+    provider resumes from — removing it would abort the very work the
+    continuation exists to finish.
     """
+    messages = without_unpaired_server_tool_uses(
+        messages, protect_trailing_assistant=True
+    )
     found: list[dict[str, Any]] = []
     for msg_idx, message in enumerate(messages):
         if _get(message, "role") != "assistant":

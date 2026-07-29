@@ -407,7 +407,7 @@ Pop-Location
 ### Implementation record
 
 - Status: **complete** (2026-07-29)
-- Commit/PR: `PENDING` — PR #PENDING
+- Commit/PR: `a42fc76` — PR #94
 - Tests: 25 new, in two new files, both registered in `package.json`'s
   explicit `node --test` list.
   `frontend/tests/researchLive.test.ts` (22): merge ordering/dedupe, merge

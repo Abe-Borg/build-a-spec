@@ -1854,6 +1854,12 @@ def _start_input(block: Any) -> dict[str, Any]:
 
     Copied, never retained by reference: the SDK accumulates into the block
     object as the stream advances.
+
+    The ``isinstance`` test is load-bearing on the real SDK path, not just
+    against a sloppy fake. ``ServerToolUseBlock.input`` is declared
+    ``Dict[str, object]``, but raw stream events are built with
+    ``construct_type_unchecked`` — no validation — so a non-mapping value
+    arrives untouched, and ``dict("…")`` raises.
     """
     value = getattr(block, "input", None)
     return dict(value) if isinstance(value, Mapping) else {}
@@ -1879,11 +1885,20 @@ def _stream_events(stream: Any) -> Iterator[dict[str, Any]]:
     chip with empty text — the round DID search, and saying so with no
     label beats saying nothing.
 
-    Per-event parsing is defensive: a malformed frame is skipped, never a
-    turn failure (the research/QC relays adapted from this one have always
-    said so; here it was implicit and one non-string ``partial_json`` away
-    from being untrue). Errors raised by the stream ITERATION still
-    propagate — those are real request failures.
+    Per-event parsing is defensive: a frame this relay cannot decode is
+    skipped, never a turn failure (the research/QC relays adapted from this
+    one have always said so; here it was implicit and one non-string
+    ``partial_json`` away from being untrue).
+
+    The boundary is exact and deliberate. The SDK accumulates and snapshots
+    each raw frame INSIDE ``next(stream)``, before yielding it
+    (``anthropic/lib/streaming/_messages.py::__stream__``), so anything that
+    breaks the SDK's own accumulator raises during iteration and is not
+    caught here. That is correct: an unparseable stream is a failed request
+    and must reach the caller's error/retry path exactly as a
+    ``get_final_message()`` failure does. What the SDK does NOT do is
+    validate raw event shapes (``construct_type_unchecked``), so frames it
+    happily hands over can still be nonsense — that is this relay's job.
     """
     json_buffers: dict[int, str] = {}
     start_inputs: dict[int, dict[str, Any]] = {}

@@ -106,10 +106,12 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_qc_liv
   plus the unchanged `upheld` adjudication) and
   `test_qc_streamed_deltas_win_and_an_absent_input_says_nothing`.
   `tests/test_streaming.py` gains
-  `test_start_input_only_web_activity_emits_the_real_query_and_url` and
-  `test_a_malformed_stream_frame_never_fails_a_chat_turn`.
+  `test_start_input_only_web_activity_emits_the_real_query_and_url`,
+  `test_malformed_frames_the_relay_decodes_never_fail_a_chat_turn`, and
+  `test_a_real_sdk_start_frame_with_a_non_mapping_input_is_survivable`
+  (added in review — see the last deviation).
   Focused run green (`test_research_engine` / `test_qc_live_events` /
-  `test_streaming` — 39 passed); full gate green: `pytest -q` 1177
+  `test_streaming` — 40 passed); full gate green: `pytest -q` 1178
   passed, 9 skipped; `npm test` 96 passed; `npm run build` clean (no
   frontend change — run as a regression check, not because this chunk
   touched the UI).
@@ -161,6 +163,34 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_qc_liv
     somehow supplied both is taken at its deltas. Absence behavior stays
     deliberately non-uniform: research and QC skip, chat still emits its
     chip with empty text.
+  - **Acceptance criterion 4 is scoped to frames the relay decodes, and
+    that scoping is deliberate** — raised in review on PR #93, where an
+    automated reviewer read "No malformed frame can fail a chat turn,
+    dimension, lens, or verifier" literally and asked for the stream
+    ITERATION to be guarded too. It must not be. The SDK accumulates and
+    snapshots every raw frame inside `next(stream)` and only then yields
+    it (`anthropic/lib/streaming/_messages.py::__stream__` calls
+    `accumulate_event` before `yield`, verified against 0.120.2), so a
+    frame that breaks the SDK's own accumulator raises during iteration —
+    which is a **failed request**, and all three relays document that
+    those escape into the retry classifier on purpose. Catching them
+    would silently kill the retry pinned by
+    `test_malformed_frames_are_ignored_and_stream_failure_retries`, and
+    would change billed retry behavior, which this phase forbids.
+    The reviewer's second point was fair and was fixed: the chat test was
+    named `..._a_malformed_stream_frame_never_fails_a_chat_turn`, which
+    over-claimed, and its `partial_json=7` frame is one today's SDK would
+    raise on first. It is now
+    `test_malformed_frames_the_relay_decodes_never_fail_a_chat_turn`, with
+    the boundary written into the docstring, and a **new** test builds a
+    genuine `RawContentBlockStartEvent`/`ServerToolUseBlock` rather than a
+    `SimpleNamespace`. That one matters: `ServerToolUseBlock.input` is
+    declared `Dict[str, object]` but raw events are built with
+    `construct_type_unchecked` (no validation), so a non-mapping `input`
+    reaches the app on a real SDK object with nothing upstream rejecting
+    it — `_start_input`'s `isinstance(..., Mapping)` is the only guard,
+    and deleting it turns that test red. The three helper docstrings now
+    say so.
 - Manual QA owed: Phase 2's list — start research and confirm visible
   query and URL labels populate. Note this is the *direct-caller* path
   (Chunk 1.1), which the live canary in Chunk 6.5 already covers; the

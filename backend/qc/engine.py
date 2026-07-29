@@ -1906,6 +1906,12 @@ def _start_block_input(block: Any) -> dict[str, Any]:
 
     Copied, never retained by reference: the SDK accumulates into the block
     object as the stream advances.
+
+    The ``isinstance`` test is load-bearing on the real SDK path, not just
+    against a sloppy fake. ``ServerToolUseBlock.input`` is declared
+    ``Dict[str, object]``, but raw stream events are built with
+    ``construct_type_unchecked`` — no validation — so a non-mapping value
+    arrives untouched, and ``dict("…")`` raises.
     """
     value = getattr(block, "input", None)
     return dict(value) if isinstance(value, Mapping) else {}

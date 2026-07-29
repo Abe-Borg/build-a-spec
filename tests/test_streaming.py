@@ -168,10 +168,21 @@ def test_start_input_only_web_activity_emits_the_real_query_and_url(monkeypatch)
     assert frames[-1]["type"] == "turn_complete"
 
 
-def test_a_malformed_stream_frame_never_fails_a_chat_turn(monkeypatch):
-    """Garbage raw frames are skipped, not fatal — the same posture the
-    research and QC relays adapted from this one have always had, and one
-    non-string ``partial_json`` away from being untrue here.
+def test_malformed_frames_the_relay_decodes_never_fail_a_chat_turn(monkeypatch):
+    """Garbage the relay is handed is skipped, not fatal — the same posture
+    the research and QC relays adapted from this one have always had, and
+    one non-string ``partial_json`` away from being untrue here.
+
+    Scope, deliberately: this covers frames the relay DECODES. The SDK
+    accumulates and snapshots each raw frame inside ``next(stream)``, before
+    it is yielded (``anthropic/lib/streaming/_messages.py::__stream__`` calls
+    ``accumulate_event`` then ``yield``), so a frame that breaks the SDK's own
+    accumulator raises during iteration and is not caught here — on purpose.
+    That is a failed request, and it must reach the caller's error/retry path
+    exactly as a ``get_final_message()`` failure does; swallowing it would
+    silently kill the research/QC retry pinned by
+    ``test_malformed_frames_are_ignored_and_stream_failure_retries``. The
+    neighbouring test covers the frames the SDK does hand over unvalidated.
 
     A server tool that supplied no input either way still emits its chip
     with empty text: the round DID search, and chat says so rather than
@@ -181,8 +192,11 @@ def test_a_malformed_stream_frame_never_fails_a_chat_turn(monkeypatch):
         SimpleNamespace(type="content_block_start", index=0, content_block=None),
         # A delta with no delta payload.
         SimpleNamespace(type="content_block_delta", index=0, delta=None),
-        # A non-string partial_json for a block that never started: string
-        # concatenation raises, and used to take the whole turn with it.
+        # A non-string partial_json for a block that never started. Today's
+        # SDK would raise on this one first (its accumulator does
+        # bytes(partial_json, "utf-8") on an indexed block); the relay is
+        # hardened anyway, because "the layer above happens to fail first"
+        # is not a property worth depending on.
         SimpleNamespace(
             type="content_block_delta",
             index=1,
@@ -226,6 +240,57 @@ def test_a_malformed_stream_frame_never_fails_a_chat_turn(monkeypatch):
         "writing",
     ]
     assert "".join(e["text"] for e in frames if e["type"] == "text_delta") == "Done."
+
+
+def test_a_real_sdk_start_frame_with_a_non_mapping_input_is_survivable(monkeypatch):
+    """The start-input read is guarded against a frame the REAL SDK delivers.
+
+    `ServerToolUseBlock.input` is declared `Dict[str, object]`, but raw stream
+    events are built with `construct_type_unchecked` — no validation — so a
+    non-mapping `input` reaches the app as-is on a genuine SDK object. Nothing
+    upstream rejects it, and `dict("not-a-mapping")` raises `ValueError`, so
+    `_start_input`'s `isinstance(..., Mapping)` test is the only thing between
+    that frame and a failed turn.
+
+    Built here with the SDK's own types (`.construct()`, which is what the
+    unvalidated path amounts to) rather than a `SimpleNamespace`, precisely so
+    the coverage does not depend on the fake being generous."""
+    from anthropic.types import RawContentBlockStartEvent
+    from anthropic.types.server_tool_use_block import ServerToolUseBlock
+
+    start = RawContentBlockStartEvent.construct(
+        type="content_block_start",
+        index=0,
+        content_block=ServerToolUseBlock.construct(
+            type="server_tool_use",
+            id="srvtoolu_real",
+            name="web_search",
+            input="not-a-mapping",
+        ),
+    )
+    fake = FakeClient(
+        [
+            raw_turn(
+                [text_block("Done.")],
+                stop_reason="end_turn",
+                events=[start, block_stop_event(0)],
+            )
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+
+    frames = _parse_sse(_client().post("/api/chat", json={"message": "look it up"}).text)
+    assert frames[-1]["type"] == "turn_complete"
+    assert not [e for e in frames if e["type"] == "error"]
+    # The block still announced itself and still got its (unlabelled) chip —
+    # the reader rejected the value, the frame's try/except never fired.
+    assert [e["kind"] for e in frames if e["type"] == "status"] == [
+        "working",
+        "searching",
+    ]
+    assert [e for e in frames if e["type"] == "web_search"] == [
+        {"type": "web_search", "query": ""}
+    ]
 
 
 def test_drafting_status_on_tool_block(monkeypatch):

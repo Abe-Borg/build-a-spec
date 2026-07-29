@@ -121,7 +121,7 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_resear
 ### Implementation record
 
 - Status: **complete** (2026-07-29)
-- Commit/PR: branch `claude/deep-dive-remediation-plans-omivzu`
+- Commit/PR: `4bd0c18` — PR #88
 - Tests: `tests/test_research_engine.py` gains
   `test_web_tools_declare_direct_callers_on_every_research_request` (exact
   tool dicts on all four dimension requests) and

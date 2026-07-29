@@ -174,7 +174,7 @@ Pop-Location
 ### Implementation record
 
 - Status: **complete** (2026-07-29)
-- Commit/PR: branch `claude/deep-dive-remediation-plans-omivzu`
+- Commit/PR: `66abd43` — PR #92
 - Tests: `tests/test_qc_runner_audit_integrity.py` gains
   `test_an_ordinary_running_attempt_is_not_settling` (running with a real
   in-flight worker reports `settling: false` on both surfaces, a second

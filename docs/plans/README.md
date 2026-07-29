@@ -13,16 +13,23 @@ gates; start there, not here.
 
 The batch plans for v0.7.0–v1.0.0 (Batches 2–5) and the batch kickoff prompt
 `AGENT_PROMPT.md` were deleted on 2026-07-29. All four batches shipped, and
-every as-built fact they recorded is restated in `CLAUDE.md` — the file those
-plans themselves named as the source of truth for conventions, invariants and
-frozen decisions. `AGENT_PROMPT.md` selected the next batch from `VERSION`
-(topping out at 0.9.0 → Batch 5) and pointed at a `ROADMAP.md` deleted long
-before it, so it could not route work in this codebase any more.
+their as-built design record is restated in `CLAUDE.md` — the file those plans
+themselves named as the source of truth for conventions, invariants and frozen
+decisions. `AGENT_PROMPT.md` selected the next batch from `VERSION` (topping
+out at 0.9.0 → Batch 5) and pointed at a `ROADMAP.md` deleted long before it,
+so it could not route work in this codebase any more.
 
-Batch 4's "audit-grade reporting amendment" was the one plan section still
-claiming to be a live maintenance contract; it was folded into `CLAUDE.md`
-→ *Audit-grade Final QC report extension* → **The reporting contract** before
-the file was removed.
+Two things in those plans were **not** already covered elsewhere and were
+relocated before the files were removed, not dropped:
+
+- Batch 4's "audit-grade reporting amendment", the one plan section still
+  claiming to be a live maintenance contract → `CLAUDE.md` → *Audit-grade
+  Final QC report extension* → **The reporting contract**.
+- The manual QA that Batches 2, 3, 4 and 5 each recorded as **still owed**
+  (real-Word redline round-trips, packaged-app QC report downloads, partial-QC
+  coverage behavior, key flows, streaming feel) → `docs/RELEASE_WINDOWS.md` →
+  **Pre-release manual QA**. Nothing recorded those checks as completed, so
+  they are carried forward as outstanding.
 
 They remain in git history at `c991c4c` if you need the original design
 reasoning:

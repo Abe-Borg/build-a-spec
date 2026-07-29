@@ -127,6 +127,64 @@ form exception details.
 
 ---
 
+## Pre-release manual QA
+
+These checks cannot be made hermetic — they need a real Word install, a real
+packaged build, real eyes on motion, or a paid live model run. They were
+recorded as **still owed** in the v0.7.0–v1.0.0 batch plans; when those plans
+were retired on 2026-07-29 the obligations moved here rather than lapsing. No
+evidence exists that any of them was ever performed, so treat the whole list as
+outstanding until a release records otherwise. Note in the release which ones
+you ran and on what (Word version, packaged vs. dev build).
+
+**Streaming and chat feel** (v0.7.0)
+
+- [ ] A long drafting turn, a thinking-heavy turn, and a search turn — text
+      arrives smoothly, the status strip never goes dead, chips appear live.
+- [ ] Reduced-motion enabled: no typewriter, no shimmer, no pulse.
+- [ ] Scrolling up mid-stream hands off follow; returning to the bottom
+      re-pins.
+- [ ] The header spend ticker and the Settings usage table show believable
+      dollar figures for the turns just run.
+
+**Keys and manual editing** (v0.7.0)
+
+- [ ] Test / replace / remove key flows, including an env-supplied key
+      rendering read-only.
+- [ ] A `.docx` round-trip after a manual inline edit.
+
+**Review queue** (v0.8.0)
+
+- [ ] Keyboard walk end-to-end on a **real office master**: keep / edit /
+      delete / ask / skip, hold-to-confirm an article, busy lockout while a
+      turn streams, undo after a delete.
+- [ ] "Ask model" round-trips and the queue recomputes on turn completion.
+
+**Final QC** (v0.9.0; model updated v1.8.0)
+
+- [ ] A live run on the configured QC model (`settings.QC_MODEL`, currently
+      Opus 5 — the plan text said Fable 5, superseded): lens → verify progress
+      reads honestly, findings are real, a refusal fails the lens clean.
+- [ ] Accept-fix `.docx` round-trip; the base QC `.docx` opens in Word.
+- [ ] Hold-to-apply-criticals, and readiness going green.
+- [ ] A large report in `QCReportModal`: no truncation, unsafe source strings
+      inert rather than clickable.
+- [ ] Word **and** JSON downloads from the **packaged** app.
+- [ ] Legacy-result limitations and stale input identity render correctly.
+- [ ] Partial runs from one failed lens and, independently, one failed
+      verifier seat: each must block `qc_audit_complete`; a failed latest
+      attempt must also block `qc_current`; all three report surfaces must
+      identify the same run.
+
+**Redline export** (v1.0.0)
+
+- [ ] Open a redline in **real Word**: the reviewing pane shows
+      "Build-a-Spec" as author; **Accept All** yields the current document;
+      **Reject All** yields the master; word-level edits read cleanly; deleted
+      paragraphs collapse on accept.
+
+---
+
 ## Manual release (on a Windows machine)
 
 ### 0. One-time setup

@@ -3213,6 +3213,28 @@ quiet time.
   already-paid in-flight work has unwound and `qc_attempt_settled` lands.
   Action/start controls remain locked for that interval. The live board stays
   mounted instead of implying that provider work ended synchronously.
+- **`settling` means a STOPPED attempt unwinding — never an ordinary run**
+  (deep-dive remediation Chunk 2.2). The predicate is
+  `status in _TERMINAL and not _worker_settled`, defined once as
+  `QCRunner._is_settling_locked()` and used by both `is_settling` and
+  `audit_record_snapshot()["runner"]["settling"]` so the two cannot drift.
+  `_worker_settled` alone only says "a worker thread exists" — it is False
+  for the whole of every normal run, so reading it directly told the
+  double-start 409, the readiness `qc_current` detail, and a run-long
+  Review Room banner that a stop had been requested every single time
+  anyone ran Final QC. The state table: running → `settling` false;
+  terminal + settled → false; **terminal + not settled → true**; that last
+  row is the only one. Callers that must block both an active run and a
+  genuine settlement keep asking `status == "running" or is_settling` —
+  the gates did not change, only the copy they select. Readiness's running
+  branch deliberately avoids the word "settled" now, since it is a term of
+  art here. The frontend mirrors it with one exported predicate,
+  `qcLive.isQcStopSettling` (`status !== "running" && settling === true`),
+  used by `foldQcLiveState`, `isQcActiveSnapshot`, and every `QCDrawer`
+  label/banner/button/aria-live; `reconcileQcSnapshotUpdate` keeps
+  settlement sticky only for a terminal attempt, so a running snapshot
+  clears an erroneous prior bit instead of latching the drawer into stop
+  language for the session.
 - **The client treats the event log as local live state.** `QcEvent` is a
   discriminated union for every legacy and new frame. `lib/qcLive.ts` keeps the
   pure helpers: `mergeQcEvent` appends by `seq`, ignores replay duplicates and

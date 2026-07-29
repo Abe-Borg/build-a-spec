@@ -1,6 +1,6 @@
 # Phase 2 — Live state and stream resilience
 
-- Status: planned
+- Status: in progress (2.2 complete; 2.1, 2.3, 2.4 planned)
 - Prerequisite: Phase 1 complete
 - Risk: high user-visible impact; backend run results must remain unchanged
 
@@ -173,11 +173,51 @@ Pop-Location
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete** (2026-07-29)
+- Commit/PR: `66abd43` — PR #92
+- Tests: `tests/test_qc_runner_audit_integrity.py` gains
+  `test_an_ordinary_running_attempt_is_not_settling` (running with a real
+  in-flight worker reports `settling: false` on both surfaces, a second
+  start is still refused, and a normal completion stays not-settling).
+  `tests/test_stop.py` gains
+  `test_a_normal_qc_run_never_reports_a_stop_it_did_not_get`, the API-level
+  version the plan asks for: a blocked worker held mid-run, then
+  `/api/qc/status` → `running` + `settling: false`, the readiness
+  `qc_current` detail containing neither "stop" nor "settl", and a second
+  `POST /api/qc/start` returning exactly "Final QC is already running."
+  `frontend/tests/qcLive.test.ts` gains three: every row of the state
+  table through `isQcStopSettling`/`isQcActiveSnapshot`, a normal running
+  fold, and a running snapshot clearing an erroneous prior settling bit.
+  Focused run green (stop / runner integrity / audit report / qc — 90
+  passed); full gate green: `pytest -q` 1170 passed, 9 skipped;
+  `npm test` 95 passed; `npm run build` clean.
 - Deviations:
-- Manual QA owed:
+  - **One `backend/app.py` copy change**, which the plan allowed ("only if
+    message/gate cleanup is required"). The readiness running branch read
+    "Final QC is running and has not settled." — accurate English, but
+    `settling` is a term of art in this subsystem for a stopped attempt
+    unwinding, so the sentence invited exactly the confusion the chunk
+    exists to remove. Now "Final QC is running; no completed report is
+    available yet." The test asserts the detail contains neither "stop" nor
+    "settl", which keeps the overloaded vocabulary from creeping back.
+  - No other `app.py` change was needed: every guard already had the shape
+    the plan wanted (`status == "running" or is_settling` for the gate,
+    `is_settling` for the copy), so fixing the predicate fixed all of them
+    at once.
+  - `tests/test_qc_audit_report.py` untouched — it exercises report
+    projections, and the runner-integrity file already owned the state
+    table.
+  - **The reconcile carries settlement on `isQcStopSettling(previous)`, not
+    `previous.settling`** — a correction made in review on PR #92. Gating
+    on the *reconciled* status re-admitted the stale bit the moment a run
+    went terminal: a normal completion emits no `qc_attempt_settled`, so
+    the bit would then latch on forever and leave the drawer in stop
+    language, and active, after the run ended. The stale input this
+    defends against is specifically a running-and-settling snapshot, so
+    the test has to be on the previous snapshot's own state.
+- Manual QA owed: Phase 2's list — run a normal Final QC and confirm no
+  stop/settling language anywhere, then stop one and confirm the real
+  settlement language persists until paid in-flight work attaches.
 
 ## Chunk 2.3 — Research follower reconnect and stale-fetch rejection
 

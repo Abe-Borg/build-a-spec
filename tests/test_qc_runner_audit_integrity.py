@@ -94,6 +94,58 @@ def _seed_running_attempt(
         runner.events = []
 
 
+def test_an_ordinary_running_attempt_is_not_settling() -> None:
+    """`settling` means a STOP is unwinding — never an ordinary run.
+
+    `_worker_settled` is False for the whole of every normal run: it only
+    says a worker thread exists. Reading it alone told the double-start 409,
+    the readiness `qc_current` detail, and the Review Room banner that a stop
+    had been requested during every single Final QC run.
+    """
+    runner = QCRunner()
+    token = object()
+    cancel_event = threading.Event()
+    _seed_running_attempt(
+        runner, token=token, run_id="normal-run", cancel_event=cancel_event
+    )
+
+    assert runner.status == STATUS_RUNNING
+    assert runner._worker_settled is False, "a worker really is in flight"
+    assert runner.is_settling is False
+    assert runner.audit_record_snapshot()["runner"] == {
+        "status": STATUS_RUNNING,
+        "error": "",
+        "error_kind": "",
+        "settling": False,
+    }
+
+    # A second start is still refused — the gate is unchanged, only the copy
+    # it selects.
+    assert not runner.start(
+        section=None,
+        profile=None,
+        module=None,
+        client=None,
+        model="test-model",
+        max_tokens=1,
+        version_index=0,
+    )
+
+    # And a normal completion stays not-settling.
+    completed = _legacy_result("normal-run")
+    assert runner._finalize_attempt(
+        token,
+        runner_status=STATUS_COMPLETE,
+        attempt_status="complete",
+        result=completed,
+        install_result=True,
+        cancel_event=cancel_event,
+        terminal_event={"type": "qc_complete"},
+    )
+    assert runner.is_settling is False
+    assert runner.audit_record_snapshot()["runner"]["settling"] is False
+
+
 def test_terminal_finalization_and_audit_snapshot_are_one_coherent_state() -> None:
     runner = QCRunner()
     runner.restore(_legacy_result("retained-run"))

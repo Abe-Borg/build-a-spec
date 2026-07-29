@@ -408,9 +408,9 @@ Pop-Location
 
 - Status: **complete** (2026-07-29)
 - Commit/PR: `a42fc76` — PR #94
-- Tests: 25 new, in two new files, both registered in `package.json`'s
+- Tests: 27 new, in two new files, both registered in `package.json`'s
   explicit `node --test` list.
-  `frontend/tests/researchLive.test.ts` (22): merge ordering/dedupe, merge
+  `frontend/tests/researchLive.test.ts` (24): merge ordering/dedupe, merge
   never writing status/error/profile, a replayed `research_started` NOT
   blanking the board, a different-round reset, a same-round restart reset,
   the sentinel ignored; `maxResearchEventSeq` / `researchSnapshotRound` /
@@ -419,7 +419,13 @@ Pop-Location
   the restart-vs-late-fetch division of labour, a further-reaching fetch
   adopted, a different round replaced wholesale, equal-watermark
   non-regression in both directions, generation rejection and acceptance,
-  first-snapshot and round-less adoption, and the milestone set.
+  first-snapshot and round-less adoption, the milestone set, and the two
+  added in review — a shorter same-round log from ANOTHER workspace still
+  reading as stale (which is *why* the transition must clear rather than
+  reconcile), plus a source-text guard that `advanceWorkspaceEpoch` clears
+  the snapshot, aborts the stream, and is the only thing that bumps the
+  epoch (cross-file, so no unit test can reach it — the `tour.test.ts`
+  precedent).
   `frontend/tests/researchStream.test.ts` (3): the abort signal reaches
   `fetch`, aborting ends the stream, and breaking out releases the body —
   all against a stubbed SSE body that **never closes**, so a leak cannot
@@ -427,7 +433,7 @@ Pop-Location
   Both fixes were verified load-bearing by reverting them: restoring the
   pre-2.3 length-based reconcile turns the two race tests red, and deleting
   `readSse`'s reader release hangs the break-out test.
-  Gate green: `npm test` 121 passed (was 96), `npm run build` clean,
+  Gate green: `npm test` 123 passed (was 96), `npm run build` clean,
   `pytest -q` 1178 passed / 9 skipped (unchanged — no backend change).
 - Deviations:
   - **A restarted round is deliberately NOT handled in reconcile.** A

@@ -489,6 +489,14 @@ export interface SectionDiffPayload extends SectionDiff {
 
 export type ResearchRunStatus = "idle" | "running" | "complete" | "failed";
 
+/** What the `stream_end` sentinel can say. Closed on purpose: the follower
+ *  decides whether to stop or reconnect by switching over this union with a
+ *  `never` fallback (`lib/researchLive.classifyResearchStreamEnd`), so a new
+ *  status cannot be added without someone deciding what it means for
+ *  reconnection. `superseded` means a newer run took the runner over and
+ *  this stream ended without draining. */
+export type ResearchStreamEndStatus = ResearchRunStatus | "superseded";
+
 export interface ResearchEvent {
   seq: number;
   ts: string;
@@ -501,9 +509,8 @@ export interface ResearchEvent {
   done?: number;
   total?: number;
   project?: string;
-  /** On the `stream_end` sentinel; `superseded` means a newer run took
-   *  the runner over and this stream ended without draining. */
-  status?: ResearchRunStatus | "superseded";
+  /** On the `stream_end` sentinel only. */
+  status?: ResearchStreamEndStatus;
   restored?: boolean;
   /** 1-based research round this event belongs to (rounds append). */
   round?: number;

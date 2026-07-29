@@ -14,7 +14,6 @@ import type {
   QcApplyPreviewResult,
   QcSnapshot,
   ReadinessPayload,
-  ResearchEvent,
   ResearchSnapshot,
   SessionBundle,
   SourceCapabilitiesState,
@@ -96,73 +95,18 @@ import {
   qcSnapshotRunId,
   reconcileQcSnapshotUpdate,
 } from "./lib/qcLive";
+import {
+  RESEARCH_MILESTONE_TYPES,
+  classifyResearchStreamEnd,
+  isResearchActiveSnapshot,
+  mergeResearchEvent,
+  reconcileResearchSnapshotUpdate,
+  researchSnapshotRound,
+  type ResearchStreamOutcome,
+} from "./lib/researchLive";
 
 let nextId = 0;
 const newId = () => `m${++nextId}`;
-
-/** The research SSE events whose arrival warrants a full authoritative
- *  snapshot refetch (status flips, profile adoption, round metadata). The
- *  chatty live events between them — per-agent activity, searches, fetches,
- *  retries — merge locally instead: refetching the whole snapshot (full
- *  event log + full profile) per frame was O(frames × payload). */
-const RESEARCH_MILESTONES = new Set([
-  "research_started",
-  "dimension_complete",
-  "dimension_failed",
-  "research_complete",
-  "research_failed",
-]);
-
-/** Merge one streamed research event into the local snapshot's event log.
- *  Never touches status/error/profile — those stay snapshot-owned
- *  (refreshResearch is authoritative and epoch-guarded). `research_started`
- *  restarts the local log (the server clears it per round); replay overlap
- *  after a reconnect dedupes by seq. */
-function mergeResearchEvent(
-  prev: ResearchSnapshot | null,
-  evt: ResearchEvent,
-): ResearchSnapshot {
-  const base: ResearchSnapshot =
-    prev ?? { status: "running", error: "", events: [] };
-  if (evt.type === "research_started") return { ...base, events: [evt] };
-  const events = base.events;
-  const last = events[events.length - 1];
-  if (!last || evt.seq > last.seq) {
-    return { ...base, events: [...events, evt] };
-  }
-  const next = [...events.filter((e) => e.seq !== evt.seq), evt].sort(
-    (a, b) => a.seq - b.seq,
-  );
-  return { ...base, events: next };
-}
-
-/** Adopt a fetched snapshot without letting it march the live board
- *  backward. The refetch is asynchronous: kicked off by a milestone frame
- *  (worst case `research_started`, the exact moment all four workers burst
- *  their first events), its response can capture an EARLIER server log yet
- *  resolve AFTER later SSE frames merged locally — replacing wholesale
- *  would regress agents to "queued" and drop live activity until the next
- *  milestone, minutes away. Within one round both logs are prefixes of the
- *  same append-only server array (dense seq from 0), so same-round + longer
- *  local log ⇒ the local log is a strict superset: keep it, and take
- *  everything else (status/error/profile — which the merge never writes)
- *  from the fetch. Different round (or either side empty) ⇒ the fetch is a
- *  genuinely newer world: adopt it wholesale. */
-function reconcileResearchSnapshot(
-  prev: ResearchSnapshot | null,
-  fetched: ResearchSnapshot,
-): ResearchSnapshot {
-  const prevEvents = prev?.events ?? [];
-  const fetchedEvents = fetched.events ?? [];
-  const sameRound =
-    prevEvents.length > 0 &&
-    fetchedEvents.length > 0 &&
-    prevEvents[0].round === fetchedEvents[0].round;
-  if (sameRound && prevEvents.length > fetchedEvents.length) {
-    return { ...fetched, events: prevEvents };
-  }
-  return fetched;
-}
 
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
@@ -271,6 +215,14 @@ export default function App() {
   // accepted in this tick before it can drive UI or auth side effects.
   const qcSnapshotRef = useRef<QcSnapshot | null>(null);
   const qcRefreshGenerationRef = useRef(0);
+  // The same pair for research, for the same reason: the follower's loop
+  // makes decisions between renders (reconnect? accept this fetch?) and must
+  // never read a React state value that has not committed yet.
+  const researchSnapshotRef = useRef<ResearchSnapshot | null>(null);
+  const researchRefreshGenerationRef = useRef(0);
+  // The in-flight research stream, so a workspace transition can release the
+  // connection instead of leaving a second reader racing the new one.
+  const researchStreamRef = useRef<AbortController | null>(null);
   const onboardingRef = useRef<OnboardingApi | null>(null);
   // Every whole-session/tutorial transition advances this epoch. Read calls
   // and streams captured against an older workspace must never repaint the
@@ -281,6 +233,39 @@ export default function App() {
     qcSnapshotRef.current = snapshot;
     setQc(snapshot);
   }, []);
+
+  const replaceResearchSnapshot = useCallback(
+    (snapshot: ResearchSnapshot | null) => {
+      researchSnapshotRef.current = snapshot;
+      setResearch(snapshot);
+    },
+    [],
+  );
+
+  /** Advance the workspace epoch and cut loose everything still bound to the
+   *  old one. Every session/tutorial/project transition goes through here so
+   *  none of this can be forgotten at a new call site.
+   *
+   *  Clearing the research snapshot is part of the transition, not tidiness.
+   *  Research's reconcile identity is the ROUND NUMBER, which says nothing
+   *  across workspaces: two projects both sit at round 1, and a restored
+   *  project's whole log is a single `research_complete` at seq 0
+   *  (`ResearchRunner.restore` empties `events` first). Left pointing at the
+   *  outgoing project, the same-round watermark rule would read the incoming
+   *  snapshot as stale and reject it — permanently, because a restored run
+   *  never streams and nothing else would reset the ref. Clearing IS the
+   *  identity reset; reconcile then sees `previous === null` and adopts.
+   *  (QC needs no equivalent: its run ids are UUIDs, so two workspaces never
+   *  compare as the same run.)
+   *
+   *  Declared after `replaceResearchSnapshot` deliberately — a `useCallback`
+   *  dependency array is evaluated at render time, in declaration order, so
+   *  naming a later `const` here is a first-render TDZ crash. */
+  const advanceWorkspaceEpoch = useCallback(() => {
+    workspaceEpochRef.current += 1;
+    researchStreamRef.current?.abort();
+    replaceResearchSnapshot(null);
+  }, [replaceResearchSnapshot]);
 
   const refreshHealth = useCallback(() => {
     const epoch = workspaceEpochRef.current;
@@ -293,30 +278,53 @@ export default function App() {
       });
   }, []);
 
+  const acceptResearchSnapshot = useCallback((
+    value: ResearchSnapshot,
+    requestGeneration = researchRefreshGenerationRef.current,
+  ) => {
+    const decision = reconcileResearchSnapshotUpdate(
+      researchSnapshotRef.current,
+      value,
+      {
+        requestGeneration,
+        currentGeneration: researchRefreshGenerationRef.current,
+      },
+    );
+    if (!decision.accepted) return null;
+    const accepted = decision.snapshot;
+    replaceResearchSnapshot(accepted);
+    // Runs on every ACCEPTED fetch, not gated by React's effect-dependency
+    // diffing — so a second fast auth failure (identical status/error_kind
+    // to the first) still opens the modal, as long as onStartResearch
+    // cleared the ref for this attempt. A rejected stale response drives
+    // nothing: its `failed` may belong to a round the user already left.
+    if (accepted.status !== "failed") {
+      researchAuthHandledRef.current = false;
+    } else if (
+      accepted.error_kind === "auth_error" &&
+      !researchAuthHandledRef.current
+    ) {
+      researchAuthHandledRef.current = true;
+      setApiKeyErrorOpen(true);
+    }
+    return accepted;
+  }, [replaceResearchSnapshot]);
+
   const refreshResearch = useCallback(() => {
     const epoch = workspaceEpochRef.current;
+    const requestGeneration = researchRefreshGenerationRef.current;
     getResearchStatus()
       .then((value) => {
         if (workspaceEpochRef.current !== epoch) return;
-        setResearch((prev) => reconcileResearchSnapshot(prev, value));
-        // Runs on every fetch, not gated by React's effect-dependency
-        // diffing — so a second fast auth failure (identical status/
-        // error_kind to the first) still opens the modal, as long as
-        // onStartResearch cleared the ref for this attempt.
-        if (value?.status !== "failed") {
-          researchAuthHandledRef.current = false;
-        } else if (
-          value.error_kind === "auth_error" &&
-          !researchAuthHandledRef.current
-        ) {
-          researchAuthHandledRef.current = true;
-          setApiKeyErrorOpen(true);
-        }
+        acceptResearchSnapshot(value, requestGeneration);
       })
       .catch(() => {
-        if (workspaceEpochRef.current === epoch) setResearch(null);
+        // A transient milestone fetch must not erase the locally merged
+        // board — the follower reconciles again at the next milestone or
+        // when the stream ends. (This used to null the snapshot, which
+        // stranded a live run on one dropped poll.)
       });
-  }, []);
+  }, [acceptResearchSnapshot]);
 
   const refreshDoc = useCallback(() => {
     const epoch = workspaceEpochRef.current;
@@ -905,27 +913,91 @@ export default function App() {
   /** Follow the SSE stream of a running research. Live events merge into
    *  the local snapshot the moment they arrive (the agent board repaints
    *  per frame); the authoritative snapshot is refetched only on milestone
-   *  events and when the stream ends. */
+   *  events and when the stream ends. If transport closes before the run
+   *  settles, reconnect to the replayable log — the same loop `followQc`
+   *  runs, and the reason a 30-minute run used to freeze mid-board with no
+   *  way back short of a reload. */
   const followResearch = useCallback(async () => {
     if (researchFollowRef.current) return;
     researchFollowRef.current = true;
     const epoch = workspaceEpochRef.current;
+    const controller = new AbortController();
+    researchStreamRef.current = controller;
     try {
-      for await (const evt of streamResearch()) {
-        // The sentinel has no seq; `superseded` just means a newer run's
-        // follower owns the stream now — the finally refetch catches up.
-        if (evt.type === "stream_end") continue;
-        if (workspaceEpochRef.current === epoch) {
-          setResearch((prev) => mergeResearchEvent(prev, evt));
+      let reconnect = true;
+      while (reconnect && workspaceEpochRef.current === epoch) {
+        reconnect = false;
+        let outcome: ResearchStreamOutcome = "interrupted";
+        try {
+          for await (const evt of streamResearch(controller.signal)) {
+            if (evt.type === "stream_end") {
+              outcome = classifyResearchStreamEnd(evt.status);
+              continue;
+            }
+            if (workspaceEpochRef.current !== epoch) break;
+            // A `research_started` for a different round is a new world:
+            // invalidate any refresh still in flight for the old one before
+            // this frame's own milestone refetch goes out. (A restart of the
+            // SAME round number — the runner reuses it after a stop — is
+            // covered by the bump in onStartResearch.)
+            if (
+              evt.type === "research_started" &&
+              typeof evt.round === "number" &&
+              evt.round > 0 &&
+              researchSnapshotRound(researchSnapshotRef.current) !== evt.round
+            ) {
+              researchRefreshGenerationRef.current += 1;
+            }
+            replaceResearchSnapshot(
+              mergeResearchEvent(researchSnapshotRef.current, evt),
+            );
+            if (RESEARCH_MILESTONE_TYPES.has(evt.type)) refreshResearch();
+          }
+        } catch {
+          // The status probe below decides whether this transport close
+          // needs a reconnect or the server has genuinely settled.
         }
-        if (RESEARCH_MILESTONES.has(evt.type)) refreshResearch();
+
+        if (
+          workspaceEpochRef.current !== epoch ||
+          controller.signal.aborted ||
+          outcome === "terminal" ||
+          outcome === "superseded"
+        ) {
+          break;
+        }
+        try {
+          const requestGeneration = researchRefreshGenerationRef.current;
+          const latest = await getResearchStatus();
+          if (workspaceEpochRef.current !== epoch) break;
+          const accepted = acceptResearchSnapshot(latest, requestGeneration);
+          reconnect = isResearchActiveSnapshot(
+            accepted ?? researchSnapshotRef.current,
+          );
+        } catch {
+          // A transient status failure should not strand a locally active
+          // run after the transport closed. Keep following until an
+          // authoritative terminal snapshot or terminal sentinel arrives.
+          reconnect = isResearchActiveSnapshot(researchSnapshotRef.current);
+        }
+        if (reconnect) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+        }
       }
     } finally {
+      if (researchStreamRef.current === controller) {
+        researchStreamRef.current = null;
+      }
       researchFollowRef.current = false;
       refreshResearch();
       refreshUsage();
     }
-  }, [refreshResearch, refreshUsage]);
+  }, [
+    acceptResearchSnapshot,
+    refreshResearch,
+    refreshUsage,
+    replaceResearchSnapshot,
+  ]);
 
   const onStartResearch = useCallback(async () => {
     try {
@@ -937,18 +1009,24 @@ export default function App() {
       // researchAuthHandledRef's declaration comment: refreshResearch (not
       // an effect) is what actually reopens the modal.
       researchAuthHandledRef.current = false;
+      // A new round invalidates every refresh already in flight. This is
+      // the bump that covers a restart of the SAME round number, which the
+      // runner produces whenever the previous round was stopped or failed
+      // (it numbers from profile_result.round_count, and a discarded round
+      // never advances it) — so round identity alone cannot see it.
+      researchRefreshGenerationRef.current += 1;
       // Open the drawer onto the live agent board — the run is the show.
       bumpDrawer("research");
       addNote("Started requirements research — progress in the Research panel.");
       void followResearch();
     } catch (e) {
-      setResearch((prev) => ({
+      replaceResearchSnapshot({
         status: "failed",
         error: e instanceof Error ? e.message : String(e),
-        events: prev?.events ?? [],
-      }));
+        events: researchSnapshotRef.current?.events ?? [],
+      });
     }
-  }, [followResearch, addNote, health, bumpDrawer]);
+  }, [followResearch, addNote, health, bumpDrawer, replaceResearchSnapshot]);
 
   /** Stop the running research fan-out (confirmed in the drawer — loses progress). */
   const onStopResearch = useCallback(async () => {
@@ -1202,7 +1280,7 @@ export default function App() {
 
   /** Shared post-reset clear+refresh — every session-start path runs this. */
   const clearSessionState = () => {
-    workspaceEpochRef.current += 1;
+    advanceWorkspaceEpoch();
     setMessages([]);
     setOpenItems([]);
     setLintIssues([]);
@@ -1276,7 +1354,7 @@ export default function App() {
   /** Hydrate a tutorial/template transition without assuming whether the
    * backend initially returns a flat payload or a nested doc_payload. */
   const applySessionBundle = (bundle: SessionBundle) => {
-    workspaceEpochRef.current += 1;
+    advanceWorkspaceEpoch();
     const merged = {
       ...bundle,
       ...(bundle.doc_payload ?? {}),
@@ -1320,7 +1398,7 @@ export default function App() {
       }
       setMessages(rebuilt);
     }
-    if (merged.research) setResearch(merged.research);
+    if (merged.research) replaceResearchSnapshot(merged.research);
     if (merged.qc) replaceQcSnapshot(merged.qc);
     if (merged.readiness) setReadiness(merged.readiness);
     if (merged.usage) setUsage(merged.usage);
@@ -1579,7 +1657,7 @@ export default function App() {
     setFileLoading({ kind: "open", name: file.name });
     try {
       const result = await loadProjectFile(file);
-      workspaceEpochRef.current += 1;
+      advanceWorkspaceEpoch();
       applyDocPayload(result);
       // The .baspec carries the original import's content-loss warnings, and
       // with the imported-DOCX banner gone this is the only place they can

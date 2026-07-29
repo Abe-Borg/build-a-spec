@@ -18,6 +18,7 @@ from tests.fakes import (
     bad_request,
     block_start_event,
     block_stop_event,
+    code_execution_tool_events,
     input_json_delta_event,
     qc_findings_response,
     qc_verdict_response,
@@ -353,6 +354,128 @@ def test_malformed_frames_are_ignored_and_stream_failure_retries(monkeypatch) ->
     terminal = _events_for(events, type="lens_complete", lens_id="completeness")
     assert len(terminal) == 1
     assert not _events_for(events, type="lens_search", lens_id="completeness")
+
+
+def test_start_input_only_frames_emit_real_lens_and_seat_activity(
+    monkeypatch,
+) -> None:
+    """A server tool whose whole input arrives on the START frame — the
+    code-execution caller's shape, which streams no ``input_json_delta`` —
+    still names its query and URL in both Review Room phases.
+
+    Direct callers (Chunk 1.1) make that shape unexpected, not impossible;
+    this is the fallback that keeps a specialist card and a verifier seat
+    from showing a nameless search.
+    """
+    monkeypatch.setattr(settings, "QC_MAX_WORKERS", 1)
+    title = "Start-input candidate"
+    lens_response = qc_findings_response(
+        "code_compliance", findings=[_finding(title)]
+    )
+    lens_response.events = [
+        *code_execution_tool_events(
+            0, "web_search", {"query": "nfpa 13 2025 remote area reduction"}
+        ),
+        *code_execution_tool_events(
+            1, "web_fetch", {"url": "https://example.test/nfpa-13"}
+        ),
+        *_synthesize_events(lens_response.content, []),
+    ]
+    first_seat = qc_verdict_response(True)
+    first_seat.events = [
+        *code_execution_tool_events(
+            0, "web_search", {"query": "seat start-input query"}
+        ),
+        *code_execution_tool_events(
+            1, "web_fetch", {"url": "https://example.test/seat"}
+        ),
+        *_synthesize_events(first_seat.content, []),
+    ]
+    scripts = _scripts(code_compliance=[lens_response])
+    scripts[title] = [first_seat, qc_verdict_response(True)]
+    events: list[dict] = []
+    _run(scripts, events)
+
+    assert _events_for(events, type="lens_search", lens_id="code_compliance") == [
+        {
+            "type": "lens_search",
+            "lens_id": "code_compliance",
+            "query": "nfpa 13 2025 remote area reduction",
+        }
+    ]
+    assert _events_for(events, type="lens_fetch", lens_id="code_compliance") == [
+        {
+            "type": "lens_fetch",
+            "lens_id": "code_compliance",
+            "url": "https://example.test/nfpa-13",
+        }
+    ]
+    assert _events_for(events, type="verifier_search") == [
+        {
+            "type": "verifier_search",
+            "candidate_id": "candidate-1",
+            "reviewer_index": 1,
+            "query": "seat start-input query",
+        }
+    ]
+    assert _events_for(events, type="verifier_fetch") == [
+        {
+            "type": "verifier_fetch",
+            "candidate_id": "candidate-1",
+            "reviewer_index": 1,
+            "url": "https://example.test/seat",
+        }
+    ]
+    # Adjudication is untouched — this chunk changes labels, not verdicts.
+    assert _events_for(events, type="candidate_complete")[0]["outcome"] == "upheld"
+
+
+def test_qc_streamed_deltas_win_and_an_absent_input_says_nothing() -> None:
+    """Precedence and absence for a lens stream: deltas beat the start copy,
+    a block with neither shape emits nothing, and a non-mapping start input
+    is garbage rather than a lens failure."""
+    lens_response = qc_findings_response("completeness", findings=[])
+    lens_response.events = [
+        # Both shapes on one block: the streamed deltas win.
+        block_start_event(
+            0, "server_tool_use", "web_search", input={"query": "start copy"}
+        ),
+        input_json_delta_event(0, '{"query": "streamed delta"}'),
+        block_stop_event(0),
+        # Neither shape: nothing truthful to say, so nothing is said.
+        block_start_event(1, "server_tool_use", "web_fetch"),
+        block_stop_event(1),
+        # A start input that is not a mapping at all.
+        SimpleNamespace(
+            type="content_block_start",
+            index=2,
+            content_block=SimpleNamespace(
+                type="server_tool_use", name="web_search", input=["not", "a", "map"]
+            ),
+        ),
+        block_stop_event(2),
+        # A repeat stop for a block already retired: every tracking dict
+        # dropped index 0 the first time, so there is nothing left to replay.
+        block_stop_event(0),
+        *_synthesize_events(lens_response.content, []),
+    ]
+    events: list[dict] = []
+    _run(_scripts(completeness=[lens_response]), events)
+
+    assert [
+        event["query"]
+        for event in _events_for(events, type="lens_search", lens_id="completeness")
+    ] == ["streamed delta"]
+    assert not _events_for(events, type="lens_fetch", lens_id="completeness")
+    # All three blocks announced their activity — the non-mapping input was
+    # rejected by the reader, not by the frame's try/except (which would have
+    # swallowed the start frame whole and lost the third "searching").
+    assert [
+        event["kind"]
+        for event in _events_for(events, type="lens_activity", lens_id="completeness")
+    ] == ["searching", "fetching", "searching", "writing"]
+    terminal = _events_for(events, type="lens_complete", lens_id="completeness")
+    assert len(terminal) == 1
 
 
 def _lens_requests(client: SequencedFakeClient, lens_id: str) -> list[dict]:

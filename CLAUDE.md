@@ -3025,7 +3025,8 @@ semantics, retry policy, pause_turn loop, and grounding are untouched.
   `get_final_message()` — the chat loop's proven iterate-then-final shape
   (the SDK accumulates during iteration, so the final message is
   byte-identical to before). Detection triple: `content_block_start`
-  records (type, name) and announces the activity kind;
+  records (type, name), announces the activity kind, and copies any
+  already-complete `block.input` (see below);
   `input_json_delta` accumulates ONLY for `server_tool_use` blocks (the
   output tool streams the whole findings payload — never buffer it);
   `content_block_stop` parses the buffer and emits the query/URL, skipping
@@ -3035,6 +3036,27 @@ semantics, retry policy, pause_turn loop, and grounding are untouched.
   `get_final_message` errors always did. No `should_stop` inside
   iteration, no early break: Batch 7's no-mid-call-interruption decision
   stands; post-stop EMISSION is what changed, and the runner drops it.
+- **A tool input arrives in one of two shapes, and all three relays read
+  both** (deep-dive remediation Chunk 2.1). The direct caller streams
+  `input_json_delta` frames; the **code-execution** caller can hand the
+  whole input over on `content_block_start.content_block.input` and stream
+  no deltas at all, which is what left the research board, the Review Room
+  and the chat chip with a nameless "Searching the web…". Chunk 1.1's
+  `allowed_callers: ["direct"]` is the fix; this is the fallback that
+  survives a future code-execution-called tool, provider-side shape drift,
+  or an owner decision to re-enable dynamic filtering. Each relay
+  (`research/engine._relay_stream_activity`,
+  `qc/engine._relay_stream_activity`, `conversation._stream_events`) keeps
+  a `start_inputs` map beside its JSON buffers, **copies** the mapping
+  (`_start_input` / `_start_block_input` — never retains the SDK block,
+  which the stream accumulates into), and at stop uses
+  `streamed or started`: **deltas win** when both exist, so nothing about
+  the normal path changed. Every index is popped from all three tracking
+  dicts at `content_block_stop` — a repeat stop therefore has nothing left
+  to replay, which is how the popping is pinned. Absence behavior is
+  deliberately NOT uniform: research and QC skip a query/URL they do not
+  have, chat still emits its chip with empty text (the round did search;
+  saying so unlabelled beats silence).
 - **The runner got the QC run token, one notch stronger.** Multiplying
   event volume made two latent races load-bearing: a stopped run's
   still-unwinding workers appending to the NEXT round's cleared log
@@ -3196,10 +3218,14 @@ quiet time.
   order. These empty transitions are immediate truth, not animation dwell.
 - **Raw stream relay follows Research's proven shape.** Each lens/verifier call
   iterates the already-open SDK stream before requesting its final message.
-  Content-block starts announce observable activity; server-tool JSON deltas
+  Content-block starts announce observable activity and copy any
+  already-complete `block.input`; server-tool JSON deltas
   are buffered narrowly enough to emit live search/fetch inputs at block stop;
   final structured finding/verdict payloads are not copied into activity
-  frames. Per-frame decoding is defensive, so malformed optional telemetry is
+  frames. A block stop resolves `streamed or started` — deltas win, the
+  copied start input is the code-execution-caller fallback described under
+  "Live research visibility" above, and both are dropped at stop. Per-frame
+  decoding is defensive, so malformed optional telemetry is
   ignored, while a real iterator/request failure escapes into the unchanged
   retry classifier. Change-only activity suppresses duplicate noise and retry
   resets the worker's activity memory so the next attempt can announce itself.
@@ -3397,7 +3423,11 @@ dicts, plus the documentation that key makes true.
   trust dossier claimed every part of the app is. Direct callers remove all
   three at the source, which is why this lands before the container
   propagation of Chunks 1.2–1.3 — those stay as defense-in-depth for any
-  future code-execution-called tool, not as the fix.
+  future code-execution-called tool, not as the fix. Chunk 2.1 is the
+  visibility half of that same defense-in-depth: all three relays now also
+  read a complete tool input off `content_block_start`, so re-enabling
+  dynamic filtering would no longer blank the live query/URL labels (it
+  would still re-open the container and ZDR halves).
 - **One choke point, three channels.** `WEB_TOOL_ALLOWED_CALLERS` in
   `backend/research/schema.py` is the single declaration; both builders spread
   a fresh `list(...)` of it, so a consumer mutating one request's tool list

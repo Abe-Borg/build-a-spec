@@ -42,6 +42,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from collections.abc import Mapping
 from concurrent.futures import (
     FIRST_COMPLETED,
     ThreadPoolExecutor,
@@ -1893,6 +1894,23 @@ def _safe_stream_json(text: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _start_block_input(block: Any) -> dict[str, Any]:
+    """A COPY of a start frame's already-complete tool input, or ``{}``.
+
+    A server tool invoked through the code-execution caller can deliver its
+    whole input on ``content_block_start`` with no ``input_json_delta``
+    frames following. Both web tools pin ``allowed_callers: ["direct"]``, so
+    the Review Room does not expect that shape — this is the fallback that
+    keeps a lens's or seat's query/URL label real for any future
+    code-execution-called tool or provider-side shape drift.
+
+    Copied, never retained by reference: the SDK accumulates into the block
+    object as the stream advances.
+    """
+    value = getattr(block, "input", None)
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
 _ACTIVITY_FOR_BLOCK: dict[tuple[str, str], str] = {
     ("server_tool_use", "web_search"): "searching",
     ("server_tool_use", "web_fetch"): "fetching",
@@ -1915,11 +1933,16 @@ def _relay_stream_activity(
     """Drain raw SDK frames and relay observable QC worker activity.
 
     Only server-tool input JSON is buffered; generated text/thinking deltas
-    and output-tool payloads are never emitted or accumulated. A malformed
+    and output-tool payloads are never emitted or accumulated. A server-tool
+    input arrives either as streamed ``input_json_delta`` frames (the
+    direct-caller shape) or complete on the start frame (the code-execution
+    caller); both are tracked, streamed deltas win when a stream supplies
+    both, and every index is dropped at ``content_block_stop``. A malformed
     individual frame is ignored, while an exception raised by stream
     iteration itself deliberately escapes into the normal retry classifier.
     """
     json_buffers: dict[int, str] = {}
+    start_inputs: dict[int, dict[str, Any]] = {}
     block_kinds: dict[int, tuple[str, str]] = {}
     for event in stream:
         try:
@@ -1932,6 +1955,9 @@ def _relay_stream_activity(
                 block_kinds[index] = (block_type, block_name)
                 if block_type == "server_tool_use":
                     json_buffers[index] = ""
+                    started = _start_block_input(block)
+                    if started:
+                        start_inputs[index] = started
                 kind = _ACTIVITY_FOR_BLOCK.get(
                     (block_type, block_name)
                 ) or _ACTIVITY_FOR_TYPE.get(block_type, "")
@@ -1954,10 +1980,12 @@ def _relay_stream_activity(
                         )
             elif event_type == "content_block_stop":
                 index = getattr(event, "index", 0)
-                block_type, block_name = block_kinds.get(index, ("", ""))
+                block_type, block_name = block_kinds.pop(index, ("", ""))
+                streamed = _safe_stream_json(json_buffers.pop(index, ""))
+                started = start_inputs.pop(index, {})
                 if block_type != "server_tool_use":
                     continue
-                payload = _safe_stream_json(json_buffers.pop(index, ""))
+                payload = streamed or started
                 if block_name == "web_search":
                     query = str(
                         payload.get("query") or payload.get("q") or ""

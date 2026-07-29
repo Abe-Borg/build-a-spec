@@ -247,11 +247,27 @@ def chat_search_blocks(
 # ---------------------------------------------------------------------------
 
 
-def block_start_event(index: int, block_type: str, name: str = "") -> SimpleNamespace:
+def block_start_event(
+    index: int,
+    block_type: str,
+    name: str = "",
+    *,
+    input: dict | None = None,
+) -> SimpleNamespace:
+    """A ``content_block_start`` frame.
+
+    ``input`` is the code-execution caller's shape: that caller hands the
+    whole tool input over on the start frame and streams no
+    ``input_json_delta`` after it. Omitted — the direct-caller default both
+    web tools pin — the started block carries no ``input`` attribute at
+    all, exactly as the wire does, and the deltas are what carry the
+    payload.
+    """
+    block = SimpleNamespace(type=block_type, name=name)
+    if input is not None:
+        block.input = input
     return SimpleNamespace(
-        type="content_block_start",
-        index=index,
-        content_block=SimpleNamespace(type=block_type, name=name),
+        type="content_block_start", index=index, content_block=block
     )
 
 
@@ -281,6 +297,31 @@ def input_json_delta_event(index: int, partial: str) -> SimpleNamespace:
 
 def block_stop_event(index: int) -> SimpleNamespace:
     return SimpleNamespace(type="content_block_stop", index=index)
+
+
+def code_execution_tool_events(
+    index: int, name: str, tool_input: dict
+) -> list[SimpleNamespace]:
+    """A server-tool block in the CODE-EXECUTION caller's streaming shape.
+
+    Start frame carrying the complete input, then straight to stop — zero
+    ``input_json_delta`` frames in between. That is what
+    ``allowed_callers: ["code_execution_20260120"]`` (the ``_20260209``
+    tools' provider default, which this app deliberately does not use)
+    produces, and it is the shape that used to leave the chat chip, the
+    research agent board, and the QC Review Room with no query or URL to
+    show. ``_synthesize_events`` cannot produce it — it always emits a
+    delta — so a fixture wanting this shape must build it here and pass it
+    through ``events=``.
+
+    The direct-caller counterpart is ``block_start_event`` (no ``input``)
+    plus ``input_json_delta_event`` plus ``block_stop_event``, which is what
+    ``_synthesize_events`` already builds for every scripted turn.
+    """
+    return [
+        block_start_event(index, "server_tool_use", name, input=dict(tool_input)),
+        block_stop_event(index),
+    ]
 
 
 _STREAMED_BLOCK_TYPES = ("text", "thinking", "tool_use", "server_tool_use")

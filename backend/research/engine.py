@@ -38,6 +38,7 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -948,6 +949,24 @@ def _safe_json(text: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _start_input(block: Any) -> dict[str, Any]:
+    """A COPY of a start frame's already-complete tool input, or ``{}``.
+
+    A server tool invoked through the code-execution caller can arrive with
+    its whole input on ``content_block_start`` and no ``input_json_delta``
+    frames after it. Both web tools pin ``allowed_callers: ["direct"]``, so
+    that is not the shape we expect — this is the fallback that keeps the
+    live query/URL labels truthful for any future code-execution-called
+    tool or provider-side shape drift.
+
+    Copied, never retained by reference: the SDK accumulates into the block
+    object as the stream advances, so holding it would leave the relay
+    reading a value that changed under it.
+    """
+    value = getattr(block, "input", None)
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
 # What a worker is doing right now, keyed off the block that just started.
 # Research's only client tool is the output tool, so any ``tool_use`` block
 # means the model is writing up its findings.
@@ -980,6 +999,14 @@ def _relay_stream_activity(
     blocks ONLY — the output tool streams the entire findings payload,
     which would be accumulated for nothing.
 
+    A server-tool input can arrive either way: streamed as
+    ``input_json_delta`` frames (the direct-caller shape both web tools
+    pin) or complete on the start frame (the code-execution caller). Both
+    are tracked; the streamed deltas win when a stream supplies both, and
+    the start copy is the fallback that keeps the label real otherwise.
+    Every index is dropped at ``content_block_stop`` so a long stream never
+    retains completed payloads.
+
     Per-event parsing is defensive: a malformed frame is skipped, never a
     dimension failure. Errors raised by the stream iteration itself
     propagate — those are real request failures and take the same
@@ -989,6 +1016,7 @@ def _relay_stream_activity(
     instead).
     """
     json_buffers: dict[int, str] = {}
+    start_inputs: dict[int, dict[str, Any]] = {}
     block_kinds: dict[int, tuple[str, str]] = {}
     for event in stream:
         try:
@@ -1001,6 +1029,9 @@ def _relay_stream_activity(
                 block_kinds[index] = (btype, bname)
                 if btype == "server_tool_use":
                     json_buffers[index] = ""
+                    started = _start_input(block)
+                    if started:
+                        start_inputs[index] = started
                 kind = _ACTIVITY_FOR_BLOCK.get(
                     (btype, bname)
                 ) or _ACTIVITY_FOR_TYPE.get(btype, "")
@@ -1023,10 +1054,12 @@ def _relay_stream_activity(
                         )
             elif etype == "content_block_stop":
                 index = getattr(event, "index", 0)
-                btype, bname = block_kinds.get(index, ("", ""))
+                btype, bname = block_kinds.pop(index, ("", ""))
+                streamed = _safe_json(json_buffers.pop(index, ""))
+                started = start_inputs.pop(index, {})
                 if btype != "server_tool_use":
                     continue
-                payload = _safe_json(json_buffers.pop(index, ""))
+                payload = streamed or started
                 if bname == "web_search":
                     query = str(payload.get("query", "") or "").strip()
                     if query:

@@ -24,7 +24,12 @@ from backend.research.schema import (
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE as DEFAULT_MODULE
 from tests.fakes import (
     SequencedFakeClient,
+    _synthesize_events,
+    block_start_event,
+    block_stop_event,
+    code_execution_tool_events,
     fetch_blocks,
+    input_json_delta_event,
     pause_response,
     research_response,
 )
@@ -578,8 +583,6 @@ def test_malformed_stream_frames_never_fail_a_dimension():
     yields no blank-query event."""
     from types import SimpleNamespace
 
-    from tests.fakes import _synthesize_events
-
     response = research_response(
         items=[_item("Survives.", ["https://a.gov"])],
         searched_urls=["https://a.gov"],
@@ -624,6 +627,146 @@ def test_malformed_stream_frames_never_fail_a_dimension():
     assert all(
         e["query"] for e in events if e["type"] == "dimension_search"
     )
+
+
+def test_start_input_only_frames_still_emit_the_real_query_and_url():
+    """A server tool whose input arrives complete on the START frame — the
+    code-execution caller's shape, which streams no ``input_json_delta`` at
+    all — still names its query and URL on the agent board.
+
+    Direct callers (``allowed_callers: ["direct"]``, Chunk 1.1) make this
+    shape unexpected, not impossible: this is the fallback that keeps the
+    labels real for any future code-execution-called tool or provider-side
+    shape drift.
+    """
+    response = research_response(
+        items=[_item("Recorded.", ["https://a.gov"])],
+        searched_urls=["https://a.gov"],
+    )
+    response.events = [
+        *code_execution_tool_events(
+            0, "web_search", {"query": "virginia adopted fire code edition"}
+        ),
+        *code_execution_tool_events(
+            1, "web_fetch", {"url": "https://a.gov/adoption.pdf"}
+        ),
+        *_synthesize_events(response.content, []),
+    ]
+    events: list[dict] = []
+    client = SequencedFakeClient(_scripts(governing_codes=[response]))
+    profile = run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        event_sink=events.append,
+    )
+
+    gov = _dimension_events(events, "governing_codes")
+    assert [e for e in gov if e["type"] == "dimension_search"] == [
+        {
+            "type": "dimension_search",
+            "dimension_id": "governing_codes",
+            "query": "virginia adopted fire code edition",
+        }
+    ]
+    assert [e for e in gov if e["type"] == "dimension_fetch"] == [
+        {
+            "type": "dimension_fetch",
+            "dimension_id": "governing_codes",
+            "url": "https://a.gov/adoption.pdf",
+        }
+    ]
+    kinds = [e["kind"] for e in gov if e["type"] == "dimension_activity"]
+    assert kinds == ["searching", "fetching", "writing"]
+    # The run itself is untouched — this chunk changes labels, not findings.
+    assert any(i.requirement == "Recorded." for i in profile.items)
+
+
+def test_streamed_deltas_win_and_an_absent_input_says_nothing():
+    """Precedence and absence. Deltas are the live truth when a stream
+    supplies both shapes; a block with neither emits no chip at all; a
+    start input that is not a mapping is garbage, not a crash."""
+    from types import SimpleNamespace
+
+    response = research_response(
+        items=[_item("Still fine.", ["https://a.gov"])],
+        searched_urls=["https://a.gov"],
+    )
+    response.events = [
+        # Both shapes on one block: the streamed deltas win.
+        block_start_event(
+            0, "server_tool_use", "web_search", input={"query": "start copy"}
+        ),
+        input_json_delta_event(0, '{"query": "streamed delta"}'),
+        block_stop_event(0),
+        # Neither shape: research skips a genuinely missing URL.
+        block_start_event(1, "server_tool_use", "web_fetch"),
+        block_stop_event(1),
+        # A start input that is not a mapping at all.
+        SimpleNamespace(
+            type="content_block_start",
+            index=2,
+            content_block=SimpleNamespace(
+                type="server_tool_use", name="web_search", input="not-a-mapping"
+            ),
+        ),
+        block_stop_event(2),
+        *_synthesize_events(response.content, []),
+    ]
+    events: list[dict] = []
+    client = SequencedFakeClient(_scripts(governing_codes=[response]))
+    profile = run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        event_sink=events.append,
+    )
+
+    gov = _dimension_events(events, "governing_codes")
+    assert [e["query"] for e in gov if e["type"] == "dimension_search"] == [
+        "streamed delta"
+    ]
+    assert not [e for e in gov if e["type"] == "dimension_fetch"]
+    # All three blocks announced their activity — the non-mapping input was
+    # rejected by the reader, not by the frame's try/except (which would
+    # have swallowed the start frame whole and lost the third "searching").
+    kinds = [e["kind"] for e in gov if e["type"] == "dimension_activity"]
+    assert kinds == ["searching", "fetching", "searching", "writing"]
+    status = next(
+        s for s in profile.dimension_statuses if s.dimension_id == "governing_codes"
+    )
+    assert status.status == "completed"
+
+
+def test_a_finished_block_is_forgotten_at_stop():
+    """Every tracking dict drops the index at ``content_block_stop``, so a
+    long stream never retains completed payloads. Observable proof: a second
+    stop for the same index has nothing left to report."""
+    response = research_response(
+        items=[_item("Once.", ["https://a.gov"])],
+        searched_urls=["https://a.gov"],
+    )
+    response.events = [
+        *code_execution_tool_events(0, "web_search", {"query": "only once"}),
+        block_stop_event(0),  # a repeat stop for a block already retired
+        *_synthesize_events(response.content, []),
+    ]
+    events: list[dict] = []
+    client = SequencedFakeClient(_scripts(governing_codes=[response]))
+    run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        event_sink=events.append,
+    )
+    gov = _dimension_events(events, "governing_codes")
+    assert [e["query"] for e in gov if e["type"] == "dimension_search"] == ["only once"]
 
 
 def test_retry_success_counts_billed_usage_from_abandoned_attempt(monkeypatch):

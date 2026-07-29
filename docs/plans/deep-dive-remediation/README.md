@@ -328,7 +328,7 @@ tests and phase gate are recorded in the phase file.
 | 1.2 | **complete** | `f0a5ac5` (PR #89) | research + QC continuation containers, attempt-local |
 | 1.3 | **complete** | `d39e778` (PR #90) | chat continuation container, turn-local |
 | 1.4 | **complete** | `2f759e3` (PR #91) | server-tool pairing at four boundaries + legacy repair — **Phase 1 done** |
-| 2.1 | planned | | |
+| 2.1 | **complete** | `PENDING` (PR #PENDING) | start-input fallback in all three relays; every index popped at block stop |
 | 2.2 | **complete** | `66abd43` (PR #92) | settling = stopped-and-unwinding only; pulled ahead of 2.1 per the roadmap |
 | 2.3 | planned | | |
 | 2.4 | planned | | |

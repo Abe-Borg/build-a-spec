@@ -5,6 +5,7 @@ streaming client in ``tests/fakes.py``."""
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -16,6 +17,8 @@ from tests.fakes import (
     block_start_event,
     block_stop_event,
     chat_search_blocks,
+    code_execution_tool_events,
+    fetch_blocks,
     raw_turn,
     text_block,
     text_delta_event,
@@ -126,6 +129,103 @@ def test_live_web_search_fires_before_doc_patch(monkeypatch):
     searching = [i for i, e in enumerate(frames) if e.get("kind") == "searching"]
     assert len(searching) >= 2
     assert searching[0] < types.index("web_search")
+
+
+def test_start_input_only_web_activity_emits_the_real_query_and_url(monkeypatch):
+    """A server tool whose whole input arrives on the START frame — the
+    code-execution caller's shape, which streams no ``input_json_delta`` —
+    still fills its chat chip.
+
+    Direct callers (``allowed_callers: ["direct"]``, Chunk 1.1) make that
+    shape unexpected, not impossible; this is the fallback that keeps the
+    chip from reading "Searching the web…" with nothing in it.
+    """
+    search_round = raw_turn(
+        [
+            *chat_search_blocks("NFPA 13 2025 remote area", ["https://nfpa.org"]),
+            *fetch_blocks("https://nfpa.org/13"),
+        ],
+        stop_reason="pause_turn",
+        events=[
+            *code_execution_tool_events(
+                0, "web_search", {"query": "NFPA 13 2025 remote area"}
+            ),
+            *code_execution_tool_events(
+                1, "web_fetch", {"url": "https://nfpa.org/13"}
+            ),
+        ],
+    )
+    fake = FakeClient([search_round, text_turn(["Done."])])
+    _patch_client(monkeypatch, fake)
+
+    frames = _parse_sse(
+        _client().post("/api/chat", json={"message": "check the remote area rule"}).text
+    )
+    (search,) = [e for e in frames if e["type"] == "web_search"]
+    assert search["query"] == "NFPA 13 2025 remote area"
+    (fetch,) = [e for e in frames if e["type"] == "web_fetch"]
+    assert fetch["url"] == "https://nfpa.org/13"
+    assert frames[-1]["type"] == "turn_complete"
+
+
+def test_a_malformed_stream_frame_never_fails_a_chat_turn(monkeypatch):
+    """Garbage raw frames are skipped, not fatal — the same posture the
+    research and QC relays adapted from this one have always had, and one
+    non-string ``partial_json`` away from being untrue here.
+
+    A server tool that supplied no input either way still emits its chip
+    with empty text: the round DID search, and chat says so rather than
+    going silent (the deliberate contrast with research/QC, which skip)."""
+    events = [
+        # A start frame with no content_block at all.
+        SimpleNamespace(type="content_block_start", index=0, content_block=None),
+        # A delta with no delta payload.
+        SimpleNamespace(type="content_block_delta", index=0, delta=None),
+        # A non-string partial_json for a block that never started: string
+        # concatenation raises, and used to take the whole turn with it.
+        SimpleNamespace(
+            type="content_block_delta",
+            index=1,
+            delta=SimpleNamespace(type="input_json_delta", partial_json=7),
+        ),
+        SimpleNamespace(type="mystery_frame"),
+        # A search with neither deltas nor a start input.
+        block_start_event(2, "server_tool_use", "web_search"),
+        block_stop_event(2),
+        # A start input that is not a mapping at all. Rejected by the reader,
+        # NOT by the frame's try/except — the block still announces itself
+        # and still gets its (unlabelled) chip.
+        SimpleNamespace(
+            type="content_block_start",
+            index=3,
+            content_block=SimpleNamespace(
+                type="server_tool_use", name="web_fetch", input=42
+            ),
+        ),
+        block_stop_event(3),
+        block_start_event(4, "text"),
+        text_delta_event(4, "Done."),
+        block_stop_event(4),
+    ]
+    fake = FakeClient(
+        [raw_turn([text_block("Done.")], stop_reason="end_turn", events=events)]
+    )
+    _patch_client(monkeypatch, fake)
+
+    frames = _parse_sse(_client().post("/api/chat", json={"message": "look it up"}).text)
+    assert frames[-1]["type"] == "turn_complete"
+    assert not [e for e in frames if e["type"] == "error"]
+    (search,) = [e for e in frames if e["type"] == "web_search"]
+    assert search["query"] == ""
+    (fetch,) = [e for e in frames if e["type"] == "web_fetch"]
+    assert fetch["url"] == ""
+    assert [e["kind"] for e in frames if e["type"] == "status"] == [
+        "working",
+        "searching",
+        "fetching",
+        "writing",
+    ]
+    assert "".join(e["text"] for e in frames if e["type"] == "text_delta") == "Done."
 
 
 def test_drafting_status_on_tool_block(monkeypatch):

@@ -1,6 +1,6 @@
 # Phase 2 — Live state and stream resilience
 
-- Status: in progress (2.1 and 2.2 complete; 2.3, 2.4 planned)
+- Status: in progress (2.1, 2.2 and 2.3 complete; 2.4 planned)
 - Prerequisite: Phase 1 complete
 - Risk: high user-visible impact; backend run results must remain unchanged
 
@@ -406,11 +406,81 @@ Pop-Location
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete** (2026-07-29)
+- Commit/PR: `PENDING` — PR #PENDING
+- Tests: 25 new, in two new files, both registered in `package.json`'s
+  explicit `node --test` list.
+  `frontend/tests/researchLive.test.ts` (22): merge ordering/dedupe, merge
+  never writing status/error/profile, a replayed `research_started` NOT
+  blanking the board, a different-round reset, a same-round restart reset,
+  the sentinel ignored; `maxResearchEventSeq` / `researchSnapshotRound` /
+  `isResearchActiveSnapshot`; every `stream_end` status classified; the
+  terminal-over-running race rejected on round 1 **and** on a later round,
+  the restart-vs-late-fetch division of labour, a further-reaching fetch
+  adopted, a different round replaced wholesale, equal-watermark
+  non-regression in both directions, generation rejection and acceptance,
+  first-snapshot and round-less adoption, and the milestone set.
+  `frontend/tests/researchStream.test.ts` (3): the abort signal reaches
+  `fetch`, aborting ends the stream, and breaking out releases the body —
+  all against a stubbed SSE body that **never closes**, so a leak cannot
+  pass by accident.
+  Both fixes were verified load-bearing by reverting them: restoring the
+  pre-2.3 length-based reconcile turns the two race tests red, and deleting
+  `readSse`'s reader release hangs the break-out test.
+  Gate green: `npm test` 121 passed (was 96), `npm run build` clean,
+  `pytest -q` 1178 passed / 9 skipped (unchanged — no backend change).
 - Deviations:
-- Manual QA owed:
+  - **A restarted round is deliberately NOT handled in reconcile.** A
+    rule for it was written, and the existing tests rejected it — "stop
+    round 2, start round 2 again" and "a late fetch from the middle of
+    round 2" are the same triple (same round, shorter fetched log), so
+    adopting the first re-opens the second, which is the whole point of
+    the chunk. The restart is instead covered by two mechanisms that both
+    run first: `onStartResearch` bumps the refresh generation, and
+    `mergeResearchEvent` resets the log on the new round's
+    `research_started` frame, which always precedes the milestone refetch
+    it triggers. Round identity genuinely repeats here —
+    `ResearchRunner.start` numbers from `profile_result.round_count` and a
+    stopped round is never adopted — so this is not hypothetical. Both
+    mechanisms and the reasoning are pinned by tests and written into the
+    module docstring.
+  - **`mergeResearchEvent`'s reset became run-aware** (the plan left merge
+    alone; 2.4 owns its dedupe cost). It had to: the reset was
+    unconditional on `research_started`, and reconnect — which this chunk
+    introduces — replays every round from seq 0, so the board would blank
+    and rebuild on each transport hiccup. A frame starts a new run when
+    the local log is empty, the round differs, **or the local snapshot is
+    not running**. 2.4's actual job (a constant-time duplicate index) is
+    untouched.
+  - **`readSse` gained a `finally` that cancels the reader, and
+    `streamResearch` takes an `AbortSignal`.** The plan asked for "an
+    `AbortController` (or equivalent epoch token)"; the token alone would
+    not have been enough. Breaking out of a `for await` unwinds the
+    generator but cancels nothing, so every prior `break` — and now every
+    reconnect — left the browser reading a body no one would consume.
+    Pinned by a test whose stub body never closes.
+  - **`advanceWorkspaceEpoch()` replaced three inline
+    `workspaceEpochRef.current += 1`** so the abort cannot be forgotten at
+    a fourth site. QC's follower is deliberately left on its epoch-check-
+    plus-`break`; converting it is its own change.
+  - **`refreshResearch`'s catch no longer nulls the snapshot** — it used
+    to erase a live board on one dropped poll. It now does nothing, which
+    is the `refreshQc` posture and what acceptance criterion 3 asks for.
+  - `frontend/tests/researchStream.test.ts` is a second new file the plan
+    did not list (it names only `researchLive.test.ts`). The abort path is
+    a transport concern at the `api.ts` seam, not a pure-helper one, and
+    the repo's no-vitest convention means the follower loop itself is not
+    directly testable — this covers the half that is.
+  - `frontend/src/types.ts` did get the narrowed type (the plan said
+    "optionally"): `ResearchStreamEndStatus` is closed and
+    `classifyResearchStreamEnd` switches over it with a `never` arm, which
+    is what makes step 6's "compiler-checked rather than string-matched"
+    true rather than aspirational.
+- Manual QA owed: Phase 2's list — interrupt the research SSE transport
+  while the server keeps running and confirm the board reconnects and
+  reaches its terminal state. Not reproducible hermetically (the repo has
+  no browser-driven suite); the pure helpers and the transport seam are
+  covered, the `followResearch` loop between them is not.
 
 ## Chunk 2.4 — Constant-time replay duplicate handling
 

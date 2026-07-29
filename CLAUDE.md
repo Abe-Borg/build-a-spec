@@ -3094,11 +3094,9 @@ semantics, retry policy, pause_turn loop, and grounding are untouched.
   fetch is async and its worst case fires on `research_started` — the
   exact moment all four workers burst — so a response captured early but
   resolved late would wholesale-replace a longer local log and march the
-  board backward until the next milestone, minutes away. Same round +
-  longer local log ⇒ both are prefixes of the same append-only server
-  array, so the local events are kept and only status/error/profile adopt
-  the fetch; a different round (or an empty side) adopts the fetch
-  wholesale.
+  board backward until the next milestone, minutes away. **Superseded by
+  the reconnect work below** — same-round comparison is now by WATERMARK
+  and a stale response is rejected outright rather than half-adopted.
 - **The drawer's running body is the agent board.** `foldResearchBoard`
   (a pure `useMemo` fold over `research.events`, the QCDrawer lens-row
   precedent) seeds one `AgentCard` per dimension from `research_started`:
@@ -3170,6 +3168,89 @@ semantics, retry policy, pause_turn loop, and grounding are untouched.
   `stream_end` exact-dict pin (test_research_api); the trace-capture fix
   (test_tracing). Frontend pinned by `npm run build` + `npm test` (the
   no-vitest convention stands).
+
+## Research follower reconnect — implemented notes (`lib/researchLive.ts`)
+
+Deep-dive remediation Chunk 2.3. The research follower was the last live
+stream in the app that could not survive its own transport: one close and
+the agent board froze mid-run with no way back short of a reload — on a
+fan-out that routinely runs half an hour. `followResearch` now runs the
+loop `followQc` already proved, and the pure helpers behind it moved out
+of `App.tsx` into their own module. Backend untouched: no route, no event
+type, no dep.
+
+- **`frontend/src/lib/researchLive.ts` is the sibling of `qcLive.ts`**, and
+  deliberately shares its vocabulary (`RESEARCH_MILESTONE_TYPES`,
+  `mergeResearchEvent`, `reconcileResearchSnapshotUpdate` returning
+  `{snapshot, accepted}`, `isResearchActiveSnapshot`) so a reader who has
+  understood one follower does not re-derive the other. What differs is
+  **identity**: QC has a `run_id`, research has a 1-based `round` — and a
+  round number is NOT unique, because `ResearchRunner.start` numbers from
+  `profile_result.round_count` and a stopped round is never adopted, so
+  the next start reuses it.
+- **Same-round staleness is decided by WATERMARK, not length.** The old
+  rule kept the longer local log but still adopted the fetch's
+  status/error/profile, so a pre-terminal response resolving late could
+  report `running` over a finished round and drop the profile that had
+  just been adopted. Now: fetched max-seq **<** local ⇒ the response is
+  wholly stale and is **rejected** (`accepted: false`, no side effects,
+  notably not the auth modal); **>** ⇒ adopt, unioned by seq; **=** ⇒ a
+  peer, adopted except for a lifecycle state it would regress (a terminal
+  status must not become `running`, an adopted profile must not vanish).
+  A different round — or either side round-less — replaces wholesale.
+- **A restarted round is deliberately NOT a reconcile case, and cannot
+  be.** "Stop round 2, start round 2 again" and "a late fetch from the
+  middle of round 2" present the identical triple (same round, shorter
+  fetched log); a rule that adopted the first re-opens the second, which
+  is the bug this chunk exists to fix. It was tried, and the tests said
+  no. Two mechanisms outside reconcile keep it honest, and both run before
+  any refresh for the new round can resolve: `onStartResearch` bumps the
+  refresh generation (rejecting everything in flight), and
+  `mergeResearchEvent` resets the log on the new round's
+  `research_started`, which always precedes the milestone refetch that
+  frame triggers.
+- **The merge's reset became run-aware, because reconnect made replays
+  routine.** Every reconnect replays the round from seq 0, so resetting on
+  every `research_started` would blank the board on each transport hiccup
+  and rebuild it from the replay. A frame starts a new run when the local
+  log is empty, the round differs, **or the local snapshot is not
+  running** — that last clause is what catches the same-number restart,
+  since a terminal local status means the previous round ended.
+- **`stream_end` is classified, not string-matched.**
+  `types.ResearchStreamEndStatus` is closed and
+  `classifyResearchStreamEnd` switches over it with a `never` arm →
+  `terminal` / `superseded` / `interrupted`. Only `interrupted`
+  reconnects. Adding a status without deciding what it means for
+  reconnection is now a type error.
+- **The follower owns an `AbortController`**, and
+  `advanceWorkspaceEpoch()` — the one helper every session/tutorial/
+  project transition now calls — bumps the epoch *and* aborts it, so the
+  abort cannot be forgotten at a future call site. `streamResearch(signal)`
+  passes it to `fetch`, and `readSse` gained a `finally` that cancels the
+  reader: unwinding the generator released nothing, so every prior
+  `break` left the browser holding a body no one would read again. (QC's
+  follower still relies on its epoch check plus a `break`; giving it the
+  same abort is a separate change.)
+- **`refreshResearch` no longer nulls the snapshot on a failed fetch.**
+  One dropped poll used to erase a live board. It now does nothing (the
+  `refreshQc` posture) and lets the follower reconcile at the next
+  milestone or at stream end.
+- **`researchSnapshotRef` backs every between-render decision** (the
+  `qcSnapshotRef` pattern): reconnect-or-not and accept-or-not are read
+  synchronously, never from React state that may not have committed.
+  Every write goes through `replaceResearchSnapshot` — there is exactly
+  one `setResearch` call site left, inside it.
+- **Tests**: `frontend/tests/researchLive.test.ts` (22 — merge ordering
+  and dedupe, replay-does-not-blank, different-round reset, same-number
+  restart, watermark/round/active helpers, every `stream_end` status, the
+  terminal-over-running race on round 1 and on a later round, wholesale
+  replacement, equal-watermark non-regression both ways, generation
+  rejection and acceptance, first-snapshot and round-less adoption, and
+  the milestone set) and `frontend/tests/researchStream.test.ts` (3 — the
+  signal reaches `fetch`, an abort ends the stream, and breaking out
+  releases the body, against a stubbed SSE body that never closes so a
+  leak cannot pass by accident). Both are registered in `package.json`'s
+  explicit `node --test` list.
 
 ## Final QC Review Room — live three-stage contract
 

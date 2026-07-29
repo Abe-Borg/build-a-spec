@@ -7,10 +7,10 @@ Owner: Abraham.
 **[Deep-dive remediation](deep-dive-remediation/README.md)** — the only live
 program. Six phases, 24 chunks; **Phase 1 is complete** (direct server-tool
 callers; continuation containers in research, QC and chat; server-tool
-pairing plus legacy history repair) and **Phase 2 is half done** — 2.2 (QC
-settling semantics, pulled forward) and 2.1 (real-shaped server-tool
-activity events) have landed; 2.3, 2.4 and the rest of Phases 3–6 are
-planned. Its README carries the handoff prompt, the
+pairing plus legacy history repair) and **Phase 2 is nearly done** — 2.2 (QC
+settling semantics, pulled forward), 2.1 (real-shaped server-tool activity
+events) and 2.3 (research follower reconnect) have landed; only 2.4 remains,
+plus Phases 3–6. Its README carries the handoff prompt, the
 frozen decisions, the finding-coverage matrix, the dependency edges and the
 phase gates; start there, not here.
 

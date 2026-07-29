@@ -292,30 +292,43 @@ export async function downloadProjectFile(): Promise<void> {
 }
 
 /** Read SSE frames off a fetch Response body and yield parsed JSON. */
-async function* readSse<T>(resp: Response): AsyncGenerator<T> {
+async function* readSse<T>(
+  resp: Response,
+  signal?: AbortSignal,
+): AsyncGenerator<T> {
   if (!resp.body) return;
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    let sep;
-    while ((sep = buffer.indexOf("\n\n")) !== -1) {
-      const frame = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("data: ")) {
-          try {
-            yield JSON.parse(line.slice(6)) as T;
-          } catch {
-            // Malformed frame — skip rather than kill the stream.
+      let sep;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("data: ")) {
+            try {
+              yield JSON.parse(line.slice(6)) as T;
+            } catch {
+              // Malformed frame — skip rather than kill the stream.
+            }
           }
         }
       }
+    }
+  } finally {
+    // Reached on normal end, on an abort, AND when a consumer breaks out of
+    // its `for await` — which is the case that used to leak, since unwinding
+    // this generator released nothing. Cancelling an already-aborted reader
+    // is a no-op, so the `signal` check is only to keep that path quiet.
+    if (!signal?.aborted) {
+      await reader.cancel().catch(() => undefined);
     }
   }
 }
@@ -643,11 +656,20 @@ export async function getResearchStatus(): Promise<ResearchSnapshot> {
   return resp.json();
 }
 
-/** Follow the active/last research run's SSE stream until it closes. */
-export async function* streamResearch(): AsyncGenerator<ResearchEvent> {
-  const resp = await fetch("/api/research/stream");
+/**
+ * Follow the active/last research run's SSE stream until it closes.
+ *
+ * `signal` aborts the underlying response so a superseded follower or a
+ * workspace transition releases the connection immediately. Breaking out of
+ * the `for await` alone does not: it unwinds this generator, but nothing
+ * cancels the body the browser is still reading.
+ */
+export async function* streamResearch(
+  signal?: AbortSignal,
+): AsyncGenerator<ResearchEvent> {
+  const resp = await fetch("/api/research/stream", { signal });
   if (!resp.ok || !resp.body) return;
-  yield* readSse<ResearchEvent>(resp);
+  yield* readSse<ResearchEvent>(resp, signal);
 }
 
 /* --- Master import + updates (Phase 5) --- */

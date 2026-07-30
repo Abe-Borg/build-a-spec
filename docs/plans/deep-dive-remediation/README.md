@@ -160,11 +160,22 @@ and should not be relitigated by an implementation agent:
    `issue_ready` (owner-ratified default — dismiss-with-reason is the pressure
    valve). "Issue readiness: Yes" and "OPEN FINDINGS REMAIN" can never both
    render in one report.
-7. **Chat cache TTL is uniform per request and configurable.**
-   `BUILD_A_SPEC_CHAT_CACHE_TTL` defaults to one hour; system,
-   committed-history, and tail breakpoints always share one TTL (mixed TTLs
-   trip the provider's ordering constraint). Correct per-TTL accounting lands
-   first.
+7. **Chat cache TTL is non-increasing per request and configurable.**
+   `BUILD_A_SPEC_CHAT_CACHE_TTL` defaults to one hour and governs the system
+   and committed-history breakpoints. Correct per-TTL accounting lands first.
+   *(Amended during 4.2 implementation, PR #100 review.)* The original
+   wording said all three breakpoints share one TTL, on the rationale that
+   "mixed TTLs trip the provider's ordering constraint". That over-stated
+   the constraint: the provider rejects only SHORT-before-LONG. The tail is
+   keyed on bytes commit strips, so no later turn can read it and a
+   one-hour lifetime there is bought and never used — 2.0x input to write
+   against 1.25x, on a document-sized block, every turn. The tail is
+   therefore pinned to the shortest supported TTL and is deliberately NOT
+   env-overridable, which keeps what the original decision actually
+   protected: because the tail is last and can never outlive what precedes
+   it, no setting can build an out-of-order request. The acceptance
+   criterion is now that property, which is strictly stronger than
+   uniformity.
 8. **Provider-reported usage is never blended with estimates.**
    `output_tokens` always holds the provider's number; stopped-turn estimates
    live in a separate disclosed `estimated_output_tokens` component.

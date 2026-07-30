@@ -175,13 +175,20 @@ Each chat request should contain copy-on-write breakpoints at:
 3. the tail of the full current request, including the fresh PROJECT CONTEXT
    and continuation messages.
 
-All three use the same TTL, sourced from one setting
-(`BUILD_A_SPEC_CHAT_CACHE_TTL`, default `"1h"`), so the policy can be
-re-tuned against real session economics without a code change. The TTL is
-**uniform within every request** regardless of the configured value — mixed
-TTLs impose a provider ordering constraint (longer-lived entries must precede
-shorter-lived ones) whose violation is a nonretryable 400, the exact failure
-mode PR #82's review caught. Stored history never carries `cache_control`.
+Breakpoints 1 and 2 use `BUILD_A_SPEC_CHAT_CACHE_TTL` (default `"1h"`), so
+the policy can be re-tuned against real session economics without a code
+change. Breakpoint 3 — the tail — is pinned to the **shortest** supported
+TTL and is not configurable: it is keyed on the fresh PROJECT CONTEXT, which
+commit strips, so no later turn can read it and a long lifetime there is
+paid for and never used.
+
+The request is therefore **non-increasing in TTL** rather than uniform.
+Mixed TTLs impose a provider ordering constraint — longer-lived entries must
+precede shorter-lived ones — whose violation is a nonretryable 400, the
+exact failure mode PR #82's review caught. Pinning the tail to the shortest
+TTL and refusing to expose it as a knob makes that violation unbuildable at
+any setting, which is a stronger guarantee than uniformity gave. Stored
+history never carries `cache_control`.
 
 ### Implementation
 
@@ -240,8 +247,10 @@ venv\Scripts\python -m pytest -q tests/test_app.py tests/test_session_modules.py
 
 - A second/third turn has a committed-history breakpoint before the fresh
   context and a tail breakpoint after it.
-- All chat breakpoints share the configured TTL (default one hour); no
-  mixed-TTL request can be built at any setting.
+- Chat breakpoints are non-increasing in TTL at every setting: system and
+  the committed-history boundary carry the configured TTL (default one
+  hour), the tail carries the shortest supported one, and no setting can
+  build an out-of-order (short-before-long) request.
 - Stored/saved history remains annotation-free.
 - Context refresh, thinking preservation within a turn, PDF elision, and turn
   atomicity remain unchanged.
@@ -280,6 +289,20 @@ venv\Scripts\python -m pytest -q tests/test_app.py tests/test_session_modules.py
     in a saved project" claim is covered end-to-end through
     `GET /api/project/save` in the new `test_app.py` case, which exercises
     the real save path rather than the serializer in isolation.
+  - **The tail TTL split (PR #100 review, Codex).** Frozen decision 7 called
+    for one uniform TTL; the review pointed out that the tail is keyed on
+    bytes commit strips, so its entry can only ever be read by continuation
+    rounds inside the same turn — a one-hour lifetime there is bought and
+    never used, at 2.0x input to write against 1.25x, on a block the size of
+    the whole document (~$0.02-0.11/turn depending on document size). The
+    provider's constraint is only SHORT-before-LONG, so `1h/1h/5m` is legal.
+    Owner decision: take the saving. Implemented so the safety property
+    survives — the tail is pinned to the SHORTEST supported TTL and
+    deliberately not env-overridable, so no setting can build an
+    out-of-order request. Decision 7 and the acceptance criterion are
+    amended above; `test_no_setting_can_build_an_out_of_order_request`
+    sweeps every supported setting and is stronger than the uniformity
+    check it replaces (reverting the pin turns it red).
   - **Docstring corrections were part of the fix, not cosmetic.** The module
     docstring and the CLAUDE.md context-architecture bullet both asserted
     that the tail breakpoint made history "cache incrementally". That was

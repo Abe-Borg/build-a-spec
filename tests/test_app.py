@@ -1101,22 +1101,82 @@ def test_a_turns_cached_prefix_is_a_byte_prefix_of_the_next_request(
     assert _unannotated(third["messages"][:2]) == written
 
 
-def test_every_breakpoint_in_a_request_shares_one_ttl(monkeypatch):
-    """Mixed TTLs are a nonretryable 400, not a degraded cache.
+def _ttl_rank(ttl: str) -> int:
+    from backend import settings
 
-    The provider requires longer-lived entries to precede shorter-lived
-    ones in tools -> system -> messages order. The fakes accept any request
-    dict, so nothing but this assertion catches a mixed-TTL request before
-    a provider does.
+    return settings._cache_ttl_rank(ttl)
+
+
+def _ordered_ttls(request: dict) -> list[str]:
+    """Every breakpoint's TTL in provider render order: system -> messages."""
+    blocks = list(request["system"]) + [
+        block
+        for message in request["messages"]
+        for block in (message.get("content") or [])
+    ]
+    return [
+        block["cache_control"].get("ttl", "")
+        for block in blocks
+        if isinstance(block, dict) and "cache_control" in block
+    ]
+
+
+def test_the_tail_is_written_at_the_short_ttl_the_boundary_at_the_long_one(
+    monkeypatch,
+):
+    """The tail's entry dies with its turn, so it must not be bought for an hour.
+
+    Commit strips the PROJECT CONTEXT the tail entry is keyed on, so no
+    later turn can read it — only this turn's continuation rounds, seconds
+    apart. Writing it at 1h costs 2.0x input against 1.25x for a lifetime
+    nothing uses, on a block the size of the whole document.
     """
     client = _client()
     _one_turn_request(client, monkeypatch, "one")
     request = _one_turn_request(client, monkeypatch, "two")
 
-    controls = _cache_controls(request)
-    assert controls, "a chat request must carry breakpoints"
-    assert all(control == {"type": "ephemeral", "ttl": "1h"} for control in controls)
-    assert len({json.dumps(c, sort_keys=True) for c in controls}) == 1
+    boundary, tail = _marked_messages(request)
+    assert request["messages"][boundary]["content"][-1]["cache_control"] == {
+        "type": "ephemeral",
+        "ttl": "1h",
+    }
+    assert request["messages"][tail]["content"][-1]["cache_control"] == {
+        "type": "ephemeral",
+        "ttl": "5m",
+    }
+    # The system block is read by every later turn: it takes the long one.
+    assert request["system"][0]["cache_control"] == {
+        "type": "ephemeral",
+        "ttl": "1h",
+    }
+
+
+def test_no_setting_can_build_an_out_of_order_request(monkeypatch):
+    """Mixed TTLs are legal ONLY longest-first; this must hold at any setting.
+
+    The provider requires longer-lived entries to precede shorter-lived
+    ones in tools -> system -> messages order, and violating it is a
+    nonretryable 400 — the exact failure PR #82's review caught in the QC
+    fan-out. The tail is pinned to the shortest supported TTL rather than
+    being configurable, so the order is non-increasing by construction.
+    The fakes accept any request dict, so nothing but this catches an
+    out-of-order request before a provider does.
+    """
+    from backend import settings
+
+    for configured in settings.SUPPORTED_CACHE_TTLS:
+        monkeypatch.setattr(settings, "CHAT_CACHE_TTL", configured)
+        client = _client()
+        _one_turn_request(client, monkeypatch, "one")
+        request = _one_turn_request(client, monkeypatch, "two")
+
+        ttls = _ordered_ttls(request)
+        assert len(ttls) == 3, ttls
+        ranks = [settings._cache_ttl_rank(ttl) for ttl in ttls]
+        assert ranks == sorted(ranks, reverse=True), (configured, ttls)
+        # The tail never outlives what precedes it, whatever is configured.
+        assert ttls[-1] == settings.CHAT_TAIL_CACHE_TTL
+        assert ttls[0] == configured
 
 
 def test_continuation_rounds_keep_their_own_tail_breakpoint(monkeypatch):
@@ -1143,13 +1203,16 @@ def test_continuation_rounds_keep_their_own_tail_breakpoint(monkeypatch):
     client.post("/api/chat", json={"message": "draft it"})
 
     # The second round's request ends with the tool_result user message,
-    # and that message carries the tail breakpoint.
+    # and that message carries the tail breakpoint — at the short TTL,
+    # since these rounds are the only readers it will ever have.
     request = fake.messages.last_request
     assert _marked_messages(request)[-1] == len(request["messages"]) - 1
-    assert all(
-        control == {"type": "ephemeral", "ttl": "1h"}
-        for control in _cache_controls(request)
-    )
+    assert request["messages"][-1]["content"][-1]["cache_control"] == {
+        "type": "ephemeral",
+        "ttl": "5m",
+    }
+    ranks = [_ttl_rank(ttl) for ttl in _ordered_ttls(request)]
+    assert ranks == sorted(ranks, reverse=True)
 
 
 def test_no_breakpoint_survives_into_history_or_a_saved_project(monkeypatch):
@@ -1242,11 +1305,12 @@ def test_tail_cache_breakpoint_rides_requests_not_history(monkeypatch):
     _patch_client(monkeypatch, fake2)
     client.post("/api/chat", json={"message": "continue"})
 
-    # The request's final content block carries the incremental breakpoint…
+    # The request's final content block carries the incremental breakpoint,
+    # at the short TTL (its entry cannot outlive this turn)…
     request = fake2.messages.last_request
     tail = request["messages"][-1]["content"][-1]
-    assert tail["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
-    # …the stable system block carries the other…
+    assert tail["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
+    # …the stable system block carries the long-lived one…
     assert request["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     # …and stored history carries none (breakpoints are per-request).
     assert "cache_control" not in json.dumps(sessions.get_session().history)

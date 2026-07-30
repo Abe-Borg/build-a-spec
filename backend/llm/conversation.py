@@ -1750,12 +1750,18 @@ def _cache_control(cache_ttl: str) -> dict[str, Any]:
     the two channels build entirely different requests and the copy-not-
     import posture keeps a QC-private helper from becoming chat's API.
 
-    EVERY breakpoint in a single request must be built from the same
-    ``cache_ttl``. The API requires longer-lived cache entries to appear
-    before shorter-lived ones in prompt order (tools -> system ->
-    messages), so a request that marks system at the 5-minute default and
-    the user turn at ``1h`` is rejected outright — not degraded, not
-    uncached. One TTL per request means there is no order to get wrong.
+    The API requires longer-lived cache entries to appear before
+    shorter-lived ones in prompt order (tools -> system -> messages), so a
+    request that marks system at the 5-minute default and the user turn at
+    ``1h`` is rejected outright — not degraded, not uncached.
+
+    This request therefore runs NON-INCREASING: system and the
+    committed-history boundary carry ``settings.CHAT_CACHE_TTL``, and only
+    the tail may differ, pinned to the shortest supported TTL
+    (``settings.CHAT_TAIL_CACHE_TTL``). Because the tail is the last
+    breakpoint and can never outlive the ones before it, no setting can
+    produce an invalid order — pinned by
+    ``test_no_setting_can_build_an_out_of_order_request``.
     """
     control: dict[str, Any] = {"type": "ephemeral"}
     if cache_ttl:
@@ -1787,6 +1793,7 @@ def _with_cache_breakpoints(
     *,
     committed_boundary: int,
     cache_ttl: str,
+    tail_cache_ttl: str,
 ) -> list[dict[str, Any]]:
     """Copy-on-write the request's cache breakpoints onto its messages.
 
@@ -1805,9 +1812,19 @@ def _with_cache_breakpoints(
       fresh PROJECT CONTEXT and any continuation rounds. A continuation
       extends the previous round's entry rather than rewriting it.
 
+    They carry DIFFERENT lifetimes, and that asymmetry is the point. The
+    boundary is read by the next user turn, minutes or hours later, so it
+    takes ``cache_ttl``. The tail is keyed on bytes commit is about to
+    strip, so no later turn can ever read it — its only readers are this
+    turn's continuation rounds, seconds apart. It therefore takes
+    ``tail_cache_ttl`` (the shortest supported), paying 1.25x input to
+    write instead of 2.0x for a lifetime nothing uses. On a block the size
+    of the whole document that is the difference every turn.
+
     The two never collide: they are the last blocks of different messages,
     and when the boundary resolves to the same message as the tail the
-    index set collapses to one annotation.
+    index set collapses to ONE annotation — which then takes the boundary's
+    longer TTL, since a merged breakpoint is doing the boundary's job.
 
     The prefix these mark is NOT byte-identical to what was streamed —
     commit strips the PROJECT CONTEXT block, thinking blocks, and fetched
@@ -1828,11 +1845,15 @@ def _with_cache_breakpoints(
     """
     if not messages:
         return messages
-    indexes = {len(messages) - 1}
+    # TTL per marked message. The tail is registered FIRST so that a
+    # boundary resolving to the same message overwrites it with the longer
+    # lifetime: a merged breakpoint is serving the boundary's cross-turn
+    # role, and under-living it would throw away the read it exists for.
+    ttl_by_index = {len(messages) - 1: tail_cache_ttl}
     if 0 <= committed_boundary < len(messages):
-        indexes.add(committed_boundary)
+        ttl_by_index[committed_boundary] = cache_ttl
     out = list(messages)
-    for index in sorted(indexes):
+    for index in sorted(ttl_by_index):
         message = out[index]
         content = message.get("content")
         if not isinstance(content, list) or not content:
@@ -1843,7 +1864,10 @@ def _with_cache_breakpoints(
             or tail.get("type") in _TRANSIENT_BLOCK_TYPES
         ):
             continue
-        new_tail = {**tail, "cache_control": _cache_control(cache_ttl)}
+        new_tail = {
+            **tail,
+            "cache_control": _cache_control(ttl_by_index[index]),
+        }
         out[index] = {**message, "content": [*content[:-1], new_tail]}
     return out
 
@@ -2517,6 +2541,7 @@ def stream_user_turn(
                     len(history), len(raw), len(messages)
                 ),
                 cache_ttl=settings.CHAT_CACHE_TTL,
+                tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
             ),
             "tools": _chat_tools(),
             "thinking": _thinking_param(),

@@ -445,6 +445,14 @@ frontend/src/
   lib/qcLive.ts            Final QC's pure live-state layer: discriminated event
                            fold, seq-deduplicating merge, same-run snapshot
                            reconciliation, milestone policy and three-stage board
+  lib/eventSeqIndex.ts     the {min, max, missing} sequence index BOTH live
+                           followers dedupe replay against — memoized per
+                           events array, derived in O(1) on append, so a
+                           reconnect's replay is one pass and not a scan per
+                           frame (see "Constant-time replay dedupe" below).
+                           Imported WITH its .ts extension on purpose: `npm
+                           test` runs node --test over the sources and Node's
+                           resolver requires a real extension
   lib/useSmoothText.ts     [Batch 2] rAF typewriter smoothing + reduced-motion +
                            splitStableTail (cheap-markdown prefix/tail split)
   lib/reviewQueue.ts       [Batch 3] pure buildQueue(doc, mode) — the review
@@ -3251,6 +3259,90 @@ type, no dep.
   releases the body, against a stubbed SSE body that never closes so a
   leak cannot pass by accident). Both are registered in `package.json`'s
   explicit `node --test` list.
+
+## Constant-time replay dedupe — implemented notes (`lib/eventSeqIndex.ts`)
+
+Deep-dive remediation Chunk 2.4, and the chunk reconnect made necessary.
+Both followers now replay their whole runner log from seq 0 on every
+transport hiccup, and both decided "have I already got this frame?" by
+walking the log — `maxEventSeq(...)` per frame in QC, `events[length - 1]`
+plus a full re-sort per duplicate in research. So recovery was quadratic in
+the log it was recovering, on the two logs in the app that run to hundreds
+or thousands of frames. Frontend only: no route, no event type, no
+dependency, no backend change.
+
+- **`frontend/src/lib/eventSeqIndex.ts` is shared by both followers**, which
+  is the one place this codebase's copy-don't-import posture does not apply:
+  the backend relays are deliberately triplicated because they diverged, but
+  this is a single correctness-critical primitive whose two copies would be
+  identical, and drift in a duplicate test is exactly what would go
+  unnoticed. The index is `{min, max, missing}` — the span of sequences
+  present plus the ones absent from inside it — and `hasEventSeq` is a
+  bounds check plus one `Set` lookup.
+- **`missing` is what makes the append path O(1).** A plain `Set` of present
+  sequences would have to be COPIED per append, trading one O(n) scan per
+  frame for one O(n) copy per frame — the same complexity, no win. A log the
+  server produced is dense, so `missing` is empty and the next index shares
+  the same set object. Only a jump past the watermark allocates, and only
+  the gap's width.
+- **Memoized per events ARRAY, and immutably.** Nothing in this app mutates
+  an event array (every merge and reconcile builds a new one), so a `WeakMap`
+  entry can never describe an array that has since changed. Deriving an index
+  for a new array never touches the old array's entry, so merging onto an
+  older snapshot costs one rebuild rather than producing a wrong answer —
+  which a mutate-and-share design would have.
+- **A duplicate returns the PREVIOUS snapshot object, untouched.** The runner
+  log is append-only and a sequence number is assigned once, so a replayed
+  frame carries the payload it carried the first time and has nothing to
+  update. First arrival wins. That is a deliberate reversal of the previous
+  behavior (both merges re-sorted and let the replay REPLACE its
+  same-seq predecessor, and two tests pinned the replacement), and it is what
+  lets React's `Object.is` bail-out skip the render entirely — the point of
+  the chunk is that recovering a hiccup costs nothing, not that it costs
+  less.
+- **Identity is settled BEFORE any sequence comparison**, because sequences
+  restart at 0 for every run and round: a frame from another run collides
+  with this one's numbering, so a dedupe that ran first would read the
+  collision as a replay and drop the frame on the floor. What each merge does
+  with a foreign frame differs, and deliberately:
+  - research resets on a LATER round (the follower missed the roster frame;
+    the milestone refetch restores it) and IGNORES an earlier one — an
+    abandoned round's straggler belongs to no log on screen, and the
+    re-sort path would have overwritten the live round's frame at that
+    sequence with it;
+  - QC keeps its existing `qc_started` reset and ignores any other foreign
+    frame. There is no reset to take: a run id is a UUID, so unlike a round
+    number it cannot be read as "newer", and a superseded run's
+    `qc_complete` would otherwise flip the live run to complete.
+- **Dropping a frame takes stronger evidence than resetting.** QC's reset
+  still consults `qcSnapshotRunId` (with its retained-report fallbacks,
+  unchanged); the ignore path consults only the LOG's own run id. A retained
+  result's id says nothing about which run is streaming, and mistaking the
+  live run for a foreign one would swallow its terminal frame permanently.
+- **`researchEventsRound` is memoized the same way**, for the same reason and
+  with the same safety argument: the merge asks for it on every frame.
+- **Tests**: `frontend/tests/eventSeqIndex.test.ts` (11, new and registered
+  in `package.json`'s explicit `node --test` list) pins the primitive
+  directly — density, gaps, a log that does not start at zero, a repeated
+  sequence, non-finite input, memoization, the shared gap set, and that
+  deriving a new array's index leaves the old array's correct.
+  `qcLive.test.ts` and `researchLive.test.ts` each gain the referential-
+  identity claim (a replay returns the same snapshot AND the same array), a
+  cross-run/round rejection, and the **bounded-access** test the plan asks
+  for: a `Proxy` counts every property read on a 400-frame log and the whole
+  replay must cost one index build and then literally nothing — no elapsed
+  time anywhere. Each of the three mechanisms was reverted in place to prove
+  it load-bearing (dedupe removed → 3 red; identity-first removed → 1 red;
+  memo removed → 4 red).
+- **`allowImportingTsExtensions` is now set in `frontend/tsconfig.json`**,
+  and the two imports of this module carry `.ts`. `npm test` runs
+  `node --test` directly over the sources and Node's ESM resolver requires a
+  real extension on a relative specifier; every other extensionless sibling
+  import in `src/lib` is either `import type` (erased before Node sees it) or
+  in a module no test loads. The flag only PERMITS the extension, requires
+  `noEmit` (already set), and Vite resolves it unchanged. Any future value
+  import between two `src/` modules that a test file loads needs the same
+  extension.
 
 ## Final QC Review Room — live three-stage contract
 

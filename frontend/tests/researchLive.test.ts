@@ -47,14 +47,94 @@ const profile = (itemCount: number): ResearchProfileView =>
 
 /* --- merge --- */
 
-test("merge appends in order and dedupes a replayed seq", () => {
+test("merge appends in order, fills a gap, and drops a replayed seq", () => {
   let snapshot: ResearchSnapshot | null = null;
   snapshot = mergeResearchEvent(snapshot, started());
   snapshot = mergeResearchEvent(snapshot, evt(2, "dimension_search", { query: "b" }));
   snapshot = mergeResearchEvent(snapshot, evt(1, "dimension_started"));
+  const filled = snapshot;
   snapshot = mergeResearchEvent(snapshot, evt(2, "dimension_search", { query: "c" }));
   assert.deepEqual(snapshot.events.map((e) => e.seq), [0, 1, 2]);
-  assert.equal(snapshot.events[2].query, "c");
+  // The runner log is append-only: seq 2 was assigned once, so the replay
+  // carries the payload it carried the first time and has nothing to update.
+  // First arrival wins, and the snapshot is not even rebuilt.
+  assert.equal(snapshot, filled);
+  assert.equal(snapshot.events[2].query, "b");
+});
+
+test("a replayed frame returns the same snapshot and the same event array", () => {
+  const log = [started(), evt(1, "dimension_started"), evt(2, "dimension_search")];
+  const local = running(log);
+  for (const frame of log) {
+    const merged = mergeResearchEvent(local, frame);
+    assert.equal(merged, local, `seq ${frame.seq} should not rebuild the snapshot`);
+    assert.equal(merged.events, log);
+  }
+});
+
+test("replaying a dense log does bounded work per duplicate frame", () => {
+  // Not a timing test. Every reconnect replays the whole round from seq 0, so
+  // a per-frame scan of the log is what made recovery quadratic in the log it
+  // was recovering. Count the accesses instead: one index build, then nothing.
+  const log = Array.from({ length: 400 }, (_, index) =>
+    evt(index, index === 0 ? "research_started" : "dimension_activity", {
+      kind: "searching",
+    }),
+  );
+  let reads = 0;
+  const watched = new Proxy(log, {
+    get(target, key, receiver) {
+      reads += 1;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  const local: ResearchSnapshot = { status: "running", error: "", events: watched };
+
+  let snapshot = mergeResearchEvent(local, log[0]);
+  const build = reads;
+  assert.equal(snapshot, local);
+  // One pass to build the index. The array iterator reads both an index and
+  // `length` per step, hence the small multiple rather than exactly n.
+  assert.ok(build <= log.length * 3, `the index build should be one pass, saw ${build}`);
+
+  // Every chatty frame — the flood a reconnect replays — costs nothing at all.
+  for (const frame of log.slice(1)) snapshot = mergeResearchEvent(snapshot, frame);
+  assert.equal(reads - build, 0, "a duplicate frame must not touch the log");
+  // The one replayed research_started frame settles round identity before any
+  // sequence comparison, which is one O(1) length read rather than a scan.
+  const beforeStart = reads;
+  snapshot = mergeResearchEvent(snapshot, log[0]);
+  assert.ok(reads - beforeStart <= 2, `identity should be O(1), saw ${reads - beforeStart}`);
+  // So the whole replay costs one pass, not the ~n² a per-frame scan would.
+  assert.ok(reads < log.length ** 2);
+  assert.equal(snapshot, local, "no duplicate may rebuild the snapshot");
+  assert.equal(snapshot.events, watched, "no duplicate may rebuild the log");
+});
+
+test("a frame from an abandoned earlier round is never merged", () => {
+  // Sequences restart per round, so an older round's straggler collides with
+  // the live round's numbering: dedupe would call it a replay, and the
+  // re-sort path would overwrite the live frame at that sequence.
+  const local = running([started(3), evt(1, "dimension_started", { round: 3 })]);
+  const straggler = mergeResearchEvent(local, evt(1, "dimension_complete", { round: 2 }));
+  assert.equal(straggler, local);
+  assert.deepEqual(straggler.events.map((e) => e.type), [
+    "research_started",
+    "dimension_started",
+  ]);
+});
+
+test("a frame from a later round resets the log even without its own start frame", () => {
+  const local = running([started(3), evt(1, "dimension_started", { round: 3 })]);
+  const ahead = mergeResearchEvent(local, evt(1, "dimension_complete", { round: 4 }));
+  assert.deepEqual(ahead.events.map((e) => e.round), [4]);
+  assert.equal(researchSnapshotRound(ahead), 4);
+});
+
+test("a round-less frame merges normally rather than being judged", () => {
+  const local = running([started(2)]);
+  const merged = mergeResearchEvent(local, evt(1, "dimension_started", { round: undefined }));
+  assert.deepEqual(merged.events.map((e) => e.seq), [0, 1]);
 });
 
 test("merge never writes status, error or profile", () => {

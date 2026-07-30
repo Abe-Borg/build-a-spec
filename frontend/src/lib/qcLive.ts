@@ -8,6 +8,11 @@ import type {
   QcValidationOutcome,
   QcWorkerActivityKind,
 } from "../types";
+import {
+  eventSeqIndex,
+  hasEventSeq,
+  rememberAppendedSeq,
+} from "./eventSeqIndex.ts";
 
 export const QC_LENS_CATALOG = [
   { id: "code_compliance", title: "Code compliance" },
@@ -200,12 +205,24 @@ function normalizedEvents(events: readonly QcEvent[]): QcEvent[] {
   ];
 }
 
+/** The log's watermark, through the memoized index — so asking for it does
+ *  not re-scan an array a merge has already indexed. */
 function maxEventSeq(events: readonly QcEvent[]): number {
-  let maximum = -1;
-  for (const event of events) {
-    if (typeof event.seq === "number") maximum = Math.max(maximum, event.seq);
+  return eventSeqIndex(events).max;
+}
+
+/** The run this ONE frame declares, or "" when it declares none. Only the
+ *  lifecycle frames carry a run id; every worker frame belongs to whichever
+ *  run the log around it identifies. */
+function frameRunId(event: QcEvent): string {
+  if (
+    event.type === "qc_started" ||
+    event.type === "qc_complete" ||
+    event.type === "qc_attempt_settled"
+  ) {
+    return event.run_id ?? "";
   }
-  return maximum;
+  return "";
 }
 
 function applyLifecycleEvent(base: QcSnapshot, event: QcEvent): QcSnapshot {
@@ -245,9 +262,21 @@ function applyLifecycleEvent(base: QcSnapshot, event: QcEvent): QcSnapshot {
   }
 }
 
-/** Merge one SSE frame into the append-only local log. Replayed frames replace
- * their same-seq predecessor; a genuinely new qc_started frame resets the
- * previous run. The unlogged stream sentinel is intentionally ignored. */
+/**
+ * Merge one SSE frame into the append-only local log.
+ *
+ * A replayed frame — every frame of the run, on every reconnect — returns the
+ * PREVIOUS snapshot object untouched. The runner log is append-only and a
+ * sequence number is assigned once, so a replay carries the same payload it
+ * carried the first time and has nothing to update; returning the same object
+ * also means React's `Object.is` bail-out skips the render entirely, which is
+ * the difference between recovering a transport hiccup and stalling on it.
+ * The duplicate test is a lookup in the memoized sequence index rather than a
+ * scan of the log (see `eventSeqIndex`).
+ *
+ * A genuinely new `qc_started` frame resets the previous run. The unlogged
+ * stream sentinel is intentionally ignored.
+ */
 export function mergeQcEvent(
   previous: QcSnapshot | null,
   event: QcEvent,
@@ -258,29 +287,51 @@ export function mergeQcEvent(
     events: [],
   };
   if (event.type === "stream_end") return base;
-  const previousMaxSeq = maxEventSeq(base.events);
+
+  // Run identity is settled BEFORE any sequence comparison. Sequence numbers
+  // restart at 0 for every run, so a frame from another run collides with
+  // this run's numbering, and the dedupe below would read the collision as a
+  // replay and drop the frame on the floor.
+  const incomingRun = frameRunId(event);
   if (event.type === "qc_started") {
     const previousRunId = qcSnapshotRunId(base);
-    if (previousRunId && previousRunId !== event.run_id) {
+    if (previousRunId && previousRunId !== incomingRun) {
       return applyLifecycleEvent({ ...base, events: [event] }, event);
     }
+  } else if (incomingRun) {
+    // A foreign non-start frame is a terminal frame about a run this snapshot
+    // is not showing — a superseded run's, most sharply — and applying it
+    // would flip the live run to complete. There is no reset to take: a run
+    // id is a UUID, so unlike research's round number it cannot be read as
+    // "newer". Dropping a frame is destructive though, so this takes the
+    // stronger evidence of the LOG's own id rather than `qcSnapshotRunId`'s
+    // retained-report fallbacks, which say nothing about which run is
+    // streaming.
+    const logRunId = eventRunId(base.events);
+    if (logRunId && logRunId !== incomingRun) return base;
   }
-  const last = base.events[base.events.length - 1];
+
+  const index = eventSeqIndex(base.events);
+  const seq = typeof event.seq === "number" ? event.seq : null;
+  if (seq !== null && hasEventSeq(index, seq)) return base;
+
+  let appends = false;
   let merged: QcSnapshot;
-  if (
-    typeof event.seq === "number" &&
-    (!last || typeof last.seq !== "number" || event.seq > last.seq)
-  ) {
-    merged = { ...base, events: [...base.events, event] };
+  if (seq !== null && seq > index.max) {
+    appends = true;
+    const events = [...base.events, event];
+    rememberAppendedSeq(events, index, seq);
+    merged = { ...base, events };
   } else {
+    // A genuine gap fill, or an unnumbered legacy frame: re-sort, which is
+    // the one path that may cost O(n log n) and the one the runner never
+    // asks for.
     merged = { ...base, events: normalizedEvents([...base.events, event]) };
   }
-  // Replayed or out-of-order lifecycle frames must not roll a newer local
-  // terminal state backward. Unnumbered legacy frames are applied because
-  // they cannot participate in seq ordering.
-  const advancesLifecycle =
-    typeof event.seq !== "number" || event.seq > previousMaxSeq;
-  return advancesLifecycle ? applyLifecycleEvent(merged, event) : merged;
+  // Out-of-order lifecycle frames must not roll a newer local terminal state
+  // backward. Unnumbered legacy frames are applied because they cannot
+  // participate in seq ordering.
+  return appends || seq === null ? applyLifecycleEvent(merged, event) : merged;
 }
 
 function statusRank(status: QcRunStatus): number {

@@ -331,7 +331,7 @@ tests and phase gate are recorded in the phase file.
 | 2.1 | **complete** | `0cfad61` (PR #93) | start-input fallback in all three relays; every index popped at block stop |
 | 2.2 | **complete** | `66abd43` (PR #92) | settling = stopped-and-unwinding only; pulled ahead of 2.1 per the roadmap |
 | 2.3 | **complete** | `a42fc76` (PR #94) | `lib/researchLive.ts`; watermark staleness, generation guard, reconnect + abort |
-| 2.4 | planned | | |
+| 2.4 | **complete** | `4de3d43` (PR #95) | `lib/eventSeqIndex.ts`; identity before sequence, O(1) duplicate test, first-arrival-wins — **Phase 2 done** |
 | 3.1 | planned | | |
 | 3.2 | planned | | |
 | 3.3 | planned | | |

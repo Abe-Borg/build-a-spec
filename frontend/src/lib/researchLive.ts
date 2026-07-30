@@ -20,6 +20,11 @@ import type {
   ResearchSnapshot,
   ResearchStreamEndStatus,
 } from "../types";
+import {
+  eventSeqIndex,
+  hasEventSeq,
+  rememberAppendedSeq,
+} from "./eventSeqIndex.ts";
 
 /** The research SSE events whose arrival warrants a full authoritative
  *  snapshot refetch (status flips, profile adoption, round metadata). The
@@ -70,23 +75,32 @@ function isStreamEnd(event: ResearchEvent): boolean {
 
 /** Highest sequence number present, or -1 for an empty/sentinel-only log.
  *  The watermark, not the length: a log can only be compared with another
- *  by how far into the server's append-only array it reaches. */
+ *  by how far into the server's append-only array it reaches. Reads the
+ *  memoized index, so asking does not re-scan an indexed array. */
 export function maxResearchEventSeq(events: readonly ResearchEvent[]): number {
-  let maximum = -1;
-  for (const event of events) {
-    if (typeof event.seq === "number") maximum = Math.max(maximum, event.seq);
-  }
-  return maximum;
+  return eventSeqIndex(events).max;
 }
+
+/** Memoized for the same reason the sequence index is, and safely for the
+ *  same reason: the round of a log is a pure function of an array nothing
+ *  mutates, and the merge asks for it on every single frame. */
+const rounds = new WeakMap<object, number>();
 
 /** The 1-based round this log belongs to, or 0 when it says nothing. Every
  *  event in a round carries the same number, so the first one that has it
  *  answers for the log. */
 export function researchEventsRound(events: readonly ResearchEvent[]): number {
+  const cached = rounds.get(events);
+  if (cached !== undefined) return cached;
+  let round = 0;
   for (const event of events) {
-    if (typeof event.round === "number" && event.round > 0) return event.round;
+    if (typeof event.round === "number" && event.round > 0) {
+      round = event.round;
+      break;
+    }
   }
-  return 0;
+  rounds.set(events, round);
+  return round;
 }
 
 export function researchSnapshotRound(
@@ -146,11 +160,20 @@ function startsNewResearchRun(
   return round !== 0 && incoming !== 0 && round !== incoming;
 }
 
-/** Merge one streamed research event into the local snapshot's event log.
- *  Never touches status/error/profile — those stay snapshot-owned (the
- *  authoritative refetch is generation- and epoch-guarded). A genuinely new
- *  `research_started` restarts the local log (the server clears it per
- *  round); replay overlap after a reconnect dedupes by seq. */
+/**
+ * Merge one streamed research event into the local snapshot's event log.
+ *
+ * Never touches status/error/profile — those stay snapshot-owned (the
+ * authoritative refetch is generation- and epoch-guarded). A genuinely new
+ * `research_started` restarts the local log (the server clears it per round).
+ *
+ * Replay overlap after a reconnect — every frame of the round, every time —
+ * returns the PREVIOUS snapshot object untouched: the runner log is
+ * append-only, so a frame's payload is fixed at the sequence it was assigned
+ * and a replay has nothing to update. Returning the same object is also what
+ * lets React skip the render, and the duplicate test is a lookup in the
+ * memoized sequence index rather than a scan (see `eventSeqIndex`).
+ */
 export function mergeResearchEvent(
   previous: ResearchSnapshot | null,
   event: ResearchEvent,
@@ -158,15 +181,38 @@ export function mergeResearchEvent(
   const base: ResearchSnapshot =
     previous ?? { status: "running", error: "", events: [] };
   if (isStreamEnd(event)) return base;
-  if (event.type === "research_started" && startsNewResearchRun(base, event)) {
-    return { ...base, events: [event] };
+
+  // Round identity is settled BEFORE any sequence comparison. Sequences
+  // restart at 0 for every round, so a frame from another round collides with
+  // this round's numbering: the dedupe below would read the collision as a
+  // replay and drop the frame, and the re-sort path would overwrite the live
+  // round's frame at that sequence with the foreign one.
+  if (event.type === "research_started") {
+    if (startsNewResearchRun(base, event)) return { ...base, events: [event] };
+  } else {
+    const localRound = researchEventsRound(base.events);
+    const incomingRound =
+      typeof event.round === "number" && event.round > 0 ? event.round : 0;
+    if (localRound && incomingRound && localRound !== incomingRound) {
+      // A LATER round arriving without its own `research_started` means the
+      // follower missed the roster frame; take the reset and let the
+      // milestone refetch restore the roster. An EARLIER round is an
+      // abandoned run's straggler and belongs to no log on screen.
+      return incomingRound > localRound ? { ...base, events: [event] } : base;
+    }
   }
-  const events = base.events;
-  const last = events[events.length - 1];
-  if (!last || event.seq > last.seq) {
-    return { ...base, events: [...events, event] };
+
+  const index = eventSeqIndex(base.events);
+  const seq = typeof event.seq === "number" ? event.seq : null;
+  if (seq !== null && hasEventSeq(index, seq)) return base;
+  if (seq !== null && seq > index.max) {
+    const events = [...base.events, event];
+    rememberAppendedSeq(events, index, seq);
+    return { ...base, events };
   }
-  return { ...base, events: normalizedResearchEvents([...events, event]) };
+  // A genuine gap fill: re-sort, the one path that may cost O(n log n) and
+  // the one the runner never asks for.
+  return { ...base, events: normalizedResearchEvents([...base.events, event]) };
 }
 
 /** A refresh's identity. `requestGeneration` is read when the fetch is

@@ -1,6 +1,6 @@
 # Phase 2 — Live state and stream resilience
 
-- Status: in progress (2.1, 2.2 and 2.3 complete; 2.4 planned)
+- Status: **complete** (2.1, 2.2, 2.3 and 2.4 landed; phase gate green)
 - Prerequisite: Phase 1 complete
 - Risk: high user-visible impact; backend run results must remain unchanged
 
@@ -558,6 +558,119 @@ Then run the full standard verification commands from the master plan.
   update.
 - New and genuinely out-of-order frames still merge in sequence order.
 - Lifecycle state never regresses from a duplicate terminal/start frame.
+
+### Implementation record
+
+- Status: **complete** (2026-07-30)
+- Commit/PR: `4de3d43` — PR #95
+- Tests: 20 new across three files (one new), all registered in
+  `package.json`'s explicit `node --test` list, and two existing merge tests
+  rewritten because they pinned the behavior this chunk reverses.
+  `frontend/tests/eventSeqIndex.test.ts` (11, new) pins the primitive
+  directly: a dense log's span with no gap set, an empty/unnumbered log, a
+  gap reading as absent rather than duplicate, a log that does not start at
+  zero, a repeated sequence still reading as dense, non-finite input,
+  memoization per array, a dense append sharing the gap set object, an append
+  past the watermark recording the hole behind it, the first append to an
+  empty log, and — the one that protects the design — that deriving a new
+  array's index leaves the old array's index correct.
+  `frontend/tests/qcLive.test.ts` and `frontend/tests/researchLive.test.ts`
+  each gain a referential-identity test (every frame of a log replayed
+  returns the same snapshot AND the same event array), a cross-identity
+  test, and the bounded-access test step 6 asks for.
+  Research adds three identity cases (an abandoned earlier round never
+  merged, a later round resetting without its own start frame, a round-less
+  frame merging normally); QC adds two (a foreign `qc_complete` cannot end
+  the run on screen while the live run's own still lands, and a live
+  terminal frame surviving a retained report from an older run).
+  The bounded-access tests use a `Proxy` counting every property read on a
+  400-frame log: one index build (asserted to be a single pass) and then
+  **zero** reads across the whole replay, with no elapsed-time threshold
+  anywhere. All three mechanisms were reverted in place to prove them
+  load-bearing — dedupe removed → 3 red, identity-before-sequence removed →
+  1 red, the memo removed → 4 red.
+  Focused run green (`eventSeqIndex` / `qcLive` / `researchLive` — 63
+  passed); phase gate green: `npm test` 143 passed (was 123),
+  `npm run build` clean, `pytest -q tests/test_research_api.py
+  tests/test_qc_live_runner.py tests/test_qc_live_events.py` 25 passed, full
+  `pytest -q` 1178 passed / 9 skipped (unchanged — no backend change).
+- Deviations:
+  - **The index is a shared module, `frontend/src/lib/eventSeqIndex.ts`, not
+    a copy in each live module.** The plan's file list names only the two
+    live modules and their tests. The two copies would have been identical —
+    ~60 lines of subtle span/gap logic — and this codebase's
+    copy-don't-import posture is documented for cases that DIVERGED (the
+    three backend relays, which carry three deliberately different
+    parsers); duplicating the one primitive whose whole job is deciding
+    whether to drop a frame is how a future fix lands in one copy only.
+  - **`missing` (a gap set) instead of a plain `Set` of present sequences.**
+    Step 2 offers "a `Set`/max-watermark pair, or a keyed map". A present-set
+    has to be COPIED per append, which trades one O(n) scan per frame for one
+    O(n) copy per frame and wins nothing. Because a server log is dense,
+    `missing` is empty and the next index shares the same object, so the
+    append path is genuinely O(1). Pinned by the shared-gap-set test.
+  - **Memoized in a `WeakMap` keyed on the events array rather than threaded
+    through the merge signature.** Keeping `merge*(previous, event)` pure and
+    two-argument is what the callers in `App.tsx` and every existing test
+    depend on; memoization is not observable state. It is safe because
+    nothing mutates an event array, and derivation never mutates a stored
+    index — so merging onto an older snapshot costs a rebuild, never a wrong
+    answer. A mutate-and-share design would have been wrong there, which is
+    why that case has its own test.
+  - **A foreign non-start frame is IGNORED, not reset onto.** Step 1 says a
+    different-run/round frame "must take the reset path, never the dedupe
+    path". Reset is right for `research_started`, and for a research frame
+    from a LATER round (the follower missed the roster frame). It is not
+    right for the frames that can actually carry a foreign identity
+    otherwise: an EARLIER research round's straggler and a superseded QC
+    run's `qc_complete`. Resetting the board onto either would adopt an
+    abandoned run's log; QC has no "newer" to read at all, since a run id is
+    a UUID. Both are dropped deliberately with the reason in the code, which
+    is the plan's intent — never let a cross-run collision masquerade as a
+    replay — rather than an accidental dedupe.
+  - **QC's ignore path uses the LOG's run id; its reset path still uses
+    `qcSnapshotRunId`.** The asymmetry is deliberate: dropping a frame is
+    destructive, and `qcSnapshotRunId`'s retained-report/result fallbacks say
+    nothing about which run is streaming, so trusting them to drop would
+    swallow a live run's terminal frame permanently whenever a retained
+    result was present. Reset keeps the broader identity so its behavior is
+    byte-unchanged. Both directions have a test.
+  - **Two existing tests were rewritten, not extended.** "QC event merge
+    deduplicates seq and orders replayed frames" and its research twin
+    asserted that a replayed frame REPLACED its same-seq predecessor
+    (`kind: "writing"` / `query: "c"` winning). Step 2 reverses that, so they
+    now assert first-arrival-wins plus snapshot identity. Their gap-fill
+    halves are kept — that path still re-sorts.
+  - **`researchEventsRound` is memoized too.** Not asked for, but the merge
+    calls it on every frame now that identity is checked first, and without it
+    the bounded-access test could only assert "a small constant per frame"
+    instead of zero. Same WeakMap-on-an-immutable-array argument.
+  - **`allowImportingTsExtensions: true` in `frontend/tsconfig.json`, and the
+    two imports carry `.ts`.** Not in the plan's file list, and forced:
+    `npm test` runs `node --test` over the `.ts` sources and Node's ESM
+    resolver rejects an extensionless relative specifier, which no existing
+    sibling import had exposed (they are all either `import type`, erased
+    before Node sees them, or in modules no test loads). The flag only
+    permits the extension, requires `noEmit` (already set), and Vite resolves
+    it unchanged; `npm run build` is clean. The reason is written into the
+    module docstring and CLAUDE.md so the odd-looking import does not read as
+    a slip.
+  - **`App.tsx` is deliberately untouched, including the milestone refetch on
+    a replayed frame.** A reconnect's replay still re-triggers `refreshQc` /
+    `refreshResearch` for each milestone frame it replays. That is bounded by
+    the milestone count (single digits per round), Chunk 2.3's reconcile
+    rejects every stale response it produces, and one authoritative re-sync
+    after a transport gap is wanted, not wasted. Suppressing it would mean
+    reading merge identity in the follower loop to decide whether to fetch —
+    real complexity for no measured win, which step 6 forbids.
+  - Step 6 appears twice in the plan (both numbered 6). The first —
+    bounded-access instrumentation — is implemented. The second, batching at
+    the stream-reader boundary, explicitly says not to do it speculatively,
+    and it was not done: the merge no longer does per-frame array work to
+    batch away.
+- Manual QA owed: Phase 2's list — reconnect/reopen the Review Room mid-run
+  and confirm no long UI freeze. Not reproducible hermetically (the repo has
+  no browser-driven suite); the access-count test is the standing guard.
 
 ## Phase 2 manual QA
 

@@ -9,9 +9,10 @@
  */
 import { useRef } from "react";
 import type { ReactNode } from "react";
-import type { QcSnapshot, ReadinessPayload } from "../types";
+import type { QcCandidateOrigin, QcSnapshot, ReadinessPayload } from "../types";
 import { useDialogFocus } from "../lib/dialogFocus";
 import {
+  QC_OPS_SOURCE_LABELS,
   buildQcReportMetrics,
   collectQcOperationRecords,
   collectQcTraceRecords,
@@ -26,6 +27,8 @@ import {
   groupFindingsBySeverity,
   isFailedVerifierSeat,
   normalizeSeverity,
+  qcCandidateOrigins,
+  qcConsolidationSummary,
   qcDisputedCandidates,
   qcInconclusiveCandidates,
   qcLensCoverage,
@@ -460,16 +463,107 @@ function VerdictRecord({ verdict, index }: { verdict: QcReportVerdict; index: nu
   );
 }
 
+function CandidateOrigins({ origins }: { origins: QcCandidateOrigin[] }) {
+  if (origins.length < 2) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2.5">
+      <p className="text-[9px] font-semibold tracking-wide text-ink-faint uppercase">
+        Original lens claims ({origins.length})
+      </p>
+      <p className="mt-1 text-[10px] leading-relaxed text-ink-faint">
+        {origins.length} independent lens claims were consolidated into this one
+        candidate and adjudicated by a single verifier panel, because one fix
+        would dispose of all of them. Each is reproduced exactly as its lens
+        submitted it — nothing was rewritten or dropped.
+      </p>
+      <div className="mt-2 space-y-2">
+        {origins.map((origin) => (
+          <div
+            key={origin.origin_id}
+            className="rounded-md border border-edge/60 bg-bg/40 px-2.5 py-2"
+          >
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Pill className="border-edge bg-surface/60 text-ink-dim">
+                {origin.lens_id || "unknown lens"}
+              </Pill>
+              <Pill className={severityTone[normalizeSeverity(origin.severity)]}>
+                {formatSeverity(origin.severity)}
+              </Pill>
+              <Pill
+                className={
+                  origin.grounded
+                    ? "border-ok/40 bg-ok/10 text-ok"
+                    : "border-warn/40 bg-warn/10 text-warn"
+                }
+              >
+                {origin.grounded ? "grounded" : "not grounded"}
+              </Pill>
+              <span className="font-mono text-[9px] text-ink-faint">
+                {origin.origin_id}
+              </span>
+            </div>
+            <p className="mt-1 whitespace-pre-wrap break-words text-[11px] font-semibold leading-relaxed text-ink">
+              {origin.title || "Untitled claim"}
+            </p>
+            <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-ink-dim">
+              {origin.issue || NOT_RECORDED}
+            </p>
+            {origin.rationale && (
+              <p className="mt-1 whitespace-pre-wrap break-words text-[10px] leading-relaxed text-ink-faint">
+                {origin.rationale}
+              </p>
+            )}
+            <div className="mt-1.5">
+              <p className="text-[9px] font-semibold tracking-wide text-ink-faint uppercase">
+                Cited sources
+              </p>
+              {origin.source_urls?.length ? (
+                <ul className="mt-1 space-y-0.5">
+                  {origin.source_urls.map((url, urlIndex) => (
+                    <li key={`${url}-${urlIndex}`} className="break-all font-mono text-[10px] text-ink-faint">
+                      {safeHttpUrl(url) ? (
+                        <a className="underline decoration-dotted" href={url} target="_blank" rel="noreferrer noopener">{url}</a>
+                      ) : (
+                        url
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-[10px] text-ink-faint">None cited.</p>
+              )}
+            </div>
+            <div className="mt-1.5">
+              <p className="text-[9px] font-semibold tracking-wide text-ink-faint uppercase">
+                Operations this lens proposed
+              </p>
+              {origin.proposed_ops?.length ? (
+                <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded bg-bg/60 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-ink-dim">
+                  {formatJson(origin.proposed_ops)}
+                </pre>
+              ) : (
+                <p className="mt-1 text-[10px] text-ink-faint">None proposed.</p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function FindingRecord({
   finding,
   index,
   kind,
   schemaVersion,
+  origins = [],
 }: {
   finding: QcReportFinding;
   index: number;
   kind: "surviving" | "refuted" | "disputed" | "inconclusive";
   schemaVersion: unknown;
+  origins?: QcCandidateOrigin[];
 }) {
   const severity = normalizeSeverity(finding.severity);
   const operations = finding.proposed_ops ?? [];
@@ -518,7 +612,11 @@ function FindingRecord({
 
       <dl className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-4">
         <DataField label="Finding ID" mono>{recorded(finding.finding_id)}</DataField>
-        <DataField label="Lens ID" mono>{recorded(finding.lens_id)}</DataField>
+        <DataField label={origins.length > 1 ? "Originating lenses" : "Lens ID"} mono>
+          {origins.length > 1
+            ? `${[...new Set(origins.map((o) => o.lens_id).filter(Boolean))].join(", ")} (${origins.length} consolidated claims)`
+            : recorded(finding.lens_id)}
+        </DataField>
         <DataField label="Element ID" mono>{finding.element_id || "Section-level"}</DataField>
         <DataField label="Reviewed reference">{recorded(finding.reviewed_ref)}</DataField>
         <DataField label="Element anchor resolution">
@@ -583,6 +681,8 @@ function FindingRecord({
           </p>
         </div>
       </div>
+
+      <CandidateOrigins origins={origins} />
 
       {(finding.dismiss_reason ||
         operationEvaluation.semanticReason ||
@@ -837,6 +937,7 @@ export default function QCReportModal({
   const disputed = qcDisputedCandidates(report);
   const inconclusive = qcInconclusiveCandidates(report);
   const lensCoverage = qcLensCoverage(report);
+  const consolidation = qcConsolidationSummary(report);
   const traceRecords = collectQcTraceRecords(report);
   const operationRecords = collectQcOperationRecords(report);
   const limitations = qcReportLimitations(report, reportIsStale);
@@ -1102,6 +1203,78 @@ export default function QCReportModal({
             </div>
           </Section>
 
+          {consolidation.state !== "off" && (
+            <Section
+              number="05b"
+              title="Cross-lens candidate consolidation"
+              description="Lens candidates describing the same actionable defect at the same element share one verifier panel instead of buying one each. Grouping is confined to candidates sharing a write scope, every original claim is retained verbatim, and any failure of the step falls back to one panel per original candidate."
+            >
+              {consolidation.state === "unrecorded" ? (
+                <EmptyRecord>
+                  This run was configured to consolidate near-duplicate lens
+                  candidates, but no grouping record was saved. Treat the
+                  candidate roster as unexplained rather than as evidence that
+                  nothing was grouped.
+                </EmptyRecord>
+              ) : (
+                <>
+                  <dl className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-4">
+                    <DataField label="Grouping step status">{consolidation.state}</DataField>
+                    <DataField label="Raw lens candidates">{formatInteger(consolidation.rawCandidates)}</DataField>
+                    <DataField label="Candidates after grouping">{formatInteger(consolidation.groupedCandidates)}</DataField>
+                    <DataField label="Verifier panels avoided">{formatInteger(consolidation.panelsAvoided)}</DataField>
+                    <DataField label="Grouping API requests">{formatInteger(consolidation.apiRequestCount)}</DataField>
+                    <DataField label="Grouping model responses">{formatInteger(consolidation.modelResponseCount)}</DataField>
+                    <DataField label="Grouping error">{consolidation.error || "None recorded"}</DataField>
+                    <DataField label="Fallback reason">{consolidation.fallbackReason || "None recorded"}</DataField>
+                  </dl>
+                  {consolidation.state === "failed" && (
+                    <p className="mt-2 text-[11px] leading-relaxed text-warn">
+                      One or more grouping calls failed or returned a partition
+                      that did not account for every candidate. Every affected
+                      candidate was reviewed on its own verifier panel — the
+                      pre-consolidation behaviour. No candidate was lost, and
+                      the run cost more rather than less.
+                    </p>
+                  )}
+                  {consolidation.mergedGroups.length > 0 ? (
+                    <div className="mt-3 space-y-2">
+                      {consolidation.mergedGroups.map((group) => (
+                        <div
+                          key={group.candidate_id || group.group_index}
+                          className="rounded-lg border border-edge/60 bg-bg/35 px-3 py-2.5"
+                        >
+                          <p className="text-[11px] font-semibold leading-relaxed text-ink">
+                            {group.canonical_title || "Untitled consolidated candidate"}
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-ink-faint">
+                            {group.origin_ids.length} original claims ·{" "}
+                            <span className="font-mono">{group.element_id || "section-level"}</span> ·
+                            panel severity {formatSeverity(group.severity)}
+                          </p>
+                          {group.grouping_rationale && (
+                            <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-ink-dim">
+                              {group.grouping_rationale}
+                            </p>
+                          )}
+                          <p className="mt-1 text-[10px] leading-relaxed text-ink-faint">
+                            {QC_OPS_SOURCE_LABELS[group.ops_source] ??
+                              "Operation provenance was not recorded."}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-[11px] text-ink-faint">
+                      No candidates were consolidated. Every lens candidate was
+                      reviewed on its own verifier panel.
+                    </p>
+                  )}
+                </>
+              )}
+            </Section>
+          )}
+
           <Section
             number="06"
             title={`Surviving findings (${findings.length})`}
@@ -1117,7 +1290,7 @@ export default function QCReportModal({
                     </div>
                     <div className="space-y-3">
                       {group.findings.map((finding) => (
-                        <FindingRecord key={finding.finding_id} finding={finding} index={findings.indexOf(finding)} kind="surviving" schemaVersion={report.schema_version} />
+                        <FindingRecord key={finding.finding_id} finding={finding} index={findings.indexOf(finding)} kind="surviving" schemaVersion={report.schema_version} origins={qcCandidateOrigins(report, finding)} />
                       ))}
                     </div>
                   </div>
@@ -1134,7 +1307,7 @@ export default function QCReportModal({
             {inconclusive.length > 0 ? (
               <div className="space-y-3">
                 {inconclusive.map((finding, index) => (
-                  <FindingRecord key={`${finding.finding_id}-${index}`} finding={finding} index={index} kind="inconclusive" schemaVersion={report.schema_version} />
+                  <FindingRecord key={`${finding.finding_id}-${index}`} finding={finding} index={index} kind="inconclusive" schemaVersion={report.schema_version} origins={qcCandidateOrigins(report, finding)} />
                 ))}
               </div>
             ) : <EmptyRecord>No candidates were infrastructure-inconclusive.</EmptyRecord>}
@@ -1154,7 +1327,7 @@ export default function QCReportModal({
                         ? "Disputed: the panel majority refuted a critical/high finding, but no refuting reviewer cited evidence that validated against what it retrieved or against the reviewed document."
                         : "Disputed: the panel completed but split — no unanimous uphold and no majority refutation."}
                     </p>
-                    <FindingRecord finding={finding} index={index} kind="disputed" schemaVersion={report.schema_version} />
+                    <FindingRecord finding={finding} index={index} kind="disputed" schemaVersion={report.schema_version} origins={qcCandidateOrigins(report, finding)} />
                   </div>
                 ))}
               </div>
@@ -1169,7 +1342,7 @@ export default function QCReportModal({
             {refuted.length > 0 ? (
               <div className="space-y-3">
                 {refuted.map((finding, index) => (
-                  <FindingRecord key={`${finding.finding_id}-${index}`} finding={finding} index={index} kind="refuted" schemaVersion={report.schema_version} />
+                  <FindingRecord key={`${finding.finding_id}-${index}`} finding={finding} index={index} kind="refuted" schemaVersion={report.schema_version} origins={qcCandidateOrigins(report, finding)} />
                 ))}
               </div>
             ) : <EmptyRecord>No candidate findings were substantively refuted.</EmptyRecord>}

@@ -1,8 +1,9 @@
 """Final-QC lens definitions, output tools, and payload normalization.
 
-The QC pass is a lens fan-out (five independent Opus 5 calls)
-followed by an adversarial verification panel per finding; this module owns
-the lens briefs, the two strict output tools (``submit_qc_findings`` /
+The QC pass is a lens fan-out (five independent Opus 5 calls), a
+cross-lens consolidation step, then an adversarial verification panel per
+consolidated candidate; this module owns the lens briefs, the three strict
+output tools (``submit_qc_findings`` / ``submit_qc_consolidation`` /
 ``submit_qc_verdict``), and the parse-time normalization that clamps model
 output to the contract.
 
@@ -24,6 +25,7 @@ from ..research.schema import _STRICT_CAPABLE_MODELS
 
 QC_FINDINGS_TOOL_NAME = "submit_qc_findings"
 QC_VERDICT_TOOL_NAME = "submit_qc_verdict"
+QC_CONSOLIDATION_TOOL_NAME = "submit_qc_consolidation"
 
 SEVERITIES: tuple[str, ...] = ("critical", "high", "medium", "low")
 QC_CHECK_OUTCOMES: tuple[str, ...] = ("passed", "finding", "not_applicable")
@@ -430,6 +432,91 @@ QC_VERDICT_SCHEMA: dict[str, Any] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# submit_qc_consolidation (cross-lens grouping, between phase 1 and phase 2)
+# ---------------------------------------------------------------------------
+
+QC_CONSOLIDATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["groups"],
+    "properties": {
+        "groups": {
+            "type": "array",
+            "description": (
+                "A partition of the supplied candidate indexes. Every index "
+                "must appear in exactly one group. A candidate that shares no "
+                "defect with any other is its own single-member group — that "
+                "is the normal, expected answer."
+            ),
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "member_indexes",
+                    "canonical_title",
+                    "canonical_issue",
+                    "canonical_rationale",
+                    "grouping_rationale",
+                    "reconciled_ops",
+                ],
+                "properties": {
+                    "member_indexes": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": (
+                            "The candidate indexes in this group, from the "
+                            "supplied list only."
+                        ),
+                    },
+                    "canonical_title": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "For a multi-member group: one short label for the "
+                            "shared defect. Null for a single-member group — "
+                            "its original wording is kept verbatim."
+                        ),
+                    },
+                    "canonical_issue": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "For a multi-member group: the shared defect "
+                            "stated once, covering what every member raised. "
+                            "Introduce no claim no member made."
+                        ),
+                    },
+                    "canonical_rationale": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "For a multi-member group: why it is a defect, "
+                            "drawn only from the members' own rationales."
+                        ),
+                    },
+                    "grouping_rationale": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "For a multi-member group: why one fix would "
+                            "dispose of every member."
+                        ),
+                    },
+                    "reconciled_ops": {
+                        "type": ["array", "null"],
+                        "items": _QC_OP_SCHEMA,
+                        "description": (
+                            "For a multi-member group whose members proposed "
+                            "DIFFERENT operations: one operation set that "
+                            "resolves the shared defect once. Null when the "
+                            "members already agree, when no clean single fix "
+                            "exists, or for a single-member group."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+}
+
+
 def _tool(name: str, description: str, schema: dict[str, Any], model: str | None) -> dict[str, Any]:
     tool: dict[str, Any] = {
         "name": name,
@@ -456,6 +543,16 @@ def submit_qc_verdict_tool(*, model: str | None = None) -> dict[str, Any]:
         QC_VERDICT_TOOL_NAME,
         "Submit your verdict on the proposed QC finding. Call exactly once.",
         QC_VERDICT_SCHEMA,
+        model,
+    )
+
+
+def submit_qc_consolidation_tool(*, model: str | None = None) -> dict[str, Any]:
+    return _tool(
+        QC_CONSOLIDATION_TOOL_NAME,
+        "Submit the grouping of these QC candidates. Call exactly once, and "
+        "account for every supplied index exactly once.",
+        QC_CONSOLIDATION_SCHEMA,
         model,
     )
 
@@ -633,6 +730,60 @@ def normalize_refutation_evidence(raw: object) -> list[dict[str, str]]:
             else {"type": kind, "reference": value}
         )
     return out
+
+
+def normalize_consolidation(payload: dict) -> dict[str, Any]:
+    """Clamp a ``submit_qc_consolidation`` payload to well-formed groups.
+
+    SHAPE ONLY. Whether the groups actually partition the supplied candidates,
+    and whether each one obeys the hard compatibility rules, is decided by the
+    engine against the bucket it asked about — this cannot know either. A
+    malformed entry is dropped rather than repaired, because a group whose
+    membership we had to guess is exactly the thing that must fall back to
+    singletons instead of quietly merging two different defects.
+
+    Non-integer, boolean and negative member indexes drop (``bool`` is an
+    ``int`` subclass, and ``true`` reading as candidate 1 would silently
+    misgroup). Duplicates within one group collapse; duplicates ACROSS groups
+    are the engine's coverage check, not this.
+    """
+    groups: list[dict[str, Any]] = []
+    for raw in payload.get("groups") or []:
+        if not isinstance(raw, dict):
+            continue
+        raw_indexes = raw.get("member_indexes")
+        if not isinstance(raw_indexes, list):
+            continue
+        members: list[int] = []
+        for value in raw_indexes:
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                continue
+            if value not in members:
+                members.append(value)
+        if not members:
+            continue
+        raw_ops = raw.get("reconciled_ops")
+        reconciled_ops: list[dict[str, Any]] = []
+        if isinstance(raw_ops, list):
+            for entry in raw_ops:
+                cleaned = _clean_op(entry)
+                if cleaned is not None:
+                    reconciled_ops.append(cleaned)
+        groups.append(
+            {
+                "member_indexes": sorted(members),
+                "canonical_title": str(raw.get("canonical_title") or "").strip(),
+                "canonical_issue": str(raw.get("canonical_issue") or "").strip(),
+                "canonical_rationale": str(
+                    raw.get("canonical_rationale") or ""
+                ).strip(),
+                "grouping_rationale": str(
+                    raw.get("grouping_rationale") or ""
+                ).strip(),
+                "reconciled_ops": reconciled_ops,
+            }
+        )
+    return {"groups": groups}
 
 
 def median_severity(severities: list[str]) -> str:

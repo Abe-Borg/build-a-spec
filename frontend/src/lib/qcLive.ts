@@ -38,6 +38,13 @@ const RECENT_CAP = 3;
 export type QcLivePhase =
   | "idle"
   | "lenses"
+  /** Cross-lens grouping, between review and verification. Deliberately a
+   *  named TRANSITION rather than a fourth stage on the board: it produces
+   *  no findings and passing through it is not a completion gate, so
+   *  showing it as one would overstate what it decides. It exists in the
+   *  phase vocabulary so the drawer can say what is happening instead of
+   *  going quiet between the last lens and the first panel. */
+  | "consolidation"
   | "verification"
   | "validation"
   | "complete"
@@ -122,6 +129,16 @@ export interface QcValidationLiveState {
   reason: string;
 }
 
+export interface QcConsolidationLiveState {
+  /** "" until a `consolidation_started` frame arrives. */
+  status: "" | "running" | "complete" | "skipped" | "failed" | string;
+  rawCandidates: number;
+  groupedCandidates: number;
+  panelsAvoided: number;
+  eligibleCandidates: number;
+  error: string;
+}
+
 export interface QcStageLiveState {
   id: "lenses" | "verification" | "validation";
   label: string;
@@ -143,6 +160,7 @@ export interface QcLiveState {
     | "cancelled";
   settling: boolean;
   lenses: QcLensLiveState[];
+  consolidation: QcConsolidationLiveState;
   candidates: QcCandidateLiveState[];
   inReview: QcCandidateLiveState[];
   waiting: QcCandidateLiveState[];
@@ -641,6 +659,14 @@ export function foldQcLiveState(
   };
   let legacyVerificationDone = 0;
   let legacyVerificationTotal = 0;
+  const consolidation: QcConsolidationLiveState = {
+    status: "",
+    rawCandidates: 0,
+    groupedCandidates: 0,
+    panelsAvoided: 0,
+    eligibleCandidates: 0,
+    error: "",
+  };
 
   const ensureLens = (id: string, title = ""): QcLensLiveState => {
     let lens = lenses.get(id);
@@ -751,6 +777,35 @@ export function foldQcLiveState(
         lens.error = event.error ?? "";
         break;
       }
+      case "consolidation_started":
+        phase = "consolidation";
+        consolidation.status = "running";
+        consolidation.rawCandidates =
+          event.raw_candidate_count ?? consolidation.rawCandidates;
+        consolidation.eligibleCandidates =
+          event.eligible_candidate_count ?? consolidation.eligibleCandidates;
+        break;
+      // The grouping call's own activity/search/fetch/retry frames are
+      // deliberately not folded into visible state. The step is a brief
+      // transition, and a per-bucket activity ticker would be noise the
+      // user cannot act on; the phase line already says it is running.
+      case "consolidation_activity":
+      case "consolidation_search":
+      case "consolidation_fetch":
+        break;
+      case "consolidation_retry":
+        consolidation.status = "running";
+        break;
+      case "consolidation_complete":
+        consolidation.status = event.status || "complete";
+        consolidation.rawCandidates =
+          event.raw_candidate_count ?? consolidation.rawCandidates;
+        consolidation.groupedCandidates =
+          event.grouped_candidate_count ?? consolidation.groupedCandidates;
+        consolidation.panelsAvoided =
+          event.panels_avoided ?? consolidation.panelsAvoided;
+        consolidation.error = event.error || "";
+        break;
       case "verify_progress":
         legacyVerificationDone = event.done ?? legacyVerificationDone;
         legacyVerificationTotal = event.total ?? legacyVerificationTotal;
@@ -996,6 +1051,10 @@ export function foldQcLiveState(
           ? "failed"
           : "complete"
         : "queued";
+  // Consolidation deliberately leaves the three-stage board alone: lenses
+  // read complete (they are) and panels stay queued (they have not started).
+  // The transition is announced in `liveMessage`, not as a stage nobody can
+  // pass or fail.
   const verificationStageStatus: QcStageStatus =
     phase === "verification"
       ? "active"
@@ -1041,6 +1100,10 @@ export function foldQcLiveState(
     liveMessage = "Stop requested. Finishing already-paid in-flight work.";
   } else if (phase === "lenses") {
     liveMessage = `Specialist review: ${lensesFinished} of ${lensList.length} lenses finished.`;
+  } else if (phase === "consolidation") {
+    liveMessage =
+      "Grouping findings that describe the same defect, so each one is " +
+      "reviewed once.";
   } else if (phase === "verification") {
     liveMessage = `Adversarial verification: ${resolvedTotal} of ${candidateTotal} candidates resolved.`;
   } else if (phase === "validation") {
@@ -1063,6 +1126,7 @@ export function foldQcLiveState(
     runState,
     settling,
     lenses: lensList,
+    consolidation,
     candidates: candidateList,
     inReview,
     waiting,

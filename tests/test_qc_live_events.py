@@ -270,6 +270,8 @@ def test_live_lens_panel_and_validation_events_use_observable_payloads() -> None
             "title": title,
             "original_severity": "medium",
             "lens_id": "code_compliance",
+            # One lens claim behind this candidate — nothing was grouped.
+            "origin_count": 1,
             "panel_size": 2,
             "uphold_requires": 2,
             "rule": VERIFICATION_RULE_V4,

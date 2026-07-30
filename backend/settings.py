@@ -46,6 +46,20 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    """Read an on/off knob, keeping ``default`` for anything unrecognized."""
+    value = os.environ.get(name, "").strip().lower()
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    return default
+
+
 # The model's own output ceiling (Sonnet 5: 128k output tokens, thinking
 # included) — a "limit" at the model maximum is no app limit at all.
 MODEL_MAX_OUTPUT_TOKENS = 128_000
@@ -147,6 +161,23 @@ QC_MAX_WORKERS = max(1, _int_env("BUILD_A_SPEC_QC_MAX_WORKERS", 8))
 # 2-seat panel needed 2-of-2).
 QC_VERIFIERS_STANDARD = _int_env("BUILD_A_SPEC_QC_VERIFIERS_STANDARD", 2)
 QC_VERIFIERS_CRITICAL = _int_env("BUILD_A_SPEC_QC_VERIFIERS_CRITICAL", 3)
+
+# Cross-lens candidate consolidation (Chunk 5.2): near-duplicate findings
+# raised by different lenses about the SAME defect at the same element share
+# one verifier panel instead of buying one each. Off means every raw candidate
+# gets its own panel — the pre-5.2 behaviour, and the deterministic fallback
+# every failure path already lands on, so disabling it can only cost money,
+# never correctness. The flag is recorded in the QC input manifest, so a
+# report always states which regime produced it.
+QC_CONSOLIDATION = _bool_env("BUILD_A_SPEC_QC_CONSOLIDATION", True)
+# A runaway guard on ONE grouping call's input, not a quality limit. A bucket
+# past this size falls back to singletons with the reason recorded in the
+# audit record (never silently truncated), because asking one call to
+# partition an enormous candidate set is where a grouping mistake stops being
+# recoverable by the strict validator.
+QC_CONSOLIDATION_MAX_BUCKET = max(
+    2, _int_env("BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET", 25)
+)
 
 # Per-call web allowances (runaway guards, not budgets — env-overridable).
 # The code-compliance lens gets the big search allowance to check standards'

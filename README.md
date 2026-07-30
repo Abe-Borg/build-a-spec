@@ -340,6 +340,20 @@ actions.
   **provenance hygiene** (risky `assumed` blocks, surviving TBD/imported,
   provisions citing `[UNVERIFIED]` items). One lens failing never cancels the
   others; all five failing fails clean.
+- **One defect buys one panel, not one per lens that noticed it.** Five
+  reviewers reading one document routinely raise the same defect in
+  different words, and each variant used to buy its own verification panel.
+  Between review and verification, near-duplicate candidates that describe
+  the *same actionable defect at the same element* are consolidated and
+  adjudicated once. Grouping is confined to candidates that share a write
+  scope (section-level candidates additionally need a shared retrieved
+  source), every original claim is kept verbatim in the report under
+  "Original lens claims", and where the lenses proposed different fixes the
+  panel approves one reconciled remediation — or the finding stays advisory
+  with the alternatives listed for you to choose. Any failure of the step
+  falls back to a panel per candidate: it can cost more, it can never lose
+  a finding. A `duplicate_provision` lint flags near-identical sibling
+  provisions if one ever reaches the document by any route.
 - **The report identifies the exact run and exact input.** It records report
   schema/protocol versions, a unique run id, reviewed document version and
   content/input fingerprints, input manifest, model, effective QC
@@ -797,10 +811,11 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          its additive-only validator, the bundled showcase, and
                          the per-chapter practice-copy builders
   qc/
-    schema.py            QC lens definitions + submit_qc_findings/verdict strict
-                         tools + observable reviewed-check and finding/verdict
-                         normalization (never chain-of-thought)
-    engine.py            run_final_qc: lens fan-out -> adversarial verification
+    schema.py            QC lens definitions + submit_qc_findings/consolidation/
+                         verdict strict tools + observable reviewed-check and
+                         finding/verdict normalization (never chain-of-thought)
+    engine.py            run_final_qc: lens fan-out -> cross-lens consolidation
+                         -> adversarial verification
                          -> ops validation -> audit-grade QCResult with versioned
                          input/run identity, evidence and seat telemetry; raw
                          provider streams relay observable lens/verifier activity
@@ -1039,6 +1054,8 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_MAX_WORKERS` | `8` | Concurrent QC calls in flight (lenses share the pool with verifiers). |
 | `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings. |
 | `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings. |
+| `BUILD_A_SPEC_QC_CONSOLIDATION` | `1` | Group near-duplicate lens findings about one defect onto a shared verifier panel. Off reviews every raw candidate separately (the pre-5.2 behaviour, and the fallback every failure path already takes). |
+| `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET` | `25` | Runaway guard on one grouping call's input; a larger bucket falls back to separate panels and records why. |
 | `BUILD_A_SPEC_QC_MAX_SEARCHES_COMPLIANCE` | `24` | web_search allowance for the code-compliance lens (runaway guard). |
 | `BUILD_A_SPEC_QC_MAX_SEARCHES_LENS` | `8` | web_search allowance for the other lenses + verifiers. |
 | `BUILD_A_SPEC_QC_MAX_FETCHES_COMPLIANCE` | `8` | web_fetch allowance for the code-compliance lens. |

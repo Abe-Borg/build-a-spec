@@ -1,4 +1,6 @@
 import type {
+  QcCandidateOrigin,
+  QcConsolidationGroup,
   QcFinding,
   QcLensStatus,
   QcOpsSemanticStatus,
@@ -1485,6 +1487,118 @@ export function qcResearchCoverage(
   return { state: "partial", identity, limitation: sentences.join(" ") };
 }
 
+export interface QcConsolidationSummary {
+  /** "off" = the run did not have grouping enabled (or predates it);
+   *  "unrecorded" = it was enabled but no record was saved. */
+  state: "off" | "unrecorded" | "complete" | "skipped" | "failed";
+  rawCandidates: number;
+  groupedCandidates: number;
+  panelsAvoided: number;
+  mergedGroups: QcConsolidationGroup[];
+  error: string;
+  fallbackReason: string;
+  apiRequestCount: number;
+  modelResponseCount: number;
+  /** Nonempty only when the record itself constrains how the run reads. */
+  limitation: string;
+}
+
+/** The cross-lens grouping record, read from serialized facts alone.
+ *
+ * Mirrors `qc_research_coverage`'s posture: the enabled flag comes from the
+ * hashed manifest, never from the presence of the record — an absent record
+ * is exactly what has to be distinguishable from a run that never grouped.
+ */
+export function qcConsolidationSummary(
+  rawResult: QcResultView | QcReportResult,
+): QcConsolidationSummary {
+  const result = resultFields(rawResult);
+  const configuration = manifestRecord(result.input_manifest, "configuration");
+  const enabled = configuration.consolidation_enabled === true;
+  const record = result.consolidation;
+  const blank: QcConsolidationSummary = {
+    state: "off",
+    rawCandidates: 0,
+    groupedCandidates: 0,
+    panelsAvoided: 0,
+    mergedGroups: [],
+    error: "",
+    fallbackReason: "",
+    apiRequestCount: 0,
+    modelResponseCount: 0,
+    limitation: "",
+  };
+  if (!record || typeof record !== "object") {
+    if (!enabled) return blank;
+    return {
+      ...blank,
+      state: "unrecorded",
+      limitation:
+        "This run was configured to consolidate near-duplicate lens candidates, but no grouping record was saved, so the candidate roster cannot be traced back to the claims that produced it.",
+    };
+  }
+  const origins = Array.isArray(record.origins) ? record.origins : [];
+  const groups = Array.isArray(record.groups) ? record.groups : [];
+  const status = String(record.status || "").toLowerCase();
+  const state: QcConsolidationSummary["state"] =
+    status === "complete" || status === "failed" || status === "skipped"
+      ? status
+      : "unrecorded";
+  const error = String(record.error || "");
+  return {
+    state,
+    rawCandidates: origins.length,
+    groupedCandidates: groups.length,
+    panelsAvoided: Math.max(0, origins.length - groups.length),
+    mergedGroups: groups.filter(
+      (group) => (group.origin_ids?.length ?? 0) > 1,
+    ),
+    error,
+    fallbackReason: String(record.fallback_reason || ""),
+    apiRequestCount: Number(record.api_request_count) || 0,
+    modelResponseCount: Number(record.model_response_count) || 0,
+    limitation:
+      state === "failed"
+        ? `Cross-lens grouping did not complete (${error || "no reason recorded"}). Every affected candidate was reviewed on its own verifier panel, which is the pre-consolidation behaviour: no candidate was lost, and the run cost more rather than less.`
+        : "",
+  };
+}
+
+/** The original lens claims behind one candidate, in recorded order.
+ *
+ * A finding stores stable REFERENCES; the immutable records live once, in
+ * the consolidation block. Mirrors `qc_origins_for` in
+ * `backend/spec_doc/docx_export.py` so Word and the modal cannot describe
+ * one multi-origin finding differently.
+ */
+export function qcCandidateOrigins(
+  rawResult: QcResultView | QcReportResult,
+  finding: QcReportFinding | QcFinding,
+): QcCandidateOrigin[] {
+  const ids = (finding.candidate_origins ?? []).filter(
+    (value): value is string => typeof value === "string" && value.trim() !== "",
+  );
+  if (!ids.length) return [];
+  const result = resultFields(rawResult);
+  const origins = result.consolidation?.origins;
+  if (!Array.isArray(origins)) return [];
+  const byId = new Map(origins.map((origin) => [origin.origin_id, origin]));
+  return ids
+    .map((id) => byId.get(id))
+    .filter((origin): origin is QcCandidateOrigin => Boolean(origin));
+}
+
+export const QC_OPS_SOURCE_LABELS: Record<string, string> = {
+  original: "Single lens claim; operations kept exactly as proposed.",
+  identical:
+    "Every contributing lens that proposed operations proposed the same ones; they are carried through unchanged.",
+  reconciled:
+    "The contributing lenses proposed different operations. One reconciled set was synthesized and put to the verifier panel, which had to approve it like any other fix.",
+  unreconciled:
+    "The contributing lenses proposed different operations and no single reconciled set was produced or accepted. This finding carries no applicable operations: a human must choose among the alternatives on the original claims. Applying more than one would write the same requirement twice.",
+  none: "No contributing lens proposed a mechanical fix.",
+};
+
 export function qcReportLimitations(
   rawResult: QcResultView | QcReportResult,
   stale: boolean,
@@ -1504,6 +1618,8 @@ export function qcReportLimitations(
   // no limitation at all, which is the reassuring half-truth this fixes.
   const research = qcResearchCoverage(rawResult);
   if (research.limitation) limitations.push(research.limitation);
+  const consolidation = qcConsolidationSummary(rawResult);
+  if (consolidation.limitation) limitations.push(consolidation.limitation);
   const failedLenses = result.lens_statuses.filter(
     (lens) => String(lens.status).toLowerCase() !== "completed",
   );

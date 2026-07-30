@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { QcCandidateOrigin, QcConsolidation } from "../src/types.ts";
 import {
+  QC_OPS_SOURCE_LABELS,
   buildQcReportMetrics,
   collectQcOperationRecords,
+  qcCandidateOrigins,
+  qcConsolidationSummary,
   qcDisputedCandidates,
   qcInconclusiveCandidates,
   qcOperationEvaluation,
@@ -797,4 +801,197 @@ test("a legacy record without declared scope still lets failures lead", () => {
   );
   assert.equal(coverage.identity, "Yes — partial (3 of 4 areas completed)");
   assert.match(coverage.limitation, /AHJ requirements/);
+});
+
+// ---------------------------------------------------------------------------
+// Chunk 5.2 — cross-lens candidate consolidation
+// ---------------------------------------------------------------------------
+
+function origin(
+  overrides: Partial<QcCandidateOrigin> = {},
+): QcCandidateOrigin {
+  return {
+    origin_id: "qco-aaaaaaaaaaaa",
+    candidate_index: 0,
+    candidate_id: "raw-1",
+    lens_id: "code_compliance",
+    severity: "high",
+    element_id: "pt1.a1.p1",
+    title: "Stale edition cited",
+    issue: "NFPA 13-2019 is superseded.",
+    rationale: "Because the effective edition is 2025.",
+    source_urls: ["https://nfpa.org/13"],
+    accepted_sources: ["https://nfpa.org/13"],
+    grounded: true,
+    proposed_ops: [],
+    ...overrides,
+  };
+}
+
+function withConsolidation(
+  overrides: Partial<QcConsolidation> = {},
+  manifest: Record<string, unknown> = { consolidation_enabled: true },
+): QcReportResult {
+  return result({
+    input_manifest: { configuration: manifest },
+    consolidation: {
+      status: "complete",
+      error: "",
+      fallback_reason: "",
+      origins: [],
+      groups: [],
+      usage_totals: {},
+      estimated_cost_usd: 0,
+      api_request_count: 1,
+      model_response_count: 1,
+      ...overrides,
+    },
+  });
+}
+
+test("a report produced without consolidation reports the step as off", () => {
+  const summary = qcConsolidationSummary(result());
+  assert.equal(summary.state, "off");
+  assert.equal(summary.limitation, "");
+  assert.equal(summary.panelsAvoided, 0);
+});
+
+test("an enabled run with no grouping record is unrecorded, not silently clean", () => {
+  const summary = qcConsolidationSummary(
+    result({ input_manifest: { configuration: { consolidation_enabled: true } } }),
+  );
+  assert.equal(summary.state, "unrecorded");
+  assert.match(summary.limitation, /no grouping record was saved/);
+});
+
+test("panels avoided counts every original beyond the first in each group", () => {
+  const summary = qcConsolidationSummary(
+    withConsolidation({
+      origins: [
+        origin({ origin_id: "qco-1" }),
+        origin({ origin_id: "qco-2" }),
+        origin({ origin_id: "qco-3" }),
+        origin({ origin_id: "qco-4" }),
+      ],
+      groups: [
+        {
+          group_index: 0,
+          candidate_id: "candidate-1",
+          origin_ids: ["qco-1", "qco-2", "qco-3"],
+          element_id: "pt1.a1.p1",
+          severity: "high",
+          bucket_id: "element:pt1.a1.p1",
+          canonical_title: "Stale edition",
+          canonical_issue: "Superseded.",
+          canonical_rationale: "",
+          grouping_rationale: "One correction disposes of all three.",
+          ops_source: "identical",
+          proposed_ops: [],
+        },
+        {
+          group_index: 1,
+          candidate_id: "candidate-2",
+          origin_ids: ["qco-4"],
+          element_id: "pt1.a1.p2",
+          severity: "low",
+          bucket_id: "element:pt1.a1.p2",
+          canonical_title: "",
+          canonical_issue: "",
+          canonical_rationale: "",
+          grouping_rationale: "",
+          ops_source: "original",
+          proposed_ops: [],
+        },
+      ],
+    }),
+  );
+  assert.equal(summary.state, "complete");
+  assert.equal(summary.rawCandidates, 4);
+  assert.equal(summary.groupedCandidates, 2);
+  assert.equal(summary.panelsAvoided, 2);
+  // Only genuinely merged groups are worth rendering.
+  assert.equal(summary.mergedGroups.length, 1);
+  assert.equal(summary.limitation, "");
+});
+
+test("a failed grouping step is disclosed as a limitation, not hidden", () => {
+  const summary = qcConsolidationSummary(
+    withConsolidation({
+      status: "failed",
+      error: "element:pt1.a1.p1: the grouping call did not account for candidate 1.",
+    }),
+  );
+  assert.equal(summary.state, "failed");
+  assert.match(summary.limitation, /did not complete/);
+  // And it says the honest thing: the run cost MORE, it did not lose work.
+  assert.match(summary.limitation, /no candidate was lost/i);
+});
+
+test("the failed-grouping limitation reaches the report limitation list", () => {
+  const limitations = qcReportLimitations(
+    withConsolidation({ status: "failed", error: "boom" }),
+    false,
+  );
+  assert.ok(limitations.some((line) => /Cross-lens grouping did not complete/.test(line)));
+});
+
+test("a clean grouping step adds no limitation", () => {
+  const limitations = qcReportLimitations(withConsolidation(), false);
+  assert.ok(!limitations.some((line) => /Cross-lens grouping/.test(line)));
+});
+
+test("candidate origins resolve through the consolidation record, in order", () => {
+  const report = withConsolidation({
+    origins: [
+      origin({ origin_id: "qco-1", lens_id: "code_compliance", title: "First" }),
+      origin({ origin_id: "qco-2", lens_id: "completeness", title: "Second" }),
+    ],
+  });
+  const merged = finding({ candidate_origins: ["qco-2", "qco-1"] });
+  const resolved = qcCandidateOrigins(report, merged);
+  assert.deepEqual(
+    resolved.map((item) => item.title),
+    ["Second", "First"],
+  );
+});
+
+test("an origin id that does not resolve is skipped, never invented", () => {
+  const report = withConsolidation({
+    origins: [origin({ origin_id: "qco-1", title: "First" })],
+  });
+  const resolved = qcCandidateOrigins(
+    report,
+    finding({ candidate_origins: ["qco-1", "qco-missing"] }),
+  );
+  assert.deepEqual(
+    resolved.map((item) => item.title),
+    ["First"],
+  );
+});
+
+test("a single-origin finding renders compactly with no origin list", () => {
+  const report = withConsolidation({
+    origins: [origin({ origin_id: "qco-1" })],
+  });
+  assert.equal(
+    qcCandidateOrigins(report, finding({ candidate_origins: ["qco-1"] })).length,
+    1,
+  );
+  // A pre-5.2 finding carries none at all, and asks the record for nothing.
+  assert.deepEqual(qcCandidateOrigins(report, finding()), []);
+});
+
+test("every ops-source value has user-facing copy", () => {
+  for (const source of [
+    "original",
+    "identical",
+    "reconciled",
+    "unreconciled",
+    "none",
+  ]) {
+    assert.equal(typeof QC_OPS_SOURCE_LABELS[source], "string");
+    assert.ok(QC_OPS_SOURCE_LABELS[source].length > 0);
+  }
+  // The unreconciled copy has to say why nothing is applicable.
+  assert.match(QC_OPS_SOURCE_LABELS.unreconciled, /human must choose/);
 });

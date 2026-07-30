@@ -118,6 +118,7 @@ from .research.engine import (
     validate_research_facts,
 )
 from .qc.engine import (
+    DISPUTE_REASON_INSUFFICIENT_EVIDENCE,
     QC_PROTOCOL_VERSION,
     QC_REPORT_SCHEMA_VERSION,
     QCSourceGuard,
@@ -1351,6 +1352,10 @@ def _readiness_payload(
         and qc_audit_grade
         and qc_result.is_complete()
         and qc_result.open_critical_count() == 0
+        # An undispositioned dispute blocks exactly as an open critical
+        # does — a separate term, so dismissing it can actually clear the
+        # gate (folding it into is_complete() deadlocked the dismiss route).
+        and qc_result.open_disputed_count() == 0
     )
     evidence_detail = (
         "Its paid report is preserved in QC status and export."
@@ -1453,6 +1458,31 @@ def _readiness_payload(
             "The saved Final QC result is a legacy or unsupported record "
             "without the current full-input audit contract; re-run Final QC."
         )
+    elif qc_result.open_disputed_count():
+        # A complete panel that disagreed is not an incomplete review, and
+        # saying "re-run" would be wrong advice: re-running re-litigates a
+        # disagreement rather than resolving it. The disposition is a
+        # human's — dismiss with a reason, or fix the provision. Already
+        # dismissed disputes are resolved and no longer named here.
+        open_disputes = [f for f in qc_result.disputed if f.status == "open"]
+        disputed_count = len(open_disputes)
+        unevidenced = sum(
+            1
+            for finding in open_disputes
+            if finding.dispute_reason == DISPUTE_REASON_INSUFFICIENT_EVIDENCE
+        )
+        qc_audit_detail = (
+            f"Final QC has {disputed_count} disputed finding(s) awaiting "
+            "human review: the verifier panel completed but did not agree"
+            + (
+                f", and {unevidenced} of them refuted a critical/high finding "
+                "without citing evidence"
+                if unevidenced
+                else ""
+            )
+            + ". Review each and dismiss with a reason, or address it, "
+            "before issue."
+        )
     elif not qc_result.is_complete():
         failed_lenses = sum(
             1 for status in qc_result.lens_statuses if status.status != "completed"
@@ -1467,6 +1497,7 @@ def _readiness_payload(
             for finding in [
                 *qc_result.findings,
                 *qc_result.refuted,
+                *qc_result.disputed,
                 *qc_result.inconclusive,
             ]
             for verdict in finding.verdicts
@@ -1489,6 +1520,7 @@ def _readiness_payload(
             for finding in [
                 *qc_result.findings,
                 *qc_result.refuted,
+                *qc_result.disputed,
                 *qc_result.inconclusive,
             ]
         )

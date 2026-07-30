@@ -26,6 +26,7 @@ import {
   groupFindingsBySeverity,
   isFailedVerifierSeat,
   normalizeSeverity,
+  qcDisputedCandidates,
   qcInconclusiveCandidates,
   qcLensCoverage,
   qcOperationEvaluation,
@@ -467,7 +468,7 @@ function FindingRecord({
 }: {
   finding: QcReportFinding;
   index: number;
-  kind: "surviving" | "refuted" | "inconclusive";
+  kind: "surviving" | "refuted" | "disputed" | "inconclusive";
   schemaVersion: unknown;
 }) {
   const severity = normalizeSeverity(finding.severity);
@@ -485,7 +486,9 @@ function FindingRecord({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-[9px] font-semibold tracking-[0.14em] text-ink-faint uppercase">
-            {kind === "refuted"
+            {kind === "disputed"
+              ? "Disputed candidate — awaiting human review"
+              : kind === "refuted"
               ? "Substantively refuted candidate"
               : kind === "inconclusive"
                 ? "Infrastructure-inconclusive candidate"
@@ -831,6 +834,7 @@ export default function QCReportModal({
   const metrics = buildQcReportMetrics(report);
   const findings = qcSurvivingCandidates(report);
   const refuted = qcSubstantivelyRefutedCandidates(report);
+  const disputed = qcDisputedCandidates(report);
   const inconclusive = qcInconclusiveCandidates(report);
   const lensCoverage = qcLensCoverage(report);
   const traceRecords = collectQcTraceRecords(report);
@@ -957,7 +961,7 @@ export default function QCReportModal({
               </p>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-              <Stat label="Candidates reviewed" value={metrics.totalCandidates.toLocaleString("en-US")} detail={`${metrics.survivingFindings} survived · ${metrics.refutedFindings} substantively refuted · ${metrics.inconclusiveFindings} infrastructure-inconclusive`} />
+              <Stat label="Candidates reviewed" value={metrics.totalCandidates.toLocaleString("en-US")} detail={`${metrics.survivingFindings} survived · ${metrics.refutedFindings} substantively refuted · ${metrics.disputedFindings} disputed · ${metrics.inconclusiveFindings} infrastructure-inconclusive`} />
               <Stat label="Open findings" value={metrics.openFindings.toLocaleString("en-US")} detail={`${metrics.appliedFindings} applied · ${metrics.dismissedFindings} dismissed`} />
               <Stat label="Lens completion" value={`${metrics.completedLenses}/${metrics.expectedLenses || metrics.totalLenses || "?"}`} detail={`${metrics.totalLenses} records · ${metrics.missingLenses} missing · ${metrics.duplicateLensRecords} duplicate · ${metrics.unexpectedLenses} unexpected`} />
               <Stat label="Grounded survivors" value={`${metrics.groundedFindings}/${metrics.survivingFindings}`} detail={`${metrics.ungroundedFindings} survivor(s) not grounded`} />
@@ -1050,7 +1054,7 @@ export default function QCReportModal({
               <Stat label="Model responses" value={metrics.modelResponses.toLocaleString("en-US")} />
               <Stat label="Verifier errors" value={metrics.verdictErrors.toLocaleString("en-US")} />
               <Stat label="Verifier seat coverage" value={`${metrics.completedVerifierSeats}/${metrics.expectedVerifierSeats || "?"}`} detail={`${metrics.recordedVerifierSeats} preserved · ${metrics.failedVerifierSeats} failed · ${metrics.missingVerifierSeats} missing · ${metrics.invalidVerifierSeatRecords} invalid index`} />
-              <Stat label="Verification outcomes" value={`${metrics.candidatesWithVerificationOutcome}/${metrics.totalCandidates}`} detail={`${metrics.survivingFindings} upheld · ${metrics.refutedFindings} substantively refuted · ${metrics.inconclusiveFindings} infrastructure-inconclusive`} />
+              <Stat label="Verification outcomes" value={`${metrics.candidatesWithVerificationOutcome}/${metrics.totalCandidates}`} detail={`${metrics.survivingFindings} upheld · ${metrics.refutedFindings} substantively refuted · ${metrics.disputedFindings} disputed · ${metrics.inconclusiveFindings} infrastructure-inconclusive`} />
               <Stat label="Grounded candidates" value={`${metrics.groundedCandidates}/${metrics.totalCandidates}`} />
               <Stat label="Resolved element anchors" value={`${metrics.resolvedElementAnchors}/${metrics.totalCandidates}`} detail={`${metrics.unresolvedElementAnchors} unresolved · ${metrics.unrecordedElementResolution} legacy/unrecorded`} />
               <Stat label="Other dispositions" value={metrics.otherDispositionFindings.toLocaleString("en-US")} detail="Surviving findings outside open/applied/dismissed" />
@@ -1134,6 +1138,27 @@ export default function QCReportModal({
                 ))}
               </div>
             ) : <EmptyRecord>No candidates were infrastructure-inconclusive.</EmptyRecord>}
+          </Section>
+
+          <Section
+            number="07b"
+            title={`Disputed candidate appendix (${disputed.length})`}
+            description="Every required verifier seat completed for these candidates and the reviewers did not agree. Disagreement on a reviewed finding is itself decision-relevant, so the candidate is escalated rather than recorded as upheld or refuted. Each needs a human disposition before issue; none is auto-applicable."
+          >
+            {disputed.length > 0 ? (
+              <div className="space-y-3">
+                {disputed.map((finding, index) => (
+                  <div key={`${finding.finding_id}-${index}`}>
+                    <p className="mb-1 text-[11px] text-warn">
+                      {finding.dispute_reason === "insufficient_refutation_evidence"
+                        ? "Disputed: the panel majority refuted a critical/high finding, but no refuting reviewer cited evidence that validated against what it retrieved or against the reviewed document."
+                        : "Disputed: the panel completed but split — no unanimous uphold and no majority refutation."}
+                    </p>
+                    <FindingRecord finding={finding} index={index} kind="disputed" schemaVersion={report.schema_version} />
+                  </div>
+                ))}
+              </div>
+            ) : <EmptyRecord>No candidate was disputed by its panel.</EmptyRecord>}
           </Section>
 
           <Section

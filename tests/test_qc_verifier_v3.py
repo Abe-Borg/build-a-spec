@@ -137,6 +137,9 @@ def test_verdict_schema_avoids_nullable_enum_and_requires_fix_review() -> None:
         "note",
         "ops_adequate",
         "ops_note",
+        # v4: a refuting seat on a critical/high candidate has to say what
+        # backs the refutation, or the candidate escalates as disputed.
+        "refutation_evidence",
     }
     tool = submit_qc_verdict_tool(model=settings.QC_MODEL)
     assert tool["input_schema"]["properties"]["revised_severity"] == revised
@@ -220,13 +223,21 @@ def test_verifier_prompt_includes_complete_untrusted_operations() -> None:
     assert "create a contradiction" in system
 
 
-def test_semantic_fix_approval_is_unanimous_but_finding_vote_is_majority() -> None:
+def test_semantic_fix_approval_is_unanimous_and_so_is_the_finding_vote() -> None:
+    """Under v4 both bars are unanimity, and they are still SEPARATE bars.
+
+    A candidate every seat upheld can still have its proposed fix rejected
+    when a seat judged the operations inadequate — surviving the merits and
+    earning an auto-apply are different questions. (Renamed from
+    ``..._but_finding_vote_is_majority``: a majority-upheld candidate is now
+    disputed, not upheld — see ``test_qc.py``'s outcome-table matrix.)
+    """
     findings = [
         _finding("Unanimous fix", ops=_replace_op("Unanimous replacement.")),
         _finding(
-            "Majority finding",
+            "Split panel",
             severity="high",
-            ops=_replace_op("Majority replacement."),
+            ops=_replace_op("Split replacement."),
         ),
         _finding("Unsafe fix", ops=_replace_op("Unsafe replacement.")),
         _finding("Advisory only", ops=None),
@@ -237,7 +248,7 @@ def test_semantic_fix_approval_is_unanimous_but_finding_vote_is_majority() -> No
         qc_verdict_response(True, ops_adequate=True),
         qc_verdict_response(True, ops_adequate=True),
     ]
-    scripts["Majority finding"] = [
+    scripts["Split panel"] = [
         qc_verdict_response(True, ops_adequate=True),
         qc_verdict_response(True, ops_adequate=True),
         qc_verdict_response(False, note="The third reviewer refuted it."),
@@ -263,9 +274,14 @@ def test_semantic_fix_approval_is_unanimous_but_finding_vote_is_majority() -> No
     survivors = {finding.title: finding for finding in result.findings}
     assert survivors["Unanimous fix"].ops_semantic_status == "approved"
     assert survivors["Unanimous fix"].ops_valid is True
-    assert survivors["Majority finding"].verification_outcome == "upheld"
-    assert survivors["Majority finding"].ops_semantic_status == "rejected"
-    assert survivors["Majority finding"].ops_valid is False
+    # 2-1 on a high finding is a DISPUTE now, so it never reaches the
+    # survivor queue at all — and nothing about it is validated.
+    assert "Split panel" not in survivors
+    split = {finding.title: finding for finding in result.disputed}["Split panel"]
+    assert split.verification_outcome == "disputed"
+    assert split.dispute_reason == "split_panel"
+    assert split.ops_semantic_status == "not_evaluated"
+    assert split.ops_valid is False
     assert survivors["Unsafe fix"].ops_semantic_status == "rejected"
     assert "unresolved choice" in survivors["Unsafe fix"].ops_semantic_reason
     assert survivors["Advisory only"].ops_semantic_status == "not_proposed"
@@ -394,8 +410,8 @@ def test_v3_semantic_fields_round_trip_and_v2_remains_readable() -> None:
     result = _run(SequencedFakeClient(scripts))
     payload = result.to_dict()
 
-    assert payload["schema_version"] == 3 == QC_REPORT_SCHEMA_VERSION
-    assert payload["protocol_version"] == "final-qc/3" == QC_PROTOCOL_VERSION
+    assert payload["schema_version"] == 4 == QC_REPORT_SCHEMA_VERSION
+    assert payload["protocol_version"] == "final-qc/4" == QC_PROTOCOL_VERSION
     restored = QCResult.from_dict(copy.deepcopy(payload))
     assert restored is not None
     assert restored.findings[0].ops_semantic_status == "approved"

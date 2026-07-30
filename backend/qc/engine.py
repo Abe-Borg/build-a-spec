@@ -19,12 +19,17 @@ Three phases:
    as research — ungrounded citations are leads, not facts).
 2. **Verification** — every finding faces a panel of independent Opus 5
    refuters (``QC_VERIFIERS_STANDARD`` for medium/low,
-   ``QC_VERIFIERS_CRITICAL`` for critical/high) prompted to REFUTE it. A tie
-   goes to the refuters. Substantively refuted findings are retained under
-   ``refuted`` (transparency), while incomplete infrastructure panels are
-   retained separately under ``inconclusive`` and never misrepresented as a
-   merits decision. Survivors take the median of the original + upheld
-   revised severities.
+   ``QC_VERIFIERS_CRITICAL`` for critical/high) prompted to REFUTE it.
+   Adjudication is :data:`VERIFICATION_RULE_V4`: a unanimous panel upholds,
+   a majority refutation refutes, and anything in between is ``disputed``
+   and escalates to a human rather than being rounded to a binary. A
+   critical/high refutation additionally has to be EVIDENCED — at least one
+   refuting seat citing a source it actually retrieved, or a resolvable
+   document reference — or it is disputed too. Refuted findings are retained
+   under ``refuted`` (transparency), disputed ones under ``disputed``, and
+   incomplete infrastructure panels separately under ``inconclusive``, never
+   misrepresented as a merits decision. Survivors take the median of the
+   original + upheld revised severities.
 3. **Ops validation (deterministic, no model)** — each surviving finding's
    ``proposed_ops`` is dry-run against a fresh copy of the section snapshot;
    invalid ops are marked (kept advisory), never trusted raw. Findings are
@@ -157,14 +162,68 @@ QC_MAX_CONTINUATIONS = 16
 # Persisted report/protocol identifiers. Bump the schema when the serialized
 # audit record changes incompatibly; bump the protocol whenever the actual
 # review method or required reviewer output changes.
-QC_REPORT_SCHEMA_VERSION = 3
-QC_PROTOCOL_VERSION = "final-qc/3"
+QC_REPORT_SCHEMA_VERSION = 4
+QC_PROTOCOL_VERSION = "final-qc/4"
+
+# --- The v4 panel outcome scheme ---------------------------------------------
+#
+# v3 survived a candidate on ``upholds >= (size // 2) + 1``, which is
+# algebraically "majority, ties to the refuters". That inverts with panel
+# size: a medium finding needed 2 of 2 (unanimous) while a critical needed
+# only 2 of 3 — so the extra seat a critical gets bought LENIENCY, not
+# scrutiny. It also had no way to say "the panel disagreed", so a 2-of-3
+# upheld life-safety finding was silently killed.
+#
+# v4 keeps unanimity as the bar for a clean uphold, keeps a majority
+# refutation as a clean refutation, and makes everything in between a
+# first-class DISPUTED outcome that escalates to a human:
+#
+#     upholds == size            -> upheld
+#     refutes  >  upholds        -> refuted (subject to the evidence rule)
+#     otherwise                  -> disputed
+#
+# which yields exactly the adjudicated table: 2 seats 2-0/1-1/0-2 =
+# upheld/disputed/refuted; 3 seats 3-0/2-1/1-2/0-3 =
+# upheld/disputed/refuted/refuted.
+VERIFICATION_OUTCOME_UPHELD = "upheld"
+VERIFICATION_OUTCOME_DISPUTED = "disputed"
+VERIFICATION_OUTCOME_REFUTED = "refuted"
+VERIFICATION_OUTCOME_INCONCLUSIVE = "inconclusive"
+
+# Why a candidate landed on ``disputed`` rather than a clean outcome.
+DISPUTE_REASON_SPLIT_PANEL = "split_panel"
+DISPUTE_REASON_INSUFFICIENT_EVIDENCE = "insufficient_refutation_evidence"
+
+# The rule identity persisted on every v4 finding. An integer threshold
+# cannot describe this scheme (the same "2" means unanimous on a 2-seat
+# panel and a dispute on a 3-seat one), and a report has to be able to say
+# which rule adjudicated it years later.
+VERIFICATION_RULE_V4 = (
+    "final-qc/4: unanimous uphold; majority refutation refutes; any other "
+    "split is disputed and escalates to a human; a critical/high refutation "
+    "additionally requires at least one validated evidence citation from a "
+    "refuting seat, else disputed."
+)
+
+# Severities whose refutation must be evidenced (the RF-001 lesson: three
+# seats refuted a life-safety-adjacent finding having run zero searches).
+EVIDENCE_GATED_SEVERITIES = frozenset({"critical", "high"})
 
 _VERDICT_STATUSES = frozenset({"completed", "failed", "cancelled"})
 _LENS_STATUSES = frozenset({"completed", "failed", "cancelled"})
 _FINDING_STATUSES = frozenset({"open", "applied", "dismissed"})
 _VERIFICATION_OUTCOMES = frozenset(
-    {"", "upheld", "refuted", "default_refuted", "inconclusive"}
+    {
+        "",
+        VERIFICATION_OUTCOME_UPHELD,
+        VERIFICATION_OUTCOME_REFUTED,
+        VERIFICATION_OUTCOME_DISPUTED,
+        "default_refuted",
+        VERIFICATION_OUTCOME_INCONCLUSIVE,
+    }
+)
+_DISPUTE_REASONS = frozenset(
+    {"", DISPUTE_REASON_SPLIT_PANEL, DISPUTE_REASON_INSUFFICIENT_EVIDENCE}
 )
 _OPS_SEMANTIC_STATUSES = frozenset(
     {"not_proposed", "not_evaluated", "approved", "rejected"}
@@ -561,12 +620,54 @@ def _validated_remembered_dismissal(
 
 
 @dataclass
+class QCRefutationEvidence:
+    """One citation a refuting seat offered, plus whether it checked out.
+
+    The claim is retained verbatim whatever the verdict — an unvalidated
+    citation is part of the audit trail, and silently dropping it would hide
+    that a seat tried to justify itself and failed. Only ``validated``
+    entries can satisfy the severity-gated evidence rule.
+    """
+
+    kind: str  # "source" | "document_ref"
+    url: str = ""
+    reference: str = ""
+    validated: bool = False
+    reason: str = ""
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "QCRefutationEvidence | None":
+        if not isinstance(raw, dict):
+            return None
+        kind = str(raw.get("kind") or raw.get("type") or "").strip().lower()
+        if kind not in ("source", "document_ref"):
+            return None
+        url = str(raw.get("url") or "").strip()
+        reference = str(raw.get("reference") or "").strip()
+        if kind == "source" and not url:
+            return None
+        if kind == "document_ref" and not reference:
+            return None
+        validated = raw.get("validated", False)
+        return cls(
+            kind=kind,
+            url=url,
+            reference=reference,
+            validated=bool(validated) if isinstance(validated, bool) else False,
+            reason=str(raw.get("reason") or ""),
+        )
+
+
+@dataclass
 class QCVerdict:
     upholds: bool
     revised_severity: str = ""  # "" = keep original
     note: str = ""
     ops_adequate: bool = False
     ops_note: str = ""
+    # Citations backing a refutation, each carrying its validation result.
+    # Empty on an upholding seat — the gate exists for refutations.
+    refutation_evidence: list[QCRefutationEvidence] = field(default_factory=list)
     status: str = "completed"  # completed | failed | cancelled
     error: str = ""
     reviewer_index: int = 0
@@ -608,6 +709,11 @@ class QCVerdict:
             note=str(raw.get("note", "") or ""),
             ops_adequate=ops_adequate,
             ops_note=str(raw.get("ops_note", "") or ""),
+            refutation_evidence=[
+                entry
+                for value in (raw.get("refutation_evidence") or [])
+                if (entry := QCRefutationEvidence.from_dict(value)) is not None
+            ],
             status=status,
             error=str(raw.get("error", "") or ""),
             reviewer_index=reviewer_index,
@@ -647,6 +753,151 @@ class QCVerdict:
         )
 
 
+def reviewable_element_ids(section: SpecSection) -> frozenset[str]:
+    """Every element id a ``document_ref`` citation may resolve against.
+
+    Computed once per run from the reviewed SNAPSHOT and handed to the
+    verifier workers as an immutable set, so no worker thread touches the
+    tree (the same anti-mutation posture the whole pass is built on).
+    """
+    ids = {"sec"}
+    for part in section.parts:
+        ids.add(part.uid)
+        for article in part.articles:
+            ids.add(article.uid)
+    for _part, _article, paragraph, _depth, _ref in iter_paragraphs(section):
+        ids.add(paragraph.uid)
+    return frozenset(ids)
+
+
+def validate_refutation_evidence(
+    claims: list[dict[str, str]],
+    *,
+    retrieved_sources: list[QCSourceRecord],
+    element_ids: frozenset[str],
+) -> list[QCRefutationEvidence]:
+    """Decide which of a seat's citations actually check out.
+
+    Mirrors the grounding trust model: a ``source`` counts only when its
+    normalized URL matches something THIS seat actually retrieved — a URL
+    the model recalled but never fetched proves nothing, and citing a page
+    another seat read is not this seat's evidence. A ``document_ref``
+    counts only when it resolves against the reviewed snapshot.
+
+    Entries that fail are RETAINED and marked, never dropped: that a seat
+    tried to justify its refutation and cited something unverifiable is
+    part of the audit trail, and is exactly what a human reviewing a
+    disputed candidate needs to see.
+    """
+    retrieved = {
+        normalized
+        for source in retrieved_sources
+        if (normalized := (source.normalized or normalize_url(source.url)))
+    }
+    out: list[QCRefutationEvidence] = []
+    for claim in claims:
+        kind = claim.get("type", "")
+        if kind == "source":
+            url = claim.get("url", "")
+            normalized = normalize_url(url)
+            accepted = bool(normalized) and normalized in retrieved
+            out.append(
+                QCRefutationEvidence(
+                    kind="source",
+                    url=url,
+                    validated=accepted,
+                    reason=(
+                        ""
+                        if accepted
+                        else (
+                            "Cited URL does not match any source this "
+                            "reviewer retrieved."
+                        )
+                    ),
+                )
+            )
+        elif kind == "document_ref":
+            reference = claim.get("reference", "")
+            accepted = reference in element_ids
+            out.append(
+                QCRefutationEvidence(
+                    kind="document_ref",
+                    reference=reference,
+                    validated=accepted,
+                    reason=(
+                        ""
+                        if accepted
+                        else (
+                            "Reference does not resolve against the reviewed "
+                            "document."
+                        )
+                    ),
+                )
+            )
+    return out
+
+
+def has_validated_refutation_evidence(verdicts: list[QCVerdict]) -> bool:
+    """Whether any COMPLETED refuting seat offered a citation that checked out.
+
+    Deliberately reads persisted verdict records only. ``search_queries`` and
+    ``retrieved_sources`` are operational records of what a seat DID, and can
+    never satisfy this on their own — that is the whole point of the gate. A
+    seat that ran a search returning nothing useful, or fetched an unrelated
+    page, has activity but no evidence.
+    """
+    return any(
+        verdict.status == "completed"
+        and not verdict.upholds
+        and any(entry.validated for entry in verdict.refutation_evidence)
+        for verdict in verdicts
+    )
+
+
+def panel_outcome(
+    original_severity: str, verdicts: list[QCVerdict], *, expected_seats: int
+) -> tuple[str, str]:
+    """Adjudicate one candidate's panel. Returns ``(outcome, dispute_reason)``.
+
+    The single v4 decision point — the roster event, the live
+    ``candidate_complete`` event, the final resolution and the persisted
+    reload check all call this, so no two of them can disagree about what a
+    set of votes means.
+
+    Infrastructure failure is never evidence: a missing, duplicated, failed
+    or cancelled seat makes the candidate ``inconclusive`` regardless of how
+    the surviving seats voted. Everything below that is a substantive
+    judgement on a fully completed panel.
+    """
+    if len(verdicts) != expected_seats or any(
+        verdict.status != "completed" for verdict in verdicts
+    ):
+        return VERIFICATION_OUTCOME_INCONCLUSIVE, ""
+    indexes = {verdict.reviewer_index for verdict in verdicts}
+    if indexes != set(range(1, expected_seats + 1)):
+        return VERIFICATION_OUTCOME_INCONCLUSIVE, ""
+
+    upholds = sum(1 for verdict in verdicts if verdict.upholds)
+    refutes = expected_seats - upholds
+    if upholds == expected_seats:
+        return VERIFICATION_OUTCOME_UPHELD, ""
+    if refutes > upholds:
+        # A clean refutation — unless the severity makes it one a human
+        # should have seen. An under-evidenced critical refutation escalates
+        # instead of quietly deleting the finding, and one token search
+        # cannot launder it: only a VALIDATED citation opens this gate.
+        if (
+            original_severity in EVIDENCE_GATED_SEVERITIES
+            and not has_validated_refutation_evidence(verdicts)
+        ):
+            return (
+                VERIFICATION_OUTCOME_DISPUTED,
+                DISPUTE_REASON_INSUFFICIENT_EVIDENCE,
+            )
+        return VERIFICATION_OUTCOME_REFUTED, ""
+    return VERIFICATION_OUTCOME_DISPUTED, DISPUTE_REASON_SPLIT_PANEL
+
+
 @dataclass
 class QCFinding:
     finding_id: str
@@ -670,9 +921,16 @@ class QCFinding:
     ops_valid: bool = False
     ops_invalid_reason: str = ""
     verdicts: list[QCVerdict] = field(default_factory=list)
-    verification_outcome: str = ""  # upheld | refuted | inconclusive
+    # upheld | disputed | refuted | inconclusive (v4); v3 records carry the
+    # outcome their own rule produced and are never re-adjudicated.
+    verification_outcome: str = ""
     verification_panel_size: int = 0
+    # v3's integer bar. Retained so historical reports stay self-describing
+    # and reload-checkable; v4 records the rule itself (see below) because an
+    # integer cannot express "unanimous, else split-dependent".
     verification_threshold: int = 0
+    verification_rule: str = ""
+    dispute_reason: str = ""
     status: str = "open"  # open | applied | dismissed
     dismiss_reason: str = ""
     disposition_events: list[QCDispositionEvent] = field(default_factory=list)
@@ -719,6 +977,11 @@ class QCFinding:
             raw.get("verification_threshold", 0),
             field_name="verification_threshold",
         )
+        dispute_reason = str(raw.get("dispute_reason", "") or "").strip().lower()
+        if dispute_reason not in _DISPUTE_REASONS:
+            raise ValueError(
+                "Persisted QC finding has an unsupported dispute reason."
+            )
         return cls(
             finding_id=str(raw.get("finding_id", "") or ""),
             lens_id=str(raw.get("lens_id", "") or ""),
@@ -762,6 +1025,8 @@ class QCFinding:
             verification_outcome=verification_outcome,
             verification_panel_size=panel_size,
             verification_threshold=threshold,
+            verification_rule=str(raw.get("verification_rule", "") or ""),
+            dispute_reason=dispute_reason,
             status=status,
             dismiss_reason=str(raw.get("dismiss_reason", "") or ""),
             disposition_events=[
@@ -881,6 +1146,12 @@ class QCResult:
     summary: str = ""
     findings: list[QCFinding] = field(default_factory=list)
     refuted: list[QCFinding] = field(default_factory=list)
+    # Substantive panel disagreement on a COMPLETE panel (v4). Distinct from
+    # `inconclusive`, which is infrastructure failure: a disputed candidate
+    # was fully reviewed and the reviewers did not agree, which is itself
+    # decision-relevant. Blocks audit completeness until a human dispositions
+    # it, and is never auto-applicable.
+    disputed: list[QCFinding] = field(default_factory=list)
     inconclusive: list[QCFinding] = field(default_factory=list)
     lens_statuses: list[QCLensStatus] = field(default_factory=list)
     started_at: str = ""
@@ -913,7 +1184,18 @@ class QCResult:
     dismissed_ids: list[str] = field(default_factory=list)
 
     def finding(self, finding_id: str) -> QCFinding | None:
-        for f in self.findings:
+        """Look up a candidate a disposition may target.
+
+        Survivors and DISPUTED candidates only. A dispute is resolved by a
+        human dismissing it with a reason, so it has to be reachable — but
+        it is never applicable, and both apply paths re-check
+        ``ops_semantic_status``/``ops_valid`` immediately after this lookup,
+        which a disputed candidate fails by construction (its operations are
+        never validated). Refuted and infrastructure-inconclusive candidates
+        stay unreachable: they are audit records, not an action queue, and
+        have no disposition workflow.
+        """
+        for f in [*self.findings, *self.disputed]:
             if f.finding_id == finding_id:
                 return f
         return None
@@ -924,6 +1206,16 @@ class QCResult:
             for f in self.findings
             if f.severity == "critical" and f.status == "open"
         )
+
+    def open_disputed_count(self) -> int:
+        """Disputed candidates still awaiting a human disposition.
+
+        The readiness term that makes a dispute block issue-readiness, in
+        exact parallel with :meth:`open_critical_count`. Dismissing one with
+        a reason resolves it; that is what the drawer and the readiness copy
+        tell the user to do, and it has to actually work.
+        """
+        return sum(1 for f in self.disputed if f.status == "open")
 
     def coverage_complete(self) -> bool:
         if not self.lens_statuses:
@@ -986,11 +1278,40 @@ class QCResult:
         ``None`` denotes a malformed current-schema panel contract. Missing,
         duplicate, failed, or cancelled seats are structurally inconclusive;
         they are never votes against a candidate and never authorize edits.
+
+        Schema v4 re-adjudicates through :func:`panel_outcome` — the same
+        helper the live run used, so a reloaded report either agrees with
+        itself or fails the check. Schema v3 is checked against the rule it
+        was actually decided under (strict majority, ties to the refuters);
+        a v3 report is historical evidence and is never reinterpreted with
+        v4 semantics, which would rewrite decisions nobody re-made.
         """
         expected = self._expected_verifier_panel_size(finding)
-        if self.schema_version >= QC_REPORT_SCHEMA_VERSION and (
-            finding.verification_panel_size != expected
-            or finding.verification_threshold != (expected // 2) + 1
+        if self.schema_version >= QC_REPORT_SCHEMA_VERSION:
+            if (
+                finding.verification_panel_size != expected
+                or finding.verification_rule != VERIFICATION_RULE_V4
+            ):
+                return None
+            outcome, dispute_reason = panel_outcome(
+                finding.original_severity or finding.severity,
+                sorted(finding.verdicts, key=lambda v: v.reviewer_index),
+                expected_seats=expected,
+            )
+            if (
+                outcome == VERIFICATION_OUTCOME_DISPUTED
+                and finding.dispute_reason != dispute_reason
+            ):
+                return None
+            return outcome
+        # --- Compatibility paths (historical records only) -----------------
+        # v3 was validated against its own strict-majority threshold while it
+        # was current, so that check stays part of what a v3 record must
+        # satisfy. Pre-v3 legacy never recorded one, and never recorded
+        # reviewer indexes either.
+        legacy_schema = self.schema_version < 3
+        if not legacy_schema and finding.verification_threshold != (
+            (expected // 2) + 1
         ):
             return None
         if len(finding.verdicts) != expected:
@@ -998,7 +1319,7 @@ class QCResult:
         indexes = {verdict.reviewer_index for verdict in finding.verdicts}
         if indexes != set(range(1, expected + 1)):
             if not (
-                self.schema_version < QC_REPORT_SCHEMA_VERSION
+                legacy_schema
                 and all(verdict.reviewer_index == 0 for verdict in finding.verdicts)
             ):
                 return "inconclusive"
@@ -1038,7 +1359,12 @@ class QCResult:
 
         verdicts = [
             verdict
-            for finding in [*self.findings, *self.refuted, *self.inconclusive]
+            for finding in [
+                *self.findings,
+                *self.refuted,
+                *self.disputed,
+                *self.inconclusive,
+            ]
             for verdict in finding.verdicts
         ]
         records: list[QCLensStatus | QCVerdict] = [
@@ -1142,9 +1468,33 @@ class QCResult:
         )
 
     def verification_complete(self) -> bool:
-        for finding in [*self.findings, *self.refuted, *self.inconclusive]:
+        """Every candidate reached a clean, self-consistent adjudication.
+
+        This is a STRUCTURAL question — did every panel complete, and does
+        every recorded outcome match what its seats imply — not a question
+        about dispositions. ``disputed`` is a legitimate v4 outcome and
+        passes here.
+
+        Whether an OPEN dispute blocks issue readiness is a separate term,
+        :meth:`open_disputed_count`, exactly parallel to
+        :meth:`open_critical_count`. Folding it in here instead was a real
+        deadlock (caught in review on PR #103): ``is_complete()`` gates the
+        dismiss endpoint, so a dispute that made this False could never be
+        dismissed, and the readiness copy telling users to dismiss it
+        described a workflow that could not be performed.
+        """
+        for finding in [
+            *self.findings,
+            *self.refuted,
+            *self.disputed,
+            *self.inconclusive,
+        ]:
             expected_outcome = self._structural_verification_outcome(finding)
-            if expected_outcome not in {"upheld", "refuted"}:
+            if expected_outcome not in {
+                "upheld",
+                "refuted",
+                VERIFICATION_OUTCOME_DISPUTED,
+            }:
                 return False
             if (
                 self.schema_version >= QC_REPORT_SCHEMA_VERSION
@@ -1155,6 +1505,11 @@ class QCResult:
             if any(f.verification_outcome != "upheld" for f in self.findings):
                 return False
             if any(f.verification_outcome != "refuted" for f in self.refuted):
+                return False
+            if any(
+                f.verification_outcome != VERIFICATION_OUTCOME_DISPUTED
+                for f in self.disputed
+            ):
                 return False
             if any(
                 f.verification_outcome != "inconclusive"
@@ -1252,6 +1607,7 @@ class QCResult:
             "summary": self.summary,
             "findings": [f.to_dict() for f in self.findings],
             "refuted": [f.to_dict() for f in self.refuted],
+            "disputed": [f.to_dict() for f in self.disputed],
             "inconclusive": [f.to_dict() for f in self.inconclusive],
             "lens_statuses": [s.to_dict() for s in self.lens_statuses],
             "started_at": self.started_at,
@@ -1290,6 +1646,9 @@ class QCResult:
             )
             raw_findings = data.get("findings") or []
             raw_refuted = data.get("refuted") or []
+            # Absent on every pre-v4 record, which is correct: v3 had no
+            # disputed outcome, so an empty collection is the honest reading.
+            raw_disputed = data.get("disputed") or []
             raw_inconclusive = data.get("inconclusive") or []
             raw_statuses = data.get("lens_statuses") or []
             if any(
@@ -1298,6 +1657,7 @@ class QCResult:
                 for collection in (
                     raw_findings,
                     raw_refuted,
+                    raw_disputed,
                     raw_inconclusive,
                     raw_statuses,
                 )
@@ -1307,6 +1667,7 @@ class QCResult:
                 for raw_finding in [
                     *raw_findings,
                     *raw_refuted,
+                    *raw_disputed,
                     *raw_inconclusive,
                 ]:
                     if (
@@ -1329,6 +1690,10 @@ class QCResult:
             refuted = [
                 QCFinding.from_dict(f)
                 for f in raw_refuted
+            ]
+            disputed = [
+                QCFinding.from_dict(f)
+                for f in raw_disputed
             ]
             inconclusive = [
                 QCFinding.from_dict(f)
@@ -1356,7 +1721,13 @@ class QCResult:
                 QCLensStatus.from_dict(s)
                 for s in raw_statuses
             ]
-            if not findings and not refuted and not inconclusive and not statuses:
+            if (
+                not findings
+                and not refuted
+                and not disputed
+                and not inconclusive
+                and not statuses
+            ):
                 return None
             dismissed_raw = data.get("dismissed_ids") or []
             if not isinstance(dismissed_raw, list) or any(
@@ -1383,6 +1754,7 @@ class QCResult:
                 summary=str(data.get("summary", "") or ""),
                 findings=findings,
                 refuted=refuted,
+                disputed=disputed,
                 inconclusive=inconclusive,
                 lens_statuses=statuses,
                 started_at=str(data.get("started_at", "") or ""),
@@ -1467,6 +1839,7 @@ class QCResult:
                 all_findings = [
                     *result.findings,
                     *result.refuted,
+                    *result.disputed,
                     *result.inconclusive,
                 ]
                 if any(
@@ -1487,6 +1860,9 @@ class QCResult:
                     finding.verification_outcome != "refuted"
                     for finding in result.refuted
                 ) or any(
+                    finding.verification_outcome != VERIFICATION_OUTCOME_DISPUTED
+                    for finding in result.disputed
+                ) or any(
                     finding.verification_outcome != "inconclusive"
                     for finding in result.inconclusive
                 ):
@@ -1497,6 +1873,10 @@ class QCResult:
                 ) or any(
                     result._structural_verification_outcome(finding) != "refuted"
                     for finding in result.refuted
+                ) or any(
+                    result._structural_verification_outcome(finding)
+                    != VERIFICATION_OUTCOME_DISPUTED
+                    for finding in result.disputed
                 ) or any(
                     result._structural_verification_outcome(finding)
                     != "inconclusive"
@@ -1520,9 +1900,15 @@ class QCResult:
                     for finding in all_findings
                 ):
                     return None
+                # Survivors AND disputed candidates, because both are
+                # dismissable and `QCRunner.dismiss` records either into
+                # `dismissed_ids`. Reconciling against survivors alone made a
+                # dismissed dispute fail this check on the next project load,
+                # which discards the whole retained result — silent loss of a
+                # paid report (caught in review on PR #103).
                 dismissed = {
                     finding.finding_id
-                    for finding in result.findings
+                    for finding in [*result.findings, *result.disputed]
                     if finding.status == "dismissed"
                 }
                 if (
@@ -2717,6 +3103,7 @@ def _verify_one(
     effort: str,
     candidate_id: str,
     reviewer_index: int,
+    element_ids: frozenset[str] = frozenset(),
     today: str = "",
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
@@ -2843,6 +3230,14 @@ def _verify_one(
             note=v["note"],
             ops_adequate=v["ops_adequate"],
             ops_note=v["ops_note"],
+            # Adjudicated against what THIS seat retrieved, at the moment it
+            # retrieved it — the panel outcome is decided from these records
+            # later, never from un-persisted stream content.
+            refutation_evidence=validate_refutation_evidence(
+                v["refutation_evidence"],
+                retrieved_sources=retrieved_sources,
+                element_ids=element_ids,
+            ),
             status="completed",
             reviewer_index=reviewer_index,
             search_queries=queries,
@@ -3011,9 +3406,23 @@ def build_qc_input_manifest(
             "max_tokens": int(max_tokens),
             "verifiers_standard": max(1, settings.QC_VERIFIERS_STANDARD),
             "verifiers_critical": max(1, settings.QC_VERIFIERS_CRITICAL),
+            # Kept under its historical key so an old report's manifest and a
+            # new one remain field-comparable; the VALUE now states the v4
+            # scheme, with panel sizes explicit.
             "majority_rule": (
-                "strict majority of a fully completed panel; ties refute; "
-                "failed/cancelled/missing seats make the candidate inconclusive"
+                "final-qc/4 adjudication of a fully completed panel. "
+                f"{max(1, settings.QC_VERIFIERS_STANDARD)}-seat panels "
+                "(medium/low): all uphold = upheld, split = disputed, all "
+                f"refute = refuted. {max(1, settings.QC_VERIFIERS_CRITICAL)}"
+                "-seat panels (critical/high): all uphold = upheld, majority "
+                "uphold = disputed, majority refute = refuted. A "
+                "critical/high refutation additionally requires at least one "
+                "validated evidence citation from a refuting seat (a "
+                "retrieved source or a resolvable document reference; tool "
+                "activity alone does not count), else disputed with reason "
+                "insufficient_refutation_evidence. Disputed blocks audit "
+                "completeness and is never auto-applied. Failed, cancelled "
+                "or missing seats make the candidate inconclusive."
             ),
             "severity_rule": "median of original and upheld revised severities",
             "lenses": [
@@ -3397,6 +3806,9 @@ def run_final_qc(
     section_render = _render_section(section)
 
     # -- Phase 2: verification (parallel across all findings' verifiers) ----
+    # Resolved once from the reviewed snapshot; a `document_ref` citation is
+    # validated against this rather than against the live tree.
+    element_ids = reviewable_element_ids(section)
     candidate_ids = {
         index: f"candidate-{index + 1}"
         for index in range(len(raw_findings))
@@ -3408,7 +3820,20 @@ def run_final_qc(
             "original_severity": finding["severity"],
             "lens_id": lens.lens_id,
             "panel_size": _panel_size(finding["severity"]),
-            "threshold": (_panel_size(finding["severity"]) // 2) + 1,
+            # v4 upholds only on a unanimous panel; an integer "threshold"
+            # cannot express the rest of the table, so the rule travels with
+            # the roster instead of a number the UI would have to decode.
+            "uphold_requires": _panel_size(finding["severity"]),
+            "rule": VERIFICATION_RULE_V4,
+            "evidence_gated": (
+                finding["severity"] in EVIDENCE_GATED_SEVERITIES
+            ),
+            "outcomes": [
+                VERIFICATION_OUTCOME_UPHELD,
+                VERIFICATION_OUTCOME_DISPUTED,
+                VERIFICATION_OUTCOME_REFUTED,
+                VERIFICATION_OUTCOME_INCONCLUSIVE,
+            ],
         }
         for index, (lens, finding) in enumerate(raw_findings)
     ]
@@ -3426,7 +3851,7 @@ def run_final_qc(
     verdicts: dict[int, list[QCVerdict]] = {
         i: [] for i in range(len(raw_findings))
     }
-    candidate_outcomes: dict[int, str] = {}
+    candidate_outcomes: dict[int, tuple[str, str]] = {}
     done = 0
     total = len(raw_findings)
     event_sink({"type": "verify_progress", "done": 0, "total": total})
@@ -3477,23 +3902,24 @@ def run_final_qc(
                     item for item in panel if item.status == "completed"
                 ]
                 upholds = sum(1 for item in completed_verdicts if item.upholds)
-                threshold = (panel_size // 2) + 1
-                panel_complete = len(panel) == panel_size and all(
-                    item.status == "completed" for item in panel
+                original_severity = raw_findings[finding_index][1]["severity"]
+                candidate_outcome, dispute_reason = panel_outcome(
+                    original_severity,
+                    sorted(panel, key=lambda item: item.reviewer_index),
+                    expected_seats=panel_size,
                 )
-                candidate_outcome = (
-                    "inconclusive"
-                    if not panel_complete
-                    else ("upheld" if upholds >= threshold else "refuted")
+                candidate_outcomes[finding_index] = (
+                    candidate_outcome,
+                    dispute_reason,
                 )
-                candidate_outcomes[finding_index] = candidate_outcome
                 event_sink(
                     {
                         "type": "candidate_complete",
                         "candidate_id": candidate_ids[finding_index],
                         "outcome": candidate_outcome,
+                        "dispute_reason": dispute_reason,
                         "panel_size": panel_size,
-                        "threshold": threshold,
+                        "uphold_requires": panel_size,
                         "completed_seats": len(completed_verdicts),
                         "upholds": upholds,
                     }
@@ -3525,6 +3951,7 @@ def run_final_qc(
                         effort=effort,
                         candidate_id=candidate_ids[i],
                         reviewer_index=j + 1,
+                        element_ids=element_ids,
                         today=today,
                         event_sink=event_sink,
                         should_stop=should_stop,
@@ -3579,8 +4006,15 @@ def run_final_qc(
                 )
 
     verification_counts = {
-        outcome: sum(1 for value in candidate_outcomes.values() if value == outcome)
-        for outcome in ("upheld", "refuted", "inconclusive")
+        outcome: sum(
+            1 for value, _reason in candidate_outcomes.values() if value == outcome
+        )
+        for outcome in (
+            VERIFICATION_OUTCOME_UPHELD,
+            VERIFICATION_OUTCOME_REFUTED,
+            VERIFICATION_OUTCOME_DISPUTED,
+            VERIFICATION_OUTCOME_INCONCLUSIVE,
+        )
     }
     completed_seats = sum(
         1
@@ -3600,9 +4034,10 @@ def run_final_qc(
     validation_total = verification_counts["upheld"]
     event_sink({"type": "validation_started", "total": validation_total})
 
-    # -- Resolve survivors + refuted + infrastructure-inconclusive ---------
+    # -- Resolve survivors + refuted + disputed + inconclusive -------------
     survivors: list[QCFinding] = []
     refuted: list[QCFinding] = []
+    disputed: list[QCFinding] = []
     inconclusive: list[QCFinding] = []
     validation_done = 0
     validation_counts = {"safe_fix": 0, "advisory": 0, "manual": 0}
@@ -3610,19 +4045,12 @@ def run_final_qc(
         panel = sorted(verdicts[i], key=lambda verdict: verdict.reviewer_index)
         size = _panel_size(finding["severity"])
         completed_verdicts = [v for v in panel if v.status == "completed"]
-        upholds = sum(1 for v in completed_verdicts if v.upholds)
-        panel_complete = len(panel) == size and all(
-            verdict.status == "completed" for verdict in panel
+        # The one adjudication point — the same helper the roster event, the
+        # live candidate_complete event and the reload check all use.
+        verification_outcome, dispute_reason = panel_outcome(
+            finding["severity"], panel, expected_seats=size
         )
-        # A substantive uphold/refutation exists only when every expected seat
-        # completed. Infrastructure failure is not evidence against the
-        # finding, even when the remaining seats happen to reach a majority.
-        survives = panel_complete and upholds >= (size // 2) + 1
-        verification_outcome = (
-            "inconclusive"
-            if not panel_complete
-            else ("upheld" if survives else "refuted")
-        )
+        survives = verification_outcome == VERIFICATION_OUTCOME_UPHELD
         revised = [
             v.revised_severity
             for v in completed_verdicts
@@ -3661,7 +4089,12 @@ def run_final_qc(
             verdicts=panel,
             verification_outcome=verification_outcome,
             verification_panel_size=size,
-            verification_threshold=(size // 2) + 1,
+            # v4 upholds only on a unanimous panel. The integer is retained
+            # so a record stays self-describing next to v3 ones; the RULE is
+            # what actually adjudicated it.
+            verification_threshold=size,
+            verification_rule=VERIFICATION_RULE_V4,
+            dispute_reason=dispute_reason,
         )
         _set_ops_semantic_decision(obj)
         if survives:
@@ -3704,8 +4137,24 @@ def run_final_qc(
                 obj.status = "dismissed"
                 obj.dismiss_reason, obj.disposition_events = carried_dismissal
             survivors.append(obj)
-        elif panel_complete:
+        elif verification_outcome == VERIFICATION_OUTCOME_REFUTED:
             refuted.append(obj)
+        elif verification_outcome == VERIFICATION_OUTCOME_DISPUTED:
+            # Reviewed in full, and the reviewers disagreed. Never validated
+            # and never auto-applicable (same posture as inconclusive) — the
+            # disposition is a human's to make.
+            #
+            # Dismiss memory applies here for the same reason it applies to
+            # survivors: a content-addressed id means this is the SAME
+            # disagreement the user already considered and set aside, and a
+            # re-run should not resurrect it as a fresh blocker.
+            carried_dismissal = _validated_remembered_dismissal(
+                remembered_records.get(obj.finding_id)
+            )
+            if carried_dismissal is not None:
+                obj.status = "dismissed"
+                obj.dismiss_reason, obj.disposition_events = carried_dismissal
+            disputed.append(obj)
         else:
             inconclusive.append(obj)
 
@@ -3726,13 +4175,19 @@ def run_final_qc(
 
     survivors.sort(key=lambda f: -SEVERITY_RANK.get(f.severity, 0))
 
+    # Both dismissable collections, matching what `QCRunner.dismiss` writes
+    # and what the reload reconciliation expects.
     dismissed_ids = sorted(
-        {f.finding_id for f in survivors if f.status == "dismissed"}
+        {
+            f.finding_id
+            for f in [*survivors, *disputed]
+            if f.status == "dismissed"
+        }
     )
 
     all_verdicts = [
         verdict
-        for finding in [*survivors, *refuted, *inconclusive]
+        for finding in [*survivors, *refuted, *disputed, *inconclusive]
         for verdict in finding.verdicts
     ]
     coverage_complete = all(
@@ -3761,6 +4216,7 @@ def run_final_qc(
         summary=" ".join(summaries).strip(),
         findings=survivors,
         refuted=refuted,
+        disputed=disputed,
         inconclusive=inconclusive,
         lens_statuses=lens_statuses,
         started_at=started_at,

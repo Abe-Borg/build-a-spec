@@ -139,8 +139,12 @@ QC_MAX_WORKERS = max(1, _int_env("BUILD_A_SPEC_QC_MAX_WORKERS", 8))
 
 # Adversarial verification panel sizes. Medium/low findings face
 # QC_VERIFIERS_STANDARD refuters; critical/high face QC_VERIFIERS_CRITICAL.
-# Majority upholds → the finding survives (a tie goes to the refuters —
-# that is the point of the pass).
+# Adjudication is final-qc/4 (see backend/qc/engine.VERIFICATION_RULE_V4):
+# a UNANIMOUS panel upholds, a majority refutation refutes, and any other
+# split is `disputed` and escalates to a human. Raising a panel size
+# therefore increases scrutiny — under the old strict-majority rule the
+# extra critical seat bought leniency instead (2-of-3 passed where a
+# 2-seat panel needed 2-of-2).
 QC_VERIFIERS_STANDARD = _int_env("BUILD_A_SPEC_QC_VERIFIERS_STANDARD", 2)
 QC_VERIFIERS_CRITICAL = _int_env("BUILD_A_SPEC_QC_VERIFIERS_CRITICAL", 3)
 

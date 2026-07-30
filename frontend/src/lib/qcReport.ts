@@ -163,6 +163,8 @@ export interface QcReportMetrics {
   totalCandidates: number;
   survivingFindings: number;
   refutedFindings: number;
+  /** v4 only; 0 for every older record. */
+  disputedFindings: number;
   inconclusiveFindings: number;
   openFindings: number;
   appliedFindings: number;
@@ -217,6 +219,7 @@ export interface QcReportMetrics {
   severity: SeverityCounts;
   survivingSeverity: SeverityCounts;
   refutedSeverity: SeverityCounts;
+  disputedSeverity: SeverityCounts;
   inconclusiveSeverity: SeverityCounts;
 }
 
@@ -240,7 +243,7 @@ export interface QcTraceRecord {
 export interface QcOperationRecord {
   findingId: string;
   findingTitle: string;
-  findingKind: "surviving" | "refuted" | "inconclusive";
+  findingKind: "surviving" | "refuted" | "disputed" | "inconclusive";
   operationIndex: number;
   opsValid: boolean;
   invalidReason: string;
@@ -324,7 +327,7 @@ export function qcOperationEvaluation(
     | "proposed_ops"
   >,
   schemaVersion?: unknown,
-  findingKind: "surviving" | "refuted" | "inconclusive" = "surviving",
+  findingKind: "surviving" | "refuted" | "disputed" | "inconclusive" = "surviving",
 ): QcOperationEvaluation {
   const rawSemanticStatus = String(finding.ops_semantic_status ?? "")
     .trim()
@@ -764,6 +767,22 @@ export function qcSubstantivelyRefutedCandidates(
  * records take precedence; legacy/misbucketed records are appended and the
  * same candidate ID is counted only once.
  */
+/**
+ * Candidates whose complete panel disagreed (final-qc/4). Distinct from the
+ * infrastructure-inconclusive collection: these were fully reviewed and the
+ * reviewers did not agree, which is itself decision-relevant. Empty for
+ * every v3 and older record — those had no disputed outcome, so an empty
+ * list is the honest reading rather than a gap.
+ */
+export function qcDisputedCandidates(
+  rawResult: QcResultView | QcReportResult,
+): QcReportFinding[] {
+  const result = resultFields(rawResult);
+  return arrayOrEmpty(
+    (result as { disputed?: QcReportFinding[] }).disputed,
+  ).filter((finding) => verificationOutcome(finding) === "disputed");
+}
+
 export function qcInconclusiveCandidates(
   rawResult: QcResultView | QcReportResult,
 ): QcReportFinding[] {
@@ -779,9 +798,17 @@ export function qcInconclusiveCandidates(
   ]);
 }
 
+/**
+ * Every candidate the run produced, across all four outcomes. Report-wide
+ * aggregations (metrics, verifier-seat and evidence totals, the operation
+ * register) go through this, so a bucket missing from it silently
+ * undercounts the whole report while the same records still show up in
+ * their own appendix.
+ */
 function allQcCandidates(result: QcReportResult): QcReportFinding[] {
   return qcSurvivingCandidates(result).concat(
     qcSubstantivelyRefutedCandidates(result),
+    qcDisputedCandidates(result),
     qcInconclusiveCandidates(result),
   );
 }
@@ -1086,7 +1113,7 @@ export function collectQcOperationRecords(
   const records: QcOperationRecord[] = [];
   const append = (
     findings: QcReportFinding[],
-    findingKind: "surviving" | "refuted" | "inconclusive",
+    findingKind: "surviving" | "refuted" | "disputed" | "inconclusive",
   ) => {
     for (const finding of findings) {
       const evaluation = qcOperationEvaluation(
@@ -1112,6 +1139,7 @@ export function collectQcOperationRecords(
   };
   append(qcSurvivingCandidates(result), "surviving");
   append(qcSubstantivelyRefutedCandidates(result), "refuted");
+  append(qcDisputedCandidates(result), "disputed");
   append(qcInconclusiveCandidates(result), "inconclusive");
   return records;
 }
@@ -1122,8 +1150,9 @@ export function buildQcReportMetrics(
   const result = resultFields(rawResult);
   const findings = qcSurvivingCandidates(result);
   const refuted = qcSubstantivelyRefutedCandidates(result);
+  const disputed = qcDisputedCandidates(result);
   const inconclusive = qcInconclusiveCandidates(result);
-  const candidates = findings.concat(refuted, inconclusive);
+  const candidates = findings.concat(refuted, disputed, inconclusive);
   const dispositions = findings.map((finding) =>
     String(finding.status ?? "").trim().toLowerCase(),
   );
@@ -1171,6 +1200,7 @@ export function buildQcReportMetrics(
     totalCandidates: candidates.length,
     survivingFindings: findings.length,
     refutedFindings: refuted.length,
+    disputedFindings: disputed.length,
     inconclusiveFindings: inconclusive.length,
     openFindings: dispositions.filter((status) => status === "open").length,
     appliedFindings: dispositions.filter((status) => status === "applied").length,
@@ -1289,6 +1319,7 @@ export function buildQcReportMetrics(
     severity: countSeverities(candidates),
     survivingSeverity: countSeverities(findings),
     refutedSeverity: countSeverities(refuted),
+    disputedSeverity: countSeverities(disputed),
     inconclusiveSeverity: countSeverities(inconclusive),
   };
 }

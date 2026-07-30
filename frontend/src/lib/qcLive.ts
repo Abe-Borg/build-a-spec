@@ -99,9 +99,12 @@ export interface QcCandidateLiveState {
   originalSeverity: string;
   lensId: string;
   panelSize: number;
+  /** Seats that must uphold for a clean uphold. v4: every one of them. */
   threshold: number;
   seats: QcVerifierSeatLiveState[];
-  outcome: "upheld" | "refuted" | "inconclusive" | null;
+  outcome: "upheld" | "refuted" | "disputed" | "inconclusive" | null;
+  /** Set only when `outcome` is "disputed". */
+  disputeReason: string;
   upholds: number;
 }
 
@@ -153,6 +156,7 @@ export interface QcLiveState {
     completedSeats: number;
     upheld: number;
     refuted: number;
+    disputed: number;
     inconclusive: number;
     validations: number;
     validationsDone: number;
@@ -568,11 +572,14 @@ function blankCandidate(entry: QcCandidateRosterEntry): QcCandidateLiveState & {
     originalSeverity: entry.original_severity,
     lensId: entry.lens_id,
     panelSize: entry.panel_size,
-    threshold: entry.threshold,
+    // v4 sends `uphold_requires` (always the panel size); `threshold` is
+    // the v3 field, kept as a fallback so a replayed older log still folds.
+    threshold: entry.uphold_requires ?? entry.threshold ?? entry.panel_size,
     seats: Array.from({ length: entry.panel_size }, (_, index) =>
       blankSeat(index + 1),
     ),
     outcome: null,
+    disputeReason: "",
     reportedOutcome: null,
     upholds: 0,
   };
@@ -622,6 +629,7 @@ export function foldQcLiveState(
     completedSeats: 0,
     upheld: 0,
     refuted: 0,
+    disputed: 0,
     inconclusive: 0,
   };
   let validationTotals = {
@@ -837,8 +845,10 @@ export function foldQcLiveState(
       case "candidate_complete": {
         const candidate = ensureCandidate(event.candidate_id);
         candidate.panelSize = event.panel_size ?? candidate.panelSize;
-        candidate.threshold = event.threshold ?? candidate.threshold;
+        candidate.threshold =
+          event.uphold_requires ?? event.threshold ?? candidate.threshold;
         candidate.reportedOutcome = event.outcome;
+        candidate.disputeReason = event.dispute_reason ?? "";
         candidate.upholds = event.upholds ?? candidate.upholds;
         break;
       }
@@ -849,6 +859,7 @@ export function foldQcLiveState(
           completedSeats: event.completed_seats ?? 0,
           upheld: event.upheld ?? 0,
           refuted: event.refuted ?? 0,
+          disputed: event.disputed ?? 0,
           inconclusive: event.inconclusive ?? 0,
         };
         break;
@@ -901,11 +912,14 @@ export function foldQcLiveState(
           verificationTotals.candidates ||
           (event.finding_count ?? 0) +
             (event.refuted_count ?? 0) +
+            (event.disputed_count ?? 0) +
             (event.inconclusive_count ?? 0);
         verificationTotals.upheld =
           verificationTotals.upheld || event.finding_count || 0;
         verificationTotals.refuted =
           verificationTotals.refuted || event.refuted_count || 0;
+        verificationTotals.disputed =
+          verificationTotals.disputed || event.disputed_count || 0;
         verificationTotals.inconclusive =
           verificationTotals.inconclusive || event.inconclusive_count || 0;
         break;
@@ -969,6 +983,7 @@ export function foldQcLiveState(
   const resolvedTotal =
     verificationTotals.upheld +
       verificationTotals.refuted +
+      verificationTotals.disputed +
       verificationTotals.inconclusive ||
     legacyVerificationDone ||
     resolved.length;
@@ -1031,7 +1046,13 @@ export function foldQcLiveState(
   } else if (phase === "validation") {
     liveMessage = `Local fix validation: ${validationTotals.done} of ${validationTotals.total} candidates checked.`;
   } else if (phase === "complete") {
-    liveMessage = `Final QC complete: ${verificationTotals.upheld} upheld, ${verificationTotals.refuted} refuted, ${validationTotals.safeFixes} safe fixes.`;
+    liveMessage =
+      `Final QC complete: ${verificationTotals.upheld} upheld, ` +
+      `${verificationTotals.refuted} refuted, ` +
+      (verificationTotals.disputed
+        ? `${verificationTotals.disputed} disputed and awaiting review, `
+        : "") +
+      `${validationTotals.safeFixes} safe fixes.`;
   } else if (phase === "failed") {
     liveMessage = runState === "cancelled" ? "Final QC cancelled." : "Final QC failed.";
   }
@@ -1055,6 +1076,7 @@ export function foldQcLiveState(
       completedSeats: verificationTotals.completedSeats,
       upheld: verificationTotals.upheld,
       refuted: verificationTotals.refuted,
+      disputed: verificationTotals.disputed,
       inconclusive: verificationTotals.inconclusive,
       validations: validationTotals.total,
       validationsDone: validationTotals.done,

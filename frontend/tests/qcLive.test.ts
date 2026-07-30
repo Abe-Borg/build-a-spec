@@ -584,6 +584,122 @@ test("candidate outcomes wait for every dynamic verifier seat", () => {
   assert.equal(complete.resolved.length, 1);
 });
 
+test("a split panel folds to disputed, distinct from inconclusive", () => {
+  const state = foldQcLiveState([
+    started(),
+    {
+      type: "verification_started",
+      seq: 1,
+      candidates: [
+        {
+          candidate_id: "candidate-1",
+          title: "Contested",
+          original_severity: "high",
+          lens_id: "code_compliance",
+          panel_size: 3,
+          uphold_requires: 3,
+          evidence_gated: true,
+        },
+      ],
+      total_candidates: 1,
+      total_seats: 3,
+    },
+    { type: "verifier_complete", seq: 2, candidate_id: "candidate-1", reviewer_index: 1, status: "completed", upholds: true, ops_adequate: false },
+    { type: "verifier_complete", seq: 3, candidate_id: "candidate-1", reviewer_index: 2, status: "completed", upholds: true, ops_adequate: false },
+    { type: "verifier_complete", seq: 4, candidate_id: "candidate-1", reviewer_index: 3, status: "completed", upholds: false },
+    {
+      type: "candidate_complete",
+      seq: 5,
+      candidate_id: "candidate-1",
+      outcome: "disputed",
+      dispute_reason: "split_panel",
+      panel_size: 3,
+      uphold_requires: 3,
+      completed_seats: 3,
+      upholds: 2,
+    },
+  ]);
+  assert.equal(state.candidates[0].outcome, "disputed");
+  assert.equal(state.candidates[0].disputeReason, "split_panel");
+  // v4 sends uphold_requires; every seat must agree for a clean uphold.
+  assert.equal(state.candidates[0].threshold, 3);
+  assert.equal(state.resolved.length, 1);
+});
+
+test("an under-evidenced refutation folds with its own dispute reason", () => {
+  const state = foldQcLiveState([
+    started(),
+    {
+      type: "verification_started",
+      seq: 1,
+      candidates: [
+        {
+          candidate_id: "candidate-1",
+          title: "Unevidenced",
+          original_severity: "critical",
+          lens_id: "code_compliance",
+          panel_size: 3,
+          uphold_requires: 3,
+          evidence_gated: true,
+        },
+      ],
+    },
+    { type: "verifier_complete", seq: 2, candidate_id: "candidate-1", reviewer_index: 1, status: "completed", upholds: false },
+    { type: "verifier_complete", seq: 3, candidate_id: "candidate-1", reviewer_index: 2, status: "completed", upholds: false },
+    { type: "verifier_complete", seq: 4, candidate_id: "candidate-1", reviewer_index: 3, status: "completed", upholds: false },
+    {
+      type: "candidate_complete",
+      seq: 5,
+      candidate_id: "candidate-1",
+      outcome: "disputed",
+      dispute_reason: "insufficient_refutation_evidence",
+      panel_size: 3,
+      uphold_requires: 3,
+      completed_seats: 3,
+      upholds: 0,
+    },
+  ]);
+  assert.equal(state.candidates[0].outcome, "disputed");
+  assert.equal(
+    state.candidates[0].disputeReason,
+    "insufficient_refutation_evidence",
+  );
+});
+
+test("disputed candidates are counted separately in the run totals", () => {
+  const state = foldQcLiveState([
+    started(),
+    {
+      type: "verification_complete",
+      seq: 1,
+      total_candidates: 3,
+      total_seats: 7,
+      completed_seats: 7,
+      upheld: 1,
+      refuted: 1,
+      disputed: 1,
+      inconclusive: 0,
+    },
+  ]);
+  assert.equal(state.totals.disputed, 1);
+  assert.equal(state.totals.refuted, 1);
+  assert.equal(state.totals.upheld, 1);
+});
+
+test("an older log without uphold_requires still folds on threshold", () => {
+  const state = foldQcLiveState([
+    started(),
+    {
+      type: "verification_started",
+      seq: 1,
+      candidates: [
+        { candidate_id: "candidate-1", title: "One", original_severity: "medium", lens_id: "completeness", panel_size: 2, threshold: 2 },
+      ],
+    },
+  ]);
+  assert.equal(state.candidates[0].threshold, 2);
+});
+
 test("failed and cancelled seats resolve only as infrastructure-inconclusive", () => {
   const state = foldQcLiveState([
     started(),

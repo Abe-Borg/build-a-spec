@@ -335,6 +335,40 @@ QC_FINDINGS_SCHEMA: dict[str, Any] = {
 # submit_qc_verdict (phase 2 output)
 # ---------------------------------------------------------------------------
 
+# One structured citation backing a refutation. The v4 evidence rule gates a
+# critical/high REFUTED outcome on at least one of these validating — a
+# search that returned nothing useful is an activity record, not evidence.
+QC_REFUTATION_EVIDENCE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["type", "url", "reference"],
+    "properties": {
+        "type": {
+            "type": "string",
+            "description": (
+                "'source' for a web page you actually retrieved in this "
+                "review, or 'document_ref' for a place in the specification "
+                "under review."
+            ),
+        },
+        "url": {
+            "type": ["string", "null"],
+            "description": (
+                "For type 'source': the exact URL you retrieved. It must be "
+                "one you actually fetched — an unretrieved URL does not count."
+            ),
+        },
+        "reference": {
+            "type": ["string", "null"],
+            "description": (
+                "For type 'document_ref': the element id in the reviewed "
+                "specification (for example 'pt2.a1.p3', or 'sec') that "
+                "contradicts the finding."
+            ),
+        },
+    },
+}
+
 QC_VERDICT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -344,6 +378,7 @@ QC_VERDICT_SCHEMA: dict[str, Any] = {
         "note",
         "ops_adequate",
         "ops_note",
+        "refutation_evidence",
     ],
     "properties": {
         "upholds": {
@@ -376,6 +411,19 @@ QC_VERDICT_SCHEMA: dict[str, Any] = {
             "description": (
                 "One-line rationale for whether the proposed operations are "
                 "adequate and safe."
+            ),
+        },
+        "refutation_evidence": {
+            "type": "array",
+            "items": QC_REFUTATION_EVIDENCE_SCHEMA,
+            "description": (
+                "When you REFUTE a critical or high finding, cite what "
+                "supports the refutation: a source you retrieved, or a place "
+                "in the reviewed specification. Required in substance for "
+                "those refutations — without at least one entry that checks "
+                "out, the finding is escalated to a human as disputed rather "
+                "than dismissed. Leave empty when you uphold, or when "
+                "refuting a medium/low finding."
             ),
         },
     },
@@ -523,6 +571,14 @@ def normalize_verdict(
     Unknown severities mean "keep original."  A refuting verdict or a
     finding without proposed operations can never approve those operations,
     even if the model emitted an inconsistent ``ops_adequate=true``.
+
+    ``refutation_evidence`` is normalized to a list of well-formed claims
+    only; whether each one actually CHECKS OUT is decided later against
+    what this seat retrieved and against the reviewed document (see
+    :func:`backend.qc.engine.validate_refutation_evidence`). Claims are
+    kept even when malformed entries around them are dropped — the payload
+    is untrusted model output, and a bad entry must not cost a good one.
+    An upholding verdict carries none: the gate exists for refutations.
     """
     upholds = payload.get("upholds")
     if not isinstance(upholds, bool):
@@ -539,7 +595,44 @@ def normalize_verdict(
         "note": str(payload.get("note") or "").strip(),
         "ops_adequate": bool(ops_adequate and upholds and has_proposed_ops),
         "ops_note": str(payload.get("ops_note") or "").strip(),
+        "refutation_evidence": (
+            [] if upholds else normalize_refutation_evidence(
+                payload.get("refutation_evidence")
+            )
+        ),
     }
+
+
+def normalize_refutation_evidence(raw: object) -> list[dict[str, str]]:
+    """Clamp model-supplied refutation citations to well-formed claims.
+
+    Shape only. A ``source`` needs a nonblank url, a ``document_ref`` a
+    nonblank reference; anything else is dropped. Duplicates collapse so a
+    seat cannot manufacture weight by repeating one citation.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        kind = str(entry.get("type") or "").strip().lower()
+        if kind == "source":
+            value = str(entry.get("url") or "").strip()
+        elif kind == "document_ref":
+            value = str(entry.get("reference") or "").strip()
+        else:
+            continue
+        if not value or (kind, value) in seen:
+            continue
+        seen.add((kind, value))
+        out.append(
+            {"type": kind, "url": value}
+            if kind == "source"
+            else {"type": kind, "reference": value}
+        )
+    return out
 
 
 def median_severity(severities: list[str]) -> str:

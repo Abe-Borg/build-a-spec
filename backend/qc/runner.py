@@ -228,6 +228,7 @@ class QCRunner:
                         "execution_status": result.execution_status,
                         "finding_count": len(result.findings),
                         "refuted_count": len(result.refuted),
+                        "disputed_count": len(result.disputed),
                         "inconclusive_count": len(result.inconclusive),
                         "open_criticals": result.open_critical_count(),
                     },
@@ -316,6 +317,9 @@ class QCRunner:
                         "refuted_count": (
                             len(result.refuted) if result is not None else 0
                         ),
+                        "disputed_count": (
+                            len(result.disputed) if result is not None else 0
+                        ),
                         "inconclusive_count": (
                             len(result.inconclusive) if result is not None else 0
                         ),
@@ -403,6 +407,7 @@ class QCRunner:
                 "restored": True,
                 "finding_count": len(result.findings),
                 "refuted_count": len(result.refuted),
+                "disputed_count": len(result.disputed),
                 "inconclusive_count": len(result.inconclusive),
                 "open_criticals": result.open_critical_count(),
             }

@@ -30,11 +30,13 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
     from backend.qc.engine import (
         QC_PROTOCOL_VERSION,
         QC_REPORT_SCHEMA_VERSION,
+        VERIFICATION_RULE_V4,
         QCLensStatus,
         QCResult,
         QCReviewedCheck,
         QCVerdict,
         build_qc_input_manifest,
+        panel_outcome,
         qc_input_fingerprint,
         qc_version_fingerprint,
     )
@@ -71,8 +73,14 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         )
         panel_size = max(1, panel_size)
         finding.verification_panel_size = panel_size
-        finding.verification_threshold = (panel_size // 2) + 1
-        finding.verification_outcome = "upheld"
+        # Current-schema fixture: v4 upholds only on a unanimous panel, and
+        # carries the rule identity rather than an integer bar. Derived
+        # through the engine's own helper below so a future rule change
+        # breaks this fixture loudly instead of silently minting a record
+        # the reload check would reject.
+        finding.verification_threshold = panel_size
+        finding.verification_rule = VERIFICATION_RULE_V4
+        finding.dispute_reason = ""
         has_ops = bool(finding.proposed_ops)
         finding.ops_semantic_status = "approved" if has_ops else "not_proposed"
         finding.ops_semantic_reason = (
@@ -96,6 +104,9 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
             )
             for index in range(1, panel_size + 1)
         ]
+        finding.verification_outcome, finding.dispute_reason = panel_outcome(
+            original_severity, finding.verdicts, expected_seats=panel_size
+        )
 
     lens_statuses = []
     for lens in QC_LENSES:
@@ -838,27 +849,43 @@ def qc_verdict_response(
     note: str = "",
     ops_adequate: bool | None = None,
     ops_note: str = "",
+    evidence: list[dict] | None = None,
+    searched_urls: list[str] | None = None,
     stop_reason: str = "tool_use",
     tokens: dict[str, int] | None = None,
     container: str | None = None,
 ) -> SimpleNamespace:
-    """A Final-QC verifier response: a submit_qc_verdict tool call."""
+    """A Final-QC verifier response: a submit_qc_verdict tool call.
+
+    ``evidence`` scripts ``refutation_evidence`` entries verbatim (each
+    ``{"type": "source", "url": ...}`` or
+    ``{"type": "document_ref", "reference": ...}``) — the v4 gate on a
+    critical/high refutation. ``searched_urls`` additionally attaches a
+    web-search result block, which is what makes a cited source count as
+    RETRIEVED by this seat: scripting evidence without it models the
+    citation-without-retrieval case the gate must reject.
+    """
+    content: list[SimpleNamespace] = []
+    if searched_urls:
+        content.append(search_result_block(searched_urls))
+    content.append(
+        tool_use_block(
+            "toolu_qc_verdict",
+            "submit_qc_verdict",
+            {
+                "upholds": upholds,
+                "revised_severity": severity,
+                "note": note,
+                "ops_adequate": (
+                    upholds if ops_adequate is None else ops_adequate
+                ),
+                "ops_note": ops_note,
+                **({"refutation_evidence": evidence} if evidence else {}),
+            },
+        )
+    )
     return SimpleNamespace(
-        content=[
-            tool_use_block(
-                "toolu_qc_verdict",
-                "submit_qc_verdict",
-                {
-                    "upholds": upholds,
-                    "revised_severity": severity,
-                    "note": note,
-                    "ops_adequate": (
-                        upholds if ops_adequate is None else ops_adequate
-                    ),
-                    "ops_note": ops_note,
-                },
-            )
-        ],
+        content=content,
         stop_reason=stop_reason,
         usage=usage(**(tokens or {})),
         **_container(container),

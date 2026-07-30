@@ -12,12 +12,15 @@ from fastapi.testclient import TestClient
 from backend import sessions
 from backend.app import create_app
 from backend.llm.conversation import stream_user_turn
+from backend.research.runner import ResearchRunner
+from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
 from tests.fakes import (
     FakeClient,
     SequencedFakeClient,
     block_start_event,
     block_stop_event,
     chat_search_blocks,
+    research_response,
     text_delta_event,
     text_turn,
     tool_turn,
@@ -25,7 +28,11 @@ from tests.fakes import (
     text_block,
 )
 from tests.test_qc import _finding, _qc_scripts, _seed_doc  # noqa: F401 (reuse)
-from tests.test_research_engine import _scripts  # noqa: F401 (reuse)
+from tests.test_research_engine import (  # noqa: F401 (reuse)
+    DIM_KEYS,
+    PROFILE as RESEARCH_PROFILE,
+    _scripts,
+)
 
 
 def _client() -> TestClient:
@@ -484,6 +491,80 @@ def test_research_stop_discards_running_work_and_allows_immediate_restart(
     )
     assert client.post("/api/research/start").json()["ok"] is True
     assert _wait_terminal(client, "/api/research/status")["status"] == "complete"
+
+
+def test_a_stopped_research_round_still_meters_what_it_already_spent():
+    """Stopping is lossy by design — the findings go — but the provider does
+    not refund the calls, so the spend still belongs to the session.
+
+    The ordering this pins: ``stop()`` resolves the run synchronously, so by
+    the time the worker's fan-out error surfaces, the failure branch's
+    compare-and-set LOSES. Metering gated on winning that CAS would drop
+    exactly the spend a user who just cancelled is most likely to ask about.
+    """
+    arrived = threading.Event()
+    release = threading.Event()
+
+    class _BarrierClient(SequencedFakeClient):
+        """Holds every dimension at its first call until released."""
+
+        def __init__(self, scripts: dict, expected: int) -> None:
+            super().__init__(scripts)
+            self._expected = expected
+            self._gate = threading.Lock()
+            self._seen = 0
+
+        def stream(self, **request):
+            with self._gate:
+                self._seen += 1
+                if self._seen == self._expected:
+                    arrived.set()
+            assert release.wait(timeout=10)
+            return super().stream(**request)
+
+    # One billed pause per dimension: the worker banks that response, then
+    # checks should_stop() at the top of the continuation loop and bails —
+    # so every dimension ends "Cancelled by user." holding real usage.
+    client = _BarrierClient(
+        {
+            key: [
+                research_response(
+                    searched_urls=["https://a.gov"],
+                    stop_reason="pause_turn",
+                    tokens={"input": 50},
+                )
+            ]
+            for key in DIM_KEYS.values()
+        },
+        expected=len(DIM_KEYS),
+    )
+
+    runner = ResearchRunner()
+    settled = threading.Event()
+    billed: list[dict] = []
+    assert runner.start(
+        module=HYPERSCALE_FIRE,
+        project_profile=RESEARCH_PROFILE,
+        client=client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        on_settled=settled.set,
+        usage_sink=billed.append,
+    )
+
+    assert arrived.wait(timeout=10)
+    # Resolve the run first, exactly as POST /api/research/stop does…
+    assert runner.stop() is True
+    assert runner.status == "failed"
+    # …then let the already-paid-for responses land.
+    release.set()
+    assert settled.wait(timeout=10)
+
+    # The round is gone.
+    assert runner.profile_result is None
+    assert "stopped" in runner.error.lower()
+    # The bill is not: 4 dimensions × one 50-token paused response.
+    assert billed == [{"input_tokens": 200, "web_search_requests": 4}]
 
 
 # ---------------------------------------------------------------------------

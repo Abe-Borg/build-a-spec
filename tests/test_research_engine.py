@@ -2,6 +2,8 @@
 hermetic against the sequenced fake client."""
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from backend.project_profile import ProjectProfile
@@ -816,6 +818,170 @@ def test_retry_success_counts_billed_usage_from_abandoned_attempt(monkeypatch):
     # 200 (abandoned but billed) + 100 (successful attempt) — not just 100.
     assert status.input_tokens == 300
     assert profile.usage_total()["input_tokens"] == 300
+
+
+# ---------------------------------------------------------------------------
+# A round that produced nothing still produced a bill
+# ---------------------------------------------------------------------------
+
+
+def test_a_round_where_every_dimension_failed_still_reports_its_bill():
+    """Nothing was adopted, but four dimensions' requests were still paid
+    for. The raised error is the only thing that carries that spend out of
+    the fan-out — without it the session meter never hears about it."""
+    client = SequencedFakeClient(
+        {
+            DIM_KEYS["governing_codes"]: [
+                research_response(
+                    items=[],
+                    stop_reason="max_tokens",
+                    searched_urls=["https://a.gov"],
+                    tokens={"input": 100, "output": 10},
+                )
+            ],
+            DIM_KEYS["ahj_requirements"]: [
+                research_response(
+                    items=[],
+                    stop_reason="max_tokens",
+                    searched_urls=["https://b.gov", "https://c.gov"],
+                    tokens={"input": 200, "output": 20, "cache_read": 7},
+                )
+            ],
+            DIM_KEYS["client_standards"]: [
+                research_response(
+                    items=[],
+                    stop_reason="max_tokens",
+                    tokens={"input": 300, "output": 30, "cache_write": 11},
+                )
+            ],
+            DIM_KEYS["site_environment"]: [
+                research_response(
+                    items=[],
+                    stop_reason="max_tokens",
+                    fetches=2,
+                    tokens={"input": 400, "output": 40},
+                )
+            ],
+        }
+    )
+    with pytest.raises(ResearchFanoutError) as exc_info:
+        _run(client)
+
+    # Exact, not "nonzero": an aggregate that quietly drops a field is the
+    # failure mode this carries.
+    assert exc_info.value.usage_totals == {
+        "input_tokens": 1000,
+        "output_tokens": 100,
+        "cache_read_input_tokens": 7,
+        "cache_creation_input_tokens": 11,
+        "web_search_requests": 3,
+        "web_fetch_requests": 2,
+    }
+
+
+def test_the_failed_round_bill_counts_a_retried_attempt_exactly_once(monkeypatch):
+    """A retryable death abandons its attempt's conversation, not its bill.
+
+    The success path already accounts for that (see
+    ``test_retry_success_counts_billed_usage_from_abandoned_attempt``); the
+    all-failed path has to agree, and must not double-count either.
+    """
+    import backend.research.engine as engine
+
+    monkeypatch.setattr(engine.time, "sleep", lambda _s: None)
+    import anthropic
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    retryable = anthropic.APIConnectionError(message="reset", request=request)
+    # The other three fail immediately and bill nothing, so the assertion
+    # below is purely about the retried dimension.
+    scripts = {
+        key: [research_response(items=[], stop_reason="max_tokens")]
+        for key in DIM_KEYS.values()
+    }
+    scripts[DIM_KEYS["governing_codes"]] = [
+        # Attempt 1: a billed pause…
+        research_response(
+            searched_urls=["https://a.gov"],
+            stop_reason="pause_turn",
+            tokens={"input": 200},
+        ),
+        # …whose continuation dies retryably.
+        retryable,
+        # Attempt 2: billed, and terminal.
+        research_response(
+            items=[], stop_reason="max_tokens", tokens={"input": 100}
+        ),
+    ]
+    with pytest.raises(ResearchFanoutError) as exc_info:
+        _run(client := SequencedFakeClient(scripts))
+    assert client  # the fake was consumed
+
+    # 200 (abandoned but billed) + 100 (the attempt that gave up) — once each.
+    assert exc_info.value.usage_totals["input_tokens"] == 300
+
+
+def test_a_failure_that_never_reached_the_provider_carries_no_bill():
+    """The no-op case the runner's metering guard relies on: an empty
+    ``usage_totals`` must stay empty rather than become a row of zeroes."""
+    module = dataclasses.replace(DEFAULT_MODULE, research_dimensions=())
+    with pytest.raises(ResearchFanoutError) as exc_info:
+        run_requirements_research(
+            module,
+            PROFILE,
+            SequencedFakeClient({}),
+            model="claude-sonnet-5",
+            max_tokens=4096,
+        )
+    assert exc_info.value.usage_totals == {}
+
+
+def test_every_recorded_usage_field_reaches_the_meter():
+    """The guard on the shared key tuple.
+
+    A usage field added to ``DimensionStatus`` but not to
+    ``_DIMENSION_USAGE_KEYS`` would be recorded per dimension and then
+    billed by neither the profile total nor the failed-round bill.
+    """
+    import backend.research.engine as engine
+
+    recorded = {
+        f.name
+        for f in dataclasses.fields(DimensionStatus)
+        if f.name.endswith(("_tokens", "_requests"))
+    }
+    assert recorded == set(engine._DIMENSION_USAGE_KEYS)
+
+
+def test_the_failed_bill_and_the_profile_total_are_the_same_computation():
+    """Both callers go through one helper, so they cannot drift apart."""
+    import backend.research.engine as engine
+
+    statuses = [
+        DimensionStatus(
+            dimension_id="governing_codes",
+            status="failed",
+            input_tokens=1,
+            output_tokens=2,
+            cache_read_input_tokens=3,
+            cache_creation_input_tokens=4,
+            web_search_requests=5,
+            web_fetch_requests=6,
+        ),
+        # A dimension that never issued a request contributes no keys.
+        DimensionStatus(dimension_id="ahj_requirements", status="failed"),
+    ]
+    profile = RequirementsProfile(items=[], dimension_statuses=statuses)
+    assert engine.dimension_usage_total(statuses) == profile.usage_total()
+    assert engine.dimension_usage_total(statuses) == {
+        "input_tokens": 1,
+        "output_tokens": 2,
+        "cache_read_input_tokens": 3,
+        "cache_creation_input_tokens": 4,
+        "web_search_requests": 5,
+        "web_fetch_requests": 6,
+    }
 
 
 def test_render_text_is_deterministic_and_marks_unverified():

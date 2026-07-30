@@ -126,6 +126,13 @@ class ResearchRunner:
         the app layer uses it for nothing today but tests can synchronize
         on it.
 
+        ``usage_sink`` (optional) receives THIS round's own billed usage,
+        once, whatever the outcome: the merged profile's total on success,
+        and the failed round's aggregate when every dimension failed or was
+        cancelled. A discarded round is still a paid round. It is never fed
+        the cumulative profile total, which would re-bill every earlier
+        round each time a new one lands.
+
         The existing ``profile_result`` is deliberately NOT cleared: this
         run is the next round on top of it, and until it resolves the model
         keeps drafting from the research the session already paid for. The
@@ -174,6 +181,19 @@ class ResearchRunner:
                     should_stop=cancel_event.is_set,
                 )
             except ResearchFanoutError as exc:
+                # Meter BEFORE resolving, and unconditionally. A round where
+                # every dimension failed or was cancelled still spent real
+                # money, and on a user stop `stop()` has already resolved
+                # this run — so gating the meter on winning the CAS below
+                # would silently drop exactly the spend the user is most
+                # likely to ask about. The app's sink carries the
+                # generation guard that decides whether this session still
+                # owns the charge.
+                if usage_sink is not None and exc.usage_totals:
+                    try:
+                        usage_sink(exc.usage_totals)
+                    except Exception:  # noqa: BLE001 — metering never hides failure
+                        pass
                 message = self._failure_message(str(exc))
                 kind = "auth_error" if getattr(exc, "auth_error", False) else ""
                 if self._try_resolve(

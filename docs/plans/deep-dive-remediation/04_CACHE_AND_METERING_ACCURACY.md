@@ -1,6 +1,6 @@
 # Phase 4 — Cache and metering accuracy
 
-- Status: in progress (4.1 and 4.2 landed; 4.3-4.4 planned)
+- Status: in progress (4.1-4.3 landed; 4.4 planned)
 - Prerequisites: Phases 1-3 complete
 - Risk: high financial/audit impact; follow the chunk order exactly
 
@@ -361,11 +361,74 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_resear
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete**
+- Commit/PR: branch `claude/deep-dive-phase-4-cont-o2up2c`
+- Tests: 9 new. `tests/test_research_engine.py` (5 — four failed dimensions
+  with distinct usage asserted as an exact dict; a retried attempt counted
+  exactly once; a failure that never reached the provider carrying no bill;
+  the key-tuple guard against a future `DimensionStatus` usage field; and
+  both callers proven to be one computation).
+  `tests/test_research_rounds.py` (2 — a totally failed round metered, and
+  success → total failure → success billing 100 · 28 · 40 while the
+  profile's cumulative total stays 140).
+  `tests/test_stop.py` (1 — the pre-CAS ordering, via a barrier client that
+  holds all four dimensions at their first call so the stop lands after
+  each has banked a billed paused response).
+  `tests/test_usage.py` (1 — the spend reaching `/api/usage`'s research
+  category end to end). Focused command green, then the full suite:
+  **1259 passed, 9 skipped**. Both mechanisms reverted in place to prove
+  them load-bearing: dropping `usage_totals` from the raise → 6 red;
+  gating the meter on winning the CAS → 1 red (the stop test, and only it).
 - Deviations:
-- Manual QA owed:
+  - **Item 2 became a shared helper rather than an aggregation written at
+    the raise site.** The plan says "using the same fields as
+    `RequirementsProfile.usage_total`"; writing a second loop over the same
+    tuple satisfies that on the day and drifts later, and the failing path
+    is the one nobody watches. `dimension_usage_total(statuses)` is now the
+    single definition and `usage_total()` delegates to it, so "the same
+    fields" is structural. `test_every_recorded_usage_field_reaches_the_
+    meter` additionally compares `_DIMENSION_USAGE_KEYS` against the
+    dataclass's own `*_tokens`/`*_requests` fields, so a usage field added
+    to `DimensionStatus` without wiring is a red test rather than a silent
+    undercount.
+  - **`cache_creation_1h_input_tokens` is deliberately not in the key
+    tuple.** Research writes no one-hour cache entries (only Final QC's
+    verifier seats do), so Chunk 4.1's per-TTL split has nothing to
+    separate here and `DimensionStatus` has never recorded the subtotal.
+    Noted in a comment so a future reader does not read the omission as an
+    oversight.
+  - **Item 1's `QCFanoutError` parity stops at `usage_totals`.** No
+    `result` field: QC preserves a terminal partial record, research stop
+    is lossy by design and there is no `RequirementsProfile` to retain
+    (the plan's own acceptance criteria keep resolution semantics
+    unchanged).
+  - **The empty case is a guard, not a zero row.** The runner meters only
+    `if usage_sink is not None and exc.usage_totals`, matching QC — a
+    module with no declared dimensions raises before any request, and a
+    zero-valued ledger entry would show up as a fake turn in the meter.
+  - **The generic `except Exception` branch still does not meter**, having
+    no usage to report. The plan does not ask it to.
+  - **`tests/test_usage.py` gained two small helpers**
+    (`_seed_research_session`, `_wait_research`) extracted from the
+    existing `test_research_run_rolls_up_into_ledger` so the new
+    end-to-end case does not duplicate ~20 lines of profile setup and a
+    poll loop. The existing test now uses both. Its one behavior change is
+    that `_wait_research` RAISES when the run never reaches the expected
+    status, where the inlined loop fell through and failed later on a
+    confusing usage assertion — strictly better diagnostics, same pass/fail.
+  - **No frontend change.** `/api/usage` already reports the research
+    category and the header ticker/Settings table already read it, so the
+    newly-landing spend surfaces with no UI work. `npm test` / `npm run
+    build` therefore not run (no `frontend/` file touched). Worth noting
+    that `TrustDeepDiveModal`'s Money section already promised this —
+    "Money spent on work that failed or was stopped is still real, and the
+    meter records it rather than quietly writing it off" — so the chunk
+    makes a shipped user-facing claim true rather than requiring new copy.
+- Manual QA owed: with owner approval, stop a real research round mid-flight
+  (or let one fail against a revoked key after some spend) and confirm the
+  header ticker and the Settings usage table move by roughly the abandoned
+  round's cost. The hermetic tests prove the usage reaches the ledger and
+  the arithmetic, not that the provider billed what the statuses recorded.
 
 ## Chunk 4.4 — Disclosed stopped-turn output estimate
 

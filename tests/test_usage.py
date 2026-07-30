@@ -24,7 +24,7 @@ from tests.fakes import (
     token_usage,
     tool_turn,
 )
-from tests.test_research_engine import _item, _scripts
+from tests.test_research_engine import DIM_KEYS, _item, _scripts
 
 
 def _client() -> TestClient:
@@ -321,15 +321,14 @@ def test_reset_clears_the_meter(monkeypatch):
     assert client.get("/api/usage").json()["totals"] == {}
 
 
-def test_research_run_rolls_up_into_ledger(monkeypatch):
-    import time as _time
+def _seed_research_session(client: TestClient, monkeypatch) -> None:
+    """A session research can start from: the fire module + a full profile.
 
-    client = _client()
-    # Research routes by the fire module's dimension messages (and requires a
-    # curated module's discipline gate to pass); the neutral default is now
-    # the generic module, so select fire first.
+    Research routes by the fire module's dimension messages (and requires a
+    curated module's discipline gate to pass); the neutral default is now
+    the generic module, so select fire first.
+    """
     client.post("/api/session/reset", json={"module_id": "hyperscale_fire"})
-    # Record a complete profile via chat so research can start.
     profile_edits = {
         "edits": [
             {
@@ -348,6 +347,22 @@ def test_research_run_rolls_up_into_ledger(monkeypatch):
     monkeypatch.setattr("backend.llm.conversation.get_client", lambda: chat_fake)
     client.post("/api/chat", json={"message": "Ashburn VA, ExampleCo"})
 
+
+def _wait_research(client: TestClient, status: str) -> None:
+    import time as _time
+
+    deadline = _time.monotonic() + 5.0
+    while _time.monotonic() < deadline:
+        if client.get("/api/research/status").json()["status"] == status:
+            return
+        _time.sleep(0.05)
+    raise AssertionError(f"research never reached {status!r}")
+
+
+def test_research_run_rolls_up_into_ledger(monkeypatch):
+    client = _client()
+    _seed_research_session(client, monkeypatch)
+
     research_fake = SequencedFakeClient(
         _scripts(
             governing_codes=[
@@ -362,11 +377,7 @@ def test_research_run_rolls_up_into_ledger(monkeypatch):
     monkeypatch.setattr("backend.app.get_client", lambda: research_fake)
 
     assert client.post("/api/research/start").json()["ok"] is True
-    deadline = _time.monotonic() + 5.0
-    while _time.monotonic() < deadline:
-        if client.get("/api/research/status").json()["status"] == "complete":
-            break
-        _time.sleep(0.05)
+    _wait_research(client, "complete")
 
     usage = client.get("/api/usage").json()
     research = usage["categories"]["research"]
@@ -375,6 +386,42 @@ def test_research_run_rolls_up_into_ledger(monkeypatch):
     # Four dimensions each ran one search (defaults + governing_codes).
     assert research["web_search_requests"] == 4
     # Research is its own category, priced on the research model.
+    assert usage["estimated_cost_usd"]["by_category"]["research"] > 0
+
+
+def test_a_research_round_that_failed_outright_still_reaches_the_meter(
+    monkeypatch,
+):
+    """The round produced no profile, so the success path's meter never
+    runs — and until the fan-out error started carrying its usage, every
+    one of those calls was invisible to the session's spend."""
+    client = _client()
+    _seed_research_session(client, monkeypatch)
+
+    # Every dimension banks a billed response and then fails on it.
+    research_fake = SequencedFakeClient(
+        {
+            key: [
+                research_response(
+                    items=[],
+                    stop_reason="max_tokens",
+                    searched_urls=["https://x.gov"],
+                    tokens={"input": 500, "output": 60},
+                )
+            ]
+            for key in DIM_KEYS.values()
+        }
+    )
+    monkeypatch.setattr("backend.app.get_client", lambda: research_fake)
+
+    assert client.post("/api/research/start").json()["ok"] is True
+    _wait_research(client, "failed")
+
+    usage = client.get("/api/usage").json()
+    research = usage["categories"]["research"]
+    assert research["input_tokens"] == 2000  # 4 × 500
+    assert research["output_tokens"] == 240  # 4 × 60
+    assert research["web_search_requests"] == 4
     assert usage["estimated_cost_usd"]["by_category"]["research"] > 0
 
 

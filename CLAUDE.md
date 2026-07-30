@@ -157,6 +157,11 @@ backend/
                            lock, the meter still gets the round's OWN usage
                            (the merged total is cumulative), and a
                            failed/stopped round says earlier rounds survived.
+                           A round where EVERY dimension failed or was
+                           cancelled is metered too (ResearchFanoutError
+                           .usage_totals), BEFORE the CAS and unconditionally
+                           — a stop has already resolved the run by then, so
+                           gating it on winning would drop the spend.
                            The live-visibility batch adds a per-start run
                            token (QCRunner pattern, one notch stronger:
                            _try_resolve CLEARS it on any terminal win): _emit
@@ -1825,7 +1830,12 @@ batch: no new SSE event types, no new env vars, no new Python deps.
   marginal benefit given stopping is already lossy by design — not worth
   it. The spend already committed to those in-flight calls is still metered
   into the usage ledger even though the result is thrown away (mirrors the
-  existing "the spend is real even on a failed turn" posture).
+  existing "the spend is real even on a failed turn" posture). **That claim
+  had a hole in research until Chunk 4.3**: it held whenever a dimension
+  still completed (the runner meters the returned profile before the CAS
+  it loses), but the common stop — every dimension cancelled — raised
+  `ResearchFanoutError`, which carried no usage, so the whole round went
+  unbilled. The error now carries it.
 - **Fake streaming client gains `current_message_snapshot`**
   (`tests/fakes.py`) so `test_stop.py` can exercise the "read the snapshot
   instead of draining the stream" branch. It mirrors `get_final_message()`
@@ -2582,7 +2592,9 @@ SSE event type, no new dep, no project-format bump (one additive key).
   construction now, so the runner keeps feeding the ledger
   `result.usage_total()` — the round's OWN profile, before the merge. Pinned
   by `test_runner_accumulates_rounds_and_meters_each_one_once` (140 total
-  across two rounds arrives as 100 then 40, never 100 then 140).
+  across two rounds arrives as 100 then 40, never 100 then 140). A round
+  that failed outright is metered from the raised error instead (Chunk
+  4.3) and, never having been adopted, cannot re-enter that accumulation.
 - **The merge runs inside the existing compare-and-set.** `_try_resolve`
   keeps being the single point every terminal transition goes through; the
   success path now passes an `adopt` callable applied under the same lock.
@@ -4152,6 +4164,82 @@ SSE event, no new dep, one new env knob.
   `test_runtime_date.py` and `test_session_modules.py`. Every mechanism was
   reverted in place to prove it load-bearing: tail-only → 2 red, uniform
   1h tail under a 5m setting → 1 red on the ordering sweep.
+
+## A failed research round is still a paid round — implemented notes
+
+Deep-dive remediation Chunk 4.3. The runner metered research only on the
+success path, so a round where EVERY dimension failed — or one the user
+stopped — spent real money and told the session nothing. The data was
+already there and simply had nowhere to go: `ResearchFanoutError` carried
+only a message. No new endpoint, no new SSE event, no new dep, no
+project-format bump.
+
+- **The spend was already recorded; only the carrier was missing.**
+  `_run_dimension`'s `_failed` has always summed the attempt's billed
+  responses into its `DimensionStatus`, retries included (a retryable
+  death abandons its attempt's conversation but not its bill). What broke
+  the chain is that the all-dimensions-failed path raises instead of
+  returning a profile, and the exception had no room for usage. It now
+  takes `usage_totals`, mirroring `QCFanoutError` — which has carried
+  exactly this since Batch 4, and whose runner branch is the shape copied
+  here.
+- **One aggregation helper, because two would drift.**
+  `dimension_usage_total(statuses)` is the single definition;
+  `RequirementsProfile.usage_total()` delegates to it and the raise site
+  calls it directly. The failing path is the one nobody watches, so a
+  duplicated key tuple would let a newly-recorded usage field reach the
+  meter on success and quietly not on failure.
+  `test_every_recorded_usage_field_reaches_the_meter` compares
+  `_DIMENSION_USAGE_KEYS` against the dataclass's own `*_tokens`/
+  `*_requests` fields, so adding a field without wiring it is a red test
+  rather than a silent undercount. `cache_creation_1h_input_tokens` is
+  deliberately absent: research writes no one-hour entries, so Chunk 4.1's
+  per-TTL split has nothing to separate here.
+- **The meter runs BEFORE the compare-and-set, and unconditionally — that
+  ordering is the whole point on a stop.** `stop()` resolves the run
+  synchronously so the UI never waits on the background thread, which
+  means that by the time the worker's `ResearchFanoutError` surfaces, the
+  failure branch's `_try_resolve` has already LOST. Metering inside that
+  `if` would therefore drop exactly the spend a user who just cancelled is
+  most likely to ask about. Pinned by
+  `test_a_stopped_research_round_still_meters_what_it_already_spent`,
+  which is the only test that goes red when the meter is moved inside the
+  CAS. The app's `add_usage_if_current` generation guard remains the thing
+  that decides whether this session still owns the charge — the runner
+  does not second-guess it.
+- **A failed round bills itself once and never re-bills an earlier one.**
+  A failed round is never adopted (`_try_resolve` takes no `adopt` on that
+  path), so it cannot enter the cumulative profile a later round re-reads.
+  Success → total failure → success bills 100 · 28 · 40 while the profile's
+  cumulative total stays 140, not 168.
+- **Empty stays empty.** A module declaring no research dimensions raises
+  before any request, so `usage_totals` is `{}` and the runner's
+  `if ... and exc.usage_totals` guard makes it a no-op — a zero-valued
+  ledger entry would be a fake turn in the meter. Zero-valued keys are
+  likewise omitted per dimension.
+- **Deliberately unchanged**: the generic `except Exception` branch does
+  not meter (an unexpected exception carries no usage to report), and
+  research stop stays lossy — this bills the discarded work, it does not
+  retain it.
+- **It makes an already-shipped trust claim true.** `TrustDeepDiveModal`'s
+  Money section says "Money spent on work that failed or was stopped is
+  still real, and the meter records it rather than quietly writing it
+  off." For research that held only when some dimension still completed;
+  the common stop did not. No frontend change was needed — the claim was
+  already the one the code should have been keeping, which is the sense in
+  which the dossier is a contract and not a brochure.
+- **Tests**: 9 new. `test_research_engine.py` (5 — four failed dimensions
+  with distinct usage asserted as an exact dict, a retried attempt counted
+  exactly once, the nothing-billed no-op, the key-tuple guard, and both
+  callers proven to be one computation); `test_research_rounds.py` (2 — a
+  totally failed round metered, and the success/failure/success sequence
+  above); `test_stop.py` (1 — the stop ordering, using a barrier client
+  that holds all four dimensions at their first call so the stop lands
+  after each has banked a billed response); `test_usage.py` (1 — the spend
+  reaching `/api/usage`'s research category end to end). Both mechanisms
+  were reverted in place to prove them load-bearing: dropping
+  `usage_totals` from the raise → 6 red; gating the meter on the CAS → 1
+  red, the stop test.
 
 ## Commands
 

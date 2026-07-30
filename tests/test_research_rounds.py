@@ -694,6 +694,80 @@ def test_runner_accumulates_rounds_and_meters_each_one_once():
     assert complete["new_item_count"] == 1  # this round's contribution
 
 
+def test_a_totally_failed_round_is_still_metered():
+    """No profile came out of it, so the success path's meter never runs —
+    but four dimensions' requests were paid for and the session has to be
+    charged for them."""
+    client = SequencedFakeClient(
+        _scripts_for_rounds(
+            {
+                dim: research_response(
+                    items=[], stop_reason="max_tokens", tokens={"input": 25}
+                )
+                for dim in DIM_KEYS
+            }
+        )
+    )
+    runner = ResearchRunner()
+    billed: list[dict] = []
+
+    _run_round(runner, client, billed.append)
+
+    assert runner.status == "failed"
+    assert runner.profile_result is None
+    assert billed == [{"input_tokens": 100}]
+
+
+def test_a_failed_round_bills_only_itself_and_never_re_bills_an_earlier_one():
+    """Success, total failure, success. Each round is charged once for its
+    own spend, and the failed round — which is never folded into the
+    profile — leaves the cumulative total alone."""
+    client = SequencedFakeClient(
+        _scripts_for_rounds(
+            {
+                "governing_codes": research_response(
+                    items=[_item("Rule A.", ["https://a.gov"])],
+                    searched_urls=["https://a.gov"],
+                    tokens={"input": 100},
+                )
+            },
+            {
+                dim: research_response(
+                    items=[], stop_reason="max_tokens", tokens={"input": 7}
+                )
+                for dim in DIM_KEYS
+            },
+            {
+                "governing_codes": research_response(
+                    items=[_item("Rule B.", ["https://b.gov"])],
+                    searched_urls=["https://b.gov"],
+                    tokens={"input": 40},
+                )
+            },
+        )
+    )
+    runner = ResearchRunner()
+    billed: list[dict] = []
+
+    _run_round(runner, client, billed.append)
+    assert runner.status == "complete"
+    _run_round(runner, client, billed.append)
+    assert runner.status == "failed"
+    _run_round(runner, client, billed.append)
+    assert runner.status == "complete"
+
+    # 100 · 28 (4 × 7) · 40 — the failed round in the middle, once.
+    assert [u["input_tokens"] for u in billed] == [100, 28, 40]
+
+    # The profile holds only the two rounds that were adopted, so its
+    # cumulative total is 140 and NOT 168: the failed round was metered
+    # without ever entering the accumulation a later round re-reads.
+    profile = runner.profile_result
+    assert profile.round_count == 2
+    assert [i.requirement for i in profile.items] == ["Rule A.", "Rule B."]
+    assert profile.usage_total()["input_tokens"] == 140
+
+
 def test_a_failed_round_keeps_the_rounds_that_succeeded():
     client = SequencedFakeClient(
         _scripts_for_rounds(

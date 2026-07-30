@@ -628,7 +628,11 @@ meter) and still current:
   1.25× input to create, a one-hour entry 2×. The provider reports the
   one-hour count inside the cache-creation total, so the meter charges the
   two rates over disjoint slices — the subtotal is never billed twice, and
-  never billed at the cheaper rate just because it is nested.
+  never billed at the cheaper rate just because it is nested. **Work you
+  did not get is still work you paid for**: a research round where every
+  dimension failed, and one you stopped part-way, both land in the meter
+  even though their findings are discarded. Nothing is quietly unbilled
+  just because it did not produce a result.
 
 Shipped in v0.6.0 ("Sonnet unleashed") and still current (project decision:
 the app imposes **no quality limits on the model** — the only caps left are

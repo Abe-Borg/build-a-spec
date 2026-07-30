@@ -38,7 +38,7 @@ import hashlib
 import json
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -90,10 +90,30 @@ def _noop_sink(_event: dict) -> None:
 
 
 class ResearchFanoutError(RuntimeError):
-    """Every research dimension failed — nothing was adopted."""
+    """Every research dimension failed — nothing was adopted.
 
-    def __init__(self, message: str, *, auth_error: bool = False) -> None:
+    ``usage_totals`` carries the round's billed spend even so. A dimension
+    records its usage across every attempt it paid for, retries included,
+    and keeps that record when it ends up failing (see ``_failed`` in
+    :func:`_run_dimension`) — so a round where every dimension failed or was
+    cancelled still cost real money, and the session must be told. The
+    runner meters it before resolving, mirroring
+    :exc:`backend.qc.engine.QCFanoutError`.
+
+    Empty when there was nothing to bill (a module declaring no dimensions,
+    or a failure before any request was made), which the runner treats as a
+    no-op rather than a zero-valued ledger entry.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        usage_totals: dict[str, int] | None = None,
+        auth_error: bool = False,
+    ) -> None:
         super().__init__(message)
+        self.usage_totals = dict(usage_totals or {})
         self.auth_error = auth_error
 
 
@@ -253,6 +273,44 @@ class DimensionStatus:
     cache_creation_input_tokens: int = 0
     error: str = ""
     error_kind: str = ""
+
+
+# The billed-usage fields a DimensionStatus carries. Deliberately no
+# `cache_creation_1h_input_tokens`: research writes no one-hour cache
+# entries, so the per-TTL split in `usage_ledger` has nothing to separate
+# here (a dimension's status simply never records the subtotal).
+_DIMENSION_USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "web_search_requests",
+    "web_fetch_requests",
+)
+
+
+def dimension_usage_total(
+    statuses: Iterable[DimensionStatus],
+) -> dict[str, int]:
+    """Billed usage summed across dimension statuses.
+
+    One definition with two callers that must agree: the profile's
+    cumulative :meth:`RequirementsProfile.usage_total`, and the
+    all-dimensions-failed raise site, which has to meter a round that
+    produced no profile to ask. Duplicating the key tuple would let a
+    newly-recorded usage field reach the meter down one path and not the
+    other, and the failing path is the one nobody watches.
+
+    Zero-valued keys are omitted, so a dimension that never issued a
+    request contributes nothing rather than a row of zeroes.
+    """
+    out: dict[str, int] = {}
+    for status in statuses:
+        for key in _DIMENSION_USAGE_KEYS:
+            value = getattr(status, key, 0)
+            if value:
+                out[key] = out.get(key, 0) + int(value)
+    return out
 
 
 def dimension_display_title(status: DimensionStatus) -> str:
@@ -611,21 +669,7 @@ class RequirementsProfile:
         that round completes (:mod:`.runner`), never this one, so a second
         round cannot re-bill the first.
         """
-        keys = (
-            "input_tokens",
-            "output_tokens",
-            "cache_read_input_tokens",
-            "cache_creation_input_tokens",
-            "web_search_requests",
-            "web_fetch_requests",
-        )
-        out: dict[str, int] = {}
-        for status in self.dimension_statuses:
-            for key in keys:
-                value = getattr(status, key, 0)
-                if value:
-                    out[key] = out.get(key, 0) + int(value)
-        return out
+        return dimension_usage_total(self.dimension_statuses)
 
     # -- Rendering (deterministic) ------------------------------------------
 
@@ -1920,8 +1964,13 @@ def run_requirements_research(
         auth_error = bool(failed) and all(
             s.error == AUTH_ERROR_MESSAGE for s in failed
         )
+        # The round produced no profile, but it did produce a bill: each
+        # status already carries what its dimension spent across every
+        # attempt, cancelled ones included. Hand it to the caller so the
+        # session meter sees it — nothing else will.
         raise ResearchFanoutError(
             f"All {len(statuses)} research dimension(s) failed. {errors}",
+            usage_totals=dimension_usage_total(statuses),
             auth_error=auth_error,
         )
 

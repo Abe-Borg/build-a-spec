@@ -25,7 +25,7 @@ const started = (runId = "run-1", seq = 0): QcEvent => ({
   ],
 });
 
-test("QC event merge deduplicates seq and orders replayed frames", () => {
+test("QC event merge orders a gap fill and drops a replayed seq", () => {
   let snapshot: QcSnapshot | null = null;
   snapshot = mergeQcEvent(snapshot, started());
   snapshot = mergeQcEvent(snapshot, {
@@ -39,6 +39,7 @@ test("QC event merge deduplicates seq and orders replayed frames", () => {
     seq: 1,
     lens_id: "code_compliance",
   });
+  const filled = snapshot;
   snapshot = mergeQcEvent(snapshot, {
     type: "lens_activity",
     seq: 2,
@@ -46,10 +47,123 @@ test("QC event merge deduplicates seq and orders replayed frames", () => {
     kind: "writing",
   });
   assert.deepEqual(snapshot.events.map((event) => event.seq), [0, 1, 2]);
+  // Seq 2 was assigned once by an append-only log, so the replay carries the
+  // payload it carried the first time. First arrival wins, and the snapshot
+  // is not rebuilt at all.
+  assert.equal(snapshot, filled);
   assert.equal(snapshot.events[2].type, "lens_activity");
   if (snapshot.events[2].type === "lens_activity") {
-    assert.equal(snapshot.events[2].kind, "writing");
+    assert.equal(snapshot.events[2].kind, "thinking");
   }
+});
+
+test("a replayed frame returns the same snapshot and the same event array", () => {
+  const log: QcEvent[] = [
+    started(),
+    { type: "lens_started", seq: 1, lens_id: "code_compliance" },
+    { type: "lens_search", seq: 2, lens_id: "code_compliance", query: "NFPA 13" },
+  ];
+  const local: QcSnapshot = { status: "running", error: "", events: log };
+  for (const frame of log) {
+    const merged = mergeQcEvent(local, frame);
+    assert.equal(merged, local, `seq ${frame.seq} should not rebuild the snapshot`);
+    assert.equal(merged.events, log);
+  }
+});
+
+test("replaying a dense QC log does bounded work per duplicate frame", () => {
+  // Not a timing test — see the research equivalent. The Review Room's log is
+  // the chattier of the two, so a per-frame scan hurts here first.
+  const log: QcEvent[] = [
+    started(),
+    ...Array.from({ length: 400 }, (_, offset): QcEvent => ({
+      type: "lens_activity",
+      seq: offset + 1,
+      lens_id: "code_compliance",
+      kind: "searching",
+    })),
+  ];
+  let reads = 0;
+  const watched = new Proxy(log, {
+    get(target, key, receiver) {
+      reads += 1;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  const local: QcSnapshot = { status: "running", error: "", events: watched };
+
+  let snapshot = mergeQcEvent(local, log[1]);
+  const build = reads;
+  assert.equal(snapshot, local);
+  // One pass to build the index. The array iterator reads both an index and
+  // `length` per step, hence the small multiple rather than exactly n.
+  assert.ok(build <= log.length * 3, `the index build should be one pass, saw ${build}`);
+
+  // Every chatty frame — the flood a reconnect replays — costs nothing at all.
+  // The single qc_started frame is excluded deliberately: it settles run
+  // identity before any sequence comparison, which reads the log once per
+  // replay to find its run id. That is the ordering this chunk requires.
+  for (const frame of log.slice(1)) snapshot = mergeQcEvent(snapshot, frame);
+  assert.equal(reads - build, 0, "a duplicate frame must not touch the log");
+  // The whole replay therefore costs one pass, not the ~n² a per-frame scan
+  // of the log would have cost.
+  assert.ok(reads < log.length ** 2);
+  assert.equal(snapshot, local, "no duplicate may rebuild the snapshot");
+  assert.equal(snapshot.events, watched, "no duplicate may rebuild the log");
+});
+
+test("a terminal frame from another run cannot end the run on screen", () => {
+  // Sequence numbers restart at 0 per run, so a superseded run's terminal
+  // frame collides with the live run's numbering. Before identity was checked
+  // first, that frame flipped the live run to complete.
+  const local: QcSnapshot = {
+    status: "running",
+    error: "",
+    events: [
+      started("run-2"),
+      { type: "lens_started", seq: 1, lens_id: "code_compliance" },
+    ],
+  };
+  const foreign = mergeQcEvent(local, {
+    type: "qc_complete",
+    seq: 1,
+    run_id: "run-1",
+    execution_status: "complete",
+  });
+  assert.equal(foreign, local);
+  assert.equal(foreign.status, "running");
+
+  // The live run's own terminal frame still lands.
+  const settled = mergeQcEvent(local, {
+    type: "qc_complete",
+    seq: 2,
+    run_id: "run-2",
+    execution_status: "complete",
+  });
+  assert.equal(settled.status, "complete");
+});
+
+test("a live terminal frame survives a retained report from an older run", () => {
+  // Dropping a frame takes the log's own run id, not qcSnapshotRunId's
+  // retained-report fallback: a retained result says nothing about which run
+  // is streaming, and reading the live run as foreign would swallow its
+  // terminal frame permanently.
+  const local: QcSnapshot = {
+    status: "running",
+    error: "",
+    events: [started("run-2")],
+    result: {
+      run_id: "retained-run",
+      execution_status: "complete",
+    } as NonNullable<QcSnapshot["result"]>,
+  };
+  const settled = mergeQcEvent(local, {
+    type: "qc_complete",
+    seq: 1,
+    run_id: "run-2",
+    execution_status: "complete",
+  });
+  assert.equal(settled.status, "complete");
 });
 
 test("qc_started activates an idle snapshot and preserves a retained queue", () => {

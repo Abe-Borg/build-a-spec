@@ -865,6 +865,11 @@ frontend/                Vite + React + TypeScript + Tailwind v4
                          operation, usage, and limitations helpers
   src/lib/qcLive.ts      typed live-event merge, same-run snapshot reconciliation,
                          milestone policy, and pure three-stage Review Room fold
+  src/lib/researchLive.ts  the research follower's sibling of qcLive: merge by
+                         seq, watermark staleness, stream-end classification
+  src/lib/eventSeqIndex.ts  the sequence index both followers dedupe replay
+                         against, so reconnecting costs one pass, not a scan
+                         per frame
   src/lib/capabilities.ts  the end-user capability vocabulary; the tutorial
                          covers it and a test enforces both directions
   src/lib/tour.ts        the versioned tutorial manifest: starter prompts,

@@ -562,7 +562,7 @@ Then run the full standard verification commands from the master plan.
 ### Implementation record
 
 - Status: **complete** (2026-07-30)
-- Commit/PR: `4de3d43` — PR #95
+- Commit/PR: `58eebec` — PR #95
 - Tests: 20 new across three files (one new), all registered in
   `package.json`'s explicit `node --test` list, and two existing merge tests
   rewritten because they pinned the behavior this chunk reverses.

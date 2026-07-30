@@ -54,7 +54,12 @@ from typing import Any, Callable
 
 from .. import settings
 from ..llm.client import AUTH_ERROR_MESSAGE, is_authentication_error
-from ..research.engine import RequirementsProfile, research_context_block
+from ..research.engine import (
+    RequirementsProfile,
+    dimension_display_title,
+    incomplete_dimensions,
+    research_context_block,
+)
 from ..research.grounding import (
     STOP_CLASS_COMPLETE,
     STOP_CLASS_PAUSE,
@@ -2820,6 +2825,56 @@ def _sha256_json(value: object) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def research_manifest_facts(
+    profile: RequirementsProfile | None,
+) -> dict[str, Any]:
+    """The research record the report projections read instead of live state.
+
+    A report is an audit of the run's INPUT snapshot, so every fact a
+    limitation needs has to be captured here — the session's profile may
+    have gained a round by the time anyone opens the report. Counts alone
+    could not name the missing coverage, which is the whole point of
+    Chunk 3.1: "2 of 4 completed" does not tell a reviewer WHICH two.
+
+    Ids are the machine identity (unique, and resolvable against the
+    module); ``dimension_titles`` names them through one map rather than
+    lists that could fall out of alignment. Both id lists are in module
+    declaration order.
+    """
+    if profile is None:
+        return {
+            "present": False,
+            "fingerprint": "",
+            "research_date": "",
+            "item_count": 0,
+            "dimension_count": 0,
+            "completed_dimensions": 0,
+            "failed_dimensions": 0,
+            "completed_dimension_ids": [],
+            "failed_dimension_ids": [],
+            "dimension_titles": {},
+        }
+    statuses = list(profile.dimension_statuses)
+    incomplete = incomplete_dimensions(profile)
+    incomplete_ids = {s.dimension_id for s in incomplete}
+    return {
+        "present": True,
+        "fingerprint": _sha256_json(profile.to_dict()),
+        "research_date": profile.research_date,
+        "item_count": len(profile.items),
+        "dimension_count": len(statuses),
+        "completed_dimensions": profile.completed_dimensions,
+        "failed_dimensions": profile.failed_dimensions,
+        "completed_dimension_ids": [
+            s.dimension_id for s in statuses if s.dimension_id not in incomplete_ids
+        ],
+        "failed_dimension_ids": [s.dimension_id for s in incomplete],
+        "dimension_titles": {
+            s.dimension_id: dimension_display_title(s) for s in statuses
+        },
+    }
+
+
 def build_qc_input_manifest(
     section: SpecSection,
     profile: RequirementsProfile | None,
@@ -2896,16 +2951,7 @@ def build_qc_input_manifest(
             "section_title": section.title,
             "project_profile": dict(section.project_profile or {}),
         },
-        "requirements_research": {
-            "present": profile is not None,
-            "fingerprint": _sha256_json(profile_payload) if profile_payload else "",
-            "research_date": profile.research_date if profile is not None else "",
-            "item_count": len(profile.items) if profile is not None else 0,
-            "completed_dimensions": (
-                profile.completed_dimensions if profile is not None else 0
-            ),
-            "failed_dimensions": profile.failed_dimensions if profile is not None else 0,
-        },
+        "requirements_research": research_manifest_facts(profile),
         "module": {
             "module_id": module.module_id,
             "display_name": module.display_name,

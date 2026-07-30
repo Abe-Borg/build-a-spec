@@ -393,6 +393,7 @@ def snapshot() -> dict[str, Any]:
     """
     from . import api_key_store, sessions, settings
     from .llm.conversation import effective_discipline
+    from .research.engine import incomplete_dimension_facts
     from .tracing import config as trace_config
     from .tracing.recorder import get_recorder
     from .tracing.redaction import scrub_data
@@ -403,6 +404,24 @@ def snapshot() -> dict[str, Any]:
     with session.session_state_guard():
         store = session.doc
         source_bytes = session.source_docx_bytes
+        # Plain attribute reads of the runner, the way readiness and
+        # `_doc_payload` already do it — never the runner's own lock, which
+        # would nest a second lock under the session guard.
+        research_profile = session.research.profile_result
+        research_block: dict[str, Any] = {
+            "status": session.research.status,
+            "rounds": (
+                research_profile.round_count if research_profile else 0
+            ),
+            "dimension_count": (
+                len(research_profile.dimension_statuses) if research_profile else 0
+            ),
+            # Which coverage never completed — a partial run still reports
+            # `complete`, so a support bundle would otherwise have to open
+            # the project to find out. Sanitized kinds, never the raw
+            # provider message.
+            "incomplete_dimensions": incomplete_dimension_facts(research_profile),
+        }
         session_block: dict[str, Any] = {
             "history_len": len(session.history),
             "doc_version_index": store.index,
@@ -418,6 +437,7 @@ def snapshot() -> dict[str, Any]:
             "import_report_present": session.import_report is not None,
             "module_id": session.module.module_id,
             "discipline": effective_discipline(session),
+            "research": research_block,
             "source": {
                 "retained": source_bytes is not None,
                 "filename": session.source_docx_filename,

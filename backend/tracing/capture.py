@@ -292,15 +292,32 @@ def research_event(handle: SpanHandle | None, event: dict) -> None:
 
 
 def research_end(
-    handle: SpanHandle | None, *, status: str, items: int = 0, error: str = ""
+    handle: SpanHandle | None,
+    *,
+    status: str,
+    items: int = 0,
+    error: str = "",
+    incomplete_dimensions: list[dict] | None = None,
 ) -> None:
+    """Close the research span.
+
+    ``incomplete_dimensions`` records which coverage never completed, as
+    ``{dimension_id, title, error_kind}`` — a partial run reports
+    ``status="complete"``, so without it a trace cannot answer "which
+    coverage failed" and a support bundle has to open the project to guess.
+    Sanitized kinds only: the dimension's own error MESSAGE can carry
+    provider exception text and never enters a trace.
+    """
     try:
         recorder = get_recorder()
         if recorder is None or handle is None:
             return
+        outputs: dict = {"status": status, "items": items}
+        if incomplete_dimensions:
+            outputs["incomplete_dimensions"] = incomplete_dimensions
         recorder.close_span(
             handle,
-            outputs={"status": status, "items": items},
+            outputs=outputs,
             status=STATUS_ERROR if error else STATUS_OK,
             error=error or None,
         )

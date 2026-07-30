@@ -110,6 +110,10 @@ backend/
                            ResearchRound + append_research_round: rounds APPEND
                            (item_id join, evidence-only upgrade, cumulative
                            dimension view, per-item as-of dates, pure/no-mutate);
+                           incomplete_dimensions / dimension_display_title /
+                           incomplete_dimension_facts + DimensionStatus.
+                           error_kind: missing coverage is NAMED, not counted
+                           (see "Incomplete research coverage is named");
                            Batch 7 threads a should_stop callback into
                            _run_dimension (checked before each retry/continuation
                            — cooperative, not mid-call interruption); Batch 10
@@ -3345,6 +3349,98 @@ dependency, no backend change.
   `noEmit` (already set), and Vite resolves it unchanged. Any future value
   import between two `src/` modules that a test file loads needs the same
   extension.
+
+## Incomplete research coverage is named — implemented notes
+
+Deep-dive remediation Chunk 3.1. A research round succeeds when ANY dimension
+completes, so a partial profile is a normal, supported outcome — and every
+surface described it as a COUNT ("2 of 4 dimensions completed"). A count is
+not actionable: absent findings are indistinguishable from a dimension that
+looked and found nothing, which is the difference between "no seismic
+requirement applies here" and "nobody checked". Four surfaces now name the
+gap. No new endpoint, no new SSE event, no new dep, no project-format bump.
+
+- **`incomplete_dimensions(profile)` is the one definition** (research/
+  engine.py, beside `DimensionStatus`): cumulative statuses that have never
+  completed, in module declaration order. `dimension_display_title` falls
+  back to the id, because a legacy profile saved before titles were stored
+  would otherwise name nothing at all. `incomplete_dimension_facts` is the
+  telemetry-safe projection (`{dimension_id, title, error_kind}`). Four
+  callers, one rule — and the rule has to be CUMULATIVE: a dimension that
+  completed in an earlier round is researched even if the latest round
+  failed it, so judging the latest round alone would warn about coverage the
+  session actually has.
+- **`render_text` names it directly after the provenance line it qualifies**,
+  and never as an item — so `research_context_block`'s trimming, which drops
+  whole items lowest-confidence-first to fit the cap, cannot remove it. That
+  matters most in exactly the profile where it is trimmed: the one whose
+  remaining findings would otherwise look like the whole picture. A profile
+  with every dimension completed renders **byte-identically** to before (the
+  warning interpolates as `""`), which is the same posture as the
+  single-round rendering rule above.
+- **The wording is the semantic point, not the count**: "INCOMPLETE
+  COVERAGE: research for X never completed. Findings from this area are
+  ABSENT, not verified-empty; do not treat them as researched. Where a
+  provision would depend on this area, say so rather than assuming that
+  nothing applies." Aimed at the model (it cannot press Research), and it
+  reaches all five QC lenses for free through `_render_profile` →
+  `_lens_shared_prefix` — which takes no lens argument, so the warning
+  physically cannot vary between them.
+- **`DimensionStatus.error_kind` is a sanitized token beside the
+  user-facing message.** Two of the recorded messages embed provider
+  exception text (`f"{type(exc).__name__}: {exc}"`), and the drawer is the
+  right place for that but a trace span and a support bundle are not. The
+  kind is chosen at the `_failed` choke point rather than reverse-engineered
+  from prose later; a raised provider error reports its
+  `retry_policy.FailureClass` value, which is already closed and
+  str-valued "for cheap telemetry" — so a bundle reads `rate_limit`, not
+  "something raised". `DIMENSION_ERROR_KINDS` is the union. The cumulative
+  merge carries `error_kind` beside `error` (both report the LATEST round's
+  outcome), and `_statuses_from_raw` defaults it empty on older files.
+- **The closed vocabulary is ENFORCED, not just documented** (`sanitized_
+  error_kind`, caught in review on PR #96). `.baspec` files are shared
+  between people and the deserializer is deliberately permissive, so
+  arbitrary text in a saved `error_kind` rode the facts projection straight
+  into `/api/diagnostics` and a support bundle — precisely the payload the
+  vocabulary exists to keep out. Applied at BOTH ends: at load, so a
+  `DimensionStatus` never carries a value its own docstring forbids, and
+  again in the projection, because that is where the telemetry-safe promise
+  is made and it must hold however the value arrived (a future code path
+  that bypasses the loader cannot reopen it). An unrecognized value becomes
+  `unrecognized` rather than `""` — a bundle should be able to show that the
+  file carried something odd without the odd thing itself travelling, and
+  `""` already means "a success, or a pre-3.1 file". The user-facing `error`
+  message is untouched: free text is what it is for, which is exactly why it
+  is not in the projection.
+- **The QC manifest captures the names, because a report is an audit of the
+  run's INPUT snapshot** (`qc/engine.research_manifest_facts`): a report
+  opened later cannot consult the live profile, which may have gained a
+  round. `dimension_count` + `completed_dimension_ids` /
+  `failed_dimension_ids` (module order, disjoint) + one `dimension_titles`
+  map — a map rather than parallel title arrays, which cannot fall out of
+  alignment. This changes `input_fingerprint` for new runs by design; a
+  persisted report is never rewritten. Chunk 3.2 adds the required-policy
+  ids here, and Chunk 3.3 renders them into both report projections.
+- **Partial coverage is observable without opening a project**: the research
+  trace span closes with `incomplete_dimensions` (absent, not an empty list,
+  when the run was clean — a complete span stays byte-identical), and
+  `/api/diagnostics`'s session block gains a `research` record with the same
+  facts. Read as plain runner attributes the way readiness and
+  `_doc_payload` already do, never the runner's own lock — that would nest a
+  second lock under the session guard.
+- **Tests**: 18 new. `test_research_engine.py` — complete-profile byte
+  identity, one gap, several gaps in module order, the id fallback, the raw
+  provider error staying out of the context, trimming that cannot drop the
+  warning, the kind recorded per failure mode, and the facts projection.
+  `test_research_rounds.py` — a later round that covers the gap retires the
+  warning while the fresh failure stays recorded, a serialization round
+  trip, and a pre-`error_kind` file. `test_qc_manifest_integrity.py` —
+  names not just counts, an absent profile recording empty coverage,
+  partial coverage changing input identity, and every lens being told.
+  `test_diagnostics.py` / `test_tracing.py` — the snapshot and span facts,
+  each asserting the provider payload is absent. Every mechanism was
+  reverted in place to prove it load-bearing (the warning → 7 red, the
+  merge's kind → 1 red).
 
 ## Final QC Review Room — live three-stage contract
 

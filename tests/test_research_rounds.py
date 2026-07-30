@@ -24,7 +24,11 @@ from backend.research import (
     ResearchRunner,
     append_research_round,
 )
-from backend.research.engine import DimensionStatus, _mint_item_id
+from backend.research.engine import (
+    DimensionStatus,
+    _mint_item_id,
+    incomplete_dimension_facts,
+)
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
 from tests.fakes import FakeClient, SequencedFakeClient, research_response, text_turn, tool_turn
 from tests.test_research_api import _PROFILE_EDITS, _parse_sse
@@ -325,6 +329,126 @@ def test_a_dimension_that_failed_this_round_keeps_its_earlier_findings():
 # ---------------------------------------------------------------------------
 # What the drafting context sees
 # ---------------------------------------------------------------------------
+
+
+def test_a_later_round_that_covers_the_gap_retires_the_coverage_warning():
+    """Pressing Research again is the remediation path, so the warning has to
+    clear on the cumulative view — not linger because the FIRST round failed.
+
+    And the reverse: a dimension that completed earlier and failed in this
+    round is researched, so its fresh failure must not reintroduce a warning
+    saying its findings are absent. They are not; they are in the profile.
+    """
+    first = append_research_round(
+        None,
+        _round(
+            items=[_ritem("r-a", "Rule A.")],
+            statuses=[
+                DimensionStatus(dimension_id="governing_codes", status="completed"),
+                DimensionStatus(
+                    dimension_id="ahj_requirements",
+                    status="failed",
+                    title="AHJ requirements",
+                    error="timed out",
+                    error_kind="connection",
+                ),
+            ],
+        ),
+    )
+    assert "INCOMPLETE COVERAGE: research for AHJ requirements" in first.render_text()
+    assert [f["error_kind"] for f in incomplete_dimension_facts(first)] == [
+        "connection"
+    ]
+
+    retried = append_research_round(
+        first,
+        _round(
+            items=[
+                _ritem(
+                    "r-c",
+                    "AHJ rule.",
+                    dimension_id="ahj_requirements",
+                    category="ahj_requirement",
+                )
+            ],
+            statuses=[
+                DimensionStatus(
+                    dimension_id="governing_codes",
+                    status="failed",
+                    title="Governing codes",
+                    error="rate limited",
+                    error_kind="rate_limit",
+                ),
+                DimensionStatus(
+                    dimension_id="ahj_requirements",
+                    status="completed",
+                    title="AHJ requirements",
+                ),
+            ],
+            date="2026-07-27",
+        ),
+    )
+    text = retried.render_text()
+    assert "INCOMPLETE COVERAGE" not in text
+    assert incomplete_dimension_facts(retried) == []
+    # The latest round's failure is still recorded where it belongs.
+    by_id = {s.dimension_id: s for s in retried.dimension_statuses}
+    assert by_id["governing_codes"].error_kind == "rate_limit"
+
+
+def test_the_coverage_warning_survives_a_serialization_round_trip():
+    profile = append_research_round(
+        None,
+        _round(
+            items=[_ritem("r-a", "Rule A.")],
+            statuses=[
+                DimensionStatus(dimension_id="governing_codes", status="completed"),
+                DimensionStatus(
+                    dimension_id="site_environment",
+                    status="failed",
+                    title="Site and environment",
+                    error="RateLimitError: slow down",
+                    error_kind="rate_limit",
+                ),
+            ],
+        ),
+    )
+    restored = RequirementsProfile.from_dict(json.loads(json.dumps(profile.to_dict())))
+    assert restored is not None
+    assert "research for Site and environment never completed" in restored.render_text()
+    assert incomplete_dimension_facts(restored) == [
+        {
+            "dimension_id": "site_environment",
+            "title": "Site and environment",
+            "error_kind": "rate_limit",
+        }
+    ]
+
+
+def test_a_profile_saved_before_kinds_existed_reads_as_an_empty_kind():
+    restored = RequirementsProfile.from_dict(
+        {
+            "items": [],
+            "dimension_statuses": [
+                {
+                    "dimension_id": "site_environment",
+                    "status": "failed",
+                    "title": "Site and environment",
+                    "error": "timed out",
+                }
+            ],
+            "research_date": "2026-07-21",
+            "project": PROFILE.to_dict(),
+        }
+    )
+    assert restored is not None
+    assert incomplete_dimension_facts(restored) == [
+        {
+            "dimension_id": "site_environment",
+            "title": "Site and environment",
+            "error_kind": "",
+        }
+    ]
 
 
 def test_one_round_renders_exactly_as_it_always_has():

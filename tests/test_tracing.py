@@ -164,6 +164,66 @@ def test_research_and_qc_progress_events_reach_the_trace(monkeypatch, tmp_path):
         set_recorder(None)
 
 
+def test_the_research_span_records_which_coverage_never_completed(
+    monkeypatch, tmp_path
+):
+    """A partial run closes its span with ``status="complete"``.
+
+    So without the incomplete list, a trace could not answer "which coverage
+    failed" — the exact question a support bundle exists for. Sanitized kinds
+    only: the dimension's own error message can carry provider exception text.
+    """
+    monkeypatch.setenv(config.ENV_TRACE, "1")
+    monkeypatch.setenv(config.ENV_TRACE_DIR, str(tmp_path))
+    set_recorder(None)
+    try:
+        handle = capture.research_start(project="Ashburn DC", dimensions=4)
+        capture.research_end(
+            handle,
+            status="complete",
+            items=7,
+            incomplete_dimensions=[
+                {
+                    "dimension_id": "ahj_requirements",
+                    "title": "AHJ requirements",
+                    "error_kind": "rate_limit",
+                }
+            ],
+        )
+        rec = recorder_module.get_recorder()
+        assert rec is not None
+        rec.stop()
+
+        run_dirs = list(tmp_path.iterdir())
+        spans = _read_jsonl(run_dirs[0] / "spans.jsonl")
+        research = [s for s in spans if s.get("kind") == "research"]
+        assert len(research) == 1
+        outputs = research[0]["outputs"]
+        assert outputs["status"] == "complete" and outputs["items"] == 7
+        assert outputs["incomplete_dimensions"] == [
+            {
+                "dimension_id": "ahj_requirements",
+                "title": "AHJ requirements",
+                "error_kind": "rate_limit",
+            }
+        ]
+
+        # A fully complete run says nothing extra — the key is absent, not
+        # an empty list, so a complete span stays byte-identical to before.
+        set_recorder(None)
+        clean = capture.research_start(project="Ashburn DC", dimensions=4)
+        capture.research_end(clean, status="complete", items=7)
+        rec = recorder_module.get_recorder()
+        assert rec is not None
+        rec.stop()
+        newest = max(tmp_path.iterdir(), key=lambda p: p.stat().st_mtime)
+        spans = _read_jsonl(newest / "spans.jsonl")
+        research = [s for s in spans if s.get("kind") == "research"]
+        assert "incomplete_dimensions" not in research[0]["outputs"]
+    finally:
+        set_recorder(None)
+
+
 def test_turns_trace_end_to_end_through_the_engine(monkeypatch, tmp_path):
     """A real (fake-client) chat turn produces a turn span + tool event."""
     monkeypatch.setenv(config.ENV_TRACE, "1")

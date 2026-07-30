@@ -1,6 +1,6 @@
 # Phase 3 — Research and QC truthfulness
 
-- Status: planned
+- Status: in progress (3.1 complete; 3.2 and 3.3 planned)
 - Prerequisites: Phases 1 and 2 complete
 - Risk: high; this phase changes issue-readiness and the audit report's claims
 
@@ -104,11 +104,116 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_resear
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete** (2026-07-30)
+- Commit/PR: `4d3c0f2` — PR #96
+- Tests: 21 new (18, plus 3 from the PR #96 review), spread over the plan's
+  named files plus `test_tracing.py`
+  (the only place the trace half of step 5 is observable).
+  `tests/test_research_engine.py` (8): a fully complete profile renders
+  byte-identically (the provenance line followed immediately by both marker
+  legends, nothing spliced between); one never-completed dimension named as
+  ABSENT-not-empty with singular phrasing and no completed dimension leaking
+  into the warning; several named in module order with plural phrasing; the
+  title falling back to the id; the raw provider error never reaching the
+  drafting context; trimming that cannot drop the warning even when items
+  are dropped; the sanitized kind recorded per failure mode
+  (`incomplete_response` / `no_payload` / a raised error's failure class /
+  empty for a success) with every kind inside `DIMENSION_ERROR_KINDS`; and
+  the facts projection's order and `None` handling.
+  `tests/test_research_rounds.py` (3): a later round that covers the gap
+  retires the warning while the round's own fresh failure stays recorded
+  (and the reverse — a dimension that completed earlier does not
+  reintroduce a warning), a serialization round trip, and a profile saved
+  before `error_kind` existed reading as an empty kind.
+  `tests/test_qc_manifest_integrity.py` (4): the manifest naming which
+  coverage failed rather than only how many (module order, disjoint sets),
+  an absent profile recording empty coverage rather than omitting the keys,
+  partial coverage changing the full input identity, and every lens being
+  told.
+  `tests/test_diagnostics.py` (2) and `tests/test_tracing.py` (1): the
+  snapshot's `session.research` record and the span's
+  `incomplete_dimensions`, both asserting the provider payload is absent
+  from the response/file text, plus the clean-run cases (empty coverage;
+  the span key absent rather than an empty list).
+  Focused run green (research engine / rounds / manifest integrity / audit
+  report / diagnostics / tracing — 114 passed); full gate green:
+  `pytest -q` **1199 passed, 9 skipped** (was 1178/9), `npm test` 143
+  passed and `npm run build` clean (no frontend change — regression check).
+  Both mechanisms were reverted in place to prove them load-bearing:
+  removing the warning interpolation turns 7 red, removing `error_kind`
+  from the cumulative merge turns 1 red.
 - Deviations:
-- Manual QA owed:
+  - **`DimensionStatus.error_kind` is a new serialized field, which the plan
+    did not call for.** Step 5 asks for "a sanitized error kind" in the
+    trace and the diagnostics snapshot, and the only alternative was to
+    reverse-engineer one from the stored English message — brittle against
+    any future reword, and silently degrading to a useless bucket. `_failed`
+    is a single choke point, so recording the kind at the failure site cost
+    8 call sites and is exact. A raised provider error reports its
+    `retry_policy.FailureClass` value rather than a new token: that enum is
+    already closed and str-valued "for cheap telemetry" per its own
+    docstring, so a support bundle reads `rate_limit` instead of
+    "something raised". `_statuses_from_raw` defaults it empty, so older
+    files load unchanged (pinned).
+  - **The manifest uses one `dimension_titles` MAP plus two id lists**, not
+    parallel id/title arrays. Step 3 says "completed dimension ids/titles";
+    parallel arrays can fall out of alignment, and 3.2 validates the id
+    lists structurally (unique, disjoint, resolvable against the module),
+    which wants ids as the machine identity with naming kept separate.
+  - **`research_manifest_facts` is extracted as its own function** rather
+    than staying an inline dict in `build_qc_input_manifest`. 3.2 extends it
+    with required-policy ids and 3.3 reads it from two projections, so it
+    needed a name and a docstring stating why counts are insufficient.
+  - **Step 2 needed no code, and the test says why.** The warning renders in
+    the header, and `research_context_block` trims by dropping whole ITEMS
+    and re-rendering — so the header is unreachable by the trimmer by
+    construction. Rather than add a "protected prefix" seam the plan left
+    optional, the invariant is pinned by a test that trims a profile until
+    items are dropped and requires the warning to survive; the comment at
+    the render site states the reason so a future refactor that moves the
+    warning into an item has to argue with it.
+  - **The warning tells the model what to do, not the user.** The plan's
+    example wording ends at "do not treat them as researched"; a clause was
+    added asking it to say so where a provision would depend on the missing
+    area, since the model cannot press Research and silence is the failure
+    mode this chunk exists to remove. "Press Research again" copy belongs to
+    the readiness detail in 3.2.
+  - **`tests/test_qc_audit_report.py` is untouched.** The plan lists it, but
+    3.1 only captures the facts; rendering them into the Word/JSON/UI
+    limitations is 3.3's job, and that file owns the projections. Its
+    existing tests are part of the focused run as a regression check.
+  - **The lens test asserts the SHARED prefix**, not a loop over per-lens
+    messages: `_lens_shared_prefix` takes no lens argument, so the profile
+    physically cannot vary between lenses (that is the v1.8.0 caching
+    invariant), which is a stronger claim than five equal strings. An
+    earlier version of the test also asserted no per-lens suffix mentions
+    the profile at all — wrong, because the `completeness` brief legitimately
+    references the `<project_requirements_profile>` tag in its prose.
+  - **The closed vocabulary is ENFORCED at both ends** (`sanitized_error_kind`)
+    — a P2 raised in review on PR #96, and a fair one: the field was
+    *documented* as closed and telemetry-safe, but `_statuses_from_raw` is
+    deliberately permissive, so arbitrary text in a shared `.baspec` file rode
+    `incomplete_dimension_facts` into `/api/diagnostics` and a support bundle.
+    Normalizing at load alone would have left the projection still trusting
+    its input, so both ends call the same helper and the projection is the
+    load-bearing one — that is where the guarantee is made, and a future code
+    path that bypasses the loader must not be able to reopen it. An
+    unrecognized value becomes `unrecognized` rather than `""`: a bundle
+    should show that the file carried something odd without the odd thing
+    travelling, and `""` already means "a success, or a pre-3.1 file". The
+    permissive LOAD is unchanged (the project still opens) and the
+    user-facing `error` keeps its detail — free text is what that field is
+    for, which is exactly why it is not in the projection. Four assertions
+    across three tests, two of which fail against the pre-fix code: the
+    smuggling attempt through a project file, the same guarantee on a
+    directly-constructed status (proving the projection enforces it and not
+    only the loader), the vocabulary round-trip, and an end-to-end
+    `/api/diagnostics` check that the crafted text is absent from the
+    response body.
+- Manual QA owed: Phase 3's first bullet — open a deliberately partial saved
+  profile and inspect the PROJECT CONTEXT in a deep diagnostic trace,
+  confirming the missing titles and the absent-not-empty instruction. The
+  rendering is pinned hermetically; what the trace viewer shows is not.
 
 ## Chunk 3.2 — Required research dimensions and readiness
 

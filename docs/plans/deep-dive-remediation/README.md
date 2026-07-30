@@ -332,7 +332,7 @@ tests and phase gate are recorded in the phase file.
 | 2.2 | **complete** | `66abd43` (PR #92) | settling = stopped-and-unwinding only; pulled ahead of 2.1 per the roadmap |
 | 2.3 | **complete** | `a42fc76` (PR #94) | `lib/researchLive.ts`; watermark staleness, generation guard, reconnect + abort |
 | 2.4 | **complete** | `58eebec` (PR #95) | `lib/eventSeqIndex.ts`; identity before sequence, O(1) duplicate test, first-arrival-wins — **Phase 2 done** |
-| 3.1 | **complete** | pending | incomplete coverage NAMED in context/manifest/trace/diagnostics; `DimensionStatus.error_kind` |
+| 3.1 | **complete** | `4d3c0f2` (PR #96) | incomplete coverage NAMED in context/manifest/trace/diagnostics; `DimensionStatus.error_kind` |
 | 3.2 | planned | | |
 | 3.3 | planned | | |
 | 4.1 | planned | | |

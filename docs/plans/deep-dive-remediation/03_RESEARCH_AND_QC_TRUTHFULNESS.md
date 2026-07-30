@@ -105,7 +105,7 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_resear
 ### Implementation record
 
 - Status: **complete** (2026-07-30)
-- Commit/PR: PENDING — pinned in the follow-up commit
+- Commit/PR: `4d3c0f2` — PR #96
 - Tests: 18 new, spread over the plan's named files plus `test_tracing.py`
   (the only place the trace half of step 5 is observable).
   `tests/test_research_engine.py` (8): a fully complete profile renders

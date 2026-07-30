@@ -3564,6 +3564,17 @@ endpoint, no new SSE event, no new dep, no schema bump.
   issue readiness), then declared-optional ones with their rationale, then
   any remaining failed status; partial with counts only → says the schema did
   not record which areas, rather than guessing.
+- **The verdict is about DECLARED coverage, and a retired dimension cannot
+  move it** (caught in review on PR #98). A persisted profile can keep a
+  failed status for a dimension the current module no longer declares —
+  `research_coverage` supports exactly that — and counting it as a gap
+  rendered "Yes — partial (4 of 4 areas completed)", a self-contradiction. On
+  a 3.2+ record every declared incomplete dimension is in one of the two
+  policy lists, so whatever is left in `failed_dimension_ids` is retired: it
+  is still DISCLOSED (this report never drops a recorded failure) but does not
+  change the verdict or the count. A legacy record has no declared scope to
+  filter against, so its failed ids still lead — otherwise a pre-3.2 partial
+  report would read clean.
 - **Step 7 was a verification, not an implementation.** `docx_export`
   consumes the readiness checks out of `export_current_state` rather than
   re-deriving them, so Chunk 3.2's truthful detail reaches Word for free and
@@ -3571,11 +3582,14 @@ endpoint, no new SSE event, no new dep, no schema bump.
   so a future refactor that re-derives readiness in the exporter has to
   disagree with a test. Note booleans render as `Yes`/`No` there, not
   `True`/`False`.
-- **Tests**: 18 new. `tests/test_qc_audit_report.py` (9): each of the six
+- **Tests**: 24 new. `tests/test_qc_audit_report.py` (12): each of the six
   branches as a unit, the Word report stating partial coverage in BOTH places
   end-to-end through the real writer, captured facts surviving a live-research
   change, and the readiness table carrying the blocked detail.
-  `frontend/tests/qcReport.test.ts` (9): the same six branches mirrored, the
+  Three more per side cover the retired-dimension verdict, a retired record
+  riding along beside a real gap without inflating the count, and the legacy
+  no-declared-scope fallback.
+  `frontend/tests/qcReport.test.ts` (12): the same branches mirrored, the
   limitation reaching `qcReportLimitations` verbatim, unknown manifest fields
   preserved (forward compatibility), and a malformed record degrading instead
   of throwing. The identity assertion was written `"Research profile present:

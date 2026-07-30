@@ -2090,3 +2090,78 @@ def test_the_word_readiness_table_carries_the_blocked_research_detail() -> None:
     assert "Authority-having-jurisdiction requirements" in text
     # The report cannot claim issue readiness while that check blocks.
     assert "Issue readiness at export: Yes" not in text
+
+
+def test_a_retired_dimension_does_not_make_declared_coverage_partial() -> None:
+    """Raised in review on PR #98, and a real self-contradiction.
+
+    A persisted profile can keep a failed status for a dimension the current
+    module no longer declares (`research_coverage` supports exactly that).
+    Counting it as a gap rendered "Yes - partial (4 of 4 areas completed)".
+    The verdict is about DECLARED coverage — but the stale failure is still
+    disclosed, because this report never drops a recorded failure.
+    """
+    identity, limitation = qc_research_coverage(
+        _result_with_research(
+            _research_record(
+                dimension_count=5,
+                declared_dimension_count=4,
+                failed_dimensions=1,
+                failed_dimension_ids=["retired_axis"],
+                dimension_titles={"retired_axis": "Retired seismic axis"},
+            )
+        )
+    )
+    assert identity == "Yes - complete"
+    assert "partial" not in identity
+    assert "Retired seismic axis" in limitation
+    assert "no longer declares as coverage" in limitation
+
+
+def test_a_retired_dimension_rides_along_without_inflating_a_real_gap() -> None:
+    identity, limitation = qc_research_coverage(
+        _result_with_research(
+            _research_record(
+                dimension_count=5,
+                declared_dimension_count=4,
+                completed_dimensions=3,
+                failed_dimensions=2,
+                completed_dimension_ids=[
+                    "governing_codes",
+                    "client_standards",
+                    "site_environment",
+                ],
+                failed_dimension_ids=["ahj_requirements", "retired_axis"],
+                incomplete_required_dimension_ids=["ahj_requirements"],
+                dimension_titles={
+                    "ahj_requirements": "Authority-having-jurisdiction requirements",
+                    "retired_axis": "Retired seismic axis",
+                },
+            )
+        )
+    )
+    # The count reflects declared coverage only: 3 of 4, not 3 of 5.
+    assert identity == "Yes - partial (3 of 4 areas completed)"
+    assert "REQUIRED for issue readiness" in limitation
+    assert "Retired seismic axis" in limitation
+    assert "no longer declares as coverage" in limitation
+
+
+def test_a_legacy_record_without_declared_scope_still_lets_failures_lead() -> None:
+    """No declared scope to filter against, so the failed ids must still
+    drive the verdict — otherwise a pre-3.2 partial report would read clean."""
+    identity, limitation = qc_research_coverage(
+        _result_with_research(
+            {
+                "present": True,
+                "dimension_count": 4,
+                "completed_dimensions": 3,
+                "failed_dimensions": 1,
+                "completed_dimension_ids": ["a", "b", "c"],
+                "failed_dimension_ids": ["ahj_requirements"],
+                "dimension_titles": {"ahj_requirements": "AHJ requirements"},
+            }
+        )
+    )
+    assert identity == "Yes - partial (3 of 4 areas completed)"
+    assert "AHJ requirements" in limitation

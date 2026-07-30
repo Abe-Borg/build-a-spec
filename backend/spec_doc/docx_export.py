@@ -915,17 +915,29 @@ def qc_research_coverage(qc_result: dict) -> tuple[str, str]:
     required_missing = [str(x) for x in _qc_list(record.get("incomplete_required_dimension_ids"))]
     optional_missing = [str(x) for x in _qc_list(record.get("incomplete_optional_dimension_ids"))]
     failed_ids = [str(x) for x in _qc_list(record.get("failed_dimension_ids"))]
-    # The declared view (Chunk 3.2) leads, because a dimension the module
-    # declares but research never recorded at all is missing coverage that
-    # no status list can show. Any remaining failed status is still named.
-    ordered: list[str] = []
-    for dimension_id in [*required_missing, *optional_missing, *failed_ids]:
-        if dimension_id not in ordered:
-            ordered.append(dimension_id)
 
     declared = record.get("declared_dimension_count")
+    declared_known = isinstance(declared, bool) is False and isinstance(declared, int) and declared > 0
+    # The verdict is about DECLARED coverage. A persisted profile can keep a
+    # failed status for a dimension the current module no longer declares
+    # (`research_coverage` supports exactly that), and counting it as a gap
+    # produced "partial (4 of 4 areas completed)" — a contradiction. On a
+    # Chunk 3.2+ record every declared incomplete dimension is in one of the
+    # two policy lists, so whatever is left in `failed_dimension_ids` is
+    # retired: reported, but not allowed to move the verdict. A legacy record
+    # has no declared scope to filter against, so its failed ids still lead.
+    ordered: list[str] = []
+    for dimension_id in (
+        [*required_missing, *optional_missing] if declared_known else failed_ids
+    ):
+        if dimension_id not in ordered:
+            ordered.append(dimension_id)
+    retired = (
+        [x for x in failed_ids if x not in ordered] if declared_known else []
+    )
+
     recorded_total = record.get("dimension_count")
-    total = declared if isinstance(declared, int) and declared > 0 else recorded_total
+    total = declared if declared_known else recorded_total
     completed_ids = _qc_list(record.get("completed_dimension_ids"))
     completed = (
         len(completed_ids)
@@ -938,9 +950,22 @@ def qc_research_coverage(qc_result: dict) -> tuple[str, str]:
         counted = f"{completed}"
 
     failed_count = record.get("failed_dimensions") or 0
-    if not ordered and not failed_count:
-        return "Yes - complete", ""
+    retired_note = ""
+    if retired:
+        names = ", ".join(_qc_research_names(record, retired))
+        retired_note = (
+            f"A recorded research status did not complete for {names}, which "
+            "this module no longer declares as coverage; it is preserved here "
+            "but does not affect the coverage verdict."
+        )
     if not ordered:
+        if retired:
+            # Declared coverage IS complete, and the stale failure is still
+            # disclosed rather than dropped (the report never omits a
+            # recorded failure).
+            return "Yes - complete", retired_note
+        if not failed_count:
+            return "Yes - complete", ""
         # Counts only: an older record that never stored the id lists.
         return (
             f"Yes - partial ({counted} areas completed)",
@@ -978,6 +1003,8 @@ def qc_research_coverage(qc_result: dict) -> tuple[str, str]:
         "Findings from those areas are absent from this review, not "
         "verified-empty."
     )
+    if retired_note:
+        sentences.append(retired_note)
     return f"Yes - partial ({counted} areas completed)", " ".join(sentences)
 
 

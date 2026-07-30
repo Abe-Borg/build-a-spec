@@ -667,3 +667,68 @@ test("a malformed record degrades instead of throwing", () => {
   assert.equal(typeof coverage.identity, "string");
   assert.ok(coverage.identity.length > 0);
 });
+
+test("a retired dimension does not make declared coverage partial", () => {
+  // Raised in review on PR #98: counting a status for a dimension the module
+  // no longer declares rendered "partial (4 of 4 areas completed)".
+  const coverage = qcResearchCoverage(
+    withResearch(
+      researchRecord({
+        dimension_count: 5,
+        declared_dimension_count: 4,
+        failed_dimensions: 1,
+        failed_dimension_ids: ["retired_axis"],
+        dimension_titles: { retired_axis: "Retired seismic axis" },
+      }),
+    ),
+  );
+  assert.equal(coverage.state, "complete");
+  assert.equal(coverage.identity, "Yes — complete");
+  // Disclosed, never dropped.
+  assert.match(coverage.limitation, /Retired seismic axis/);
+  assert.match(coverage.limitation, /no longer declares as coverage/);
+});
+
+test("a retired dimension rides along without inflating a real gap", () => {
+  const coverage = qcResearchCoverage(
+    withResearch(
+      researchRecord({
+        dimension_count: 5,
+        declared_dimension_count: 4,
+        completed_dimensions: 3,
+        failed_dimensions: 2,
+        completed_dimension_ids: [
+          "governing_codes",
+          "client_standards",
+          "site_environment",
+        ],
+        failed_dimension_ids: ["ahj_requirements", "retired_axis"],
+        incomplete_required_dimension_ids: ["ahj_requirements"],
+        dimension_titles: {
+          ahj_requirements: "Authority-having-jurisdiction requirements",
+          retired_axis: "Retired seismic axis",
+        },
+      }),
+    ),
+  );
+  // Declared coverage only: 3 of 4, never 3 of 5.
+  assert.equal(coverage.identity, "Yes — partial (3 of 4 areas completed)");
+  assert.match(coverage.limitation, /REQUIRED for issue readiness/);
+  assert.match(coverage.limitation, /no longer declares as coverage/);
+});
+
+test("a legacy record without declared scope still lets failures lead", () => {
+  const coverage = qcResearchCoverage(
+    withResearch({
+      present: true,
+      dimension_count: 4,
+      completed_dimensions: 3,
+      failed_dimensions: 1,
+      completed_dimension_ids: ["a", "b", "c"],
+      failed_dimension_ids: ["ahj_requirements"],
+      dimension_titles: { ahj_requirements: "AHJ requirements" },
+    }),
+  );
+  assert.equal(coverage.identity, "Yes — partial (3 of 4 areas completed)");
+  assert.match(coverage.limitation, /AHJ requirements/);
+});

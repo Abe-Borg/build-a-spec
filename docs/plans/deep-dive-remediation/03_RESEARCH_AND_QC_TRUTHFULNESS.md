@@ -472,8 +472,9 @@ Then run the full standard verification commands from the master plan.
 
 - Status: **complete** (2026-07-30)
 - Commit/PR: `c10df8b` — PR #98
-- Tests: 18 new, nine per side, deliberately the same six branches twice so
-  the mirrors can be compared by reading them side by side.
+- Tests: 24 new (18, plus 6 from the PR #98 review), twelve per side,
+  deliberately the same branches twice so the mirrors can be compared by
+  reading them side by side.
   `tests/test_qc_audit_report.py` (9): each branch as a unit (no profile;
   complete → EMPTY limitation; partial-required naming the areas and marking
   them required; partial-optional quoting the declared rationale; count-only
@@ -487,7 +488,7 @@ Then run the full standard verification commands from the master plan.
   preserved (step 5's forward compatibility), and a malformed record
   degrading instead of throwing.
   Focused run green (`test_qc_audit_report` 36 passed); full gate green:
-  `pytest -q` **1220 passed, 9 skipped** (was 1211/9), `npm test` **151
+  `pytest -q` **1223 passed, 9 skipped** (was 1211/9), `npm test` **154
   passed** (was 143), `npm run build` clean.
   Reverting the identity row to a bare `Yes` turns two backend tests red.
 - Deviations:
@@ -526,6 +527,21 @@ Then run the full standard verification commands from the master plan.
     `"Research profile present\nYes\n" not in text`, which can never match:
     `_qc_add_label` puts label and value in ONE paragraph. The colon form is
     what makes it bite, and reverting the identity row proves it does.
+  - **A retired dimension must not move the verdict** — a P2 raised in review
+    on PR #98, and a real self-contradiction. A persisted profile can keep a
+    failed status for a dimension the current module no longer declares
+    (`research_coverage` supports exactly that, and this chunk's own code
+    comments said so), and counting it as a gap rendered "Yes — partial (4 of
+    4 areas completed)". On a 3.2+ record every declared incomplete dimension
+    is in one of the two policy lists, so the remainder of
+    `failed_dimension_ids` is retired by construction — no new manifest field
+    was needed to identify it. It is still DISCLOSED, because the reporting
+    contract never drops a recorded failure, but it no longer changes the
+    verdict or the count. A legacy record has no declared scope to filter
+    against, so its failed ids still lead; otherwise a pre-3.2 partial report
+    would read clean, which would be a worse bug than the one being fixed.
+    Three tests per side, two of which fail against the pre-fix code on each
+    side.
   - **Backend wording uses `Yes - complete` (hyphen), the frontend
     `Yes — complete` (em dash).** The plan allows semantically equivalent
     wording with different wrapping; the Word report avoids the em dash for

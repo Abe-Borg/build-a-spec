@@ -1370,14 +1370,29 @@ export function qcResearchCoverage(
   const requiredMissing = manifestIds(record, "incomplete_required_dimension_ids");
   const optionalMissing = manifestIds(record, "incomplete_optional_dimension_ids");
   const failedIds = manifestIds(record, "failed_dimension_ids");
-  const ordered: string[] = [];
-  for (const id of [...requiredMissing, ...optionalMissing, ...failedIds]) {
-    if (!ordered.includes(id)) ordered.push(id);
-  }
 
   const declared = manifestCount(record, "declared_dimension_count");
+  const declaredKnown = declared !== null && declared > 0;
+  // The verdict is about DECLARED coverage. A persisted profile can keep a
+  // failed status for a dimension the current module no longer declares, and
+  // counting it as a gap produced "partial (4 of 4 areas completed)" — a
+  // contradiction. On a Chunk 3.2+ record every declared incomplete dimension
+  // is in one of the two policy lists, so whatever is left in
+  // `failed_dimension_ids` is retired: reported, never verdict-moving. A
+  // legacy record has no declared scope to filter against, so its failed ids
+  // still lead.
+  const ordered: string[] = [];
+  for (const id of declaredKnown
+    ? [...requiredMissing, ...optionalMissing]
+    : failedIds) {
+    if (!ordered.includes(id)) ordered.push(id);
+  }
+  const retired = declaredKnown
+    ? failedIds.filter((id) => !ordered.includes(id))
+    : [];
+
   const recorded = manifestCount(record, "dimension_count");
-  const total = declared && declared > 0 ? declared : recorded;
+  const total = declaredKnown ? declared : recorded;
   const completedIds = manifestIds(record, "completed_dimension_ids");
   const completed = completedIds.length
     ? completedIds.length
@@ -1386,11 +1401,19 @@ export function qcResearchCoverage(
     total && total > 0 ? `${completed} of ${total}` : `${completed}`;
   const failedCount = manifestCount(record, "failed_dimensions") ?? 0;
 
-  if (!ordered.length && !failedCount) {
-    return { state: "complete", identity: "Yes — complete", limitation: "" };
-  }
+  const retiredNote = retired.length
+    ? `A recorded research status did not complete for ${researchNames(record, retired).join(", ")}, which this module no longer declares as coverage; it is preserved here but does not affect the coverage verdict.`
+    : "";
   const identity = `Yes — partial (${counted} areas completed)`;
   if (!ordered.length) {
+    if (retired.length) {
+      // Declared coverage IS complete, and the stale failure is still
+      // disclosed rather than dropped.
+      return { state: "complete", identity: "Yes — complete", limitation: retiredNote };
+    }
+    if (!failedCount) {
+      return { state: "complete", identity: "Yes — complete", limitation: "" };
+    }
     return {
       state: "partial",
       identity,
@@ -1427,6 +1450,7 @@ export function qcResearchCoverage(
   sentences.push(
     "Findings from those areas are absent from this review, not verified-empty.",
   );
+  if (retiredNote) sentences.push(retiredNote);
   return { state: "partial", identity, limitation: sentences.join(" ") };
 }
 

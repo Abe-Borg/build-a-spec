@@ -16,6 +16,7 @@ from backend.research.engine import (
     DimensionStatus,
     ResearchItem,
     incomplete_dimension_facts,
+    sanitized_error_kind,
 )
 from backend.research.schema import (
     RESEARCH_TOOL_NAME,
@@ -1075,3 +1076,64 @@ def test_incomplete_facts_are_telemetry_safe_and_in_module_order():
         },
     ]
     assert incomplete_dimension_facts(None) == []
+
+
+def test_a_project_file_cannot_smuggle_text_into_the_telemetry_kind():
+    """`.baspec` files are shared between people and the loader is permissive.
+
+    So the closed vocabulary has to be enforced, not just documented: without
+    this, arbitrary text from a project file rode the facts projection into
+    /api/diagnostics and a support bundle — the exact payload the vocabulary
+    exists to keep out. Raised in review on PR #96.
+    """
+    hostile = "BadRequestError: {'message': 'container_id required', 'key': 'sk-x'}"
+    restored = RequirementsProfile.from_dict(
+        {
+            "items": [],
+            "dimension_statuses": [
+                {
+                    "dimension_id": "ahj_requirements",
+                    "status": "failed",
+                    "title": "AHJ requirements",
+                    "error": hostile,
+                    "error_kind": hostile,
+                }
+            ],
+            "research_date": "2026-07-21",
+            "project": PROFILE.to_dict(),
+        }
+    )
+    assert restored is not None
+    # Permissive load — the profile still opens, and the user-facing message
+    # keeps the detail it is allowed to keep.
+    assert restored.dimension_statuses[0].error == hostile
+    # The kind does not: flagged as unrecognized rather than echoed.
+    assert restored.dimension_statuses[0].error_kind == "unrecognized"
+    facts = incomplete_dimension_facts(restored)
+    assert facts[0]["error_kind"] == "unrecognized"
+    assert hostile not in str(facts)
+
+    # And the guarantee holds at the PROJECTION, not only at load: a status
+    # constructed directly with a bad kind is sanitized too, so a future code
+    # path that bypasses the deserializer cannot reopen this.
+    forged = RequirementsProfile(
+        items=[],
+        dimension_statuses=[
+            DimensionStatus(
+                "ahj_requirements", "failed", title="AHJ", error_kind=hostile
+            )
+        ],
+        research_date="2026-07-21",
+    )
+    assert incomplete_dimension_facts(forged)[0]["error_kind"] == "unrecognized"
+
+
+def test_sanitizing_a_kind_keeps_every_real_one_and_rejects_the_rest():
+    for kind in DIMENSION_ERROR_KINDS:
+        assert sanitized_error_kind(kind) == kind
+    # Absence stays absence — it means "a success, or a pre-3.1 file", which
+    # is not the same claim as "the file said something we do not know".
+    assert sanitized_error_kind("") == ""
+    assert sanitized_error_kind(None) == ""
+    assert sanitized_error_kind(["rate_limit"]) == ""
+    assert sanitized_error_kind("RATE_LIMIT") == "unrecognized"

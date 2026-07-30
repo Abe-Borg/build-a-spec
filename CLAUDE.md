@@ -3397,6 +3397,21 @@ gap. No new endpoint, no new SSE event, no new dep, no project-format bump.
   "something raised". `DIMENSION_ERROR_KINDS` is the union. The cumulative
   merge carries `error_kind` beside `error` (both report the LATEST round's
   outcome), and `_statuses_from_raw` defaults it empty on older files.
+- **The closed vocabulary is ENFORCED, not just documented** (`sanitized_
+  error_kind`, caught in review on PR #96). `.baspec` files are shared
+  between people and the deserializer is deliberately permissive, so
+  arbitrary text in a saved `error_kind` rode the facts projection straight
+  into `/api/diagnostics` and a support bundle — precisely the payload the
+  vocabulary exists to keep out. Applied at BOTH ends: at load, so a
+  `DimensionStatus` never carries a value its own docstring forbids, and
+  again in the projection, because that is where the telemetry-safe promise
+  is made and it must hold however the value arrived (a future code path
+  that bypasses the loader cannot reopen it). An unrecognized value becomes
+  `unrecognized` rather than `""` — a bundle should be able to show that the
+  file carried something odd without the odd thing itself travelling, and
+  `""` already means "a success, or a pre-3.1 file". The user-facing `error`
+  message is untouched: free text is what it is for, which is exactly why it
+  is not in the projection.
 - **The QC manifest captures the names, because a report is an audit of the
   run's INPUT snapshot** (`qc/engine.research_manifest_facts`): a report
   opened later cannot consult the live profile, which may have gained a

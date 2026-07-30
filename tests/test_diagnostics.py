@@ -588,6 +588,45 @@ def test_the_snapshot_names_which_research_coverage_never_completed():
     assert "BadRequestError" not in resp.text
 
 
+def test_a_crafted_project_kind_never_reaches_the_diagnostics_response():
+    """The end of the path the review named: project file → snapshot → bundle.
+
+    `.baspec` files are shared between people, so a hostile or hand-edited
+    one must not be able to place text of its choosing in a support bundle
+    through a field documented as a closed vocabulary.
+    """
+    from backend.research.engine import RequirementsProfile
+
+    hostile = "BadRequestError: {'message': 'leaked payload'}"
+    session = sessions.get_workspace().session
+    session.research.status = "complete"
+    session.research.profile_result = RequirementsProfile.from_dict(
+        {
+            "items": [],
+            "dimension_statuses": [
+                {
+                    "dimension_id": "site_environment",
+                    "status": "failed",
+                    "title": "Site and environment",
+                    "error_kind": hostile,
+                }
+            ],
+            "research_date": "2026-07-21",
+        }
+    )
+
+    resp = TestClient(create_app()).get("/api/diagnostics")
+    assert resp.status_code == 200
+    assert resp.json()["session"]["research"]["incomplete_dimensions"] == [
+        {
+            "dimension_id": "site_environment",
+            "title": "Site and environment",
+            "error_kind": "unrecognized",
+        }
+    ]
+    assert "leaked payload" not in resp.text
+
+
 def test_a_session_that_never_researched_reports_empty_coverage():
     client = TestClient(create_app())
     research = client.get("/api/diagnostics").json()["session"]["research"]

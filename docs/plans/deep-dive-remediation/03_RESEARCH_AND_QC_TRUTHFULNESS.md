@@ -106,7 +106,8 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_resear
 
 - Status: **complete** (2026-07-30)
 - Commit/PR: `4d3c0f2` — PR #96
-- Tests: 18 new, spread over the plan's named files plus `test_tracing.py`
+- Tests: 21 new (18, plus 3 from the PR #96 review), spread over the plan's
+  named files plus `test_tracing.py`
   (the only place the trace half of step 5 is observable).
   `tests/test_research_engine.py` (8): a fully complete profile renders
   byte-identically (the provenance line followed immediately by both marker
@@ -136,7 +137,7 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_resear
   the span key absent rather than an empty list).
   Focused run green (research engine / rounds / manifest integrity / audit
   report / diagnostics / tracing — 114 passed); full gate green:
-  `pytest -q` **1196 passed, 9 skipped** (was 1178/9), `npm test` 143
+  `pytest -q` **1199 passed, 9 skipped** (was 1178/9), `npm test` 143
   passed and `npm run build` clean (no frontend change — regression check).
   Both mechanisms were reverted in place to prove them load-bearing:
   removing the warning interpolation turns 7 red, removing `error_kind`
@@ -188,6 +189,27 @@ venv\Scripts\python -m pytest -q tests/test_research_engine.py tests/test_resear
     earlier version of the test also asserted no per-lens suffix mentions
     the profile at all — wrong, because the `completeness` brief legitimately
     references the `<project_requirements_profile>` tag in its prose.
+  - **The closed vocabulary is ENFORCED at both ends** (`sanitized_error_kind`)
+    — a P2 raised in review on PR #96, and a fair one: the field was
+    *documented* as closed and telemetry-safe, but `_statuses_from_raw` is
+    deliberately permissive, so arbitrary text in a shared `.baspec` file rode
+    `incomplete_dimension_facts` into `/api/diagnostics` and a support bundle.
+    Normalizing at load alone would have left the projection still trusting
+    its input, so both ends call the same helper and the projection is the
+    load-bearing one — that is where the guarantee is made, and a future code
+    path that bypasses the loader must not be able to reopen it. An
+    unrecognized value becomes `unrecognized` rather than `""`: a bundle
+    should show that the file carried something odd without the odd thing
+    travelling, and `""` already means "a success, or a pre-3.1 file". The
+    permissive LOAD is unchanged (the project still opens) and the
+    user-facing `error` keeps its detail — free text is what that field is
+    for, which is exactly why it is not in the projection. Four assertions
+    across three tests, two of which fail against the pre-fix code: the
+    smuggling attempt through a project file, the same guarantee on a
+    directly-constructed status (proving the projection enforces it and not
+    only the loader), the vocabulary round-trip, and an end-to-end
+    `/api/diagnostics` check that the crafted text is absent from the
+    response body.
 - Manual QA owed: Phase 3's first bullet — open a deliberately partial saved
   profile and inspect the PROJECT CONTEXT in a deep diagnostic trace,
   confirming the missing titles and the absent-not-empty instruction. The

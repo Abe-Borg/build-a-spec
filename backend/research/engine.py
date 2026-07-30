@@ -193,6 +193,11 @@ DIMENSION_ERROR_BUDGET = "budget_ceiling"
 DIMENSION_ERROR_INCOMPLETE = "incomplete_response"
 DIMENSION_ERROR_NO_PAYLOAD = "no_payload"
 DIMENSION_ERROR_EXHAUSTED = "retries_exhausted"
+# What a project file said that this build does not recognize. Distinct from
+# "" (a successful dimension, or a profile saved before kinds existed): a
+# support bundle should be able to see that the file carried something odd
+# without the odd thing itself travelling.
+DIMENSION_ERROR_UNRECOGNIZED = "unrecognized"
 # A provider failure reports its FailureClass value instead — that enum is
 # already closed and str-valued "for cheap telemetry", so a support bundle
 # gets "rate_limit" rather than a bucket that says only "something raised".
@@ -203,8 +208,27 @@ DIMENSION_ERROR_KINDS: tuple[str, ...] = (
     DIMENSION_ERROR_INCOMPLETE,
     DIMENSION_ERROR_NO_PAYLOAD,
     DIMENSION_ERROR_EXHAUSTED,
+    DIMENSION_ERROR_UNRECOGNIZED,
     *(member.value for member in FailureClass),
 )
+
+
+def sanitized_error_kind(value: object) -> str:
+    """A kind is only a kind if it is one of ours.
+
+    ``.baspec`` files are shared between people, and the deserializer is
+    deliberately permissive — so without this, arbitrary text from a project
+    file would ride :func:`incomplete_dimension_facts` straight into
+    ``/api/diagnostics`` and a support bundle, which is exactly the payload
+    the closed vocabulary exists to keep out. Applied at BOTH ends: at load,
+    so a ``DimensionStatus`` never carries a value its own docstring
+    forbids, and again in the projection, because that is where the
+    telemetry-safe guarantee is made and it must hold for every caller
+    regardless of how the value arrived.
+    """
+    if not isinstance(value, str) or not value:
+        return ""
+    return value if value in DIMENSION_ERROR_KINDS else DIMENSION_ERROR_UNRECOGNIZED
 
 
 @dataclass
@@ -271,7 +295,7 @@ def incomplete_dimension_facts(
         {
             "dimension_id": status.dimension_id,
             "title": dimension_display_title(status),
-            "error_kind": status.error_kind,
+            "error_kind": sanitized_error_kind(status.error_kind),
         }
         for status in incomplete_dimensions(profile)
     ]
@@ -615,7 +639,7 @@ def _statuses_from_raw(data: object) -> list[DimensionStatus]:
                 cache_creation_input_tokens=int(
                     raw.get("cache_creation_input_tokens", 0) or 0
                 ),
-                error_kind=str(raw.get("error_kind", "") or ""),
+                error_kind=sanitized_error_kind(raw.get("error_kind")),
                 error=str(raw.get("error", "") or ""),
             )
         )

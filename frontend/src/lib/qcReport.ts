@@ -1599,6 +1599,96 @@ export const QC_OPS_SOURCE_LABELS: Record<string, string> = {
   none: "No contributing lens proposed a mechanical fix.",
 };
 
+export interface QcRequestPopulation {
+  lensRecords: number;
+  consolidationRecords: number;
+  verifierSeats: number;
+  apiRequests: number;
+  modelResponses: number;
+  /** False for a legacy or malformed report whose parts do not add up. */
+  reconciles: boolean;
+}
+
+/** Reconcile the run's request/response totals to their own records.
+ *
+ * Mirrors `qc_request_population` in `backend/spec_doc/docx_export.py` so
+ * the in-app and Word projections cannot teach different meanings. Verifier
+ * seats span all FOUR outcome collections — a disputed candidate's seats are
+ * as billed as any other's.
+ */
+export function qcRequestPopulation(
+  rawResult: QcResultView | QcReportResult,
+): QcRequestPopulation {
+  const result = resultFields(rawResult);
+  const lenses = result.lens_statuses ?? [];
+  const consolidationRecords = result.consolidation ? 1 : 0;
+  // The RAW collections, deliberately — not `allQcCandidates`. That applies
+  // semantic re-classification (misbucket migration, outcome filtering, and
+  // deduplication by candidate id), which is right for "what did this run
+  // conclude" and wrong for "what did this run bill": every persisted seat
+  // was paid for however its candidate is finally classified, and a
+  // deduplicated record would drop seats the backend counts. Accounting is
+  // structural. Divergence here would have the modal print "component
+  // population unavailable" for a report Word reconciles cleanly.
+  const seats = (
+    [
+      ...arrayOrEmpty(result.findings),
+      ...arrayOrEmpty(result.refuted),
+      ...arrayOrEmpty((result as { disputed?: QcReportFinding[] }).disputed),
+      ...arrayOrEmpty(result.inconclusive),
+    ] as QcReportFinding[]
+  ).flatMap((finding) => arrayOrEmpty(finding.verdicts));
+  const countOf = (value: unknown): number =>
+    typeof value === "number" && Number.isInteger(value) ? value : 0;
+  const sum = (key: "api_request_count" | "model_response_count"): number =>
+    lenses.reduce((total, lens) => total + countOf(lens[key]), 0) +
+    countOf(result.consolidation?.[key]) +
+    seats.reduce((total, seat) => total + countOf(seat[key]), 0);
+  const apiRequests = sum("api_request_count");
+  const modelResponses = sum("model_response_count");
+  const recordCount = lenses.length + consolidationRecords + seats.length;
+  return {
+    lensRecords: lenses.length,
+    consolidationRecords,
+    verifierSeats: seats.length,
+    apiRequests,
+    modelResponses,
+    reconciles:
+      recordCount > 0 &&
+      Number.isInteger(result.api_request_count) &&
+      Number.isInteger(result.model_response_count) &&
+      result.api_request_count === apiRequests &&
+      result.model_response_count === modelResponses,
+  };
+}
+
+/** The Meaning line: what the run total is the sum of. */
+export function qcRequestPopulationNote(
+  population: QcRequestPopulation,
+): string {
+  if (!population.reconciles) {
+    return "Recorded total; component population unavailable";
+  }
+  const parts = [`${population.lensRecords} lens record(s)`];
+  if (population.consolidationRecords) {
+    parts.push(
+      `${population.consolidationRecords} candidate-consolidation record`,
+    );
+  }
+  parts.push(`${population.verifierSeats} verifier-seat record(s)`);
+  return `Sum of ${parts.join(" + ")}`;
+}
+
+/** Server-side web tools iterate inside ONE client streaming request, so a
+ *  reader reconciling tokens against requests finds far more tokens than a
+ *  single inference pass would explain. Verbatim in both projections. */
+export const QC_REQUEST_METHODOLOGY_NOTE =
+  "A client API request is one streaming call to the model, including retries and pause_turn continuations. Server-side web search and fetch may perform several billed internal model iterations within a single client request, so token totals need not resemble one inference pass.";
+
+/** "Grounded" is the single most over-read word in this report. */
+export const QC_GROUNDING_METHODOLOGY_NOTE =
+  '"Grounded" records that a cited source was actually retrieved during the run and matched the citation. It is retrieval confirmation, not truth verification: it does not assert that the source supports the claim, only that the reviewer really read the page it cites.';
+
 export function qcReportLimitations(
   rawResult: QcResultView | QcReportResult,
   stale: boolean,

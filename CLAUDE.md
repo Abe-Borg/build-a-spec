@@ -4645,6 +4645,69 @@ no new dep, no schema bump (5.1's `final-qc/4` already covers it).
   partition (`singleton_consolidation_for`), so every pre-5.2 fixture keeps
   meaning what it always meant while still exercising the real path.
 
+## Report labels and request accounting — implemented notes
+
+Deep-dive remediation Chunk 5.3, the small-surface chunk between the two
+policy ones. Nothing about the review changes; what changes is whether a
+reader can believe the numbers the report prints. No new endpoint, no new
+event, no new dep, no schema change.
+
+- **One document-version convention: `v4 (stored index 3)`.** Word printed
+  `v4` for the reviewed version and a bare `3` for the active and retained
+  ones, so a reader comparing them was silently comparing a 1-based display
+  number against a 0-based stored index. Both numbers are useful — the
+  display number is what the panel's stepper shows, the stored index is what
+  the JSON export and the API carry — so `qc_version_label` states both
+  rather than picking a side. JSON is untouched: this is presentation only.
+- **The formatter rejects `bool`, and that was the actual latent bug.**
+  `True` is an `int` in Python, and the two prose sites (the QC and audit
+  closings appended to the ISSUED SPEC) both tested `isinstance(value, int)`
+  — so a `True` coerced in upstream rendered "v2". `_qc_version_display` is
+  the one validator; `qc_version_label` renders label rows and
+  `_qc_version_phrase` renders the prose ones, which keep the display number
+  alone because a data field's parenthetical mid-sentence is noise.
+- **Run totals now say what they are the sum of.** "API request count: 100"
+  is unfalsifiable on its face. `qc_request_population` counts one record per
+  lens, one per grouping call, and one per verifier seat, sums their
+  persisted counters, and checks the arithmetic; the Meaning cell reads
+  "Sum of 5 lens record(s) + 1 candidate-consolidation record + 95
+  verifier-seat record(s)". A legacy or malformed report that does not add
+  up reads "Recorded total; component population unavailable" — a report
+  that explains a total it cannot substantiate is worse than one that admits
+  the components are missing.
+- **Seats span all FOUR outcome collections**, including `disputed`. The
+  plan predates Chunk 5.1's fourth collection; a disputed candidate's seats
+  are as billed as any other's, and omitting them would report a spurious
+  mismatch on every run that produced one.
+- **The frontend mirror reads the RAW collections, never
+  `allQcCandidates`.** That helper applies semantic re-classification
+  (misbucket migration, outcome filtering, dedup by candidate id), which is
+  right for "what did this run conclude" and wrong for "what did this run
+  bill" — a deduplicated record drops seats the backend counts, and a
+  finding in `disputed` whose `verification_outcome` disagrees vanishes
+  entirely. Divergence would print "component population unavailable" in the
+  modal for a report Word reconciles cleanly, which is precisely the failure
+  this chunk exists to prevent. **Accounting is structural, not semantic.**
+  Caught by a failing test, not by design.
+- **Two notes both projections state verbatim.**
+  `QC_REQUEST_METHODOLOGY_NOTE`: a client API request is one streaming call
+  including retries and pause_turn continuations, and server-side web tools
+  may run several billed internal model iterations inside one of them — so
+  token totals need not resemble a single inference pass. A reader who
+  notices that discrepancy and is not told why has every reason to distrust
+  the rest of the accounting. `QC_GROUNDING_METHODOLOGY_NOTE`: "grounded" is
+  retrieval confirmation, not truth verification — it says the reviewer
+  really read the page it cites, not that the page supports the claim. The
+  persisted field is NOT renamed; the clarification is textual.
+- **Per-record count fields are relabelled** to `Client API requests
+  (streaming calls, including retries and pause_turn continuations)` and
+  `Final model responses received`. The run-total rows keep short labels —
+  their Meaning column already carries the population note, so the
+  parenthetical there would be redundant.
+- **The modal's methodology list was missing Chunk 5.2's consolidation
+  step** (5.2 added it to Word only). Fixed here, since this chunk's whole
+  contract is that the two projections do not teach different meanings.
+
 ## Commands
 
 ```

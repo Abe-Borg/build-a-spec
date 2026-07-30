@@ -172,12 +172,7 @@ def build_docx(
         document.add_page_break()
         _centered(document, "COMPLIANCE AUDIT SUMMARY")
         audited_at = audit_result.get("audited_at", "")
-        version_index = audit_result.get("version_index")
-        version_note = (
-            f" of document version v{int(version_index) + 1}"
-            if isinstance(version_index, int)
-            else ""
-        )
+        version_note = _qc_version_phrase(audit_result.get("version_index"))
         document.add_paragraph(
             f"Advisory audit{version_note} against the researched project "
             f"requirements profile ({audited_at}). Grounded requirements "
@@ -1008,6 +1003,149 @@ def qc_research_coverage(qc_result: dict) -> tuple[str, str]:
     return f"Yes - partial ({counted} areas completed)", " ".join(sentences)
 
 
+def qc_version_label(value: object) -> str:
+    """``3`` → ``v4 (stored index 3)`` — the one document-version wording.
+
+    Word used to print `v4` in one place and a bare `3` in two others, so a
+    reader comparing the reviewed version against the active one was
+    silently comparing a 1-based display number with a 0-based stored
+    index. Both numbers are useful (the display number is what the panel's
+    stepper shows; the stored index is what the JSON export and the API
+    carry), so the label states both rather than picking a side.
+
+    Mirrors `versionLabel` in `QCReportModal.tsx`. Booleans are rejected as
+    integers — `True` is an `int` in Python, and "v2" is not what a caller
+    passing `True` meant. JSON keeps the raw zero-based integer; this is
+    presentation only.
+    """
+    display = _qc_version_display(value)
+    return f"{display} (stored index {value})" if display else "Not recorded"
+
+
+def _qc_version_display(value: object) -> str:
+    """The 1-based display number alone, or "" when absent/malformed."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return ""
+    return f"v{value + 1}"
+
+
+def _qc_version_phrase(value: object) -> str:
+    """The same number, shaped for the middle of a sentence.
+
+    The closing summaries appended to the ISSUED SPEC read as prose, so they
+    take the display number without the stored index — a data field's
+    parenthetical mid-sentence is noise. What they share with
+    :func:`qc_version_label` is the VALIDATION, which is where the bug was:
+    both sites tested `isinstance(value, int)` and so rendered "v2" for a
+    `True` that had been coerced somewhere upstream.
+    """
+    display = _qc_version_display(value)
+    return f" of document version {display}" if display else ""
+
+
+def qc_request_population(qc_result: dict) -> dict[str, object]:
+    """Reconcile the run's request/response totals to their own records.
+
+    A reader seeing "API request count: 100" cannot tell whether that is
+    100 reviews, 100 retries, or a number the report simply asserts. It is
+    the sum of one record per lens, one per grouping call, and one per
+    verifier seat across ALL four outcome collections — so this counts that
+    population and checks the arithmetic rather than restating the total.
+
+    ``reconciles`` is False for a legacy or malformed report whose parts do
+    not add up. The caller then says so, instead of inventing a match:
+    an audit report that explains a total it cannot substantiate is worse
+    than one that admits the components are unavailable.
+
+    Mirrored by `qcRequestPopulation` in `frontend/src/lib/qcReport.ts`.
+    """
+    lenses = [
+        item
+        for item in _qc_list(qc_result.get("lens_statuses"))
+        if isinstance(item, dict)
+    ]
+    consolidation = _qc_dict(qc_result.get("consolidation"))
+    # Disputed is included deliberately. The plan predates Chunk 5.1's
+    # fourth collection, and a disputed candidate's seats are as billed as
+    # any other's — omitting them would under-count the population and
+    # report a spurious mismatch on every run that produced one.
+    seats = [
+        verdict
+        for bucket in ("findings", "refuted", "disputed", "inconclusive")
+        for finding in _qc_list(qc_result.get(bucket))
+        if isinstance(finding, dict)
+        for verdict in _qc_list(finding.get("verdicts"))
+        if isinstance(verdict, dict)
+    ]
+
+    def total(records: list[dict], key: str) -> int:
+        out = 0
+        for record in records:
+            value = record.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                out += value
+        return out
+
+    consolidation_records = [consolidation] if consolidation else []
+    records = [*lenses, *consolidation_records, *seats]
+    requests = total(records, "api_request_count")
+    responses = total(records, "model_response_count")
+    recorded_requests = qc_result.get("api_request_count")
+    recorded_responses = qc_result.get("model_response_count")
+    reconciles = (
+        bool(records)
+        and isinstance(recorded_requests, int)
+        and not isinstance(recorded_requests, bool)
+        and isinstance(recorded_responses, int)
+        and not isinstance(recorded_responses, bool)
+        and recorded_requests == requests
+        and recorded_responses == responses
+    )
+    return {
+        "lens_records": len(lenses),
+        "consolidation_records": len(consolidation_records),
+        "verifier_seats": len(seats),
+        "api_requests": requests,
+        "model_responses": responses,
+        "reconciles": reconciles,
+    }
+
+
+def qc_request_population_note(population: dict[str, object]) -> str:
+    """The Meaning cell: what the run total is the sum of."""
+    if not population.get("reconciles"):
+        return "Recorded total; component population unavailable"
+    parts = [f"{population['lens_records']} lens record(s)"]
+    if population["consolidation_records"]:
+        parts.append(
+            f"{population['consolidation_records']} candidate-consolidation "
+            "record"
+        )
+    parts.append(f"{population['verifier_seats']} verifier-seat record(s)")
+    return f"Sum of {' + '.join(parts)}"
+
+
+# Server-side web tools iterate inside ONE client streaming request, so a
+# reader reconciling tokens against requests will find far more tokens than
+# a single inference pass would explain. Stated in both projections
+# verbatim, because a reader who notices the discrepancy and is not told why
+# has every reason to distrust the rest of the accounting.
+QC_REQUEST_METHODOLOGY_NOTE = (
+    "A client API request is one streaming call to the model, including "
+    "retries and pause_turn continuations. Server-side web search and fetch "
+    "may perform several billed internal model iterations within a single "
+    "client request, so token totals need not resemble one inference pass."
+)
+
+# "Grounded" is the single most over-read word in this report.
+QC_GROUNDING_METHODOLOGY_NOTE = (
+    "\"Grounded\" records that a cited source was actually retrieved during "
+    "the run and matched the citation. It is retrieval confirmation, not "
+    "truth verification: it does not assert that the source supports the "
+    "claim, only that the reviewer really read the page it cites."
+)
+
+
 def qc_origins_for(qc_result: dict, finding: dict) -> list[dict]:
     """The original lens claims behind one candidate, in recorded order.
 
@@ -1497,10 +1635,7 @@ def _qc_add_table(
 
 
 def _qc_version_note(qc_result: dict) -> str:
-    version_index = qc_result.get("version_index")
-    if isinstance(version_index, int):
-        return f" of document version v{version_index + 1}"
-    return ""
+    return _qc_version_phrase(qc_result.get("version_index"))
 
 
 def _render_qc_closing(document, qc_result: dict, *, compact: bool) -> None:
@@ -2100,10 +2235,7 @@ def _qc_render_identity(
 ) -> None:
     _qc_heading(document, "Run and Input Identity", 1)
     legacy = _qc_legacy_schema(document)
-    version = qc_result.get("version_index")
-    version_text = (
-        f"v{version + 1}" if isinstance(version, int) else "Not recorded"
-    )
+    version_text = qc_version_label(qc_result.get("version_index"))
     duration = qc_result.get("duration_ms")
     duration_text = (
         f"{int(duration):,} ms ({float(duration) / 1000:,.3f} seconds)"
@@ -2206,7 +2338,7 @@ def _qc_render_export_current_state(document, qc_result: dict) -> None:
             "Selected report execution status",
             qc_result.get("execution_status") or "Not recorded",
         ),
-        ("Active document version", state.get("document_version")),
+        ("Active document version", qc_version_label(state.get("document_version"))),
         ("Active document fingerprint", state.get("document_fingerprint")),
         ("Active full-input fingerprint", state.get("current_input_fingerprint")),
         ("Report matches all active inputs", state.get("report_matches_current_inputs")),
@@ -2246,7 +2378,10 @@ def _qc_render_export_current_state(document, qc_result: dict) -> None:
             ),
             ("Retained successful start", retained.get("started_at")),
             ("Retained successful finish", retained.get("finished_at")),
-            ("Retained reviewed document version", retained.get("version_index")),
+            (
+                "Retained reviewed document version",
+                qc_version_label(retained.get("version_index")),
+            ),
             (
                 "Retained reviewed document fingerprint",
                 retained.get("version_fingerprint"),
@@ -2310,7 +2445,8 @@ def _qc_render_methodology(document, qc_result: dict) -> None:
             (
                 "Source grounding",
                 "A source marked accepted passed the recorded grounding check. A "
-                "source merely cited or retrieved is retained with that narrower label.",
+                "source merely cited or retrieved is retained with that narrower "
+                "label. " + QC_GROUNDING_METHODOLOGY_NOTE,
             ),
             (
                 "Cross-lens consolidation",
@@ -2484,7 +2620,7 @@ def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> N
     )
     _qc_add_label(
         document,
-        "API requests",
+        "Client API requests (streaming calls, including retries and pause_turn continuations)",
         (
             "Not recorded"
             if legacy
@@ -2495,7 +2631,7 @@ def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> N
     )
     _qc_add_label(
         document,
-        "Model responses",
+        "Final model responses received",
         (
             "Not recorded"
             if legacy
@@ -2720,8 +2856,8 @@ def _qc_render_verdict(document, verdict: dict, index: int) -> None:
         if "model_response_count" in verdict
         else verdict.get("response_count", "Not recorded")
     )
-    _qc_add_label(document, "API requests", request_value)
-    _qc_add_label(document, "Model responses", response_value)
+    _qc_add_label(document, "Client API requests (streaming calls, including retries and pause_turn continuations)", request_value)
+    _qc_add_label(document, "Final model responses received", response_value)
 
 
 def _qc_render_source_checks(document, checks: object) -> None:
@@ -3610,6 +3746,8 @@ def _qc_flatten_cost(
 def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
     _qc_heading(document, "Usage, Requests, and Estimated Cost", 1)
     legacy = _qc_legacy_schema(document)
+    population = qc_request_population(qc_result)
+    population_note = qc_request_population_note(population)
     rows: list[list[object]] = []
     usage = _qc_dict(qc_result.get("usage_totals"))
     if usage:
@@ -3628,7 +3766,7 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
     rows.extend(
         [
             [
-                "API request count",
+                "Client API requests",
                 (
                     "Not recorded"
                     if legacy
@@ -3636,10 +3774,10 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
                         qc_result.get("api_request_count"), "Not recorded"
                     )
                 ),
-                "Overall persisted run total",
+                population_note,
             ],
             [
-                "Model response count",
+                "Final model responses received",
                 (
                     "Not recorded"
                     if legacy
@@ -3647,7 +3785,7 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
                         qc_result.get("model_response_count"), "Not recorded"
                     )
                 ),
-                "Overall persisted run total",
+                population_note,
             ],
             [
                 "Maximum output tokens",
@@ -3692,6 +3830,8 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
         "pricing. The provider invoice is authoritative. Per-lens and per-verifier "
         "counters remain in their detailed records above."
     )
+    note = document.add_paragraph(style="QC Table Citation")
+    note.add_run(QC_REQUEST_METHODOLOGY_NOTE)
     cost_basis = _qc_dict(qc_result.get("cost_basis"))
     _qc_heading(document, "Saved Pricing Basis", 2)
     if cost_basis:

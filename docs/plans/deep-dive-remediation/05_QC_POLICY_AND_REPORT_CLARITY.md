@@ -1,6 +1,6 @@
 # Phase 5 — QC policy and report clarity
 
-- Status: in progress (5.1 and 5.2 landed; 5.3-5.4 planned)
+- Status: in progress (5.1-5.3 landed; 5.4 planned)
 - Prerequisites: Phases 1-4 complete
 - Risk: medium-to-high; Chunk 5.1 deliberately changes finding survival
   semantics
@@ -726,11 +726,60 @@ Pop-Location
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete**
+- Commit/PR: branch `claude/phase-5-1-qc-panel-jzdd1n` (restarted from master
+  after the 5.2 PR merged; the branch name predates Phase 5)
+- Tests: 9 new backend (`tests/test_qc_audit_report.py`), 7 new frontend
+  (`frontend/tests/qcReport.test.ts`). Backend **1341 passed, 9 skipped**;
+  `npm test` **184**; `npm run build` clean. Three mechanisms reverted in
+  place to prove them load-bearing: the stored-index half of the label → 2
+  red, the reconciliation check → 2 red, the boolean rejection → 1 red.
 - Deviations:
-- Manual QA owed:
+  - **Two prose version sites were normalized too, but stay prose.** The
+    plan asks for every other raw `version_index` presentation to be
+    normalized. Two live in the closing summaries appended to the ISSUED
+    SPEC (not the audit memo) and read as sentences, where a data field's
+    parenthetical would be noise. They now share the VALIDATION through
+    `_qc_version_phrase` while keeping the display number alone — and that
+    validation is where the bug actually was: both tested
+    `isinstance(value, int)`, so a `True` coerced in upstream rendered
+    "v2". `qc_version_label` (label rows) and `_qc_version_phrase` (prose)
+    are two renderers over one `_qc_version_display`.
+  - **The seat population includes `disputed`.** The plan says "surviving,
+    refuted, and inconclusive" — written before Chunk 5.1 added the fourth
+    collection. A disputed candidate's seats are as billed as any other's,
+    and omitting them would under-count the population and report a
+    spurious mismatch on every run that produced one.
+  - **The frontend mirror reads the RAW collections, not
+    `allQcCandidates`.** Caught by a failing test rather than by design:
+    `allQcCandidates` applies semantic re-classification (misbucket
+    migration, outcome filtering, dedup by candidate id), which is right
+    for "what did this run conclude" and wrong for "what did this run
+    bill" — a deduplicated record drops seats the backend counts, and a
+    finding sitting in `disputed` without a matching
+    `verification_outcome` vanishes from the frontend population entirely.
+    Divergence would have printed "component population unavailable" in
+    the modal for a report Word reconciles cleanly, which is exactly the
+    "must not teach different meanings" failure this chunk exists to
+    prevent. Accounting is structural.
+  - **The run-total rows keep short labels; only the per-record fields take
+    the long parenthetical**, per the plan's split (item 4 names per-lens
+    and per-verifier; item 3 changes the total's Meaning cell). The totals
+    table has a Meaning column carrying the population note, so the
+    parenthetical there would be redundant.
+  - **The modal's methodology list was missing Chunk 5.2's consolidation
+    step**, which 5.2 added to Word only. Added here alongside the
+    grounding note, since this chunk's contract is that the two
+    projections do not teach different meanings.
+  - **The request note lives under the usage table, not in the methodology
+    section** — it explains numbers the reader is looking at right then.
+    The grounding note joins the existing "Source grounding" methodology
+    step in both projections.
+- Manual QA owed: none specific. Read one exported Word report and the
+  in-app modal side by side to confirm the version labels and the
+  request-population line agree — cheap, and the only thing the hermetic
+  tests cannot check is whether the wording reads naturally in the
+  rendered document.
 
 ## Chunk 5.4 — Issue readiness, sign-off consistency, and report layering
 

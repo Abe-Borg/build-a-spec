@@ -34,9 +34,14 @@ from backend.qc.runner import QCRunner
 from backend.qc.schema import QC_FINDINGS_SCHEMA, QC_LENSES, normalize_findings
 from backend.research.engine import DimensionStatus, RequirementsProfile, ResearchItem
 from backend.spec_doc.docx_export import (
+    QC_GROUNDING_METHODOLOGY_NOTE,
+    QC_REQUEST_METHODOLOGY_NOTE,
     build_docx,
     build_qc_memo,
+    qc_request_population,
+    qc_request_population_note,
     qc_research_coverage,
+    qc_version_label,
 )
 from backend.spec_doc.model import DocumentStore
 from backend.spec_modules import DEFAULT_MODULE
@@ -2562,3 +2567,177 @@ def test_a_legacy_record_without_declared_scope_still_lets_failures_lead() -> No
     )
     assert identity == "Yes - partial (3 of 4 areas completed)"
     assert "AHJ requirements" in limitation
+
+
+# ---------------------------------------------------------------------------
+# Chunk 5.3 — version labels and request-count explanations
+# ---------------------------------------------------------------------------
+
+
+def test_the_version_label_states_both_numbers_and_rejects_malformed_input():
+    """One convention: the display number AND the stored index.
+
+    Word used to print `v4` in one place and a bare `3` in two others, so a
+    reader comparing the reviewed version to the active one was silently
+    comparing a 1-based display number with a 0-based stored index.
+    """
+    assert qc_version_label(0) == "v1 (stored index 0)"
+    assert qc_version_label(3) == "v4 (stored index 3)"
+    # `True` is an `int` in Python, and "v2" is not what a caller meant.
+    assert qc_version_label(True) == "Not recorded"
+    assert qc_version_label(False) == "Not recorded"
+    for malformed in (None, -1, "3", 3.0, [3]):
+        assert qc_version_label(malformed) == "Not recorded"
+
+
+def test_one_word_report_labels_every_document_index_identically():
+    store = _section()
+    result = _run(SequencedFakeClient(_scripts()), store)
+    payload = result.to_dict()
+    payload["export_current_state"] = {
+        "generated_at": "2026-07-30T12:00:00+00:00",
+        "document_version": 4,
+        "document_fingerprint": "f" * 64,
+        "stale": True,
+        "runner": {"status": "complete", "error": ""},
+        "latest_attempt": {"run_id": result.run_id, "status": "complete"},
+        "last_successful_report": {
+            "run_id": "qc-earlier",
+            "version_index": 2,
+        },
+    }
+    text = _document_text(Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=True))))
+
+    # The reviewed version, the active one (4) and the retained one (2) all
+    # read in the same convention — derived, so the assertion cannot drift
+    # from whichever version the fixture happens to review.
+    assert (
+        f"Reviewed document version: {qc_version_label(payload['version_index'])}"
+        in text
+    )
+    assert "Active document version: v5 (stored index 4)" in text
+    assert "Retained reviewed document version: v3 (stored index 2)" in text
+    # And no raw index is left standing in as a version on its own.
+    assert "Active document version: 4" not in text
+    assert "Retained reviewed document version: 2" not in text
+
+
+def test_the_run_totals_say_which_records_they_are_the_sum_of():
+    store = _section()
+    result = _run(SequencedFakeClient(_scripts()), store)
+    payload = result.to_dict()
+
+    population = qc_request_population(payload)
+    assert population["reconciles"] is True
+    assert population["lens_records"] == len(QC_LENSES)
+    assert population["api_requests"] == payload["api_request_count"]
+    assert population["model_responses"] == payload["model_response_count"]
+
+    note = qc_request_population_note(population)
+    assert note.startswith("Sum of ")
+    assert f"{len(QC_LENSES)} lens record(s)" in note
+    assert "verifier-seat record(s)" in note
+
+    text = _document_text(Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False))))
+    assert note in text
+    # The relabelled per-record fields, and the note that explains why
+    # tokens do not resemble one inference pass.
+    assert (
+        "Client API requests (streaming calls, including retries and "
+        "pause_turn continuations)"
+    ) in text
+    assert "Final model responses received" in text
+    assert QC_REQUEST_METHODOLOGY_NOTE in text
+
+
+def test_a_v4_consolidated_run_names_the_consolidation_record_in_the_total():
+    """The v4 shape: lens + consolidation + verifier records."""
+    store = _section()
+    result = _run(SequencedFakeClient(_scripts()), store)
+    payload = result.to_dict()
+    # This fixture's lenses produce candidates at one element, so a real
+    # grouping call ran and is part of the population.
+    population = qc_request_population(payload)
+    assert population["consolidation_records"] == 1
+    note = qc_request_population_note(population)
+    assert "1 candidate-consolidation record" in note
+    assert population["reconciles"] is True
+
+
+def test_the_historical_five_lens_ninety_five_verifier_shape_reconciles():
+    """The plan's worked example: 5 + 95 = 100, explained rather than asserted."""
+    payload = {
+        "schema_version": 4,
+        "lens_statuses": [
+            {"api_request_count": 1, "model_response_count": 1}
+            for _ in range(5)
+        ],
+        "findings": [
+            {
+                "verdicts": [
+                    {"api_request_count": 1, "model_response_count": 1}
+                    for _ in range(95)
+                ]
+            }
+        ],
+        "api_request_count": 100,
+        "model_response_count": 100,
+    }
+    population = qc_request_population(payload)
+    assert population["lens_records"] == 5
+    assert population["verifier_seats"] == 95
+    assert population["consolidation_records"] == 0
+    assert population["reconciles"] is True
+    note = qc_request_population_note(population)
+    assert note == "Sum of 5 lens record(s) + 95 verifier-seat record(s)"
+
+
+def test_a_disputed_candidates_seats_count_toward_the_population():
+    """The plan predates the fourth collection; its seats are still billed."""
+    payload = {
+        "lens_statuses": [{"api_request_count": 1, "model_response_count": 1}],
+        "disputed": [
+            {
+                "verdicts": [
+                    {"api_request_count": 1, "model_response_count": 1}
+                    for _ in range(3)
+                ]
+            }
+        ],
+        "api_request_count": 4,
+        "model_response_count": 4,
+    }
+    population = qc_request_population(payload)
+    assert population["verifier_seats"] == 3
+    assert population["reconciles"] is True
+
+
+def test_a_report_whose_parts_do_not_add_up_says_so_instead_of_inventing_one():
+    """Better to admit the components are unavailable than to fake a match."""
+    payload = {
+        "lens_statuses": [{"api_request_count": 1, "model_response_count": 1}],
+        "api_request_count": 100,
+        "model_response_count": 100,
+    }
+    population = qc_request_population(payload)
+    assert population["reconciles"] is False
+    assert (
+        qc_request_population_note(population)
+        == "Recorded total; component population unavailable"
+    )
+
+
+def test_a_legacy_report_with_no_records_at_all_does_not_claim_a_sum():
+    population = qc_request_population({"api_request_count": 0, "model_response_count": 0})
+    assert population["reconciles"] is False
+    assert "component population unavailable" in qc_request_population_note(population)
+
+
+def test_the_word_report_says_grounded_means_retrieval_not_truth():
+    store = _section()
+    result = _run(SequencedFakeClient(_scripts()), store)
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(result.to_dict(), store.doc, stale=False)))
+    )
+    assert QC_GROUNDING_METHODOLOGY_NOTE in text
+    assert "retrieval confirmation, not truth verification" in text

@@ -3,7 +3,9 @@ import test from "node:test";
 
 import type { QcCandidateOrigin, QcConsolidation } from "../src/types.ts";
 import {
+  QC_GROUNDING_METHODOLOGY_NOTE,
   QC_OPS_SOURCE_LABELS,
+  QC_REQUEST_METHODOLOGY_NOTE,
   buildQcReportMetrics,
   collectQcOperationRecords,
   qcCandidateOrigins,
@@ -14,6 +16,8 @@ import {
   qcPrimaryReport,
   qcReportExportUrl,
   qcReportLimitations,
+  qcRequestPopulation,
+  qcRequestPopulationNote,
   qcResearchCoverage,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
@@ -994,4 +998,130 @@ test("every ops-source value has user-facing copy", () => {
   }
   // The unreconciled copy has to say why nothing is applicable.
   assert.match(QC_OPS_SOURCE_LABELS.unreconciled, /human must choose/);
+});
+
+// ---------------------------------------------------------------------------
+// Chunk 5.3 — request-count composition
+// ---------------------------------------------------------------------------
+
+test("the run totals reconcile to lens + consolidation + verifier records", () => {
+  const population = qcRequestPopulation(
+    result({
+      lens_statuses: Array.from({ length: 5 }, () => ({
+        api_request_count: 1,
+        model_response_count: 1,
+      })) as never,
+      findings: [
+        finding({
+          verdicts: Array.from({ length: 3 }, (_unused, index) =>
+            verdict(index + 1, { api_request_count: 1, model_response_count: 1 }),
+          ),
+        }),
+      ],
+      api_request_count: 8,
+      model_response_count: 8,
+    }),
+  );
+  assert.equal(population.lensRecords, 5);
+  assert.equal(population.verifierSeats, 3);
+  assert.equal(population.consolidationRecords, 0);
+  assert.equal(population.reconciles, true);
+  assert.equal(
+    qcRequestPopulationNote(population),
+    "Sum of 5 lens record(s) + 3 verifier-seat record(s)",
+  );
+});
+
+test("the historical five-lens ninety-five-verifier shape explains its 100", () => {
+  const population = qcRequestPopulation(
+    result({
+      lens_statuses: Array.from({ length: 5 }, () => ({
+        api_request_count: 1,
+        model_response_count: 1,
+      })) as never,
+      findings: [
+        finding({
+          verdicts: Array.from({ length: 95 }, (_unused, index) =>
+            verdict(index + 1, { api_request_count: 1, model_response_count: 1 }),
+          ),
+        }),
+      ],
+      api_request_count: 100,
+      model_response_count: 100,
+    }),
+  );
+  assert.equal(population.reconciles, true);
+  assert.equal(
+    qcRequestPopulationNote(population),
+    "Sum of 5 lens record(s) + 95 verifier-seat record(s)",
+  );
+});
+
+test("a v4 consolidated run names the consolidation record in the total", () => {
+  const population = qcRequestPopulation({
+    ...withConsolidation({ api_request_count: 1, model_response_count: 1 }),
+    api_request_count: 1,
+    model_response_count: 1,
+  });
+  assert.equal(population.consolidationRecords, 1);
+  assert.match(
+    qcRequestPopulationNote(population),
+    /1 candidate-consolidation record/,
+  );
+});
+
+test("a disputed candidate's seats count toward the population", () => {
+  const population = qcRequestPopulation(
+    result({
+      lens_statuses: [
+        { api_request_count: 1, model_response_count: 1 },
+      ] as never,
+      disputed: [
+        finding({
+          verdicts: Array.from({ length: 3 }, (_unused, index) =>
+            verdict(index + 1, { api_request_count: 1, model_response_count: 1 }),
+          ),
+        }),
+      ],
+      api_request_count: 4,
+      model_response_count: 4,
+    }),
+  );
+  assert.equal(population.verifierSeats, 3);
+  assert.equal(population.reconciles, true);
+});
+
+test("a report whose parts do not add up says so rather than inventing a match", () => {
+  const population = qcRequestPopulation(
+    result({
+      lens_statuses: [
+        { api_request_count: 1, model_response_count: 1 },
+      ] as never,
+      api_request_count: 100,
+      model_response_count: 100,
+    }),
+  );
+  assert.equal(population.reconciles, false);
+  assert.equal(
+    qcRequestPopulationNote(population),
+    "Recorded total; component population unavailable",
+  );
+});
+
+test("a legacy report with no records at all does not claim a sum", () => {
+  const population = qcRequestPopulation(result());
+  assert.equal(population.reconciles, false);
+  assert.match(
+    qcRequestPopulationNote(population),
+    /component population unavailable/,
+  );
+});
+
+test("both methodology notes exist and say the load-bearing thing", () => {
+  assert.match(QC_REQUEST_METHODOLOGY_NOTE, /retries and pause_turn continuations/);
+  assert.match(QC_REQUEST_METHODOLOGY_NOTE, /need not resemble one inference pass/);
+  assert.match(
+    QC_GROUNDING_METHODOLOGY_NOTE,
+    /retrieval confirmation, not truth verification/,
+  );
 });

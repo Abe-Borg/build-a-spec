@@ -705,7 +705,7 @@ def test_a_normal_turn_carries_no_estimate_at_all():
 def test_the_context_gauge_includes_a_stopped_turns_estimated_output():
     """The gauge pairs the last request's prompt with the reply about to be
     committed, so omitting the estimate would undercount the conversation
-    the next turn has to re-send. It becomes an upper estimate, not a lie."""
+    the next turn has to re-send."""
     usage = _stopped_turn_usage(
         [text_block("word " * 400)],
         snapshot_usage=token_usage(input=1000, output=4),
@@ -714,6 +714,37 @@ def test_the_context_gauge_includes_a_stopped_turns_estimated_output():
     # prompt 1000 + retained output 4 + estimated 496.
     assert session.last_context_tokens == 1500
     assert usage["estimated_output_tokens"] == 496
+
+
+def test_the_gauge_excludes_output_the_commit_throws_away():
+    """Billing and the gauge want different numbers, and conflating them
+    overstates the gauge badly.
+
+    Thinking blocks are stripped by `_committed_messages` and an unexecuted
+    `tool_use` is dropped by the truncation branch — both were billed, so
+    they belong in the spend estimate, but neither is ever re-sent. A gauge
+    that counted them would promise the user thousands of tokens the next
+    turn does not carry. (Caught in review on PR #102.)
+    """
+    usage = _stopped_turn_usage(
+        [
+            thinking_block("t" * 4000),  # billed, then stripped at commit
+            text_block("word " * 100),  # 500 chars → 125 tokens, retained
+            tool_use_block(  # billed, then dropped as unexecuted
+                "toolu_1", "apply_spec_edits", {"edits": "e" * 4000}
+            ),
+        ],
+        snapshot_usage=token_usage(input=1000, output=4),
+    )
+    session = sessions.get_session()
+
+    # The BILL counts everything the model authored: >2000 tokens of
+    # thinking and tool input on top of the text.
+    assert usage["estimated_output_tokens"] > 2000
+
+    # The GAUGE counts only the surviving text: 1000 prompt + 4 reported
+    # + (125 - 4) estimated retained = 1125. Emphatically not 1000 + 2000+.
+    assert session.last_context_tokens == 1125
 
 
 # ---------------------------------------------------------------------------

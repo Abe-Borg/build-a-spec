@@ -4307,12 +4307,24 @@ SSE event type, no new dep, no project-format bump.
   record's validation — to describe something a QC run cannot produce, since
   its fan-out always reads a final message. The disclosure lives on the
   session-meter surfaces and in the module docstring instead.
-- **The context gauge includes the estimate, and says so.** It pairs the
-  last request's prompt with the reply about to be committed, so omitting a
-  stopped turn's output would undercount the conversation the NEXT turn has
-  to re-send. Adding it makes the gauge an upper estimate for that one
-  turn, which is the right direction for a gauge whose job is warning about
-  a filling context window.
+- **The context gauge gets a DIFFERENT estimate from the bill, and that
+  distinction is load-bearing** (caught in review on PR #102). The gauge
+  pairs the last request's prompt with the reply about to be committed, so
+  omitting a stopped turn's output would undercount the conversation the
+  NEXT turn re-sends — but counting the BILLING figure overstates it just
+  as badly. A stopped turn discards two whole categories on the way to
+  commit: `thinking` blocks are stripped by `_committed_messages`, and
+  unexecuted `tool_use` blocks are dropped by the truncation branch. Both
+  were billed (so they belong in spend) and neither is ever re-sent (so
+  they must not reach the gauge). `estimated_retained_output` counts text
+  blocks only; `estimated_output_shortfall` counts everything authored.
+  The first draft used one figure for both, which would have had the pill
+  promising thousands of tokens the next turn never carries — precisely
+  undoing the subtraction `_retained_output_tokens` performs for exactly
+  this reason. Server-tool blocks are also left out of the gauge: a stop
+  usually catches one unpaired and `_without_unpaired_server_tool_uses`
+  scrubs it, and a surviving one carries only a short query — so the gauge
+  understates by a few tokens rather than overstating by a reasoning block.
 - **Two senses of "estimate" now meet in the ledger** and the docstring
   separates them: the DOLLAR figure has always been an estimate (list
   prices, not an invoice) computed from exact TOKEN COUNTS; a stopped turn
@@ -4330,16 +4342,18 @@ SSE event type, no new dep, no project-format bump.
   `SequencedFakeClient` routes on `hasattr(turn, "usage")` to pick its
   stream context and an unconditional `usage=None` would silently change
   which context a `raw_turn` got if one were ever scripted through it.
-- **Tests**: 12 new. `test_stop.py` (6 — the headline long-stop case, a
+- **Tests**: 13 new. `test_stop.py` (7 — the headline long-stop case, a
   provider count larger than the heuristic adding nothing, thinking +
-  tool-input counted, monotonicity, a normal turn carrying no estimate at
+  tool-input counted in the BILL, the gauge excluding those same blocks,
+  monotonicity, a normal turn carrying no estimate at
   all, and the context gauge); `test_usage.py` (4 — priced at the output
   rate, the derived flag both ways, the bool trap, and the whole thing
   through `/api/usage`); `test_diagnostics.py` (2 — the `round_end` trace
   event disclosing it, and a normal round claiming no estimate; the
-  round_end records live there, not in `test_tracing.py`). Both mechanisms
-  reverted in place to prove them load-bearing: blending the estimate into
-  `output_tokens` → 6 red; dropping the bool guard → 2 red.
+  round_end records live there, not in `test_tracing.py`). Every mechanism
+  reverted in place to prove it load-bearing: blending the estimate into
+  `output_tokens` → 6 red; dropping the bool guard → 2 red; feeding the
+  gauge the billing figure → 1 red.
 
 ## Commands
 

@@ -512,19 +512,36 @@ Then run the full standard verification commands from the master plan.
 - Status: **complete**
 - Commit/PR: branch `claude/deep-dive-phase-4-cont-o2up2c` (restarted from
   master after the 4.3 PR merged)
-- Tests: 12 new. `tests/test_stop.py` (6 — the headline long-stop case with
+- Tests: 13 new. `tests/test_stop.py` (7 — the headline long-stop case with
   a tiny provider placeholder; a provider count larger than the heuristic
-  adding nothing; thinking + tool-input counted; monotonicity; a normal
+  adding nothing; thinking + tool-input counted in the BILL; the gauge
+  EXCLUDING those same blocks; monotonicity; a normal
   turn carrying no estimate at all; and the context gauge including it).
   `tests/test_usage.py` (4 — priced at the output rate, the derived
   disclosure flag both ways, the bool trap, and the whole path through
   `/api/usage`). `tests/test_diagnostics.py` (2 — the `round_end` trace
   event disclosing it, and a normal round claiming no estimate). Full
   suite: **1271 passed, 9 skipped**; `npm test` 154 passed; `npm run
-  build` clean. Both mechanisms reverted in place to prove them
+  build` clean. Every mechanism reverted in place to prove it
   load-bearing: blending the estimate into `output_tokens` → 6 red;
-  dropping the ledger's bool guard → 2 red.
+  dropping the ledger's bool guard → 2 red; feeding the context gauge the
+  billing figure → 1 red.
 - Deviations:
+  - **Item 2's last bullet needed splitting into two estimates (PR #102
+    review, Codex).** The plan says to "use reported-plus-estimated for the
+    last-round context gauge, documented as an upper estimate", and the
+    first implementation did exactly that with the billing figure. But a
+    stopped turn discards two whole categories of billed output before
+    commit — `thinking` blocks (stripped by `_committed_messages`) and
+    unexecuted `tool_use` blocks (dropped by the truncation branch) — so
+    that figure would have the pill promising tokens the next turn never
+    re-sends, undoing the very subtraction `_retained_output_tokens`
+    performs for this reason. `estimated_output_shortfall` (everything
+    authored) now serves billing and `estimated_retained_output` (text
+    blocks only) serves the gauge. "Upper estimate" survives as a
+    description of the heuristic's error bar, not as licence to count
+    discarded content. Pinned by
+    `test_the_gauge_excludes_output_the_commit_throws_away`.
   - **The key constants live in `backend/usage_ledger.py`, not
     `conversation.py`.** That module owns the usage-key vocabulary, is a
     leaf (imports only `settings`), is where the counter is priced, and is

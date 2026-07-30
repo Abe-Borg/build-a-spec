@@ -2038,9 +2038,53 @@ def estimated_output_shortfall(
     final delta) this contributes nothing and the recorded usage stays
     purely provider-reported. The estimate can only ever ADD to a total,
     never revise the provider's figure downward.
+
+    This is the BILLING figure and counts everything the model authored,
+    because all of it was billed. The context gauge needs a different
+    number — see :func:`estimated_retained_output`.
     """
     estimate = -(-_model_authored_chars(content) // _CHARS_PER_TOKEN)
     return max(0, estimate - max(0, reported_output))
+
+
+def _retained_output_chars(content: list[dict[str, Any]]) -> int:
+    """Characters of a stopped round's output that SURVIVE into history.
+
+    Billing and the context gauge want different numbers here, and
+    conflating them overstates the gauge badly. A stopped turn discards two
+    whole categories of output on its way to commit: ``thinking`` blocks are
+    stripped by ``_committed_messages``, and unexecuted ``tool_use`` blocks
+    are dropped by the truncation branch below. Both were billed — so they
+    belong in the spend estimate — but neither is ever re-sent, so counting
+    them would make the context pill promise tokens the next turn will not
+    carry. That is the same reason :func:`_retained_output_tokens`
+    subtracts thinking from the provider's own count; adding an estimate
+    that included it would undo that subtraction.
+
+    Server-tool blocks are left out as well: a stop typically catches one
+    mid-flight with no result, and ``_without_unpaired_server_tool_uses``
+    then scrubs it. A paired one that does survive carries only a short
+    query, so omitting it understates a gauge by a few tokens instead of
+    overstating it by a whole reasoning block — the right direction for a
+    number whose job is warning about a filling context window.
+    """
+    return sum(
+        len(block.get("text") or "")
+        for block in content
+        if block.get("type") == "text"
+    )
+
+
+def estimated_retained_output(
+    content: list[dict[str, Any]], reported_retained: int
+) -> int:
+    """Gauge addition: retained output beyond what the provider reported.
+
+    Same shape as :func:`estimated_output_shortfall` — floored at zero, so
+    it can only ever add — but measured over the surviving content only.
+    """
+    estimate = -(-_retained_output_chars(content) // _CHARS_PER_TOKEN)
+    return max(0, estimate - max(0, reported_retained))
 
 
 # --- Streaming-event translation (WI1: buttery-smooth streaming UX) ----------
@@ -2774,15 +2818,19 @@ def stream_user_turn(
 
             round_context = _context_tokens(final_usage)
             if round_context is not None:
-                # The gauge pairs this request's prompt with the reply that
-                # is about to be committed, so a stopped round's estimated
-                # output belongs in it too — making the gauge an UPPER
-                # estimate for that one turn rather than a silent undercount.
-                last_round_context = (
-                    round_context
-                    + _retained_output_tokens(final_usage)
-                    + shortfall
-                )
+                # The gauge pairs this request's prompt with the reply about
+                # to be committed. A stopped round's provider count is a
+                # placeholder, so estimate the reply too — but over the
+                # RETAINED content only, never the billing figure: thinking
+                # and unexecuted tool_use were billed and are then thrown
+                # away, and a gauge that counted them would promise tokens
+                # the next turn does not re-send.
+                retained = _retained_output_tokens(final_usage)
+                last_round_context = round_context + retained
+                if stopped_mid_stream:
+                    last_round_context += estimated_retained_output(
+                        content, retained
+                    )
 
             # One round_end trace event per streaming round — which round
             # stalled, where the tokens went — including pause_turn rounds.

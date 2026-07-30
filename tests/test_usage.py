@@ -20,6 +20,7 @@ from tests.fakes import (
     FakeClient,
     SequencedFakeClient,
     research_response,
+    text_block,
     text_turn,
     token_usage,
     tool_turn,
@@ -82,6 +83,81 @@ def test_estimate_math_is_golden_against_pricing():
     assert snap["estimated_cost_usd"]["total"] == 6.35
     # Cache saved = 1e6 * (3e-6 - 0.30e-6) = 2.7
     assert snap["cache_saved_usd"] == 2.7
+
+
+# ---------------------------------------------------------------------------
+# Stopped-turn output estimate (Chunk 4.4)
+# ---------------------------------------------------------------------------
+#
+# Provider counts and heuristics never share a field. `output_tokens` is
+# always exactly what the provider reported; a stopped turn's unreported
+# output lands in `estimated_output_tokens` beside it, disjoint by
+# construction, and every surface that includes it says so.
+
+
+def test_estimated_output_is_priced_at_the_output_rate():
+    # Sonnet 5 output is $15/M. 200k reported + 100k estimated = 300k at
+    # $15/M = 4.5, on top of 1M input at $3/M.
+    ledger = UsageLedger()
+    ledger.add(
+        "interview",
+        {
+            "input_tokens": 1_000_000,
+            "output_tokens": 200_000,
+            "estimated_output_tokens": 100_000,
+        },
+    )
+    snap = ledger.snapshot()
+    assert snap["estimated_cost_usd"]["by_category"]["interview"] == 7.5
+    # Disclosed, and the two counters stay separate in the bucket.
+    assert snap["includes_estimated_output"] is True
+    assert snap["totals"]["output_tokens"] == 200_000
+    assert snap["totals"]["estimated_output_tokens"] == 100_000
+
+
+def test_a_ledger_with_no_estimate_says_so():
+    ledger = UsageLedger()
+    ledger.add("interview", {"input_tokens": 10, "output_tokens": 5})
+    assert ledger.snapshot()["includes_estimated_output"] is False
+    assert UsageLedger().snapshot()["includes_estimated_output"] is False
+
+
+def test_the_disclosure_flag_is_never_counted_as_a_token():
+    """`bool` is a subclass of `int` in Python, so a usage record carrying
+    `usage_estimated: True` would otherwise accumulate as a token count —
+    1, then 2, then 3 — and render in the usage table as if it were one."""
+    ledger = UsageLedger()
+    for _ in range(3):
+        ledger.add(
+            "interview",
+            {"output_tokens": 5, "usage_estimated": True},
+        )
+    bucket = ledger.snapshot()["categories"]["interview"]
+    assert bucket == {"output_tokens": 15}
+    assert "usage_estimated" not in bucket
+
+
+def test_a_stopped_turns_estimate_reaches_the_session_meter(monkeypatch):
+    """End to end: the estimate lands in `/api/usage`, priced and disclosed,
+    without disturbing the provider-reported output count."""
+    from tests.test_stop import _stopped_turn_usage
+
+    client = _client()
+    turn_usage = _stopped_turn_usage(
+        [text_block("word " * 400)],  # 2000 chars → ~500 tokens
+        snapshot_usage=token_usage(input=1000, output=4),
+    )
+    assert turn_usage["estimated_output_tokens"] == 496
+
+    usage = client.get("/api/usage").json()
+    interview = usage["categories"]["interview"]
+    assert interview["output_tokens"] == 4  # provider-reported, untouched
+    assert interview["estimated_output_tokens"] == 496
+    assert usage["includes_estimated_output"] is True
+    # The flag never became a counter on the way through the ledger.
+    assert "usage_estimated" not in interview
+    # 1000 in @ $3/M + (4 + 496) out @ $15/M = 0.003 + 0.0075
+    assert usage["estimated_cost_usd"]["by_category"]["interview"] == 0.0105
 
 
 # ---------------------------------------------------------------------------

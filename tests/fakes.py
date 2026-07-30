@@ -410,20 +410,34 @@ def raw_turn(
     chunks: list[str] | None = None,
     events: list[SimpleNamespace] | None = None,
     container: str | None = None,
+    usage: SimpleNamespace | None = None,
+    snapshot_usage: SimpleNamespace | None = None,
 ) -> SimpleNamespace:
     """A scripted response with arbitrary content blocks (thinking,
     server tools, pause_turn shapes) for the chat loop's fake client.
 
     ``events`` overrides the synthesized raw-event stream when a test needs
     a precise ordering (e.g. thinking → text → tool). ``container`` scripts
-    a provider continuation container id (see :func:`_container`)."""
-    return SimpleNamespace(
+    a provider continuation container id (see :func:`_container`).
+    ``snapshot_usage`` scripts what ``current_message_snapshot`` reports
+    when a turn is stopped mid-stream, which is normally a much smaller
+    placeholder than the final message's count."""
+    turn = SimpleNamespace(
         chunks=list(chunks or []),
         content=list(content),
         stop_reason=stop_reason,
         events=events,
         **_container(container),
     )
+    # Attached only when supplied, like ``container``: ``SequencedFakeClient``
+    # routes on ``hasattr(turn, "usage")`` to pick its stream context, so an
+    # unconditional ``usage=None`` would silently change which context a
+    # raw_turn gets if one were ever scripted through that client.
+    if usage is not None:
+        turn.usage = usage
+    if snapshot_usage is not None:
+        turn.snapshot_usage = snapshot_usage
+    return turn
 
 
 def request_context_text(request: dict) -> str:
@@ -493,11 +507,24 @@ class _FakeStreamCtx:
         draining the stream" code path without duplicating the SDK's
         accumulation logic. ``stop_reason`` is ``None``, matching the real
         API (only set once the message is fully complete).
+
+        ``snapshot_usage`` on the scripted turn overrides the usage here.
+        That models the one way the snapshot genuinely differs from a final
+        message: the authoritative output count rides the closing
+        ``message_delta``, which a stopped stream never receives, so the
+        snapshot reports only the small placeholder ``message_start``
+        announced. Absent, the turn's own usage is returned and every
+        pre-existing fixture behaves exactly as before.
         """
+        snapshot_usage = getattr(self._turn, "snapshot_usage", None)
         return SimpleNamespace(
             content=self._turn.content,
             stop_reason=None,
-            usage=getattr(self._turn, "usage", None),
+            usage=(
+                snapshot_usage
+                if snapshot_usage is not None
+                else getattr(self._turn, "usage", None)
+            ),
         )
 
 

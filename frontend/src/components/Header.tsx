@@ -110,7 +110,11 @@ export default function Header({
           ))}
         <button
           onClick={onOpenSettings}
-          title="Estimated spend this session — click for the breakdown"
+          title={
+            usage?.includes_estimated_output
+              ? "Estimated spend this session — click for the breakdown. Includes an estimated allowance for output from a stopped turn: the provider reports no final token count when generation is interrupted, so it is measured from what arrived."
+              : "Estimated spend this session — click for the breakdown"
+          }
           data-tour="spend-pill"
           data-capability="usage.details"
           className="rounded-full border border-edge bg-raised px-3 py-1 text-xs text-ink-dim tabular-nums transition-colors hover:border-accent hover:text-accent"

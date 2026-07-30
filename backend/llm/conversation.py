@@ -134,7 +134,11 @@ from ..suggestions import SUGGEST_PROMPTS_TOOL, SuggestError, validate_prompts
 from ..tracing import capture as _trace
 from ..spec_modules import SpecModule, get_module
 from ..standards import standards_context_block
-from ..usage_ledger import UsageLedger
+from ..usage_ledger import (
+    ESTIMATED_OUTPUT_TOKENS_KEY,
+    USAGE_ESTIMATED_KEY,
+    UsageLedger,
+)
 from .client import AUTH_ERROR_MESSAGE, MissingApiKeyError, get_client
 from .prompts import (
     render_system_prompt,
@@ -1962,6 +1966,83 @@ def _retained_output_tokens(usage: Any) -> int:
     return max(0, int(output))
 
 
+# --- Stopped-turn output estimation ------------------------------------------
+#
+# Closing a stream the instant the user clicks Stop is the whole point of
+# ``current_message_snapshot`` (draining it would keep paying for tokens the
+# UI already stopped showing) — but the provider's final ``message_delta``,
+# which carries the authoritative output count, is exactly what gets skipped.
+# The snapshot therefore reports whatever ``message_start`` announced, which
+# is a placeholder of a handful of tokens no matter how much text arrived.
+# Under-reporting a stopped turn by hundreds of tokens is the one thing a
+# spend meter must not do quietly.
+#
+# So the accumulated content is measured and the shortfall recorded — in its
+# OWN counter, never blended into ``output_tokens``. That separation is a
+# frozen decision of this remediation program, and it is load-bearing:
+# ``output_tokens`` is the one number that can be reconciled against a
+# provider invoice, and a heuristic mixed into it would corrupt exactly the
+# field an auditor trusts. See ``ESTIMATED_OUTPUT_TOKENS_KEY``.
+
+# ``ESTIMATED_OUTPUT_TOKENS_KEY`` / ``USAGE_ESTIMATED_KEY`` live in
+# :mod:`backend.usage_ledger`, which owns the usage-key vocabulary and is
+# where the counter is priced.
+
+# Characters per token. Deliberately coarse: the SDK exposes no running
+# output count, and a real tokenizer is neither available offline nor worth
+# a dependency for a number the UI labels an estimate either way. English
+# prose runs ~4 chars/token, so this under-counts dense JSON slightly and
+# over-counts whitespace-heavy text slightly.
+_CHARS_PER_TOKEN = 4
+
+
+def _model_authored_chars(content: list[dict[str, Any]]) -> int:
+    """Characters the MODEL produced in one round's accumulated content.
+
+    Only blocks the model generated are counted, because only those were
+    billed as output. Tool RESULTS (client, web-search, web-fetch) are
+    provider- or app-supplied and bill as input on the following request —
+    counting them would inflate a stopped turn by whole retrieved pages.
+
+    A thinking block contributes its summary text but not its ``signature``:
+    that is an opaque provider attestation, not generated prose, and its
+    length tracks nothing the user was billed for.
+    """
+    total = 0
+    for block in content:
+        block_type = block.get("type")
+        if block_type == "text":
+            total += len(block.get("text") or "")
+        elif block_type == "thinking":
+            total += len(block.get("thinking") or "")
+        elif block_type in ("tool_use", "server_tool_use"):
+            # A stop most often lands mid tool-input JSON, and that partial
+            # JSON is real output the model streamed.
+            total += len(block.get("name") or "")
+            raw_input = block.get("input")
+            if raw_input is not None:
+                try:
+                    total += len(json.dumps(raw_input, ensure_ascii=False))
+                except (TypeError, ValueError):
+                    total += len(str(raw_input))
+    return total
+
+
+def estimated_output_shortfall(
+    content: list[dict[str, Any]], reported_output: int
+) -> int:
+    """Output tokens a stopped round produced BEYOND the provider's count.
+
+    ``max(0, estimate - reported)`` — so when the provider's number already
+    exceeds the heuristic (a short reply, or a stop that still caught the
+    final delta) this contributes nothing and the recorded usage stays
+    purely provider-reported. The estimate can only ever ADD to a total,
+    never revise the provider's figure downward.
+    """
+    estimate = -(-_model_authored_chars(content) // _CHARS_PER_TOKEN)
+    return max(0, estimate - max(0, reported_output))
+
+
 # --- Streaming-event translation (WI1: buttery-smooth streaming UX) ----------
 #
 # The interview streams raw SDK events instead of the text-only
@@ -2669,19 +2750,47 @@ def stream_user_turn(
             container_id = response_container_id(final) or container_id
 
             _merge_usage(usage_totals, getattr(final, "usage", None))
-            round_usage = getattr(final, "usage", None)
-            round_context = _context_tokens(round_usage)
-            if round_context is not None:
-                last_round_context = round_context + _retained_output_tokens(
-                    round_usage
-                )
+            final_usage = getattr(final, "usage", None)
             content = _content_blocks_to_dicts(final.content)
             stop_reason = "user_stop" if stopped_mid_stream else final.stop_reason
+
+            # A stopped round skipped the provider's final usage delta, so
+            # measure what actually arrived and record the shortfall in its
+            # own counter. Only here: a round that ended normally carries an
+            # exact provider count, which always wins.
+            shortfall = 0
+            if stopped_mid_stream:
+                reported = getattr(final_usage, "output_tokens", None)
+                shortfall = estimated_output_shortfall(
+                    content,
+                    int(reported) if isinstance(reported, (int, float)) else 0,
+                )
+                if shortfall:
+                    usage_totals[ESTIMATED_OUTPUT_TOKENS_KEY] = (
+                        usage_totals.get(ESTIMATED_OUTPUT_TOKENS_KEY, 0)
+                        + shortfall
+                    )
+                    usage_totals[USAGE_ESTIMATED_KEY] = True
+
+            round_context = _context_tokens(final_usage)
+            if round_context is not None:
+                # The gauge pairs this request's prompt with the reply that
+                # is about to be committed, so a stopped round's estimated
+                # output belongs in it too — making the gauge an UPPER
+                # estimate for that one turn rather than a silent undercount.
+                last_round_context = (
+                    round_context
+                    + _retained_output_tokens(final_usage)
+                    + shortfall
+                )
 
             # One round_end trace event per streaming round — which round
             # stalled, where the tokens went — including pause_turn rounds.
             round_usage: dict[str, int] = {}
-            _merge_usage(round_usage, getattr(final, "usage", None))
+            _merge_usage(round_usage, final_usage)
+            if shortfall:
+                round_usage[ESTIMATED_OUTPUT_TOKENS_KEY] = shortfall
+                round_usage[USAGE_ESTIMATED_KEY] = True
             _trace.turn_round(
                 trace_handle,
                 round_index=_round,

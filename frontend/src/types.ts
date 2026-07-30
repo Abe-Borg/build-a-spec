@@ -99,10 +99,19 @@ export interface UsageSummary {
   };
   cache_saved_usd: number;
   /**
+   * True when any bucket carries `estimated_output_tokens` — output from a
+   * turn the user stopped, which the provider never reported a final count
+   * for. Every other counter is provider-reported; the estimate is a
+   * separate addition, never blended into `output_tokens`. Derived from the
+   * counter server-side, so the flag and the number cannot disagree.
+   */
+  includes_estimated_output?: boolean;
+  /**
    * Context gauge, not spend: the Anthropic-counted conversation size after
    * the last committed chat turn (system prompt + tools + history + project
    * context + the retained reply), against the model's context window. null
    * until a turn commits (fresh session, reset, or a just-loaded project).
+   * A turn stopped mid-stream makes this an upper estimate for that turn.
    */
   context?: { tokens: number; window: number } | null;
 }

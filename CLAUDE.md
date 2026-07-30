@@ -265,6 +265,15 @@ backend/
                            over DISJOINT slices — the subtotal rides INSIDE
                            cache_creation_input_tokens, so adding it would
                            double-bill and ignoring it would under-bill.
+                           Chunk 4.4 adds ESTIMATED_OUTPUT_TOKENS_KEY /
+                           USAGE_ESTIMATED_KEY (the module owns the usage-key
+                           vocabulary; conversation.py imports them): the
+                           stopped-turn output estimate, priced at the OUTPUT
+                           rate because it is DISJOINT from output_tokens —
+                           the exact opposite of the 1h subtotal above. add()
+                           now rejects bools (isinstance(True, int) is True)
+                           and snapshot() DERIVES includes_estimated_output
+                           from the counter.
                            The context gauge is deliberately NOT here: it lives on
                            SessionState.last_context_tokens (a gauge, not spend —
                            the ledger's snapshot/merge tutorial plumbing is
@@ -682,7 +691,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
 | `open_questions` | `items` | open-item list (TBD markers + needs_input blocks); emitted when a turn changed the doc |
 | `lint` | `items`, `standards` | advisory lint issues + the editions in effect (pins + overrides); emitted right after `open_questions` when a turn changed the doc |
-| `turn_complete` | `stop_reason`, `usage` | turn ended; history + doc version committed server-side. `usage` aggregates the turn's billed tokens across every round (input/output/cache/thinking + web-tool request counts) — raw material for the future cost meter |
+| `turn_complete` | `stop_reason`, `usage` | turn ended; history + doc version committed server-side. `usage` aggregates the turn's billed tokens across every round (input/output/cache/thinking + web-tool request counts) — raw material for the future cost meter. A turn stopped mid-stream adds `estimated_output_tokens` + `usage_estimated: true` (see "Disclosed stopped-turn output estimate"); `output_tokens` stays exactly what the provider reported |
 | `error` | `message` | turn failed; history untouched and doc rolled back (retry is safe) |
 
 The frontend switch in `App.tsx#send` is the single place events dispatch.
@@ -4240,6 +4249,97 @@ project-format bump.
   were reverted in place to prove them load-bearing: dropping
   `usage_totals` from the raise → 6 red; gating the meter on the CAS → 1
   red, the stop test.
+
+## Disclosed stopped-turn output estimate — implemented notes
+
+Deep-dive remediation Chunk 4.4, and the last of Phase 4. Stopping a turn
+closes the request immediately — the whole point, since draining it would
+keep paying for tokens the UI stopped showing — but the provider's
+authoritative output count rides the closing `message_delta`, which is
+exactly what a closed stream never receives. `current_message_snapshot`
+therefore reports whatever `message_start` announced: a placeholder of a
+few tokens, no matter how much text arrived. A user who stopped a long
+reply was billed for it and told almost nothing. No new endpoint, no new
+SSE event type, no new dep, no project-format bump.
+
+- **Provider counts and estimates never share a field** (frozen decision 8,
+  and the reason this chunk is shaped the way it is). `output_tokens`
+  always holds exactly what the provider reported — it is the one number
+  reconcilable against an invoice, so a heuristic mixed into it would
+  corrupt precisely the field an auditor trusts. The shortfall lands in
+  `estimated_output_tokens` beside it, with `usage_estimated: true` on the
+  record. The two are DISJOINT, so a consumer wanting the best available
+  total adds them and one wanting provider truth reads `output_tokens`
+  alone, unaffected by this feature existing. Pinned by six tests;
+  blending them turns those six red.
+- **The estimate can only ever ADD.** `estimated_output_shortfall` is
+  `max(0, estimate - reported)`, so when the provider's number already
+  exceeds the heuristic — a short reply, or a stop that still caught the
+  final delta — it contributes nothing and the record stays purely
+  provider-reported. It never revises the provider's figure downward.
+- **Only model-authored blocks are counted.** Text, thinking summaries, and
+  tool/server-tool `name` + JSON-serialized `input` — because those were
+  billed as output, and a stop most often lands mid tool-input JSON. Tool
+  RESULTS (client, web-search, web-fetch) are excluded: they are provider-
+  or app-supplied and bill as INPUT on the following request, so counting
+  them would inflate a stopped turn by whole retrieved pages. A thinking
+  block's `signature` is excluded too — an opaque attestation whose length
+  tracks nothing the user paid for.
+- **`ceil(chars / 4)`, deliberately coarse.** The SDK exposes no running
+  output count and a real tokenizer is neither available offline nor worth
+  a dependency for a number every surface labels an estimate. The tests
+  assert MONOTONICITY and a floor, never a tokenizer-exact figure — pinning
+  an exact count would make them brittle for no gain.
+- **`bool` is a subclass of `int`, and that was a live trap.** The turn's
+  usage record carries `usage_estimated: True` and is handed straight to
+  `UsageLedger.add`, whose filter was `isinstance(v, (int, float)) and v` —
+  so the flag would have accumulated as a token count (1, then 2, then 3)
+  and rendered in the usage table as if it were one. `add()` now rejects
+  bools explicitly (the precedent already existed in `load_snapshot`), and
+  the ledger's own disclosure is DERIVED —
+  `snapshot()["includes_estimated_output"]` reads the counter — so the flag
+  and the number it describes cannot disagree. Removing the guard turns 2
+  tests red.
+- **`usage_pricing_snapshot` is deliberately untouched.** It is consumed as
+  Final QC's persisted `cost_basis`, whose validator asserts exact set
+  equality over BOTH the top-level keys and the rate map (Chunk 4.1's
+  `_COST_BASIS_SHAPES`). Adding a field would break every new audit
+  record's validation — to describe something a QC run cannot produce, since
+  its fan-out always reads a final message. The disclosure lives on the
+  session-meter surfaces and in the module docstring instead.
+- **The context gauge includes the estimate, and says so.** It pairs the
+  last request's prompt with the reply about to be committed, so omitting a
+  stopped turn's output would undercount the conversation the NEXT turn has
+  to re-send. Adding it makes the gauge an upper estimate for that one
+  turn, which is the right direction for a gauge whose job is warning about
+  a filling context window.
+- **Two senses of "estimate" now meet in the ledger** and the docstring
+  separates them: the DOLLAR figure has always been an estimate (list
+  prices, not an invoice) computed from exact TOKEN COUNTS; a stopped turn
+  is the one case where a token count itself is not exact.
+- **Surfaces**: the Settings usage table shows `+N` in faint text beside the
+  affected row's reported output (separate, never summed into it) plus a
+  disclosure paragraph in the `cache_saved_usd` idiom; the header pill's
+  tooltip gains the same disclosure (the pill has no room, and its `≈`
+  already reads as an estimate). `includes_estimated_output` on the
+  snapshot is what both gate on.
+- **Fakes**: `raw_turn` gained `usage=` and `snapshot_usage=`, and
+  `_FakeStreamCtx.current_message_snapshot` prefers the latter — modelling
+  the one way a snapshot genuinely differs from a final message. Both
+  attach ONLY when supplied (the `container` convention), because
+  `SequencedFakeClient` routes on `hasattr(turn, "usage")` to pick its
+  stream context and an unconditional `usage=None` would silently change
+  which context a `raw_turn` got if one were ever scripted through it.
+- **Tests**: 12 new. `test_stop.py` (6 — the headline long-stop case, a
+  provider count larger than the heuristic adding nothing, thinking +
+  tool-input counted, monotonicity, a normal turn carrying no estimate at
+  all, and the context gauge); `test_usage.py` (4 — priced at the output
+  rate, the derived flag both ways, the bool trap, and the whole thing
+  through `/api/usage`); `test_diagnostics.py` (2 — the `round_end` trace
+  event disclosing it, and a normal round claiming no estimate; the
+  round_end records live there, not in `test_tracing.py`). Both mechanisms
+  reverted in place to prove them load-bearing: blending the estimate into
+  `output_tokens` → 6 red; dropping the bool guard → 2 red.
 
 ## Commands
 

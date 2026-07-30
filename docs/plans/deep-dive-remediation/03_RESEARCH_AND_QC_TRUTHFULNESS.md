@@ -1,6 +1,6 @@
 # Phase 3 — Research and QC truthfulness
 
-- Status: in progress (3.1 complete; 3.2 and 3.3 planned)
+- Status: in progress (3.1 and 3.2 complete; 3.3 planned)
 - Prerequisites: Phases 1 and 2 complete
 - Risk: high; this phase changes issue-readiness and the audit report's claims
 
@@ -304,11 +304,96 @@ venv\Scripts\python -m pytest -q tests/test_spec_modules.py tests/test_research_
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete** (2026-07-30)
+- Commit/PR: `5e24b5c` — PR #97
+- Tests: 12 new.
+  `tests/test_spec_modules.py` (5): every shipped dimension required by
+  default plus the dataclass default itself; a silent opt-out rejected; a
+  stale rationale on a required dimension rejected; a non-bool `required`
+  rejected; and a properly declared optional dimension accepted.
+  `tests/test_research_api.py` (7), all through `GET /api/readiness`: the
+  false pass removed (one of four dimensions completing now fails, names the
+  missing area, and carries "1 of 4" plus the retry guidance); all-complete
+  reading as the unchanged "Requirements research complete."; a later round
+  restoring readiness AND a subsequent failed rerun not revoking it (the
+  cumulative rule, over three real `append_research_round` rounds); a
+  complete runner with no profile failing closed; a self-contradicting
+  record failing closed while `/api/doc` and the runner's own status stay
+  unaffected; a declared-optional gap PASSING with its rationale quoted; and
+  a legacy no-rounds profile still reading complete.
+  Focused run green (spec_modules / research_api / research_rounds /
+  qc / qc_manifest_integrity — 91 passed); full gate green: `pytest -q`
+  **1211 passed, 9 skipped** (was 1199/9), `npm test` 143 passed,
+  `npm run build` clean (no frontend change — regression check).
+  Load-bearing checks: reverting readiness to the status-only test turns 5
+  red, and flipping the `required` default to `False` does not merely fail a
+  test — it fails the registry at IMPORT with
+  `SpecModule 'generic': research dimension 'governing_codes' declares
+  required=False without an optional_rationale`, so the fail-open default the
+  plan forbids cannot be introduced silently.
 - Deviations:
-- Manual QA owed:
+  - **`hyperscale_fire.py` and `generic.py` are untouched**, though the plan
+    lists them. Step 3 says to leave every dimension required and add no
+    `required=False`, and required-by-default means that is exactly zero
+    edits. A test asserts the property instead, over every module in
+    `AVAILABLE_MODULES`, so a future module that opts out has to do it
+    deliberately.
+  - **`research_manifest_facts` moved from `qc/engine.py` to
+    `research/engine.py`** and gained the module parameter. Readiness and the
+    QC manifest now consume the same record (step 5 speaks of "the research
+    facts the readiness/manifest path consumes"), and having `app.py` reach
+    into a QC internal for a research fact would have been backwards — QC
+    imports research, not the reverse. `profile_fingerprint` came with it
+    because `qc/engine._sha256_json` is not importable from research without
+    a cycle; it is pinned byte-compatible with what it replaced, so a
+    retained report's research fingerprint does not shift from the move
+    alone.
+  - **The structural checks are ordered most-specific-first**, which the plan
+    did not specify but the message demands: a duplicated status (the case a
+    corrupt project file actually produces) trips the per-list count check
+    before the disjointness check, and "counts disagree with lists" names
+    nothing a user can act on. It now reports more records than distinct
+    dimensions and says one is recorded twice. Note the overlap check is
+    unreachable from freshly derived facts by construction — it stays for a
+    facts record read back from a persisted report in 3.3.
+  - **The readiness helper lives in `app.py`** next to `_readiness_payload`
+    ("near readiness derivation"), while the pure join/validation live in
+    `research/engine.py`. The helper is the only part that needs a
+    `SessionState`; keeping the domain logic out of `app.py` is what let the
+    join be unit-tested by the manifest tests as well.
+  - **The Word memo needed no change**, which is worth stating because 3.3
+    step 7 asks for it: `docx_export` consumes the readiness checks out of
+    the QC state rather than re-deriving them, so the truthful detail reaches
+    the export for free. A second derivation would be free to disagree with
+    the checklist, so keep it consuming.
+  - **`tests/test_qc.py` and `tests/test_qc_audit_report.py` are untouched.**
+    They are in the plan's file list and were run as regression checks (the
+    existing `test_qc.py` readiness assertion still passes unchanged), but
+    3.2 adds no QC-report behavior — rendering the new manifest fields is
+    3.3's job.
+  - **A README sentence claimed selective retry, and it was false** — caught
+    in review on PR #97. "Pressing Research again retries just those" is a
+    SPEND claim, and `run_requirements_research` fans out
+    `module.research_dimensions` unfiltered, so a rerun re-researches every
+    area. Now: "re-runs every area and appends what it finds, so a retry
+    costs a full round but never loses what earlier rounds already
+    established." Selective retry is a genuine cost optimization and is
+    deliberately NOT implemented here — it would change what a round record
+    covers and what a rerun bills, neither of which is in this chunk's scope.
+    Noted as an owner-facing idea, not a plan item. The readiness detail's
+    "Press Research again to retry" is unaffected: it names the action, not
+    its scope.
+  - One 3.1 test expectation changed: with the module now in hand, an ABSENT
+    profile's facts still name the module's declared dimensions (and count
+    them all as incomplete-required) instead of leaving `dimension_titles`
+    empty. That is strictly better for 3.3's "no profile" limitation, so the
+    assertion was updated to pin the new meaning rather than the old
+    emptiness.
+- Manual QA owed: Phase 3's third bullet — press Research again on a
+  deliberately partial profile, complete the previously missing required
+  dimension, and confirm readiness recovers without losing prior findings.
+  The recovery is pinned hermetically over three rounds; what is not covered
+  is the drawer's own rendering of the new detail string.
 
 ## Chunk 3.3 — Consistent partial-research limitations in every report
 

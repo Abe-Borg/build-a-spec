@@ -179,7 +179,16 @@ def test_an_absent_profile_records_empty_coverage_rather_than_omitting_it() -> N
     assert research["dimension_count"] == 0
     assert research["completed_dimension_ids"] == []
     assert research["failed_dimension_ids"] == []
-    assert research["dimension_titles"] == {}
+    # No statuses were recorded, but the module still DECLARES coverage, and
+    # naming it is what lets a report say what was never researched at all
+    # rather than only that a profile was absent (Chunk 3.2).
+    assert research["declared_dimension_count"] == 4
+    assert sorted(research["dimension_titles"]) == sorted(
+        research["required_dimension_ids"]
+    )
+    assert research["incomplete_required_dimension_ids"] == [
+        d.dimension_id for d in DEFAULT_MODULE.research_dimensions
+    ]
 
 
 def test_partial_coverage_changes_the_full_input_identity() -> None:

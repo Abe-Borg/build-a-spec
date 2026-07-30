@@ -301,6 +301,237 @@ def incomplete_dimension_facts(
     ]
 
 
+@dataclass(frozen=True)
+class CoverageGap:
+    """One declared dimension whose research never completed."""
+
+    dimension_id: str
+    title: str
+    required: bool
+    optional_rationale: str = ""
+    # False when the module declares the dimension but the profile holds no
+    # status for it at all — which readiness must treat as missing coverage
+    # rather than as coverage it simply cannot see (fail closed).
+    recorded: bool = True
+
+
+@dataclass(frozen=True)
+class ResearchCoverage:
+    """How a module's declared dimensions line up with what research did.
+
+    The join is by ``dimension_id`` against the CUMULATIVE profile statuses,
+    never the latest round's events: a dimension that completed in round 1
+    and failed in round 3 is researched, and its findings are still in the
+    profile (see :func:`append_research_round`).
+    """
+
+    total: int
+    completed: tuple[str, ...]
+    gaps: tuple[CoverageGap, ...]
+    # Every incomplete status the PROFILE holds, including any for a
+    # dimension the current module no longer declares — those cannot be
+    # required, so they never block readiness, but they are still true.
+    incomplete_statuses: tuple[DimensionStatus, ...] = ()
+
+    @property
+    def required_gaps(self) -> tuple[CoverageGap, ...]:
+        return tuple(gap for gap in self.gaps if gap.required)
+
+    @property
+    def optional_gaps(self) -> tuple[CoverageGap, ...]:
+        return tuple(gap for gap in self.gaps if not gap.required)
+
+    @property
+    def missing_required(self) -> tuple[CoverageGap, ...]:
+        """Required dimensions with no status record at all."""
+        return tuple(gap for gap in self.required_gaps if not gap.recorded)
+
+
+def research_coverage(
+    module: SpecModule, profile: "RequirementsProfile | None"
+) -> ResearchCoverage:
+    """Join the module's declared dimensions to what the profile recorded.
+
+    Pure, and the one place the required-vs-optional policy is applied. A
+    module with no declared dimensions yields no gaps — there is no coverage
+    to be missing.
+    """
+    dimensions = tuple(getattr(module, "research_dimensions", ()) or ())
+    statuses = {
+        s.dimension_id: s
+        for s in (profile.dimension_statuses if profile is not None else [])
+    }
+    completed: list[str] = []
+    gaps: list[CoverageGap] = []
+    for dimension in dimensions:
+        status = statuses.get(dimension.dimension_id)
+        if status is not None and status.status == "completed":
+            completed.append(dimension.dimension_id)
+            continue
+        gaps.append(
+            CoverageGap(
+                dimension_id=dimension.dimension_id,
+                title=dimension.title or dimension.dimension_id,
+                required=bool(dimension.required),
+                optional_rationale=dimension.optional_rationale,
+                recorded=status is not None,
+            )
+        )
+    return ResearchCoverage(
+        total=len(dimensions),
+        completed=tuple(completed),
+        gaps=tuple(gaps),
+        incomplete_statuses=tuple(incomplete_dimensions(profile))
+        if profile is not None
+        else (),
+    )
+
+
+def profile_fingerprint(profile: "RequirementsProfile") -> str:
+    """Canonical hash of the whole serialized profile.
+
+    Lives here rather than reusing Final QC's generic JSON hasher because
+    research owns the profile and QC imports research, not the other way
+    round. Byte-compatible with what `qc/engine._sha256_json` produced for
+    the same input, so a retained report's research fingerprint is unchanged
+    by the move.
+    """
+    payload = json.dumps(
+        profile.to_dict(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def research_manifest_facts(
+    profile: "RequirementsProfile | None", module: SpecModule
+) -> dict[str, Any]:
+    """The research record the report projections and readiness both read.
+
+    A report is an audit of the run's INPUT snapshot, so every fact a
+    limitation needs has to be captured here — the session's profile may
+    have gained a round by the time anyone opens the report. Counts alone
+    could not name the missing coverage: "2 of 4 completed" does not tell a
+    reviewer WHICH two.
+
+    Ids are the machine identity (unique, and resolvable against the
+    module); ``dimension_titles`` names them through one map rather than
+    lists that could fall out of alignment. Every id list is in module
+    declaration order. The required-policy lists come from the module's
+    CURRENT declaration, never a hard-coded id set.
+    """
+    coverage = research_coverage(module, profile)
+    statuses = list(profile.dimension_statuses) if profile is not None else []
+    incomplete_ids = {s.dimension_id for s in coverage.incomplete_statuses}
+    titles = {s.dimension_id: dimension_display_title(s) for s in statuses}
+    for gap in coverage.gaps:
+        titles.setdefault(gap.dimension_id, gap.title)
+    return {
+        "present": profile is not None,
+        "fingerprint": (
+            profile_fingerprint(profile) if profile is not None else ""
+        ),
+        "research_date": profile.research_date if profile is not None else "",
+        "item_count": len(profile.items) if profile is not None else 0,
+        "dimension_count": len(statuses),
+        "completed_dimensions": (
+            profile.completed_dimensions if profile is not None else 0
+        ),
+        "failed_dimensions": (
+            profile.failed_dimensions if profile is not None else 0
+        ),
+        "completed_dimension_ids": [
+            s.dimension_id for s in statuses if s.dimension_id not in incomplete_ids
+        ],
+        "failed_dimension_ids": [
+            s.dimension_id for s in coverage.incomplete_statuses
+        ],
+        "dimension_titles": titles,
+        # The module's policy at run time, so a report can say which missing
+        # coverage actually mattered rather than re-deriving it later from a
+        # module that may since have changed.
+        "declared_dimension_count": coverage.total,
+        "required_dimension_ids": [
+            d.dimension_id
+            for d in (getattr(module, "research_dimensions", ()) or ())
+            if d.required
+        ],
+        "incomplete_required_dimension_ids": [
+            gap.dimension_id for gap in coverage.required_gaps
+        ],
+        "incomplete_optional_dimension_ids": [
+            gap.dimension_id for gap in coverage.optional_gaps
+        ],
+        "optional_rationales": {
+            gap.dimension_id: gap.optional_rationale
+            for gap in coverage.optional_gaps
+            if gap.optional_rationale
+        },
+    }
+
+
+def validate_research_facts(facts: object, module: SpecModule) -> str:
+    """Structural check on a research record. ``""`` means coherent.
+
+    Readiness fails CLOSED on the message this returns: a record that
+    contradicts itself is not evidence that research happened, and the
+    permissive deserializer means a corrupt or hand-edited project file can
+    produce one (two statuses for the same dimension, say). Project loading
+    stays permissive — this judges readiness, never whether a file opens.
+    """
+    if not isinstance(facts, dict):
+        return "The research record is not a structured record."
+    if not facts.get("present"):
+        return "No research profile was recorded."
+    completed = facts.get("completed_dimension_ids")
+    failed = facts.get("failed_dimension_ids")
+    if not isinstance(completed, list) or not isinstance(failed, list):
+        return "The research record's dimension lists are malformed."
+    ids = [*completed, *failed]
+    if len(set(ids)) != len(ids):
+        return "The research record lists the same dimension more than once."
+    overlap = sorted(set(completed) & set(failed))
+    if overlap:
+        return (
+            "The research record reports "
+            f"{', '.join(overlap)} as both completed and incomplete."
+        )
+    # Ordered most-specific first, because the message is what a user reads.
+    # A duplicated status is the case a corrupt project file actually
+    # produces, and it surfaces here as more records than distinct ids —
+    # checking the per-list counts first would report it as a count mismatch
+    # and say nothing about the duplication that caused it.
+    recorded = facts.get("dimension_count")
+    if isinstance(recorded, int) and recorded != len(ids):
+        return (
+            f"The research record holds {recorded} dimension records for "
+            f"{len(ids)} distinct dimensions — at least one is recorded "
+            "more than once."
+        )
+    if facts.get("completed_dimensions") != len(completed) or facts.get(
+        "failed_dimensions"
+    ) != len(failed):
+        return "The research record's dimension counts disagree with its lists."
+    if not isinstance(recorded, int):
+        return "The research record's dimension total is malformed."
+    declared = {
+        d.dimension_id for d in (getattr(module, "research_dimensions", ()) or ())
+    }
+    required = facts.get("required_dimension_ids")
+    if not isinstance(required, list):
+        return "The research record's required-dimension list is malformed."
+    unknown = sorted(set(required) - declared)
+    if unknown:
+        return (
+            "The research record requires "
+            f"{', '.join(unknown)}, which this module does not define."
+        )
+    return ""
+
+
 @dataclass
 class ResearchRound:
     """One research pass's own record, kept when later rounds append.

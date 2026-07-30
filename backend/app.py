@@ -112,6 +112,11 @@ from .llm.conversation import (
 )
 from .llm.prompts import FULL_DRAFT_DIRECTIVE
 from .project_profile import ProjectProfile
+from .research.engine import (
+    research_coverage,
+    research_manifest_facts,
+    validate_research_facts,
+)
 from .qc.engine import (
     QC_PROTOCOL_VERSION,
     QC_REPORT_SCHEMA_VERSION,
@@ -1202,6 +1207,67 @@ def _doc_payload(session) -> dict[str, Any]:
     }
 
 
+def _research_readiness(session: SessionState) -> tuple[bool, str]:
+    """Is the section's requirements research complete enough to issue?
+
+    Runner status alone was the whole test, and it is the wrong one: a round
+    reports ``complete`` when ANY dimension completed, so three of four
+    dimensions could have failed and readiness still passed — the false pass
+    this replaces. What decides it now is the module's declared coverage
+    joined to the CUMULATIVE profile statuses (never the latest round's
+    events: a dimension that completed earlier and failed in a later round is
+    researched, and a failed rerun must not revoke that).
+
+    Everything else about research is unchanged. A round still succeeds when
+    one dimension does, the profile still accumulates, and pressing Research
+    again is still the remediation path — which is what the failing detail
+    says, because it is the only action the user can take.
+    """
+    status = session.research.status
+    if status != "complete":
+        return False, f"Research status: {status}."
+    profile = session.research.profile_result
+    if profile is None:
+        return (
+            False,
+            "Research reports complete but no profile was recorded — press "
+            "Research again.",
+        )
+    module = session.module
+    facts = research_manifest_facts(profile, module)
+    invalid = validate_research_facts(facts, module)
+    if invalid:
+        # Fail closed: a self-contradicting record is not evidence that the
+        # research happened. Project loading stays permissive.
+        return False, f"{invalid} Press Research again."
+    coverage = research_coverage(module, profile)
+    required_gaps = coverage.required_gaps
+    if required_gaps:
+        names = ", ".join(gap.title for gap in required_gaps)
+        return (
+            False,
+            f"Required research coverage is missing: {names} "
+            f"({len(coverage.completed)} of {coverage.total} dimensions "
+            "completed). Press Research again to retry.",
+        )
+    optional_gaps = coverage.optional_gaps
+    if optional_gaps:
+        named = "; ".join(
+            f"{gap.title} (declared optional: {gap.optional_rationale})"
+            if gap.optional_rationale
+            else gap.title
+            for gap in optional_gaps
+        )
+        # Passing, but never silently: the absent areas are named, and so is
+        # the reason each was declared optional.
+        return (
+            True,
+            f"Requirements research complete for {len(coverage.completed)} of "
+            f"{coverage.total} dimensions. Absent optional coverage: {named}.",
+        )
+    return True, "Requirements research complete."
+
+
 def _readiness_payload(
     session, *, qc_record: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -1229,7 +1295,7 @@ def _readiness_payload(
     )
     profile = ProjectProfile.from_dict(doc.project_profile)
     profile_ok = bool(profile and profile.is_complete())
-    research_ok = session.research.status == "complete"
+    research_ok, research_detail = _research_readiness(session)
 
     if qc_record is None:
         qc_record = session.qc.audit_record_snapshot()
@@ -1487,9 +1553,7 @@ def _readiness_payload(
         {
             "id": "research_complete",
             "ok": research_ok,
-            "detail": "Requirements research complete."
-            if research_ok
-            else f"Research status: {session.research.status}.",
+            "detail": research_detail,
             "advisory": False,
         },
         {

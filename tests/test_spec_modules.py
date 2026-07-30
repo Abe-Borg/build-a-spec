@@ -300,3 +300,78 @@ def test_generic_rendered_prompt_is_stable_and_clean():
     # module, so a session value structurally cannot leak in).
     assert "Standards editions in effect" not in prompt
     assert "PROJECT DISCIPLINE line" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Required research coverage is a declared policy (Chunk 3.2)
+# ---------------------------------------------------------------------------
+
+
+def test_every_shipped_dimension_is_required_by_default():
+    """Required-by-default is the frozen decision, and nothing opts out.
+
+    A fail-open default would pass a section whose AHJ or site coverage
+    nobody ever researched, which is exactly the false pass this policy
+    exists to stop.
+    """
+    for module in AVAILABLE_MODULES.values():
+        assert module.research_dimensions, module.module_id
+        for dim in module.research_dimensions:
+            assert dim.required is True, f"{module.module_id}/{dim.dimension_id}"
+            assert dim.optional_rationale == ""
+    # And the default really is the default, not something each module states.
+    assert ResearchDimension("d", "D", "Research {city}.").required is True
+
+
+def test_opting_out_without_a_machine_readable_reason_is_rejected():
+    silent = ResearchDimension(
+        "quiet_dim", "Quiet", "Research {city} quietly.", required=False
+    )
+    bad = replace(
+        _valid(), research_dimensions=_valid().research_dimensions + (silent,)
+    )
+    with pytest.raises(ValueError, match="without an optional_rationale"):
+        validate_module_registry([bad])
+
+
+def test_a_rationale_left_on_a_required_dimension_is_rejected():
+    """A stale rationale must not outlive the opt-out it was written for —
+    it would be quoted to a reviewer as if it still applied."""
+    stale = ResearchDimension(
+        "stale_dim",
+        "Stale",
+        "Research {city}.",
+        optional_rationale="was optional in a previous revision",
+    )
+    bad = replace(
+        _valid(), research_dimensions=_valid().research_dimensions + (stale,)
+    )
+    with pytest.raises(ValueError, match="carries an optional_rationale"):
+        validate_module_registry([bad])
+
+
+def test_required_must_be_an_actual_boolean():
+    # `required=0` reads as a deliberate opt-out at a glance while behaving
+    # nothing like one.
+    truthy = ResearchDimension(
+        "int_dim", "Int", "Research {city}.", required=0  # type: ignore[arg-type]
+    )
+    bad = replace(
+        _valid(), research_dimensions=_valid().research_dimensions + (truthy,)
+    )
+    with pytest.raises(ValueError, match="required must be a bool"):
+        validate_module_registry([bad])
+
+
+def test_a_properly_declared_optional_dimension_is_accepted():
+    optional = ResearchDimension(
+        "optional_dim",
+        "Optional coverage",
+        "Research {city} optionally.",
+        required=False,
+        optional_rationale="rarely governs this discipline",
+    )
+    good = replace(
+        _valid(), research_dimensions=_valid().research_dimensions + (optional,)
+    )
+    validate_module_registry([good])

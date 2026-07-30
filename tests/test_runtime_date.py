@@ -140,7 +140,7 @@ def test_the_chat_turn_carries_the_date_and_the_cached_prompt_does_not(
     )
 
     stable = request["system"][0]
-    assert stable["cache_control"] == {"type": "ephemeral"}
+    assert stable["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     assert "CURRENT DATE" not in stable["text"]
     assert current_date_iso() not in stable["text"]
 

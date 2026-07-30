@@ -1,6 +1,6 @@
 # Phase 4 — Cache and metering accuracy
 
-- Status: in progress (4.1 landed; 4.2-4.4 planned)
+- Status: in progress (4.1 and 4.2 landed; 4.3-4.4 planned)
 - Prerequisites: Phases 1-3 complete
 - Risk: high financial/audit impact; follow the chunk order exactly
 
@@ -248,11 +248,48 @@ venv\Scripts\python -m pytest -q tests/test_app.py tests/test_session_modules.py
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete**
+- Commit/PR: branch `claude/deep-dive-remediation-4-1-thvbrv` (restarted from
+  master after the 4.1 PR merged)
+- Tests: `tests/test_app.py` (8 new — the rolling layout across three turns
+  with exact marked-message indexes and last-block-only placement; the
+  byte-prefix cache-read condition asserted directly; uniform TTL;
+  continuation rounds; nothing surviving into history or a saved project;
+  the TTL setting's validation + loud fallback; the boundary helper's
+  fail-safe; and the sanitizer message-count invariant). Five existing
+  exact-dict assertions updated from bare `ephemeral` to
+  `{"type": "ephemeral", "ttl": "1h"}` across `test_app.py`,
+  `test_runtime_date.py` and `test_session_modules.py`. Full suite:
+  **1249 passed, 9 skipped**. Both mechanisms reverted in place to prove
+  them load-bearing (tail-only → 2 red; mixed TTL → 5 red).
 - Deviations:
-- Manual QA owed:
+  - **Item 5 needed no marker threading.** The sanitizer provably cannot
+    change message count — the pairing pass replaces entries positionally
+    and refills an emptied assistant message with a placeholder rather than
+    removing it, and PDF elision rebuilds only affected messages. So the
+    boundary is plain index arithmetic. It is still *checked*
+    (`_committed_history_boundary` compares raw vs sanitized length and
+    returns `-1` on any mismatch), and the invariant it rests on has its
+    own test, so a future sanitizer change degrades to the old tail-only
+    behavior instead of annotating the wrong message.
+  - **Item 6 confirmed by inspection, no tool breakpoint added.** A rendered
+    request carries exactly three breakpoints (system + boundary + tail),
+    inside the limit of four; tools render ahead of system, so the system
+    breakpoint already closes them. Asserted, not assumed.
+  - **`test_project_package.py` needed no change** — the "no `cache_control`
+    in a saved project" claim is covered end-to-end through
+    `GET /api/project/save` in the new `test_app.py` case, which exercises
+    the real save path rather than the serializer in isolation.
+  - **Docstring corrections were part of the fix, not cosmetic.** The module
+    docstring and the CLAUDE.md context-architecture bullet both asserted
+    that the tail breakpoint made history "cache incrementally". That was
+    the false claim the review found; both now describe the actual rolling
+    boundary, the strip-at-commit divergence that defeats a tail-only
+    layout, the one-hour economics, and the 20-block lookback residual.
+- Manual QA owed: the phase-level item — capture two ordinary chat turns
+  more than five minutes apart and confirm diagnostics show the large
+  committed prefix moving from cache creation to cache read while only the
+  incremental suffix writes. Needs a real API key and owner approval.
 
 ## Chunk 4.3 — Meter total research failure and cancellation
 

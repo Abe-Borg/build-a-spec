@@ -11,13 +11,33 @@ The system prompt is ONLY the stable module-rendered block, carrying
 ``cache_control`` — byte-identical across the whole session. Everything
 session-varying (standards editions in effect, the research profile, the
 FULL document text, the lint report, open items) rides a PROJECT CONTEXT
-block spliced into the newest user message instead. That ordering is what
-makes the conversation history a stable, cacheable prefix: a second cache
-breakpoint rides the tail of the request's messages, so the growing
-interview hits the prompt cache incrementally instead of re-billing every
-token every turn. At commit the spliced context (and the turn's thinking
-blocks, plus any fetched-PDF payloads) are stripped from the stored
-history — each request carries exactly one, current, state block.
+block spliced into the newest user message instead. At commit that spliced
+context (and the turn's thinking blocks, plus any fetched-PDF payloads)
+are stripped from the stored history — each request carries exactly one,
+current, state block.
+
+Cache layout (three breakpoints, one TTL)
+-----------------------------------------
+1. the stable system block, which also closes the tools+system prefix;
+2. the **committed-history boundary** — the last block of the last message
+   in ``session.history``; and
+3. the tail of the full request, covering the fresh PROJECT CONTEXT and
+   any continuation rounds.
+
+Breakpoint 2 is the one that makes caching roll. A tail breakpoint alone
+cannot: the entry it writes is keyed on a prefix that ENDS with that
+turn's PROJECT CONTEXT, and commit strips exactly those bytes, so the next
+turn's prefix diverges where the context block used to be and nothing
+matches — the whole conversation re-bills as fresh input, every turn. The
+committed boundary is keyed on the stripped, re-sent form instead, so each
+turn's entry is a byte-prefix of the next turn's request: turn N+1 reads
+everything turn N wrote and writes only the newest exchange.
+
+All three share one TTL (``settings.CHAT_CACHE_TTL``, one hour by
+default). That is not a preference — the provider requires longer-lived
+entries to precede shorter-lived ones in prompt order, and a mixed-TTL
+request is a nonretryable 400. Stored history never carries
+``cache_control``; the annotations ride a per-request copy.
 
 The model sees the ENTIRE document every turn — full paragraph text, ids,
 statuses, provenance chips — never a truncated outline. Tool results still
@@ -1312,12 +1332,18 @@ def _stable_system_blocks(session: SessionState) -> list[dict[str, Any]]:
     ``test_stable_system_prompt_is_cached_and_module_rendered``); the live
     state travels in the PROJECT CONTEXT block of the newest user message
     (:func:`_turn_context_text`), after the cacheable history prefix.
+
+    This breakpoint also closes the tools prefix, since tools render ahead
+    of system — which is why the request needs no separate tool
+    breakpoint. It carries the same TTL as every message breakpoint: a
+    request that mixes TTLs violates the provider's longest-lived-first
+    ordering rule and is rejected outright (see :func:`_cache_control`).
     """
     return [
         {
             "type": "text",
             "text": render_system_prompt(session.module),
-            "cache_control": {"type": "ephemeral"},
+            "cache_control": _cache_control(settings.CHAT_CACHE_TTL),
         }
     ]
 
@@ -1717,32 +1743,109 @@ def _committed_messages(
     )
 
 
-def _with_tail_cache_breakpoint(
-    messages: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Copy-on-write a cache breakpoint onto the request's last block.
+def _cache_control(cache_ttl: str) -> dict[str, Any]:
+    """One breakpoint value. A fresh dict per call — callers own it.
 
-    Marks the incremental prefix (tools + system are covered by the stable
-    block's own breakpoint): each continuation round extends the previous
-    round's cache; each new turn re-writes only the previous turn's
-    exchange (the strip at commit shifts those bytes). Stored history is
-    never mutated — the breakpoint rides a per-request copy.
+    Copy-adapted from ``qc.engine._cache_control`` rather than imported:
+    the two channels build entirely different requests and the copy-not-
+    import posture keeps a QC-private helper from becoming chat's API.
+
+    EVERY breakpoint in a single request must be built from the same
+    ``cache_ttl``. The API requires longer-lived cache entries to appear
+    before shorter-lived ones in prompt order (tools -> system ->
+    messages), so a request that marks system at the 5-minute default and
+    the user turn at ``1h`` is rejected outright — not degraded, not
+    uncached. One TTL per request means there is no order to get wrong.
+    """
+    control: dict[str, Any] = {"type": "ephemeral"}
+    if cache_ttl:
+        control["ttl"] = cache_ttl
+    return control
+
+
+def _committed_history_boundary(
+    history_len: int, raw_len: int, sanitized_len: int
+) -> int:
+    """Index of the last message belonging to the committed-history prefix.
+
+    ``-1`` when there is no such message to mark. Sanitization replaces
+    messages positionally and never adds or drops one (an emptied
+    assistant message becomes a placeholder rather than disappearing), so
+    the boundary is plain index arithmetic — but it is CHECKED rather than
+    assumed. If a future sanitizer ever changes the count, this returns
+    ``-1`` and the request falls back to the tail breakpoint alone: one
+    missed cache read, instead of a breakpoint silently annotating the
+    wrong message and splitting the prefix in the wrong place.
+    """
+    if history_len <= 0 or sanitized_len != raw_len:
+        return -1
+    return min(history_len, sanitized_len) - 1
+
+
+def _with_cache_breakpoints(
+    messages: list[dict[str, Any]],
+    *,
+    committed_boundary: int,
+    cache_ttl: str,
+) -> list[dict[str, Any]]:
+    """Copy-on-write the request's cache breakpoints onto its messages.
+
+    Two of the request's three breakpoints live here (the third is the
+    stable system block, which also closes the tools+system prefix ahead
+    of it):
+
+    * **the committed-history boundary** — the last block of the last
+      message in ``session.history``. This is the rolling one: every turn
+      it advances by one exchange, so turn N+1 READS the whole prefix turn
+      N wrote and only the newest exchange is written fresh. Without it a
+      request has no breakpoint between the system block and the very end,
+      so the entire conversation re-bills as uncached input every turn —
+      which is what shipped before this.
+    * **the tail** — the last block of the whole request, covering the
+      fresh PROJECT CONTEXT and any continuation rounds. A continuation
+      extends the previous round's entry rather than rewriting it.
+
+    The two never collide: they are the last blocks of different messages,
+    and when the boundary resolves to the same message as the tail the
+    index set collapses to one annotation.
+
+    The prefix these mark is NOT byte-identical to what was streamed —
+    commit strips the PROJECT CONTEXT block, thinking blocks, and fetched
+    PDF payloads — so the boundary caches the *committed* form. That is
+    the form every later turn re-sends, which is exactly what makes it
+    worth caching.
+
+    Residual limitation, deliberately not worked around: a breakpoint
+    looks back at most 20 content blocks for a prior entry. A single turn
+    that appends more than 20 blocks (a long tool-heavy round) can push
+    the previous turn's entry out of that window, and the read is missed
+    for that turn — it re-writes and the next turn caches normally again.
+    Adding interior breakpoints to cover it would spend the request's
+    remaining budget on a rare case.
+
+    Stored history is never mutated: the annotations ride a per-request
+    copy, which is what keeps ``cache_control`` out of saved projects.
     """
     if not messages:
         return messages
-    last = messages[-1]
-    content = last.get("content")
-    if not isinstance(content, list) or not content:
-        return messages
-    tail = content[-1]
-    if not isinstance(tail, dict) or tail.get("type") in _TRANSIENT_BLOCK_TYPES:
-        return messages
-    new_tail = dict(tail)
-    new_tail["cache_control"] = {"type": "ephemeral"}
-    return [
-        *messages[:-1],
-        {**last, "content": [*content[:-1], new_tail]},
-    ]
+    indexes = {len(messages) - 1}
+    if 0 <= committed_boundary < len(messages):
+        indexes.add(committed_boundary)
+    out = list(messages)
+    for index in sorted(indexes):
+        message = out[index]
+        content = message.get("content")
+        if not isinstance(content, list) or not content:
+            continue
+        tail = content[-1]
+        if (
+            not isinstance(tail, dict)
+            or tail.get("type") in _TRANSIENT_BLOCK_TYPES
+        ):
+            continue
+        new_tail = {**tail, "cache_control": _cache_control(cache_ttl)}
+        out[index] = {**message, "content": [*content[:-1], new_tail]}
+    return out
 
 
 def _merge_usage(totals: dict[str, int], usage: Any) -> None:
@@ -2401,14 +2504,20 @@ def stream_user_turn(
         request was later built — a real hazard once Phase 6 moves request
         construction outside the turn-state lock.
         """
-        messages = sanitize_messages_for_resend(
-            list(session.history) + new_messages
-        )
+        history = list(session.history)
+        raw = history + new_messages
+        messages = sanitize_messages_for_resend(raw)
         kwargs: dict[str, Any] = {
             "model": model or settings.INTERVIEW_MODEL,
             "max_tokens": max_tokens or settings.INTERVIEW_MAX_TOKENS,
             "system": _stable_system_blocks(session),
-            "messages": _with_tail_cache_breakpoint(messages),
+            "messages": _with_cache_breakpoints(
+                messages,
+                committed_boundary=_committed_history_boundary(
+                    len(history), len(raw), len(messages)
+                ),
+                cache_ttl=settings.CHAT_CACHE_TTL,
+            ),
             "tools": _chat_tools(),
             "thinking": _thinking_param(),
             "output_config": {"effort": settings.INTERVIEW_EFFORT},

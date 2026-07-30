@@ -336,7 +336,7 @@ tests and phase gate are recorded in the phase file.
 | 3.2 | **complete** | `5e24b5c` (PR #97) | `required` defaults True + bound rationale; readiness joins declared coverage to cumulative statuses |
 | 3.3 | **complete** | `c10df8b` (PR #98) | Word + in-app both read the captured research manifest; three-state identity — **Phase 3 done** |
 | 4.1 | **complete** | branch `claude/deep-dive-remediation-4-1-thvbrv` | per-TTL cache-write rates; disjoint-slice math; legacy + new cost basis both read and preserved |
-| 4.2 | planned | | |
+| 4.2 | **complete** | branch `claude/deep-dive-remediation-4-1-thvbrv` | rolling committed-history breakpoint + uniform configurable TTL (default 1h); tail-only never cached across turns |
 | 4.3 | planned | | |
 | 4.4 | planned | | |
 | 5.1 | planned | | |

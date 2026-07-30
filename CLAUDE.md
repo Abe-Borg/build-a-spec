@@ -863,12 +863,15 @@ already resolved and does nothing). 409 when nothing is running.
   the **full document text** (`outline(doc, max_text=None)`, with
   ◆source chips), the lint report, and open items — renders into a
   PROJECT CONTEXT block spliced ahead of the user's text in the **newest
-  user message** (`_turn_context_text`, frozen at turn start). A second
-  cache breakpoint rides the tail of each request's messages
-  (`_with_tail_cache_breakpoint`, copy-on-write — stored history never
-  carries `cache_control`), so history caches incrementally instead of
-  re-billing every turn. Nothing session-varying may render into the
-  stable block (pinned by
+  user message** (`_turn_context_text`, frozen at turn start). Two more
+  cache breakpoints ride each request's messages
+  (`_with_cache_breakpoints`, copy-on-write — stored history never
+  carries `cache_control`): the **committed-history boundary** and the
+  **tail**. The boundary is what makes caching roll across turns; the
+  tail alone cannot (see "Rolling chat cache breakpoint" below). All
+  three breakpoints share `settings.CHAT_CACHE_TTL` — a mixed-TTL request
+  is a nonretryable 400, not a degraded cache. Nothing session-varying
+  may render into the stable block (pinned by
   `test_stable_system_prompt_is_cached_and_module_rendered`).
 - **Strip at commit** (`_committed_messages`): the context block is
   replaced by the user's bare text (exactly one current state block per
@@ -4049,6 +4052,84 @@ charges 2×. No new endpoint, no new SSE event, no new dep, no schema bump.
   attaches the nested object only when supplied, so every pre-existing
   fixture stays byte-identical. Each mechanism was reverted in place to
   prove it load-bearing (the guard → 1 red, the split formula → 1 red).
+
+## Rolling chat cache breakpoint — implemented notes
+
+Deep-dive remediation Chunk 4.2, and the chunk 4.1 existed to make
+priceable. The interview had a cache breakpoint on the request tail and a
+docstring claiming history "caches incrementally" — it did not. Every turn
+re-billed the entire conversation as fresh input. No new endpoint, no new
+SSE event, no new dep, one new env knob.
+
+- **A tail breakpoint cannot cache across turns, and the reason is
+  strip-at-commit.** The entry it writes is keyed on a prefix that ENDS
+  with that turn's PROJECT CONTEXT block, and commit replaces that block
+  with the user's bare text. The next turn's prefix therefore diverges at
+  exactly the point the entry was cut, and a prefix match that fails at
+  byte N caches nothing after byte N — which here is everything. The tail
+  breakpoint was never useless (it caches *continuation rounds within* a
+  turn, where nothing has been stripped yet); it just could not do the job
+  the docstring claimed.
+- **The fix is a breakpoint on the committed-history boundary** — the last
+  block of the last message in `session.history`, i.e. the last byte of
+  the stripped form every later turn re-sends. That form is stable, so
+  turn N's entry is a genuine byte-prefix of turn N+1's request: N+1 reads
+  the whole prefix and writes only the newest exchange. Pinned directly by
+  `test_a_turns_cached_prefix_is_a_byte_prefix_of_the_next_request`, which
+  asserts the cache-read condition itself rather than a proxy for it.
+- **The boundary is passed in, never inferred from roles.** Roles alternate
+  and a continuation round appends more user-role messages, so any
+  role-walking heuristic would land in the wrong place on a tool turn.
+  `request_kwargs` snapshots `history = list(session.history)` and hands
+  `_committed_history_boundary(len(history), len(raw), len(sanitized))`
+  to the builder.
+- **Index arithmetic is CHECKED, not trusted.** Sanitization replaces
+  messages positionally and never adds or drops one (an emptied assistant
+  message becomes a placeholder rather than disappearing — pinned by
+  `test_sanitizing_a_request_never_adds_or_drops_a_message`), so the
+  boundary is `len(history) - 1`. If a future sanitizer ever changes the
+  count, the helper returns `-1` and the request falls back to the tail
+  alone: one missed cache read, rather than a breakpoint silently
+  annotating the wrong message and splitting the prefix in the wrong place.
+- **One TTL per request, and that is a correctness rule.** The provider
+  requires longer-lived entries to precede shorter-lived ones in
+  tools → system → messages order, so a request marking system at the
+  5-minute default and the user turn at `1h` is rejected outright. This is
+  the exact failure PR #82's review caught in the QC fan-out; the chat
+  loop now cannot reproduce it because `_stable_system_blocks` and
+  `_with_cache_breakpoints` both read `settings.CHAT_CACHE_TTL`. Pinned by
+  `test_every_breakpoint_in_a_request_shares_one_ttl` — the fakes accept
+  any request dict, so nothing else would catch it before a provider did.
+- **`BUILD_A_SPEC_CHAT_CACHE_TTL` defaults to `1h`** because an interview
+  turn is a person reading a drafted provision and typing a reply, which
+  routinely outlives five minutes — and a lapsed entry is re-WRITTEN at
+  full price, not read at 0.1×. A 1h write costs 2.0× input against 1.25×
+  for 5m (Chunk 4.1 prices both), so it breaks even after ~3 reads instead
+  of ~2. `settings._cache_ttl_env` validates against
+  `SUPPORTED_CACHE_TTLS` and falls back to the default with a WARNING: an
+  unsupported TTL is a 400 on every request, so passing one through would
+  take chat down, and degrading silently would leave an operator believing
+  their override took effect.
+- **Three breakpoints, no tool breakpoint.** System (which also closes the
+  tools prefix, since tools render first) + boundary + tail = 3, inside
+  the provider's limit of 4. A separate tool breakpoint would spend the
+  remaining slot on bytes the system breakpoint already covers.
+- **Residual limitation, deliberately not worked around**: a breakpoint
+  looks back at most 20 content blocks for a prior entry, so a single turn
+  appending more than 20 blocks (a long tool-heavy round) can push the
+  previous entry out of the window. That turn re-writes; the next caches
+  normally again. Interior breakpoints would spend the request's remaining
+  budget on a rare case.
+- **Tests**: 8 new in `test_app.py` (the rolling layout across three turns
+  with exact marked-message indexes and last-block-only placement, the
+  byte-prefix cache-read condition, uniform TTL, continuation rounds,
+  nothing surviving into history or a saved project, the TTL setting's
+  validation and loud fallback, the boundary helper's fail-safe, and the
+  sanitizer count invariant). Five existing exact-dict assertions moved
+  from bare `ephemeral` to `{"type": "ephemeral", "ttl": "1h"}` across
+  `test_app.py`, `test_runtime_date.py` and `test_session_modules.py`.
+  Both mechanisms were reverted in place to prove them load-bearing:
+  tail-only → 2 red, mixed TTL → 5 red.
 
 ## Commands
 

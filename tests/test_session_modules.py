@@ -164,7 +164,7 @@ def test_discipline_line_rides_context_not_the_stable_block(monkeypatch):
     # The cached stable block carries policy, never the session value.
     stable = request["system"][0]["text"]
     assert "PROJECT DISCIPLINE: Electrical" not in stable
-    assert request["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert request["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
 
 def test_open_catalog_without_discipline_asks_for_it(monkeypatch):

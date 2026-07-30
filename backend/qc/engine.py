@@ -2091,8 +2091,8 @@ def _relay_stream_activity(
             continue
 
 
-# NOTE — deliberately no messages-tail breakpoint here, unlike the interview
-# loop's ``_with_tail_cache_breakpoint`` (``llm/conversation.py``). A
+# NOTE — deliberately no messages breakpoints here, unlike the interview
+# loop's ``_with_cache_breakpoints`` (``llm/conversation.py``). A
 # pause_turn continuation does re-bill its accumulated assistant turns at
 # full input price, so one would pay off for the search-heavy compliance
 # lens. It cannot be applied as-is: the continuation branch below re-sends

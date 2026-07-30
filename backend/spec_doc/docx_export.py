@@ -868,6 +868,119 @@ def _qc_dict(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _qc_research_names(record: dict, ids: list) -> list[str]:
+    titles = _qc_dict(record.get("dimension_titles"))
+    out: list[str] = []
+    for dimension_id in ids:
+        key = str(dimension_id)
+        title = titles.get(key)
+        out.append(str(title).strip() if title else key)
+    return out
+
+
+def qc_research_coverage(qc_result: dict) -> tuple[str, str]:
+    """``(identity value, limitation)`` from the CAPTURED research manifest.
+
+    One function for both surfaces so the identity row and the Limitations
+    list cannot disagree — "Research profile present: Yes" beside a
+    limitation saying half of it never ran would be exactly the kind of
+    reassuring half-truth this chunk exists to remove.
+
+    Reads ``input_manifest.requirements_research`` and NEVER the live
+    session: a report is an audit of the run's input snapshot, and the
+    session's profile may have gained a round since. An empty limitation
+    means there is nothing to disclose.
+    """
+    manifest = _qc_dict(qc_result.get("input_manifest"))
+    record = _qc_dict(manifest.get("requirements_research"))
+    present_flag = bool(qc_result.get("research_profile_present"))
+    absent = (
+        "No requirements-research profile was available to this run, so "
+        "completeness and jurisdiction-specific coverage may be narrower "
+        "than for a researched section."
+    )
+    if not record:
+        # A schema that predates the manifest, or one that dropped it.
+        if not present_flag:
+            return "No", absent
+        return (
+            "Yes - coverage not recorded",
+            "A requirements-research profile was available to this run, but "
+            "this report schema did not record which research areas "
+            "completed, so partial coverage cannot be ruled out.",
+        )
+    if not record.get("present"):
+        return "No", absent
+
+    required_missing = [str(x) for x in _qc_list(record.get("incomplete_required_dimension_ids"))]
+    optional_missing = [str(x) for x in _qc_list(record.get("incomplete_optional_dimension_ids"))]
+    failed_ids = [str(x) for x in _qc_list(record.get("failed_dimension_ids"))]
+    # The declared view (Chunk 3.2) leads, because a dimension the module
+    # declares but research never recorded at all is missing coverage that
+    # no status list can show. Any remaining failed status is still named.
+    ordered: list[str] = []
+    for dimension_id in [*required_missing, *optional_missing, *failed_ids]:
+        if dimension_id not in ordered:
+            ordered.append(dimension_id)
+
+    declared = record.get("declared_dimension_count")
+    recorded_total = record.get("dimension_count")
+    total = declared if isinstance(declared, int) and declared > 0 else recorded_total
+    completed_ids = _qc_list(record.get("completed_dimension_ids"))
+    completed = (
+        len(completed_ids)
+        if completed_ids
+        else record.get("completed_dimensions") or 0
+    )
+    if isinstance(total, int) and total > 0:
+        counted = f"{completed} of {total}"
+    else:
+        counted = f"{completed}"
+
+    failed_count = record.get("failed_dimensions") or 0
+    if not ordered and not failed_count:
+        return "Yes - complete", ""
+    if not ordered:
+        # Counts only: an older record that never stored the id lists.
+        return (
+            f"Yes - partial ({counted} areas completed)",
+            f"Requirements research was partial: {counted} research areas "
+            "completed. This report schema did not record which areas, so "
+            "the missing coverage cannot be named here.",
+        )
+
+    sentences = [
+        f"Requirements research was partial: {counted} research areas completed."
+    ]
+    if required_missing:
+        names = ", ".join(_qc_research_names(record, required_missing))
+        sentences.append(
+            f"Missing coverage REQUIRED for issue readiness: {names}."
+        )
+    optional_only = [x for x in optional_missing if x not in required_missing]
+    if optional_only:
+        rationales = _qc_dict(record.get("optional_rationales"))
+        parts = []
+        for dimension_id in optional_only:
+            name = _qc_research_names(record, [dimension_id])[0]
+            reason = str(rationales.get(dimension_id) or "").strip()
+            parts.append(f"{name} (declared optional: {reason})" if reason else name)
+        sentences.append(f"Missing coverage declared optional: {'; '.join(parts)}.")
+    other = [
+        x for x in ordered if x not in required_missing and x not in optional_missing
+    ]
+    if other:
+        names = ", ".join(_qc_research_names(record, other))
+        sentences.append(
+            f"Also recorded as not completed: {names}."
+        )
+    sentences.append(
+        "Findings from those areas are absent from this review, not "
+        "verified-empty."
+    )
+    return f"Yes - partial ({counted} areas completed)", " ".join(sentences)
+
+
 def _qc_legacy_schema(document) -> bool:
     try:
         return int(getattr(document, "_qc_schema_version", 1) or 1) < 2
@@ -1892,11 +2005,9 @@ def _qc_render_identity(
         ),
         (
             "Research profile present",
-            (
-                "Yes"
-                if qc_result.get("research_profile_present")
-                else "No or not recorded"
-            ),
+            # Three-state, never a reassuring bare "Yes": a partial profile
+            # says so here, with the same numbers the Limitations use.
+            qc_research_coverage(qc_result)[0],
         ),
     ]
     for label, value in identities:
@@ -3305,6 +3416,11 @@ def _qc_render_limitations_and_signoff(
         and "element_resolved" in item
         and not item.get("element_resolved")
     ]
+    # After the stale and failed-lens facts, before the unresolved-anchor
+    # note, so the run's own coverage gaps read together.
+    _research_limitation = qc_research_coverage(qc_result)[1]
+    if _research_limitation:
+        limitations.append(_research_limitation)
     if unresolved:
         limitations.append(
             f"{len(unresolved)} candidate finding(s) have unresolved reviewed anchors. "

@@ -1,6 +1,6 @@
 # Phase 3 — Research and QC truthfulness
 
-- Status: in progress (3.1 and 3.2 complete; 3.3 planned)
+- Status: **complete** (3.1, 3.2 and 3.3 landed; phase gate green)
 - Prerequisites: Phases 1 and 2 complete
 - Risk: high; this phase changes issue-readiness and the audit report's claims
 
@@ -467,6 +467,76 @@ Then run the full standard verification commands from the master plan.
 - A partial profile is never summarized as merely “Research profile present:
   Yes.”
 - Required missing coverage makes export-time issue readiness false.
+
+### Implementation record
+
+- Status: **complete** (2026-07-30)
+- Commit/PR: PENDING — pinned in the follow-up commit
+- Tests: 18 new, nine per side, deliberately the same six branches twice so
+  the mirrors can be compared by reading them side by side.
+  `tests/test_qc_audit_report.py` (9): each branch as a unit (no profile;
+  complete → EMPTY limitation; partial-required naming the areas and marking
+  them required; partial-optional quoting the declared rationale; count-only
+  legacy admitting it cannot name the gap; record-less legacy admitting
+  coverage is unknown, both with and without the present flag), the Word
+  report stating partial coverage in BOTH places end-to-end through the real
+  writer, the captured facts surviving a live-research change, and the
+  readiness table carrying the blocked `research_complete` detail.
+  `frontend/tests/qcReport.test.ts` (9): the same six branches, the
+  limitation reaching `qcReportLimitations` verbatim, unknown manifest fields
+  preserved (step 5's forward compatibility), and a malformed record
+  degrading instead of throwing.
+  Focused run green (`test_qc_audit_report` 36 passed); full gate green:
+  `pytest -q` **1220 passed, 9 skipped** (was 1211/9), `npm test` **151
+  passed** (was 143), `npm run build` clean.
+  Reverting the identity row to a bare `Yes` turns two backend tests red.
+- Deviations:
+  - **One function returns identity AND limitation on each side**, rather
+    than the plan's implied two (a limitation helper in step 1, an identity
+    row in step 3). They are computed together precisely because "Research
+    profile present: Yes" beside a limitation saying half of it never ran is
+    the half-truth this chunk exists to remove — two functions could drift
+    into saying exactly that. `qc_research_coverage` returns a tuple;
+    `qcResearchCoverage` returns `{state, identity, limitation}` because the
+    frontend has three consumers.
+  - **`M` in "N of M" is the DECLARED dimension count when recorded**, not
+    the number of status records. The plan says "N of M completed" without
+    saying which M, and the recorded total is the wrong one: a profile with
+    two completed statuses for a module that declares four has two areas
+    nobody ran, and "2 of 2" would hide them. Legacy records without
+    `declared_dimension_count` fall back to the recorded total.
+  - **A complete profile emits an EMPTY limitation**, which replaces the
+    frontend's previous present/absent-only line. The plan's decision tree
+    covers "distinguish absent from present-but-partial" but not "say nothing
+    when complete"; manufacturing a limitation for a clean run would put
+    noise in every good report, so silence is the fourth state and a test
+    pins it.
+  - **`QCReportModal.tsx` was in scope after all** — the plan says "only if
+    the identity summary is projected there separately", and it is (a
+    `DataField label="Requirements research present"` rendering a bare
+    Yes/No). It now renders the same three-state identity.
+  - **Step 7 is a verification, and the test says so in its docstring.**
+    `docx_export` consumes the readiness checks out of `export_current_state`
+    instead of re-deriving them, so Chunk 3.2's detail reaches Word for free
+    and `ready` was already False for missing required coverage. The test
+    pins both halves so a future refactor that re-derives readiness in the
+    exporter has to disagree with a test rather than silently diverge.
+  - **A vacuous assertion was caught and fixed while writing it.** The
+    "bare reassurance is gone" check was first written as
+    `"Research profile present\nYes\n" not in text`, which can never match:
+    `_qc_add_label` puts label and value in ONE paragraph. The colon form is
+    what makes it bite, and reverting the identity row proves it does.
+  - **Backend wording uses `Yes - complete` (hyphen), the frontend
+    `Yes — complete` (em dash).** The plan allows semantically equivalent
+    wording with different wrapping; the Word report avoids the em dash for
+    consistency with the rest of that document's label values, and the tests
+    pin each side's own string rather than a shared constant that would
+    force one style on both.
+- Manual QA owed: Phase 3's second bullet — export a QC report from a
+  deliberately partial profile and compare the in-app Limitations, the
+  downloaded JSON manifest, the Word Limitations, the identity row, and the
+  readiness table by eye. Each surface is pinned hermetically; that they
+  read coherently *together* to a human is what the manual pass adds.
 
 ## Phase 3 manual QA
 

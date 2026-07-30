@@ -467,7 +467,10 @@ frontend/src/
                            reviewCounts (outstanding imported/assumed)
   lib/qcReport.ts          pure audit-report helpers: coverage/limitations,
                            safe source links, formatting for identity, lens/seat
-                           telemetry, operations/dispositions, usage and cost
+                           telemetry, operations/dispositions, usage and cost;
+                           qcResearchCoverage mirrors docx_export's
+                           qc_research_coverage so both projections read the
+                           CAPTURED research manifest the same way
   lib/capabilities.ts      END_USER_CAPABILITIES: the one vocabulary of end-user
                            capability ids. Production controls declare them via
                            data-capability; tour.ts steps reference them; the
@@ -3522,6 +3525,63 @@ No new endpoint, no new SSE event, no new dep, no project-format bump.
   the rest of the surface keeps working, a declared-optional gap passing with
   its rationale quoted, and a legacy no-rounds profile still reading complete.
   Reverting readiness to the status-only test turns 5 red.
+
+## Partial research reads the same in every report — implemented notes
+
+Deep-dive remediation Chunk 3.3, and the chunk that finally consumes what
+3.1 and 3.2 recorded. Both report projections now interpret the CAPTURED
+research manifest, so a partial profile can no longer render as a reassuring
+"Research profile present: Yes" with no limitation beside it. No new
+endpoint, no new SSE event, no new dep, no schema bump.
+
+- **The canonical source is `input_manifest.requirements_research`, never
+  live research state.** A report is an audit of the run's input snapshot,
+  and the session's profile may have gained a round since the run — so
+  completing the missing dimension afterwards must not retroactively make an
+  exported report claim full coverage. Pinned by a test that completes the
+  live profile and re-renders the same payload.
+- **One function computes identity AND limitation together**, on each side:
+  `docx_export.qc_research_coverage` returns `(identity, limitation)` and
+  `qcReport.qcResearchCoverage` returns `{state, identity, limitation}`. They
+  are deliberate mirrors — the reason they are one function rather than two
+  is that an identity row saying "Yes" beside a limitation saying half of it
+  never ran is exactly the half-truth this chunk removes, and two functions
+  could drift into saying it.
+- **The identity row is three-state**: `No` / `Yes — complete` /
+  `Yes — partial (N of M areas completed)`, replacing a bare `Yes`. It reaches
+  the Word identity block and `QCReportModal`'s "Requirements research
+  present" field, which projects it separately.
+- **`M` is the DECLARED dimension count when recorded**, not the number of
+  status records. A profile holding two completed statuses for a module that
+  declares four has two areas nobody ever ran, and "2 of 2" would hide them.
+  Legacy records without `declared_dimension_count` fall back to the recorded
+  total.
+- **Six branches, and the empty one matters**: no manifest record + present
+  flag → "coverage not recorded" (an older schema cannot be read as
+  complete); no record + no flag → absent; `present: False` → absent;
+  complete → **empty limitation**, because a clean report must not manufacture
+  one; partial with ids → names required gaps first (marked REQUIRED for
+  issue readiness), then declared-optional ones with their rationale, then
+  any remaining failed status; partial with counts only → says the schema did
+  not record which areas, rather than guessing.
+- **Step 7 was a verification, not an implementation.** `docx_export`
+  consumes the readiness checks out of `export_current_state` rather than
+  re-deriving them, so Chunk 3.2's truthful detail reaches Word for free and
+  `ready` is already False when a required area is missing. A test pins both,
+  so a future refactor that re-derives readiness in the exporter has to
+  disagree with a test. Note booleans render as `Yes`/`No` there, not
+  `True`/`False`.
+- **Tests**: 18 new. `tests/test_qc_audit_report.py` (9): each of the six
+  branches as a unit, the Word report stating partial coverage in BOTH places
+  end-to-end through the real writer, captured facts surviving a live-research
+  change, and the readiness table carrying the blocked detail.
+  `frontend/tests/qcReport.test.ts` (9): the same six branches mirrored, the
+  limitation reaching `qcReportLimitations` verbatim, unknown manifest fields
+  preserved (forward compatibility), and a malformed record degrading instead
+  of throwing. The identity assertion was written `"Research profile present:
+  Yes\n"` on purpose — label and value share one paragraph, so the colon form
+  is what makes it bite (the newline-separated version was vacuous), and
+  reverting the row to a bare `Yes` turns two tests red.
 
 ## Final QC Review Room — live three-stage contract
 

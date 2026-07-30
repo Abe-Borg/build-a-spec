@@ -334,7 +334,7 @@ tests and phase gate are recorded in the phase file.
 | 2.4 | **complete** | `58eebec` (PR #95) | `lib/eventSeqIndex.ts`; identity before sequence, O(1) duplicate test, first-arrival-wins — **Phase 2 done** |
 | 3.1 | **complete** | `4d3c0f2` (PR #96) | incomplete coverage NAMED in context/manifest/trace/diagnostics; `DimensionStatus.error_kind` |
 | 3.2 | **complete** | `5e24b5c` (PR #97) | `required` defaults True + bound rationale; readiness joins declared coverage to cumulative statuses |
-| 3.3 | planned | | |
+| 3.3 | **complete** | `c10df8b` (PR #98) | Word + in-app both read the captured research manifest; three-state identity — **Phase 3 done** |
 | 4.1 | planned | | |
 | 4.2 | planned | | |
 | 4.3 | planned | | |

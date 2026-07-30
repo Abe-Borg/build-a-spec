@@ -32,6 +32,7 @@ import {
   qcPrimaryReport,
   qcReportExportUrl,
   qcReportLimitations,
+  qcResearchCoverage,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
   safeHttpUrl,
@@ -987,7 +988,7 @@ export default function QCReportModal({
               <DataField label="Current document version">{versionLabel(currentVersion)}</DataField>
               <DataField label="Reviewed document fingerprint" mono>{recorded(report.version_fingerprint)}</DataField>
               <DataField label="QC input fingerprint" mono>{recorded(report.input_fingerprint)}</DataField>
-              <DataField label="Requirements research present">{report.research_profile_present ? "Yes" : "No"}</DataField>
+              <DataField label="Requirements research present">{qcResearchCoverage(report).identity}</DataField>
               <DataField label="Remembered dismissed IDs">{report.dismissed_ids.length.toLocaleString("en-US")}</DataField>
               <DataField label="Latest attempt run ID" mono>{recorded(latestAttempt?.run_id)}</DataField>
               <DataField label="Latest attempt status">{recorded(latestAttempt?.status)}</DataField>

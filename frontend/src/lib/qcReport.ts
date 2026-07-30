@@ -1296,6 +1296,164 @@ export function buildQcReportMetrics(
 /** Backward-friendly short alias for consumers and direct unit tests. */
 export const computeQcMetrics = buildQcReportMetrics;
 
+export interface QcResearchCoverage {
+  state: "absent" | "unrecorded" | "complete" | "partial";
+  /** Three-state identity value — never a reassuring bare "Yes". */
+  identity: string;
+  /** "" when there is nothing to disclose. */
+  limitation: string;
+}
+
+function manifestRecord(
+  manifest: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> {
+  const value = manifest?.[key];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function manifestIds(record: Record<string, unknown>, key: string): string[] {
+  const value = record[key];
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => String(entry));
+}
+
+function manifestCount(record: Record<string, unknown>, key: string): number | null {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function researchNames(
+  record: Record<string, unknown>,
+  ids: string[],
+): string[] {
+  const titles = manifestRecord(record, "dimension_titles");
+  return ids.map((id) => {
+    const title = titles[id];
+    const text = typeof title === "string" ? title.trim() : "";
+    return text || id;
+  });
+}
+
+/**
+ * The captured research record, read the same way the Word report reads it.
+ *
+ * Deliberately a mirror of `docx_export.qc_research_coverage`: the two
+ * projections must reach the same verdict from the same captured manifest,
+ * so both compute identity AND limitation together — an identity row saying
+ * "Yes" beside a limitation saying half of it never ran is precisely the
+ * reassuring half-truth this replaces. Never reads live research state: a
+ * report is an audit of the run's input snapshot.
+ */
+export function qcResearchCoverage(
+  rawResult: QcResultView | QcReportResult,
+): QcResearchCoverage {
+  const result = resultFields(rawResult);
+  const record = manifestRecord(result.input_manifest, "requirements_research");
+  const presentFlag = Boolean(result.research_profile_present);
+  const absent =
+    "No requirements-research profile was available to this run, so completeness and jurisdiction-specific coverage may be narrower than for a researched section.";
+  if (Object.keys(record).length === 0) {
+    if (!presentFlag) return { state: "absent", identity: "No", limitation: absent };
+    return {
+      state: "unrecorded",
+      identity: "Yes — coverage not recorded",
+      limitation:
+        "A requirements-research profile was available to this run, but this report schema did not record which research areas completed, so partial coverage cannot be ruled out.",
+    };
+  }
+  if (!record.present) {
+    return { state: "absent", identity: "No", limitation: absent };
+  }
+
+  const requiredMissing = manifestIds(record, "incomplete_required_dimension_ids");
+  const optionalMissing = manifestIds(record, "incomplete_optional_dimension_ids");
+  const failedIds = manifestIds(record, "failed_dimension_ids");
+
+  const declared = manifestCount(record, "declared_dimension_count");
+  const declaredKnown = declared !== null && declared > 0;
+  // The verdict is about DECLARED coverage. A persisted profile can keep a
+  // failed status for a dimension the current module no longer declares, and
+  // counting it as a gap produced "partial (4 of 4 areas completed)" — a
+  // contradiction. On a Chunk 3.2+ record every declared incomplete dimension
+  // is in one of the two policy lists, so whatever is left in
+  // `failed_dimension_ids` is retired: reported, never verdict-moving. A
+  // legacy record has no declared scope to filter against, so its failed ids
+  // still lead.
+  const ordered: string[] = [];
+  for (const id of declaredKnown
+    ? [...requiredMissing, ...optionalMissing]
+    : failedIds) {
+    if (!ordered.includes(id)) ordered.push(id);
+  }
+  const retired = declaredKnown
+    ? failedIds.filter((id) => !ordered.includes(id))
+    : [];
+
+  const recorded = manifestCount(record, "dimension_count");
+  const total = declaredKnown ? declared : recorded;
+  const completedIds = manifestIds(record, "completed_dimension_ids");
+  const completed = completedIds.length
+    ? completedIds.length
+    : manifestCount(record, "completed_dimensions") ?? 0;
+  const counted =
+    total && total > 0 ? `${completed} of ${total}` : `${completed}`;
+  const failedCount = manifestCount(record, "failed_dimensions") ?? 0;
+
+  const retiredNote = retired.length
+    ? `A recorded research status did not complete for ${researchNames(record, retired).join(", ")}, which this module no longer declares as coverage; it is preserved here but does not affect the coverage verdict.`
+    : "";
+  const identity = `Yes — partial (${counted} areas completed)`;
+  if (!ordered.length) {
+    if (retired.length) {
+      // Declared coverage IS complete, and the stale failure is still
+      // disclosed rather than dropped.
+      return { state: "complete", identity: "Yes — complete", limitation: retiredNote };
+    }
+    if (!failedCount) {
+      return { state: "complete", identity: "Yes — complete", limitation: "" };
+    }
+    return {
+      state: "partial",
+      identity,
+      limitation: `Requirements research was partial: ${counted} research areas completed. This report schema did not record which areas, so the missing coverage cannot be named here.`,
+    };
+  }
+
+  const sentences = [
+    `Requirements research was partial: ${counted} research areas completed.`,
+  ];
+  if (requiredMissing.length) {
+    sentences.push(
+      `Missing coverage REQUIRED for issue readiness: ${researchNames(record, requiredMissing).join(", ")}.`,
+    );
+  }
+  const optionalOnly = optionalMissing.filter((id) => !requiredMissing.includes(id));
+  if (optionalOnly.length) {
+    const rationales = manifestRecord(record, "optional_rationales");
+    const parts = optionalOnly.map((id) => {
+      const name = researchNames(record, [id])[0];
+      const reason = typeof rationales[id] === "string" ? rationales[id].trim() : "";
+      return reason ? `${name} (declared optional: ${reason})` : name;
+    });
+    sentences.push(`Missing coverage declared optional: ${parts.join("; ")}.`);
+  }
+  const other = ordered.filter(
+    (id) => !requiredMissing.includes(id) && !optionalMissing.includes(id),
+  );
+  if (other.length) {
+    sentences.push(
+      `Also recorded as not completed: ${researchNames(record, other).join(", ")}.`,
+    );
+  }
+  sentences.push(
+    "Findings from those areas are absent from this review, not verified-empty.",
+  );
+  if (retiredNote) sentences.push(retiredNote);
+  return { state: "partial", identity, limitation: sentences.join(" ") };
+}
+
 export function qcReportLimitations(
   rawResult: QcResultView | QcReportResult,
   stale: boolean,
@@ -1311,11 +1469,10 @@ export function qcReportLimitations(
       "The active review input differs from the captured snapshot. The change may be in the document, research, standards, module, model settings, or source policy; re-run Final QC before relying on findings or applying proposed operations.",
     );
   }
-  if (!result.research_profile_present) {
-    limitations.push(
-      "No requirements-research profile was available to this run, so completeness and jurisdiction-specific coverage may be narrower.",
-    );
-  }
+  // Replaces a present/absent-only line: a PARTIAL profile used to read as
+  // no limitation at all, which is the reassuring half-truth this fixes.
+  const research = qcResearchCoverage(rawResult);
+  if (research.limitation) limitations.push(research.limitation);
   const failedLenses = result.lens_statuses.filter(
     (lens) => String(lens.status).toLowerCase() !== "completed",
   );

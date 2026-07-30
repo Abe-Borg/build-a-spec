@@ -483,7 +483,13 @@ actions.
   estimate, and also states material
   limitations — such as absent research context, failed calls, incomplete web
   retrieval or grounding, and document staleness — so the user can tell the
-  difference between "no defect found" and "not fully checked."
+  difference between "no defect found" and "not fully checked." Research
+  coverage is stated three ways rather than as a bare "present: Yes": no
+  profile, complete, or partial with the count and the names of the areas that
+  never completed, marked when they were required for issue readiness. The
+  Word report and the in-app report read the same captured record, so they
+  cannot disagree — and a report already exported keeps its own facts even
+  after later research fills the gap.
 - **No dead air — Final QC runs in an inline Review Room.** Starting QC opens
   the drawer once and replaces the readiness checklist with a compact,
   truthful three-stage rail: **Specialist lenses → Adversarial panels → Local
@@ -866,7 +872,9 @@ frontend/                Vite + React + TypeScript + Tailwind v4
                          update calls
   src/lib/reviewQueue.ts buildQueue(doc, mode): the review queue as a pure
                          document-order walk (port of iter_paragraphs)
-  src/lib/qcReport.ts    pure Final QC report formatting, coverage, source-link,
+  src/lib/qcReport.ts    pure Final QC report formatting, coverage (incl. the
+                         captured partial-research verdict shared with Word),
+                         source-link,
                          operation, usage, and limitations helpers
   src/lib/qcLive.ts      typed live-event merge, same-run snapshot reconciliation,
                          milestone policy, and pure three-stage Review Room fold

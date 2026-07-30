@@ -31,7 +31,11 @@ from backend.qc.engine import (
 from backend.qc.runner import QCRunner
 from backend.qc.schema import QC_FINDINGS_SCHEMA, QC_LENSES, normalize_findings
 from backend.research.engine import DimensionStatus, RequirementsProfile, ResearchItem
-from backend.spec_doc.docx_export import build_docx, build_qc_memo
+from backend.spec_doc.docx_export import (
+    build_docx,
+    build_qc_memo,
+    qc_research_coverage,
+)
 from backend.spec_doc.model import DocumentStore
 from backend.spec_modules import DEFAULT_MODULE
 from tests.fakes import (
@@ -1837,3 +1841,327 @@ def test_infrastructure_failed_verification_is_structurally_inconclusive() -> No
         f"Refuted finding {candidate.finding_id} has incomplete verifier "
         "status(es): failed."
     ) not in legacy_text
+
+
+# ---------------------------------------------------------------------------
+# Partial research reads the same in every projection (Chunk 3.3)
+# ---------------------------------------------------------------------------
+
+
+def _research_record(**overrides) -> dict:
+    """A captured `input_manifest.requirements_research` record."""
+    record = {
+        "present": True,
+        "dimension_count": 4,
+        "declared_dimension_count": 4,
+        "completed_dimensions": 4,
+        "failed_dimensions": 0,
+        "completed_dimension_ids": [
+            "governing_codes",
+            "ahj_requirements",
+            "client_standards",
+            "site_environment",
+        ],
+        "failed_dimension_ids": [],
+        "incomplete_required_dimension_ids": [],
+        "incomplete_optional_dimension_ids": [],
+        "dimension_titles": {
+            "governing_codes": "Governing construction codes",
+            "ahj_requirements": "Authority-having-jurisdiction requirements",
+            "client_standards": "Owner / client and insurer standards",
+            "site_environment": "Site and environmental factors",
+        },
+    }
+    record.update(overrides)
+    return record
+
+
+def _result_with_research(record: dict | None, *, present: bool = True) -> dict:
+    manifest: dict = {"application_version": settings.VERSION}
+    if record is not None:
+        manifest["requirements_research"] = record
+    return {
+        "research_profile_present": present,
+        "input_manifest": manifest,
+        "lens_statuses": [],
+        "findings": [],
+        "refuted": [],
+        "inconclusive": [],
+    }
+
+
+def test_no_profile_reads_as_no_in_both_the_identity_row_and_limitations() -> None:
+    identity, limitation = qc_research_coverage(
+        _result_with_research(_research_record(present=False), present=False)
+    )
+    assert identity == "No"
+    assert "No requirements-research profile was available" in limitation
+
+
+def test_a_complete_profile_says_complete_and_discloses_nothing() -> None:
+    identity, limitation = qc_research_coverage(
+        _result_with_research(_research_record())
+    )
+    assert identity == "Yes - complete"
+    # Nothing to disclose — a complete profile must not manufacture a
+    # limitation, or every clean report would carry noise.
+    assert limitation == ""
+
+
+def test_a_partial_required_profile_names_the_missing_coverage() -> None:
+    identity, limitation = qc_research_coverage(
+        _result_with_research(
+            _research_record(
+                completed_dimensions=2,
+                failed_dimensions=2,
+                completed_dimension_ids=["governing_codes", "client_standards"],
+                failed_dimension_ids=["ahj_requirements", "site_environment"],
+                incomplete_required_dimension_ids=[
+                    "ahj_requirements",
+                    "site_environment",
+                ],
+            )
+        )
+    )
+    # Never a reassuring bare "Yes".
+    assert identity == "Yes - partial (2 of 4 areas completed)"
+    assert "REQUIRED for issue readiness" in limitation
+    assert "Authority-having-jurisdiction requirements" in limitation
+    assert "Site and environmental factors" in limitation
+    assert "absent from this review, not verified-empty" in limitation
+
+
+def test_a_partial_optional_profile_quotes_the_declared_rationale() -> None:
+    identity, limitation = qc_research_coverage(
+        _result_with_research(
+            _research_record(
+                dimension_count=5,
+                declared_dimension_count=5,
+                completed_dimensions=4,
+                failed_dimensions=1,
+                failed_dimension_ids=["seismic_practice"],
+                incomplete_optional_dimension_ids=["seismic_practice"],
+                dimension_titles={"seismic_practice": "Seismic bracing practice"},
+                optional_rationales={
+                    "seismic_practice": "rarely governs in this jurisdiction"
+                },
+            )
+        )
+    )
+    assert identity == "Yes - partial (4 of 5 areas completed)"
+    assert "declared optional: rarely governs in this jurisdiction" in limitation
+    assert "REQUIRED" not in limitation
+
+
+def test_a_count_only_legacy_record_says_it_cannot_name_the_gap() -> None:
+    identity, limitation = qc_research_coverage(
+        _result_with_research(
+            {
+                "present": True,
+                "dimension_count": 4,
+                "completed_dimensions": 2,
+                "failed_dimensions": 2,
+            }
+        )
+    )
+    assert identity == "Yes - partial (2 of 4 areas completed)"
+    assert "did not record which areas" in limitation
+
+
+def test_a_record_less_legacy_report_admits_coverage_is_unknown() -> None:
+    identity, limitation = qc_research_coverage(_result_with_research(None))
+    assert identity == "Yes - coverage not recorded"
+    assert "did not record which research areas completed" in limitation
+
+    absent_identity, absent_limitation = qc_research_coverage(
+        _result_with_research(None, present=False)
+    )
+    assert absent_identity == "No"
+    assert "No requirements-research profile was available" in absent_limitation
+
+
+def test_the_word_report_states_partial_coverage_in_both_places() -> None:
+    """End to end through the real writer: identity row AND Limitations."""
+    store, result = _rich_audit_result()
+    payload = result.to_dict()
+    manifest = dict(payload.get("input_manifest") or {})
+    manifest["requirements_research"] = _research_record(
+        completed_dimensions=3,
+        failed_dimensions=1,
+        completed_dimension_ids=[
+            "governing_codes",
+            "client_standards",
+            "site_environment",
+        ],
+        failed_dimension_ids=["ahj_requirements"],
+        incomplete_required_dimension_ids=["ahj_requirements"],
+    )
+    payload["input_manifest"] = manifest
+    payload["research_profile_present"] = True
+
+    text = _document_text(Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False))))
+    assert "Yes - partial (3 of 4 areas completed)" in text
+    assert "Missing coverage REQUIRED for issue readiness" in text
+    assert "Authority-having-jurisdiction requirements" in text
+    # The bare reassurance is gone. Label and value share one paragraph, so
+    # the colon form is what makes this assertion bite.
+    assert "Research profile present: Yes\n" not in text
+
+
+def test_the_exported_report_keeps_its_captured_facts_when_research_moves_on() -> None:
+    """A report is an audit of the run's INPUT snapshot.
+
+    Completing the missing dimension in the live session afterwards must not
+    retroactively make an already-exported report claim full coverage.
+    """
+    store, result = _rich_audit_result()
+    payload = result.to_dict()
+    manifest = dict(payload.get("input_manifest") or {})
+    manifest["requirements_research"] = _research_record(
+        completed_dimensions=3,
+        failed_dimensions=1,
+        completed_dimension_ids=[
+            "governing_codes",
+            "client_standards",
+            "site_environment",
+        ],
+        failed_dimension_ids=["ahj_requirements"],
+        incomplete_required_dimension_ids=["ahj_requirements"],
+    )
+    payload["input_manifest"] = manifest
+
+    # Live research now completes everything…
+    session = sessions.get_workspace().session
+    from backend.research.engine import DimensionStatus, RequirementsProfile
+
+    session.research.status = "complete"
+    session.research.profile_result = RequirementsProfile(
+        items=[],
+        dimension_statuses=[
+            DimensionStatus(dimension_id=d.dimension_id, status="completed", title=d.title)
+            for d in session.module.research_dimensions
+        ],
+        research_date="2026-07-30",
+    )
+
+    # …and the captured record still governs the report.
+    text = _document_text(Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False))))
+    assert "Yes - partial (3 of 4 areas completed)" in text
+    assert "Yes - complete" not in text
+
+
+def test_the_word_readiness_table_carries_the_blocked_research_detail() -> None:
+    """Step 7 is a VERIFICATION, not an implementation.
+
+    `docx_export` consumes the readiness checks out of the export state rather
+    than re-deriving them, so Chunk 3.2's truthful detail reaches the Word
+    report for free — and `ready` is already False when a required area is
+    missing, because `research_complete` is a non-advisory check. This pins
+    both, so a future refactor that re-derives readiness in the exporter has
+    to disagree with a test.
+    """
+    store, result = _rich_audit_result()
+    payload = result.to_dict()
+    payload["export_current_state"] = {
+        "readiness": {
+            "ready": False,
+            "checks": [
+                {
+                    "id": "research_complete",
+                    "ok": False,
+                    "detail": (
+                        "Required research coverage is missing: "
+                        "Authority-having-jurisdiction requirements (3 of 4 "
+                        "dimensions completed). Press Research again to retry."
+                    ),
+                    "advisory": False,
+                }
+            ],
+        }
+    }
+
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False)))
+    )
+    # Booleans render as Yes/No in this report, not True/False.
+    assert "Issue readiness at export: No" in text
+    assert "BLOCK - research_complete" in text
+    assert "Required research coverage is missing" in text
+    assert "Authority-having-jurisdiction requirements" in text
+    # The report cannot claim issue readiness while that check blocks.
+    assert "Issue readiness at export: Yes" not in text
+
+
+def test_a_retired_dimension_does_not_make_declared_coverage_partial() -> None:
+    """Raised in review on PR #98, and a real self-contradiction.
+
+    A persisted profile can keep a failed status for a dimension the current
+    module no longer declares (`research_coverage` supports exactly that).
+    Counting it as a gap rendered "Yes - partial (4 of 4 areas completed)".
+    The verdict is about DECLARED coverage — but the stale failure is still
+    disclosed, because this report never drops a recorded failure.
+    """
+    identity, limitation = qc_research_coverage(
+        _result_with_research(
+            _research_record(
+                dimension_count=5,
+                declared_dimension_count=4,
+                failed_dimensions=1,
+                failed_dimension_ids=["retired_axis"],
+                dimension_titles={"retired_axis": "Retired seismic axis"},
+            )
+        )
+    )
+    assert identity == "Yes - complete"
+    assert "partial" not in identity
+    assert "Retired seismic axis" in limitation
+    assert "no longer declares as coverage" in limitation
+
+
+def test_a_retired_dimension_rides_along_without_inflating_a_real_gap() -> None:
+    identity, limitation = qc_research_coverage(
+        _result_with_research(
+            _research_record(
+                dimension_count=5,
+                declared_dimension_count=4,
+                completed_dimensions=3,
+                failed_dimensions=2,
+                completed_dimension_ids=[
+                    "governing_codes",
+                    "client_standards",
+                    "site_environment",
+                ],
+                failed_dimension_ids=["ahj_requirements", "retired_axis"],
+                incomplete_required_dimension_ids=["ahj_requirements"],
+                dimension_titles={
+                    "ahj_requirements": "Authority-having-jurisdiction requirements",
+                    "retired_axis": "Retired seismic axis",
+                },
+            )
+        )
+    )
+    # The count reflects declared coverage only: 3 of 4, not 3 of 5.
+    assert identity == "Yes - partial (3 of 4 areas completed)"
+    assert "REQUIRED for issue readiness" in limitation
+    assert "Retired seismic axis" in limitation
+    assert "no longer declares as coverage" in limitation
+
+
+def test_a_legacy_record_without_declared_scope_still_lets_failures_lead() -> None:
+    """No declared scope to filter against, so the failed ids must still
+    drive the verdict — otherwise a pre-3.2 partial report would read clean."""
+    identity, limitation = qc_research_coverage(
+        _result_with_research(
+            {
+                "present": True,
+                "dimension_count": 4,
+                "completed_dimensions": 3,
+                "failed_dimensions": 1,
+                "completed_dimension_ids": ["a", "b", "c"],
+                "failed_dimension_ids": ["ahj_requirements"],
+                "dimension_titles": {"ahj_requirements": "AHJ requirements"},
+            }
+        )
+    )
+    assert identity == "Yes - partial (3 of 4 areas completed)"
+    assert "AHJ requirements" in limitation

@@ -9,6 +9,7 @@ import {
   qcPrimaryReport,
   qcReportExportUrl,
   qcReportLimitations,
+  qcResearchCoverage,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
   safeHttpUrl,
@@ -490,4 +491,244 @@ test("limitations identify a completed-looking register with a missing required 
     qcReportLimitations(report, false).join("\n"),
     /missing provenance_hygiene/i,
   );
+});
+
+/* --- partial research coverage, mirrored from the Word report (Chunk 3.3) --- */
+
+function researchRecord(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    present: true,
+    dimension_count: 4,
+    declared_dimension_count: 4,
+    completed_dimensions: 4,
+    failed_dimensions: 0,
+    completed_dimension_ids: [
+      "governing_codes",
+      "ahj_requirements",
+      "client_standards",
+      "site_environment",
+    ],
+    failed_dimension_ids: [],
+    incomplete_required_dimension_ids: [],
+    incomplete_optional_dimension_ids: [],
+    dimension_titles: {
+      governing_codes: "Governing construction codes",
+      ahj_requirements: "Authority-having-jurisdiction requirements",
+      client_standards: "Owner / client and insurer standards",
+      site_environment: "Site and environmental factors",
+    },
+    ...overrides,
+  };
+}
+
+function withResearch(
+  record: Record<string, unknown> | null,
+  present = true,
+): QcReportResult {
+  return result({
+    research_profile_present: present,
+    input_manifest: record ? { requirements_research: record } : {},
+  });
+}
+
+test("no research profile reads as No in the identity row and is disclosed", () => {
+  const coverage = qcResearchCoverage(
+    withResearch(researchRecord({ present: false }), false),
+  );
+  assert.equal(coverage.state, "absent");
+  assert.equal(coverage.identity, "No");
+  assert.match(coverage.limitation, /No requirements-research profile was available/);
+});
+
+test("a complete profile says complete and discloses nothing", () => {
+  const coverage = qcResearchCoverage(withResearch(researchRecord()));
+  assert.equal(coverage.state, "complete");
+  assert.equal(coverage.identity, "Yes — complete");
+  // A clean report must not manufacture a limitation.
+  assert.equal(coverage.limitation, "");
+  assert.equal(
+    qcReportLimitations(withResearch(researchRecord()), false).some((line) =>
+      line.includes("Requirements research was partial"),
+    ),
+    false,
+  );
+});
+
+test("a partial required profile names the missing coverage", () => {
+  const report = withResearch(
+    researchRecord({
+      completed_dimensions: 2,
+      failed_dimensions: 2,
+      completed_dimension_ids: ["governing_codes", "client_standards"],
+      failed_dimension_ids: ["ahj_requirements", "site_environment"],
+      incomplete_required_dimension_ids: [
+        "ahj_requirements",
+        "site_environment",
+      ],
+    }),
+  );
+  const coverage = qcResearchCoverage(report);
+  assert.equal(coverage.state, "partial");
+  // Never a reassuring bare "Yes".
+  assert.equal(coverage.identity, "Yes — partial (2 of 4 areas completed)");
+  assert.match(coverage.limitation, /REQUIRED for issue readiness/);
+  assert.match(coverage.limitation, /Authority-having-jurisdiction requirements/);
+  assert.match(coverage.limitation, /absent from this review, not verified-empty/);
+  // …and the same sentence reaches the Limitations list.
+  assert.ok(
+    qcReportLimitations(report, false).includes(coverage.limitation),
+    "the limitations list must carry the coverage sentence verbatim",
+  );
+});
+
+test("a partial optional profile quotes the declared rationale", () => {
+  const coverage = qcResearchCoverage(
+    withResearch(
+      researchRecord({
+        dimension_count: 5,
+        declared_dimension_count: 5,
+        completed_dimensions: 4,
+        failed_dimensions: 1,
+        failed_dimension_ids: ["seismic_practice"],
+        incomplete_optional_dimension_ids: ["seismic_practice"],
+        dimension_titles: { seismic_practice: "Seismic bracing practice" },
+        optional_rationales: {
+          seismic_practice: "rarely governs in this jurisdiction",
+        },
+      }),
+    ),
+  );
+  assert.equal(coverage.identity, "Yes — partial (4 of 5 areas completed)");
+  assert.match(
+    coverage.limitation,
+    /declared optional: rarely governs in this jurisdiction/,
+  );
+  assert.doesNotMatch(coverage.limitation, /REQUIRED/);
+});
+
+test("a count-only legacy record admits it cannot name the gap", () => {
+  const coverage = qcResearchCoverage(
+    withResearch({
+      present: true,
+      dimension_count: 4,
+      completed_dimensions: 2,
+      failed_dimensions: 2,
+    }),
+  );
+  assert.equal(coverage.identity, "Yes — partial (2 of 4 areas completed)");
+  assert.match(coverage.limitation, /did not record which areas/);
+});
+
+test("a record-less legacy report admits coverage is unknown", () => {
+  const unknown = qcResearchCoverage(withResearch(null));
+  assert.equal(unknown.state, "unrecorded");
+  assert.equal(unknown.identity, "Yes — coverage not recorded");
+  assert.match(unknown.limitation, /did not record which research areas completed/);
+
+  const absent = qcResearchCoverage(withResearch(null, false));
+  assert.equal(absent.identity, "No");
+  assert.match(absent.limitation, /No requirements-research profile was available/);
+});
+
+test("unknown manifest fields are preserved rather than rejected", () => {
+  // Forward compatibility: a newer backend may add keys this build has never
+  // heard of, and the reader must ignore them without losing the verdict.
+  const coverage = qcResearchCoverage(
+    withResearch(
+      researchRecord({
+        completed_dimensions: 3,
+        failed_dimensions: 1,
+        completed_dimension_ids: ["governing_codes", "client_standards", "site_environment"],
+        failed_dimension_ids: ["ahj_requirements"],
+        incomplete_required_dimension_ids: ["ahj_requirements"],
+        some_future_field: { nested: [1, 2, 3] },
+        another_future_list: ["x"],
+      }),
+    ),
+  );
+  assert.equal(coverage.identity, "Yes — partial (3 of 4 areas completed)");
+  assert.match(coverage.limitation, /Authority-having-jurisdiction requirements/);
+});
+
+test("a malformed record degrades instead of throwing", () => {
+  // The projections are read-only views of an untrusted serialized record.
+  const coverage = qcResearchCoverage(
+    withResearch({
+      present: true,
+      dimension_count: "four",
+      completed_dimension_ids: "governing_codes",
+      failed_dimension_ids: null,
+      incomplete_required_dimension_ids: 7,
+      dimension_titles: "nope",
+    } as unknown as Record<string, unknown>),
+  );
+  assert.equal(typeof coverage.identity, "string");
+  assert.ok(coverage.identity.length > 0);
+});
+
+test("a retired dimension does not make declared coverage partial", () => {
+  // Raised in review on PR #98: counting a status for a dimension the module
+  // no longer declares rendered "partial (4 of 4 areas completed)".
+  const coverage = qcResearchCoverage(
+    withResearch(
+      researchRecord({
+        dimension_count: 5,
+        declared_dimension_count: 4,
+        failed_dimensions: 1,
+        failed_dimension_ids: ["retired_axis"],
+        dimension_titles: { retired_axis: "Retired seismic axis" },
+      }),
+    ),
+  );
+  assert.equal(coverage.state, "complete");
+  assert.equal(coverage.identity, "Yes — complete");
+  // Disclosed, never dropped.
+  assert.match(coverage.limitation, /Retired seismic axis/);
+  assert.match(coverage.limitation, /no longer declares as coverage/);
+});
+
+test("a retired dimension rides along without inflating a real gap", () => {
+  const coverage = qcResearchCoverage(
+    withResearch(
+      researchRecord({
+        dimension_count: 5,
+        declared_dimension_count: 4,
+        completed_dimensions: 3,
+        failed_dimensions: 2,
+        completed_dimension_ids: [
+          "governing_codes",
+          "client_standards",
+          "site_environment",
+        ],
+        failed_dimension_ids: ["ahj_requirements", "retired_axis"],
+        incomplete_required_dimension_ids: ["ahj_requirements"],
+        dimension_titles: {
+          ahj_requirements: "Authority-having-jurisdiction requirements",
+          retired_axis: "Retired seismic axis",
+        },
+      }),
+    ),
+  );
+  // Declared coverage only: 3 of 4, never 3 of 5.
+  assert.equal(coverage.identity, "Yes — partial (3 of 4 areas completed)");
+  assert.match(coverage.limitation, /REQUIRED for issue readiness/);
+  assert.match(coverage.limitation, /no longer declares as coverage/);
+});
+
+test("a legacy record without declared scope still lets failures lead", () => {
+  const coverage = qcResearchCoverage(
+    withResearch({
+      present: true,
+      dimension_count: 4,
+      completed_dimensions: 3,
+      failed_dimensions: 1,
+      completed_dimension_ids: ["a", "b", "c"],
+      failed_dimension_ids: ["ahj_requirements"],
+      dimension_titles: { ahj_requirements: "AHJ requirements" },
+    }),
+  );
+  assert.equal(coverage.identity, "Yes — partial (3 of 4 areas completed)");
+  assert.match(coverage.limitation, /AHJ requirements/);
 });

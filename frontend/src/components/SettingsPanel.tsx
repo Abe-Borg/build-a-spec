@@ -67,7 +67,17 @@ function UsageTable({ usage }: { usage: UsageSummary }) {
                   {CATEGORY_LABEL[cat] ?? cat}
                 </td>
                 <td className={cell}>{fmt(b.input_tokens)}</td>
-                <td className={cell}>{fmt(b.output_tokens)}</td>
+                <td className={cell}>
+                  {fmt(b.output_tokens)}
+                  {!!b.estimated_output_tokens && (
+                    <span
+                      className="ml-1 text-ink-faint"
+                      title="Estimated output from a stopped turn, shown separately because the provider never reported it"
+                    >
+                      +{fmt(b.estimated_output_tokens)}
+                    </span>
+                  )}
+                </td>
                 <td className={cell}>
                   {fmt(b.cache_read_input_tokens)}/
                   {fmt(b.cache_creation_input_tokens)}
@@ -82,7 +92,14 @@ function UsageTable({ usage }: { usage: UsageSummary }) {
               Total ({usage.turns} turn{usage.turns === 1 ? "" : "s"})
             </td>
             <td className={cell}>{fmt(usage.totals.input_tokens)}</td>
-            <td className={cell}>{fmt(usage.totals.output_tokens)}</td>
+            <td className={cell}>
+              {fmt(usage.totals.output_tokens)}
+              {!!usage.totals.estimated_output_tokens && (
+                <span className="ml-1 text-ink-faint">
+                  +{fmt(usage.totals.estimated_output_tokens)}
+                </span>
+              )}
+            </td>
             <td className={cell}>
               {fmt(usage.totals.cache_read_input_tokens)}/
               {fmt(usage.totals.cache_creation_input_tokens)}
@@ -98,6 +115,18 @@ function UsageTable({ usage }: { usage: UsageSummary }) {
         <p className="mt-2 text-[11px] text-ok">
           Prompt caching saved ≈ ${usage.cache_saved_usd.toFixed(3)} this
           session.
+        </p>
+      )}
+      {usage.includes_estimated_output && (
+        <p className="mt-2 text-[11px] text-ink-faint">
+          <span className="text-ink-dim">
+            +{fmt(usage.totals.estimated_output_tokens)} output tokens are
+            estimated, not reported.
+          </span>{" "}
+          Stopping a reply closes the request before the provider sends its
+          final token count, so that part is measured from what arrived and
+          charged at the output rate. Every other number here is
+          provider-reported.
         </p>
       )}
       <p className="mt-1 text-[11px] text-ink-faint">

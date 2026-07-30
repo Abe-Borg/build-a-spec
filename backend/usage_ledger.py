@@ -10,6 +10,22 @@ Cost is an *estimate* from list pricing (``settings.PRICING``), labeled as
 such in the UI. Thinking tokens are billed as output tokens and are already
 counted inside ``output_tokens`` — they are surfaced for visibility, never
 added to the dollar estimate a second time.
+
+Two senses of "estimate" meet here and must not be confused. The DOLLAR
+figure has always been an estimate (list prices, not an invoice) computed
+from exact provider TOKEN COUNTS. A turn the user stops is the one case
+where a token count itself is not exact: the stream closes before the
+provider's final usage delta, so the shortfall is measured from the
+accumulated content and recorded under
+``ESTIMATED_OUTPUT_TOKENS_KEY`` — beside ``output_tokens``, never inside
+it. ``includes_estimated_output`` on the snapshot says whether any such
+component is present, so a surface can disclose it.
+
+Note that ``usage_pricing_snapshot`` deliberately says nothing about this:
+it is consumed as Final QC's persisted, shape-validated ``cost_basis``, and
+a QC run cannot produce an estimated component (its fan-out always reads a
+final message). Adding a field there would break every new audit record's
+validation to describe something that can never happen in it.
 """
 from __future__ import annotations
 
@@ -18,6 +34,23 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from . import settings
+
+
+# The stopped-turn output estimate, kept strictly apart from provider data.
+#
+# ``output_tokens`` always holds exactly what the provider reported — it is
+# the one number reconcilable against an invoice, so a heuristic must never
+# be blended into it. When a user stops a turn the stream closes before the
+# provider's final usage delta arrives, so the accumulated content is
+# measured instead and the SHORTFALL (estimate minus reported) is recorded
+# under this key. The two are disjoint: best-available total = sum of both;
+# provider truth = ``output_tokens`` alone.
+ESTIMATED_OUTPUT_TOKENS_KEY = "estimated_output_tokens"
+
+# Disclosure flag on a turn/round usage RECORD (the SSE payload and the
+# trace event) — never on a ledger bucket, where it would be counted as an
+# integer. See :meth:`UsageLedger.add`.
+USAGE_ESTIMATED_KEY = "usage_estimated"
 
 
 def _get(obj: Any, key: str) -> Any:
@@ -114,12 +147,20 @@ def estimate_usage_cost(model: str, usage: dict[str, int]) -> float:
     authority. Thinking tokens already live inside ``output_tokens`` and are
     therefore not added a second time — and neither is the one-hour cache
     subtotal, which lives inside the cache-creation total.
+
+    ``estimated_output_tokens`` is the opposite case and IS added: it is the
+    output a stopped turn produced BEYOND what the provider reported (the
+    stream was closed before the final usage delta), so it is disjoint from
+    ``output_tokens`` by construction. It is charged at the same output
+    rate — a token the model wrote costs the same whether or not the
+    provider got to tell us about it.
     """
     rates = _rates(model)
     five_minute, one_hour = cache_write_split(usage)
     return round(
         usage.get("input_tokens", 0) * rates["input"]
         + usage.get("output_tokens", 0) * rates["output"]
+        + usage.get(ESTIMATED_OUTPUT_TOKENS_KEY, 0) * rates["output"]
         + usage.get("cache_read_input_tokens", 0) * rates["cache_read"]
         + five_minute * rates["cache_write"]
         + one_hour * rates.get("cache_write_1h", rates["cache_write"])
@@ -180,9 +221,22 @@ class UsageLedger:
         ``usage`` may be a plain dict (the interview's aggregated totals) or
         an SDK usage object (research/audit). Empty usage is a no-op — and
         does not count a turn, so a no-key failure never inflates the count.
+
+        Booleans are rejected rather than counted. A turn's usage record
+        carries the ``usage_estimated`` disclosure flag beside its counts,
+        and ``bool`` is a subclass of ``int`` in Python — so without this a
+        flagged turn would silently accumulate a ``usage_estimated: 1``,
+        then ``2``, then ``3`` in the bucket and render as a token count.
+        The ledger's own disclosure is derived from
+        ``estimated_output_tokens`` instead (see :meth:`snapshot`), which
+        cannot drift from the number it describes.
         """
         data = usage if isinstance(usage, dict) else usage_to_dict(usage)
-        data = {k: int(v) for k, v in data.items() if isinstance(v, (int, float)) and v}
+        data = {
+            k: int(v)
+            for k, v in data.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v
+        }
         if not data:
             return
         with self._lock:
@@ -227,14 +281,23 @@ class UsageLedger:
         return round(saved, 6)
 
     def snapshot(self) -> dict[str, Any]:
-        """The UI-shaped payload for ``GET /api/usage``."""
+        """The UI-shaped payload for ``GET /api/usage``.
+
+        ``includes_estimated_output`` is DERIVED from the counter rather
+        than tracked alongside it, so the flag and the number it discloses
+        can never disagree.
+        """
         with self._lock:
+            totals = self._totals()
             return {
                 "categories": {k: dict(v) for k, v in self.categories.items()},
-                "totals": self._totals(),
+                "totals": totals,
                 "turns": self.turns,
                 "estimated_cost_usd": self._estimated_cost(),
                 "cache_saved_usd": self._cache_saved(),
+                "includes_estimated_output": bool(
+                    totals.get(ESTIMATED_OUTPUT_TOKENS_KEY, 0)
+                ),
             }
 
     def reset(self) -> None:

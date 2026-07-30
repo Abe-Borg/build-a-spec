@@ -520,6 +520,52 @@ def test_round_end_and_prompt_refs_are_recorded_per_turn(
     assert kinds.count("system") == 1
 
 
+def test_a_stopped_rounds_trace_event_discloses_its_estimated_output(
+    monkeypatch, trace_env
+):
+    """A support bundle has to be able to tell an exact provider count from
+    an estimated one — otherwise the round_end record silently asserts a
+    precision it does not have."""
+    from tests.fakes import text_block, token_usage
+    from tests.test_stop import _stopped_turn_usage
+
+    TestClient(create_app())  # start the app so the recorder is live
+    usage = _stopped_turn_usage(
+        [text_block("word " * 400)],
+        snapshot_usage=token_usage(input=1000, output=4),
+    )
+    assert usage["estimated_output_tokens"] == 496
+
+    events = _wait_events(
+        lambda evs: any(e["type"] == "round_end" for e in evs)
+    )
+    rounds = [e for e in events if e["type"] == "round_end"]
+    assert len(rounds) == 1
+    recorded = rounds[0]["usage"]
+    assert recorded["output_tokens"] == 4  # provider-reported
+    assert recorded["estimated_output_tokens"] == 496
+    assert recorded["usage_estimated"] is True
+
+
+def test_a_normal_rounds_trace_event_claims_no_estimate(monkeypatch, trace_env):
+    from tests.fakes import FakeClient, text_turn, token_usage
+
+    fake = FakeClient(
+        [text_turn(["Done."], usage=token_usage(input=100, output=25))]
+    )
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    client = TestClient(create_app())
+    client.post("/api/chat", json={"message": "go"})
+
+    events = _wait_events(
+        lambda evs: any(e["type"] == "round_end" for e in evs)
+    )
+    recorded = next(e for e in events if e["type"] == "round_end")["usage"]
+    assert recorded["output_tokens"] == 25
+    assert "estimated_output_tokens" not in recorded
+    assert "usage_estimated" not in recorded
+
+
 def test_workspace_conflict_event_from_the_lease_middleware(
     monkeypatch, trace_env
 ):

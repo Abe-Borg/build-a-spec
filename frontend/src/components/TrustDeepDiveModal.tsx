@@ -1388,6 +1388,16 @@ function Dossier() {
               stopped is still real</b>, and the meter records it rather than
               quietly writing it off.
             </>,
+            <>
+              <b className="text-ink">One number in the table is estimated
+              rather than counted</b>, and it is marked. Stopping a reply
+              closes the request before Anthropic sends its final token
+              tally, so the output you already received is measured from what
+              arrived and shown as a separate <code>+N</code> addition. It is
+              never folded into the reported output count — that figure stays
+              exactly what the API said, so it can still be reconciled
+              against your console.
+            </>,
           ]}
         />
       </Section>

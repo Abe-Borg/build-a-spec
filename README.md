@@ -632,7 +632,11 @@ meter) and still current:
   did not get is still work you paid for**: a research round where every
   dimension failed, and one you stopped part-way, both land in the meter
   even though their findings are discarded. Nothing is quietly unbilled
-  just because it did not produce a result.
+  just because it did not produce a result. Stopping a chat reply is the
+  one case where a *token count* is itself estimated — closing the stream
+  skips the provider's final tally — so that part is measured from what
+  arrived and shown as a separate `+N` addition, never folded into the
+  reported output. Every other number in the table is provider-reported.
 
 Shipped in v0.6.0 ("Sonnet unleashed") and still current (project decision:
 the app imposes **no quality limits on the model** — the only caps left are

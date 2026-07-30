@@ -23,7 +23,10 @@ from tests.fakes import (
     research_response,
     text_delta_event,
     text_turn,
+    thinking_block,
+    token_usage,
     tool_turn,
+    tool_use_block,
     raw_turn,
     text_block,
 )
@@ -565,6 +568,183 @@ def test_a_stopped_research_round_still_meters_what_it_already_spent():
     assert "stopped" in runner.error.lower()
     # The bill is not: 4 dimensions × one 50-token paused response.
     assert billed == [{"input_tokens": 200, "web_search_requests": 4}]
+
+
+# ---------------------------------------------------------------------------
+# Stopped-turn output estimate (the provider never sends the final count)
+# ---------------------------------------------------------------------------
+
+
+def _stopped_turn_usage(content, *, snapshot_usage) -> dict:
+    """Stop a turn after its first delta; return `turn_complete`'s usage.
+
+    The scripted snapshot usage is what the stop path reads, standing in for
+    the small ``message_start`` placeholder the real SDK holds when the
+    closing ``message_delta`` never arrives.
+    """
+    events = [
+        block_start_event(0, "text"),
+        text_delta_event(0, "partial"),
+        block_stop_event(0),
+    ]
+    fake = FakeClient(
+        [
+            raw_turn(
+                content,
+                stop_reason="end_turn",
+                events=events,
+                snapshot_usage=snapshot_usage,
+            )
+        ]
+    )
+    session = sessions.get_session()
+    import backend.llm.conversation as conv
+
+    orig_get_client = conv.get_client
+    conv.get_client = lambda: fake  # type: ignore[assignment]
+    try:
+        usage: dict = {}
+        for event in stream_user_turn(session, "write something long"):
+            if event["type"] == "text_delta":
+                session.stop_requested.set()
+            elif event["type"] == "turn_complete":
+                usage = event["usage"]
+            assert event["type"] != "error"
+        return usage
+    finally:
+        conv.get_client = orig_get_client
+
+
+def test_a_stopped_turn_estimates_the_output_the_provider_never_reported():
+    """The headline case: a long reply stopped mid-stream. The provider's
+    placeholder says 4 output tokens; ~2000 characters actually arrived."""
+    usage = _stopped_turn_usage(
+        [text_block("word " * 400)],  # 2000 chars → ~500 tokens
+        snapshot_usage=token_usage(input=1000, output=4),
+    )
+
+    # The provider's number is untouched — this is the one field that can be
+    # reconciled against an invoice.
+    assert usage["output_tokens"] == 4
+    # The shortfall lives in its own counter, and is disclosed.
+    assert usage["estimated_output_tokens"] == 496
+    assert usage["usage_estimated"] is True
+
+
+def test_a_provider_count_larger_than_the_heuristic_adds_nothing():
+    """The estimate can only ever ADD. When the provider already reported
+    more than the heuristic guesses, the record stays purely reported."""
+    usage = _stopped_turn_usage(
+        [text_block("short")],  # 5 chars → 2 tokens
+        snapshot_usage=token_usage(input=100, output=50),
+    )
+    assert usage["output_tokens"] == 50
+    assert "estimated_output_tokens" not in usage
+    assert "usage_estimated" not in usage
+
+
+def test_the_estimate_counts_thinking_and_tool_input_but_not_tool_results():
+    """Thinking summaries and the model's tool-call JSON are output it was
+    billed for. A stop most often lands mid tool-input, so missing them
+    would under-report exactly the turns this exists for."""
+    usage = _stopped_turn_usage(
+        [
+            thinking_block("t" * 400),
+            text_block("x" * 400),
+            tool_use_block("toolu_1", "apply_spec_edits", {"edits": "e" * 400}),
+        ],
+        snapshot_usage=token_usage(input=100, output=1),
+    )
+    # 400 thinking + 400 text + (name + JSON-serialized input) ≥ 1200 chars,
+    # so ≥ 300 tokens estimated, less the 1 the provider reported. Asserted
+    # as a floor, not an exact number: this is a heuristic, and pinning a
+    # tokenizer-exact figure would make it brittle for no benefit.
+    assert usage["output_tokens"] == 1
+    assert usage["estimated_output_tokens"] >= 299
+    assert usage["usage_estimated"] is True
+
+
+def test_more_output_never_estimates_fewer_tokens():
+    """Monotonicity — the property worth pinning for a heuristic."""
+    small = _stopped_turn_usage(
+        [text_block("word " * 100)],
+        snapshot_usage=token_usage(input=100, output=1),
+    )
+    large = _stopped_turn_usage(
+        [text_block("word " * 400)],
+        snapshot_usage=token_usage(input=100, output=1),
+    )
+    assert (
+        large["estimated_output_tokens"] > small["estimated_output_tokens"] > 0
+    )
+
+
+def test_a_normal_turn_carries_no_estimate_at_all():
+    """Exact provider usage wins; the estimated counter stays absent."""
+    fake = FakeClient(
+        [text_turn(["A complete reply."], usage=token_usage(input=100, output=25))]
+    )
+    session = sessions.get_session()
+    import backend.llm.conversation as conv
+
+    orig_get_client = conv.get_client
+    conv.get_client = lambda: fake  # type: ignore[assignment]
+    try:
+        usage: dict = {}
+        for event in stream_user_turn(session, "hello"):
+            if event["type"] == "turn_complete":
+                usage = event["usage"]
+    finally:
+        conv.get_client = orig_get_client
+
+    assert usage["output_tokens"] == 25
+    assert "estimated_output_tokens" not in usage
+    assert "usage_estimated" not in usage
+
+
+def test_the_context_gauge_includes_a_stopped_turns_estimated_output():
+    """The gauge pairs the last request's prompt with the reply about to be
+    committed, so omitting the estimate would undercount the conversation
+    the next turn has to re-send."""
+    usage = _stopped_turn_usage(
+        [text_block("word " * 400)],
+        snapshot_usage=token_usage(input=1000, output=4),
+    )
+    session = sessions.get_session()
+    # prompt 1000 + retained output 4 + estimated 496.
+    assert session.last_context_tokens == 1500
+    assert usage["estimated_output_tokens"] == 496
+
+
+def test_the_gauge_excludes_output_the_commit_throws_away():
+    """Billing and the gauge want different numbers, and conflating them
+    overstates the gauge badly.
+
+    Thinking blocks are stripped by `_committed_messages` and an unexecuted
+    `tool_use` is dropped by the truncation branch — both were billed, so
+    they belong in the spend estimate, but neither is ever re-sent. A gauge
+    that counted them would promise the user thousands of tokens the next
+    turn does not carry. (Caught in review on PR #102.)
+    """
+    usage = _stopped_turn_usage(
+        [
+            thinking_block("t" * 4000),  # billed, then stripped at commit
+            text_block("word " * 100),  # 500 chars → 125 tokens, retained
+            tool_use_block(  # billed, then dropped as unexecuted
+                "toolu_1", "apply_spec_edits", {"edits": "e" * 4000}
+            ),
+        ],
+        snapshot_usage=token_usage(input=1000, output=4),
+    )
+    session = sessions.get_session()
+
+    # The BILL counts everything the model authored: >2000 tokens of
+    # thinking and tool input on top of the text.
+    assert usage["estimated_output_tokens"] > 2000
+
+    # The GAUGE counts only the surviving text: 1000 prompt + 4 reported
+    # + (125 - 4) estimated retained = 1125. Emphatically not 1000 + 2000+.
+    assert session.last_context_tokens == 1125
 
 
 # ---------------------------------------------------------------------------

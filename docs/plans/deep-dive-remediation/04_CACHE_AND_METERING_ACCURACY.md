@@ -1,6 +1,6 @@
 # Phase 4 — Cache and metering accuracy
 
-- Status: in progress (4.1-4.3 landed; 4.4 planned)
+- Status: **complete** (4.1-4.4 landed)
 - Prerequisites: Phases 1-3 complete
 - Risk: high financial/audit impact; follow the chunk order exactly
 
@@ -506,6 +506,100 @@ Then run the full standard verification commands from the master plan.
 - Normal completed responses use exact usage unchanged.
 - Every estimated record is explicitly labeled estimated.
 - Estimated output is counted once in cost and context metrics.
+
+### Implementation record
+
+- Status: **complete**
+- Commit/PR: branch `claude/deep-dive-phase-4-cont-o2up2c` (restarted from
+  master after the 4.3 PR merged)
+- Tests: 13 new. `tests/test_stop.py` (7 — the headline long-stop case with
+  a tiny provider placeholder; a provider count larger than the heuristic
+  adding nothing; thinking + tool-input counted in the BILL; the gauge
+  EXCLUDING those same blocks; monotonicity; a normal
+  turn carrying no estimate at all; and the context gauge including it).
+  `tests/test_usage.py` (4 — priced at the output rate, the derived
+  disclosure flag both ways, the bool trap, and the whole path through
+  `/api/usage`). `tests/test_diagnostics.py` (2 — the `round_end` trace
+  event disclosing it, and a normal round claiming no estimate). Full
+  suite: **1271 passed, 9 skipped**; `npm test` 154 passed; `npm run
+  build` clean. Every mechanism reverted in place to prove it
+  load-bearing: blending the estimate into `output_tokens` → 6 red;
+  dropping the ledger's bool guard → 2 red; feeding the context gauge the
+  billing figure → 1 red.
+- Deviations:
+  - **Item 2's last bullet needed splitting into two estimates (PR #102
+    review, Codex).** The plan says to "use reported-plus-estimated for the
+    last-round context gauge, documented as an upper estimate", and the
+    first implementation did exactly that with the billing figure. But a
+    stopped turn discards two whole categories of billed output before
+    commit — `thinking` blocks (stripped by `_committed_messages`) and
+    unexecuted `tool_use` blocks (dropped by the truncation branch) — so
+    that figure would have the pill promising tokens the next turn never
+    re-sends, undoing the very subtraction `_retained_output_tokens`
+    performs for this reason. `estimated_output_shortfall` (everything
+    authored) now serves billing and `estimated_retained_output` (text
+    blocks only) serves the gauge. "Upper estimate" survives as a
+    description of the heuristic's error bar, not as licence to count
+    discarded content. Pinned by
+    `test_the_gauge_excludes_output_the_commit_throws_away`.
+  - **The key constants live in `backend/usage_ledger.py`, not
+    `conversation.py`.** That module owns the usage-key vocabulary, is a
+    leaf (imports only `settings`), is where the counter is priced, and is
+    already imported by `conversation.py` — so putting them there is the
+    import direction that already exists.
+  - **`bool` is a subclass of `int`, which the plan does not mention and
+    which made item 2 unsafe as written.** The turn's usage record carries
+    `usage_estimated: True` and is handed straight to `UsageLedger.add`,
+    whose filter (`isinstance(v, (int, float)) and v`) would have
+    accumulated the flag as a token count. `add()` now rejects bools (the
+    precedent already existed in `load_snapshot`), and the ledger's own
+    disclosure is DERIVED from the counter
+    (`snapshot()["includes_estimated_output"]`) so flag and number cannot
+    disagree. The flag itself rides only the RECORDS — SSE payload and
+    trace event — as the plan's item 3 requires.
+  - **Item 6 does NOT extend `usage_pricing_snapshot`.** That function is
+    consumed as Final QC's persisted `cost_basis`, whose validator asserts
+    exact set equality over both the top-level keys and the rate map
+    (Chunk 4.1's `_COST_BASIS_SHAPES`). Adding a field would break every
+    new audit record's validation in order to describe something a QC run
+    cannot produce — its fan-out always reads a final message, so it has
+    no stopped-turn estimate. The wording landed in the ledger module
+    docstring, the README meter section, the Settings disclosure line and
+    the trust dossier instead.
+  - **Trace capture needed no change** (the plan's "if its typed turn event
+    needs the disclosure"). `capture.turn_round` passes the usage dict
+    through as `dict(usage)`, so both keys ride the trace for free.
+    Verified rather than assumed, with a test.
+  - **The trace tests landed in `tests/test_diagnostics.py`, not
+    `tests/test_tracing.py`** — that is where the existing `round_end`
+    coverage and the `trace_env` fixture live.
+  - **Frontend beyond the plan's file list**, because item 2 names the
+    header ticker and Settings table as surfaces: `types.ts`
+    (`includes_estimated_output`), `Header.tsx` (tooltip — the pill has no
+    room, and its `≈` already reads as an estimate), `SettingsPanel.tsx`
+    (a faint `+N` beside the affected row's reported output, never summed
+    into it, plus a disclosure paragraph in the existing
+    `cache_saved_usd` idiom), and `TrustDeepDiveModal.tsx` (the Money
+    section claims every number is real, so an estimated one has to be
+    named there).
+  - **`tests/fakes.py` gained `usage=`/`snapshot_usage=` on `raw_turn`**,
+    with `_FakeStreamCtx.current_message_snapshot` preferring
+    `snapshot_usage` — modelling the one way a snapshot genuinely differs
+    from a final message. Both attach only when supplied (the `container`
+    convention), because `SequencedFakeClient` routes on
+    `hasattr(turn, "usage")` to choose its stream context; an
+    unconditional `usage=None` would silently change which context a
+    `raw_turn` received if one were ever scripted through that client.
+  - **Tests assert monotonicity and a floor, never a tokenizer-exact
+    count**, per item 5 — the estimator is `ceil(chars / 4)` and pinning an
+    exact figure would be brittle for no benefit.
+- Manual QA owed: the phase-level item — stop a long output against a real
+  key and confirm the ticker increments plausibly, the Settings table shows
+  the `+N` addition, and the trace marks the round's output usage estimated.
+  Worth comparing the estimate against the provider console for one such
+  turn to sanity-check the 4-chars-per-token heuristic in practice; the
+  hermetic tests prove separation, disclosure and monotonicity, not
+  calibration.
 
 ## Phase 4 manual QA
 

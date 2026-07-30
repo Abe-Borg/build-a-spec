@@ -1,15 +1,21 @@
 """Focused regressions for complete Final-QC input identity."""
 from __future__ import annotations
 
+import inspect
 from dataclasses import replace
 from types import SimpleNamespace
 
 from backend import settings
 from backend.qc.engine import (
     QCSourceGuard,
+    _lens_request_suffix,
+    _lens_shared_prefix,
+    _render_profile,
     build_qc_input_manifest,
     qc_input_fingerprint,
 )
+from backend.qc.schema import QC_LENSES
+from backend.research.engine import DimensionStatus, RequirementsProfile
 from backend.spec_doc.model import SpecSection
 from backend.spec_doc.source_mapping import SourceBodyMap
 from backend.spec_modules import DEFAULT_MODULE
@@ -98,3 +104,139 @@ def test_each_source_preservation_constituent_changes_full_input_identity() -> N
         manifest = _manifest(section, variant)
         assert qc_input_fingerprint(manifest) != baseline_identity, label
 
+
+
+# ---------------------------------------------------------------------------
+# Captured research facts (Chunk 3.1)
+# ---------------------------------------------------------------------------
+
+
+def _research_profile(*statuses: tuple[str, str, str]) -> RequirementsProfile:
+    return RequirementsProfile(
+        items=[],
+        dimension_statuses=[
+            DimensionStatus(dimension_id=did, status=status, title=title)
+            for did, status, title in statuses
+        ],
+        research_date="2026-07-21",
+        project={"city": "Ashburn", "state": "VA", "country": "USA"},
+    )
+
+
+def test_the_manifest_names_which_coverage_failed_not_only_how_many() -> None:
+    """A report is an audit of the run's input snapshot.
+
+    Counts cannot answer "which two of the four?", and the live profile is
+    not available to a report opened later (it may have gained a round), so
+    the names have to be captured here.
+    """
+    profile = _research_profile(
+        ("governing_codes", "completed", "Governing codes"),
+        ("ahj_requirements", "failed", "AHJ requirements"),
+        ("client_standards", "completed", "Client and insurer standards"),
+        ("site_environment", "failed", "Site and environment"),
+    )
+    research = build_qc_input_manifest(
+        _section(),
+        profile,
+        DEFAULT_MODULE,
+        version_index=3,
+        model=settings.QC_MODEL,
+        max_tokens=settings.QC_MAX_TOKENS,
+    )["requirements_research"]
+
+    assert research["present"] is True
+    assert research["dimension_count"] == 4
+    assert research["completed_dimensions"] == 2
+    assert research["failed_dimensions"] == 2
+    # Module declaration order, both lists, so a rendered limitation reads
+    # the same way every time.
+    assert research["completed_dimension_ids"] == [
+        "governing_codes",
+        "client_standards",
+    ]
+    assert research["failed_dimension_ids"] == [
+        "ahj_requirements",
+        "site_environment",
+    ]
+    assert research["dimension_titles"]["ahj_requirements"] == "AHJ requirements"
+    # The sets a later chunk validates as disjoint really are.
+    assert not set(research["completed_dimension_ids"]) & set(
+        research["failed_dimension_ids"]
+    )
+
+
+def test_an_absent_profile_records_empty_coverage_rather_than_omitting_it() -> None:
+    research = build_qc_input_manifest(
+        _section(),
+        None,
+        DEFAULT_MODULE,
+        version_index=0,
+        model=settings.QC_MODEL,
+        max_tokens=settings.QC_MAX_TOKENS,
+    )["requirements_research"]
+    assert research["present"] is False
+    assert research["dimension_count"] == 0
+    assert research["completed_dimension_ids"] == []
+    assert research["failed_dimension_ids"] == []
+    assert research["dimension_titles"] == {}
+
+
+def test_partial_coverage_changes_the_full_input_identity() -> None:
+    """Two runs that saw different coverage are not the same review."""
+    complete = _research_profile(
+        ("governing_codes", "completed", "Governing codes"),
+        ("ahj_requirements", "completed", "AHJ requirements"),
+    )
+    partial = _research_profile(
+        ("governing_codes", "completed", "Governing codes"),
+        ("ahj_requirements", "failed", "AHJ requirements"),
+    )
+
+    def identity(profile: RequirementsProfile) -> str:
+        return qc_input_fingerprint(
+            build_qc_input_manifest(
+                _section(),
+                profile,
+                DEFAULT_MODULE,
+                version_index=0,
+                model=settings.QC_MODEL,
+                max_tokens=settings.QC_MAX_TOKENS,
+            )
+        )
+
+    assert identity(complete) != identity(partial)
+
+
+def test_every_lens_is_told_which_coverage_is_absent() -> None:
+    """The warning rides the SHARED cached prefix, so all five lenses see it.
+
+    Asserting it on the prefix rather than looping over per-lens messages is
+    the stronger claim: the prefix is byte-identical for every lens by
+    construction (that is the v1.8.0 caching invariant), and the per-lens
+    suffix carries no profile content at all — so no lens can be built
+    without this.
+    """
+    profile = _research_profile(
+        ("governing_codes", "completed", "Governing codes"),
+        ("ahj_requirements", "failed", "AHJ requirements"),
+    )
+    rendered = _render_profile(profile)
+    assert "INCOMPLETE COVERAGE: research for AHJ requirements never" in rendered
+    assert "ABSENT, not verified-empty" in rendered
+
+    prefix = _lens_shared_prefix(
+        _section(),
+        DEFAULT_MODULE,
+        profile,
+        "Fire Protection",
+        "",
+        "Current date: 2026-07-21",
+    )
+    assert "INCOMPLETE COVERAGE" in prefix
+    # And it cannot be lens-specific: `_lens_shared_prefix` takes no lens
+    # argument, so the profile physically cannot vary between them, and no
+    # per-lens suffix carries coverage text of its own.
+    assert "lens" not in inspect.signature(_lens_shared_prefix).parameters
+    for lens in QC_LENSES:
+        assert "INCOMPLETE COVERAGE" not in _lens_request_suffix(lens), lens.lens_id

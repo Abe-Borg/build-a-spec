@@ -28,6 +28,7 @@ from .engine import (
     RequirementsProfile,
     ResearchFanoutError,
     append_research_round,
+    incomplete_dimension_facts,
     run_requirements_research,
 )
 
@@ -252,6 +253,10 @@ class ResearchRunner:
                         trace_handle,
                         status=STATUS_COMPLETE,
                         items=len(merged.items),
+                        # A run reports complete when ANY dimension did, so
+                        # the span has to name what did not — cumulatively,
+                        # since an earlier round may already have covered it.
+                        incomplete_dimensions=incomplete_dimension_facts(merged),
                     )
             finally:
                 if on_settled is not None:

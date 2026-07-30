@@ -539,3 +539,59 @@ def test_workspace_conflict_event_from_the_lease_middleware(
     )
     conflict = next(e for e in events if e["type"] == "workspace_conflict")
     assert conflict["path"] == "/api/qc/dismiss"
+
+
+def test_the_snapshot_names_which_research_coverage_never_completed():
+    """A support bundle has to answer "which coverage failed" without opening
+    the project — a partial run still reports ``complete``, so the status
+    alone says nothing, and the raw provider message must not travel.
+    """
+    from backend.research.engine import DimensionStatus, RequirementsProfile
+
+    session = sessions.get_workspace().session
+    session.research.status = "complete"
+    session.research.profile_result = RequirementsProfile(
+        items=[],
+        dimension_statuses=[
+            DimensionStatus(
+                dimension_id="governing_codes",
+                status="completed",
+                title="Governing codes",
+            ),
+            DimensionStatus(
+                dimension_id="ahj_requirements",
+                status="failed",
+                title="AHJ requirements",
+                error="BadRequestError: {'message': 'container_id required'}",
+                error_kind="invalid_request",
+            ),
+        ],
+        research_date="2026-07-21",
+        rounds=[],
+    )
+
+    client = TestClient(create_app())
+    resp = client.get("/api/diagnostics")
+    assert resp.status_code == 200
+    research = resp.json()["session"]["research"]
+    assert research["status"] == "complete"
+    assert research["dimension_count"] == 2
+    assert research["incomplete_dimensions"] == [
+        {
+            "dimension_id": "ahj_requirements",
+            "title": "AHJ requirements",
+            "error_kind": "invalid_request",
+        }
+    ]
+    # Sanitized: the kind travels, the provider's own payload does not.
+    assert "container_id" not in resp.text
+    assert "BadRequestError" not in resp.text
+
+
+def test_a_session_that_never_researched_reports_empty_coverage():
+    client = TestClient(create_app())
+    research = client.get("/api/diagnostics").json()["session"]["research"]
+    assert research["status"] == "idle"
+    assert research["rounds"] == 0
+    assert research["dimension_count"] == 0
+    assert research["incomplete_dimensions"] == []

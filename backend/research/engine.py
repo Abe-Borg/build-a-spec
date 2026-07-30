@@ -68,6 +68,7 @@ from .grounding import (
 from .resend_sanitizer import sanitize_messages_for_resend
 from .retry_policy import (
     DEFAULT_REALTIME_RETRY_POLICY,
+    FailureClass,
     classify_exception,
     compute_backoff_seconds,
     is_retryable_failure_class,
@@ -180,9 +181,40 @@ class ResearchItem:
         return self.actionability == "process_advisory"
 
 
+# Closed vocabulary for the failure KIND recorded beside a dimension's
+# error message. The message is written for the user (it reaches the research
+# drawer) and two of the ones this module records embed provider exception
+# text; a trace span and a support bundle have to be safe to hand over, so
+# they carry only these tokens. Chosen at the failure site rather than
+# reverse-engineered from prose later.
+DIMENSION_ERROR_AUTH = "auth"
+DIMENSION_ERROR_CANCELLED = "cancelled"
+DIMENSION_ERROR_BUDGET = "budget_ceiling"
+DIMENSION_ERROR_INCOMPLETE = "incomplete_response"
+DIMENSION_ERROR_NO_PAYLOAD = "no_payload"
+DIMENSION_ERROR_EXHAUSTED = "retries_exhausted"
+# A provider failure reports its FailureClass value instead — that enum is
+# already closed and str-valued "for cheap telemetry", so a support bundle
+# gets "rate_limit" rather than a bucket that says only "something raised".
+DIMENSION_ERROR_KINDS: tuple[str, ...] = (
+    DIMENSION_ERROR_AUTH,
+    DIMENSION_ERROR_CANCELLED,
+    DIMENSION_ERROR_BUDGET,
+    DIMENSION_ERROR_INCOMPLETE,
+    DIMENSION_ERROR_NO_PAYLOAD,
+    DIMENSION_ERROR_EXHAUSTED,
+    *(member.value for member in FailureClass),
+)
+
+
 @dataclass
 class DimensionStatus:
-    """Per-dimension completion telemetry (failure honesty + WI4 billing)."""
+    """Per-dimension completion telemetry (failure honesty + WI4 billing).
+
+    ``error`` is the user-facing message; ``error_kind`` is the sanitized
+    token from :data:`DIMENSION_ERROR_KINDS` that telemetry may repeat.
+    Empty on profiles saved before the kind was recorded.
+    """
 
     dimension_id: str
     status: str  # "completed" | "failed"
@@ -196,6 +228,53 @@ class DimensionStatus:
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
     error: str = ""
+    error_kind: str = ""
+
+
+def dimension_display_title(status: DimensionStatus) -> str:
+    """Human name for a dimension, falling back to its id.
+
+    Legacy profiles saved before the title was stored carry none, and a
+    coverage warning that named nothing would be worse than a bare id.
+    """
+    return status.title.strip() or status.dimension_id
+
+
+def incomplete_dimensions(
+    profile: "RequirementsProfile",
+) -> list[DimensionStatus]:
+    """Cumulative statuses that have NEVER completed, in module order.
+
+    The one definition of missing coverage. Four surfaces ask the question —
+    the drafting context header, the QC input manifest, the research trace
+    span, and the diagnostics snapshot — and they must agree, because a
+    dimension that completed in an earlier round is researched even if the
+    latest round failed it (see :func:`append_research_round`).
+    """
+    return [s for s in profile.dimension_statuses if s.status != "completed"]
+
+
+def incomplete_dimension_facts(
+    profile: "RequirementsProfile | None",
+) -> list[dict[str, str]]:
+    """Missing coverage as telemetry-safe records, in module order.
+
+    Carries the sanitized ``error_kind``, never the dimension's own error
+    message: that message is written for the research drawer and two of the
+    ones the fan-out records embed provider exception text, while these
+    records go into a trace span and the diagnostics snapshot — both of
+    which are meant to be handed to someone else.
+    """
+    if profile is None:
+        return []
+    return [
+        {
+            "dimension_id": status.dimension_id,
+            "title": dimension_display_title(status),
+            "error_kind": status.error_kind,
+        }
+        for status in incomplete_dimensions(profile)
+    ]
 
 
 @dataclass
@@ -308,6 +387,13 @@ class RequirementsProfile:
         then every item carries its own "as of" date, because the header's
         single date would otherwise claim an earlier round's findings were
         confirmed today.
+
+        A profile with missing coverage names it. The provenance line's
+        "N of M dimensions completed" is a count the model has no way to
+        act on: absent findings are indistinguishable from a dimension that
+        looked and found nothing, which is the difference between "no
+        seismic requirement applies" and "nobody checked". A profile with
+        every dimension completed renders byte-identically to before.
         """
         project = ProjectProfile.from_dict(self.project) or ProjectProfile(
             "", "", "", ""
@@ -331,11 +417,26 @@ class RequirementsProfile:
                 f"completed), researched {self.research_date}. Edition and "
                 "process facts are as-of that date."
             )
+        # Renders directly after the provenance count it qualifies, and
+        # never as an item — so the context-block trimming, which drops
+        # whole items to fit the cap, cannot remove it.
+        gaps = incomplete_dimensions(self)
+        coverage_warning = ""
+        if gaps:
+            names = ", ".join(dimension_display_title(s) for s in gaps)
+            area = "this area" if len(gaps) == 1 else "these areas"
+            coverage_warning = (
+                f"INCOMPLETE COVERAGE: research for {names} never completed. "
+                f"Findings from {area} are ABSENT, not verified-empty; do not "
+                "treat them as researched. Where a provision would depend on "
+                f"{area}, say so rather than assuming that nothing applies.\n"
+            )
         header = (
             "PROJECT REQUIREMENTS PROFILE\n"
             f"Project: {project.city}, {project.state_display}, "
             f"{project.country_display} | Client: {project.client_name}\n"
             f"{provenance}\n"
+            f"{coverage_warning}"
             "Items marked [UNVERIFIED] could not be grounded in retrieved "
             "sources.\n"
             "Items marked [PROCESS] are project-team process/schedule "
@@ -514,6 +615,7 @@ def _statuses_from_raw(data: object) -> list[DimensionStatus]:
                 cache_creation_input_tokens=int(
                     raw.get("cache_creation_input_tokens", 0) or 0
                 ),
+                error_kind=str(raw.get("error_kind", "") or ""),
                 error=str(raw.get("error", "") or ""),
             )
         )
@@ -664,6 +766,10 @@ def _accumulate_statuses(
                     + after.cache_creation_input_tokens
                 ),
                 error=after.error,
+                # The kind follows the message it belongs to: both report
+                # the LATEST round's outcome, so a fresh failure stays
+                # visible even where the cumulative status is completed.
+                error_kind=after.error_kind,
             )
         owned = [i for i in items if i.dimension_id == dimension_id]
         base.item_count = len(owned)
@@ -1143,7 +1249,12 @@ def _run_dimension(
         module, profile, dimension, discipline, today=today
     )
 
-    def _failed(error: str, *, responses: list[Any] | None = None) -> _DimensionOutcome:
+    def _failed(
+        error: str,
+        *,
+        kind: str,
+        responses: list[Any] | None = None,
+    ) -> _DimensionOutcome:
         billed = responses or []
         tokens = _sum_token_usage(billed)
         return _DimensionOutcome(
@@ -1151,6 +1262,7 @@ def _run_dimension(
                 dimension_id=dimension.dimension_id,
                 status="failed",
                 title=dimension.title,
+                error_kind=kind,
                 web_search_requests=sum(web_search_count(r) for r in billed),
                 web_fetch_requests=sum(web_fetch_count(r) for r in billed),
                 input_tokens=tokens.get("input_tokens", 0),
@@ -1212,7 +1324,9 @@ def _run_dimension(
     for attempt in range(attempts_planned):
         if should_stop():
             return _failed(
-                "Cancelled by user.", responses=billed_responses
+                "Cancelled by user.",
+                kind=DIMENSION_ERROR_CANCELLED,
+                responses=billed_responses,
             )
         is_last_attempt = attempt == attempts_planned - 1
         all_responses: list[Any] = []
@@ -1229,6 +1343,7 @@ def _run_dimension(
                 if should_stop():
                     return _failed(
                         "Cancelled by user.",
+                        kind=DIMENSION_ERROR_CANCELLED,
                         responses=[*billed_responses, *all_responses],
                     )
                 # Fresh copy per request: ``request_kwargs`` stays byte-
@@ -1273,6 +1388,7 @@ def _run_dimension(
                             "Research exceeded the per-dimension web_search "
                             f"budget ceiling ({total_search_so_far} > "
                             f"{search_budget_ceiling}) without completing.",
+                            kind=DIMENSION_ERROR_BUDGET,
                             responses=[*billed_responses, *all_responses],
                         )
                     # Resume per the pause_turn contract: re-send the
@@ -1291,12 +1407,14 @@ def _run_dimension(
                 return _failed(
                     "Research response incomplete (stop_reason: "
                     f"{getattr(response, 'stop_reason', None)}).",
+                    kind=DIMENSION_ERROR_INCOMPLETE,
                     responses=[*billed_responses, *all_responses],
                 )
             if not completed:
                 return _failed(
                     "Research did not complete after maximum continuation "
                     f"attempts (max_continuations={RESEARCH_MAX_CONTINUATIONS}).",
+                    kind=DIMENSION_ERROR_INCOMPLETE,
                     responses=[*billed_responses, *all_responses],
                 )
 
@@ -1305,6 +1423,7 @@ def _run_dimension(
                 return _failed(
                     "Research produced no parseable payload (no tool call, "
                     "no tagged JSON).",
+                    kind=DIMENSION_ERROR_NO_PAYLOAD,
                     responses=[*billed_responses, *all_responses],
                 )
             items = _items_from_payload(payload, dimension.dimension_id)
@@ -1373,6 +1492,14 @@ def _run_dimension(
                 )
                 return _failed(
                     message,
+                    # Same predicate the message uses, so kind and message
+                    # can never disagree; otherwise the failure CLASS, which
+                    # is already a closed telemetry vocabulary.
+                    kind=(
+                        DIMENSION_ERROR_AUTH
+                        if is_authentication_error(exc)
+                        else failure_class.value
+                    ),
                     responses=[*billed_responses, *all_responses],
                 )
             billed_responses.extend(all_responses)
@@ -1395,6 +1522,7 @@ def _run_dimension(
             time.sleep(backoff)
     return _failed(
         f"Research failed after {attempts_planned} attempts.",
+        kind=DIMENSION_ERROR_EXHAUSTED,
         responses=billed_responses,
     )
 
@@ -1496,6 +1624,11 @@ def run_requirements_research(
                             AUTH_ERROR_MESSAGE
                             if is_authentication_error(exc)
                             else f"{type(exc).__name__}: {exc}"
+                        ),
+                        error_kind=(
+                            DIMENSION_ERROR_AUTH
+                            if is_authentication_error(exc)
+                            else classify_exception(exc).value
                         ),
                     )
                 )

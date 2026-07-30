@@ -3299,7 +3299,9 @@ dependency, no backend change.
   same-seq predecessor, and two tests pinned the replacement), and it is what
   lets React's `Object.is` bail-out skip the render entirely — the point of
   the chunk is that recovering a hiccup costs nothing, not that it costs
-  less.
+  less. It is also why `foldQcLiveState` / `foldResearchBoard` needed no
+  change: they are `useMemo`d on the snapshot, so an unchanged object means
+  the O(n log n) fold does not run either.
 - **Identity is settled BEFORE any sequence comparison**, because sequences
   restart at 0 for every run and round: a frame from another run collides
   with this one's numbering, so a dedupe that ran first would read the

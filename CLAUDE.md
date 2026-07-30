@@ -4699,6 +4699,15 @@ event, no new dep, no schema change.
   retrieval confirmation, not truth verification — it says the reviewer
   really read the page it cites, not that the page supports the claim. The
   persisted field is NOT renamed; the clarification is textual.
+- **A schema that never persisted these counters can never reconcile**
+  (review finding on PR #105, Codex). The loaders normalize an absent
+  counter to 0 and a serialized record always carries the key afterwards,
+  so on a schema-1 report every part and the total are 0, the equality
+  holds VACUOUSLY, and the sum reads as substantiated — beside a Value cell
+  that says "Not recorded" for exactly those counters. The gate is the same
+  threshold `_qc_legacy_schema` uses for the values, which is what makes
+  that adjacent-cell contradiction unrepresentable rather than unlikely. A
+  malformed `schema_version` fails closed.
 - **Per-record count fields are relabelled** to `Client API requests
   (streaming calls, including retries and pause_turn continuations)` and
   `Final model responses received`. The run-total rows keep short labels —

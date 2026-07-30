@@ -1043,6 +1043,13 @@ def _qc_version_phrase(value: object) -> str:
     return f" of document version {display}" if display else ""
 
 
+# The report schema from which per-record and run-total request/response
+# counters are actually persisted. Deliberately the same threshold
+# `_qc_legacy_schema` uses to decide whether to PRINT those counters, so the
+# Meaning cell and the Value cell beside it cannot disagree.
+_QC_SCHEMA_WITH_REQUEST_COUNTERS = 2
+
+
 def qc_request_population(qc_result: dict) -> dict[str, object]:
     """Reconcile the run's request/response totals to their own records.
 
@@ -1057,8 +1064,24 @@ def qc_request_population(qc_result: dict) -> dict[str, object]:
     an audit report that explains a total it cannot substantiate is worse
     than one that admits the components are unavailable.
 
+    **A schema that never persisted these counters can never reconcile**,
+    however well the numbers appear to agree. The persisted-model loaders
+    normalize an absent counter to ``0``, and a serialized record always
+    carries the key afterwards — so on a schema-1 report every part and the
+    total are all ``0``, the equality holds vacuously, and the sum would be
+    reported as substantiated. Worse, the Value column beside it says "Not
+    recorded" for exactly those counters, so the report would contradict
+    itself in adjacent cells. The threshold is the SAME one
+    :func:`_qc_legacy_schema` uses for the values, which is what makes that
+    disagreement unrepresentable rather than merely unlikely.
+
     Mirrored by `qcRequestPopulation` in `frontend/src/lib/qcReport.ts`.
     """
+    try:
+        schema_version = int(qc_result.get("schema_version", 1) or 1)
+    except (TypeError, ValueError):
+        schema_version = 1
+    counters_recorded = schema_version >= _QC_SCHEMA_WITH_REQUEST_COUNTERS
     lenses = [
         item
         for item in _qc_list(qc_result.get("lens_statuses"))
@@ -1093,7 +1116,8 @@ def qc_request_population(qc_result: dict) -> dict[str, object]:
     recorded_requests = qc_result.get("api_request_count")
     recorded_responses = qc_result.get("model_response_count")
     reconciles = (
-        bool(records)
+        counters_recorded
+        and bool(records)
         and isinstance(recorded_requests, int)
         and not isinstance(recorded_requests, bool)
         and isinstance(recorded_responses, int)

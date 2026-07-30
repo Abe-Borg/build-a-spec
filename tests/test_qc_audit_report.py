@@ -2695,6 +2695,7 @@ def test_the_historical_five_lens_ninety_five_verifier_shape_reconciles():
 def test_a_disputed_candidates_seats_count_toward_the_population():
     """The plan predates the fourth collection; its seats are still billed."""
     payload = {
+        "schema_version": 4,
         "lens_statuses": [{"api_request_count": 1, "model_response_count": 1}],
         "disputed": [
             {
@@ -2715,6 +2716,9 @@ def test_a_disputed_candidates_seats_count_toward_the_population():
 def test_a_report_whose_parts_do_not_add_up_says_so_instead_of_inventing_one():
     """Better to admit the components are unavailable than to fake a match."""
     payload = {
+        # A CURRENT schema, so the mismatch is what fails it — not the
+        # legacy gate, which has its own test.
+        "schema_version": 4,
         "lens_statuses": [{"api_request_count": 1, "model_response_count": 1}],
         "api_request_count": 100,
         "model_response_count": 100,
@@ -2728,7 +2732,9 @@ def test_a_report_whose_parts_do_not_add_up_says_so_instead_of_inventing_one():
 
 
 def test_a_legacy_report_with_no_records_at_all_does_not_claim_a_sum():
-    population = qc_request_population({"api_request_count": 0, "model_response_count": 0})
+    population = qc_request_population(
+        {"schema_version": 4, "api_request_count": 0, "model_response_count": 0}
+    )
     assert population["reconciles"] is False
     assert "component population unavailable" in qc_request_population_note(population)
 
@@ -2741,3 +2747,68 @@ def test_the_word_report_says_grounded_means_retrieval_not_truth():
     )
     assert QC_GROUNDING_METHODOLOGY_NOTE in text
     assert "retrieval confirmation, not truth verification" in text
+
+
+def test_a_legacy_schema_can_never_claim_a_reconciled_sum():
+    """Regression, PR #105 review (Codex P2).
+
+    The persisted-model loaders normalize an absent counter to 0 and a
+    serialized record always carries the key afterwards — so on a schema-1
+    report every part and the total are 0, the equality holds vacuously,
+    and the breakdown was reported as substantiated. Beside a Value column
+    that says "Not recorded" for exactly those counters, which made the
+    report contradict itself in adjacent cells.
+    """
+    legacy = {
+        "schema_version": 1,
+        "lens_statuses": [
+            {"api_request_count": 0, "model_response_count": 0}
+            for _ in range(5)
+        ],
+        "findings": [
+            {
+                "verdicts": [
+                    {"api_request_count": 0, "model_response_count": 0}
+                    for _ in range(95)
+                ]
+            }
+        ],
+        "api_request_count": 0,
+        "model_response_count": 0,
+    }
+    population = qc_request_population(legacy)
+    assert population["reconciles"] is False
+    assert (
+        qc_request_population_note(population)
+        == "Recorded total; component population unavailable"
+    )
+    # The same records under a current schema DO reconcile, so the gate is
+    # about recorded provenance and not about the numbers being zero.
+    assert qc_request_population({**legacy, "schema_version": 2})["reconciles"] is True
+
+
+def test_the_legacy_word_report_never_prints_a_sum_beside_not_recorded():
+    """The two cells that must not disagree, asserted from the document."""
+    store = _section()
+    result = _run(SequencedFakeClient(_scripts()), store)
+    payload = result.to_dict()
+    payload["schema_version"] = 1
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False)))
+    )
+    assert "Recorded total; component population unavailable" in text
+    assert "Sum of " not in text
+
+
+def test_a_malformed_schema_version_fails_closed():
+    population = qc_request_population(
+        {
+            "schema_version": "not a number",
+            "lens_statuses": [
+                {"api_request_count": 1, "model_response_count": 1}
+            ],
+            "api_request_count": 1,
+            "model_response_count": 1,
+        }
+    )
+    assert population["reconciles"] is False

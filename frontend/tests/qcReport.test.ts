@@ -1007,6 +1007,7 @@ test("every ops-source value has user-facing copy", () => {
 test("the run totals reconcile to lens + consolidation + verifier records", () => {
   const population = qcRequestPopulation(
     result({
+      schema_version: 4,
       lens_statuses: Array.from({ length: 5 }, () => ({
         api_request_count: 1,
         model_response_count: 1,
@@ -1035,6 +1036,7 @@ test("the run totals reconcile to lens + consolidation + verifier records", () =
 test("the historical five-lens ninety-five-verifier shape explains its 100", () => {
   const population = qcRequestPopulation(
     result({
+      schema_version: 4,
       lens_statuses: Array.from({ length: 5 }, () => ({
         api_request_count: 1,
         model_response_count: 1,
@@ -1060,6 +1062,7 @@ test("the historical five-lens ninety-five-verifier shape explains its 100", () 
 test("a v4 consolidated run names the consolidation record in the total", () => {
   const population = qcRequestPopulation({
     ...withConsolidation({ api_request_count: 1, model_response_count: 1 }),
+    schema_version: 4,
     api_request_count: 1,
     model_response_count: 1,
   });
@@ -1073,6 +1076,7 @@ test("a v4 consolidated run names the consolidation record in the total", () => 
 test("a disputed candidate's seats count toward the population", () => {
   const population = qcRequestPopulation(
     result({
+      schema_version: 4,
       lens_statuses: [
         { api_request_count: 1, model_response_count: 1 },
       ] as never,
@@ -1094,6 +1098,8 @@ test("a disputed candidate's seats count toward the population", () => {
 test("a report whose parts do not add up says so rather than inventing a match", () => {
   const population = qcRequestPopulation(
     result({
+      // A CURRENT schema, so the mismatch is what fails it.
+      schema_version: 4,
       lens_statuses: [
         { api_request_count: 1, model_response_count: 1 },
       ] as never,
@@ -1109,7 +1115,7 @@ test("a report whose parts do not add up says so rather than inventing a match",
 });
 
 test("a legacy report with no records at all does not claim a sum", () => {
-  const population = qcRequestPopulation(result());
+  const population = qcRequestPopulation(result({ schema_version: 4 }));
   assert.equal(population.reconciles, false);
   assert.match(
     qcRequestPopulationNote(population),
@@ -1124,4 +1130,52 @@ test("both methodology notes exist and say the load-bearing thing", () => {
     QC_GROUNDING_METHODOLOGY_NOTE,
     /retrieval confirmation, not truth verification/,
   );
+});
+
+test("a legacy schema can never claim a reconciled sum", () => {
+  // Regression, PR #105 review. Every counter loads as 0 below the schema
+  // that records them, so the equality would hold vacuously and print a
+  // fabricated breakdown beside a value the report calls "not recorded".
+  const legacy = result({
+    schema_version: 1,
+    lens_statuses: Array.from({ length: 5 }, () => ({
+      api_request_count: 0,
+      model_response_count: 0,
+    })) as never,
+    findings: [
+      finding({
+        verdicts: Array.from({ length: 95 }, (_unused, index) =>
+          verdict(index + 1, { api_request_count: 0, model_response_count: 0 }),
+        ),
+      }),
+    ],
+    api_request_count: 0,
+    model_response_count: 0,
+  });
+  const population = qcRequestPopulation(legacy);
+  assert.equal(population.reconciles, false);
+  assert.equal(
+    qcRequestPopulationNote(population),
+    "Recorded total; component population unavailable",
+  );
+  // The same records under a current schema DO reconcile, so the gate is
+  // about recorded provenance and not about the numbers being zero.
+  assert.equal(
+    qcRequestPopulation({ ...legacy, schema_version: 2 }).reconciles,
+    true,
+  );
+});
+
+test("a malformed schema version fails closed", () => {
+  const population = qcRequestPopulation(
+    result({
+      schema_version: "not a number",
+      lens_statuses: [
+        { api_request_count: 1, model_response_count: 1 },
+      ] as never,
+      api_request_count: 1,
+      model_response_count: 1,
+    }),
+  );
+  assert.equal(population.reconciles, false);
 });

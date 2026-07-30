@@ -1609,17 +1609,31 @@ export interface QcRequestPopulation {
   reconciles: boolean;
 }
 
+/** The report schema from which request/response counters are persisted.
+ *  Below it every counter loads as 0, so an equality check would hold
+ *  vacuously and report a fabricated breakdown. */
+const QC_SCHEMA_WITH_REQUEST_COUNTERS = 2;
+
 /** Reconcile the run's request/response totals to their own records.
  *
  * Mirrors `qc_request_population` in `backend/spec_doc/docx_export.py` so
  * the in-app and Word projections cannot teach different meanings. Verifier
  * seats span all FOUR outcome collections — a disputed candidate's seats are
  * as billed as any other's.
+ *
+ * A schema that never persisted these counters can never reconcile, however
+ * well the numbers appear to agree: on a legacy report every part and the
+ * total are 0, so the sum would be reported as substantiated beside a value
+ * the report itself calls "not recorded".
  */
 export function qcRequestPopulation(
   rawResult: QcResultView | QcReportResult,
 ): QcRequestPopulation {
   const result = resultFields(rawResult);
+  const schemaVersion = Number(result.schema_version ?? 1);
+  const countersRecorded =
+    Number.isFinite(schemaVersion) &&
+    schemaVersion >= QC_SCHEMA_WITH_REQUEST_COUNTERS;
   const lenses = result.lens_statuses ?? [];
   const consolidationRecords = result.consolidation ? 1 : 0;
   // The RAW collections, deliberately — not `allQcCandidates`. That applies
@@ -1654,6 +1668,7 @@ export function qcRequestPopulation(
     apiRequests,
     modelResponses,
     reconciles:
+      countersRecorded &&
       recordCount > 0 &&
       Number.isInteger(result.api_request_count) &&
       Number.isInteger(result.model_response_count) &&

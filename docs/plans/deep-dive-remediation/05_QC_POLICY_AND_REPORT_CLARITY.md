@@ -729,11 +729,12 @@ Pop-Location
 - Status: **complete**
 - Commit/PR: branch `claude/phase-5-1-qc-panel-jzdd1n` (restarted from master
   after the 5.2 PR merged; the branch name predates Phase 5)
-- Tests: 9 new backend (`tests/test_qc_audit_report.py`), 7 new frontend
-  (`frontend/tests/qcReport.test.ts`). Backend **1341 passed, 9 skipped**;
-  `npm test` **184**; `npm run build` clean. Three mechanisms reverted in
+- Tests: 12 new backend (`tests/test_qc_audit_report.py`), 9 new frontend
+  (`frontend/tests/qcReport.test.ts`). Backend **1344 passed, 9 skipped**;
+  `npm test` **186**; `npm run build` clean. Four mechanisms reverted in
   place to prove them load-bearing: the stored-index half of the label → 2
-  red, the reconciliation check → 2 red, the boolean rejection → 1 red.
+  red, the reconciliation check → 2 red, the boolean rejection → 1 red,
+  the legacy-schema gate → 3 red.
 - Deviations:
   - **Two prose version sites were normalized too, but stay prose.** The
     plan asks for every other raw `version_index` presentation to be
@@ -767,6 +768,21 @@ Pop-Location
     and per-verifier; item 3 changes the total's Meaning cell). The totals
     table has a Meaning column carrying the population note, so the
     parenthetical there would be redundant.
+  - **Review follow-up (PR #105, Codex P2): a legacy schema reconciled
+    vacuously.** The persisted-model loaders normalize an absent counter to
+    0 and a serialized record always carries the key afterwards, so on a
+    schema-1 report every part and the total were 0, the equality held, and
+    the breakdown printed as substantiated — beside a Value cell reading
+    "Not recorded" for exactly those counters, i.e. the report contradicted
+    itself in adjacent cells. `reconciles` now additionally requires
+    `schema_version >= 2`, deliberately the SAME threshold
+    `_qc_legacy_schema` uses to decide whether to print the values, which
+    makes the disagreement unrepresentable rather than merely unlikely. A
+    malformed `schema_version` fails closed. Both sides fixed; five tests
+    (three backend incl. one asserting the two cells from the rendered
+    document, two frontend); reverting the gate turns 3 red. Three earlier
+    population fixtures gained an explicit current `schema_version` so each
+    still fails or passes for its own reason rather than the new gate's.
   - **The modal's methodology list was missing Chunk 5.2's consolidation
     step**, which 5.2 added to Word only. Added here alongside the
     grounding note, since this chunk's contract is that the two

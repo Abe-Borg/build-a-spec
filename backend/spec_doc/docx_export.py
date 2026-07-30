@@ -1008,6 +1008,121 @@ def qc_research_coverage(qc_result: dict) -> tuple[str, str]:
     return f"Yes - partial ({counted} areas completed)", " ".join(sentences)
 
 
+def qc_origins_for(qc_result: dict, finding: dict) -> list[dict]:
+    """The original lens claims behind one candidate, in recorded order.
+
+    A finding stores stable REFERENCES; the immutable records live once, in
+    the consolidation block. Mirrored by ``qcCandidateOrigins`` in
+    ``frontend/src/lib/qcReport.ts`` — both projections read the same
+    serialized facts so Word and the modal cannot describe one multi-origin
+    finding differently.
+
+    An id that does not resolve is skipped rather than invented; the loader
+    refuses such a report in the first place, so this is belt-and-braces
+    against a hand-edited file reaching a renderer.
+    """
+    ids = [
+        value
+        for value in _qc_list(finding.get("candidate_origins"))
+        if isinstance(value, str) and value.strip()
+    ]
+    if not ids:
+        return []
+    consolidation = _qc_dict(qc_result.get("consolidation"))
+    by_id = {
+        str(origin.get("origin_id") or ""): origin
+        for origin in _qc_list(consolidation.get("origins"))
+        if isinstance(origin, dict)
+    }
+    return [by_id[origin_id] for origin_id in ids if origin_id in by_id]
+
+
+_QC_OPS_SOURCE_LABELS: dict[str, str] = {
+    "original": "Single lens claim; operations kept exactly as proposed.",
+    "identical": (
+        "Every contributing lens that proposed operations proposed the same "
+        "ones; they are carried through unchanged."
+    ),
+    "reconciled": (
+        "The contributing lenses proposed different operations. One "
+        "reconciled set was synthesized and put to the verifier panel, which "
+        "had to approve it like any other fix."
+    ),
+    "unreconciled": (
+        "The contributing lenses proposed different operations and no single "
+        "reconciled set was produced or accepted. This finding carries NO "
+        "applicable operations: a human must choose among the alternatives "
+        "listed with each original claim below. Applying more than one of "
+        "them would write the same requirement twice."
+    ),
+    "none": "No contributing lens proposed a mechanical fix.",
+}
+
+
+def _qc_render_candidate_origins(document, origins: list[dict]) -> None:
+    """The 'Original lens claims' subsection for a multi-origin candidate."""
+    if len(origins) < 2:
+        return
+    _qc_heading(document, "Original Lens Claims", 3)
+    document.add_paragraph(
+        f"{len(origins)} independent lens claims were consolidated into this "
+        "single candidate and adjudicated by one verifier panel, because one "
+        "fix would dispose of all of them. Each original claim is reproduced "
+        "below exactly as its lens submitted it — nothing was rewritten or "
+        "dropped, and each retains its own severity, citations and proposed "
+        "operations."
+    )
+    for index, origin in enumerate(origins, start=1):
+        _qc_heading(
+            document,
+            f"Origin {index}: {origin.get('lens_id') or 'Unknown lens'} | "
+            f"{str(origin.get('severity') or 'not recorded').upper()}",
+            4,
+        )
+        _qc_add_label(
+            document, "Origin ID", origin.get("origin_id") or "Not recorded"
+        )
+        _qc_add_label(
+            document, "Title", origin.get("title") or "Not recorded"
+        )
+        _qc_add_label(
+            document, "Issue", origin.get("issue") or "Not recorded"
+        )
+        _qc_add_label(
+            document, "Rationale", origin.get("rationale") or "Not recorded"
+        )
+        _qc_add_label(
+            document,
+            "Element reference",
+            origin.get("element_id") or "Section-level claim",
+        )
+        _qc_add_label(
+            document, "Grounded", "Yes" if origin.get("grounded") else "No"
+        )
+        _qc_add_source_list(
+            document,
+            "Model-cited sources",
+            origin.get("source_urls"),
+            empty="No model-cited source URL was persisted for this claim.",
+        )
+        _qc_add_source_list(
+            document,
+            "Accepted sources",
+            origin.get("accepted_sources"),
+            empty="No source was recorded as accepted for this claim.",
+        )
+        ops = [
+            item
+            for item in _qc_list(origin.get("proposed_ops"))
+            if isinstance(item, dict)
+        ]
+        _qc_add_label(
+            document,
+            "Operations this lens proposed",
+            _qc_json(ops) if ops else "None proposed.",
+        )
+
+
 def _qc_legacy_schema(document) -> bool:
     try:
         return int(getattr(document, "_qc_schema_version", 1) or 1) < 2
@@ -2198,6 +2313,16 @@ def _qc_render_methodology(document, qc_result: dict) -> None:
                 "source merely cited or retrieved is retained with that narrower label.",
             ),
             (
+                "Cross-lens consolidation",
+                "Lens candidates that describe the SAME actionable defect at the "
+                "same element are consolidated into one candidate reviewed by one "
+                "verifier panel, so a defect two lenses both noticed is not "
+                "challenged twice. Grouping is confined to candidates sharing a "
+                "write scope, every original claim is retained verbatim in the "
+                "record, and any failure of the grouping step falls back to one "
+                "panel per original candidate.",
+            ),
+            (
                 "Adversarial verification",
                 "Candidate findings are challenged by a severity-based reviewer "
                 "panel. Finding survival uses the completed panel's majority. In "
@@ -2629,6 +2754,17 @@ def _qc_render_ops(
     document, finding: dict, *, candidate_kind: str = "surviving"
 ) -> None:
     _qc_heading(document, "Proposed Operations and Validation", 3)
+    ops_source = str(finding.get("ops_source") or "").strip().lower()
+    if ops_source and ops_source != "original":
+        # Only says something a single-lens candidate does not already say.
+        _qc_add_label(
+            document,
+            "Operation provenance",
+            _QC_OPS_SOURCE_LABELS.get(
+                ops_source, "Operation provenance was not recorded."
+            ),
+            color=_QC_RISK if ops_source == "unreconciled" else _QC_MUTED,
+        )
     semantic_schema = _qc_has_semantic_fix_review(document)
     semantic_status = str(
         finding.get("ops_semantic_status") or ""
@@ -2813,8 +2949,10 @@ def _render_memo_finding(
     *,
     ordinal: str = "",
     candidate_kind: str = "surviving",
+    origins: list[dict] | None = None,
 ) -> None:
     legacy = _qc_legacy_schema(document)
+    origins = origins or []
     severity = str(finding.get("severity") or "not recorded").upper()
     title = str(finding.get("title") or "Untitled finding")
     prefix = f"{ordinal} | " if ordinal else ""
@@ -2822,11 +2960,26 @@ def _render_memo_finding(
     _qc_add_label(
         document, "Finding ID", finding.get("finding_id") or "Not recorded"
     )
-    _qc_add_label(
-        document,
-        "Originating lens",
-        finding.get("lens_id") or "Not recorded",
-    )
+    if len(origins) > 1:
+        lenses = sorted(
+            {
+                str(origin.get("lens_id") or "")
+                for origin in origins
+                if origin.get("lens_id")
+            }
+        )
+        _qc_add_label(
+            document,
+            "Originating lenses",
+            f"{', '.join(lenses) or 'Not recorded'} "
+            f"({len(origins)} consolidated claims)",
+        )
+    else:
+        _qc_add_label(
+            document,
+            "Originating lens",
+            finding.get("lens_id") or "Not recorded",
+        )
     _qc_add_label(
         document,
         "Element reference",
@@ -2887,6 +3040,7 @@ def _render_memo_finding(
     _qc_add_label(
         document, "Rationale", finding.get("rationale") or "Not recorded"
     )
+    _qc_render_candidate_origins(document, origins)
 
     _qc_heading(document, "Evidence and Grounding", 3)
     _qc_add_label(
@@ -2965,6 +3119,146 @@ def _render_memo_finding(
     _qc_render_disposition(document, finding, candidate_kind=candidate_kind)
 
 
+def _qc_render_consolidation(document, qc_result: dict) -> None:
+    """The cross-lens grouping record: what was merged, and what it saved."""
+    consolidation = _qc_dict(qc_result.get("consolidation"))
+    manifest = _qc_dict(qc_result.get("input_manifest"))
+    configuration = _qc_dict(manifest.get("configuration"))
+    enabled = configuration.get("consolidation_enabled") is True
+    if not consolidation and not enabled:
+        # Predates the feature, or ran with it off and recorded nothing.
+        # Saying nothing is right: there is no grouping step to report.
+        return
+    document.add_page_break()
+    _qc_heading(document, "Cross-Lens Candidate Consolidation", 1)
+    if not consolidation:
+        _qc_add_callout(
+            document,
+            "GROUPING RECORD NOT PERSISTED",
+            "This run was configured to consolidate near-duplicate lens "
+            "candidates, but no grouping record was saved. Treat the "
+            "candidate roster below as unexplained rather than as evidence "
+            "that nothing was grouped.",
+            accent=_QC_RISK,
+        )
+        return
+    origins = [
+        item
+        for item in _qc_list(consolidation.get("origins"))
+        if isinstance(item, dict)
+    ]
+    groups = [
+        item
+        for item in _qc_list(consolidation.get("groups"))
+        if isinstance(item, dict)
+    ]
+    merged = [group for group in groups if len(_qc_list(group.get("origin_ids"))) > 1]
+    status = str(consolidation.get("status") or "not recorded")
+    _qc_add_label(
+        document,
+        "Grouping step status",
+        status,
+        color=_QC_RISK if status == "failed" else _QC_MUTED,
+    )
+    _qc_add_label(document, "Raw lens candidates", len(origins))
+    _qc_add_label(document, "Candidates after grouping", len(groups))
+    _qc_add_label(
+        document,
+        "Verifier panels avoided",
+        max(0, len(origins) - len(groups)),
+    )
+    _qc_add_label(
+        document,
+        "Grouping step error",
+        consolidation.get("error") or "None recorded",
+    )
+    _qc_add_label(
+        document,
+        "Fallback reason",
+        consolidation.get("fallback_reason") or "None recorded",
+    )
+    _qc_add_label(
+        document,
+        "Grouping step API requests",
+        consolidation.get("api_request_count"),
+    )
+    _qc_add_label(
+        document,
+        "Grouping step model responses",
+        consolidation.get("model_response_count"),
+    )
+    if status == "failed":
+        _qc_add_callout(
+            document,
+            "GROUPING FELL BACK TO ONE PANEL PER CANDIDATE",
+            "One or more grouping calls failed or returned a partition that "
+            "did not account for every candidate. Every affected candidate "
+            "was reviewed on its own verifier panel, which is the "
+            "pre-consolidation behaviour: no candidate was lost, and the "
+            "run cost more rather than less.",
+            accent=_QC_CAUTION,
+        )
+    if not merged:
+        document.add_paragraph(
+            "No candidates were consolidated. Every lens candidate was "
+            "reviewed on its own verifier panel."
+        )
+        return
+    document.add_paragraph(
+        f"{len(merged)} consolidated candidate(s) each stand for more than "
+        "one original lens claim. Every original claim is reproduced in full "
+        "with the candidate it belongs to, in the registers below."
+    )
+    by_id = {
+        str(origin.get("origin_id") or ""): origin for origin in origins
+    }
+    for group in merged:
+        ids = [
+            str(value)
+            for value in _qc_list(group.get("origin_ids"))
+            if isinstance(value, str)
+        ]
+        _qc_heading(
+            document,
+            f"{group.get('candidate_id') or 'Candidate'}: "
+            f"{group.get('canonical_title') or 'Untitled'}",
+            2,
+        )
+        _qc_add_label(
+            document,
+            "Element reference",
+            group.get("element_id") or "Section-level",
+        )
+        _qc_add_label(
+            document,
+            "Panel severity (maximum original)",
+            group.get("severity") or "Not recorded",
+        )
+        _qc_add_label(
+            document,
+            "Why these are one defect",
+            group.get("grouping_rationale") or "Not recorded",
+        )
+        _qc_add_label(
+            document,
+            "Operation provenance",
+            _QC_OPS_SOURCE_LABELS.get(
+                str(group.get("ops_source") or ""),
+                "Operation provenance was not recorded.",
+            ),
+        )
+        _qc_add_text_list(
+            document,
+            "Consolidated original claims",
+            [
+                f"{by_id.get(origin_id, {}).get('lens_id') or 'unknown lens'}"
+                f" | {by_id.get(origin_id, {}).get('title') or origin_id}"
+                for origin_id in ids
+            ],
+            empty="No original claim records resolved for this group.",
+        )
+
+
 def _qc_render_surviving_findings(document, qc_result: dict) -> None:
     document.add_page_break()
     _qc_heading(document, "Complete Surviving Findings Register", 1)
@@ -3002,6 +3296,7 @@ def _qc_render_surviving_findings(document, qc_result: dict) -> None:
                 finding,
                 ordinal=f"SF-{counter:03d}",
                 candidate_kind="surviving",
+                origins=qc_origins_for(qc_result, finding),
             )
     unranked = [
         item
@@ -3015,6 +3310,7 @@ def _qc_render_surviving_findings(document, qc_result: dict) -> None:
             finding,
             ordinal=f"SF-{counter:03d}",
             candidate_kind="surviving",
+            origins=qc_origins_for(qc_result, finding),
         )
 
 
@@ -3045,6 +3341,7 @@ def _qc_render_refuted_appendix(document, qc_result: dict) -> None:
             finding,
             ordinal=f"RF-{index:03d}",
             candidate_kind="refuted",
+            origins=qc_origins_for(qc_result, finding),
         )
 
 
@@ -3095,6 +3392,7 @@ def _qc_render_disputed_appendix(document, qc_result: dict) -> None:
             finding,
             ordinal=f"DP-{index:03d}",
             candidate_kind="disputed",
+            origins=qc_origins_for(qc_result, finding),
         )
 
 
@@ -3138,6 +3436,7 @@ def _qc_render_inconclusive_appendix(document, qc_result: dict) -> None:
             finding,
             ordinal=f"IC-{index:03d}",
             candidate_kind="inconclusive",
+            origins=qc_origins_for(qc_result, finding),
         )
 
 
@@ -3631,6 +3930,7 @@ def build_qc_memo(qc_result: dict, section: SpecSection, *, stale: bool) -> byte
     _qc_render_export_current_state(document, qc_result)
     _qc_render_methodology(document, qc_result)
     _qc_render_lenses(document, qc_result)
+    _qc_render_consolidation(document, qc_result)
     _qc_render_surviving_findings(document, qc_result)
     _qc_render_refuted_appendix(document, qc_result)
     _qc_render_disputed_appendix(document, qc_result)

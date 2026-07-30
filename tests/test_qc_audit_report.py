@@ -599,8 +599,23 @@ def test_json_export_contains_complete_report_and_authoritative_current_state() 
     assert surviving["proposed_ops"][0]["action"] == "replace"
     assert refuted["verification_outcome"] == "refuted"
     assert len(refuted["verdicts"]) == 2
-    assert report["api_request_count"] == 10
-    assert report["model_response_count"] == 10
+    # 5 lenses + 1 grouping call + 5 verifier seats. The run totals are the
+    # sum of the component records, and the grouping call is one of them —
+    # a reader must be able to reconcile the total without inference.
+    consolidation = report["consolidation"]
+    assert consolidation["api_request_count"] == 1
+    assert report["api_request_count"] == 11
+    assert report["model_response_count"] == 11
+    assert report["api_request_count"] == (
+        sum(lens["api_request_count"] for lens in report["lens_statuses"])
+        + consolidation["api_request_count"]
+        + sum(
+            verdict["api_request_count"]
+            for bucket in ("findings", "refuted", "disputed", "inconclusive")
+            for finding in report[bucket]
+            for verdict in finding["verdicts"]
+        )
+    )
     assert "usage_totals" in report
     assert "estimated_cost_usd" in report
 

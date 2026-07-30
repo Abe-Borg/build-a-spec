@@ -450,3 +450,132 @@ def test_overlapping_designation_forms_are_not_double_reported():
     assert len(issues) == 2
     matches = sorted(i["match"] for i in issues)
     assert matches == ["CAN/ULC-S524-2019", "ULC-S524-2019"]
+
+
+# ---------------------------------------------------------------------------
+# Chunk 5.2: duplicate sibling provisions
+# ---------------------------------------------------------------------------
+
+
+def _dupes(issues):
+    return [i for i in issues if i["rule"] == "duplicate_provision"]
+
+
+def _siblings(*texts: str, target: str = "pt1.a1"):
+    return _doc_with(
+        [
+            {
+                "action": "replace",
+                "target_id": "sec",
+                "text": "WET-PIPE SPRINKLER SYSTEMS",
+                "numbering": "21 13 13",
+            },
+            {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+            *(_para(text, target) for text in texts),
+        ]
+    )
+
+
+def test_two_identical_siblings_are_flagged_once_against_the_first():
+    doc = _siblings(
+        "Provide clear service access to each control valve assembly.",
+        "Provide clear service access to each control valve assembly.",
+    )
+    issues = _dupes(lint_document(doc, DEFAULT_MODULE))
+    assert len(issues) == 1
+    assert issues[0]["ref"] == "1.1.B"
+    assert "repeats 1.1.A verbatim" in issues[0]["message"]
+
+
+def test_a_near_identical_restatement_is_flagged():
+    doc = _siblings(
+        "Provide clear service access to each control valve assembly.",
+        "Provide clear  service access to each control-valve assembly.",
+    )
+    issues = _dupes(lint_document(doc, DEFAULT_MODULE))
+    assert len(issues) == 1
+    assert "restates 1.1.A almost word for word" in issues[0]["message"]
+
+
+def test_provisions_differing_only_in_a_number_are_never_flagged():
+    """The guard that makes this rule usable in a specification.
+
+    These two are ~95% similar as text and are two entirely different
+    requirements. A similarity rule without the numeric check would flag
+    the sibling pairs a spec is made of.
+    """
+    doc = _siblings(
+        "Provide 4 inch diameter pipe throughout the sprinkler main run.",
+        "Provide 6 inch diameter pipe throughout the sprinkler main run.",
+    )
+    assert _dupes(lint_document(doc, DEFAULT_MODULE)) == []
+
+
+def test_distinct_provisions_stay_quiet():
+    doc = _siblings(
+        "Provide clear service access to each control valve assembly.",
+        "Submit hydraulic calculations for review before fabrication.",
+    )
+    assert _dupes(lint_document(doc, DEFAULT_MODULE)) == []
+
+
+def test_short_boilerplate_repeats_are_not_duplicates():
+    doc = _siblings("Not used.", "Not used.")
+    assert _dupes(lint_document(doc, DEFAULT_MODULE)) == []
+
+
+def test_three_identical_siblings_report_two_findings_not_three():
+    text = "Provide clear service access to each control valve assembly."
+    doc = _siblings(text, text, text)
+    issues = _dupes(lint_document(doc, DEFAULT_MODULE))
+    assert len(issues) == 2
+    assert [i["ref"] for i in issues] == ["1.1.B", "1.1.C"]
+
+
+def test_the_same_sentence_in_two_different_articles_is_not_a_duplicate():
+    """Only SIBLINGS. A repeat across parts is usually a cross-reference."""
+    text = "Provide clear service access to each control valve assembly."
+    doc = _doc_with(
+        [
+            {
+                "action": "replace",
+                "target_id": "sec",
+                "text": "WET-PIPE SPRINKLER SYSTEMS",
+                "numbering": "21 13 13",
+            },
+            {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+            {"action": "add_article", "target_id": "pt3", "text": "EXECUTION"},
+            _para(text, "pt1.a1"),
+            _para(text, "pt3.a1"),
+        ]
+    )
+    assert _dupes(lint_document(doc, DEFAULT_MODULE)) == []
+
+
+def test_nested_children_are_compared_against_their_own_siblings():
+    text = "Coordinate the valve assembly location with the ceiling grid."
+    doc = _doc_with(
+        [
+            {
+                "action": "replace",
+                "target_id": "sec",
+                "text": "WET-PIPE SPRINKLER SYSTEMS",
+                "numbering": "21 13 13",
+            },
+            {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+            _para("Parent provision covering coordination duties."),
+            _para(text, "pt1.a1.p1"),
+            _para(text, "pt1.a1.p1"),
+        ]
+    )
+    issues = _dupes(lint_document(doc, DEFAULT_MODULE))
+    assert len(issues) == 1
+    assert issues[0]["ref"] == "1.1.A.2"
+
+
+def test_the_duplicate_rule_is_advisory_and_never_info_severity():
+    doc = _siblings(
+        "Provide clear service access to each control valve assembly.",
+        "Provide clear service access to each control valve assembly.",
+    )
+    assert _dupes(lint_document(doc, DEFAULT_MODULE))[0]["severity"] == "warn"

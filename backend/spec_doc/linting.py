@@ -29,6 +29,12 @@ Rules (stable ids consumers can branch on):
   lorem-ipsum boilerplate.
 - ``empty_article`` — an article heading with no paragraphs under it.
 - ``duplicate_article_title`` — the same title twice within one part.
+- ``duplicate_provision`` — (Chunk 5.2) two SIBLING paragraphs saying the
+  same thing, verbatim or near enough. The advisory backstop for a
+  duplicated requirement reaching the document by any route — QC fixes
+  applied one at a time, a model restatement, a hand edit. Numeric tokens
+  must match before similarity is even consulted, so two provisions
+  differing only in a dimension or an article number are never flagged.
 - ``missing_section_header`` — articles drafted while the section
   number/title is still unset (info-level).
 """
@@ -51,6 +57,7 @@ RULE_PLACEHOLDER = "placeholder_marker"
 RULE_TEMPLATE_MARKER = "template_marker"
 RULE_EMPTY_ARTICLE = "empty_article"
 RULE_DUPLICATE_ARTICLE_TITLE = "duplicate_article_title"
+RULE_DUPLICATE_PROVISION = "duplicate_provision"
 RULE_MISSING_SECTION_HEADER = "missing_section_header"
 
 # ---------------------------------------------------------------------------
@@ -329,6 +336,90 @@ def _scan_unrecorded_editions(
                 }
 
 
+# ---------------------------------------------------------------------------
+# Duplicate sibling provisions (Chunk 5.2)
+# ---------------------------------------------------------------------------
+
+# Below this the text is too short for similarity to mean anything, and
+# short repeats ("None.", "Not used.") are legitimate spec boilerplate.
+_DUPLICATE_MIN_CHARS = 25
+# Deliberately high. A duplicated provision is a restatement, not a variant;
+# anything looser starts flagging the sibling pairs a spec is MADE of.
+_DUPLICATE_RATIO = 0.90
+
+
+def _normalized_provision(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def _numeric_tokens(text: str) -> tuple[str, ...]:
+    """Every whitespace token carrying a digit, sorted.
+
+    The guard that keeps this rule usable in a specification. "Provide
+    4-inch pipe." and "Provide 6-inch pipe." are ~0.95 similar as text and
+    are two entirely different requirements; so are two otherwise identical
+    provisions citing different standard articles. A difference in the
+    numbers is decisive evidence AGAINST duplication, checked before any
+    similarity ratio is consulted.
+    """
+    return tuple(sorted(token for token in text.split() if any(c.isdigit() for c in token)))
+
+
+def _duplicate_siblings(
+    siblings: list[Any],
+) -> Iterable[tuple[Any, Any, bool]]:
+    """Yield ``(earlier, later, exact)`` for near-identical sibling pairs.
+
+    Only siblings, because that is the shape a duplicate actually takes:
+    two provisions under one parent saying the same thing. The same
+    sentence appearing in PART 1 and PART 3 is usually a legitimate
+    cross-reference, not a defect.
+
+    Each paragraph is reported against its FIRST match only, so three
+    identical siblings produce two findings rather than three.
+    """
+    from difflib import SequenceMatcher
+
+    normalized = [_normalized_provision(p.text) for p in siblings]
+    numerics = [_numeric_tokens(text) for text in normalized]
+    matched: set[int] = set()
+    for later in range(1, len(siblings)):
+        if len(normalized[later]) < _DUPLICATE_MIN_CHARS:
+            continue
+        for earlier in range(later):
+            if earlier in matched and later in matched:
+                continue
+            if len(normalized[earlier]) < _DUPLICATE_MIN_CHARS:
+                continue
+            if normalized[earlier] == normalized[later]:
+                matched.add(later)
+                yield siblings[earlier], siblings[later], True
+                break
+            if numerics[earlier] != numerics[later]:
+                continue
+            ratio = SequenceMatcher(
+                None, normalized[earlier], normalized[later], autojunk=False
+            ).ratio()
+            if ratio >= _DUPLICATE_RATIO:
+                matched.add(later)
+                yield siblings[earlier], siblings[later], False
+                break
+
+
+def _sibling_groups(section: SpecSection) -> Iterable[list[Any]]:
+    """Every set of paragraphs sharing one parent, in document order."""
+    for part in section.parts:
+        for article in part.articles:
+            pending: list[list[Any]] = [article.paragraphs]
+            while pending:
+                siblings = pending.pop(0)
+                if len(siblings) > 1:
+                    yield siblings
+                for paragraph in siblings:
+                    if paragraph.children:
+                        pending.append(paragraph.children)
+
+
 def _scan_markers(
     text: str,
     patterns: Iterable[tuple[str, str]],
@@ -451,6 +542,34 @@ def lint_document(
                 ref,
                 f"{hit['label']} left in the draft.",
                 hit["match"],
+            )
+
+    # --- duplicate sibling provisions --------------------------------------
+    # Advisory backstop for Chunk 5.2: cross-lens consolidation stops QC
+    # proposing two fixes for one defect, but nothing stops a model-drafted
+    # restatement, an older report's fixes applied one at a time, or a
+    # hand edit. Whatever the route, a duplicated provision becomes visible
+    # in the surface the user already watches.
+    refs = {
+        paragraph.uid: ref
+        for _part, _article, paragraph, _depth, ref in iter_paragraphs(section)
+    }
+    for siblings in _sibling_groups(section):
+        for earlier, later, exact in _duplicate_siblings(siblings):
+            earlier_ref = refs.get(earlier.uid, "—")
+            add(
+                RULE_DUPLICATE_PROVISION,
+                later.uid,
+                refs.get(later.uid, "—"),
+                (
+                    f"This provision repeats {earlier_ref} verbatim."
+                    if exact
+                    else f"This provision restates {earlier_ref} almost "
+                    "word for word."
+                )
+                + " Keep one and delete the other, or make the difference "
+                "explicit.",
+                later.text[:120],
             )
 
     # --- structural checks -------------------------------------------------

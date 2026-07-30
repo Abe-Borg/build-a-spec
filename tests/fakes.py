@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -28,13 +29,19 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
     from backend import settings
     from backend.app import _qc_source_guard
     from backend.qc.engine import (
+        CONSOLIDATION_OPS_ORIGINAL,
+        CONSOLIDATION_STATUS_SKIPPED,
         QC_PROTOCOL_VERSION,
         QC_REPORT_SCHEMA_VERSION,
         VERIFICATION_RULE_V4,
+        QCCandidateOrigin,
+        QCConsolidation,
+        QCConsolidationGroup,
         QCLensStatus,
         QCResult,
         QCReviewedCheck,
         QCVerdict,
+        _mint_origin_id,
         build_qc_input_manifest,
         panel_outcome,
         qc_input_fingerprint,
@@ -58,6 +65,10 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         source_guard=source_guard,
         model=settings.QC_MODEL,
         max_tokens=settings.QC_MAX_TOKENS,
+        # The live regime, matching what `matches_inputs` will rebuild — a
+        # fixture pinned to the other one would read as stale to every
+        # freshness check and never reach the guard it exists to exercise.
+        consolidation_enabled=settings.QC_CONSOLIDATION,
     )
     lens_ids = {lens.lens_id for lens in QC_LENSES}
     default_lens_id = "coordination_consistency"
@@ -108,6 +119,59 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
             original_severity, finding.verdicts, expected_seats=panel_size
         )
 
+    # Every fixture candidate stands for exactly its own lens claim — the
+    # identity partition. Built through the engine's own id helper so the
+    # record satisfies the same reload partition check production writes.
+    origins = [
+        QCCandidateOrigin(
+            origin_id=_mint_origin_id(
+                finding.lens_id,
+                {
+                    "element_id": finding.element_id,
+                    "title": finding.title,
+                    "issue": finding.issue,
+                    "rationale": finding.rationale,
+                    "severity": finding.original_severity,
+                    "source_urls": finding.source_urls,
+                    "proposed_ops": finding.proposed_ops,
+                },
+            ),
+            candidate_index=index,
+            candidate_id=f"raw-{index + 1}",
+            lens_id=finding.lens_id,
+            severity=finding.original_severity,
+            element_id=finding.element_id,
+            title=finding.title,
+            issue=finding.issue,
+            rationale=finding.rationale,
+            source_urls=list(finding.source_urls),
+            accepted_sources=list(finding.accepted_sources),
+            grounded=finding.grounded,
+            proposed_ops=[dict(op) for op in finding.proposed_ops],
+        )
+        for index, finding in enumerate(findings)
+    ]
+    for finding, origin in zip(findings, origins):
+        finding.candidate_origins = [origin.origin_id]
+        finding.ops_source = CONSOLIDATION_OPS_ORIGINAL
+    consolidation = QCConsolidation(
+        status=CONSOLIDATION_STATUS_SKIPPED,
+        fallback_reason="Test fixture: candidates were not grouped.",
+        origins=origins,
+        groups=[
+            QCConsolidationGroup(
+                group_index=index,
+                candidate_id=f"candidate-{index + 1}",
+                origin_ids=[origin.origin_id],
+                element_id=origin.element_id,
+                severity=origin.severity,
+                ops_source=CONSOLIDATION_OPS_ORIGINAL,
+                proposed_ops=[dict(op) for op in origin.proposed_ops],
+            )
+            for index, origin in enumerate(origins)
+        ],
+    )
+
     lens_statuses = []
     for lens in QC_LENSES:
         lens_findings = [f for f in findings if f.lens_id == lens.lens_id]
@@ -139,6 +203,7 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         summary="Audit-grade endpoint test fixture.",
         findings=findings,
         lens_statuses=lens_statuses,
+        consolidation=consolidation if settings.QC_CONSOLIDATION else None,
         started_at="2026-07-24T10:00:00+00:00",
         finished_at="2026-07-24T10:00:01+00:00",
         version_index=session.doc.index,
@@ -892,6 +957,72 @@ def qc_verdict_response(
     )
 
 
+def qc_consolidation_response(
+    groups: list[dict],
+    *,
+    stop_reason: str = "tool_use",
+    tokens: dict[str, int] | None = None,
+    container: str | None = None,
+) -> SimpleNamespace:
+    """A Final-QC consolidation response: a submit_qc_consolidation call.
+
+    ``groups`` are raw payload group dicts (the engine normalizes and then
+    strictly validates them), so a test can script an invalid partition —
+    a missing index, an unknown one, a merge with no canonical wording —
+    and assert the deterministic singleton fallback.
+
+    ``groups=None`` produces a response with NO tool call (the parse-failure
+    case), mirroring ``qc_findings_response``.
+    """
+    content: list[SimpleNamespace] = []
+    if groups is not None:
+        content.append(
+            tool_use_block(
+                "toolu_qc_consolidation",
+                "submit_qc_consolidation",
+                {"groups": groups},
+            )
+        )
+    return SimpleNamespace(
+        content=content,
+        stop_reason=stop_reason,
+        usage=usage(**(tokens or {})),
+        **_container(container),
+    )
+
+
+_CONSOLIDATION_MARKER = "[[QC-CONSOLIDATE:"
+_CANDIDATE_INDEX_RE = re.compile(r"<candidate index=\"(\d+)\">")
+
+
+def singleton_consolidation_for(request_text: str) -> SimpleNamespace:
+    """The default answer to an unscripted grouping call: group nothing.
+
+    Every QC fixture predates cross-lens consolidation and asserts against
+    one panel per lens candidate, so the fake's default has to be the
+    identity partition — that keeps those expectations meaning what they
+    always meant while still running the real grouping code path.
+
+    Indexes are read back out of the prompt the engine actually built, so a
+    fixture can never answer for a candidate set it was not asked about; a
+    test that wants real grouping scripts it with
+    :func:`qc_consolidation_response`.
+    """
+    return qc_consolidation_response(
+        [
+            {
+                "member_indexes": [int(index)],
+                "canonical_title": None,
+                "canonical_issue": None,
+                "canonical_rationale": None,
+                "grouping_rationale": None,
+                "reconciled_ops": None,
+            }
+            for index in _CANDIDATE_INDEX_RE.findall(request_text)
+        ]
+    )
+
+
 def _user_text(messages: list) -> str:
     """The first user turn's text, whether it is a string or content blocks.
 
@@ -950,7 +1081,27 @@ class SequencedFakeClient:
                 captured["messages"] = list(captured["messages"])
             self.requests.append(captured)
             first_user = _user_text(request.get("messages", []))
-            for key, queue in self._scripts.items():
+            # A grouping call quotes every candidate's title verbatim, so
+            # ordinary title-keyed scripts all match it. Routing it here —
+            # before the substring sweep, and only against keys that carry
+            # the marker themselves — stops it consuming a verdict scripted
+            # for one of the findings it is merely quoting, which would
+            # desynchronize that finding's whole panel.
+            consolidating = _CONSOLIDATION_MARKER in first_user
+            candidates = (
+                {
+                    key: queue
+                    for key, queue in self._scripts.items()
+                    if _CONSOLIDATION_MARKER in key
+                }
+                if consolidating
+                else {
+                    key: queue
+                    for key, queue in self._scripts.items()
+                    if _CONSOLIDATION_MARKER not in key
+                }
+            )
+            for key, queue in candidates.items():
                 if key in first_user:
                     if not queue:
                         raise AssertionError(
@@ -960,10 +1111,13 @@ class SequencedFakeClient:
                     turn = queue.pop(0)
                     break
             else:
-                raise AssertionError(
-                    "Fake research client: no script matches the request "
-                    f"({first_user[:80]!r})."
-                )
+                if consolidating:
+                    turn = singleton_consolidation_for(first_user)
+                else:
+                    raise AssertionError(
+                        "Fake research client: no script matches the request "
+                        f"({first_user[:80]!r})."
+                    )
         if isinstance(turn, Exception):
             raise turn
         return _FakeStreamCtx(

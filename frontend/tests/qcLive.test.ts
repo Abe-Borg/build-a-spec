@@ -780,3 +780,138 @@ test("recap status follows the matching attempt and identifies a retained queue"
     "Review failed",
   );
 });
+
+// ---------------------------------------------------------------------------
+// Chunk 5.2 — cross-lens candidate consolidation
+// ---------------------------------------------------------------------------
+
+test("consolidation is a named transition, never a fourth stage on the rail", () => {
+  const live = foldQcLiveState([
+    started(),
+    { type: "consolidation_started", seq: 1, raw_candidate_count: 4, eligible_candidate_count: 3 },
+  ]);
+  assert.equal(live.phase, "consolidation");
+  // The board still has exactly the three gates a reviewer can pass or fail.
+  assert.deepEqual(
+    live.stages.map((stage) => stage.id),
+    ["lenses", "verification", "validation"],
+  );
+  // Lenses are done; panels have not started.
+  assert.equal(live.stages[0].status, "complete");
+  assert.equal(live.stages[1].status, "queued");
+  // And the transition is announced rather than being silent.
+  assert.match(live.liveMessage, /same defect/);
+  assert.equal(live.consolidation.status, "running");
+  assert.equal(live.consolidation.rawCandidates, 4);
+  assert.equal(live.consolidation.eligibleCandidates, 3);
+});
+
+test("a completed grouping step reports what it bought", () => {
+  const live = foldQcLiveState([
+    started(),
+    { type: "consolidation_started", seq: 1, raw_candidate_count: 4 },
+    {
+      type: "consolidation_complete",
+      seq: 2,
+      status: "complete",
+      raw_candidate_count: 4,
+      grouped_candidate_count: 2,
+      panels_avoided: 2,
+    },
+  ]);
+  assert.equal(live.consolidation.status, "complete");
+  assert.equal(live.consolidation.rawCandidates, 4);
+  assert.equal(live.consolidation.groupedCandidates, 2);
+  assert.equal(live.consolidation.panelsAvoided, 2);
+  assert.equal(live.consolidation.error, "");
+});
+
+test("a failed grouping step keeps its error and the run keeps going", () => {
+  const live = foldQcLiveState([
+    started(),
+    { type: "consolidation_started", seq: 1, raw_candidate_count: 2 },
+    {
+      type: "consolidation_complete",
+      seq: 2,
+      status: "failed",
+      raw_candidate_count: 2,
+      grouped_candidate_count: 2,
+      panels_avoided: 0,
+      error: "element:pt1.a1.p1: unaccounted candidate 1.",
+    },
+    {
+      type: "verification_started",
+      seq: 3,
+      candidates: [
+        {
+          candidate_id: "candidate-1",
+          title: "First",
+          original_severity: "medium",
+          lens_id: "code_compliance",
+          origin_count: 1,
+          panel_size: 2,
+          uphold_requires: 2,
+        },
+        {
+          candidate_id: "candidate-2",
+          title: "Second",
+          original_severity: "medium",
+          lens_id: "completeness",
+          origin_count: 1,
+          panel_size: 2,
+          uphold_requires: 2,
+        },
+      ],
+      total_candidates: 2,
+      total_seats: 4,
+    },
+  ]);
+  assert.equal(live.consolidation.status, "failed");
+  assert.match(live.consolidation.error, /unaccounted candidate/);
+  // The failure is confined to the grouping step: verification proceeds
+  // with one panel per candidate, which is the pre-5.2 behaviour.
+  assert.equal(live.phase, "verification");
+  assert.equal(live.totals.candidates, 2);
+  assert.equal(live.stages[1].status, "active");
+});
+
+test("the grouping call's own activity frames never surface as board noise", () => {
+  const quiet = foldQcLiveState([
+    started(),
+    { type: "consolidation_started", seq: 1, raw_candidate_count: 2 },
+  ]);
+  const noisy = foldQcLiveState([
+    started(),
+    { type: "consolidation_started", seq: 1, raw_candidate_count: 2 },
+    { type: "consolidation_activity", seq: 2, bucket_id: "element:pt1.a1.p1", kind: "thinking" },
+    { type: "consolidation_search", seq: 3, bucket_id: "element:pt1.a1.p1", query: "x" },
+    { type: "consolidation_fetch", seq: 4, bucket_id: "element:pt1.a1.p1", url: "https://x" },
+  ]);
+  assert.deepEqual(noisy.consolidation, quiet.consolidation);
+  assert.equal(noisy.phase, "consolidation");
+});
+
+test("a run with no grouping step folds exactly as it always did", () => {
+  const live = foldQcLiveState([
+    started(),
+    {
+      type: "verification_started",
+      seq: 1,
+      candidates: [
+        {
+          candidate_id: "candidate-1",
+          title: "Only",
+          original_severity: "medium",
+          lens_id: "code_compliance",
+          panel_size: 2,
+          uphold_requires: 2,
+        },
+      ],
+      total_candidates: 1,
+      total_seats: 2,
+    },
+  ]);
+  assert.equal(live.consolidation.status, "");
+  assert.equal(live.consolidation.panelsAvoided, 0);
+  assert.equal(live.phase, "verification");
+});

@@ -431,7 +431,9 @@ function QcReviewRoom({ live }: { live: QcLiveState }) {
       ? "Adversarial panels"
       : live.phase === "validation"
         ? "Local fix validation"
-        : "Specialist review";
+        : live.phase === "consolidation"
+          ? "Grouping duplicate findings"
+          : "Specialist review";
   const verificationVisible =
     live.phase === "verification" ||
     live.phase === "validation" ||
@@ -479,6 +481,29 @@ function QcReviewRoom({ live }: { live: QcLiveState }) {
           </li>
         ))}
       </ol>
+
+      {/* A named transition, not a stage. It decides nothing a reviewer can
+          pass or fail, so it gets a line rather than a fourth gate on the
+          rail — but it does take time, and silence here reads as a stall. */}
+      {(live.phase === "consolidation" ||
+        (live.consolidation.status !== "" &&
+          live.consolidation.panelsAvoided > 0)) && (
+        <p className="mt-2 rounded-md border border-edge/60 bg-bg/30 px-2 py-1.5 text-[9px] leading-relaxed text-ink-faint">
+          {live.phase === "consolidation" ? (
+            <span className="status-shimmer">
+              Grouping findings that describe the same defect, so each is
+              reviewed once…
+            </span>
+          ) : (
+            <>
+              Consolidated {live.consolidation.rawCandidates} lens findings into{" "}
+              {live.consolidation.groupedCandidates} candidates —{" "}
+              {live.consolidation.panelsAvoided} duplicate panel
+              {live.consolidation.panelsAvoided === 1 ? "" : "s"} avoided.
+            </>
+          )}
+        </p>
+      )}
 
       <div className="mt-2.5 flex flex-col gap-3">
         {specialistActive ? (
@@ -2307,6 +2332,14 @@ function FindingCard({
         <span className="min-w-0 flex-1 truncate text-[12px] text-ink-dim">
           {finding.title}
         </span>
+        {(finding.candidate_origins?.length ?? 0) > 1 && (
+          <span
+            className="shrink-0 rounded border border-accent/30 bg-accent/8 px-1 py-px text-[9px] font-medium text-accent"
+            title={`${finding.candidate_origins?.length} lens findings describing this defect were consolidated into one candidate and reviewed by one panel. Every original claim is in the full report.`}
+          >
+            ×{finding.candidate_origins?.length}
+          </span>
+        )}
         {finding.status !== "open" && (
           <span className="shrink-0 text-[10px] text-ink-faint uppercase">
             {finding.status}

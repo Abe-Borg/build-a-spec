@@ -1,6 +1,6 @@
 # Phase 5 — QC policy and report clarity
 
-- Status: in progress (5.1 landed; 5.2-5.4 planned)
+- Status: in progress (5.1 and 5.2 landed; 5.3-5.4 planned)
 - Prerequisites: Phases 1-4 complete
 - Risk: medium-to-high; Chunk 5.1 deliberately changes finding survival
   semantics
@@ -510,11 +510,145 @@ Pop-Location
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete**
+- Commit/PR: branch `claude/phase-5-1-qc-panel-jzdd1n` (restarted from master
+  after the 5.1 PR merged; the branch name predates 5.2)
+- Tests: 40 new backend, 15 new frontend.
+  `tests/test_qc_consolidation.py` (31 — three variants at one element
+  buying exactly one panel with all three claims retained; every origin
+  claim reaching the serialized AND rendered report; maximum original
+  severity sizing the shared panel; the same title at different elements
+  never grouped; section-level candidates needing a shared source to be
+  eligible, and becoming eligible when they share one; identical member ops
+  passing through; the SF-009/SF-023 shape reconciling to ONE write with
+  both alternatives still readable; an unreconciled group surviving
+  advisory-only; a reconciliation reaching outside the members' scope
+  refused; a no-ops group recorded distinctly; five invalid-partition
+  shapes falling back to singletons with the call still billed; a
+  no-payload call; a raised call; the feature disabled; an oversized
+  bucket; determinism across lens completion order; origin ids tracking
+  content not position; **membership alone changing the finding id when the
+  claim does not** (the test that actually pins the hash extension — see
+  Deviations); a rerun that regroups not inheriting a dismissal while the
+  same grouping does; a single-member group keeping its claim verbatim;
+  live counts reconciling with the report and ordering before the roster;
+  and the record round-tripping with three partition-corruption cases
+  refused). `tests/test_linting.py` (9 — exact and near-identical siblings,
+  the numeric guard, distinct provisions, short boilerplate, three
+  identical siblings reporting two, cross-article repeats ignored, nested
+  children compared against their own siblings, advisory severity).
+  `frontend/tests/qcReport.test.ts` (10) and `qcLive.test.ts` (5).
+  Backend **1332 passed, 9 skipped**; `npm test` **177**; `npm run build`
+  clean. Eight mechanisms were reverted in place to prove them
+  load-bearing: repeated-claim disambiguation → 3 red, hard bucketing → 1 red, strict partition validation → 5
+  red, reconciliation containment → 1 red, reload partition integrity → 1
+  red, singleton-verbatim → 1 red, the finding-hash membership → 1 red,
+  the lint numeric guard → 1 red.
 - Deviations:
-- Manual QA owed:
+  - **`candidate_origins` holds stable REFERENCES, not copies.** The plan
+    allows either ("all member records or stable references"). References
+    won because the full records then live exactly once, in
+    `QCConsolidation.origins`, so a finding and the grouping record cannot
+    drift — and because it makes the acceptance criterion ("no original
+    candidate disappears") a checkable PARTITION invariant rather than a
+    hope. `QCResult.origins_for` /
+    `qcCandidateOrigins` / `qc_origins_for` are the one join, mirrored in
+    all three projections. `from_dict` refuses a report whose origins,
+    groups and candidates do not partition exactly.
+  - **The first draft of the dismiss-memory test passed for the wrong
+    reason, and was replaced.** Reverting `origin_ids` out of
+    `_mint_finding_id` turned nothing red: the merged candidate's canonical
+    wording differed from the singleton's, so the ids differed on claim
+    text alone.
+    `test_membership_alone_changes_the_finding_id_when_the_claim_does_not`
+    constructs the case where a group's canonical claim reproduces one
+    member's words verbatim — same lens, element, severity and panel shape
+    — so membership is the only difference. It goes red when the hash
+    extension is removed. (Same failure mode the session's two Codex
+    findings had: a test encoding the same wrong intent as the code.)
+  - **"Identical member operations" compares the NON-EMPTY sets.** Read
+    strictly, `{[X], []}` are not identical and would need reconciliation.
+    But a member that proposed nothing has not proposed a *different* fix,
+    and refusing the common shape (one lens proposes, another declines)
+    would make it advisory for no safety gain — the outcome would be worse
+    than pre-consolidation, where that lens's fix was applicable. All
+    non-empty sets identical → `identical`; the verifier panel still has to
+    approve. "Never apply more than one member's operations" holds either
+    way: the candidate carries exactly one op set.
+  - **Reconciled operations are containment-checked** against the union of
+    the members' own target ids plus the anchor's ancestors. Not in the
+    plan, but the grouping call's job is to GROUP: without it, a
+    reconciliation could edit an element no member ever proposed touching,
+    and the dry-run would happily validate it. `_ancestor_ids` permits the
+    natural parent-insert (`pt2.a1` for two `pt2.a1.pN` duplicates) while
+    refusing an unrelated element.
+  - **A single-member group always keeps its original claim verbatim.** The
+    plan does not say this; it fell out of asking what a validator
+    downstream could catch. Nothing could catch the grouping call quietly
+    rewriting one lens's finding, so the merge path is simply not reachable
+    for a singleton — the canonical fields are ignored.
+  - **Section-level evidence overlap is a shared normalized source URL**,
+    not a standard identifier. The plan offers both as examples; URL
+    overlap reuses `normalize_url` and needs no designation scanner.
+    Connected components over that relation keep bucketing
+    order-independent.
+  - **Live events are a named TRANSITION, not a fourth stage** (the plan's
+    own steer). `QcLivePhase` gains `"consolidation"` and the drawer shows
+    a line; `stages` stays the three gates a reviewer can pass or fail. The
+    grouping call's activity/search/fetch frames are relayed by the shared
+    streaming machinery but deliberately not folded into visible state —
+    pinned by a test that a noisy log and a quiet one fold identically.
+  - **The manifest gains `consolidation_enabled` + `consolidation_rule`,
+    so retained pre-5.2 results read stale.** Deliberate and consistent
+    with `model`/`effort`: a review where five near-duplicate claims each
+    faced their own panel is a materially different review.
+    `matches_inputs` rebuilds with the CURRENT setting.
+  - **`settings.QC_CONSOLIDATION` and `QC_CONSOLIDATION_MAX_BUCKET` were
+    added** (the plan permits a dedicated setting). The first is the
+    operator escape hatch that makes the manifest flag meaningful; the
+    second is a runaway guard whose breach is RECORDED in
+    `fallback_reason`, never silent.
+  - **`tests/fakes.py` needed a routing fix, not just a new builder.** A
+    grouping call quotes every candidate's title, so it matched — and
+    consumed — scripts keyed on a finding title, desynchronizing that
+    finding's whole panel. `SequencedFakeClient` now routes consolidation
+    requests against marker-bearing keys only, and answers an unscripted
+    one with the identity partition, so every pre-5.2 fixture keeps meaning
+    what it always meant while still running the real code path.
+  - **Review follow-up (PR #104, Codex P2): a repeated claim collided on
+    its origin id, and the reload check turned that into silent data
+    loss.** `normalize_findings` deduplicates nothing, so a lens can emit
+    the same normalized finding twice; both content-addressed to one
+    `origin_id`, and a duplicate origin id is precisely what
+    `_consolidation_record_consistent` refuses — the run finished,
+    serialized, and the whole paid report was discarded the next time the
+    project was opened. Fixed by `_unique_origin_id`, which disambiguates
+    (`qco-<digest>-2`) rather than deduplicating: "no original candidate
+    disappears" is the criterion this step is built around, so if a lens
+    submitted a claim twice the record says so. The suffix counts only
+    byte-identical EARLIER claims, so ordinal-independence survives.
+    **Verified the same shape against master: this is a PRE-EXISTING bug
+    the fix also closes** — two identical claims from one lens minted one
+    `finding_id` before consolidation existed, and `from_dict`'s
+    duplicate-id check discarded the report for that alone. Four tests
+    (`test_a_lens_emitting_one_claim_twice_still_reloads`,
+    `..._also_used_to_collide_on_the_finding_id`,
+    `..._suffix_does_not_shift_with_unrelated_candidates`,
+    `test_three_identical_claims_disambiguate...`); reverting the
+    disambiguation turns 3 red.
+  - **Chunk 5.3's composition language is not written here**, as the plan
+    intends. The consolidation record IS in the reconciled population
+    (`_audit_accounting_consistent` and the run totals include it, pinned
+    by a test in `test_qc_audit_report.py`); 5.3 owns the Meaning-cell
+    wording.
+- Manual QA owed: with owner approval, a live Final QC run on a section
+  likely to produce cross-lens duplicates, to confirm (a) the grouping call
+  actually merges the near-duplicates a human would merge rather than
+  returning all singletons — the hermetic tests prove the machinery, not the
+  model's judgement — and (b) it does not over-merge distinct defects that
+  happen to share an element. If it returns all singletons in practice, the
+  panels-avoided number in the report is the direct measure, and the prompt
+  needs strengthening before the feature is worth its own call.
 
 ## Chunk 5.3 — Version labels and request-count explanations
 

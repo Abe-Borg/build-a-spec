@@ -773,9 +773,87 @@ export interface QcFinding {
    *  "insufficient_refutation_evidence" when a critical/high refutation
    *  cited nothing that validated. Empty for every other outcome. */
   dispute_reason?: string;
+  /** Chunk 5.2: content-addressed ids of the ORIGINAL lens claims this
+   *  candidate covers. Stable references — the immutable records live once,
+   *  in `consolidation.origins`; resolve with `qcCandidateOrigins`. Length
+   *  > 1 means several lenses raised one defect and shared a panel. Absent
+   *  or single on a report produced with consolidation off. */
+  candidate_origins?: string[];
+  /** How this candidate's `proposed_ops` were arrived at when it covers
+   *  more than one original claim. */
+  ops_source?: QcOpsSource;
   status: QcFindingStatus;
   dismiss_reason: string;
   disposition_events: QcDispositionEvent[];
+}
+
+/** Provenance of a consolidated candidate's proposed operations. */
+export type QcOpsSource =
+  /** Single lens claim; its operations, unchanged. */
+  | "original"
+  /** Every contributing lens that proposed operations proposed the same. */
+  | "identical"
+  /** One synthesized set, which the verifier panel had to approve. */
+  | "reconciled"
+  /** Members disagreed and nothing was reconciled: advisory only, and a
+   *  human picks among the alternatives on the original claims. */
+  | "unreconciled"
+  /** Nobody proposed a mechanical fix. */
+  | "none"
+  | string;
+
+/** One lens's original claim, frozen before consolidation touched it. */
+export interface QcCandidateOrigin {
+  origin_id: string;
+  candidate_index: number;
+  candidate_id: string;
+  lens_id: string;
+  severity: string;
+  element_id: string;
+  title: string;
+  issue: string;
+  rationale: string;
+  source_urls: string[];
+  accepted_sources: string[];
+  grounded: boolean;
+  source_checks?: QcSourceRecord[];
+  proposed_ops: Record<string, unknown>[];
+}
+
+/** One emitted group: which originals it covers, and how it was decided. */
+export interface QcConsolidationGroup {
+  group_index: number;
+  candidate_id: string;
+  origin_ids: string[];
+  element_id: string;
+  severity: string;
+  bucket_id: string;
+  canonical_title: string;
+  canonical_issue: string;
+  canonical_rationale: string;
+  grouping_rationale: string;
+  ops_source: QcOpsSource;
+  proposed_ops: Record<string, unknown>[];
+}
+
+/** The persisted cross-lens grouping record (Chunk 5.2).
+ *
+ *  `status` describes the GROUPING STEP alone, never the QC run: a failed
+ *  grouping still produced a complete partition (all singletons) and the
+ *  run continued untouched. */
+export interface QcConsolidation {
+  status: "complete" | "skipped" | "failed" | string;
+  error: string;
+  fallback_reason: string;
+  origins: QcCandidateOrigin[];
+  groups: QcConsolidationGroup[];
+  usage_totals: Record<string, number>;
+  estimated_cost_usd: number;
+  api_request_count: number;
+  model_response_count: number;
+  raw_candidate_count?: number;
+  grouped_candidate_count?: number;
+  panels_avoided?: number;
 }
 
 export interface QcLensStatus {
@@ -814,6 +892,10 @@ export interface QcResultView {
    *  uphold/refute decision. Infrastructure-inconclusive, never open issues. */
   inconclusive: QcFinding[];
   lens_statuses: QcLensStatus[];
+  /** Absent on a report produced with consolidation off, and on every v4
+   *  report written before the step existed. `input_manifest.configuration
+   *  .consolidation_enabled` is what says which of those it is. */
+  consolidation?: QcConsolidation | null;
   started_at: string;
   finished_at: string;
   version_index: number;
@@ -845,6 +927,10 @@ export interface QcCandidateRosterEntry {
   title: string;
   original_severity: string;
   lens_id: string;
+  /** How many original lens claims this candidate stands for. > 1 means
+   *  consolidation gave several lenses' claims one shared panel. Absent on
+   *  a replayed pre-5.2 log, where every candidate was one claim. */
+  origin_count?: number;
   panel_size: number;
   /** v4: seats that must uphold for a clean uphold — always the panel size,
    *  since v4 upholds only unanimously. */
@@ -927,6 +1013,36 @@ export type QcEvent =
       error?: string;
       done?: number;
       total?: number;
+    })
+  | (QcEventBase & {
+      type: "consolidation_started";
+      raw_candidate_count?: number;
+      bucket_count?: number;
+      eligible_bucket_count?: number;
+      eligible_candidate_count?: number;
+    })
+  | (QcEventBase & {
+      type: "consolidation_activity";
+      bucket_id: string;
+      kind?: QcWorkerActivityKind;
+    })
+  | (QcEventBase & { type: "consolidation_search"; bucket_id: string; query?: string })
+  | (QcEventBase & { type: "consolidation_fetch"; bucket_id: string; url?: string })
+  | (QcEventBase & {
+      type: "consolidation_retry";
+      bucket_id: string;
+      attempt?: number;
+      max_attempts?: number;
+      reason?: string;
+      backoff_s?: number;
+    })
+  | (QcEventBase & {
+      type: "consolidation_complete";
+      status?: "complete" | "skipped" | "failed" | string;
+      raw_candidate_count?: number;
+      grouped_candidate_count?: number;
+      panels_avoided?: number;
+      error?: string;
     })
   | (QcEventBase & {
       /** Legacy aggregate progress retained for old/replayed event logs. */

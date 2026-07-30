@@ -371,6 +371,18 @@ venv\Scripts\python -m pytest -q tests/test_spec_modules.py tests/test_research_
     existing `test_qc.py` readiness assertion still passes unchanged), but
     3.2 adds no QC-report behavior — rendering the new manifest fields is
     3.3's job.
+  - **A README sentence claimed selective retry, and it was false** — caught
+    in review on PR #97. "Pressing Research again retries just those" is a
+    SPEND claim, and `run_requirements_research` fans out
+    `module.research_dimensions` unfiltered, so a rerun re-researches every
+    area. Now: "re-runs every area and appends what it finds, so a retry
+    costs a full round but never loses what earlier rounds already
+    established." Selective retry is a genuine cost optimization and is
+    deliberately NOT implemented here — it would change what a round record
+    covers and what a rerun bills, neither of which is in this chunk's scope.
+    Noted as an owner-facing idea, not a plan item. The readiness detail's
+    "Press Research again to retry" is unaffected: it names the action, not
+    its scope.
   - One 3.1 test expectation changed: with the module now in hand, an ABSENT
     profile's facts still name the module's declared dimensions (and count
     them all as incomplete-required) instead of leaving `dimension_titles`

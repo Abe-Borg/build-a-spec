@@ -161,12 +161,21 @@ def token_usage(
     output: int = 0,
     cache_read: int = 0,
     cache_write: int = 0,
+    cache_write_1h: int | None = None,
     thinking: int = 0,
     searches: int = 0,
     fetches: int = 0,
 ) -> SimpleNamespace:
-    """A billed-usage object shaped for the ledger (WI4 cost meter)."""
-    return SimpleNamespace(
+    """A billed-usage object shaped for the ledger (WI4 cost meter).
+
+    ``cache_write`` is the provider's TOTAL cache creation across TTL
+    classes, exactly as the API reports it. ``cache_write_1h`` is the
+    one-hour subtotal WITHIN that total; passing it adds the nested
+    ``cache_creation`` object the SDK sends. Omitting it leaves the
+    attribute absent entirely, so every pre-existing fixture keeps
+    exercising the no-nested-object path.
+    """
+    usage = SimpleNamespace(
         input_tokens=input,
         output_tokens=output,
         cache_read_input_tokens=cache_read,
@@ -176,6 +185,12 @@ def token_usage(
             web_search_requests=searches, web_fetch_requests=fetches
         ),
     )
+    if cache_write_1h is not None:
+        usage.cache_creation = SimpleNamespace(
+            ephemeral_5m_input_tokens=max(0, cache_write - cache_write_1h),
+            ephemeral_1h_input_tokens=cache_write_1h,
+        )
+    return usage
 
 
 def text_turn(
@@ -604,8 +619,15 @@ def usage(
     output: int = 0,
     cache_read: int = 0,
     cache_write: int = 0,
+    cache_write_1h: int | None = None,
 ) -> SimpleNamespace:
-    return SimpleNamespace(
+    """Research/QC billed usage. ``cache_write`` is the TTL-wide total.
+
+    ``cache_write_1h`` is the one-hour subtotal within it; supplying it
+    attaches the nested ``cache_creation`` object the SDK sends on a
+    request that carries a one-hour breakpoint (Final QC's verifier seats).
+    """
+    record = SimpleNamespace(
         input_tokens=input,
         output_tokens=output,
         cache_read_input_tokens=cache_read,
@@ -614,6 +636,12 @@ def usage(
             web_search_requests=searches, web_fetch_requests=fetches
         ),
     )
+    if cache_write_1h is not None:
+        record.cache_creation = SimpleNamespace(
+            ephemeral_5m_input_tokens=max(0, cache_write - cache_write_1h),
+            ephemeral_1h_input_tokens=cache_write_1h,
+        )
+    return record
 
 
 def research_response(

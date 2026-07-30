@@ -157,8 +157,17 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4)
 # reference (Current Models table) + Anthropic's web-search pricing. Sonnet 5
 # lists an intro rate ($2/$10 per MTok through 2026-08-31); we deliberately
 # use the POST-intro numbers ($3/$15) so the meter never under-reports.
-# Cache read is 0.1× input; cache write (5-minute ephemeral TTL) is 1.25×
-# input. Opus 5 ($5/$25) is the Final-QC model; Fable 5 ($10/$50) is retained
+# Cache read is 0.1× input. Cache WRITE is per-TTL and this table carries
+# both rates: ``cache_write`` is the 5-minute ephemeral entry at 1.25× input,
+# ``cache_write_1h`` the one-hour entry at 2.0× input (VERIFIED 2026-07 —
+# the 1h entry lives longer, so it costs more to create). The provider
+# reports the one-hour subtotal INSIDE the cache-creation total, so the two
+# rates apply to disjoint slices (``usage_ledger.estimate_usage_cost``);
+# charging the subtotal at both rates would double-bill it. Final QC's
+# verifier requests are the app's only one-hour writes today (v1.8.0), and
+# Chunk 4.2 puts the interview on them too.
+#
+# Opus 5 ($5/$25) is the Final-QC model; Fable 5 ($10/$50) is retained
 # because BUILD_A_SPEC_QC_MODEL can still select it. Web search bills
 # $10 / 1,000 requests ($0.01 each); web fetch has no per-request fee (token
 # cost only). Keep this current when Anthropic's list pricing moves.
@@ -172,24 +181,28 @@ PRICING: dict[str, dict[str, float]] = {
         "output": 15.0 / 1_000_000,
         "cache_read": 0.30 / 1_000_000,
         "cache_write": 3.75 / 1_000_000,
+        "cache_write_1h": 6.00 / 1_000_000,
     },
     MODEL_OPUS_48: {
         "input": 5.0 / 1_000_000,
         "output": 25.0 / 1_000_000,
         "cache_read": 0.50 / 1_000_000,
         "cache_write": 6.25 / 1_000_000,
+        "cache_write_1h": 10.00 / 1_000_000,
     },
     MODEL_FABLE_5: {
         "input": 10.0 / 1_000_000,
         "output": 50.0 / 1_000_000,
         "cache_read": 1.00 / 1_000_000,
         "cache_write": 12.50 / 1_000_000,
+        "cache_write_1h": 20.00 / 1_000_000,
     },
     MODEL_OPUS_5: {
         "input": 5.0 / 1_000_000,
         "output": 25.0 / 1_000_000,
         "cache_read": 0.50 / 1_000_000,
         "cache_write": 6.25 / 1_000_000,
+        "cache_write_1h": 10.00 / 1_000_000,
     },
 }
 

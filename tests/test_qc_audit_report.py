@@ -1625,6 +1625,231 @@ def test_current_schema_pricing_and_aggregate_accounting_are_reconciled() -> Non
         assert QCResult.from_dict(payload) is None, label
 
 
+# ---------------------------------------------------------------------------
+# Per-TTL cache-write accounting (Chunk 4.1)
+# ---------------------------------------------------------------------------
+#
+# Final QC's verifier seats carry a one-hour cache breakpoint (v1.8.0), so
+# these records are the first in the app to hold a one-hour subtotal. The
+# subtotal lives INSIDE cache_creation_input_tokens; a report that charged
+# it at the five-minute rate would under-report a real invoice, and one
+# that added it on top would over-report.
+
+
+def _rates_estimate(basis: dict, usage_totals: dict) -> float:
+    """Recompute an estimate the way a persisted report claims it was made."""
+    rates = basis["rates_per_token"]
+    one_hour = usage_totals.get("cache_creation_1h_input_tokens", 0)
+    five_minute = usage_totals.get("cache_creation_input_tokens", 0) - one_hour
+    return round(
+        usage_totals.get("input_tokens", 0) * rates["input"]
+        + usage_totals.get("output_tokens", 0) * rates["output"]
+        + usage_totals.get("cache_read_input_tokens", 0) * rates["cache_read"]
+        + five_minute * rates["cache_write"]
+        + one_hour * rates.get("cache_write_1h", rates["cache_write"])
+        + usage_totals.get("web_search_requests", 0)
+        * basis["web_search_per_request"]
+        + usage_totals.get("web_fetch_requests", 0)
+        * basis["web_fetch_per_request"],
+        6,
+    )
+
+
+def test_a_verifier_seats_one_hour_cache_subtotal_is_captured_and_priced() -> None:
+    store = _section()
+    scripts = _scripts(
+        code_compliance=[
+            qc_findings_response(
+                "code_compliance",
+                summary="One candidate recorded.",
+                findings=[
+                    _finding(
+                        "Priced candidate",
+                        "A candidate whose panel wrote a one-hour cache entry.",
+                        severity="medium",
+                    )
+                ],
+            )
+        ]
+    )
+    # Both standard seats write a one-hour entry: 900 cache-creation tokens
+    # each, 400 of them at the one-hour TTL.
+    scripts["Priced candidate"] = [
+        qc_verdict_response(
+            True,
+            note="Upheld.",
+            tokens={"cache_write": 900, "cache_write_1h": 400},
+        ),
+        qc_verdict_response(
+            True,
+            note="Upheld.",
+            tokens={"cache_write": 900, "cache_write_1h": 400},
+        ),
+    ]
+    result = _run(SequencedFakeClient(scripts), store)
+
+    seats = [v for f in result.findings for v in f.verdicts]
+    assert seats, "fixture must produce verifier seats"
+    for seat in seats:
+        assert seat.usage_totals["cache_creation_input_tokens"] == 900
+        assert seat.usage_totals["cache_creation_1h_input_tokens"] == 400
+        rates = result.cost_basis["rates_per_token"]
+        # 500 five-minute + 400 one-hour, each at its own rate — not 900 at
+        # either one.
+        assert seat.estimated_cost_usd == round(
+            500 * rates["cache_write"] + 400 * rates["cache_write_1h"], 6
+        )
+        assert seat.estimated_cost_usd != round(900 * rates["cache_write"], 6)
+
+    assert result.usage_totals["cache_creation_1h_input_tokens"] == 800
+    # Per-record and aggregate accounting both reconcile under the saved
+    # five-rate basis, so the record survives a save/load round trip.
+    payload = result.to_dict()
+    assert payload["cost_basis"]["rates_per_token"]["cache_write_1h"] > 0
+    assert "cache_write_treatment" in payload["cost_basis"]
+    restored = QCResult.from_dict(copy.deepcopy(payload))
+    assert restored is not None
+    assert restored.usage_totals["cache_creation_1h_input_tokens"] == 800
+    assert restored.cost_basis["rates_per_token"]["cache_write_1h"] == (
+        payload["cost_basis"]["rates_per_token"]["cache_write_1h"]
+    )
+
+
+def test_a_legacy_cost_basis_loads_and_reproduces_its_own_estimate() -> None:
+    # A report saved before per-TTL pricing carries a four-rate basis and no
+    # one-hour subtotal. It must stay readable — and its arithmetic must
+    # still check out, which means the whole cache-creation total falls
+    # through to the five-minute rate exactly as it did when it was written.
+    _store, result = _rich_audit_result()
+    payload = copy.deepcopy(result.to_dict())
+    payload["cost_basis"]["rates_per_token"].pop("cache_write_1h")
+    payload["cost_basis"].pop("cache_write_treatment")
+
+    restored = QCResult.from_dict(copy.deepcopy(payload))
+    assert restored is not None
+    # Preserved, not rewritten: a cost basis is an immutable claim about how
+    # this run was priced, so loading it must not mint a rate it never used.
+    assert "cache_write_1h" not in restored.cost_basis["rates_per_token"]
+    assert "cache_write_treatment" not in restored.cost_basis
+    assert restored.to_dict()["cost_basis"] == payload["cost_basis"]
+    assert restored.estimated_cost_usd == _rates_estimate(
+        payload["cost_basis"], payload["usage_totals"]
+    )
+
+
+def test_a_legacy_basis_paired_with_a_one_hour_subtotal_prices_it_conservatively(
+) -> None:
+    # A four-rate basis has no one-hour rate to apply, so the subtotal falls
+    # back to cache_write. The record still reconciles — it is simply priced
+    # at the rate the run actually recorded.
+    _store, result = _rich_audit_result()
+    payload = copy.deepcopy(result.to_dict())
+    payload["cost_basis"]["rates_per_token"].pop("cache_write_1h")
+    payload["cost_basis"].pop("cache_write_treatment")
+    lens = payload["lens_statuses"][0]
+    for record in (lens["usage_totals"], payload["usage_totals"]):
+        record["cache_creation_input_tokens"] = (
+            record.get("cache_creation_input_tokens", 0) + 1_000
+        )
+        record["cache_creation_1h_input_tokens"] = 400
+    lens["estimated_cost_usd"] = _rates_estimate(
+        payload["cost_basis"], lens["usage_totals"]
+    )
+    payload["estimated_cost_usd"] = _rates_estimate(
+        payload["cost_basis"], payload["usage_totals"]
+    )
+    assert QCResult.from_dict(copy.deepcopy(payload)) is not None
+
+
+def test_a_persisted_one_hour_subtotal_above_its_total_is_rejected() -> None:
+    # Live provider values are clamped; a persisted report is not. A record
+    # claiming more one-hour tokens than it created any cache with cannot
+    # describe a real run, so it fails accounting rather than being quietly
+    # repaired into something plausible.
+    _store, result = _rich_audit_result()
+    baseline = result.to_dict()
+    assert QCResult.from_dict(copy.deepcopy(baseline)) is not None
+
+    for target in ("lens_statuses", "aggregate"):
+        payload = copy.deepcopy(baseline)
+        lens = payload["lens_statuses"][0]
+        for record in (lens["usage_totals"], payload["usage_totals"]):
+            record["cache_creation_input_tokens"] = (
+                record.get("cache_creation_input_tokens", 0) + 100
+            )
+            record["cache_creation_1h_input_tokens"] = 100
+        if target == "lens_statuses":
+            lens["usage_totals"]["cache_creation_1h_input_tokens"] = 5_000
+            payload["usage_totals"]["cache_creation_1h_input_tokens"] = 5_000
+        else:
+            payload["usage_totals"]["cache_creation_input_tokens"] = 1
+        lens["estimated_cost_usd"] = _rates_estimate(
+            payload["cost_basis"], lens["usage_totals"]
+        )
+        payload["estimated_cost_usd"] = _rates_estimate(
+            payload["cost_basis"], payload["usage_totals"]
+        )
+        assert QCResult.from_dict(payload) is None, target
+
+
+def test_a_half_migrated_cost_basis_is_refused() -> None:
+    """The explanation and the rate it explains ship together, or not at all.
+
+    Validating the outer fields and the rate map independently accepts two
+    incoherent hybrids. The dangerous one is a basis that keeps
+    `cache_write_treatment` — prose promising per-TTL pricing — while
+    dropping `cache_write_1h`: one-hour tokens then fall back to the
+    five-minute rate and the report's own saved text is a lie about its own
+    arithmetic. The mirror case is a current five-rate report that lost its
+    required explanatory evidence. Neither can arise from a real run, so
+    pairing the shapes costs nothing and refuses both.
+    """
+    _store, result = _rich_audit_result()
+    # deepcopy per case: `to_dict` shallow-copies `cost_basis`, so mutating a
+    # payload's `rates_per_token` in place would edit the live result and
+    # silently turn the next case into a different shape.
+    baseline = result.to_dict()
+
+    keeps_prose_drops_rate = copy.deepcopy(baseline)
+    keeps_prose_drops_rate["cost_basis"]["rates_per_token"].pop("cache_write_1h")
+    assert QCResult.from_dict(keeps_prose_drops_rate) is None
+
+    keeps_rate_drops_prose = copy.deepcopy(baseline)
+    keeps_rate_drops_prose["cost_basis"].pop("cache_write_treatment")
+    assert QCResult.from_dict(keeps_rate_drops_prose) is None
+
+    # Both COMPLETE shapes still load — this tightened corruption handling,
+    # it did not narrow the supported basis versions to one.
+    assert QCResult.from_dict(copy.deepcopy(baseline)) is not None
+    legacy = copy.deepcopy(baseline)
+    legacy["cost_basis"].pop("cache_write_treatment")
+    legacy["cost_basis"]["rates_per_token"].pop("cache_write_1h")
+    assert QCResult.from_dict(legacy) is not None
+
+
+def test_a_cost_basis_with_an_unknown_rate_key_is_still_refused() -> None:
+    # Accepting two known shapes must not become accepting any shape: an
+    # unrecognized rate would be silently ignored by every consumer while
+    # the report claimed it had been applied.
+    _store, result = _rich_audit_result()
+    # One deepcopied baseline per case: `to_dict` shallow-copies `cost_basis`,
+    # so mutating a payload's rate map in place leaks into the next case and
+    # lets it pass for the wrong reason.
+    baseline = result.to_dict()
+
+    payload = copy.deepcopy(baseline)
+    payload["cost_basis"]["rates_per_token"]["cache_write_2h"] = 1e-6
+    assert QCResult.from_dict(payload) is None
+
+    payload = copy.deepcopy(baseline)
+    payload["cost_basis"]["invented_field"] = "nonsense"
+    assert QCResult.from_dict(payload) is None
+
+    payload = copy.deepcopy(baseline)
+    payload["cost_basis"]["cache_write_treatment"] = "   "
+    assert QCResult.from_dict(payload) is None
+
+
 def test_current_schema_top_level_identity_agrees_with_hashed_input_manifest() -> None:
     _store, result = _rich_audit_result()
     baseline = result.to_dict()

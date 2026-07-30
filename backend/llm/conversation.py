@@ -1746,7 +1746,15 @@ def _with_tail_cache_breakpoint(
 
 
 def _merge_usage(totals: dict[str, int], usage: Any) -> None:
-    """Accumulate one response's billed usage into the turn totals."""
+    """Accumulate one response's billed usage into the turn totals.
+
+    The chat loop aggregates across continuation rounds itself rather than
+    calling ``usage_ledger.usage_to_dict``, so the provider's per-TTL cache
+    subtotal has to be read here too — otherwise every one-hour cache write
+    an interview turn makes is priced at the five-minute rate.
+    ``cache_creation_1h_input_tokens`` is a SLICE of
+    ``cache_creation_input_tokens``, never an addition to it.
+    """
     if usage is None:
         return
     for key in (
@@ -1758,6 +1766,16 @@ def _merge_usage(totals: dict[str, int], usage: Any) -> None:
         value = getattr(usage, key, None)
         if isinstance(value, (int, float)) and value:
             totals[key] = totals.get(key, 0) + int(value)
+    creation = getattr(usage, "cache_creation", None)
+    one_hour = (
+        getattr(creation, "ephemeral_1h_input_tokens", None)
+        if creation is not None
+        else None
+    )
+    if isinstance(one_hour, (int, float)) and one_hour:
+        totals["cache_creation_1h_input_tokens"] = (
+            totals.get("cache_creation_1h_input_tokens", 0) + int(one_hour)
+        )
     details = getattr(usage, "output_tokens_details", None)
     thinking = getattr(details, "thinking_tokens", None) if details else None
     if isinstance(thinking, (int, float)) and thinking:

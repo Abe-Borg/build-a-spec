@@ -235,7 +235,11 @@ def _persisted_usage_totals(
     return totals
 
 
-_COST_BASIS_KEYS = frozenset(
+# A cost basis is an IMMUTABLE claim about how a report's dollar figures
+# were reached, so both the pre- and post-per-TTL-pricing shapes are read
+# and echoed back exactly as saved. Rewriting an old report's basis to the
+# new shape would forge a rate the run never used.
+_LEGACY_COST_BASIS_KEYS = frozenset(
     {
         "currency",
         "requested_model",
@@ -248,7 +252,26 @@ _COST_BASIS_KEYS = frozenset(
         "authority",
     }
 )
-_TOKEN_RATE_KEYS = frozenset({"input", "output", "cache_read", "cache_write"})
+_COST_BASIS_KEYS = _LEGACY_COST_BASIS_KEYS | {"cache_write_treatment"}
+_LEGACY_TOKEN_RATE_KEYS = frozenset(
+    {"input", "output", "cache_read", "cache_write"}
+)
+_TOKEN_RATE_KEYS = _LEGACY_TOKEN_RATE_KEYS | {"cache_write_1h"}
+
+# The outer key set and the rate map are validated as a PAIR, never
+# independently. `cache_write_treatment` is the prose that explains the
+# `cache_write_1h` rate, so the two ship together or not at all: a basis
+# carrying the explanation without the rate would price one-hour tokens at
+# the five-minute rate while its own saved text claimed per-TTL pricing —
+# the exact forged claim this validator exists to refuse — and a five-rate
+# map without the explanation is a current report missing required
+# evidence. Real records can only be one shape or the other
+# (`usage_pricing_snapshot` emits both new fields together, and a
+# pre-4.1 report has neither), so pairing rejects only corruption.
+_COST_BASIS_SHAPES = (
+    (_COST_BASIS_KEYS, _TOKEN_RATE_KEYS),
+    (_LEGACY_COST_BASIS_KEYS, _LEGACY_TOKEN_RATE_KEYS),
+)
 
 
 def _persisted_cost_basis(value: object, *, required: bool) -> dict[str, Any]:
@@ -257,15 +280,27 @@ def _persisted_cost_basis(value: object, *, required: bool) -> dict[str, Any]:
         if required:
             raise ValueError("Current-schema QC cost_basis is required.")
         return {}
-    if not isinstance(value, dict) or set(value) != _COST_BASIS_KEYS:
+    if not isinstance(value, dict):
         raise ValueError("Persisted QC cost_basis has an unsupported shape.")
-    text_fields = (
+    raw_rates = value.get("rates_per_token")
+    if not isinstance(raw_rates, dict):
+        raise ValueError(
+            "Persisted QC cost_basis rates_per_token has an unsupported shape."
+        )
+    if (set(value), set(raw_rates)) not in _COST_BASIS_SHAPES:
+        raise ValueError(
+            "Persisted QC cost_basis has an unsupported shape: its fields and "
+            "its rates_per_token map must both describe the same basis "
+            "version."
+        )
+    text_fields = [
         "currency",
         "requested_model",
         "rate_model",
         "thinking_token_treatment",
         "authority",
-    )
+        *(["cache_write_treatment"] if "cache_write_treatment" in value else []),
+    ]
     if any(
         not isinstance(value.get(key), str) or not value[key].strip()
         for key in text_fields
@@ -277,18 +312,13 @@ def _persisted_cost_basis(value: object, *, required: bool) -> dict[str, Any]:
         raise ValueError(
             "Persisted QC cost_basis used_fallback_rate must be a boolean."
         )
-    raw_rates = value.get("rates_per_token")
-    if not isinstance(raw_rates, dict) or set(raw_rates) != _TOKEN_RATE_KEYS:
-        raise ValueError(
-            "Persisted QC cost_basis rates_per_token has an unsupported shape."
-        )
     rates = {
         key: _persisted_nonnegative_number(
             raw_rates[key], field_name=f"cost_basis.rates_per_token.{key}"
         )
-        for key in sorted(_TOKEN_RATE_KEYS)
+        for key in sorted(raw_rates)
     }
-    return {
+    basis = {
         "currency": value["currency"],
         "requested_model": value["requested_model"],
         "rate_model": value["rate_model"],
@@ -305,23 +335,58 @@ def _persisted_cost_basis(value: object, *, required: bool) -> dict[str, Any]:
         "thinking_token_treatment": value["thinking_token_treatment"],
         "authority": value["authority"],
     }
+    if "cache_write_treatment" in value:
+        basis["cache_write_treatment"] = value["cache_write_treatment"]
+    return basis
+
+
+def _cache_write_tokens_by_ttl(usage: dict[str, int]) -> tuple[int, int]:
+    """Split a persisted usage record's cache writes by TTL class.
+
+    Deliberately does NOT clamp the way the live estimator does: a report
+    claims its own arithmetic, so an impossible subtotal has to reach
+    :meth:`QCResult._audit_accounting_consistent` and fail there rather
+    than be silently repaired into a plausible-looking number.
+    """
+    total = usage.get("cache_creation_input_tokens", 0)
+    one_hour = usage.get("cache_creation_1h_input_tokens", 0)
+    return total - one_hour, one_hour
 
 
 def _estimated_cost_from_basis(
     usage: dict[str, int], cost_basis: dict[str, Any]
 ) -> float:
-    """Recompute a report's estimate from its immutable pricing snapshot."""
+    """Recompute a report's estimate from its immutable pricing snapshot.
+
+    A legacy basis carries no one-hour rate and a legacy usage record no
+    one-hour subtotal, so the whole cache-creation total falls through to
+    ``cache_write`` and the saved estimate reproduces exactly.
+    """
     rates = cost_basis["rates_per_token"]
+    five_minute, one_hour = _cache_write_tokens_by_ttl(usage)
     return round(
         usage.get("input_tokens", 0) * rates["input"]
         + usage.get("output_tokens", 0) * rates["output"]
         + usage.get("cache_read_input_tokens", 0) * rates["cache_read"]
-        + usage.get("cache_creation_input_tokens", 0) * rates["cache_write"]
+        + five_minute * rates["cache_write"]
+        + one_hour * rates.get("cache_write_1h", rates["cache_write"])
         + usage.get("web_search_requests", 0)
         * cost_basis["web_search_per_request"]
         + usage.get("web_fetch_requests", 0)
         * cost_basis["web_fetch_per_request"],
         6,
+    )
+
+
+def _cache_write_subtotal_possible(usage: dict[str, int]) -> bool:
+    """A TTL subtotal larger than its own total is not a coherent record.
+
+    The provider reports the one-hour count INSIDE cache creation, so this
+    can only be corruption or a hand-edited file — and either way the
+    report's dollar figures no longer describe anything that happened.
+    """
+    return usage.get("cache_creation_1h_input_tokens", 0) <= usage.get(
+        "cache_creation_input_tokens", 0
     )
 
 
@@ -984,6 +1049,8 @@ class QCResult:
         for record in records:
             for key, value in record.usage_totals.items():
                 aggregate_usage[key] = aggregate_usage.get(key, 0) + value
+            if not _cache_write_subtotal_possible(record.usage_totals):
+                return False
             expected_cost = _estimated_cost_from_basis(
                 record.usage_totals, self.cost_basis
             )
@@ -998,6 +1065,8 @@ class QCResult:
         if _canonical_usage(self.usage_totals) != _canonical_usage(
             aggregate_usage
         ):
+            return False
+        if not _cache_write_subtotal_possible(self.usage_totals):
             return False
         if self.api_request_count != sum(
             record.api_request_count for record in records

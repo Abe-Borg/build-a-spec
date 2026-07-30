@@ -4382,6 +4382,31 @@ new dep; one new SSE payload field and one new persisted collection.
   upheld/disputed/refuted/refuted). Disputed blocks audit completeness
   like an open critical, is never auto-applied, and needs a human
   disposition.
+- **"Like an open critical" is literal, and getting it wrong deadlocked
+  the feature** (caught in review on PR #103). The first implementation
+  made a dispute fail `verification_complete()`, i.e. `is_complete()` —
+  but `is_complete()` gates the dismiss endpoint AND whether the runner
+  retains the result at all, so the dispute could never be dismissed, and
+  the drawer copy telling users to dismiss it described an impossible
+  workflow. `verification_complete()` is now a purely STRUCTURAL question
+  (did every panel complete, does every recorded outcome match its seats —
+  `disputed` passes), and the blocking lives in `open_disputed_count()`, a
+  separate readiness term exactly parallel to `open_critical_count()`.
+  `QCResult.finding()` was widened to survivors + disputed so a dismissal
+  can reach one; both apply paths re-check `ops_semantic_status`/
+  `ops_valid` immediately after that lookup, which a disputed candidate
+  fails by construction, so widening it cannot make one applicable.
+  Refuted and inconclusive stay unreachable — they are audit records, not
+  an action queue.
+- **`dismissed_ids` spans both dismissable collections.** `QCRunner.dismiss`
+  records whatever it dismissed, so the run's `dismissed_ids` and the
+  reload reconciliation must both count survivors AND disputed. Computing
+  the expected set from survivors alone made a dismissed dispute fail
+  `from_dict`'s consistency check on the next project load — which returns
+  `None`, silently discarding an entire paid report. Dismiss memory also
+  carries to a re-generated dispute, for the same reason it carries to a
+  survivor: a content-addressed id means it is the same disagreement the
+  user already set aside.
 - **`disputed` and `inconclusive` are different things and must stay
   different.** Disputed = a COMPLETE panel that disagreed, which is
   substantive information. Inconclusive = infrastructure failure, which is
@@ -4437,17 +4462,20 @@ new dep; one new SSE payload field and one new persisted collection.
   so the copy says review-and-disposition, never "re-run"); the Word memo
   gains **Appendix A1: Disputed Candidate Register**; `QCReportModal`
   gains section 07b; `QCDrawer` gains a warn-toned disputed group.
-- **Tests**: 20 new. `test_qc.py` (17 — every row of the outcome table on
+- **Tests**: 23 new. `test_qc.py` (19 — every row of the outcome table on
   both panel sizes, the RF-001 shape, activity-is-not-evidence, an
   unretrieved citation, a resolving and a non-resolving `document_ref`,
   medium not gated, an upholder's evidence not counting, failed seats
-  staying inconclusive, disputed blocking completeness and being
-  unapplicable, the persisted rule identity, and a reload that
-  re-adjudicates). `test_qc_audit_report.py` (3 — the Word appendix, a v3
-  2-of-3 keeping its original outcome, and v3 being readable but not
-  current audit grade). Frontend: `qcLive.test.ts` (4) and
-  `qcReport.test.ts` (3). Backend **1290 passed, 9 skipped**; `npm test`
-  **161**; `npm run build` clean.
+  staying inconclusive, disputed blocking readiness while staying
+  structurally complete and unapplicable, the dismissal round trip end to
+  end, a dismissed dispute surviving save/reload, the persisted rule
+  identity, and a reload that re-adjudicates). `test_qc_audit_report.py`
+  (3 — the Word appendix, a v3 2-of-3 keeping its original outcome, and v3
+  being readable but not current audit grade). Frontend:
+  `qcLive.test.ts` (4) and `qcReport.test.ts` (4, incl. the report-wide
+  aggregation totals summing). Backend **1292 passed, 9 skipped**;
+  `npm test` **162**; `npm run build` clean. The completeness/readiness
+  split was reverted in place to prove it load-bearing → 4 red.
 
 ## Commands
 

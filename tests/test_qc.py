@@ -551,14 +551,96 @@ def test_a_disputed_candidate_blocks_audit_completeness_and_is_not_applicable():
     )
     assert len(result.disputed) == 1
     finding = result.disputed[0]
-    # Reviewed in full — but not a completed AUDIT until a human resolves it.
-    assert result.verification_complete() is False
-    assert result.is_complete() is False
+    # The ADJUDICATION is structurally sound — every seat reported and the
+    # recorded outcome matches the votes. Disputed is a legitimate outcome,
+    # not a broken record.
+    assert result.verification_complete() is True
+    assert result.is_complete() is True
+    # What blocks readiness is the undispositioned dispute, a separate term
+    # in exact parallel with an open critical. Folding it into is_complete()
+    # deadlocked the dismiss route (PR #103 review).
+    assert result.open_disputed_count() == 1
     # Never validated, so nothing about it is auto-applicable.
     assert finding.ops_valid is False
     assert finding.ops_semantic_status in {"not_evaluated", "not_proposed"}
     # And it is not in the actionable queue.
     assert all(f.finding_id != finding.finding_id for f in result.findings)
+
+
+def test_a_disputed_candidate_can_actually_be_dismissed_with_a_reason():
+    """The workflow the drawer and readiness copy tell the user to perform.
+
+    It has to be reachable end to end: the lookup has to find a disputed
+    candidate, the dismissal has to stick, and dismissing it has to clear
+    the readiness term it was blocking. (Before the PR #103 review it was
+    unreachable on all three counts.)
+    """
+    runner = QCRunner()
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(True),
+                    qc_verdict_response(True),
+                    qc_verdict_response(False),
+                ]
+            )
+        ),
+        _section(),
+    )
+    runner.restore(result)
+    restored = runner.result
+    assert restored is not None
+    disputed = restored.disputed[0]
+    assert restored.open_disputed_count() == 1
+
+    # The lookup reaches it…
+    assert restored.finding(disputed.finding_id) is disputed
+    # …the dismissal sticks…
+    assert (
+        runner.dismiss(
+            disputed.finding_id,
+            "Reviewed the split; the stricter reading is not required here.",
+            document_version=3,
+            document_fingerprint="f" * 64,
+        )
+        is True
+    )
+    assert disputed.status == "dismissed"
+    assert disputed.dismiss_reason.startswith("Reviewed the split")
+    # …and it stops blocking.
+    assert restored.open_disputed_count() == 0
+    assert restored.is_complete() is True
+    # The audit trail records the disposition.
+    assert [e.action for e in disputed.disposition_events] == ["dismissed"]
+
+
+def test_a_dismissed_dispute_survives_a_save_and_reload():
+    """`QCRunner.dismiss` records the id in `dismissed_ids`, so the reload
+    reconciliation has to expect it there — computing the expected set from
+    survivors alone discarded the entire retained report."""
+    runner = QCRunner()
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(True),
+                    qc_verdict_response(True),
+                    qc_verdict_response(False),
+                ]
+            )
+        ),
+        _section(),
+    )
+    runner.restore(result)
+    disputed_id = runner.result.disputed[0].finding_id
+    assert runner.dismiss(disputed_id, "Considered and set aside.") is True
+    assert disputed_id in runner.result.dismissed_ids
+
+    reloaded = QCResult.from_dict(runner.result.to_dict())
+    assert reloaded is not None, "a dismissed dispute must not void the report"
+    assert reloaded.disputed[0].status == "dismissed"
+    assert reloaded.open_disputed_count() == 0
 
 
 def test_every_v4_finding_persists_the_rule_that_adjudicated_it():
@@ -596,7 +678,10 @@ def test_a_reloaded_v4_report_re_adjudicates_to_the_same_outcome():
     assert len(restored.disputed) == 1
     assert restored.disputed[0].verification_outcome == "disputed"
     assert restored.disputed[0].dispute_reason == "split_panel"
-    assert restored.verification_complete() is False
+    # Structurally sound (the reload re-adjudicated to the same outcome);
+    # still blocking, via the separate open-dispute term.
+    assert restored.verification_complete() is True
+    assert restored.open_disputed_count() == 1
     # The seat-level evidence records survive the round trip.
     assert restored.disputed[0].verdicts[2].upholds is False
 

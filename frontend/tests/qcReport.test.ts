@@ -264,6 +264,38 @@ test("a v3 report has no disputed candidates rather than an unknown gap", () => 
   assert.deepEqual(qcDisputedCandidates(report), []);
 });
 
+test("report-wide aggregations include disputed candidates", () => {
+  const survivor = finding({ finding_id: "qc-survivor" });
+  const split = finding({
+    finding_id: "qc-disputed-counted",
+    severity: "critical",
+    verification_outcome: "disputed",
+    dispute_reason: "split_panel",
+  });
+  const report = result({ findings: [survivor], disputed: [split] });
+  const metrics = buildQcReportMetrics(report);
+
+  // Undercounting here left the modal's totals disagreeing with its own
+  // appendix, which showed the same records.
+  assert.equal(metrics.totalCandidates, 2);
+  assert.equal(metrics.disputedFindings, 1);
+  assert.equal(metrics.disputedSeverity.critical, 1);
+  // The breakdown the modal renders has to sum to the total.
+  assert.equal(
+    metrics.survivingFindings +
+      metrics.refutedFindings +
+      metrics.disputedFindings +
+      metrics.inconclusiveFindings,
+    metrics.totalCandidates,
+  );
+
+  // And its proposed operations reach the register, marked not-evaluated.
+  const operations = collectQcOperationRecords(report);
+  const disputedOps = operations.filter((o) => o.findingKind === "disputed");
+  assert.equal(disputedOps.length, 1);
+  assert.equal(disputedOps[0].validationStatus, "not_evaluated");
+});
+
 test("a disputed candidate's operations are never actionable", () => {
   const split = finding({
     finding_id: "qc-disputed-ops",

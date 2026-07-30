@@ -1184,7 +1184,18 @@ class QCResult:
     dismissed_ids: list[str] = field(default_factory=list)
 
     def finding(self, finding_id: str) -> QCFinding | None:
-        for f in self.findings:
+        """Look up a candidate a disposition may target.
+
+        Survivors and DISPUTED candidates only. A dispute is resolved by a
+        human dismissing it with a reason, so it has to be reachable — but
+        it is never applicable, and both apply paths re-check
+        ``ops_semantic_status``/``ops_valid`` immediately after this lookup,
+        which a disputed candidate fails by construction (its operations are
+        never validated). Refuted and infrastructure-inconclusive candidates
+        stay unreachable: they are audit records, not an action queue, and
+        have no disposition workflow.
+        """
+        for f in [*self.findings, *self.disputed]:
             if f.finding_id == finding_id:
                 return f
         return None
@@ -1195,6 +1206,16 @@ class QCResult:
             for f in self.findings
             if f.severity == "critical" and f.status == "open"
         )
+
+    def open_disputed_count(self) -> int:
+        """Disputed candidates still awaiting a human disposition.
+
+        The readiness term that makes a dispute block issue-readiness, in
+        exact parallel with :meth:`open_critical_count`. Dismissing one with
+        a reason resolves it; that is what the drawer and the readiness copy
+        tell the user to do, and it has to actually work.
+        """
+        return sum(1 for f in self.disputed if f.status == "open")
 
     def coverage_complete(self) -> bool:
         if not self.lens_statuses:
@@ -1449,11 +1470,18 @@ class QCResult:
     def verification_complete(self) -> bool:
         """Every candidate reached a clean, self-consistent adjudication.
 
-        A DISPUTED candidate fails this deliberately: the panel completed
-        but disagreed, which is exactly the case a human has to resolve. It
-        is not an infrastructure failure and not a silent pass — it blocks
-        audit completeness until dispositioned, the same way an open
-        critical does.
+        This is a STRUCTURAL question — did every panel complete, and does
+        every recorded outcome match what its seats imply — not a question
+        about dispositions. ``disputed`` is a legitimate v4 outcome and
+        passes here.
+
+        Whether an OPEN dispute blocks issue readiness is a separate term,
+        :meth:`open_disputed_count`, exactly parallel to
+        :meth:`open_critical_count`. Folding it in here instead was a real
+        deadlock (caught in review on PR #103): ``is_complete()`` gates the
+        dismiss endpoint, so a dispute that made this False could never be
+        dismissed, and the readiness copy telling users to dismiss it
+        described a workflow that could not be performed.
         """
         for finding in [
             *self.findings,
@@ -1462,7 +1490,11 @@ class QCResult:
             *self.inconclusive,
         ]:
             expected_outcome = self._structural_verification_outcome(finding)
-            if expected_outcome not in {"upheld", "refuted"}:
+            if expected_outcome not in {
+                "upheld",
+                "refuted",
+                VERIFICATION_OUTCOME_DISPUTED,
+            }:
                 return False
             if (
                 self.schema_version >= QC_REPORT_SCHEMA_VERSION
@@ -1807,6 +1839,7 @@ class QCResult:
                 all_findings = [
                     *result.findings,
                     *result.refuted,
+                    *result.disputed,
                     *result.inconclusive,
                 ]
                 if any(
@@ -1827,6 +1860,9 @@ class QCResult:
                     finding.verification_outcome != "refuted"
                     for finding in result.refuted
                 ) or any(
+                    finding.verification_outcome != VERIFICATION_OUTCOME_DISPUTED
+                    for finding in result.disputed
+                ) or any(
                     finding.verification_outcome != "inconclusive"
                     for finding in result.inconclusive
                 ):
@@ -1837,6 +1873,10 @@ class QCResult:
                 ) or any(
                     result._structural_verification_outcome(finding) != "refuted"
                     for finding in result.refuted
+                ) or any(
+                    result._structural_verification_outcome(finding)
+                    != VERIFICATION_OUTCOME_DISPUTED
+                    for finding in result.disputed
                 ) or any(
                     result._structural_verification_outcome(finding)
                     != "inconclusive"
@@ -1860,9 +1900,15 @@ class QCResult:
                     for finding in all_findings
                 ):
                     return None
+                # Survivors AND disputed candidates, because both are
+                # dismissable and `QCRunner.dismiss` records either into
+                # `dismissed_ids`. Reconciling against survivors alone made a
+                # dismissed dispute fail this check on the next project load,
+                # which discards the whole retained result — silent loss of a
+                # paid report (caught in review on PR #103).
                 dismissed = {
                     finding.finding_id
-                    for finding in result.findings
+                    for finding in [*result.findings, *result.disputed]
                     if finding.status == "dismissed"
                 }
                 if (
@@ -4097,6 +4143,17 @@ def run_final_qc(
             # Reviewed in full, and the reviewers disagreed. Never validated
             # and never auto-applicable (same posture as inconclusive) — the
             # disposition is a human's to make.
+            #
+            # Dismiss memory applies here for the same reason it applies to
+            # survivors: a content-addressed id means this is the SAME
+            # disagreement the user already considered and set aside, and a
+            # re-run should not resurrect it as a fresh blocker.
+            carried_dismissal = _validated_remembered_dismissal(
+                remembered_records.get(obj.finding_id)
+            )
+            if carried_dismissal is not None:
+                obj.status = "dismissed"
+                obj.dismiss_reason, obj.disposition_events = carried_dismissal
             disputed.append(obj)
         else:
             inconclusive.append(obj)
@@ -4118,8 +4175,14 @@ def run_final_qc(
 
     survivors.sort(key=lambda f: -SEVERITY_RANK.get(f.severity, 0))
 
+    # Both dismissable collections, matching what `QCRunner.dismiss` writes
+    # and what the reload reconciliation expects.
     dismissed_ids = sorted(
-        {f.finding_id for f in survivors if f.status == "dismissed"}
+        {
+            f.finding_id
+            for f in [*survivors, *disputed]
+            if f.status == "dismissed"
+        }
     )
 
     all_verdicts = [

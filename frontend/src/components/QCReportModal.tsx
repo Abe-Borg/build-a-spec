@@ -961,7 +961,7 @@ export default function QCReportModal({
               </p>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-              <Stat label="Candidates reviewed" value={metrics.totalCandidates.toLocaleString("en-US")} detail={`${metrics.survivingFindings} survived · ${metrics.refutedFindings} substantively refuted · ${metrics.inconclusiveFindings} infrastructure-inconclusive`} />
+              <Stat label="Candidates reviewed" value={metrics.totalCandidates.toLocaleString("en-US")} detail={`${metrics.survivingFindings} survived · ${metrics.refutedFindings} substantively refuted · ${metrics.disputedFindings} disputed · ${metrics.inconclusiveFindings} infrastructure-inconclusive`} />
               <Stat label="Open findings" value={metrics.openFindings.toLocaleString("en-US")} detail={`${metrics.appliedFindings} applied · ${metrics.dismissedFindings} dismissed`} />
               <Stat label="Lens completion" value={`${metrics.completedLenses}/${metrics.expectedLenses || metrics.totalLenses || "?"}`} detail={`${metrics.totalLenses} records · ${metrics.missingLenses} missing · ${metrics.duplicateLensRecords} duplicate · ${metrics.unexpectedLenses} unexpected`} />
               <Stat label="Grounded survivors" value={`${metrics.groundedFindings}/${metrics.survivingFindings}`} detail={`${metrics.ungroundedFindings} survivor(s) not grounded`} />
@@ -1054,7 +1054,7 @@ export default function QCReportModal({
               <Stat label="Model responses" value={metrics.modelResponses.toLocaleString("en-US")} />
               <Stat label="Verifier errors" value={metrics.verdictErrors.toLocaleString("en-US")} />
               <Stat label="Verifier seat coverage" value={`${metrics.completedVerifierSeats}/${metrics.expectedVerifierSeats || "?"}`} detail={`${metrics.recordedVerifierSeats} preserved · ${metrics.failedVerifierSeats} failed · ${metrics.missingVerifierSeats} missing · ${metrics.invalidVerifierSeatRecords} invalid index`} />
-              <Stat label="Verification outcomes" value={`${metrics.candidatesWithVerificationOutcome}/${metrics.totalCandidates}`} detail={`${metrics.survivingFindings} upheld · ${metrics.refutedFindings} substantively refuted · ${metrics.inconclusiveFindings} infrastructure-inconclusive`} />
+              <Stat label="Verification outcomes" value={`${metrics.candidatesWithVerificationOutcome}/${metrics.totalCandidates}`} detail={`${metrics.survivingFindings} upheld · ${metrics.refutedFindings} substantively refuted · ${metrics.disputedFindings} disputed · ${metrics.inconclusiveFindings} infrastructure-inconclusive`} />
               <Stat label="Grounded candidates" value={`${metrics.groundedCandidates}/${metrics.totalCandidates}`} />
               <Stat label="Resolved element anchors" value={`${metrics.resolvedElementAnchors}/${metrics.totalCandidates}`} detail={`${metrics.unresolvedElementAnchors} unresolved · ${metrics.unrecordedElementResolution} legacy/unrecorded`} />
               <Stat label="Other dispositions" value={metrics.otherDispositionFindings.toLocaleString("en-US")} detail="Surviving findings outside open/applied/dismissed" />

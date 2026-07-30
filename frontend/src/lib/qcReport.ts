@@ -163,6 +163,8 @@ export interface QcReportMetrics {
   totalCandidates: number;
   survivingFindings: number;
   refutedFindings: number;
+  /** v4 only; 0 for every older record. */
+  disputedFindings: number;
   inconclusiveFindings: number;
   openFindings: number;
   appliedFindings: number;
@@ -217,6 +219,7 @@ export interface QcReportMetrics {
   severity: SeverityCounts;
   survivingSeverity: SeverityCounts;
   refutedSeverity: SeverityCounts;
+  disputedSeverity: SeverityCounts;
   inconclusiveSeverity: SeverityCounts;
 }
 
@@ -795,9 +798,17 @@ export function qcInconclusiveCandidates(
   ]);
 }
 
+/**
+ * Every candidate the run produced, across all four outcomes. Report-wide
+ * aggregations (metrics, verifier-seat and evidence totals, the operation
+ * register) go through this, so a bucket missing from it silently
+ * undercounts the whole report while the same records still show up in
+ * their own appendix.
+ */
 function allQcCandidates(result: QcReportResult): QcReportFinding[] {
   return qcSurvivingCandidates(result).concat(
     qcSubstantivelyRefutedCandidates(result),
+    qcDisputedCandidates(result),
     qcInconclusiveCandidates(result),
   );
 }
@@ -1128,6 +1139,7 @@ export function collectQcOperationRecords(
   };
   append(qcSurvivingCandidates(result), "surviving");
   append(qcSubstantivelyRefutedCandidates(result), "refuted");
+  append(qcDisputedCandidates(result), "disputed");
   append(qcInconclusiveCandidates(result), "inconclusive");
   return records;
 }
@@ -1138,8 +1150,9 @@ export function buildQcReportMetrics(
   const result = resultFields(rawResult);
   const findings = qcSurvivingCandidates(result);
   const refuted = qcSubstantivelyRefutedCandidates(result);
+  const disputed = qcDisputedCandidates(result);
   const inconclusive = qcInconclusiveCandidates(result);
-  const candidates = findings.concat(refuted, inconclusive);
+  const candidates = findings.concat(refuted, disputed, inconclusive);
   const dispositions = findings.map((finding) =>
     String(finding.status ?? "").trim().toLowerCase(),
   );
@@ -1187,6 +1200,7 @@ export function buildQcReportMetrics(
     totalCandidates: candidates.length,
     survivingFindings: findings.length,
     refutedFindings: refuted.length,
+    disputedFindings: disputed.length,
     inconclusiveFindings: inconclusive.length,
     openFindings: dispositions.filter((status) => status === "open").length,
     appliedFindings: dispositions.filter((status) => status === "applied").length,
@@ -1305,6 +1319,7 @@ export function buildQcReportMetrics(
     severity: countSeverities(candidates),
     survivingSeverity: countSeverities(findings),
     refutedSeverity: countSeverities(refuted),
+    disputedSeverity: countSeverities(disputed),
     inconclusiveSeverity: countSeverities(inconclusive),
   };
 }

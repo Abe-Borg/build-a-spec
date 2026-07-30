@@ -1352,6 +1352,10 @@ def _readiness_payload(
         and qc_audit_grade
         and qc_result.is_complete()
         and qc_result.open_critical_count() == 0
+        # An undispositioned dispute blocks exactly as an open critical
+        # does — a separate term, so dismissing it can actually clear the
+        # gate (folding it into is_complete() deadlocked the dismiss route).
+        and qc_result.open_disputed_count() == 0
     )
     evidence_detail = (
         "Its paid report is preserved in QC status and export."
@@ -1454,15 +1458,17 @@ def _readiness_payload(
             "The saved Final QC result is a legacy or unsupported record "
             "without the current full-input audit contract; re-run Final QC."
         )
-    elif qc_result.disputed:
+    elif qc_result.open_disputed_count():
         # A complete panel that disagreed is not an incomplete review, and
         # saying "re-run" would be wrong advice: re-running re-litigates a
         # disagreement rather than resolving it. The disposition is a
-        # human's — dismiss with a reason, or fix the provision.
-        disputed_count = len(qc_result.disputed)
+        # human's — dismiss with a reason, or fix the provision. Already
+        # dismissed disputes are resolved and no longer named here.
+        open_disputes = [f for f in qc_result.disputed if f.status == "open"]
+        disputed_count = len(open_disputes)
         unevidenced = sum(
             1
-            for finding in qc_result.disputed
+            for finding in open_disputes
             if finding.dispute_reason == DISPUTE_REASON_INSUFFICIENT_EVIDENCE
         )
         qc_audit_detail = (

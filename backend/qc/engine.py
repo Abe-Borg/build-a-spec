@@ -258,6 +258,21 @@ _LEGACY_TOKEN_RATE_KEYS = frozenset(
 )
 _TOKEN_RATE_KEYS = _LEGACY_TOKEN_RATE_KEYS | {"cache_write_1h"}
 
+# The outer key set and the rate map are validated as a PAIR, never
+# independently. `cache_write_treatment` is the prose that explains the
+# `cache_write_1h` rate, so the two ship together or not at all: a basis
+# carrying the explanation without the rate would price one-hour tokens at
+# the five-minute rate while its own saved text claimed per-TTL pricing —
+# the exact forged claim this validator exists to refuse — and a five-rate
+# map without the explanation is a current report missing required
+# evidence. Real records can only be one shape or the other
+# (`usage_pricing_snapshot` emits both new fields together, and a
+# pre-4.1 report has neither), so pairing rejects only corruption.
+_COST_BASIS_SHAPES = (
+    (_COST_BASIS_KEYS, _TOKEN_RATE_KEYS),
+    (_LEGACY_COST_BASIS_KEYS, _LEGACY_TOKEN_RATE_KEYS),
+)
+
 
 def _persisted_cost_basis(value: object, *, required: bool) -> dict[str, Any]:
     """Validate the exact pricing snapshot used by an audit-grade report."""
@@ -265,11 +280,19 @@ def _persisted_cost_basis(value: object, *, required: bool) -> dict[str, Any]:
         if required:
             raise ValueError("Current-schema QC cost_basis is required.")
         return {}
-    if not isinstance(value, dict) or set(value) not in (
-        _COST_BASIS_KEYS,
-        _LEGACY_COST_BASIS_KEYS,
-    ):
+    if not isinstance(value, dict):
         raise ValueError("Persisted QC cost_basis has an unsupported shape.")
+    raw_rates = value.get("rates_per_token")
+    if not isinstance(raw_rates, dict):
+        raise ValueError(
+            "Persisted QC cost_basis rates_per_token has an unsupported shape."
+        )
+    if (set(value), set(raw_rates)) not in _COST_BASIS_SHAPES:
+        raise ValueError(
+            "Persisted QC cost_basis has an unsupported shape: its fields and "
+            "its rates_per_token map must both describe the same basis "
+            "version."
+        )
     text_fields = [
         "currency",
         "requested_model",
@@ -288,14 +311,6 @@ def _persisted_cost_basis(value: object, *, required: bool) -> dict[str, Any]:
     if not isinstance(value.get("used_fallback_rate"), bool):
         raise ValueError(
             "Persisted QC cost_basis used_fallback_rate must be a boolean."
-        )
-    raw_rates = value.get("rates_per_token")
-    if not isinstance(raw_rates, dict) or set(raw_rates) not in (
-        _TOKEN_RATE_KEYS,
-        _LEGACY_TOKEN_RATE_KEYS,
-    ):
-        raise ValueError(
-            "Persisted QC cost_basis rates_per_token has an unsupported shape."
         )
     rates = {
         key: _persisted_nonnegative_number(

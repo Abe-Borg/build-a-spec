@@ -133,6 +133,16 @@ venv\Scripts\python -m pytest -q tests/test_usage.py tests/test_qc_audit_report.
     and the validator asserts exact set equality. Legacy nine-key/four-rate
     and new ten-key/five-rate are both accepted and echoed back verbatim;
     an unknown rate key or unknown top-level field is still refused (pinned).
+    **Review follow-up (PR #99, Codex):** the two sets must be validated as
+    a PAIR. Validated independently they admit two hybrids, and one is the
+    forged claim this validator exists to refuse — a basis keeping
+    `cache_write_treatment` while dropping `cache_write_1h` prices 1M
+    one-hour tokens at $6.25 instead of $10.00 while its own text promises
+    per-TTL pricing. Fixed with `_COST_BASIS_SHAPES` and pinned by
+    `test_a_half_migrated_cost_basis_is_refused`. The same review pass
+    exposed a test-side flaw: `to_dict` shallow-copies `cost_basis`, so
+    in-place mutation of `rates_per_token` leaks across cases — every case
+    now starts from one `copy.deepcopy(baseline)`.
   - **Two split helpers, deliberately not one.**
     `usage_ledger.cache_write_split` clamps (live provider data should skew
     an estimate, never invert it); `qc.engine._cache_write_tokens_by_ttl`

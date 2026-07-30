@@ -4001,6 +4001,25 @@ charges 2×. No new endpoint, no new SSE event, no new dep, no schema bump.
   `_estimated_cost_from_basis` uses `rates.get("cache_write_1h",
   rates["cache_write"])`, so a legacy basis prices the whole total at the
   five-minute rate and reproduces its saved estimate exactly.
+- **The outer field set and the rate map are validated as a PAIR**
+  (`_COST_BASIS_SHAPES`), never independently — caught in review on PR #99.
+  Checking them separately accepts two hybrids, and one of them is exactly
+  the forged claim the immutability rule exists to prevent: a basis that
+  keeps `cache_write_treatment` (prose promising per-TTL pricing) while
+  dropping `cache_write_1h` prices a million one-hour tokens at $6.25
+  instead of $10.00 while its own saved text says otherwise, and validates
+  clean. The mirror hybrid is a current five-rate report missing the
+  required explanation. `cache_write_treatment` and `cache_write_1h` ship
+  together or not at all, so pairing rejects only corruption —
+  `usage_pricing_snapshot` always emits both, and a pre-4.1 report has
+  neither.
+- **`QCResult.to_dict()` shallow-copies `cost_basis`**, so a test that
+  mutates `payload["cost_basis"]["rates_per_token"]` in place edits the
+  LIVE result and silently reshapes every later case built from the same
+  fixture. That is why every case in these tests starts from one
+  `copy.deepcopy(baseline)` — the convention the rest of the file already
+  followed, and the reason the first draft of the pairing test passed its
+  second assertion for the wrong reason.
 - **`cache_write_treatment` is a sibling of `thinking_token_treatment`**,
   and exists for the same reason: both explain a non-obvious "this is
   already inside that number, don't charge it twice" decision. It reaches

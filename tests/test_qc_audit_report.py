@@ -1721,7 +1721,7 @@ def test_a_legacy_cost_basis_loads_and_reproduces_its_own_estimate() -> None:
     # still check out, which means the whole cache-creation total falls
     # through to the five-minute rate exactly as it did when it was written.
     _store, result = _rich_audit_result()
-    payload = result.to_dict()
+    payload = copy.deepcopy(result.to_dict())
     payload["cost_basis"]["rates_per_token"].pop("cache_write_1h")
     payload["cost_basis"].pop("cache_write_treatment")
 
@@ -1743,7 +1743,7 @@ def test_a_legacy_basis_paired_with_a_one_hour_subtotal_prices_it_conservatively
     # back to cache_write. The record still reconciles — it is simply priced
     # at the rate the run actually recorded.
     _store, result = _rich_audit_result()
-    payload = result.to_dict()
+    payload = copy.deepcopy(result.to_dict())
     payload["cost_basis"]["rates_per_token"].pop("cache_write_1h")
     payload["cost_basis"].pop("cache_write_treatment")
     lens = payload["lens_statuses"][0]
@@ -1792,20 +1792,60 @@ def test_a_persisted_one_hour_subtotal_above_its_total_is_rejected() -> None:
         assert QCResult.from_dict(payload) is None, target
 
 
+def test_a_half_migrated_cost_basis_is_refused() -> None:
+    """The explanation and the rate it explains ship together, or not at all.
+
+    Validating the outer fields and the rate map independently accepts two
+    incoherent hybrids. The dangerous one is a basis that keeps
+    `cache_write_treatment` — prose promising per-TTL pricing — while
+    dropping `cache_write_1h`: one-hour tokens then fall back to the
+    five-minute rate and the report's own saved text is a lie about its own
+    arithmetic. The mirror case is a current five-rate report that lost its
+    required explanatory evidence. Neither can arise from a real run, so
+    pairing the shapes costs nothing and refuses both.
+    """
+    _store, result = _rich_audit_result()
+    # deepcopy per case: `to_dict` shallow-copies `cost_basis`, so mutating a
+    # payload's `rates_per_token` in place would edit the live result and
+    # silently turn the next case into a different shape.
+    baseline = result.to_dict()
+
+    keeps_prose_drops_rate = copy.deepcopy(baseline)
+    keeps_prose_drops_rate["cost_basis"]["rates_per_token"].pop("cache_write_1h")
+    assert QCResult.from_dict(keeps_prose_drops_rate) is None
+
+    keeps_rate_drops_prose = copy.deepcopy(baseline)
+    keeps_rate_drops_prose["cost_basis"].pop("cache_write_treatment")
+    assert QCResult.from_dict(keeps_rate_drops_prose) is None
+
+    # Both COMPLETE shapes still load — this tightened corruption handling,
+    # it did not narrow the supported basis versions to one.
+    assert QCResult.from_dict(copy.deepcopy(baseline)) is not None
+    legacy = copy.deepcopy(baseline)
+    legacy["cost_basis"].pop("cache_write_treatment")
+    legacy["cost_basis"]["rates_per_token"].pop("cache_write_1h")
+    assert QCResult.from_dict(legacy) is not None
+
+
 def test_a_cost_basis_with_an_unknown_rate_key_is_still_refused() -> None:
     # Accepting two known shapes must not become accepting any shape: an
     # unrecognized rate would be silently ignored by every consumer while
     # the report claimed it had been applied.
     _store, result = _rich_audit_result()
-    payload = result.to_dict()
+    # One deepcopied baseline per case: `to_dict` shallow-copies `cost_basis`,
+    # so mutating a payload's rate map in place leaks into the next case and
+    # lets it pass for the wrong reason.
+    baseline = result.to_dict()
+
+    payload = copy.deepcopy(baseline)
     payload["cost_basis"]["rates_per_token"]["cache_write_2h"] = 1e-6
     assert QCResult.from_dict(payload) is None
 
-    payload = result.to_dict()
+    payload = copy.deepcopy(baseline)
     payload["cost_basis"]["invented_field"] = "nonsense"
     assert QCResult.from_dict(payload) is None
 
-    payload = result.to_dict()
+    payload = copy.deepcopy(baseline)
     payload["cost_basis"]["cache_write_treatment"] = "   "
     assert QCResult.from_dict(payload) is None
 

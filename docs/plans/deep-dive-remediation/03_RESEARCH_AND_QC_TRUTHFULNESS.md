@@ -471,7 +471,7 @@ Then run the full standard verification commands from the master plan.
 ### Implementation record
 
 - Status: **complete** (2026-07-30)
-- Commit/PR: PENDING — pinned in the follow-up commit
+- Commit/PR: `c10df8b` — PR #98
 - Tests: 18 new, nine per side, deliberately the same six branches twice so
   the mirrors can be compared by reading them side by side.
   `tests/test_qc_audit_report.py` (9): each branch as a unit (no profile;

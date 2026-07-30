@@ -513,8 +513,8 @@ Pop-Location
 - Status: **complete**
 - Commit/PR: branch `claude/phase-5-1-qc-panel-jzdd1n` (restarted from master
   after the 5.1 PR merged; the branch name predates 5.2)
-- Tests: 36 new backend, 15 new frontend.
-  `tests/test_qc_consolidation.py` (27 — three variants at one element
+- Tests: 40 new backend, 15 new frontend.
+  `tests/test_qc_consolidation.py` (31 — three variants at one element
   buying exactly one panel with all three claims retained; every origin
   claim reaching the serialized AND rendered report; maximum original
   severity sizing the shared panel; the same title at different elements
@@ -538,9 +538,9 @@ Pop-Location
   identical siblings reporting two, cross-article repeats ignored, nested
   children compared against their own siblings, advisory severity).
   `frontend/tests/qcReport.test.ts` (10) and `qcLive.test.ts` (5).
-  Backend **1328 passed, 9 skipped**; `npm test` **177**; `npm run build`
-  clean. Seven mechanisms were reverted in place to prove them
-  load-bearing: hard bucketing → 1 red, strict partition validation → 5
+  Backend **1332 passed, 9 skipped**; `npm test` **177**; `npm run build`
+  clean. Eight mechanisms were reverted in place to prove them
+  load-bearing: repeated-claim disambiguation → 3 red, hard bucketing → 1 red, strict partition validation → 5
   red, reconciliation containment → 1 red, reload partition integrity → 1
   red, singleton-verbatim → 1 red, the finding-hash membership → 1 red,
   the lint numeric guard → 1 red.
@@ -615,6 +615,27 @@ Pop-Location
     requests against marker-bearing keys only, and answers an unscripted
     one with the identity partition, so every pre-5.2 fixture keeps meaning
     what it always meant while still running the real code path.
+  - **Review follow-up (PR #104, Codex P2): a repeated claim collided on
+    its origin id, and the reload check turned that into silent data
+    loss.** `normalize_findings` deduplicates nothing, so a lens can emit
+    the same normalized finding twice; both content-addressed to one
+    `origin_id`, and a duplicate origin id is precisely what
+    `_consolidation_record_consistent` refuses — the run finished,
+    serialized, and the whole paid report was discarded the next time the
+    project was opened. Fixed by `_unique_origin_id`, which disambiguates
+    (`qco-<digest>-2`) rather than deduplicating: "no original candidate
+    disappears" is the criterion this step is built around, so if a lens
+    submitted a claim twice the record says so. The suffix counts only
+    byte-identical EARLIER claims, so ordinal-independence survives.
+    **Verified the same shape against master: this is a PRE-EXISTING bug
+    the fix also closes** — two identical claims from one lens minted one
+    `finding_id` before consolidation existed, and `from_dict`'s
+    duplicate-id check discarded the report for that alone. Four tests
+    (`test_a_lens_emitting_one_claim_twice_still_reloads`,
+    `..._also_used_to_collide_on_the_finding_id`,
+    `..._suffix_does_not_shift_with_unrelated_candidates`,
+    `test_three_identical_claims_disambiguate...`); reverting the
+    disambiguation turns 3 red.
   - **Chunk 5.3's composition language is not written here**, as the plan
     intends. The consolidation record IS in the reconciled population
     (`_audit_accounting_consistent` and the run totals include it, pinned

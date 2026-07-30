@@ -4585,6 +4585,20 @@ no new dep, no schema bump (5.1's `final-qc/4` already covers it).
   differs, so the ids differ on claim text alone). The real pin is a group
   whose canonical claim reproduces one member's words verbatim, where
   membership is the only difference.
+- **A repeated claim is disambiguated, never deduplicated**
+  (`_unique_origin_id`; review finding on PR #104, Codex). `normalize_findings`
+  deduplicates nothing, so a lens CAN emit the same finding twice — both then
+  content-address to one id, and a duplicate origin id is exactly what the
+  reload partition check refuses. The run finished, serialized, and had the
+  whole paid report discarded the next time the project was opened. The
+  suffix (`qco-<digest>-2`) counts only byte-identical EARLIER claims, so an
+  unrelated candidate can never shift it and the ordinal-independence above
+  survives. Dropping the duplicate instead would have been simpler and
+  wrong: "no original candidate disappears" is the criterion the whole step
+  is built around. **The same fix closes a PRE-EXISTING instance of the same
+  bug** — two identical claims from one lens minted one `finding_id` on
+  master too, and `from_dict`'s duplicate-id check discarded the report for
+  that alone, before consolidation existed.
 - **The manifest gains `consolidation_enabled` + `consolidation_rule`**, so
   a report always states which regime produced it and a retained pre-5.2
   result reads STALE — deliberate, and the same posture `model`/`effort`

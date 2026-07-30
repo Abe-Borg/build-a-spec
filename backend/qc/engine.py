@@ -2442,6 +2442,39 @@ def _mint_origin_id(lens_id: str, finding: dict[str, Any]) -> str:
     return f"qco-{digest}"
 
 
+def _unique_origin_id(base: str, taken: set[str]) -> str:
+    """Disambiguate a repeated claim without dropping either record.
+
+    A lens can emit the same normalized finding twice — the payload is
+    untrusted model output and ``normalize_findings`` deduplicates nothing.
+    Both then content-address to one id, and since a duplicate origin id is
+    exactly what :meth:`QCResult._consolidation_record_consistent` refuses,
+    the run would finish, serialize, and then be discarded WHOLESALE the
+    next time the project was opened. Silent loss of a paid report is the
+    worst failure mode this record has, so the collision is resolved here
+    rather than merely detected there.
+
+    Disambiguating rather than deduplicating, because "no original candidate
+    disappears from the audit record" is the acceptance criterion this whole
+    step is built around: if a lens submitted a claim twice, the record says
+    so. The suffix counts only byte-identical EARLIER claims, so it cannot
+    be shifted by an unrelated candidate elsewhere in the run — the
+    ordinal-independence :func:`_mint_origin_id` exists for survives.
+
+    Note this also closes a PRE-EXISTING instance of the same bug: two
+    identical claims from one lens minted one ``finding_id`` too, and
+    ``from_dict``'s duplicate-id check discarded the report for that alone,
+    before consolidation existed. Unique origins now feed the finding hash,
+    so those ids diverge as well.
+    """
+    if base not in taken:
+        return base
+    occurrence = 2
+    while f"{base}-{occurrence}" in taken:
+        occurrence += 1
+    return f"{base}-{occurrence}"
+
+
 def _mint_finding_id(
     lens_id: str,
     finding: dict[str, Any],
@@ -3967,25 +4000,33 @@ def _consolidate_candidates(
     record, and the billed responses. Every early return produces a complete
     singleton partition, so the caller needs no failure branch.
     """
-    origins = [
-        QCCandidateOrigin(
-            origin_id=_mint_origin_id(lens.lens_id, finding),
-            candidate_index=index,
-            candidate_id=f"raw-{index + 1}",
-            lens_id=lens.lens_id,
-            severity=finding["severity"],
-            element_id=finding["element_id"],
-            title=finding["title"],
-            issue=finding["issue"],
-            rationale=finding.get("rationale", ""),
-            source_urls=list(finding.get("source_urls") or []),
-            accepted_sources=list(finding.get("accepted_sources") or []),
-            grounded=bool(finding.get("grounded")),
-            source_checks=list(finding.get("source_checks") or []),
-            proposed_ops=[dict(op) for op in finding.get("proposed_ops") or []],
+    origins: list[QCCandidateOrigin] = []
+    taken_origin_ids: set[str] = set()
+    for index, (lens, finding) in enumerate(raw_findings):
+        origin_id = _unique_origin_id(
+            _mint_origin_id(lens.lens_id, finding), taken_origin_ids
         )
-        for index, (lens, finding) in enumerate(raw_findings)
-    ]
+        taken_origin_ids.add(origin_id)
+        origins.append(
+            QCCandidateOrigin(
+                origin_id=origin_id,
+                candidate_index=index,
+                candidate_id=f"raw-{index + 1}",
+                lens_id=lens.lens_id,
+                severity=finding["severity"],
+                element_id=finding["element_id"],
+                title=finding["title"],
+                issue=finding["issue"],
+                rationale=finding.get("rationale", ""),
+                source_urls=list(finding.get("source_urls") or []),
+                accepted_sources=list(finding.get("accepted_sources") or []),
+                grounded=bool(finding.get("grounded")),
+                source_checks=list(finding.get("source_checks") or []),
+                proposed_ops=[
+                    dict(op) for op in finding.get("proposed_ops") or []
+                ],
+            )
+        )
 
     def record(
         candidates: list[_Candidate],

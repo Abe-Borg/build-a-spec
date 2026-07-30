@@ -909,6 +909,132 @@ def test_membership_alone_changes_the_finding_id_when_the_claim_does_not():
     assert merged_finding.finding_id != singleton.finding_id
 
 
+def _twice(claim: dict) -> dict:
+    """One lens emitting the SAME normalized finding twice.
+
+    ``normalize_findings`` deduplicates nothing — the payload is untrusted
+    model output — so this is a shape the engine really can be handed.
+    """
+    return _qc_scripts(
+        code_compliance=[
+            qc_findings_response(
+                "code_compliance", findings=[dict(claim), dict(claim)]
+            )
+        ],
+    )
+
+
+def test_a_lens_emitting_one_claim_twice_still_reloads(monkeypatch):
+    """Regression, PR #104 review (Codex P2).
+
+    Both records content-addressed to ONE origin id, and a duplicate origin
+    id is exactly what the reload partition check refuses — so the run
+    finished, serialized, and then had the whole paid report discarded the
+    next time the project was opened. Silent loss of a paid report is the
+    worst failure this record has.
+    """
+    store = _section()
+    scripts = _twice(_finding("Same claim", "Same issue.", severity="medium"))
+    scripts["[[QC-VERIFY:"] = _upheld(4)
+    result = _run(SequencedFakeClient(scripts), store)
+
+    origin_ids = [origin.origin_id for origin in result.consolidation.origins]
+    assert len(origin_ids) == 2, "neither claim may be dropped"
+    assert len(set(origin_ids)) == 2
+    # The suffix is a disambiguator on the SAME content hash, not a new one.
+    assert origin_ids[1].startswith(origin_ids[0])
+
+    # The whole point: the report survives a save and reload.
+    restored = QCResult.from_dict(result.to_dict())
+    assert restored is not None
+    assert len(restored.consolidation.origins) == 2
+
+
+def test_the_same_repeat_also_used_to_collide_on_the_finding_id():
+    """The pre-existing half of the same bug, closed by the same fix.
+
+    Two byte-identical claims from one lens minted one `finding_id` on
+    master too — and `from_dict`'s duplicate-id check discarded the report
+    for that alone, before consolidation existed. Unique origins feed the
+    finding hash, so those ids now diverge as well.
+    """
+    store = _section()
+    scripts = _twice(_finding("Same claim", "Same issue.", severity="medium"))
+    scripts["[[QC-VERIFY:"] = _upheld(4)
+    result = _run(SequencedFakeClient(scripts), store)
+
+    finding_ids = [f.finding_id for f in result.findings]
+    assert len(finding_ids) == 2
+    assert len(set(finding_ids)) == 2
+
+
+def test_a_repeated_claims_suffix_does_not_shift_with_unrelated_candidates():
+    """The ordinal-independence `_mint_origin_id` exists for survives.
+
+    The suffix counts byte-identical EARLIER claims only. An unrelated
+    candidate appearing in a rerun must not renumber it, or dismissals
+    would churn on defects nothing about which changed.
+    """
+    store = _section()
+    dup = _finding("Same claim", "Same issue.", severity="medium")
+
+    def run(extra: list[dict]) -> QCResult:
+        scripts = _qc_scripts(
+            code_compliance=[
+                qc_findings_response(
+                    "code_compliance", findings=[dict(dup), dict(dup)]
+                )
+            ],
+            completeness=[
+                qc_findings_response("completeness", findings=extra)
+            ],
+        )
+        scripts["[[QC-VERIFY:"] = _upheld(6)
+        return _run(SequencedFakeClient(scripts), store)
+
+    without = run([])
+    with_extra = run(
+        [
+            _finding(
+                "Unrelated",
+                "Something else entirely.",
+                element_id="pt1.a1",
+                severity="low",
+            )
+        ]
+    )
+    repeated = [
+        origin.origin_id
+        for origin in without.consolidation.origins
+        if origin.lens_id == "code_compliance"
+    ]
+    still = [
+        origin.origin_id
+        for origin in with_extra.consolidation.origins
+        if origin.lens_id == "code_compliance"
+    ]
+    assert repeated == still
+
+
+def test_three_identical_claims_disambiguate_without_running_out_of_room():
+    store = _section()
+    claim = _finding("Same claim", "Same issue.", severity="medium")
+    scripts = _qc_scripts(
+        code_compliance=[
+            qc_findings_response(
+                "code_compliance",
+                findings=[dict(claim), dict(claim), dict(claim)],
+            )
+        ],
+    )
+    scripts["[[QC-VERIFY:"] = _upheld(6)
+    result = _run(SequencedFakeClient(scripts), store)
+
+    origin_ids = [origin.origin_id for origin in result.consolidation.origins]
+    assert len(set(origin_ids)) == 3
+    assert QCResult.from_dict(result.to_dict()) is not None
+
+
 def test_a_single_member_group_keeps_its_original_claim_verbatim():
     """The grouping call is not licensed to rewrite one lens's finding."""
     store = _section()

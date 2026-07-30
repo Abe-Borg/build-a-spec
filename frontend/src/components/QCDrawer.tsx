@@ -41,6 +41,7 @@ import {
   sourceCapabilityTitle,
 } from "../lib/sourceCapabilities";
 import {
+  qcDisputedCandidates,
   qcInconclusiveCandidates,
   qcOperationEvaluation,
   qcPrimaryReport,
@@ -333,6 +334,11 @@ function candidateOutcome(candidate: QcCandidateLiveState): {
 } {
   if (candidate.outcome === "upheld") return { label: "Upheld", tone: "text-accent" };
   if (candidate.outcome === "refuted") return { label: "Refuted", tone: "text-ink-faint" };
+  // A complete panel that disagreed — warn-toned like inconclusive because
+  // both need a human, but labelled distinctly because the reasons differ:
+  // one is disagreement, the other is a reviewer that never reported.
+  if (candidate.outcome === "disputed")
+    return { label: "Disputed", tone: "text-warn" };
   if (candidate.outcome === "inconclusive") return { label: "Inconclusive", tone: "text-warn" };
   return { label: "In review", tone: "text-accent" };
 }
@@ -705,6 +711,7 @@ export default function QCDrawer({
   }, [openNonce]);
   const [openRationale, setOpenRationale] = useState<Record<string, boolean>>({});
   const [showRefuted, setShowRefuted] = useState(false);
+  const [showDisputed, setShowDisputed] = useState(false);
   const [showInconclusive, setShowInconclusive] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
@@ -735,6 +742,7 @@ export default function QCDrawer({
   const primaryReport = qcPrimaryReport(qc);
   const findings = result ? qcSurvivingCandidates(result) : [];
   const refuted = result ? qcSubstantivelyRefutedCandidates(result) : [];
+  const disputed = result ? qcDisputedCandidates(result) : [];
   const inconclusive = result ? qcInconclusiveCandidates(result) : [];
   const openFindings = findings.filter((f) => f.status === "open");
   const openCriticalCount = openFindings.filter(
@@ -1510,6 +1518,44 @@ export default function QCDrawer({
                 </details>
               )}
               </div>
+
+              {disputed.length > 0 && (
+                <div className="rounded border border-warn/35 bg-warn/5 px-2 py-1.5">
+                  <button
+                    className="text-left text-[11px] font-medium text-warn hover:underline"
+                    onClick={() => setShowDisputed((value) => !value)}
+                    aria-expanded={showDisputed}
+                    aria-controls="qc-disputed-candidates"
+                  >
+                    {showDisputed ? "▾" : "▸"} Disputed — needs your review (
+                    {disputed.length})
+                  </button>
+                  {showDisputed && (
+                    <ul id="qc-disputed-candidates" className="mt-1.5 space-y-1">
+                      {disputed.map((finding) => (
+                        <li
+                          key={finding.finding_id}
+                          className="text-[11px] text-ink-dim"
+                        >
+                          <span className="font-medium text-warn">
+                            [{finding.severity}]
+                          </span>{" "}
+                          {finding.title} —{" "}
+                          {finding.dispute_reason ===
+                          "insufficient_refutation_evidence"
+                            ? "refuted without cited evidence"
+                            : "the reviewers disagreed"}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="mt-1 text-[10px] leading-snug text-ink-faint">
+                    Every reviewer reported, and they did not agree. These are
+                    not applied automatically — read each one and either
+                    address it or dismiss it with a reason.
+                  </p>
+                </div>
+              )}
 
               {inconclusive.length > 0 && (
                 <div className="rounded border border-warn/35 bg-warn/5 px-2 py-1.5">

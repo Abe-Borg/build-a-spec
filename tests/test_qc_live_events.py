@@ -8,7 +8,7 @@ import anthropic
 import httpx
 
 from backend import settings
-from backend.qc.engine import run_final_qc
+from backend.qc.engine import VERIFICATION_RULE_V4, run_final_qc
 from backend.qc.schema import QC_LENSES
 from backend.spec_doc.model import DocumentStore
 from backend.spec_modules import DEFAULT_MODULE
@@ -157,6 +157,7 @@ def test_zero_candidates_emits_truthful_empty_phase_transitions() -> None:
             "completed_seats": 0,
             "upheld": 0,
             "refuted": 0,
+            "disputed": 0,
             "inconclusive": 0,
         }
     ]
@@ -270,7 +271,10 @@ def test_live_lens_panel_and_validation_events_use_observable_payloads() -> None
             "original_severity": "medium",
             "lens_id": "code_compliance",
             "panel_size": 2,
-            "threshold": 2,
+            "uphold_requires": 2,
+            "rule": VERIFICATION_RULE_V4,
+            "evidence_gated": False,
+            "outcomes": ["upheld", "disputed", "refuted", "inconclusive"],
         }
     ]
     assert verification_started["total_seats"] == 2
@@ -299,8 +303,9 @@ def test_live_lens_panel_and_validation_events_use_observable_payloads() -> None
         "type": "candidate_complete",
         "candidate_id": "candidate-1",
         "outcome": "upheld",
+        "dispute_reason": "",
         "panel_size": 2,
-        "threshold": 2,
+        "uphold_requires": 2,
         "completed_seats": 2,
         "upholds": 2,
     }
@@ -588,8 +593,9 @@ def test_failed_verifier_makes_panel_inconclusive_without_fix_validation() -> No
             "type": "candidate_complete",
             "candidate_id": "candidate-1",
             "outcome": "inconclusive",
+            "dispute_reason": "",
             "panel_size": 2,
-            "threshold": 2,
+            "uphold_requires": 2,
             "completed_seats": 1,
             "upholds": 1,
         }
@@ -762,6 +768,7 @@ def test_shared_invalid_request_accounts_for_every_unstarted_verifier_seat(
         "completed_seats": 0,
         "upheld": 0,
         "refuted": 0,
+        "disputed": 0,
         "inconclusive": 3,
     }
 

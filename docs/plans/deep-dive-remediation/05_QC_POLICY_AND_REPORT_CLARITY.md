@@ -1,6 +1,6 @@
 # Phase 5 — QC policy and report clarity
 
-- Status: planned
+- Status: in progress (5.1 landed; 5.2-5.4 planned)
 - Prerequisites: Phases 1-4 complete
 - Risk: medium-to-high; Chunk 5.1 deliberately changes finding survival
   semantics
@@ -215,11 +215,82 @@ Pop-Location
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete**
+- Commit/PR: branch `claude/deep-dive-phase-4-cont-o2up2c` (restarted from
+  master after the 4.4 PR merged; the branch name predates Phase 5)
+- Tests: 20 new. `tests/test_qc.py` (17 — every row of the outcome table on
+  both panel sizes; the RF-001 shape (3-0 refute, no evidence → disputed);
+  activity-is-not-evidence; a cited URL the seat never retrieved; a
+  resolving and a non-resolving `document_ref`; medium/low not gated; an
+  UPHOLDING seat's citation not opening the gate; a failed seat staying
+  inconclusive whatever the votes; disputed blocking completeness and being
+  unapplicable; the persisted rule identity; and a serialize/reload that
+  re-adjudicates to the same outcome).
+  `tests/test_qc_audit_report.py` (3 — the Word disputed appendix end to
+  end, a v3 2-of-3 keeping its original upheld outcome on load, and v3
+  being readable but no longer current audit grade).
+  `frontend/tests/qcLive.test.ts` (4) and `frontend/tests/qcReport.test.ts`
+  (3). Two v3-semantics tests in `tests/test_qc.py` were replaced by the
+  matrix, and `test_qc_verifier_v3.py`'s
+  `..._but_finding_vote_is_majority` was renamed and rewritten (a
+  majority-upheld candidate is now disputed). Focused command green, then:
+  backend **1290 passed, 9 skipped**; `npm test` **161**; `npm run build`
+  clean.
 - Deviations:
-- Manual QA owed:
+  - **`verification_threshold` is retained rather than replaced.** Item 1
+    says to persist the full rule identity, not just an integer. It does —
+    `verification_rule` carries `VERIFICATION_RULE_V4` and the reload check
+    keys off it. But the integer field stays (set to the panel size under
+    v4, since v4 upholds only unanimously) so a v4 record remains
+    field-comparable with the v3 records sitting beside it in the same
+    project file, and so the v3 compatibility path has something to
+    validate against.
+  - **The manifest keeps the key `majority_rule`.** Item 4 asks for the
+    rule string to describe the table; renaming the key would make an old
+    manifest and a new one non-comparable field-by-field for no gain, so
+    the key is historical and the VALUE now states the v4 scheme with panel
+    sizes explicit.
+  - **`_structural_verification_outcome` grew a third branch, not two.**
+    The plan describes v4 and "schema v3 validates its recorded threshold";
+    the pre-existing code actually had one path for `>= CURRENT` and a
+    laxer one below it (no threshold check, all-zero reviewer indexes
+    tolerated). Bumping CURRENT to 4 would silently have moved v3 records
+    onto the lax path, so the branches are now explicitly v4 / v3 /
+    pre-v3-legacy and each keeps the rules it was validated under.
+  - **Evidence validation happens in the verifier worker, not at
+    adjudication.** A `source` entry can only be judged against what THAT
+    seat retrieved, and that is in scope in `_verify_one`. The seat
+    therefore persists `validated` per entry, and `panel_outcome` reads
+    persisted records only — satisfying item 2's "determine everything from
+    persisted verdict records, never from un-persisted stream content".
+    `document_ref` resolution needs the reviewed tree, so
+    `reviewable_element_ids(section)` is computed once per run and threaded
+    to the workers as a `frozenset` — no worker thread touches the tree,
+    matching the pass's existing anti-mutation posture.
+  - **Item 6's readiness copy got its own branch ahead of the
+    coverage-incomplete one.** A disputed candidate is not incomplete
+    coverage, and the existing detail would have told the user to re-run —
+    which re-litigates a disagreement rather than resolving it. The new
+    copy names the count, calls out under-evidenced refutations
+    specifically, and points at dismiss-with-reason.
+  - **Release notes not written (item 9's release-notes clause).** The
+    v3→v4 `finding_id`/dismiss-memory boundary must be stated to users, but
+    the product version is not bumped in this chunk (per the program's
+    handoff rule) and `test_the_shipped_notes_describe_the_shipped_version`
+    ties notes to the shipped version. **The release chunk owns writing
+    it**; the obligation is recorded in `CLAUDE.md` under "Final QC v4
+    panel outcomes" so it cannot be lost.
+  - **Chunk 5.2's `disputed` interactions are out of scope here**, as the
+    plan intends — this chunk adds the outcome; consolidation lands on top
+    of it.
+- Manual QA owed: with owner approval, a live Final QC run on a section
+  with at least one critical/high finding, to confirm (a) real verifier
+  seats populate `refutation_evidence` when prompted to, and (b) the
+  disputed rate is not so high that the escalation becomes noise. The
+  hermetic tests prove the adjudication and the gate; only a paid run shows
+  whether the model actually cites evidence under the new prompt wording,
+  which is the assumption the whole gate rests on. If seats routinely omit
+  it, the prompt needs strengthening before the disputed volume is judged.
 
 ## Chunk 5.2 — Audit-preserving cross-lens candidate consolidation
 

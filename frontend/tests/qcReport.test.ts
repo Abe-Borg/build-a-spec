@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildQcReportMetrics,
   collectQcOperationRecords,
+  qcDisputedCandidates,
   qcInconclusiveCandidates,
   qcOperationEvaluation,
   qcPrimaryReport,
@@ -242,6 +243,39 @@ test("schema-v2 operations remain readable but cannot become actionable", () => 
   assert.equal(evaluation.actionable, false);
   assert.equal(operation.semanticStatus, "legacy_unrecorded");
   assert.equal(operation.validationStatus, "not_evaluated");
+});
+
+test("disputed candidates project separately from refuted and inconclusive", () => {
+  const split = finding({
+    finding_id: "qc-disputed",
+    verification_outcome: "disputed",
+    dispute_reason: "split_panel",
+  });
+  const report = result({ disputed: [split] });
+
+  assert.deepEqual(qcDisputedCandidates(report), [split]);
+  // A dispute is neither a refutation nor an infrastructure failure.
+  assert.deepEqual(qcSubstantivelyRefutedCandidates(report), []);
+  assert.deepEqual(qcInconclusiveCandidates(report), []);
+});
+
+test("a v3 report has no disputed candidates rather than an unknown gap", () => {
+  const report = result({ schema_version: 3, findings: [finding({})] });
+  assert.deepEqual(qcDisputedCandidates(report), []);
+});
+
+test("a disputed candidate's operations are never actionable", () => {
+  const split = finding({
+    finding_id: "qc-disputed-ops",
+    verification_outcome: "disputed",
+    dispute_reason: "insufficient_refutation_evidence",
+    ops_semantic_status: "not_evaluated",
+    ops_valid: false,
+    proposed_ops: [{ action: "replace", target_id: "pt1.a1.p1", text: "x" }],
+  });
+  const evaluation = qcOperationEvaluation(split, 4, "disputed");
+  assert.equal(evaluation.mechanicalStatus, "not_evaluated");
+  assert.equal(evaluation.actionable, false);
 });
 
 test("structurally incomplete refuted panels fail closed as inconclusive", () => {

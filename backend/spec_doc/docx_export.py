@@ -1424,12 +1424,14 @@ def _render_qc_closing(document, qc_result: dict, *, compact: bool) -> None:
     applied = sum(1 for f in findings if f.get("status") == "applied")
     dismissed = sum(1 for f in findings if f.get("status") == "dismissed")
     refuted = len(qc_result.get("refuted") or [])
+    disputed = len(qc_result.get("disputed") or [])
     inconclusive = len(qc_result.get("inconclusive") or [])
     document.add_paragraph(
         "Surviving-finding dispositions: "
         f"{len(open_findings)} open, {applied} applied, {dismissed} dismissed. "
         "Other candidate outcomes: "
-        f"{refuted} substantively refuted, {inconclusive} "
+        f"{refuted} substantively refuted, {disputed} disputed and awaiting "
+        f"human review, {inconclusive} "
         "infrastructure-inconclusive; those candidates are not shown in this "
         "compact closing but remain in the full audit report."
     )
@@ -1640,6 +1642,7 @@ def _qc_execution_issues(qc_result: dict) -> list[str]:
             "refuted",
             [item for item in raw_refuted if item not in legacy_inconclusive],
         ),
+        ("disputed", _qc_list(qc_result.get("disputed"))),
         (
             "infrastructure-inconclusive",
             [*_qc_list(qc_result.get("inconclusive")), *legacy_inconclusive],
@@ -1788,6 +1791,11 @@ def _qc_render_executive_status(
         in {"default_refuted", "inconclusive"}
     ]
     refuted = [item for item in raw_refuted if item not in legacy_inconclusive]
+    disputed = [
+        item
+        for item in _qc_list(qc_result.get("disputed"))
+        if isinstance(item, dict)
+    ]
     inconclusive = [
         item
         for item in _qc_list(qc_result.get("inconclusive"))
@@ -1901,12 +1909,18 @@ def _qc_render_executive_status(
             ["All surviving findings", *_qc_severity_counts(findings)],
             ["Refuted candidates", *_qc_severity_counts(refuted)],
             [
+                "Disputed candidates (human review)",
+                *_qc_severity_counts(disputed),
+            ],
+            [
                 "Infrastructure-inconclusive candidates",
                 *_qc_severity_counts(inconclusive),
             ],
             [
                 "All recorded candidates",
-                *_qc_severity_counts([*findings, *refuted, *inconclusive]),
+                *_qc_severity_counts(
+                    [*findings, *refuted, *disputed, *inconclusive]
+                ),
             ],
         ]
     )
@@ -2669,6 +2683,8 @@ def _qc_render_ops(
             )
         elif candidate_kind == "refuted":
             validation = "NOT EVALUATED - CANDIDATE REFUTED"
+        elif candidate_kind == "disputed":
+            validation = "NOT EVALUATED - CANDIDATE DISPUTED"
         else:
             validation = "Not applicable - no operation proposed"
         _qc_add_label(document, "Operation validation", validation)
@@ -2682,11 +2698,10 @@ def _qc_render_ops(
         op.add_run(_qc_json(operation))
     valid = finding.get("ops_valid")
     if candidate_kind != "surviving":
-        kind_label = (
-            "INFRASTRUCTURE-INCONCLUSIVE"
-            if candidate_kind == "inconclusive"
-            else "REFUTED"
-        )
+        kind_label = {
+            "inconclusive": "INFRASTRUCTURE-INCONCLUSIVE",
+            "disputed": "DISPUTED",
+        }.get(candidate_kind, "REFUTED")
         _qc_add_label(
             document,
             "Operation validation",
@@ -2697,9 +2712,9 @@ def _qc_render_ops(
             document,
             "Validation detail",
             "The pipeline does not dry-run proposed operations for candidates "
-            "that are substantively refuted or lack a complete verifier panel. "
-            "A false ops_valid default is not an invalidity finding for these "
-            "operations.",
+            "that are substantively refuted, disputed by their panel, or lack "
+            "a complete verifier panel. A false ops_valid default is not an "
+            "invalidity finding for these operations.",
         )
         return
     if not semantic_schema:
@@ -2751,11 +2766,15 @@ def _qc_render_disposition(
 ) -> None:
     _qc_heading(document, "Disposition Record", 3)
     if candidate_kind != "surviving":
-        outcome_label = (
-            "INCONCLUSIVE - REQUIRED VERIFIER COVERAGE DID NOT COMPLETE"
-            if candidate_kind == "inconclusive"
-            else "REFUTED - NOT A SURVIVING FINDING"
-        )
+        outcome_label = {
+            "inconclusive": (
+                "INCONCLUSIVE - REQUIRED VERIFIER COVERAGE DID NOT COMPLETE"
+            ),
+            "disputed": (
+                "DISPUTED - PANEL COMPLETED WITHOUT AGREEMENT; "
+                "AWAITING HUMAN DISPOSITION"
+            ),
+        }.get(candidate_kind, "REFUTED - NOT A SURVIVING FINDING")
         _qc_add_label(document, "QC outcome", outcome_label)
         _qc_add_label(
             document,
@@ -3026,6 +3045,56 @@ def _qc_render_refuted_appendix(document, qc_result: dict) -> None:
             finding,
             ordinal=f"RF-{index:03d}",
             candidate_kind="refuted",
+        )
+
+
+def _qc_render_disputed_appendix(document, qc_result: dict) -> None:
+    document.add_page_break()
+    _qc_heading(
+        document, "Appendix A1: Disputed Candidate Register (Human Review)", 1
+    )
+    disputed = [
+        item
+        for item in _qc_list(qc_result.get("disputed"))
+        if isinstance(item, dict)
+    ]
+    if not disputed:
+        document.add_paragraph(
+            "No disputed candidate was persisted for this run."
+        )
+        return
+    document.add_paragraph(
+        "Every required verifier seat completed for these candidates and the "
+        "reviewers did not agree. That disagreement is itself decision-relevant "
+        "evidence, so the candidate is escalated rather than recorded as either "
+        "a surviving finding or a refutation. Each one requires a human "
+        "disposition before the section is issue-ready. Their operations were "
+        "not validated and must not be applied from this record."
+    )
+    for index, finding in enumerate(_sorted_by_severity(disputed), start=1):
+        reason = str(finding.get("dispute_reason") or "")
+        if reason == "insufficient_refutation_evidence":
+            _qc_add_label(
+                document,
+                "Why disputed",
+                "A critical or high finding was refuted by the panel majority, "
+                "but no refuting reviewer cited evidence that could be "
+                "validated against what it actually retrieved or against the "
+                "reviewed document. Under-evidenced refutations of severe "
+                "findings are escalated, not accepted.",
+            )
+        elif reason:
+            _qc_add_label(
+                document,
+                "Why disputed",
+                "The verifier panel completed but split; no unanimous uphold "
+                "and no majority refutation.",
+            )
+        _render_memo_finding(
+            document,
+            finding,
+            ordinal=f"DP-{index:03d}",
+            candidate_kind="disputed",
         )
 
 
@@ -3564,6 +3633,7 @@ def build_qc_memo(qc_result: dict, section: SpecSection, *, stale: bool) -> byte
     _qc_render_lenses(document, qc_result)
     _qc_render_surviving_findings(document, qc_result)
     _qc_render_refuted_appendix(document, qc_result)
+    _qc_render_disputed_appendix(document, qc_result)
     _qc_render_inconclusive_appendix(document, qc_result)
     _qc_render_evidence_register(document, qc_result)
     _qc_render_usage_and_cost(document, qc_result)

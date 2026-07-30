@@ -21,6 +21,8 @@ from fastapi.testclient import TestClient
 from backend import sessions, settings
 from backend.app import create_app
 from backend.qc.engine import (
+    QC_PROTOCOL_VERSION,
+    QC_REPORT_SCHEMA_VERSION,
     QCFanoutError,
     QCResult,
     QCSourceGuard,
@@ -302,7 +304,8 @@ def test_verifier_panel_preserves_exact_seats_including_failures() -> None:
     assert len(result.inconclusive) == 1
     finding = result.inconclusive[0]
     assert finding.verification_panel_size == 3
-    assert finding.verification_threshold == 2
+    # v4 upholds only unanimously, so the integer bar equals the panel size.
+    assert finding.verification_threshold == 3
     assert finding.verification_outcome == "inconclusive"
     assert len(finding.verdicts) == 3
     assert {verdict.reviewer_index for verdict in finding.verdicts} == {1, 2, 3}
@@ -573,8 +576,8 @@ def test_json_export_contains_complete_report_and_authoritative_current_state() 
     assert set(payload) == {"report", "current_state"}
 
     report = payload["report"]
-    assert report["schema_version"] == 3
-    assert report["protocol_version"] == "final-qc/3"
+    assert report["schema_version"] == 4
+    assert report["protocol_version"] == "final-qc/4"
     assert report["run_id"].startswith("qc-run-")
     assert report["execution_status"] == "complete"
     assert report["version_fingerprint"] == qc_version_fingerprint(store.doc)
@@ -1986,14 +1989,168 @@ def test_compact_qc_closing_keeps_candidate_outcomes_distinct() -> None:
         "findings": [],
         "lens_statuses": [{"lens_id": "code_compliance", "status": "completed"}],
         "refuted": [{"finding_id": "qc-refuted"}],
+        "disputed": [{"finding_id": "qc-disputed"}],
         "inconclusive": [{"finding_id": "qc-inconclusive"}],
     }
 
     text = _document_text(Document(io.BytesIO(build_docx(store.doc, qc_result=payload))))
     assert "No surviving finding remains open." in text
     assert "0 open, 0 applied, 0 dismissed" in text
-    assert "1 substantively refuted, 1 infrastructure-inconclusive" in text
+    # Four distinct outcomes, each named — a disputed candidate is neither a
+    # refutation nor an infrastructure failure.
+    assert (
+        "1 substantively refuted, 1 disputed and awaiting human review, "
+        "1 infrastructure-inconclusive"
+    ) in text
     assert "every finding was applied or dismissed" not in text
+
+
+def test_the_word_report_gives_disputed_candidates_their_own_appendix() -> None:
+    """A disputed candidate is neither a survivor nor a refutation, so it
+    cannot be filed under either without misrepresenting the review."""
+    store = _section()
+    payload = {
+        "schema_version": 4,
+        "protocol_version": "final-qc/4",
+        "model": settings.QC_MODEL,
+        "finished_at": "2026-07-30T10:05:00+00:00",
+        "version_index": store.index,
+        "summary": "One candidate split its panel.",
+        "findings": [],
+        "lens_statuses": [{"lens_id": "code_compliance", "status": "completed"}],
+        "refuted": [],
+        "disputed": [
+            {
+                "finding_id": "qc-disputed",
+                "lens_id": "code_compliance",
+                "severity": "high",
+                "original_severity": "high",
+                "element_id": "pt1.a1.p1",
+                "title": "Contested edition reference",
+                "issue": "Two reviewers disagreed about the adopted edition.",
+                "rationale": "The panel completed but did not agree.",
+                "verification_outcome": "disputed",
+                "dispute_reason": "insufficient_refutation_evidence",
+                "verification_panel_size": 3,
+                "proposed_ops": [
+                    {
+                        "action": "replace",
+                        "target_id": "pt1.a1.p1",
+                        "text": "Contested replacement.",
+                    }
+                ],
+            }
+        ],
+        "inconclusive": [],
+    }
+
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False)))
+    )
+    assert "Disputed Candidate Register" in text
+    assert "Contested edition reference" in text
+    # It is named as awaiting a human, never as a resolved outcome.
+    assert "DISPUTED - PANEL COMPLETED WITHOUT AGREEMENT" in text
+    # And the under-evidenced reason is spelled out rather than left a token.
+    assert "no refuting reviewer cited evidence" in text
+    # Its operations are shown but explicitly not actionable.
+    assert "NOT EVALUATED - CANDIDATE DISPUTED" in text
+
+
+def test_a_v3_report_keeps_its_original_majority_outcome_on_load() -> None:
+    """A historical 2-of-3 uphold stays upheld. v3 was decided under strict
+    majority; re-adjudicating it with v4 rules would rewrite a decision
+    nobody re-made, on evidence nobody re-examined."""
+    payload = {
+        "schema_version": 3,
+        "protocol_version": "final-qc/3",
+        "findings": [
+            {
+                "finding_id": "qc-legacy",
+                "lens_id": "code_compliance",
+                "severity": "high",
+                "original_severity": "high",
+                "element_id": "pt1.a1.p1",
+                "title": "Historic majority uphold",
+                "issue": "Recorded under final-qc/3.",
+                "rationale": "Two of three reviewers upheld it.",
+                "verification_outcome": "upheld",
+                "verification_panel_size": 3,
+                "verification_threshold": 2,
+                "verdicts": [
+                    {
+                        "upholds": True,
+                        "reviewer_index": 1,
+                        "status": "completed",
+                        "ops_adequate": False,
+                        "ops_note": "",
+                    },
+                    {
+                        "upholds": True,
+                        "reviewer_index": 2,
+                        "status": "completed",
+                        "ops_adequate": False,
+                        "ops_note": "",
+                    },
+                    {
+                        "upholds": False,
+                        "reviewer_index": 3,
+                        "status": "completed",
+                        "ops_adequate": False,
+                        "ops_note": "",
+                    },
+                ],
+            }
+        ],
+        "lens_statuses": [{"lens_id": "code_compliance", "status": "completed"}],
+    }
+    restored = QCResult.from_dict(copy.deepcopy(payload))
+    assert restored is not None
+    assert restored.schema_version == 3
+    assert len(restored.findings) == 1
+    assert restored.findings[0].verification_outcome == "upheld"
+    assert restored.findings[0].verification_threshold == 2
+    # Its own rule still validates it — the record is self-consistent.
+    assert restored.verification_complete() is True
+    # But it is not a v4 record, so it cannot satisfy the current audit gate.
+    assert restored.schema_version < 4
+    assert restored.findings[0].verification_rule == ""
+
+
+def test_a_v3_report_is_readable_but_no_longer_current_audit_grade() -> None:
+    """The version bump is what makes a v3 record historical rather than
+    actionable — readable, exportable, and not a current sign-off."""
+    store = _section()
+    scripts = _scripts(
+        code_compliance=[
+            qc_findings_response(
+                "code_compliance",
+                findings=[
+                    _finding("Live finding", "Real defect.", severity="medium")
+                ],
+            )
+        ],
+    )
+    scripts["Live finding"] = [
+        qc_verdict_response(True),
+        qc_verdict_response(True),
+    ]
+    result = _run(SequencedFakeClient(scripts), store)
+    assert result.schema_version == QC_REPORT_SCHEMA_VERSION == 4
+    assert result.protocol_version == QC_PROTOCOL_VERSION == "final-qc/4"
+
+    # The same record labelled v3 still loads (history is never dropped)…
+    payload = copy.deepcopy(result.to_dict())
+    payload["schema_version"] = 3
+    payload["protocol_version"] = "final-qc/3"
+    legacy = QCResult.from_dict(payload)
+    assert legacy is not None
+    assert len(legacy.findings) == 1
+    assert legacy.findings[0].title == "Live finding"
+
+    # …but it fails the current audit-grade predicate the readiness gate uses.
+    assert legacy.schema_version != QC_REPORT_SCHEMA_VERSION
+    assert legacy.protocol_version != QC_PROTOCOL_VERSION
 
 
 def test_infrastructure_failed_verification_is_structurally_inconclusive() -> None:

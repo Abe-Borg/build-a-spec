@@ -362,9 +362,17 @@ actions.
   finding faces a panel of independent Opus 5 refuters prompted to *refute*
   it (2 for medium/low, 3 for critical/high). The report preserves every
   expected verifier seat, including its success, verdict, severity revision,
-  proposed-fix adequacy decision and note, usage, or failure. A tie on a fully
-  completed panel goes to the refuters. Finding validity still uses that panel
-  majority, while a fix is executable only when every expected seat completes,
+  proposed-fix adequacy decision and note, usage, or failure. **A finding is
+  upheld only when the whole panel agrees.** A majority refutation refutes it;
+  any other split — including 2-of-3 upholding a critical — is marked
+  *disputed* and escalated to you rather than rounded to a yes or a no,
+  because disagreement about a severe finding is itself worth knowing. And a
+  refutation of a critical or high finding only counts when a refuting
+  reviewer cites something that checks out: a page it actually retrieved, or
+  a place in your own document. Running a search that found nothing is not
+  evidence. Raising a panel size therefore raises scrutiny — under the old
+  majority rule the extra critical seat quietly made refutation *easier*.
+  A fix is executable only when every expected seat completes,
   upholds the finding, and approves the complete operation payload. A surviving
   finding without unanimous fix approval stays visible and advisory. A failed
   or cancelled seat remains visible and makes the candidate infrastructure-
@@ -446,8 +454,11 @@ actions.
   separate checks: users can tell whether a failure means stale inputs, a
   failed/latest attempt, legacy data, incomplete lens/verifier coverage, or an
   unresolved critical. Any lens failure or missing or failed verifier seat
-  makes the report explicitly partial and blocks readiness; a majority verdict
-  never converts partial execution into a full sign-off.
+  makes the report explicitly partial and blocks readiness; a partial panel
+  never converts incomplete execution into a full sign-off. A disputed
+  candidate blocks readiness too, until you either address it or dismiss it
+  with a reason — it is not a defect in the review, it is the review telling
+  you the reviewers disagreed.
 - **Read it in-app or file the same record.** **View full report** opens the
   complete report in the app while the drawer keeps a compact, severity-sorted
   action queue. Word (`.docx`) and machine-readable JSON downloads carry the

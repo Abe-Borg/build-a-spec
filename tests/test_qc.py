@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from backend import sessions, settings
 from backend.app import create_app
 from backend.qc.engine import (
+    VERIFICATION_RULE_V4,
     QCFanoutError,
     QCResult,
     qc_version_fingerprint,
@@ -216,28 +217,34 @@ def test_ungrounded_citation_is_kept_but_marked():
 # ---------------------------------------------------------------------------
 
 
-def test_two_panel_tie_kills_the_finding():
-    store = _section()
+# ---------------------------------------------------------------------------
+# The v4 outcome table (Chunk 5.1)
+# ---------------------------------------------------------------------------
+#
+# v3 survived on `upholds >= (size // 2) + 1`, which inverts with panel size:
+# a medium needed 2 of 2 while a critical needed only 2 of 3, so the extra
+# critical seat bought leniency. v4: unanimous upholds, majority refutation
+# refutes, everything between is DISPUTED and escalates to a human.
+
+
+def _medium_scripts(verdicts: list) -> dict:
     scripts = _qc_scripts(
         enforceability_language=[
             qc_findings_response(
                 "enforceability_language",
                 findings=[
-                    _finding("Vague language", "Uses 'as required'.", severity="medium")
+                    _finding(
+                        "Vague language", "Uses 'as required'.", severity="medium"
+                    )
                 ],
             )
         ],
     )
-    # medium → 2-panel. 1 uphold, 1 refute = tie → refuted.
-    scripts["Vague language"] = [qc_verdict_response(True), qc_verdict_response(False)]
-    result = _run(SequencedFakeClient(scripts), store)
-    assert result.findings == []
-    assert len(result.refuted) == 1
-    assert result.refuted[0].title == "Vague language"
+    scripts["Vague language"] = verdicts
+    return scripts
 
 
-def test_three_panel_majority_survives_for_criticals_and_medians_severity():
-    store = _section()
+def _high_scripts(verdicts: list) -> dict:
     scripts = _qc_scripts(
         code_compliance=[
             qc_findings_response(
@@ -248,17 +255,350 @@ def test_three_panel_majority_survives_for_criticals_and_medians_severity():
             )
         ],
     )
-    # high → 3-panel. 2 uphold (revising to critical), 1 refute → survives.
-    scripts["Wrong edition"] = [
-        qc_verdict_response(True, severity="critical"),
-        qc_verdict_response(True, severity="critical"),
-        qc_verdict_response(False),
-    ]
-    result = _run(SequencedFakeClient(scripts), store)
+    scripts["Wrong edition"] = verdicts
+    return scripts
+
+
+def test_two_seat_panel_upholds_only_when_both_seats_agree():
+    result = _run(
+        SequencedFakeClient(
+            _medium_scripts([qc_verdict_response(True), qc_verdict_response(True)])
+        ),
+        _section(),
+    )
+    assert len(result.findings) == 1
+    assert result.findings[0].verification_outcome == "upheld"
+    assert result.disputed == [] and result.refuted == []
+
+
+def test_two_seat_panel_tie_is_disputed_not_refuted():
+    """The v3 behavior this replaces: a 1-1 tie silently went to the
+    refuters. A split panel is disagreement, and disagreement is the
+    reviewer's information, not something to round away."""
+    result = _run(
+        SequencedFakeClient(
+            _medium_scripts([qc_verdict_response(True), qc_verdict_response(False)])
+        ),
+        _section(),
+    )
+    assert result.findings == [] and result.refuted == []
+    assert len(result.disputed) == 1
+    assert result.disputed[0].title == "Vague language"
+    assert result.disputed[0].verification_outcome == "disputed"
+    assert result.disputed[0].dispute_reason == "split_panel"
+
+
+def test_two_seat_panel_refutes_when_both_seats_refute():
+    result = _run(
+        SequencedFakeClient(
+            _medium_scripts([qc_verdict_response(False), qc_verdict_response(False)])
+        ),
+        _section(),
+    )
+    assert result.findings == [] and result.disputed == []
+    assert len(result.refuted) == 1
+    assert result.refuted[0].verification_outcome == "refuted"
+
+
+def test_three_seat_panel_upholds_unanimously_and_medians_severity():
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(True, severity="critical"),
+                    qc_verdict_response(True, severity="critical"),
+                    qc_verdict_response(True),
+                ]
+            )
+        ),
+        _section(),
+    )
     assert len(result.findings) == 1
     # median(["high","critical","critical"]) → critical.
     assert result.findings[0].severity == "critical"
+    assert result.findings[0].verification_outcome == "upheld"
     assert len(result.findings[0].verdicts) == 3
+
+
+def test_three_seat_panel_majority_uphold_is_disputed():
+    """2-1 was an outright pass under v3. A life-safety finding two of three
+    reviewers believe in is exactly what a human should adjudicate."""
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(True, severity="critical"),
+                    qc_verdict_response(True, severity="critical"),
+                    qc_verdict_response(False),
+                ]
+            )
+        ),
+        _section(),
+    )
+    assert result.findings == [] and result.refuted == []
+    assert len(result.disputed) == 1
+    assert result.disputed[0].verification_outcome == "disputed"
+    assert result.disputed[0].dispute_reason == "split_panel"
+
+
+def test_three_seat_panel_majority_refutation_needs_evidence_to_refute():
+    """The RF-001 shape: three seats refuted a life-safety-adjacent finding
+    having retrieved nothing. Under v4 that escalates instead of vanishing."""
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(False),
+                    qc_verdict_response(False),
+                    qc_verdict_response(False),
+                ]
+            )
+        ),
+        _section(),
+    )
+    assert result.refuted == []
+    assert len(result.disputed) == 1
+    assert result.disputed[0].dispute_reason == "insufficient_refutation_evidence"
+
+
+def test_a_refuting_seat_that_cites_what_it_retrieved_refutes_cleanly():
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(
+                        False,
+                        evidence=[{"type": "source", "url": "https://a.gov/code"}],
+                        searched_urls=["https://a.gov/code"],
+                    ),
+                    qc_verdict_response(False),
+                    qc_verdict_response(False),
+                ]
+            )
+        ),
+        _section(),
+    )
+    assert result.disputed == []
+    assert len(result.refuted) == 1
+    assert result.refuted[0].verification_outcome == "refuted"
+    evidence = result.refuted[0].verdicts[0].refutation_evidence
+    assert [e.validated for e in evidence] == [True]
+
+
+def test_activity_without_a_citation_never_satisfies_the_evidence_gate():
+    """One token search must not launder an unevidenced refutation. Queries
+    and retrievals are operational records of what a seat DID; only a
+    validated citation is evidence."""
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(False, searched_urls=["https://a.gov/code"]),
+                    qc_verdict_response(False, searched_urls=["https://b.gov/code"]),
+                    qc_verdict_response(False, searched_urls=["https://c.gov/code"]),
+                ]
+            )
+        ),
+        _section(),
+    )
+    assert result.refuted == []
+    assert len(result.disputed) == 1
+    assert result.disputed[0].dispute_reason == "insufficient_refutation_evidence"
+    # The retrievals are still recorded — they are billable activity.
+    assert result.disputed[0].verdicts[0].retrieved_sources
+
+
+def test_a_cited_source_the_seat_never_retrieved_does_not_validate():
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(
+                        False,
+                        evidence=[{"type": "source", "url": "https://never.example"}],
+                    ),
+                    qc_verdict_response(False),
+                    qc_verdict_response(False),
+                ]
+            )
+        ),
+        _section(),
+    )
+    assert len(result.disputed) == 1
+    assert result.disputed[0].dispute_reason == "insufficient_refutation_evidence"
+    # Retained and marked, never dropped: that the seat tried to justify
+    # itself and cited something unverifiable is part of the audit trail.
+    evidence = result.disputed[0].verdicts[0].refutation_evidence
+    assert len(evidence) == 1
+    assert evidence[0].validated is False
+    assert "does not match" in evidence[0].reason
+
+
+def test_a_document_reference_that_resolves_satisfies_the_gate():
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(
+                        False,
+                        evidence=[
+                            {"type": "document_ref", "reference": "pt1.a1.p1"}
+                        ],
+                    ),
+                    qc_verdict_response(False),
+                    qc_verdict_response(False),
+                ]
+            )
+        ),
+        _section(),
+    )
+    assert result.disputed == []
+    assert len(result.refuted) == 1
+    assert result.refuted[0].verdicts[0].refutation_evidence[0].validated is True
+
+
+def test_an_unresolvable_document_reference_does_not_satisfy_the_gate():
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(
+                        False,
+                        evidence=[
+                            {"type": "document_ref", "reference": "pt9.a9.p9"}
+                        ],
+                    ),
+                    qc_verdict_response(False),
+                    qc_verdict_response(False),
+                ]
+            )
+        ),
+        _section(),
+    )
+    assert len(result.disputed) == 1
+    assert result.disputed[0].dispute_reason == "insufficient_refutation_evidence"
+    evidence = result.disputed[0].verdicts[0].refutation_evidence
+    assert evidence[0].validated is False
+    assert "does not resolve" in evidence[0].reason
+
+
+def test_a_medium_refutation_is_not_evidence_gated():
+    """The gate is severity-scoped on purpose — it exists for the findings
+    whose false-negative cost is highest, not as a tax on every refutation."""
+    result = _run(
+        SequencedFakeClient(
+            _medium_scripts([qc_verdict_response(False), qc_verdict_response(False)])
+        ),
+        _section(),
+    )
+    assert result.disputed == []
+    assert len(result.refuted) == 1
+
+
+def test_an_upholding_seats_evidence_never_opens_the_gate():
+    """Only a REFUTING seat's citation can justify a refutation. A 1-2 high
+    finding where the upholder cited a retrieved source stays disputed."""
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(
+                        True,
+                        evidence=[{"type": "source", "url": "https://a.gov/code"}],
+                        searched_urls=["https://a.gov/code"],
+                    ),
+                    qc_verdict_response(False),
+                    qc_verdict_response(False),
+                ]
+            )
+        ),
+        _section(),
+    )
+    assert result.refuted == []
+    assert len(result.disputed) == 1
+    assert result.disputed[0].dispute_reason == "insufficient_refutation_evidence"
+
+
+def test_a_failed_seat_stays_inconclusive_whatever_the_other_votes_say():
+    """Infrastructure failure is never evidence, and never a dispute."""
+    scripts = _high_scripts(
+        [
+            qc_verdict_response(True),
+            RuntimeError("verifier died"),
+            qc_verdict_response(True),
+        ]
+    )
+    result = _run(SequencedFakeClient(scripts), _section())
+    assert result.findings == []
+    assert result.refuted == [] and result.disputed == []
+    assert len(result.inconclusive) == 1
+    assert result.inconclusive[0].verification_outcome == "inconclusive"
+    assert result.inconclusive[0].dispute_reason == ""
+
+
+def test_a_disputed_candidate_blocks_audit_completeness_and_is_not_applicable():
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(True),
+                    qc_verdict_response(True),
+                    qc_verdict_response(False),
+                ]
+            )
+        ),
+        _section(),
+    )
+    assert len(result.disputed) == 1
+    finding = result.disputed[0]
+    # Reviewed in full — but not a completed AUDIT until a human resolves it.
+    assert result.verification_complete() is False
+    assert result.is_complete() is False
+    # Never validated, so nothing about it is auto-applicable.
+    assert finding.ops_valid is False
+    assert finding.ops_semantic_status in {"not_evaluated", "not_proposed"}
+    # And it is not in the actionable queue.
+    assert all(f.finding_id != finding.finding_id for f in result.findings)
+
+
+def test_every_v4_finding_persists_the_rule_that_adjudicated_it():
+    result = _run(
+        SequencedFakeClient(
+            _medium_scripts([qc_verdict_response(True), qc_verdict_response(True)])
+        ),
+        _section(),
+    )
+    finding = result.findings[0]
+    assert finding.verification_rule == VERIFICATION_RULE_V4
+    # v4 upholds only unanimously, so the integer bar equals the panel size.
+    assert finding.verification_threshold == finding.verification_panel_size == 2
+    assert result.schema_version == 4
+    assert result.protocol_version == "final-qc/4"
+
+
+def test_a_reloaded_v4_report_re_adjudicates_to_the_same_outcome():
+    """Serialized, reloaded, and checked against the same helper the live run
+    used — so a report either agrees with itself or fails the check."""
+    result = _run(
+        SequencedFakeClient(
+            _high_scripts(
+                [
+                    qc_verdict_response(True),
+                    qc_verdict_response(True),
+                    qc_verdict_response(False),
+                ]
+            )
+        ),
+        _section(),
+    )
+    restored = QCResult.from_dict(result.to_dict())
+    assert restored is not None
+    assert len(restored.disputed) == 1
+    assert restored.disputed[0].verification_outcome == "disputed"
+    assert restored.disputed[0].dispute_reason == "split_panel"
+    assert restored.verification_complete() is False
+    # The seat-level evidence records survive the round trip.
+    assert restored.disputed[0].verdicts[2].upholds is False
 
 
 def test_dead_verifier_counts_as_refuted():

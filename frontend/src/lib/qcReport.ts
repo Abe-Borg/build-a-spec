@@ -240,7 +240,7 @@ export interface QcTraceRecord {
 export interface QcOperationRecord {
   findingId: string;
   findingTitle: string;
-  findingKind: "surviving" | "refuted" | "inconclusive";
+  findingKind: "surviving" | "refuted" | "disputed" | "inconclusive";
   operationIndex: number;
   opsValid: boolean;
   invalidReason: string;
@@ -324,7 +324,7 @@ export function qcOperationEvaluation(
     | "proposed_ops"
   >,
   schemaVersion?: unknown,
-  findingKind: "surviving" | "refuted" | "inconclusive" = "surviving",
+  findingKind: "surviving" | "refuted" | "disputed" | "inconclusive" = "surviving",
 ): QcOperationEvaluation {
   const rawSemanticStatus = String(finding.ops_semantic_status ?? "")
     .trim()
@@ -764,6 +764,22 @@ export function qcSubstantivelyRefutedCandidates(
  * records take precedence; legacy/misbucketed records are appended and the
  * same candidate ID is counted only once.
  */
+/**
+ * Candidates whose complete panel disagreed (final-qc/4). Distinct from the
+ * infrastructure-inconclusive collection: these were fully reviewed and the
+ * reviewers did not agree, which is itself decision-relevant. Empty for
+ * every v3 and older record — those had no disputed outcome, so an empty
+ * list is the honest reading rather than a gap.
+ */
+export function qcDisputedCandidates(
+  rawResult: QcResultView | QcReportResult,
+): QcReportFinding[] {
+  const result = resultFields(rawResult);
+  return arrayOrEmpty(
+    (result as { disputed?: QcReportFinding[] }).disputed,
+  ).filter((finding) => verificationOutcome(finding) === "disputed");
+}
+
 export function qcInconclusiveCandidates(
   rawResult: QcResultView | QcReportResult,
 ): QcReportFinding[] {
@@ -1086,7 +1102,7 @@ export function collectQcOperationRecords(
   const records: QcOperationRecord[] = [];
   const append = (
     findings: QcReportFinding[],
-    findingKind: "surviving" | "refuted" | "inconclusive",
+    findingKind: "surviving" | "refuted" | "disputed" | "inconclusive",
   ) => {
     for (const finding of findings) {
       const evaluation = qcOperationEvaluation(

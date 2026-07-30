@@ -1448,9 +1448,10 @@ what happened next?* Four rules follow, and they bind every future change:
   retain their summary, observable reviewed checks, queries/retrievals, and
   usage; failed lenses retain their error. (2) Every finding faces a panel of
   independent refuters (`QC_VERIFIERS_STANDARD` 2 for medium/low,
-  `QC_VERIFIERS_CRITICAL` 3 for critical/high); a fully completed panel
-  survives iff `upholds >= size//2 + 1` (**a tie goes to the refuters**).
-  A dead/cancelled/missing verifier makes the candidate infrastructure-
+  `QC_VERIFIERS_CRITICAL` 3 for critical/high). **Adjudication is
+  `final-qc/4` (Chunk 5.1) — the v3 rule `upholds >= size//2 + 1` described
+  here originally is GONE**; see "Final QC v4 panel outcomes" below. A
+  dead/cancelled/missing verifier makes the candidate infrastructure-
   inconclusive and the run partial; it is never treated as substantive
   refutation evidence. Verifications for all findings flatten into
   ONE bounded thread pool (per-`(finding, verifier)` task) with at most
@@ -1459,7 +1460,8 @@ what happened next?* Four rules follow, and they bind every future change:
   {done,total} fires as each finding's panel resolves. Surviving severity =
   `median_severity([original, *upheld revisions])`; both original and final
   severity persist. Refuted findings are retained under `QCResult.refuted`;
-  incomplete panels under `QCResult.inconclusive`, both with full
+  disputed ones under `QCResult.disputed`; incomplete panels under
+  `QCResult.inconclusive`, all with full
   evidence/seat/fix detail (transparency, excluded from the compact issue
   queue). An immediate nonretryable `INVALID_REQUEST` before any model response
   is treated as a shared verifier-phase failure: queued seats are synthesized
@@ -4354,6 +4356,98 @@ SSE event type, no new dep, no project-format bump.
   reverted in place to prove it load-bearing: blending the estimate into
   `output_tokens` → 6 red; dropping the bool guard → 2 red; feeding the
   gauge the billing figure → 1 red.
+
+## Final QC v4 panel outcomes — implemented notes
+
+Deep-dive remediation Chunk 5.1, and the first change in the program that
+deliberately alters which findings survive. `QC_REPORT_SCHEMA_VERSION` is
+now **4** and `QC_PROTOCOL_VERSION` **`final-qc/4`**. No new endpoint, no
+new dep; one new SSE payload field and one new persisted collection.
+
+- **The v3 rule inverted with panel size, and that was the bug.** Survival
+  was `upholds >= (size // 2) + 1` — "majority, ties to the refuters". On a
+  2-seat panel that is 2 of 2 (unanimous); on a 3-seat panel it is 2 of 3
+  (a majority). So the extra seat a critical/high finding gets bought it
+  **leniency**, not scrutiny, which is exactly backwards. Two simpler
+  fixes were considered and rejected during adjudication: "upholds >
+  refutes, ties refute" is algebraically the shipped formula and fixes
+  nothing, and "critical/high must be unanimous else refuted" makes a
+  2-of-3 upheld life-safety finding vanish silently — false negatives
+  maximised on the class where they cost most.
+- **v4 makes disagreement a first-class outcome.** `panel_outcome()` is the
+  single decision point: `upholds == size` → **upheld**; `refutes >
+  upholds` → **refuted**; anything else → **disputed**. That yields the
+  adjudicated table exactly (2 seats: 2-0/1-1/0-2 =
+  upheld/disputed/refuted; 3 seats: 3-0/2-1/1-2/0-3 =
+  upheld/disputed/refuted/refuted). Disputed blocks audit completeness
+  like an open critical, is never auto-applied, and needs a human
+  disposition.
+- **`disputed` and `inconclusive` are different things and must stay
+  different.** Disputed = a COMPLETE panel that disagreed, which is
+  substantive information. Inconclusive = infrastructure failure, which is
+  no information at all. Both need a human; conflating them would tell a
+  reviewer a provider timeout was a professional disagreement. Separate
+  collections, separate report appendices, separate drawer groups,
+  separate copy.
+- **The evidence rule is severity-gated, and activity is not evidence.**
+  A critical/high refutation only counts as refuted when at least one
+  completed refuting seat carries a citation that VALIDATED — a source
+  whose normalized URL matches something that seat actually retrieved, or
+  a `document_ref` that resolves against the reviewed snapshot. This
+  encodes the RF-001 lesson (three seats refuted a life-safety-adjacent
+  finding having run zero searches) and closes the adjacent loophole where
+  one token search would have laundered the same refutation:
+  `search_queries`/`retrieved_sources` are records of what a seat DID and
+  can never satisfy the gate alone. Medium/low refutations are not gated —
+  the gate exists for the findings whose false-negative cost is highest,
+  not as a tax on every refutation. An UPHOLDING seat's citation never
+  opens it either.
+- **Failed citations are retained and marked, never dropped.** That a seat
+  tried to justify its refutation and cited something unverifiable is
+  precisely what a human reviewing a disputed candidate needs to see.
+  `QCRefutationEvidence` carries `validated` plus the reason it failed.
+- **The rule identity is persisted, not an integer.** An integer threshold
+  cannot express this scheme — the same "2" means unanimous on a 2-seat
+  panel and a dispute on a 3-seat one. Every v4 finding carries
+  `verification_rule = VERIFICATION_RULE_V4`; `verification_threshold`
+  stays (now equal to the panel size) so a record remains self-describing
+  next to v3 ones, and the reload check keys off the rule.
+- **v3 is re-checked under v3's rule, never re-adjudicated under v4.**
+  `_structural_verification_outcome` branches on schema version: v4 calls
+  `panel_outcome` (so a reloaded report either agrees with itself or fails
+  the check), schema 3 validates its recorded strict-majority threshold,
+  and pre-v3 legacy keeps its own laxer path (no threshold recorded, and
+  all-zero reviewer indexes tolerated). Reinterpreting a v3 2-of-3 uphold
+  with v4 rules would rewrite a decision nobody re-made on evidence nobody
+  re-examined.
+- **The v3→v4 boundary breaks finding ids and dismiss memory, by
+  construction.** `finding_id` hashes `verification_outcome` and the panel
+  projection, so a candidate whose outcome moved from `refuted`/`upheld`
+  to `disputed` mints a new id and its remembered dismissal does not carry
+  across. That is expected protocol-change behavior, not a bug — **and it
+  has to be stated in the release notes of whatever version ships this.**
+  It is not in them yet: the version is not bumped in this chunk, and a
+  notes entry for a version that does not exist would fail the
+  version-consistency gate. The release chunk owns it.
+- **Surfaces**: the roster event carries `uphold_requires` + `rule` +
+  `evidence_gated` instead of a bare `threshold`; `candidate_complete`
+  carries `outcome` + `dispute_reason`; `verification_complete` and the
+  runner snapshots count disputed separately; readiness gets its own
+  branch (re-running a dispute re-litigates it rather than resolving it,
+  so the copy says review-and-disposition, never "re-run"); the Word memo
+  gains **Appendix A1: Disputed Candidate Register**; `QCReportModal`
+  gains section 07b; `QCDrawer` gains a warn-toned disputed group.
+- **Tests**: 20 new. `test_qc.py` (17 — every row of the outcome table on
+  both panel sizes, the RF-001 shape, activity-is-not-evidence, an
+  unretrieved citation, a resolving and a non-resolving `document_ref`,
+  medium not gated, an upholder's evidence not counting, failed seats
+  staying inconclusive, disputed blocking completeness and being
+  unapplicable, the persisted rule identity, and a reload that
+  re-adjudicates). `test_qc_audit_report.py` (3 — the Word appendix, a v3
+  2-of-3 keeping its original outcome, and v3 being readable but not
+  current audit grade). Frontend: `qcLive.test.ts` (4) and
+  `qcReport.test.ts` (3). Backend **1290 passed, 9 skipped**; `npm test`
+  **161**; `npm run build` clean.
 
 ## Commands
 

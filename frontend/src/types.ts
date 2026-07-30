@@ -758,11 +758,21 @@ export interface QcFinding {
   verification_outcome:
     | "upheld"
     | "refuted"
+    /** v4: a COMPLETE panel that did not agree. Distinct from
+     *  `inconclusive` (infrastructure failure) — escalates to a human. */
+    | "disputed"
     | "default_refuted"
     | "inconclusive"
     | string;
   verification_panel_size: number;
   verification_threshold: number;
+  /** v4 rule identity. Empty on v3 and older records, which recorded only
+   *  the integer threshold their own strict-majority rule used. */
+  verification_rule?: string;
+  /** Why a candidate is disputed: "split_panel", or
+   *  "insufficient_refutation_evidence" when a critical/high refutation
+   *  cited nothing that validated. Empty for every other outcome. */
+  dispute_reason?: string;
   status: QcFindingStatus;
   dismiss_reason: string;
   disposition_events: QcDispositionEvent[];
@@ -796,6 +806,10 @@ export interface QcResultView {
   summary: string;
   findings: QcFinding[];
   refuted: QcFinding[];
+  /** v4: fully reviewed candidates whose panel disagreed. Blocks audit
+   *  completeness until a human dispositions each one; never auto-applied.
+   *  Absent on v3 and older records, which had no disputed outcome. */
+  disputed?: QcFinding[];
   /** Candidates lacking enough completed verifier seats for a substantive
    *  uphold/refute decision. Infrastructure-inconclusive, never open issues. */
   inconclusive: QcFinding[];
@@ -832,7 +846,17 @@ export interface QcCandidateRosterEntry {
   original_severity: string;
   lens_id: string;
   panel_size: number;
-  threshold: number;
+  /** v4: seats that must uphold for a clean uphold — always the panel size,
+   *  since v4 upholds only unanimously. */
+  uphold_requires?: number;
+  /** v3's integer bar. Retained so a replayed older log still folds. */
+  threshold?: number;
+  /** The v4 rule that will adjudicate this panel. */
+  rule?: string;
+  /** True when a refutation of this candidate needs validated evidence
+   *  (critical/high only). */
+  evidence_gated?: boolean;
+  outcomes?: string[];
 }
 
 export type QcWorkerActivityKind =
@@ -943,8 +967,12 @@ export type QcEvent =
   | (QcEventBase & {
       type: "candidate_complete";
       candidate_id: string;
-      outcome: "upheld" | "refuted" | "inconclusive";
+      outcome: "upheld" | "refuted" | "disputed" | "inconclusive";
+      /** Set only when `outcome` is "disputed". */
+      dispute_reason?: string;
       panel_size?: number;
+      /** v4 replaces the integer `threshold`: an uphold needs every seat. */
+      uphold_requires?: number;
       threshold?: number;
       completed_seats?: number;
       upholds?: number;
@@ -956,6 +984,7 @@ export type QcEvent =
       completed_seats?: number;
       upheld?: number;
       refuted?: number;
+      disputed?: number;
       inconclusive?: number;
     })
   | (QcEventBase & { type: "validation_started"; total?: number })
@@ -983,6 +1012,7 @@ export type QcEvent =
       execution_status?: string;
       finding_count?: number;
       refuted_count?: number;
+      disputed_count?: number;
       inconclusive_count?: number;
       open_criticals?: number;
       restored?: boolean;
@@ -1002,6 +1032,7 @@ export type QcEvent =
       report_available?: boolean;
       finding_count?: number;
       refuted_count?: number;
+      disputed_count?: number;
       inconclusive_count?: number;
     })
   | (QcEventBase & {

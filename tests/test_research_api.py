@@ -500,3 +500,220 @@ def test_generic_research_prefers_document_identity_over_legacy_discipline(
         and "Discipline: Electrical." not in req["messages"][0]["content"]
         for req in fake.requests
     )
+
+
+# ---------------------------------------------------------------------------
+# Readiness follows declared coverage, not the runner's status (Chunk 3.2)
+# ---------------------------------------------------------------------------
+
+
+def _readiness_research(client: TestClient) -> dict:
+    checks = {c["id"]: c for c in client.get("/api/readiness").json()["checks"]}
+    return checks["research_complete"]
+
+
+def _install_profile(client: TestClient, statuses: list[tuple[str, str]]) -> None:
+    """Put a cumulative profile on the session's runner, as a round would."""
+    from backend.research.engine import DimensionStatus, RequirementsProfile
+
+    session = sessions.get_workspace().session
+    session.research.status = "complete"
+    session.research.profile_result = RequirementsProfile(
+        items=[],
+        dimension_statuses=[
+            DimensionStatus(
+                dimension_id=did,
+                status=status,
+                title=next(
+                    (
+                        d.title
+                        for d in session.module.research_dimensions
+                        if d.dimension_id == did
+                    ),
+                    did,
+                ),
+            )
+            for did, status in statuses
+        ],
+        research_date="2026-07-21",
+    )
+
+
+def test_one_completed_dimension_no_longer_passes_readiness():
+    """The false pass this chunk removes.
+
+    A round reports ``complete`` when ANY dimension completes, so three of
+    four could have failed while readiness said research was done.
+    """
+    client = _client()
+    _select_fire(client)
+    _install_profile(
+        client,
+        [
+            ("governing_codes", "completed"),
+            ("ahj_requirements", "failed"),
+            ("client_standards", "failed"),
+            ("site_environment", "failed"),
+        ],
+    )
+    check = _readiness_research(client)
+    assert check["ok"] is False
+    # Named, not counted — and it says the one thing the user can do.
+    assert "Authority-having-jurisdiction requirements" in check["detail"]
+    assert "1 of 4" in check["detail"]
+    assert "Press Research again" in check["detail"]
+
+
+def test_every_dimension_completed_reads_as_complete():
+    client = _client()
+    _select_fire(client)
+    _install_profile(
+        client,
+        [
+            (d.dimension_id, "completed")
+            for d in sessions.get_workspace().session.module.research_dimensions
+        ],
+    )
+    check = _readiness_research(client)
+    assert check["ok"] is True
+    assert check["detail"] == "Requirements research complete."
+
+
+def test_a_later_round_restores_readiness_and_a_failed_rerun_does_not_revoke_it():
+    """Cumulative statuses decide, never the latest round's events."""
+    from backend.research.engine import (
+        DimensionStatus,
+        RequirementsProfile,
+        append_research_round,
+    )
+
+    client = _client()
+    _select_fire(client)
+    session = sessions.get_workspace().session
+    dims = [d.dimension_id for d in session.module.research_dimensions]
+
+    def _round(failed: set[str], date: str) -> RequirementsProfile:
+        return RequirementsProfile(
+            items=[],
+            dimension_statuses=[
+                DimensionStatus(
+                    dimension_id=did,
+                    status="failed" if did in failed else "completed",
+                    title=did,
+                )
+                for did in dims
+            ],
+            research_date=date,
+        )
+
+    session.research.status = "complete"
+    first = append_research_round(None, _round({"site_environment"}, "2026-07-21"))
+    session.research.profile_result = first
+    assert _readiness_research(client)["ok"] is False
+
+    # Round 2 covers the gap.
+    second = append_research_round(first, _round(set(), "2026-07-27"))
+    session.research.profile_result = second
+    assert _readiness_research(client)["ok"] is True
+
+    # Round 3 fails a dimension that already completed. Its findings are
+    # still in the profile, so readiness must not be revoked.
+    third = append_research_round(second, _round({"governing_codes"}, "2026-08-01"))
+    session.research.profile_result = third
+    assert _readiness_research(client)["ok"] is True
+
+
+def test_a_complete_runner_with_no_profile_fails_closed():
+    client = _client()
+    _select_fire(client)
+    session = sessions.get_workspace().session
+    session.research.status = "complete"
+    session.research.profile_result = None
+    check = _readiness_research(client)
+    assert check["ok"] is False
+    assert "no profile was recorded" in check["detail"]
+
+
+def test_a_self_contradicting_record_fails_closed_without_blocking_the_project():
+    """A corrupt or hand-edited project file can produce two statuses for one
+    dimension. That is not evidence research happened — but it must not stop
+    the project from opening (the lenient-loader posture)."""
+    from backend.research.engine import DimensionStatus, RequirementsProfile
+
+    client = _client()
+    _select_fire(client)
+    session = sessions.get_workspace().session
+    session.research.status = "complete"
+    session.research.profile_result = RequirementsProfile(
+        items=[],
+        dimension_statuses=[
+            DimensionStatus(dimension_id=d.dimension_id, status="completed", title="x")
+            for d in session.module.research_dimensions
+        ]
+        + [DimensionStatus(dimension_id="governing_codes", status="failed", title="x")],
+        research_date="2026-07-21",
+    )
+    check = _readiness_research(client)
+    assert check["ok"] is False
+    assert "recorded more than once" in check["detail"]
+    # Fail closed for READINESS only: the rest of the surface is unaffected,
+    # and the runner's own status is untouched. (The loader's own tolerance
+    # of malformed research is covered in test_research_rounds.py.)
+    doc = client.get("/api/doc")
+    assert doc.status_code == 200 and doc.json()["research_status"] == "complete"
+
+
+def test_a_declared_optional_gap_passes_but_says_so_with_its_reason(monkeypatch):
+    from dataclasses import replace as dc_replace
+
+    from backend.spec_modules.base import ResearchDimension
+    from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
+
+    client = _client()
+    _select_fire(client)
+    session = sessions.get_workspace().session
+    optional = ResearchDimension(
+        "seismic_optional",
+        "Seismic bracing practice",
+        "Research {city} seismic practice.",
+        required=False,
+        optional_rationale="rarely governs in this jurisdiction",
+    )
+    session.module = dc_replace(
+        HYPERSCALE_FIRE,
+        research_dimensions=HYPERSCALE_FIRE.research_dimensions + (optional,),
+    )
+    _install_profile(
+        client,
+        [
+            *[(d.dimension_id, "completed") for d in HYPERSCALE_FIRE.research_dimensions],
+            ("seismic_optional", "failed"),
+        ],
+    )
+    check = _readiness_research(client)
+    assert check["ok"] is True
+    assert "4 of 5" in check["detail"]
+    assert "Seismic bracing practice" in check["detail"]
+    assert "rarely governs in this jurisdiction" in check["detail"]
+
+
+def test_a_legacy_profile_with_no_rounds_still_reads_as_complete():
+    """Pre-round profiles synthesize completed statuses on load, so a project
+    saved before any of this must not suddenly read as missing coverage."""
+    from backend.research.engine import RequirementsProfile
+
+    client = _client()
+    _select_fire(client)
+    session = sessions.get_workspace().session
+    session.research.status = "complete"
+    session.research.profile_result = RequirementsProfile.from_dict(
+        {
+            "items": [],
+            "dimension_statuses": [
+                {"dimension_id": d.dimension_id, "status": "completed"}
+                for d in session.module.research_dimensions
+            ],
+            "research_date": "2026-07-21",
+        }
+    )
+    assert _readiness_research(client)["ok"] is True

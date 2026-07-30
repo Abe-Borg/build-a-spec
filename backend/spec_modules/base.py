@@ -102,6 +102,24 @@ class ResearchDimension:
     ``prompt_template`` is a ``str.format`` template over the project
     profile placeholders (:data:`PROFILE_FORMAT_PLACEHOLDERS`) plus the
     module basis placeholders (``StandardsBasis.format_kwargs``).
+
+    ``required`` is an **issue-readiness** policy, not a fan-out failure
+    policy: one dimension failing still never cancels the others, a round
+    still succeeds when any dimension completes, and the profile still
+    accumulates. What it decides is whether a section whose coverage is
+    missing this area may be called ready to issue.
+
+    It defaults to **required**, deliberately. On the projects these modules
+    serve, AHJ requirements, owner/insurer standards and site conditions are
+    not inherently more optional than governing codes, and a fail-open
+    default would silently pass a section nobody researched. A module may opt
+    a dimension out only explicitly, and only with a ``optional_rationale``
+    saying why — the rationale is a FIELD rather than a source comment
+    because registry validation cannot enforce a comment, and it is what the
+    readiness warning and the QC manifest quote. Validation binds the pair
+    both ways: opting out without a reason fails, and a leftover reason on a
+    required dimension fails too, so a stale rationale cannot outlive the
+    opt-out it was written for.
     """
 
     dimension_id: str
@@ -109,6 +127,8 @@ class ResearchDimension:
     prompt_template: str
     max_searches: int = 0
     max_fetches: int = 0
+    required: bool = True
+    optional_rationale: str = ""
 
 
 # Per-run project-identity placeholders a research template may reference
@@ -423,6 +443,33 @@ def _validate_research_dimensions(module: SpecModule) -> None:
             raise ValueError(
                 f"SpecModule {module.module_id!r}: research dimension "
                 f"{dim.dimension_id!r} budgets must be non-negative"
+            )
+        # An actual bool, not merely something truthy: `required=0` or
+        # `required="no"` would read as a deliberate opt-out at a glance
+        # while behaving nothing like one.
+        if not isinstance(dim.required, bool):
+            raise ValueError(
+                f"SpecModule {module.module_id!r}: research dimension "
+                f"{dim.dimension_id!r} required must be a bool, got "
+                f"{type(dim.required).__name__}"
+            )
+        # The pair binds both ways — see ResearchDimension. Opting out
+        # silently is the fail-open this defends against; a rationale left
+        # behind on a required dimension is a stale claim that would be
+        # quoted to a reviewer as if it still applied.
+        if not dim.required and not dim.optional_rationale.strip():
+            raise ValueError(
+                f"SpecModule {module.module_id!r}: research dimension "
+                f"{dim.dimension_id!r} declares required=False without an "
+                "optional_rationale — an optional dimension must say why in "
+                "a machine-readable field, not a comment"
+            )
+        if dim.required and dim.optional_rationale.strip():
+            raise ValueError(
+                f"SpecModule {module.module_id!r}: research dimension "
+                f"{dim.dimension_id!r} is required but carries an "
+                "optional_rationale — remove the rationale, or declare "
+                "required=False"
             )
         try:
             dim.prompt_template.format(**kwargs)

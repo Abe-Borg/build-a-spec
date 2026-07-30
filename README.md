@@ -437,7 +437,11 @@ actions.
   deterministic checklist (no model call) at the top of the QC drawer goes
   green exactly when: no open items, no unreviewed imported/assumed blocks,
   lint clean, research complete, QC current, and the audit contract complete
-  with no open criticals. Freshness and audit sufficiency are shown as
+  with no open criticals. "Research complete" means every research area the
+  module declares has actually completed — a run that finished with some
+  areas failed blocks readiness and names which ones, because absent findings
+  are not the same as an area that was checked and found nothing. Pressing
+  Research again retries just those; earlier findings are never lost. Freshness and audit sufficiency are shown as
   separate checks: users can tell whether a failure means stale inputs, a
   failed/latest attempt, legacy data, incomplete lens/verifier coverage, or an
   unresolved critical. Any lens failure or missing or failed verifier seat

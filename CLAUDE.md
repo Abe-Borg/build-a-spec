@@ -327,7 +327,10 @@ backend/
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint
                            vocabulary, dormant research dimensions); import-time
-                           validate_module_registry — bad module = startup failure
+                           validate_module_registry — bad module = startup failure.
+                           ResearchDimension.required (default True) +
+                           optional_rationale are an issue-READINESS policy,
+                           validated as a bound pair both ways
   spec_modules/registry.py [PORT: Spec Critic src/modules/registry.py]
                            AVAILABLE_MODULES / DEFAULT_MODULE / get_module
                            (unknown id degrades to default, never errors)
@@ -747,7 +750,10 @@ success is included separately). `GET /api/readiness` is a
 deterministic checklist (no model call):
 `{checks: [{id, ok, detail, advisory}], ready}` — `ready` = all non-advisory
 checks ok (no open items, no unreviewed imported/assumed, lint clean, research
-complete, `qc_current` exact-input/latest-attempt identity,
+complete — which since Chunk 3.2 means every REQUIRED module dimension has
+cumulatively completed, not merely that the runner said `complete`; see
+"Required research coverage gates readiness" — `qc_current`
+exact-input/latest-attempt identity,
 `qc_audit_complete` current schema/protocol plus complete lens/verifier
 coverage and no open criticals; `profile_complete` is advisory). Any
 failed/missing lens or verifier seat makes the QC result partial and blocks
@@ -3441,6 +3447,81 @@ gap. No new endpoint, no new SSE event, no new dep, no project-format bump.
   each asserting the provider payload is absent. Every mechanism was
   reverted in place to prove it load-bearing (the warning → 7 red, the
   merge's kind → 1 red).
+
+## Required research coverage gates readiness — implemented notes
+
+Deep-dive remediation Chunk 3.2, and the first behavior change in Phase 3.
+`research_complete` readiness was `session.research.status == "complete"` —
+but a round reports complete when ANY dimension completes, so three of four
+could have failed and the checklist still said research was done. That is a
+false pass on the one gate that exists to say "this can go out the door".
+No new endpoint, no new SSE event, no new dep, no project-format bump.
+
+- **`ResearchDimension.required` defaults to `True`, and every shipped
+  dimension keeps the default** (so `hyperscale_fire.py` and `generic.py`
+  are untouched — the frozen decision is that AHJ requirements, owner/insurer
+  standards and site conditions are not more optional than governing codes).
+  It is an **issue-readiness** policy, NOT a fan-out failure policy: one
+  dimension failing still never cancels the others, a round still succeeds
+  when any completes, and the profile still accumulates.
+- **Opting out costs a machine-readable reason.** `optional_rationale` is a
+  field, not a comment, because registry validation cannot enforce a comment
+  — and the rationale is what the readiness warning and the QC manifest
+  quote. Validation binds the pair BOTH ways: `required=False` with a blank
+  rationale fails startup, and a leftover rationale on a required dimension
+  fails too, so a stale reason cannot outlive the opt-out it was written
+  for. `required` must be an actual `bool` (`required=0` reads as a
+  deliberate opt-out while behaving nothing like one). A fail-open default
+  is therefore not silently introducible: flipping the default to `False`
+  fails the registry at import with a named error rather than quietly
+  passing sections.
+- **`research_coverage(module, profile)` is the join** (research/engine.py,
+  pure): declared dimensions against the CUMULATIVE profile statuses, giving
+  `gaps` (per declared dimension, with `required`/`optional_rationale` and a
+  `recorded` flag), `required_gaps`, `optional_gaps`, `missing_required` (a
+  required dimension with no status record at all — fail closed) and
+  `incomplete_statuses` (including any for a dimension the current module no
+  longer declares, which cannot be required and so never block). Cumulative
+  is load-bearing: a dimension that completed in round 1 and failed in round
+  3 is researched, so a failed rerun must not revoke readiness.
+- **`validate_research_facts` fails readiness CLOSED on a self-contradicting
+  record.** The deserializer is permissive by design, so a corrupt or
+  hand-edited project file can hold two statuses for one dimension. Checks
+  are ordered most-specific-first because the message is what a user reads:
+  a duplicated status surfaces as more records than distinct ids and says so,
+  rather than being reported as a count mismatch that names nothing. Project
+  LOADING stays permissive — this judges readiness only.
+- **The readiness detail is now six branches** (`app._research_readiness`):
+  runner not complete → its status; complete with no profile → evidence
+  missing; invalid record → the validation detail; a missing REQUIRED
+  dimension → named, with "N of M completed" and "Press Research again to
+  retry" (the only action the user can take); only optional gaps → **passes**
+  but names each absent area and its declared rationale; all complete →
+  the unchanged "Requirements research complete."
+- **`research_manifest_facts` moved to research/engine.py** and takes the
+  module, since readiness and the QC manifest now share it — it is
+  research-domain data, and QC imports research rather than the reverse. It
+  gains `declared_dimension_count`, `required_dimension_ids`,
+  `incomplete_required_dimension_ids`, `incomplete_optional_dimension_ids`
+  and `optional_rationales`, all from the module's CURRENT declaration
+  rather than a hard-coded id set. `profile_fingerprint` came with it and is
+  byte-compatible with the `_sha256_json` it replaced (pinned), so a
+  retained report's research fingerprint is unchanged by the move.
+- **The Word memo needed no change**: it CONSUMES the readiness checks from
+  the QC state rather than re-deriving them, so the truthful detail reaches
+  the export for free. Keep it that way — a second derivation would be free
+  to disagree with the checklist.
+- **Tests**: 12 new. `test_spec_modules.py` (5): every shipped dimension
+  required by default and the default itself, a silent opt-out rejected, a
+  stale rationale rejected, a non-bool rejected, and a properly declared
+  optional dimension accepted. `test_research_api.py` (7): the false pass
+  removed (one of four completing now fails, named, with the count and the
+  retry guidance), all-complete reading as complete, a later round restoring
+  readiness while a failed rerun does NOT revoke it, a complete runner with
+  no profile failing closed, a self-contradicting record failing closed while
+  the rest of the surface keeps working, a declared-optional gap passing with
+  its rationale quoted, and a legacy no-rounds profile still reading complete.
+  Reverting readiness to the status-only test turns 5 red.
 
 ## Final QC Review Room — live three-stage contract
 

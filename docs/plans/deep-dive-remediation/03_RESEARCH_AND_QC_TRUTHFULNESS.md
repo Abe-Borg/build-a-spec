@@ -305,7 +305,7 @@ venv\Scripts\python -m pytest -q tests/test_spec_modules.py tests/test_research_
 ### Implementation record
 
 - Status: **complete** (2026-07-30)
-- Commit/PR: PENDING — pinned in the follow-up commit
+- Commit/PR: `5e24b5c` — PR #97
 - Tests: 12 new.
   `tests/test_spec_modules.py` (5): every shipped dimension required by
   default plus the dataclass default itself; a silent opt-out rejected; a

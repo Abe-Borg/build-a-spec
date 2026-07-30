@@ -12,6 +12,7 @@ and search-budget ceilings) sized so no legitimate turn ever meets them.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -209,6 +210,79 @@ PRICING: dict[str, dict[str, float]] = {
 # Per-request cost of a server-side web search ($10 / 1,000). Web fetch has
 # no separate per-request charge — only the tokens it returns.
 WEB_SEARCH_COST = 10.0 / 1_000
+
+# --- Prompt cache -----------------------------------------------------------
+
+# The TTL every breakpoint in a chat request is written at. One hour by
+# default: an interview turn is a person reading a drafted provision and
+# typing a reply, which routinely exceeds the 5-minute default, and a lapsed
+# entry is re-WRITTEN at full price rather than read at 0.1x. A 1h entry
+# costs 2.0x input to create against 1.25x for 5m, so it breaks even after
+# ~3 reads instead of ~2 — a trade the app's turn pacing wins easily.
+#
+# Mixed TTLs impose a provider ordering constraint — longer-lived entries
+# must precede shorter-lived ones in tools -> system -> messages order —
+# and violating it is a nonretryable 400, not a degraded cache. This module
+# makes that violation unbuildable rather than merely avoided: the ONLY
+# breakpoint allowed to differ is the request tail, and it is pinned to the
+# SHORTEST supported TTL, so it can never precede a longer-lived one.
+#
+# SUPPORTED_CACHE_TTLS is ordered shortest-first and that order is load
+# bearing (``_cache_ttl_rank``). A new TTL must be inserted in the right
+# place, not appended.
+SUPPORTED_CACHE_TTLS = ("5m", "1h")
+CHAT_CACHE_TTL_DEFAULT = "1h"
+
+# The request tail covers the fresh PROJECT CONTEXT and the user's text —
+# bytes that commit strips, so no LATER turn can ever read this entry. Its
+# only readers are continuation rounds inside the same turn, seconds apart.
+# A one-hour lifetime buys nothing there and costs 2.0x input to write
+# against 1.25x, on a block the size of the whole document. Deliberately
+# NOT env-overridable: a knob here would let an operator put a long-lived
+# tail after a short-lived system block, which is exactly the 400 the
+# shortest-TTL pin exists to make impossible.
+CHAT_TAIL_CACHE_TTL = SUPPORTED_CACHE_TTLS[0]
+
+
+def _cache_ttl_rank(ttl: str) -> int:
+    """Sort key for TTL lifetime; unknown values sort shortest.
+
+    Ranking an unrecognized TTL as shortest is the safe direction: it can
+    only make a request look MORE ordering-violating to the guard, never
+    less.
+    """
+    try:
+        return SUPPORTED_CACHE_TTLS.index(ttl)
+    except ValueError:
+        return -1
+
+
+def _cache_ttl_env(name: str, default: str) -> str:
+    """A provider-supported TTL, or the default with a loud complaint.
+
+    An unsupported TTL is rejected by the API on every request, so silently
+    passing one through would take chat down entirely. Degrading to the
+    default keeps the app working; the warning is what tells the operator
+    their override did nothing.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    if raw in SUPPORTED_CACHE_TTLS:
+        return raw
+    logging.getLogger("buildaspec.settings").warning(
+        "%s=%r is not a supported prompt-cache TTL (%s); using %r.",
+        name,
+        raw,
+        ", ".join(SUPPORTED_CACHE_TTLS),
+        default,
+    )
+    return default
+
+
+CHAT_CACHE_TTL = _cache_ttl_env(
+    "BUILD_A_SPEC_CHAT_CACHE_TTL", CHAT_CACHE_TTL_DEFAULT
+)
 
 # --- Server -----------------------------------------------------------------
 

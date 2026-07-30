@@ -652,10 +652,18 @@ runaway circuit breakers sized so no legitimate turn ever meets one):
 - **Prompt-cache restructure that pays for all of it.** The dynamic
   context used to sit between the cached system prompt and the message
   history, busting the cache for the whole history every doc-changing
-  turn; now the system prompt is stable-only, live state rides the newest
-  user message, and a second cache breakpoint on the message tail caches
-  the growing interview incrementally. Strictly more context per turn,
-  cheaper per turn.
+  turn; now the system prompt is stable-only and live state rides the
+  newest user message. Strictly more context per turn, cheaper per turn.
+  A later pass finished the job: a tail breakpoint alone still could not
+  cache *across* turns, because the entry it wrote ended with that turn's
+  live context and commit strips exactly those bytes. Chat requests now
+  also carry a **rolling breakpoint on the committed-history boundary**,
+  so each turn reads everything the previous turn wrote and pays only for
+  the newest exchange — at a one-hour lifetime, since an interview turn
+  is a person reading and typing. The request tail keeps a short-lived
+  entry instead: it can only ever be read by continuation rounds inside
+  the same turn, so buying it an hour would be paying for a lifetime
+  nothing uses.
 - **Adaptive thinking, wired properly.** Requests state
   `thinking: adaptive` explicitly with effort knobs (interview `high`,
   research `high` — see below), and thinking blocks are preserved verbatim
@@ -1000,6 +1008,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
 | `BUILD_A_SPEC_INTERVIEW_EFFORT` | `high` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`). |
 | `BUILD_A_SPEC_THINKING_DISPLAY` | `summarized` | Thinking-summary streaming: `summarized` streams a readable reasoning summary (the "see what the model is thinking" strip); `omitted` streams empty thinking. Degrades to `omitted` automatically if a model rejects the display key. |
+| `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the system block and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at 0.1×. The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
 | `BUILD_A_SPEC_CHAT_MAX_SEARCHES` | `8` | Interview web_search allowance per continuation round. |
 | `BUILD_A_SPEC_CHAT_MAX_FETCHES` | `4` | Interview web_fetch allowance per continuation round. |
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |

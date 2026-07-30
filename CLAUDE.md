@@ -863,12 +863,18 @@ already resolved and does nothing). 409 when nothing is running.
   the **full document text** (`outline(doc, max_text=None)`, with
   ◆source chips), the lint report, and open items — renders into a
   PROJECT CONTEXT block spliced ahead of the user's text in the **newest
-  user message** (`_turn_context_text`, frozen at turn start). A second
-  cache breakpoint rides the tail of each request's messages
-  (`_with_tail_cache_breakpoint`, copy-on-write — stored history never
-  carries `cache_control`), so history caches incrementally instead of
-  re-billing every turn. Nothing session-varying may render into the
-  stable block (pinned by
+  user message** (`_turn_context_text`, frozen at turn start). Two more
+  cache breakpoints ride each request's messages
+  (`_with_cache_breakpoints`, copy-on-write — stored history never
+  carries `cache_control`): the **committed-history boundary** and the
+  **tail**. The boundary is what makes caching roll across turns; the
+  tail alone cannot (see "Rolling chat cache breakpoint" below). TTLs are
+  NON-INCREASING across the request: system and boundary carry
+  `settings.CHAT_CACHE_TTL`, the tail the shortest supported
+  (`CHAT_TAIL_CACHE_TTL`) because its entry cannot outlive its own turn.
+  A SHORT-before-LONG request is a nonretryable 400, which the pin makes
+  unbuildable. Nothing session-varying
+  may render into the stable block (pinned by
   `test_stable_system_prompt_is_cached_and_module_rendered`).
 - **Strip at commit** (`_committed_messages`): the context block is
   replaced by the user's bare text (exactly one current state block per
@@ -4049,6 +4055,103 @@ charges 2×. No new endpoint, no new SSE event, no new dep, no schema bump.
   attaches the nested object only when supplied, so every pre-existing
   fixture stays byte-identical. Each mechanism was reverted in place to
   prove it load-bearing (the guard → 1 red, the split formula → 1 red).
+
+## Rolling chat cache breakpoint — implemented notes
+
+Deep-dive remediation Chunk 4.2, and the chunk 4.1 existed to make
+priceable. The interview had a cache breakpoint on the request tail and a
+docstring claiming history "caches incrementally" — it did not. Every turn
+re-billed the entire conversation as fresh input. No new endpoint, no new
+SSE event, no new dep, one new env knob.
+
+- **A tail breakpoint cannot cache across turns, and the reason is
+  strip-at-commit.** The entry it writes is keyed on a prefix that ENDS
+  with that turn's PROJECT CONTEXT block, and commit replaces that block
+  with the user's bare text. The next turn's prefix therefore diverges at
+  exactly the point the entry was cut, and a prefix match that fails at
+  byte N caches nothing after byte N — which here is everything. The tail
+  breakpoint was never useless (it caches *continuation rounds within* a
+  turn, where nothing has been stripped yet); it just could not do the job
+  the docstring claimed.
+- **The fix is a breakpoint on the committed-history boundary** — the last
+  block of the last message in `session.history`, i.e. the last byte of
+  the stripped form every later turn re-sends. That form is stable, so
+  turn N's entry is a genuine byte-prefix of turn N+1's request: N+1 reads
+  the whole prefix and writes only the newest exchange. Pinned directly by
+  `test_a_turns_cached_prefix_is_a_byte_prefix_of_the_next_request`, which
+  asserts the cache-read condition itself rather than a proxy for it.
+- **The boundary is passed in, never inferred from roles.** Roles alternate
+  and a continuation round appends more user-role messages, so any
+  role-walking heuristic would land in the wrong place on a tool turn.
+  `request_kwargs` snapshots `history = list(session.history)` and hands
+  `_committed_history_boundary(len(history), len(raw), len(sanitized))`
+  to the builder.
+- **Index arithmetic is CHECKED, not trusted.** Sanitization replaces
+  messages positionally and never adds or drops one (an emptied assistant
+  message becomes a placeholder rather than disappearing — pinned by
+  `test_sanitizing_a_request_never_adds_or_drops_a_message`), so the
+  boundary is `len(history) - 1`. If a future sanitizer ever changes the
+  count, the helper returns `-1` and the request falls back to the tail
+  alone: one missed cache read, rather than a breakpoint silently
+  annotating the wrong message and splitting the prefix in the wrong place.
+- **The request is NON-INCREASING in TTL, not uniform — and the tail is the
+  one that differs.** The boundary is read by the next user turn, so it
+  takes `settings.CHAT_CACHE_TTL`. The tail is keyed on the fresh PROJECT
+  CONTEXT, which commit strips, so no later turn can ever read it — its
+  only readers are this turn's continuation rounds, seconds apart. Buying
+  it an hour costs 2.0× input to write against 1.25×, on a block the size
+  of the whole document, every turn (~$0.02–0.11/turn). It therefore takes
+  `settings.CHAT_TAIL_CACHE_TTL`, pinned to the SHORTEST supported TTL.
+  Caught in review on PR #100; the original plan froze "uniform" on the
+  belief that any mixed TTL trips the provider, but the constraint is only
+  SHORT-before-LONG.
+- **The tail TTL is deliberately NOT env-overridable**, and that is what
+  preserves the safety property uniformity used to give. Because the tail
+  is the LAST breakpoint and pinned shortest, it can never precede a
+  longer-lived one — so no setting can build the out-of-order request that
+  400s (the exact failure PR #82's review caught in the QC fan-out). A knob
+  here would hand that footgun straight back. Pinned by
+  `test_no_setting_can_build_an_out_of_order_request`, which sweeps every
+  supported setting; the fakes accept any request dict, so nothing else
+  would catch it before a provider did. Note `SUPPORTED_CACHE_TTLS` is
+  ordered shortest-first and that order is load-bearing
+  (`settings._cache_ttl_rank`) — a new TTL is an insertion, not an append.
+- **A merged breakpoint takes the LONGER TTL.** When the boundary resolves
+  to the same message as the tail, one annotation is written: it is doing
+  the boundary's cross-turn job, and under-living it would throw away the
+  read it exists for. The tail is registered first in `ttl_by_index` so the
+  boundary overwrites it.
+- **`BUILD_A_SPEC_CHAT_CACHE_TTL` defaults to `1h`** because an interview
+  turn is a person reading a drafted provision and typing a reply, which
+  routinely outlives five minutes — and a lapsed entry is re-WRITTEN at
+  full price, not read at 0.1×. A 1h write costs 2.0× input against 1.25×
+  for 5m (Chunk 4.1 prices both), so it breaks even after ~3 reads instead
+  of ~2. `settings._cache_ttl_env` validates against
+  `SUPPORTED_CACHE_TTLS` and falls back to the default with a WARNING: an
+  unsupported TTL is a 400 on every request, so passing one through would
+  take chat down, and degrading silently would leave an operator believing
+  their override took effect.
+- **Three breakpoints, no tool breakpoint.** System (which also closes the
+  tools prefix, since tools render first) + boundary + tail = 3, inside
+  the provider's limit of 4. A separate tool breakpoint would spend the
+  remaining slot on bytes the system breakpoint already covers.
+- **Residual limitation, deliberately not worked around**: a breakpoint
+  looks back at most 20 content blocks for a prior entry, so a single turn
+  appending more than 20 blocks (a long tool-heavy round) can push the
+  previous entry out of the window. That turn re-writes; the next caches
+  normally again. Interior breakpoints would spend the request's remaining
+  budget on a rare case.
+- **Tests**: 9 new in `test_app.py` (the rolling layout across three turns
+  with exact marked-message indexes and last-block-only placement, the
+  byte-prefix cache-read condition, the long/short TTL split, the
+  non-increasing-order sweep over every supported setting, continuation
+  rounds, nothing surviving into history or a saved project, the TTL
+  setting's validation and loud fallback, the boundary helper's fail-safe,
+  and the sanitizer count invariant). Existing exact-dict assertions moved
+  from bare `ephemeral` to the explicit TTL across `test_app.py`,
+  `test_runtime_date.py` and `test_session_modules.py`. Every mechanism was
+  reverted in place to prove it load-bearing: tail-only → 2 red, uniform
+  1h tail under a 5m setting → 1 red on the ordering sweep.
 
 ## Commands
 

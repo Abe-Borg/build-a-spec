@@ -115,7 +115,7 @@ def test_chat_streams_deltas_and_updates_history(monkeypatch):
     # web tools, and explicit adaptive thinking at the configured effort.
     request = fake.messages.last_request
     assert len(request["system"]) == 1
-    assert request["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert request["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     context = request_context_text(request)
     assert "document" in context
     # Order is the cached-prefix contract: additions go on the end so the
@@ -800,7 +800,7 @@ def test_stable_system_prompt_is_cached_and_module_rendered(monkeypatch):
     # session-varying rides the PROJECT CONTEXT block in the user message.
     assert len(request["system"]) == 1
     stable = request["system"][0]
-    assert stable["cache_control"] == {"type": "ephemeral"}
+    assert stable["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     assert "21 13 13 Wet-Pipe Sprinkler Systems" in stable["text"]
     assert "Standards editions in effect" not in stable["text"]
     context = request_context_text(request)
@@ -987,6 +987,316 @@ def test_chat_carries_the_container_through_a_turn_and_drops_it_next_turn(
     assert "cont_chat_1" not in saved.text
 
 
+# ---------------------------------------------------------------------------
+# Rolling committed-history cache breakpoint (Chunk 4.2)
+# ---------------------------------------------------------------------------
+#
+# A tail breakpoint alone cannot cache across turns: its entry is keyed on a
+# prefix ending in that turn's PROJECT CONTEXT, and commit strips exactly
+# those bytes. The committed-history boundary is keyed on the stripped form
+# every later turn re-sends, so each turn's entry is a byte-prefix of the
+# next turn's request.
+
+
+def _one_turn_request(client, monkeypatch, message: str) -> dict:
+    """Send one chat turn; return the request the model actually received."""
+    fake = FakeClient([text_turn(["ok"])])
+    _patch_client(monkeypatch, fake)
+    client.post("/api/chat", json={"message": message})
+    return fake.messages.last_request
+
+
+def _marked_messages(request: dict) -> list[int]:
+    """Indexes of messages carrying a cache breakpoint, in order."""
+    return sorted(
+        index
+        for index, message in enumerate(request["messages"])
+        for block in (message.get("content") or [])
+        if isinstance(block, dict) and "cache_control" in block
+    )
+
+
+def _cache_controls(request: dict) -> list[dict]:
+    """Every breakpoint value in the request, system block included."""
+    blocks = [
+        block
+        for message in request["messages"]
+        for block in (message.get("content") or [])
+    ] + list(request["system"])
+    return [
+        block["cache_control"]
+        for block in blocks
+        if isinstance(block, dict) and "cache_control" in block
+    ]
+
+
+def _unannotated(messages: list) -> str:
+    """Message bytes with every breakpoint annotation removed."""
+    stripped = json.loads(json.dumps(messages))
+    for message in stripped:
+        for block in message.get("content") or []:
+            if isinstance(block, dict):
+                block.pop("cache_control", None)
+    return json.dumps(stripped, sort_keys=True)
+
+
+def test_the_committed_history_breakpoint_rolls_forward_each_turn(monkeypatch):
+    client = _client()
+
+    first = _one_turn_request(client, monkeypatch, "one")
+    # Nothing is committed yet, so the tail is the only breakpoint there is
+    # to place — one message, marked once.
+    assert len(first["messages"]) == 1
+    assert _marked_messages(first) == [0]
+
+    second = _one_turn_request(client, monkeypatch, "two")
+    # History is now [user, assistant]: the boundary marks the assistant
+    # reply that closes it, and the tail marks the new user message.
+    assert len(second["messages"]) == 3
+    assert _marked_messages(second) == [1, 2]
+
+    third = _one_turn_request(client, monkeypatch, "three")
+    assert len(third["messages"]) == 5
+    assert _marked_messages(third) == [3, 4]
+
+    # Three breakpoints per request (two here + the system block), inside
+    # the provider's limit of four and leaving no room wasted on a
+    # separate tool breakpoint — the system block already closes tools.
+    assert len(_cache_controls(third)) == 3
+
+    # Each marks the LAST block of its message; a breakpoint anywhere else
+    # would cache a partial message.
+    for index in _marked_messages(third):
+        content = third["messages"][index]["content"]
+        assert "cache_control" in content[-1]
+        assert not any("cache_control" in block for block in content[:-1])
+
+
+def test_a_turns_cached_prefix_is_a_byte_prefix_of_the_next_request(
+    monkeypatch,
+):
+    """The cache-read condition, asserted directly.
+
+    An entry is only readable if its exact bytes lead the next request. If
+    this fails, every turn silently re-bills the whole conversation as
+    fresh input — which is the regression this chunk exists to fix.
+    """
+    client = _client()
+    _one_turn_request(client, monkeypatch, "one")
+    second = _one_turn_request(client, monkeypatch, "two")
+    third = _one_turn_request(client, monkeypatch, "three")
+
+    def cached_prefix(request: dict) -> list:
+        boundary = _marked_messages(request)[0]
+        return request["messages"][: boundary + 1]
+
+    # What turn 2's boundary wrote, and the same span of turn 3's request.
+    written = _unannotated(cached_prefix(second))
+    assert written == _unannotated(third["messages"][:2])
+
+    # And turn 3's own boundary strictly extends it — the increment is the
+    # newest exchange, not the whole conversation.
+    extended = _unannotated(cached_prefix(third))
+    assert extended != written
+    assert _unannotated(third["messages"][:2]) == written
+
+
+def _ttl_rank(ttl: str) -> int:
+    from backend import settings
+
+    return settings._cache_ttl_rank(ttl)
+
+
+def _ordered_ttls(request: dict) -> list[str]:
+    """Every breakpoint's TTL in provider render order: system -> messages."""
+    blocks = list(request["system"]) + [
+        block
+        for message in request["messages"]
+        for block in (message.get("content") or [])
+    ]
+    return [
+        block["cache_control"].get("ttl", "")
+        for block in blocks
+        if isinstance(block, dict) and "cache_control" in block
+    ]
+
+
+def test_the_tail_is_written_at_the_short_ttl_the_boundary_at_the_long_one(
+    monkeypatch,
+):
+    """The tail's entry dies with its turn, so it must not be bought for an hour.
+
+    Commit strips the PROJECT CONTEXT the tail entry is keyed on, so no
+    later turn can read it — only this turn's continuation rounds, seconds
+    apart. Writing it at 1h costs 2.0x input against 1.25x for a lifetime
+    nothing uses, on a block the size of the whole document.
+    """
+    client = _client()
+    _one_turn_request(client, monkeypatch, "one")
+    request = _one_turn_request(client, monkeypatch, "two")
+
+    boundary, tail = _marked_messages(request)
+    assert request["messages"][boundary]["content"][-1]["cache_control"] == {
+        "type": "ephemeral",
+        "ttl": "1h",
+    }
+    assert request["messages"][tail]["content"][-1]["cache_control"] == {
+        "type": "ephemeral",
+        "ttl": "5m",
+    }
+    # The system block is read by every later turn: it takes the long one.
+    assert request["system"][0]["cache_control"] == {
+        "type": "ephemeral",
+        "ttl": "1h",
+    }
+
+
+def test_no_setting_can_build_an_out_of_order_request(monkeypatch):
+    """Mixed TTLs are legal ONLY longest-first; this must hold at any setting.
+
+    The provider requires longer-lived entries to precede shorter-lived
+    ones in tools -> system -> messages order, and violating it is a
+    nonretryable 400 — the exact failure PR #82's review caught in the QC
+    fan-out. The tail is pinned to the shortest supported TTL rather than
+    being configurable, so the order is non-increasing by construction.
+    The fakes accept any request dict, so nothing but this catches an
+    out-of-order request before a provider does.
+    """
+    from backend import settings
+
+    for configured in settings.SUPPORTED_CACHE_TTLS:
+        monkeypatch.setattr(settings, "CHAT_CACHE_TTL", configured)
+        client = _client()
+        _one_turn_request(client, monkeypatch, "one")
+        request = _one_turn_request(client, monkeypatch, "two")
+
+        ttls = _ordered_ttls(request)
+        assert len(ttls) == 3, ttls
+        ranks = [settings._cache_ttl_rank(ttl) for ttl in ttls]
+        assert ranks == sorted(ranks, reverse=True), (configured, ttls)
+        # The tail never outlives what precedes it, whatever is configured.
+        assert ttls[-1] == settings.CHAT_TAIL_CACHE_TTL
+        assert ttls[0] == configured
+
+
+def test_continuation_rounds_keep_their_own_tail_breakpoint(monkeypatch):
+    """A tool round extends the previous round's entry rather than rewriting."""
+    client = _client()
+    fake = FakeClient(
+        [
+            tool_turn(
+                ["Drafting. "],
+                {
+                    "edits": [
+                        {
+                            "action": "add_article",
+                            "target_id": "pt1",
+                            "text": "SUMMARY",
+                        }
+                    ]
+                },
+            ),
+            text_turn(["Done."]),
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+    client.post("/api/chat", json={"message": "draft it"})
+
+    # The second round's request ends with the tool_result user message,
+    # and that message carries the tail breakpoint — at the short TTL,
+    # since these rounds are the only readers it will ever have.
+    request = fake.messages.last_request
+    assert _marked_messages(request)[-1] == len(request["messages"]) - 1
+    assert request["messages"][-1]["content"][-1]["cache_control"] == {
+        "type": "ephemeral",
+        "ttl": "5m",
+    }
+    ranks = [_ttl_rank(ttl) for ttl in _ordered_ttls(request)]
+    assert ranks == sorted(ranks, reverse=True)
+
+
+def test_no_breakpoint_survives_into_history_or_a_saved_project(monkeypatch):
+    client = _client()
+    _seed_doc_via_chat(client, monkeypatch)
+    _one_turn_request(client, monkeypatch, "another")
+
+    assert "cache_control" not in json.dumps(sessions.get_session().history)
+    saved = client.get("/api/project/save")
+    assert saved.status_code == 200
+    assert "cache_control" not in saved.text
+
+
+def test_the_cache_ttl_setting_validates_and_degrades_loudly(monkeypatch, caplog):
+    """An unsupported TTL is a 400 on every request, so it must not pass through."""
+    from backend.settings import _cache_ttl_env
+
+    monkeypatch.delenv("BUILD_A_SPEC_CHAT_CACHE_TTL", raising=False)
+    assert _cache_ttl_env("BUILD_A_SPEC_CHAT_CACHE_TTL", "1h") == "1h"
+
+    for supported in ("5m", "1h"):
+        monkeypatch.setenv("BUILD_A_SPEC_CHAT_CACHE_TTL", supported)
+        assert _cache_ttl_env("BUILD_A_SPEC_CHAT_CACHE_TTL", "1h") == supported
+
+    monkeypatch.setenv("BUILD_A_SPEC_CHAT_CACHE_TTL", "7d")
+    with caplog.at_level(logging.WARNING, logger="buildaspec.settings"):
+        assert _cache_ttl_env("BUILD_A_SPEC_CHAT_CACHE_TTL", "1h") == "1h"
+    # Silent degradation would leave an operator believing their override
+    # took effect; the warning is the whole point of the fallback.
+    assert "7d" in caplog.text
+
+
+def test_the_history_boundary_fails_safe_if_sanitizing_ever_moves_messages():
+    """Index arithmetic is checked, not trusted.
+
+    Sanitization replaces messages positionally today. If that ever
+    changes, dropping the extra breakpoint costs one cache read; guessing
+    an index would annotate the wrong message and split the prefix in the
+    wrong place.
+    """
+    from backend.llm.conversation import _committed_history_boundary
+
+    assert _committed_history_boundary(2, 3, 3) == 1
+    assert _committed_history_boundary(4, 5, 5) == 3
+    # No committed history yet -> tail only.
+    assert _committed_history_boundary(0, 1, 1) == -1
+    # Count changed under us -> refuse to guess.
+    assert _committed_history_boundary(2, 3, 2) == -1
+    assert _committed_history_boundary(2, 3, 4) == -1
+
+
+def test_sanitizing_a_request_never_adds_or_drops_a_message():
+    """The invariant the committed-history boundary index rests on."""
+    from backend.research.resend_sanitizer import sanitize_messages_for_resend
+
+    cases = [
+        [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "yes"}]},
+            {"role": "user", "content": [{"type": "text", "text": "more"}]},
+        ],
+        # An assistant message whose only block is an unpaired server tool
+        # use: emptied, then refilled with a placeholder — never removed.
+        [
+            {"role": "user", "content": [{"type": "text", "text": "search"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_orphan",
+                        "name": "web_search",
+                        "input": {},
+                    }
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "and?"}]},
+        ],
+    ]
+    for messages in cases:
+        assert len(sanitize_messages_for_resend(messages)) == len(messages)
+
+
 def test_tail_cache_breakpoint_rides_requests_not_history(monkeypatch):
     client = _client()
     _seed_doc_via_chat(client, monkeypatch)
@@ -995,11 +1305,12 @@ def test_tail_cache_breakpoint_rides_requests_not_history(monkeypatch):
     _patch_client(monkeypatch, fake2)
     client.post("/api/chat", json={"message": "continue"})
 
-    # The request's final content block carries the incremental breakpoint…
+    # The request's final content block carries the incremental breakpoint,
+    # at the short TTL (its entry cannot outlive this turn)…
     request = fake2.messages.last_request
     tail = request["messages"][-1]["content"][-1]
-    assert tail["cache_control"] == {"type": "ephemeral"}
-    # …the stable system block carries the other…
-    assert request["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert tail["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
+    # …the stable system block carries the long-lived one…
+    assert request["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     # …and stored history carries none (breakpoints are per-request).
     assert "cache_control" not in json.dumps(sessions.get_session().history)

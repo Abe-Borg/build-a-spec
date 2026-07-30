@@ -249,3 +249,33 @@ def test_every_lens_is_told_which_coverage_is_absent() -> None:
     assert "lens" not in inspect.signature(_lens_shared_prefix).parameters
     for lens in QC_LENSES:
         assert "INCOMPLETE COVERAGE" not in _lens_request_suffix(lens), lens.lens_id
+
+
+def test_pricing_rates_are_not_part_of_reviewed_input_identity() -> None:
+    """A rate table describes how a number was reached, not what was reviewed.
+
+    Chunk 4.1 grew ``cost_basis`` a second cache-write rate. If pricing rode
+    the hashed manifest, that would flip every retained Final QC result stale
+    and demand a re-run of a review that costs real money and has not gone out
+    of date — the conclusions do not depend on what the tokens were billed at.
+    """
+    section = _section()
+    manifest = build_qc_input_manifest(
+        section,
+        None,
+        DEFAULT_MODULE,
+        version_index=1,
+        model=settings.QC_MODEL,
+        max_tokens=settings.QC_MAX_TOKENS,
+    )
+    assert "cost_basis" not in manifest
+    configuration = manifest["configuration"]
+    assert not [
+        key
+        for key in configuration
+        if "rate" in key or "cost" in key or "cache_write" in key
+    ]
+    # The things that DO belong to identity are still there, so this test
+    # cannot pass by the manifest having quietly lost its configuration.
+    assert configuration["model"] == settings.QC_MODEL
+    assert configuration["effort"] == settings.QC_EFFORT

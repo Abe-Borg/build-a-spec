@@ -1,6 +1,6 @@
 # Phase 4 — Cache and metering accuracy
 
-- Status: planned
+- Status: in progress (4.1 landed; 4.2-4.4 planned)
 - Prerequisites: Phases 1-3 complete
 - Risk: high financial/audit impact; follow the chunk order exactly
 
@@ -104,11 +104,54 @@ venv\Scripts\python -m pytest -q tests/test_usage.py tests/test_qc_audit_report.
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete**
+- Commit/PR: see the branch `claude/deep-dive-remediation-4-1-thvbrv`
+- Tests: `tests/test_usage.py` (11 new — the per-model rate matrix, pure 5m,
+  pure 1h at 2x input, mixed-not-double-counted, zero, clamped malformed
+  subtotal, ledger accrual, nested read plus absent-key identity, malformed
+  nested object, snapshot rate + wording, and the subtotal through a real
+  `/api/chat` turn); `tests/test_qc_audit_report.py` (5 new — a verifier
+  seat's subtotal captured/priced/round-tripped, legacy basis loads and
+  reproduces its estimate, legacy basis plus a subtotal prices
+  conservatively, impossible subtotal rejected per-record and in aggregate,
+  unknown rate/field still refused); `tests/test_qc_manifest_integrity.py`
+  (1 new — pricing is not part of reviewed input identity). Focused command
+  green, then the full suite: **1239 passed, 9 skipped**. Each new mechanism
+  was reverted in place to prove it load-bearing (the impossible-subtotal
+  guard → 1 red; the split formula → 1 red).
 - Deviations:
-- Manual QA owed:
+  - **Item 5's "explanatory text" became a new `cache_write_treatment`
+    field** rather than an edit to `thinking_token_treatment`/`authority`.
+    It is the exact sibling of `thinking_token_treatment` — both explain an
+    "already inside that number, do not charge it twice" decision — and
+    both report renderers are generic (`docx_export` iterates `cost_basis`
+    items, `QCReportModal` prints a JSON block), so it reaches Word and the
+    modal with no renderer change. That is also why **item 8 needed no
+    work**: the new field is what makes the two rates clear.
+  - **`_persisted_cost_basis` had to accept two TOP-LEVEL shapes**, not just
+    two `rates_per_token` shapes, because the new field is a top-level key
+    and the validator asserts exact set equality. Legacy nine-key/four-rate
+    and new ten-key/five-rate are both accepted and echoed back verbatim;
+    an unknown rate key or unknown top-level field is still refused (pinned).
+  - **Two split helpers, deliberately not one.**
+    `usage_ledger.cache_write_split` clamps (live provider data should skew
+    an estimate, never invert it); `qc.engine._cache_write_tokens_by_ttl`
+    does not, so an impossible persisted subtotal reaches
+    `_audit_accounting_consistent` and fails there. This is the plan's
+    "clamp live, reject persisted" rule made structural.
+  - **No frontend change.** The Settings usage table shows the
+    cache-creation TOTAL, which the subtotal is part of, so it stays
+    correct; only the dollar figure moved. Breaking the TTL split out in the
+    UI belongs with Chunk 4.4's disclosure work. `npm test` / `npm run
+    build` therefore not run (no `frontend/` file touched).
+  - **Retained QC results do not go stale**, verified against
+    `build_qc_input_manifest`: `cost_basis` is absent from the hashed
+    manifest and `configuration` carries no rate. Pinned by a new test so
+    the claim cannot rot.
+- Manual QA owed: the phase-level item — compare a verifier-heavy run's
+  recorded one-hour subtotal and rate against the provider usage/billing
+  export. Needs a paid live QC run and owner approval; the app remains a
+  list-price estimate, not an invoice.
 
 ## Chunk 4.2 — Rolling committed-history breakpoint and one-hour TTL
 

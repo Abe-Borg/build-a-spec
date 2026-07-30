@@ -51,7 +51,11 @@ backend/
                            (interview high / research high, dialed back
                            2026-07-28 from xhigh — cost), max_tokens at
                            the 128k model ceiling, chat web-tool allowances,
-                           port 8756, env knobs
+                           port 8756, env knobs; PRICING carries BOTH
+                           cache-write rates per model (cache_write = 1.25×
+                           input for the 5m entry, cache_write_1h = 2.0× for
+                           the 1h one) — a new model must land with both or
+                           every 1h write on it is silently underpriced
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
                            /api/draft/full (Batch 3 directive); doc/undo/redo/edit,
                            docx export, project save/load endpoints; Batch 4 adds
@@ -248,6 +252,14 @@ backend/
   usage_ledger.py          [Batch 2] session-scoped billed-usage ledger (interview/
                            research/audit/qc), thread-safe, cost estimate from
                            settings.PRICING; not persisted (per-session meter).
+                           Chunk 4.1 adds per-TTL cache-write accounting:
+                           usage_to_dict flattens the provider's nested
+                           usage.cache_creation.ephemeral_1h_input_tokens to
+                           cache_creation_1h_input_tokens, and cache_write_split
+                           (+ estimate_usage_cost) charge the 5m and 1h rates
+                           over DISJOINT slices — the subtotal rides INSIDE
+                           cache_creation_input_tokens, so adding it would
+                           double-bill and ignoring it would under-bill.
                            The context gauge is deliberately NOT here: it lives on
                            SessionState.last_context_tokens (a gauge, not spend —
                            the ledger's snapshot/merge tutorial plumbing is
@@ -3933,6 +3945,91 @@ dicts, plus the documentation that key makes true.
   request in an attempt show that attempt's final conversation, which would
   have made "this continuation re-sent exactly the paused content" quietly
   assert something else.
+
+## Per-TTL cache-write pricing — implemented notes
+
+Deep-dive remediation Chunk 4.1, and the accounting that has to exist
+BEFORE Chunk 4.2 puts the interview on one-hour cache entries. v1.8.0 gave
+Final QC's verifier seats a one-hour TTL and the ledger kept pricing every
+cache write at the five-minute rate, so the most expensive phase of the
+most expensive feature was billed at 1.25× input where the provider
+charges 2×. No new endpoint, no new SSE event, no new dep, no schema bump.
+
+- **The subtotal is INSIDE the total, and that is the whole design.** The
+  provider reports `cache_creation_input_tokens` as the total across TTL
+  classes and nests the one-hour count at
+  `usage.cache_creation.ephemeral_1h_input_tokens`. Two rates over one
+  overlapping pair of counters is a bug in either direction: adding the
+  subtotal on top double-bills it, ignoring it under-bills it. Everything
+  here computes **disjoint slices** — `five_minute = total − one_hour` —
+  and every surface that prices cache creation goes through one of the two
+  splitters (`usage_ledger.cache_write_split` live,
+  `qc.engine._cache_write_tokens_by_ttl` persisted). A new pricing site
+  that reaches for `cache_creation_input_tokens * cache_write` directly is
+  the regression to watch for.
+- **`PRICING` carries both rates per model** — `cache_write` at 1.25×
+  input, `cache_write_1h` at 2.0× (VERIFIED 2026-07). The 1h entry costs
+  more to create because it lives longer; it breaks even against the 5m
+  entry after ~3 reads instead of 2. `test_every_priced_model_configures_
+  both_cache_write_rates` pins the multipliers for every model, because a
+  model added with only the 5m rate would silently underprice every run on
+  it and nothing else in the app would notice — the same failure mode the
+  existing "absent from PRICING falls back to Sonnet 5" note warns about.
+- **Two readers, because chat aggregates its own usage.** `usage_to_dict`
+  covers research/audit/QC; `conversation._merge_usage` is a separate
+  accumulator over continuation rounds and needed the nested read too
+  (kept as a local `getattr` walk — the module's fakes are
+  `SimpleNamespace`, and importing a QC-private helper was explicitly out).
+  Research's `DimensionStatus` has explicit usage fields and simply ignores
+  the new key; that is correct, since research writes no 1h entries.
+- **Live values are clamped; persisted values are not.** A malformed
+  provider subtotal is clamped into `[0, total]` so an estimate can skew
+  but never invert into a negative charge. A persisted audit record gets
+  the opposite treatment: `_cache_write_subtotal_possible` makes a subtotal
+  larger than its own total **fail** `_audit_accounting_consistent`, per
+  record and in aggregate. A report claims its own arithmetic, so quietly
+  repairing it into something plausible would forge the claim — the same
+  posture the rest of the QC deserializer already takes.
+- **A cost basis is an immutable claim, so BOTH shapes are read and echoed
+  back verbatim.** `_persisted_cost_basis` accepts the legacy nine-key /
+  four-rate shape and the new ten-key / five-rate one, and preserves
+  whichever it read rather than upgrading it — minting a `cache_write_1h`
+  onto an old report would assert a rate that run never used. Accepting two
+  shapes is not accepting any shape: an unknown rate key or an unknown
+  top-level field is still refused, pinned by
+  `test_a_cost_basis_with_an_unknown_rate_key_is_still_refused`.
+  `_estimated_cost_from_basis` uses `rates.get("cache_write_1h",
+  rates["cache_write"])`, so a legacy basis prices the whole total at the
+  five-minute rate and reproduces its saved estimate exactly.
+- **`cache_write_treatment` is a sibling of `thinking_token_treatment`**,
+  and exists for the same reason: both explain a non-obvious "this is
+  already inside that number, don't charge it twice" decision. It reaches
+  the Word memo and the report modal for free — both render `cost_basis`
+  generically (the exporter iterates its items, the modal prints a JSON
+  block), so no renderer changed.
+- **The Settings usage table is unchanged and still correct**: it shows the
+  cache-creation TOTAL, which the subtotal is part of. Only the dollar
+  figure moved. Breaking the split out in the UI is deliberately left to
+  Chunk 4.4's disclosure work rather than bolted on here.
+- **Retained QC results do NOT go stale from this change.** `cost_basis`
+  is not part of the hashed `input_manifest` (`model`/`effort` are), so a
+  saved report keeps its identity and stays actionable — it simply carries
+  the basis it was priced under. That is the intended asymmetry: the rate
+  table is documentation of how a number was reached, not an input the
+  review's conclusions depend on.
+- **Tests**: 11 in `test_usage.py` (the golden per-model rate matrix, pure
+  5m, pure 1h at 2× input, mixed-not-double-counted, zero, clamped
+  malformed subtotal, ledger accrual, nested read + absent-key identity,
+  malformed nested object, the snapshot's rate + wording, and the
+  subtotal's trip through a real `/api/chat` turn) and 5 in
+  `test_qc_audit_report.py` (a verifier seat's subtotal captured/priced/
+  round-tripped, legacy basis loads and reproduces its estimate, legacy
+  basis + a subtotal prices conservatively, impossible subtotal rejected
+  per-record and in aggregate, unknown keys still refused). `token_usage`
+  and the research/QC `usage` fake gain an optional `cache_write_1h=`; it
+  attaches the nested object only when supplied, so every pre-existing
+  fixture stays byte-identical. Each mechanism was reverted in place to
+  prove it load-bearing (the guard → 1 red, the split formula → 1 red).
 
 ## Commands
 

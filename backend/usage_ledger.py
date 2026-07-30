@@ -31,6 +31,12 @@ def usage_to_dict(usage: Any) -> dict[str, int]:
 
     Mirrors the interview loop's ``_merge_usage`` for the research/audit
     call sites, which have a single ``response.usage`` to read.
+
+    ``cache_creation_1h_input_tokens`` is the provider's
+    ``usage.cache_creation.ephemeral_1h_input_tokens`` subtotal, flattened
+    to a plain key so it rides every ledger, trace and audit record like
+    any other count. It is a SLICE of ``cache_creation_input_tokens``, not
+    an addition to it — see :func:`estimate_usage_cost`.
     """
     out: dict[str, int] = {}
     if usage is None:
@@ -44,6 +50,12 @@ def usage_to_dict(usage: Any) -> dict[str, int]:
         value = _get(usage, key)
         if isinstance(value, (int, float)) and value:
             out[key] = int(value)
+    creation = _get(usage, "cache_creation")
+    one_hour = (
+        _get(creation, "ephemeral_1h_input_tokens") if creation is not None else None
+    )
+    if isinstance(one_hour, (int, float)) and one_hour:
+        out["cache_creation_1h_input_tokens"] = int(one_hour)
     details = _get(usage, "output_tokens_details")
     thinking = _get(details, "thinking_tokens") if details is not None else None
     if isinstance(thinking, (int, float)) and thinking:
@@ -72,20 +84,45 @@ def _rates(model: str) -> dict[str, float]:
     return settings.PRICING.get(model, settings.PRICING[settings.MODEL_SONNET_5])
 
 
+def cache_write_split(usage: Mapping[str, Any]) -> tuple[int, int]:
+    """Split cache-creation tokens into (5-minute, 1-hour) disjoint slices.
+
+    The provider's ``cache_creation_input_tokens`` is the TOTAL across TTL
+    classes and already contains the one-hour subtotal; the two are priced
+    at different rates, so they must be charged over disjoint slices or the
+    one-hour tokens are billed twice.
+
+    Live provider values are clamped into ``[0, total]`` rather than
+    trusted: a malformed subtotal should skew an estimate, never invert it
+    into a negative charge. Persisted audit records get no such courtesy —
+    :mod:`backend.qc.engine` rejects an impossible subtotal as inconsistent
+    accounting instead of quietly clamping a report's saved arithmetic.
+    """
+    total = usage.get("cache_creation_input_tokens", 0)
+    total = int(total) if isinstance(total, (int, float)) else 0
+    one_hour = usage.get("cache_creation_1h_input_tokens", 0)
+    one_hour = int(one_hour) if isinstance(one_hour, (int, float)) else 0
+    one_hour = max(0, min(one_hour, max(0, total)))
+    return max(0, total) - one_hour, one_hour
+
+
 def estimate_usage_cost(model: str, usage: dict[str, int]) -> float:
     """Estimate one recorded run's cost from its model and usage snapshot.
 
     The result is deliberately labeled an estimate everywhere it is exposed:
     it uses the app's list-price table, while the provider invoice remains the
     authority. Thinking tokens already live inside ``output_tokens`` and are
-    therefore not added a second time.
+    therefore not added a second time — and neither is the one-hour cache
+    subtotal, which lives inside the cache-creation total.
     """
     rates = _rates(model)
+    five_minute, one_hour = cache_write_split(usage)
     return round(
         usage.get("input_tokens", 0) * rates["input"]
         + usage.get("output_tokens", 0) * rates["output"]
         + usage.get("cache_read_input_tokens", 0) * rates["cache_read"]
-        + usage.get("cache_creation_input_tokens", 0) * rates["cache_write"]
+        + five_minute * rates["cache_write"]
+        + one_hour * rates.get("cache_write_1h", rates["cache_write"])
         + usage.get("web_search_requests", 0) * settings.WEB_SEARCH_COST,
         6,
     )
@@ -108,6 +145,13 @@ def usage_pricing_snapshot(model: str) -> dict[str, Any]:
         "thinking_token_treatment": (
             "Thinking tokens are included in output_tokens and are not "
             "charged a second time."
+        ),
+        "cache_write_treatment": (
+            "Cache creation is priced per TTL class. The provider's "
+            "one-hour subtotal (cache_creation_1h_input_tokens) is included "
+            "in cache_creation_input_tokens and is charged once, at the "
+            "cache_write_1h rate; the remainder is charged at the "
+            "five-minute cache_write rate."
         ),
         "authority": (
             "Application list-price estimate; provider billing records are "

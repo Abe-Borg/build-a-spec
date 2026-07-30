@@ -480,7 +480,10 @@ actions.
   token/cache/search usage, API/model response counts, and estimated cost for
   the run, with attribution to lenses and verifier seats where captured. It
   saves the exact pricing-rate snapshot and fallback basis used for the
-  estimate, and also states material
+  estimate — including both cache-write rates and a note on how the
+  provider's one-hour subtotal is charged — and a report saved before that
+  snapshot grew its one-hour rate keeps the four-rate basis it was actually
+  priced under rather than being rewritten. It also states material
   limitations — such as absent research context, failed calls, incomplete web
   retrieval or grounding, and document staleness — so the user can tell the
   difference between "no defect found" and "not fully checked." Research
@@ -621,6 +624,11 @@ meter) and still current:
   line. Estimates come from a verified list-pricing table (Sonnet 5 at the
   post-intro rate so the meter never under-reports); the trace files stay
   the exact record. Per-session — reset and project load zero it out.
+  Cache **writes are priced per TTL class**: a five-minute entry costs
+  1.25× input to create, a one-hour entry 2×. The provider reports the
+  one-hour count inside the cache-creation total, so the meter charges the
+  two rates over disjoint slices — the subtotal is never billed twice, and
+  never billed at the cheaper rate just because it is nested.
 
 Shipped in v0.6.0 ("Sonnet unleashed") and still current (project decision:
 the app imposes **no quality limits on the model** — the only caps left are

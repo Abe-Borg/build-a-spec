@@ -3,11 +3,19 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
+from backend import settings
 from backend.app import create_app
 from backend import sessions
-from backend.usage_ledger import UsageLedger
+from backend.usage_ledger import (
+    UsageLedger,
+    cache_write_split,
+    estimate_usage_cost,
+    usage_pricing_snapshot,
+    usage_to_dict,
+)
 from tests.fakes import (
     FakeClient,
     SequencedFakeClient,
@@ -74,6 +82,173 @@ def test_estimate_math_is_golden_against_pricing():
     assert snap["estimated_cost_usd"]["total"] == 6.35
     # Cache saved = 1e6 * (3e-6 - 0.30e-6) = 2.7
     assert snap["cache_saved_usd"] == 2.7
+
+
+# ---------------------------------------------------------------------------
+# Per-TTL cache-write pricing (Chunk 4.1)
+# ---------------------------------------------------------------------------
+#
+# The provider reports `cache_creation_input_tokens` as the TOTAL across TTL
+# classes, with the one-hour count nested at
+# `usage.cache_creation.ephemeral_1h_input_tokens` INSIDE that total. A
+# one-hour entry costs 2x input to create where a five-minute entry costs
+# 1.25x, so the two rates must apply to disjoint slices — charging the
+# subtotal at both is a real over-report, charging it only at the cheap rate
+# a real under-report.
+
+
+def test_every_priced_model_configures_both_cache_write_rates():
+    # A model whose table is missing either rate silently mis-prices every
+    # run on it, and nothing else in the app would notice.
+    for model, rates in settings.PRICING.items():
+        assert set(rates) == {
+            "input",
+            "output",
+            "cache_read",
+            "cache_write",
+            "cache_write_1h",
+        }, model
+        assert rates["cache_write"] == pytest.approx(1.25 * rates["input"]), model
+        assert rates["cache_write_1h"] == pytest.approx(2.0 * rates["input"]), model
+
+
+def test_one_hour_cache_writes_price_at_twice_input_not_the_five_minute_rate():
+    # Opus 5 (the Final QC model): $5/M input, so a one-hour write is $10/M.
+    # The five-minute rate would say $6.25 — the number this chunk removes.
+    cost = estimate_usage_cost(
+        settings.MODEL_OPUS_5,
+        {
+            "cache_creation_input_tokens": 1_000_000,
+            "cache_creation_1h_input_tokens": 1_000_000,
+        },
+    )
+    assert cost == 10.0
+
+
+def test_a_pure_five_minute_cache_write_still_prices_at_1_25x():
+    cost = estimate_usage_cost(
+        settings.MODEL_OPUS_5, {"cache_creation_input_tokens": 1_000_000}
+    )
+    assert cost == 6.25
+
+
+def test_mixed_ttl_cache_writes_are_not_double_counted():
+    # 600k five-minute at $6.25/M = 3.75, 400k one-hour at $10/M = 4.00.
+    # Double-counting the subtotal on top of the total would read 10.25.
+    cost = estimate_usage_cost(
+        settings.MODEL_OPUS_5,
+        {
+            "cache_creation_input_tokens": 1_000_000,
+            "cache_creation_1h_input_tokens": 400_000,
+        },
+    )
+    assert cost == 7.75
+
+
+def test_zero_cache_creation_costs_nothing():
+    assert (
+        estimate_usage_cost(
+            settings.MODEL_OPUS_5,
+            {"cache_creation_input_tokens": 0, "cache_creation_1h_input_tokens": 0},
+        )
+        == 0.0
+    )
+
+
+def test_a_subtotal_larger_than_its_total_is_clamped_not_inverted():
+    # Live provider data is clamped so a malformed subtotal skews the
+    # estimate rather than subtracting a negative five-minute slice from
+    # it. (Persisted audit records are held to a stricter standard — see
+    # test_qc_audit_report.)
+    cost = estimate_usage_cost(
+        settings.MODEL_OPUS_5,
+        {
+            "cache_creation_input_tokens": 100_000,
+            "cache_creation_1h_input_tokens": 900_000,
+        },
+    )
+    assert cost == pytest.approx(1.0)
+    assert cache_write_split(
+        {
+            "cache_creation_input_tokens": 100_000,
+            "cache_creation_1h_input_tokens": 900_000,
+        }
+    ) == (0, 100_000)
+    assert cache_write_split({"cache_creation_1h_input_tokens": -5}) == (0, 0)
+
+
+def test_the_ledger_prices_a_one_hour_subtotal_it_accrued():
+    ledger = UsageLedger()
+    ledger.add(
+        "qc",
+        {
+            "cache_creation_input_tokens": 1_000_000,
+            "cache_creation_1h_input_tokens": 400_000,
+        },
+    )
+    snap = ledger.snapshot()
+    assert snap["totals"]["cache_creation_1h_input_tokens"] == 400_000
+    assert snap["estimated_cost_usd"]["by_category"]["qc"] == 7.75
+
+
+def test_usage_to_dict_reads_the_nested_one_hour_subtotal():
+    flat = usage_to_dict(token_usage(cache_write=900, cache_write_1h=400))
+    assert flat["cache_creation_input_tokens"] == 900
+    assert flat["cache_creation_1h_input_tokens"] == 400
+    # Absent nested object (the ordinary five-minute request) adds no key,
+    # so a legacy record and a fresh all-5m one serialize identically.
+    assert "cache_creation_1h_input_tokens" not in usage_to_dict(
+        token_usage(cache_write=900)
+    )
+
+
+def test_a_malformed_nested_cache_creation_is_ignored_not_fatal():
+    from types import SimpleNamespace
+
+    for creation in (None, "nonsense", SimpleNamespace(), SimpleNamespace(
+        ephemeral_1h_input_tokens="lots"
+    )):
+        flat = usage_to_dict(
+            SimpleNamespace(input_tokens=10, cache_creation=creation)
+        )
+        assert flat["input_tokens"] == 10
+        assert "cache_creation_1h_input_tokens" not in flat
+
+
+def test_the_pricing_snapshot_publishes_the_one_hour_rate_and_explains_it():
+    snap = usage_pricing_snapshot(settings.MODEL_OPUS_5)
+    assert snap["rates_per_token"]["cache_write_1h"] == pytest.approx(
+        10.0 / 1_000_000
+    )
+    treatment = snap["cache_write_treatment"]
+    assert "one-hour" in treatment and "charged once" in treatment
+
+
+def test_the_chat_loop_records_the_providers_one_hour_subtotal(monkeypatch):
+    # The interview aggregates usage itself (_merge_usage) instead of going
+    # through usage_to_dict, so it needs the nested read of its own — this
+    # is what Chunk 4.2's one-hour interview breakpoints will be priced on.
+    client = _client()
+    fake = FakeClient(
+        [
+            tool_turn(
+                ["Working. "],
+                _EDITS,
+                usage=token_usage(cache_write=500, cache_write_1h=200),
+            ),
+            text_turn(
+                ["Done."], usage=token_usage(cache_write=300, cache_write_1h=100)
+            ),
+        ]
+    )
+    monkeypatch.setattr("backend.llm.conversation.get_client", lambda: fake)
+    resp = client.post("/api/chat", json={"message": "go"})
+
+    (done,) = [e for e in _parse_sse(resp.text) if e["type"] == "turn_complete"]
+    assert done["usage"]["cache_creation_input_tokens"] == 800
+    assert done["usage"]["cache_creation_1h_input_tokens"] == 300
+    interview = client.get("/api/usage").json()["categories"]["interview"]
+    assert interview["cache_creation_1h_input_tokens"] == 300
 
 
 def test_ledger_reset_clears():

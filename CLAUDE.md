@@ -4989,6 +4989,61 @@ no new SSE event, no new dep, no project-format bump.
   already held and has to keep holding under ownership; they are
   regression guards, not fixes.
 
+## Short endpoints answer from one state — implemented notes
+
+Deep-dive remediation Chunk 6.3. Four small surfaces that either did
+seconds of work on the event loop or built a reply out of two different
+document versions. No new endpoint, no new SSE event, no new dep, no
+project-format bump.
+
+- **Template import was the fourth `async def` upload path**, and the only
+  one still parsing inline. Up to 16 MiB of JSON validated and atomically
+  written under the catalog lock, on the loop — the same shape as the
+  master parse the upload-responsiveness work already moved off it.
+  `get_template_catalog().import_bytes` now goes through
+  `run_in_threadpool`; every `TemplateError`, status code, size limit and
+  trace event is unchanged. **The event-loop rule stands: an `async def`
+  handler in this app must never do seconds of CPU inline.**
+- **`/api/doc/diff` could 500 on a race it has a 400 for.** Both indexes
+  were validated against `len(store.versions)` and then read afterwards —
+  and an edit made after an undo TRUNCATES the redo tail, so the list can
+  get shorter. The bounds check and both reads now happen inside
+  `session_state_guard()`; the expensive part (two `SpecSection.from_dict`
+  builds plus `diff_sections`) still runs outside it. A version record is
+  immutable history — QC apply's staleness check depends on that identity
+  — so binding the reference under the guard is enough, and a deepcopy of
+  two whole documents per compare-view poll is not.
+- **`/api/doc` now builds its payload under the guard.** `_doc_payload`
+  reads `session.doc.doc` several times over (the snapshot, the open
+  items, the lint pass) and a commit swaps in a NEW tree, so an edit
+  landing mid-payload returned a tree from one version beside a lint
+  report computed against another — a disagreement the panel has no way
+  to detect. Precedent already existed: undo/redo/edit have always built
+  theirs inside the guard.
+- **QC apply's response describes the version it committed.** The payload
+  was built after the committing guard released, so anything landing in
+  that window — another edit, a turn's commit — was what the caller got
+  back, beside outcomes describing an apply it never saw. Both final
+  branches now freeze `_doc_payload` inside the same guard and return the
+  frozen dict; the trace event and JSON serialization stay outside it.
+- **Tests: 4 new, each reverted in place.**
+  `test_import_responsiveness.py` (the blocked-worker + `/api/health`
+  pattern the file already uses), `test_redline_export.py` (the diff
+  TOCTOU — the seam is `SpecSection.from_dict`, which on the unguarded
+  route runs BETWEEN the two version reads, exactly where the truncation
+  landed; it reproduces the real `IndexError`), `test_qc_apply_history.py`
+  (the seam is the trace event, which genuinely runs between the guard and
+  the response), and `test_app.py` (the payload probe records the tree
+  object each reader was handed — one guarded state means one object).
+- **Two things that made the concurrency probes lie, worth knowing.**
+  A `TestClient` NOT entered as a context manager serializes a second
+  thread's request behind the first, so a "concurrent" edit silently lands
+  after the request under test — use `with TestClient(...) as client:`.
+  And a hook on `open_questions`/`lint_document` fires for EVERY payload
+  built, including the concurrent edit's own response, so a single shared
+  record gets overwritten by the wrong request: key it by
+  `threading.get_ident()`.
+
 ## Commands
 
 ```

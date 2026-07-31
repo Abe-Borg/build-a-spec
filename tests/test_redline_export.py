@@ -450,6 +450,92 @@ def test_doc_diff_endpoint_validation():
     assert client.get("/api/doc/diff?base=-1").status_code == 400
 
 
+def test_a_concurrent_truncation_cannot_turn_a_diff_into_a_500(monkeypatch):
+    """Bounds are checked against the version list, so the reads must be atomic
+    with the check.
+
+    An edit made after an undo truncates the redo tail, so the list can get
+    SHORTER. The route validated both indexes against ``len(versions)`` and
+    then read them afterwards — a truncation landing in between raised
+    IndexError, i.e. a 500 from a route whose entire contract for a bad index
+    is a 400. Binding both records inside the guard makes the window
+    unreachable; the expensive tree build and diff still run outside it.
+
+    The seam is ``SpecSection.from_dict``: on the unguarded route it runs
+    between the two version reads, which is exactly where the truncation used
+    to land.
+    """
+    import threading
+
+    from backend import sessions
+    from backend.spec_doc import model as model_module
+
+    client = TestClient(create_app())
+    session = sessions.get_session()
+    for index in range(3):
+        assert client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {
+                        "action": "add_article",
+                        "target_id": "pt1",
+                        "text": f"ARTICLE {index}",
+                    }
+                ]
+            },
+        ).status_code == 200
+    assert len(session.doc.versions) == 4
+
+    # Two undos leave a redo tail of two versions; index 3 is still valid.
+    assert client.post("/api/doc/undo").status_code == 200
+    assert client.post("/api/doc/undo").status_code == 200
+    assert session.doc.index == 1 and len(session.doc.versions) == 4
+
+    real_from_dict = model_module.SpecSection.from_dict
+    reached = threading.Event()
+    truncated = threading.Event()
+
+    def hooked_from_dict(payload):
+        if not reached.is_set():
+            reached.set()
+            # Wait for a real edit to truncate the redo tail. Bounded: once
+            # the reads are guarded the edit cannot land until the route
+            # releases, and the test must not deadlock proving that.
+            truncated.wait(2.0)
+        return real_from_dict(payload)
+
+    monkeypatch.setattr(model_module.SpecSection, "from_dict", hooked_from_dict)
+
+    def _truncate() -> None:
+        assert reached.wait(5)
+        client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {
+                        "action": "add_article",
+                        "target_id": "pt1",
+                        "text": "BRANCHED",
+                    }
+                ]
+            },
+        )
+        truncated.set()
+
+    worker = threading.Thread(target=_truncate, daemon=True)
+    worker.start()
+    try:
+        response = client.get("/api/doc/diff?base=0&cur=3")
+    finally:
+        truncated.set()
+        worker.join(10)
+
+    # Either answer is defensible; a 500 is not.
+    assert response.status_code in (200, 400), response.text
+    assert response.json()["ok"] is (response.status_code == 200)
+
+
 def test_export_redline_master_requires_baseline():
     from backend import sessions
 

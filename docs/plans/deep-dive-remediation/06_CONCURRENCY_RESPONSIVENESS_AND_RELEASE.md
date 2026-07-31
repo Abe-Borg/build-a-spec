@@ -1,6 +1,6 @@
 # Phase 6 — Concurrency, responsiveness, and release
 
-- Status: **in progress** (6.1-6.2 landed; 6.3-6.5 planned)
+- Status: **in progress** (6.1-6.3 landed; 6.4-6.5 planned)
 - Prerequisites: Chunk 6.5 requires Phases 1-5 complete. Chunks 6.1-6.4 depend
   only on Phase 1 (6.1 additionally interacts with Chunk 4.3's metering seam —
   coordinate, don't serialize). Pulling 6.1 forward early is encouraged: the
@@ -359,11 +359,34 @@ venv\Scripts\python -m pytest -q tests/test_import_responsiveness.py tests/test_
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: complete
+- Commit/PR: branch `claude/phase-6-concurrency-responsiveness-xncqik`
+- Tests: 4 new, each reverted in place to confirm it goes red.
+  `tests/test_import_responsiveness.py`: a blocked template import does not
+  stall `/api/health` (the file's established blocked-worker pattern).
+  `tests/test_redline_export.py`: a concurrent redo-tail truncation cannot
+  turn a diff into a 500 — it reproduces the real `IndexError` on the
+  unguarded route. `tests/test_qc_apply_history.py`: apply replies with the
+  version it committed, not a later one. `tests/test_app.py`: `/api/doc`
+  reads one state, not a mixture of two. Full suite 1373 passed / 9
+  skipped (no new skips); `npm test` 193; `npm run build` clean.
 - Deviations:
-- Manual QA owed:
+  - **The diff binds version REFERENCES under the guard rather than
+    deepcopying.** A version record is immutable history — QC apply's
+    staleness check turns on that identity — so the reference is as safe as
+    a copy against the failure the plan names (the LIST being truncated),
+    and a deepcopy of two whole documents per compare-view poll is real
+    cost for none.
+  - **The diff TOCTOU test lives in `tests/test_redline_export.py`**, not
+    `tests/test_diffing.py` as listed: `test_diffing.py` is pure-unit with
+    no TestClient, while the existing `/api/doc/diff` route tests are
+    already in the redline file. Keeping route tests together beat adding
+    HTTP infrastructure to a unit module.
+  - No `tests/test_templates.py` change was needed: the import route had no
+    existing route-level test, and the new one belongs with the other
+    event-loop guarantees.
+- Manual QA owed: none specific to this chunk. Covered incidentally by the
+  6.5 responsiveness item (import a large template while chat streams).
 
 ## Chunk 6.4 — Snapshot heavy DOCX/request work outside locks
 

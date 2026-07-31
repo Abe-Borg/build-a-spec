@@ -1153,11 +1153,24 @@ def _source_preservation_payload(
     }
 
 
-def _doc_payload(session) -> dict[str, Any]:
+def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
+    """Build the full document payload.
+
+    ``workspace`` MUST be supplied by any caller holding
+    ``session_state_guard()`` without an ``active_write`` lease. Looking the
+    lease up here takes the SessionManager lock, and a tutorial transition
+    takes those two locks in the opposite order — manager lock held while
+    calling ``invalidate_model_turn()``, which takes the session's
+    turn-state lock. That is an AB/BA deadlock, and it wedges every later
+    workspace access with it. Undo/redo/edit are safe without this because
+    ``active_write`` and the transitions mutually exclude each other under
+    the manager lock; ``/api/doc`` and QC apply take no such lease.
+    """
     profile = ProjectProfile.from_dict(session.doc.doc.project_profile)
     preservation = _source_readiness(session)
     capabilities = session.source_edit_capabilities()
-    workspace = sessions.get_workspace()
+    if workspace is None:
+        workspace = sessions.get_workspace()
     workspace_fields = (
         {
             "workspace_id": workspace.workspace_id,
@@ -2960,13 +2973,19 @@ def create_app() -> FastAPI:
 
     @app.get("/api/doc")
     def get_doc() -> dict:
-        session = sessions.get_session()
+        # The lease is captured BEFORE the guard and passed in: looking it
+        # up inside would take the manager lock in the opposite order from
+        # a tutorial transition and deadlock (see ``_doc_payload``). This
+        # route takes no ``active_write`` lease, so nothing else excludes a
+        # transition while it runs.
+        lease = sessions.get_workspace()
+        session = lease.session
         # One guarded state: the document, its lint report, open questions,
         # figures, suggestions and version pair are read together or not at
         # all. Unguarded, a turn committing mid-payload could return a tree
         # from one version beside a lint report computed against another.
         with session.session_state_guard():
-            return _doc_payload(session)
+            return _doc_payload(session, workspace=lease)
 
     @app.get("/api/doc/capabilities")
     def get_doc_capabilities() -> dict:
@@ -4653,8 +4672,9 @@ def create_app() -> FastAPI:
                 record_skipped_outcomes()
                 # Frozen inside the same guard that committed it: the reply
                 # has to describe the version this apply produced, not one a
-                # turn landed while the response was being assembled.
-                applied_payload = _doc_payload(session)
+                # turn landed while the response was being assembled. The
+                # lease rides in from outside — see ``_doc_payload``.
+                applied_payload = _doc_payload(session, workspace=lease)
         else:
             # No document mutation occurred, but outcome events still belong
             # only to the exact result/version validated above.
@@ -4686,7 +4706,7 @@ def create_app() -> FastAPI:
                         status_code=409,
                     )
                 record_skipped_outcomes()
-                applied_payload = _doc_payload(session)
+                applied_payload = _doc_payload(session, workspace=lease)
 
         outcome_counts: dict[str, int] = {}
         for outcome in outcomes.values():

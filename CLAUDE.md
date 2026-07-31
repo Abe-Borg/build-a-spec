@@ -5026,7 +5026,22 @@ project-format bump.
   back, beside outcomes describing an apply it never saw. Both final
   branches now freeze `_doc_payload` inside the same guard and return the
   frozen dict; the trace event and JSON serialization stay outside it.
-- **Tests: 4 new, each reverted in place.**
+- **The workspace is never looked up while the session guard is held**
+  (review finding on PR #109, Codex). `_doc_payload` ends with
+  `sessions.get_workspace()`, which takes the SessionManager lock — and a
+  tutorial transition takes the two locks the OTHER way round, holding the
+  manager lock while calling `invalidate_model_turn()`, which takes the
+  session's turn-state lock. AB/BA, and it wedges every later workspace
+  access with it. `_doc_payload` now takes an optional `workspace` and
+  guarded callers capture the lease first. **Undo/redo/edit were already
+  safe and still are**: they hold an `active_write` lease, and
+  `active_write` and every transition exclude each other under the manager
+  lock (the busy check and the invalidate share one critical section), so
+  a transition can never be mid-flight while one is held. `/api/doc` and
+  QC apply take no such lease, which is exactly why they needed the lease
+  passed in. `_turn_state_lock` is an RLock, so `_is_owned()` — not a
+  non-blocking re-acquire — is what a test must probe.
+- **Tests: 5 new, each reverted in place.**
   `test_import_responsiveness.py` (the blocked-worker + `/api/health`
   pattern the file already uses), `test_redline_export.py` (the diff
   TOCTOU — the seam is `SpecSection.from_dict`, which on the unguarded
@@ -5035,14 +5050,20 @@ project-format bump.
   (the seam is the trace event, which genuinely runs between the guard and
   the response), and `test_app.py` (the payload probe records the tree
   object each reader was handed — one guarded state means one object).
-- **Two things that made the concurrency probes lie, worth knowing.**
-  A `TestClient` NOT entered as a context manager serializes a second
-  thread's request behind the first, so a "concurrent" edit silently lands
-  after the request under test — use `with TestClient(...) as client:`.
-  And a hook on `open_questions`/`lint_document` fires for EVERY payload
-  built, including the concurrent edit's own response, so a single shared
-  record gets overwritten by the wrong request: key it by
-  `threading.get_ident()`.
+- **Three things that made the concurrency probes lie, worth knowing.**
+  (1) Whether a second thread's request through `TestClient` really runs
+  concurrently depends on how the client was constructed — entering it as
+  a context manager starts a persistent portal, and a bare one behaves
+  differently. Do not build a regression test on that: the diff test
+  drives its truncation from INSIDE the seam, on the request's own thread,
+  so there is no concurrency to depend on. (2) A hook on
+  `open_questions`/`lint_document` fires for EVERY payload built,
+  including the concurrent edit's own response, so a single shared record
+  gets overwritten by the wrong request — key it by
+  `threading.get_ident()`. (3) `git stash push backend/app.py` only
+  reverts UNCOMMITTED work: once the chunk is committed, a revert check
+  has to be `git checkout HEAD~1 -- backend/app.py` or it silently
+  measures the fixed code and every conclusion drawn from it is wrong.
 
 ## Commands
 

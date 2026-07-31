@@ -1409,3 +1409,46 @@ def test_api_doc_reads_one_state_not_a_mixture_of_two(monkeypatch):
         for article in part["articles"]
     ]
     assert "MID-PAYLOAD" not in titles
+
+
+def test_the_workspace_is_never_looked_up_while_the_session_guard_is_held(
+    monkeypatch,
+):
+    """AB/BA: the transition path takes these two locks the other way round.
+
+    ``SessionManager`` holds its own lock while calling
+    ``invalidate_model_turn()``, which takes the session's turn-state lock.
+    So a route that holds ``session_state_guard()`` and THEN looks the
+    workspace up — the manager lock — can deadlock against a tutorial
+    finish, permanently, wedging every later workspace access with it.
+
+    Undo/redo/edit are safe without this rule because ``active_write`` and
+    the transitions mutually exclude each other under the manager lock:
+    while a write lease is held every transition raises busy, and the check
+    and the invalidate share one critical section. ``/api/doc`` and QC apply
+    take no such lease, so they must capture the lease before the guard.
+
+    Reported by Codex on PR #109.
+    """
+    from backend import app as app_module
+
+    client = _client()
+    session = sessions.get_session()
+    real_get_workspace = sessions.get_workspace
+    owned_at_lookup: list[bool] = []
+
+    def probing_get_workspace():
+        # `_turn_state_lock` is an RLock, so a same-thread re-acquire would
+        # succeed and prove nothing; `_is_owned()` answers the real question.
+        owned_at_lookup.append(session._turn_state_lock._is_owned())
+        return real_get_workspace()
+
+    monkeypatch.setattr(sessions, "get_workspace", probing_get_workspace)
+    monkeypatch.setattr(app_module.sessions, "get_workspace", probing_get_workspace)
+
+    assert client.get("/api/doc").status_code == 200
+    assert owned_at_lookup, "the route really did look the workspace up"
+    assert not any(owned_at_lookup), (
+        "the workspace was looked up while the session guard was held — "
+        "that is the deadlocking lock order"
+    )

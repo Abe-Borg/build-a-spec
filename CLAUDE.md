@@ -170,7 +170,14 @@ backend/
                            later round's log nor — via the token check in
                            _try_resolve — adopt their discarded round once
                            the next one is RUNNING; sse_events binds to the
-                           token at call time and closes `superseded`
+                           token at call time and closes `superseded`.
+                           Chunk 6.1 makes ending a run ONE transaction:
+                           _try_resolve adopts, sets error/kind, sets the
+                           winning run's cancel event, appends the terminal
+                           event (_append_event_locked), claims the trace
+                           handle and publishes status LAST, returning a
+                           _Resolution so the winner never rereads a field
+                           a successor start() may already own
   updates.py               [PORT ≈verbatim: Spec Critic src/core/updates.py]
                            GitHub-Releases manifest updater: https-only +
                            redirect-downgrade guard, SHA-256 verify before
@@ -231,7 +238,12 @@ backend/
                            pattern as research/runner.py); Review Room keeps the
                            existing endpoints and run-token isolation, exposes
                            top-level error_kind, and holds stopped attempts in a
-                           truthful settling state until in-flight work unwinds
+                           truthful settling state until in-flight work unwinds.
+                           Chunk 6.1 gives it the same claimed _trace_handle,
+                           closed in _finalize_attempt (settlement, whoever won
+                           the status race) and NEVER in stop() — a stopped
+                           attempt is still assembling the paid partial report
+                           the span's counts describe
   tracing/                 [PORT: Spec Critic src/tracing/ core, since diverged]
                            recorder (JSONL spans/events/prompts + run.json,
                            writer thread, per-line flush, ContextVar parent
@@ -2636,8 +2648,9 @@ SSE event type, no new dep, no project-format bump (one additive key).
   `_failure_message` appends "Earlier research rounds are unchanged and still
   in use." when a profile survives, and the stop message became "this
   round's progress was discarded". `stop()` tags that terminal event with
-  the active round (`_round_number`, read before the CAS while no fresh
-  `start()` can renumber it) — a stop that beats the worker's first event
+  the active round (`_round_number` — read inside the CAS since Chunk 6.1,
+  where the verified `status == running` is itself the proof no fresh
+  `start()` has renumbered it) — a stop that beats the worker's first event
   would otherwise leave the round's whole log one untagged entry. Readiness
   is deliberately unchanged
   (still `status == "complete"`): a failed extra round leaves the session no
@@ -4789,6 +4802,92 @@ endpoint, no new dep, no schema change.
 - **`no_open_items` keeps its id** and now says "open document item(s)
   ([TBD]/needs-input)" — it was easy to confuse with QC findings when only
   one of the two checks existed.
+
+## Ending a run is one transaction — implemented notes
+
+Deep-dive remediation Chunk 6.1, and the first of Phase 6. `ResearchRunner`
+ended a run in three steps — compare-and-set, then set the cancel event,
+then append the terminal event — and the very next thing that can happen
+after that first lock release is a fresh `start()`, which clears the event
+log, blanks `error` and installs its own cancel event. So every one of
+those follow-up steps could address the SUCCESSOR. No new endpoint, no new
+SSE event, no new dep, no project-format bump.
+
+- **Three live bugs, one cause.** A stop racing an immediate restart
+  (which Batch 7 explicitly made safe and encouraged) set the NEW round's
+  `cancel_event`, cancelling a run the user never stopped; published its
+  terminal frame into the NEW round's log; and read `self.error` back
+  after the successor had blanked it, so the frame that did land carried
+  an empty message. The success path had the same shape: round N's
+  `research_complete` landed in round N+1's log, where a follower reads it
+  as its own round finishing minutes early. All three are now impossible
+  by construction — `_try_resolve` does the whole thing under one
+  acquisition and hands the winner a `_Resolution` so nothing has to
+  reread a mutable field afterwards.
+- **The order inside the lock is load-bearing, because the readers are
+  not inside it.** Readiness, `_doc_payload` and the diagnostics snapshot
+  sample `status` and `profile_result` as plain attributes — deliberately,
+  since taking the runner lock there would nest a second lock under the
+  session guard. So the merge (`adopt`) runs FIRST and `status` is
+  assigned LAST: a lock-free reader sees `running` beside the old profile
+  or `complete` beside the new one, never `complete` beside the round it
+  superseded. The seam that makes this testable is the merge itself —
+  what `append_research_round` observes mid-transaction is exactly what an
+  interleaving reader would.
+- **The terminal status and its event move together because `sse_events`
+  reads them together.** Its "terminal and drained" test is
+  `status in _TERMINAL and every event sent`, sampled in one critical
+  section, so a follower landing between a published status and its
+  not-yet-appended event saw a finished, fully drained run and closed with
+  `stream_end` having never sent the terminal frame at all.
+  `_append_event_locked` is the entry point the transaction uses; `_emit`
+  is now just token validation in front of it.
+- **`_failure_message` became `_failure_message_locked`.** It reads
+  `profile_result` to decide whether to add "Earlier research rounds are
+  unchanged and still in use", and that read now happens inside the same
+  transaction as the write — it was a separate acquire/release before the
+  CAS.
+- **Stopped runs no longer leak their trace span.** `research_end`/`qc_end`
+  ran only when the worker WON the compare-and-set, and a stop is exactly
+  the case where it loses — so every stopped research and QC run left an
+  unclosed span, which `trace_viewer.html` renders as a crash node and a
+  support bundle cannot tell apart from a hang. Each runner now holds the
+  open handle (`_trace_handle`) and the terminal transition CLAIMS it, so
+  the loser has nothing to close and "exactly once" is structural.
+- **The two runners deliberately close at different points, and each
+  encodes it once.** Research closes at the stop: the round's result is
+  discarded outright, so there is nothing left to wait for. Final QC
+  closes at settlement (`_finalize_attempt`, whoever won the status race)
+  because a stopped attempt keeps assembling the partial report it already
+  paid for, and that report and its finding counts are what the span
+  should describe — `stop()` never closes it. The QC span now also carries
+  the truthful `latest_attempt_status` (`complete|partial|failed|
+  cancelled`) rather than a flat "complete", and its error, per the
+  plan's "terminal status/error and available counts".
+- **A span is opened only after the compare-and-set** so a refused
+  double-start never fabricates a run span (the same reason `restore()`
+  does not — it is a project-file read, not a provider run). That leaves a
+  narrow window in which a stop can resolve the run before the handle is
+  adopted, which is why adoption is a token-checked lock and an orphan is
+  closed on the spot. The orphan close reads the runner's terminal state
+  only while it is still terminal: a successor that started in that same
+  window owns `status`/`error` by then, and recording its `running` as
+  this span's outcome would be a false record.
+- **`restore()` appends inside its own lock** for the same reason as the
+  transaction — it publishes a terminal status, and a `start()` racing the
+  gap would have taken the compatibility event with it.
+- **Tests: 7 new, and the seam is a lock wrapper, not a sleep.** Every
+  race here is a window BETWEEN two critical sections, so
+  `tests/test_research_rounds.py::_ReleaseHook` wraps the runner lock with
+  two hooks — `while_locked` (probes reading state other threads mutate)
+  and `on_release` (where a competing `start()` goes). Install it before
+  the first `start()`; disarm inside a hook before doing anything that
+  locks again. `test_research_rounds.py` gets the stop-publishes-first,
+  worker-vs-successor, status-and-event-never-apart and lock-free-profile
+  cases; `test_stop.py` gets cancel-event ownership; `test_tracing.py`
+  gets one span test per runner, each also pinning WHICH point closes it.
+  All seven were reverted in place to prove them load-bearing (4 red on
+  the research runner alone, 3 more across both).
 
 ## Commands
 

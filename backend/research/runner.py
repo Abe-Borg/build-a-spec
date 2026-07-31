@@ -15,11 +15,22 @@ emit fine-grained live progress (dimension started/activity/search/fetch/
 retry), so each run is identified by an unforgeable per-start token: a
 stopped run's still-unwinding threads can neither append to a later
 round's log nor resolve over it.
+
+Ending a run is ONE transaction (:meth:`ResearchRunner._try_resolve`).
+Everything a terminal transition publishes — the merged profile, the
+error, the cancel signal, the terminal event, the trace handle, the
+status — moves under a single acquisition of the runner lock, and the
+status is published last. Splitting any of it back out reopens a race
+against the very next ``start()``: a successor round clears the event log
+and installs its own cancel event, so a post-lock append lands in the
+wrong round's log and a post-lock ``cancel_event.set()`` cancels a run
+the user never stopped.
 """
 from __future__ import annotations
 
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from ..project_profile import ProjectProfile
@@ -38,6 +49,46 @@ STATUS_COMPLETE = "complete"
 STATUS_FAILED = "failed"
 
 _TERMINAL = (STATUS_COMPLETE, STATUS_FAILED)
+
+
+@dataclass
+class _Resolution:
+    """Everything a winning terminal transition published.
+
+    Handed back to whichever caller won the compare-and-set so it never has
+    to reread a mutable runner attribute after the lock is released — by
+    then a successor round may already own ``status``, ``error``, the
+    cancel event and the event log. The loser gets ``None`` and does
+    nothing at all, which is what makes "exactly one of stop and the worker
+    closes the trace span" true by construction.
+    """
+
+    status: str
+    error: str
+    error_kind: str
+    round_number: int
+    profile: RequirementsProfile | None = None
+    #: The terminal log entry as it landed (seq/ts/round stamped).
+    event: dict[str, Any] | None = None
+    #: Claimed from the runner — the winner closes it, exactly once.
+    trace_handle: Any | None = None
+
+
+def _research_failed_event(resolution: _Resolution) -> dict[str, Any]:
+    """The terminal event every failure path publishes — one shape, one place.
+
+    Fan-out failure, an unexpected exception, and a user stop all end the
+    same way as far as a follower is concerned; only the message differs.
+    """
+    return {
+        "type": "research_failed",
+        "error": resolution.error,
+        **(
+            {"error_kind": resolution.error_kind}
+            if resolution.error_kind
+            else {}
+        ),
+    }
 
 
 class ResearchRunner:
@@ -70,6 +121,10 @@ class ResearchRunner:
         # run's still-unwinding threads can neither append to a later
         # round's log nor adopt their discarded round into its profile.
         self._run_token: object | None = None
+        # The run's open trace span, claimed by whichever caller resolves the
+        # run — so a stopped run's span is closed instead of hanging open
+        # forever (which the trace viewer renders as a crash).
+        self._trace_handle: Any | None = None
         self.status = STATUS_IDLE
         self.error = ""
         self.error_kind = ""
@@ -77,6 +132,26 @@ class ResearchRunner:
         self.events: list[dict[str, Any]] = []
 
     # -- events --------------------------------------------------------------
+
+    def _append_event_locked(
+        self, event: dict[str, Any], *, round_number: int = 0
+    ) -> dict[str, Any]:
+        """Append one event while the caller already holds ``self._lock``.
+
+        Returns the stamped entry. The terminal transition appends through
+        this rather than :meth:`_emit`, so publishing the terminal status
+        and its event is one critical section: ``sse_events`` decides
+        "terminal and drained" from exactly this pair under exactly this
+        lock, and a window between them lets a follower reach ``stream_end``
+        without ever being sent the terminal frame.
+        """
+        stamped = dict(event)
+        stamped["seq"] = len(self.events)
+        stamped["ts"] = time.strftime("%H:%M:%S")
+        if round_number:
+            stamped["round"] = round_number
+        self.events.append(stamped)
+        return stamped
 
     def _emit(
         self,
@@ -89,17 +164,11 @@ class ResearchRunner:
 
         A ``run_token`` that no longer matches the runner's current one is
         a stale worker talking past its run's end — the event is dropped.
-        Token-free emits (stop's terminal event, restore) always land.
         """
         with self._lock:
             if run_token is not None and run_token is not self._run_token:
                 return False
-            event = dict(event)
-            event["seq"] = len(self.events)
-            event["ts"] = time.strftime("%H:%M:%S")
-            if round_number:
-                event["round"] = round_number
-            self.events.append(event)
+            self._append_event_locked(event, round_number=round_number)
             return True
 
     def events_since(self, seq: int) -> list[dict[str, Any]]:
@@ -161,6 +230,32 @@ class ResearchRunner:
             project=project_profile.display_line(),
             dimensions=len(getattr(module, "research_dimensions", ()) or ()),
         )
+        # Opened AFTER the compare-and-set, so a losing double-start never
+        # fabricates a run span — which leaves a narrow window in which a
+        # stop can already have resolved this run. Adopt the handle against
+        # our own token; if the run is over already, close the span right
+        # here, because by then nobody else holds it.
+        orphaned: tuple[str, str] | None = None
+        with self._lock:
+            if self._run_token is run_token:
+                self._trace_handle = trace_handle
+            else:
+                # Normally the stop's own terminal state. Only read it when
+                # it is still ours to read — a successor that also started in
+                # this window owns `status`/`error` now, and reporting its
+                # `running` as this span's outcome would be a false record.
+                orphaned = (
+                    (self.status, self.error)
+                    if self.status in _TERMINAL
+                    else (
+                        STATUS_FAILED,
+                        "The run ended before its trace span was adopted.",
+                    )
+                )
+        if orphaned is not None:
+            _trace.research_end(
+                trace_handle, status=orphaned[0], error=orphaned[1]
+            )
 
         def _sink(event: dict) -> None:
             # A dropped (stale-token) event stays out of the trace too —
@@ -194,37 +289,25 @@ class ResearchRunner:
                         usage_sink(exc.usage_totals)
                     except Exception:  # noqa: BLE001 — metering never hides failure
                         pass
-                message = self._failure_message(str(exc))
                 kind = "auth_error" if getattr(exc, "auth_error", False) else ""
-                if self._try_resolve(
-                    STATUS_FAILED,
-                    error=message,
-                    error_kind=kind,
-                    run_token=run_token,
-                ):
-                    self._emit(
-                        {
-                            "type": "research_failed",
-                            "error": message,
-                            **({"error_kind": kind} if kind else {}),
-                        },
-                        round_number=round_number,
+                self._close_trace(
+                    self._try_resolve(
+                        STATUS_FAILED,
+                        error=str(exc),
+                        error_kind=kind,
+                        terminal_event=_research_failed_event,
+                        run_token=run_token,
                     )
-                    _trace.research_end(
-                        trace_handle, status=STATUS_FAILED, error=message
-                    )
+                )
             except Exception as exc:  # noqa: BLE001 — surfaced, never raised
-                message = self._failure_message(f"{type(exc).__name__}: {exc}")
-                if self._try_resolve(
-                    STATUS_FAILED, error=message, run_token=run_token
-                ):
-                    self._emit(
-                        {"type": "research_failed", "error": message},
-                        round_number=round_number,
+                self._close_trace(
+                    self._try_resolve(
+                        STATUS_FAILED,
+                        error=f"{type(exc).__name__}: {exc}",
+                        terminal_event=_research_failed_event,
+                        run_token=run_token,
                     )
-                    _trace.research_end(
-                        trace_handle, status=STATUS_FAILED, error=message
-                    )
+                )
             else:
                 # Meter first — the spend is real even on a run that ends up
                 # discarded below (stopped, or superseded by a fresh start).
@@ -236,48 +319,53 @@ class ResearchRunner:
                         usage_sink(result.usage_total())
                     except Exception:  # noqa: BLE001 — metering never sinks a run
                         pass
-                merged: RequirementsProfile | None = None
 
                 def _adopt(
                     previous: RequirementsProfile | None,
                 ) -> RequirementsProfile:
-                    nonlocal merged
-                    merged = append_research_round(previous, result)
-                    return merged
+                    return append_research_round(previous, result)
 
-                if (
-                    self._try_resolve(
-                        STATUS_COMPLETE, adopt=_adopt, run_token=run_token
-                    )
-                    and merged
-                ):
+                def _complete_event(
+                    resolution: _Resolution,
+                ) -> dict[str, Any]:
+                    # ``adopt`` already ran, inside this same transaction, so
+                    # the resolution carries the merged profile.
+                    merged = resolution.profile or result
                     latest = merged.rounds[-1] if merged.rounds else None
-                    self._emit(
-                        {
-                            "type": "research_complete",
-                            # Cumulative — what the session now holds.
-                            "item_count": len(merged.items),
-                            "grounded_count": len(merged.grounded_items()),
-                            "completed_dimensions": merged.completed_dimensions,
-                            "failed_dimensions": merged.failed_dimensions,
-                            # This round's own contribution.
-                            "round_item_count": len(result.items),
-                            "new_item_count": latest.new_items if latest else 0,
-                            "repeat_item_count": (
-                                latest.repeat_items if latest else 0
-                            ),
-                        },
-                        round_number=round_number,
-                    )
-                    _trace.research_end(
-                        trace_handle,
-                        status=STATUS_COMPLETE,
-                        items=len(merged.items),
-                        # A run reports complete when ANY dimension did, so
-                        # the span has to name what did not — cumulatively,
-                        # since an earlier round may already have covered it.
-                        incomplete_dimensions=incomplete_dimension_facts(merged),
-                    )
+                    return {
+                        "type": "research_complete",
+                        # Cumulative — what the session now holds.
+                        "item_count": len(merged.items),
+                        "grounded_count": len(merged.grounded_items()),
+                        "completed_dimensions": merged.completed_dimensions,
+                        "failed_dimensions": merged.failed_dimensions,
+                        # This round's own contribution.
+                        "round_item_count": len(result.items),
+                        "new_item_count": latest.new_items if latest else 0,
+                        "repeat_item_count": (
+                            latest.repeat_items if latest else 0
+                        ),
+                    }
+
+                resolution = self._try_resolve(
+                    STATUS_COMPLETE,
+                    adopt=_adopt,
+                    terminal_event=_complete_event,
+                    run_token=run_token,
+                )
+                merged = resolution.profile if resolution is not None else None
+                self._close_trace(
+                    resolution,
+                    items=len(merged.items) if merged is not None else 0,
+                    # A run reports complete when ANY dimension did, so the
+                    # span has to name what did not — cumulatively, since an
+                    # earlier round may already have covered it.
+                    incomplete_dimensions=(
+                        incomplete_dimension_facts(merged)
+                        if merged is not None
+                        else None
+                    ),
+                )
             finally:
                 if on_settled is not None:
                     try:
@@ -299,9 +387,11 @@ class ResearchRunner:
         adopt: Callable[
             [RequirementsProfile | None], RequirementsProfile
         ] | None = None,
+        terminal_event: Callable[[_Resolution], dict[str, Any]] | None = None,
+        cancel: bool = False,
         run_token: object | None = None,
-    ) -> bool:
-        """Atomically move RUNNING -> a terminal status; False if it lost the race.
+    ) -> _Resolution | None:
+        """Atomically move RUNNING -> terminal; None if it lost the race.
 
         The single compare-and-set point for every way a run can end
         (success, failure, or :meth:`stop`) — whichever caller acquires the
@@ -313,38 +403,97 @@ class ResearchRunner:
         then. Winning clears the token: after a terminal event, nothing
         (log entries included) may arrive from the ended run.
 
+        It is one transaction, not a compare-and-set followed by cleanup,
+        because the very next thing that can happen after this lock is
+        released is a fresh ``start()`` — which clears the event log and
+        installs its own cancel event. Publishing the terminal event or
+        setting the cancel event afterwards therefore addressed the
+        SUCCESSOR: the ended round's terminal frame landed in the new
+        round's log, and a stop cancelled the run that replaced it.
+
+        The order inside the lock is deliberate, because several readers
+        (readiness, ``_doc_payload``, the diagnostics snapshot) sample
+        ``status`` and ``profile_result`` WITHOUT this lock:
+
         ``adopt`` (the success path) maps the accumulated profile to its
-        replacement — the round-append merge — and runs INSIDE the same
-        lock as the compare-and-set. That is what keeps a stopped run's
+        replacement — the round-append merge — and runs FIRST, so a
+        lock-free reader sees either ``running`` beside the old profile or
+        ``complete`` beside the new one, never ``complete`` beside the old
+        one. Running it here is also what keeps a stopped run's
         late-finishing thread from folding its discarded round into a
         profile that has already moved on: it loses the CAS, so its merge
-        never runs at all.
+        never runs at all. ``status`` is assigned LAST for the same reason.
         """
         with self._lock:
             if self.status != STATUS_RUNNING:
-                return False
+                return None
             if run_token is not None and run_token is not self._run_token:
-                return False
-            self.status = status
-            self.error = error
-            self.error_kind = error_kind
-            self._run_token = None
+                return None
+            message = self._failure_message_locked(error) if error else ""
+            profile = self.profile_result
             if adopt is not None:
-                self.profile_result = adopt(self.profile_result)
-            return True
+                profile = adopt(profile)
+                self.profile_result = profile
+            self.error = message
+            self.error_kind = error_kind
+            if cancel and self._cancel_event is not None:
+                # The winning run's own cancel event, read under the lock
+                # that proves the run is still ours.
+                self._cancel_event.set()
+            resolution = _Resolution(
+                status=status,
+                error=message,
+                error_kind=error_kind,
+                # Still this run's: status is `running`, so no fresh start()
+                # can have renumbered it.
+                round_number=self._round_number,
+                profile=profile,
+            )
+            if terminal_event is not None:
+                resolution.event = self._append_event_locked(
+                    terminal_event(resolution),
+                    round_number=resolution.round_number,
+                )
+            resolution.trace_handle = self._trace_handle
+            self._trace_handle = None
+            self._run_token = None
+            self.status = status
+            return resolution
 
-    def _failure_message(self, base: str) -> str:
-        """A failure message that says what survived it.
+    def _failure_message_locked(self, base: str) -> str:
+        """A failure message that says what survived it (caller holds the lock).
 
         Rounds accumulate, so a failed or stopped run costs only the round
         in flight — the user should not read "failed" and assume the
         research they already paid for is gone.
         """
-        with self._lock:
-            retained = self.profile_result is not None
-        if not retained:
+        if self.profile_result is None:
             return base
         return f"{base} Earlier research rounds are unchanged and still in use."
+
+    def _close_trace(
+        self,
+        resolution: _Resolution | None,
+        *,
+        items: int = 0,
+        incomplete_dimensions: list[dict] | None = None,
+    ) -> None:
+        """Close the run's trace span — the winner closes it, exactly once.
+
+        The handle is claimed inside the terminal transaction, so a stop and
+        a late-finishing worker can never both close it (the loser gets no
+        resolution at all) and a stopped run no longer leaves its span open
+        forever, which the trace viewer renders as a crashed run.
+        """
+        if resolution is None or resolution.trace_handle is None:
+            return
+        _trace.research_end(
+            resolution.trace_handle,
+            status=resolution.status,
+            error=resolution.error,
+            items=items,
+            incomplete_dimensions=incomplete_dimensions,
+        )
 
     def stop(self) -> bool:
         """Request cancellation of the running run. False if none is running.
@@ -359,23 +508,19 @@ class ResearchRunner:
 
         Only the round in flight is lost: rounds that already completed stay
         in the profile, which is what the message says.
+
+        The round is discarded, so the trace span closes here rather than
+        waiting on work whose outcome is already thrown away.
         """
-        # Read the active round BEFORE the compare-and-set: until it lands,
-        # status is still running, so no fresh start() can have renumbered
-        # it. A stop that beats the worker's first event would otherwise
-        # leave the round's whole log a single untagged terminal event.
-        round_number = self._round_number
-        message = self._failure_message(
-            "Stopped by user — this round's progress was discarded."
+        resolution = self._try_resolve(
+            STATUS_FAILED,
+            error="Stopped by user — this round's progress was discarded.",
+            terminal_event=_research_failed_event,
+            cancel=True,
         )
-        if not self._try_resolve(STATUS_FAILED, error=message):
+        if resolution is None:
             return False
-        if self._cancel_event is not None:
-            self._cancel_event.set()
-        self._emit(
-            {"type": "research_failed", "error": self.error},
-            round_number=round_number,
-        )
+        self._close_trace(resolution)
         return True
 
     def restore(self, profile: RequirementsProfile) -> None:
@@ -384,25 +529,28 @@ class ResearchRunner:
         The saved profile carries its own rounds, so a resumed session
         continues counting from where it left off — pressing Research adds
         round N+1, not a replacement.
+
+        A restore is a project-file read, not a provider run: it publishes
+        the compatibility event but never opens (or fabricates) a run span.
         """
         with self._lock:
-            self.status = STATUS_COMPLETE
+            self.profile_result = profile
             self.error = ""
             self.error_kind = ""
-            self.profile_result = profile
             self.events = []
+            self._append_event_locked(
+                {
+                    "type": "research_complete",
+                    "restored": True,
+                    "item_count": len(profile.items),
+                    "grounded_count": len(profile.grounded_items()),
+                    "completed_dimensions": profile.completed_dimensions,
+                    "failed_dimensions": profile.failed_dimensions,
+                },
+                round_number=profile.round_count,
+            )
             self._run_token = None
-        self._emit(
-            {
-                "type": "research_complete",
-                "restored": True,
-                "item_count": len(profile.items),
-                "grounded_count": len(profile.grounded_items()),
-                "completed_dimensions": profile.completed_dimensions,
-                "failed_dimensions": profile.failed_dimensions,
-            },
-            round_number=profile.round_count,
-        )
+            self.status = STATUS_COMPLETE
 
     # -- snapshots -----------------------------------------------------------
 

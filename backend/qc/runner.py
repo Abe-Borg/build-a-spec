@@ -52,6 +52,12 @@ class QCRunner:
         self._thread: threading.Thread | None = None
         self._cancel_event: threading.Event | None = None
         self._run_token: object | None = None
+        # The run's open trace span. Unlike research — whose stopped round is
+        # discarded outright — a stopped QC attempt keeps assembling the paid
+        # partial report it will attach at settlement, so the span closes
+        # there (``_finalize_attempt``) and never at ``stop()``. One close
+        # point, so stop and worker can never both close it.
+        self._trace_handle: Any | None = None
         # ``status`` resolves immediately when the user stops a run, but an
         # already-billed provider call may still be returning a partial audit
         # record.  SSE must not close (and a replacement run must not start)
@@ -138,6 +144,30 @@ class QCRunner:
             self.latest_attempt_finished_at = ""
 
         trace_handle = _trace.qc_start(lenses=len(QC_LENSES))
+        # Opened after the compare-and-set, so a refused double-start never
+        # fabricates a run span — which leaves a narrow window in which a
+        # stop can already have taken the run. Adopt against our own token;
+        # an orphan closes here, since ``_finalize_attempt`` will find
+        # nothing to claim.
+        orphaned: tuple[str, str] | None = None
+        with self._lock:
+            if self._run_token is run_token:
+                self._trace_handle = trace_handle
+            else:
+                # Normally the stop's own terminal state. Only read it while
+                # it is still ours — a successor that also started in this
+                # window owns it now, and recording its `running` as this
+                # span's outcome would be a false record.
+                orphaned = (
+                    (self.latest_attempt_status or self.status, self.error)
+                    if self.status in _TERMINAL
+                    else (
+                        STATUS_FAILED,
+                        "The attempt ended before its trace span was adopted.",
+                    )
+                )
+        if orphaned is not None:
+            _trace.qc_end(trace_handle, status=orphaned[0], error=orphaned[1])
 
         def _sink(event: dict) -> None:
             if self._emit(event, run_token=run_token):
@@ -172,7 +202,7 @@ class QCRunner:
                 if exc.result is not None:
                     exc.result.finished_at = _now_iso()
                 kind = "auth_error" if exc.auth_error else ""
-                if self._finalize_attempt(
+                self._finalize_attempt(
                     run_token,
                     runner_status=STATUS_FAILED,
                     attempt_status="failed",
@@ -186,13 +216,10 @@ class QCRunner:
                         "error": str(exc),
                         **({"error_kind": kind} if kind else {}),
                     },
-                ):
-                    _trace.qc_end(
-                        trace_handle, status=STATUS_FAILED, error=str(exc)
-                    )
+                )
             except Exception as exc:  # noqa: BLE001 — surfaced, never raised
                 message = f"{type(exc).__name__}: {exc}"
-                if self._finalize_attempt(
+                self._finalize_attempt(
                     run_token,
                     runner_status=STATUS_FAILED,
                     attempt_status="failed",
@@ -200,8 +227,7 @@ class QCRunner:
                     install_result=False,
                     cancel_event=cancel_event,
                     terminal_event={"type": "qc_failed", "error": message},
-                ):
-                    _trace.qc_end(trace_handle, status=STATUS_FAILED, error=message)
+                )
             else:
                 # Stamp finished_at + meter BEFORE resolving — the spend is
                 # real even on a run that ends up discarded below (stopped,
@@ -212,7 +238,7 @@ class QCRunner:
                         usage_sink(result.usage_totals)
                     except Exception:  # noqa: BLE001 — metering never sinks a run
                         pass
-                if self._finalize_attempt(
+                self._finalize_attempt(
                     run_token,
                     runner_status=STATUS_COMPLETE,
                     attempt_status=result.execution_status,
@@ -232,12 +258,7 @@ class QCRunner:
                         "inconclusive_count": len(result.inconclusive),
                         "open_criticals": result.open_critical_count(),
                     },
-                ):
-                    _trace.qc_end(
-                        trace_handle,
-                        status=STATUS_COMPLETE,
-                        findings=len(result.findings),
-                    )
+                )
             finally:
                 if on_settled is not None:
                     try:
@@ -270,6 +291,13 @@ class QCRunner:
         attempt, but it cannot replace the retained successful result or
         resolve a newer run.  If the worker wins, status, retained result, and
         latest-attempt metadata become visible atomically.
+
+        Settlement is also where the run's trace span closes, whoever won the
+        status race — this is the point at which the preserved partial report
+        and its counts become final, and routing every close through here is
+        what makes "exactly once" structural rather than a convention. A
+        stale worker (token mismatch) claims nothing: the handle belongs to
+        whichever run currently owns the runner.
         """
         with self._lock:
             if run_token is not self._run_token:
@@ -296,6 +324,11 @@ class QCRunner:
             if result is not None:
                 self.latest_attempt_result = result
             self._worker_settled = True
+            claimed_trace = self._trace_handle
+            self._trace_handle = None
+            trace_status = self.latest_attempt_status
+            trace_error = self.latest_attempt_error
+            trace_findings = len(result.findings) if result is not None else 0
             if self.status != STATUS_RUNNING:
                 # ``stop()`` won the status race.  Preserve whatever paid
                 # report the worker could assemble, then explicitly notify
@@ -325,19 +358,30 @@ class QCRunner:
                         ),
                     }
                 )
-                return False
-            self.status = runner_status
-            self.error = error
-            self.error_kind = error_kind
-            if (
-                install_result
-                and result is not None
-                and result.execution_status == "complete"
-            ):
-                self.result = result
-            if terminal_event is not None:
-                self._append_event_locked(terminal_event)
-            return True
+                published = False
+            else:
+                self.status = runner_status
+                self.error = error
+                self.error_kind = error_kind
+                if (
+                    install_result
+                    and result is not None
+                    and result.execution_status == "complete"
+                ):
+                    self.result = result
+                if terminal_event is not None:
+                    self._append_event_locked(terminal_event)
+                published = True
+        if claimed_trace is not None:
+            # Outside the lock: the close enqueues a write, and the runner
+            # lock is on the path of every SSE poll.
+            _trace.qc_end(
+                claimed_trace,
+                status=trace_status,
+                error=trace_error,
+                findings=trace_findings,
+            )
+        return published
 
     def stop(self) -> bool:
         """Request cancellation of the running run. False if none is running.

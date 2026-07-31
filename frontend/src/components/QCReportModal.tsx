@@ -12,7 +12,9 @@ import type { ReactNode } from "react";
 import type { QcCandidateOrigin, QcSnapshot, ReadinessPayload } from "../types";
 import { useDialogFocus } from "../lib/dialogFocus";
 import {
+  QC_GROUNDING_METHODOLOGY_NOTE,
   QC_OPS_SOURCE_LABELS,
+  QC_REQUEST_METHODOLOGY_NOTE,
   buildQcReportMetrics,
   collectQcOperationRecords,
   collectQcTraceRecords,
@@ -36,6 +38,8 @@ import {
   qcPrimaryReport,
   qcReportExportUrl,
   qcReportLimitations,
+  qcRequestPopulation,
+  qcRequestPopulationNote,
   qcResearchCoverage,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
@@ -414,8 +418,8 @@ function VerdictRecord({ verdict, index }: { verdict: QcReportVerdict; index: nu
               ? "Yes"
               : "No"}
         </DataField>
-        <DataField label="API requests">{formatInteger(verdict.api_request_count)}</DataField>
-        <DataField label="Model responses">{formatInteger(verdict.model_response_count)}</DataField>
+        <DataField label="Client API requests (streaming calls, including retries and pause_turn continuations)">{formatInteger(verdict.api_request_count)}</DataField>
+        <DataField label="Final model responses received">{formatInteger(verdict.model_response_count)}</DataField>
         <DataField label="Estimated seat cost">{formatUsd(verdict.estimated_cost_usd)}</DataField>
       </dl>
       <div className="mt-2">
@@ -795,8 +799,8 @@ function LensRecord({ lens, index }: { lens: QcReportLens; index: number }) {
         <DataField label="Candidates raised">{formatInteger(lens.finding_count)}</DataField>
         <DataField label="Grounded candidates">{formatInteger(lens.grounded_count)}</DataField>
         <DataField label="Reviewed checks">{formatInteger(lens.reviewed_checks?.length)}</DataField>
-        <DataField label="API requests">{formatInteger(lens.api_request_count)}</DataField>
-        <DataField label="Model responses">{formatInteger(lens.model_response_count)}</DataField>
+        <DataField label="Client API requests (streaming calls, including retries and pause_turn continuations)">{formatInteger(lens.api_request_count)}</DataField>
+        <DataField label="Final model responses received">{formatInteger(lens.model_response_count)}</DataField>
         <DataField label="Estimated lens cost">{formatUsd(lens.estimated_cost_usd)}</DataField>
       </dl>
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -938,6 +942,7 @@ export default function QCReportModal({
   const inconclusive = qcInconclusiveCandidates(report);
   const lensCoverage = qcLensCoverage(report);
   const consolidation = qcConsolidationSummary(report);
+  const requestPopulation = qcRequestPopulation(report);
   const traceRecords = collectQcTraceRecords(report);
   const operationRecords = collectQcOperationRecords(report);
   const limitations = qcReportLimitations(report, reportIsStale);
@@ -1119,7 +1124,8 @@ export default function QCReportModal({
               {[
                 ["Snapshot and identity", "The application captured the selected document version, a content fingerprint, the active module/project inputs, and whether requirements research was available."],
                 ["Parallel specialist lenses", "Each recorded lens received a defined brief and reviewed the whole input from its specialty. Lens check ledgers, searches, retrievals, summaries, errors, and usage appear in Section 05."],
-                ["Evidence qualification", "Candidate citations were retrieved and checked. Accepted and rejected source checks are both retained; rejected records provide traceability but do not count as grounding."],
+                ["Evidence qualification", `Candidate citations were retrieved and checked. Accepted and rejected source checks are both retained; rejected records provide traceability but do not count as grounding. ${QC_GROUNDING_METHODOLOGY_NOTE}`],
+                ["Cross-lens consolidation", "Lens candidates describing the same actionable defect at the same element were consolidated into one candidate reviewed by one verifier panel, so a defect two lenses both noticed was not challenged twice. Grouping was confined to candidates sharing a write scope, every original claim is retained verbatim in Section 05b, and any failure of the step fell back to one panel per original candidate."],
                 ["Adversarial verification", "Candidate findings were sent to recorded reviewer seats. Finding survival uses the complete panel's majority; schema-3 fix eligibility separately requires every seat to uphold and approve the full operation set. Each available verdict, fix-adequacy decision, note, revised severity, search, retrieval, error, and usage counter appears with the finding."],
                 ["Outcome separation and operation validation", "Candidates are separated into surviving findings, substantively refuted candidates, and infrastructure-inconclusive candidates. Only a schema-3 surviving finding with unanimous semantic fix approval can enter deterministic and source-preservation validation; unabridged JSON remains visible for every bucket."],
                 ["Human disposition", "Open, applied, and dismissed states are kept separate from verification. Where supported by the record schema, later disposition events include time, reason, and document identity."],
@@ -1413,10 +1419,13 @@ export default function QCReportModal({
           >
             <dl className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <DataField label="Estimated run cost">{formatUsd(report.estimated_cost_usd)}</DataField>
-              <DataField label="API request count">{formatInteger(report.api_request_count ?? metrics.apiRequests)}</DataField>
-              <DataField label="Model response count">{formatInteger(report.model_response_count ?? metrics.modelResponses)}</DataField>
+              <DataField label="Client API requests">{formatInteger(report.api_request_count ?? metrics.apiRequests)}</DataField>
+              <DataField label="Final model responses received">{formatInteger(report.model_response_count ?? metrics.modelResponses)}</DataField>
               <DataField label="Elapsed duration">{formatDuration(duration)}</DataField>
             </dl>
+            <p className="mb-3 text-[11px] leading-relaxed text-ink-faint">
+              {qcRequestPopulationNote(requestPopulation)}. {QC_REQUEST_METHODOLOGY_NOTE}
+            </p>
             <UsageTable usage={report.usage_totals} empty="No aggregate usage totals were recorded." />
             {report.cost_basis && Object.keys(report.cost_basis).length > 0 ? (
               <div className="mt-3">

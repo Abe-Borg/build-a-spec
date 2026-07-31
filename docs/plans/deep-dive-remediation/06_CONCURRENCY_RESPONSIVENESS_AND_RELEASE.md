@@ -1,6 +1,6 @@
 # Phase 6 — Concurrency, responsiveness, and release
 
-- Status: **in progress** (6.1 landed; 6.2-6.5 planned)
+- Status: **in progress** (6.1-6.2 landed; 6.3-6.5 planned)
 - Prerequisites: Chunk 6.5 requires Phases 1-5 complete. Chunks 6.1-6.4 depend
   only on Phase 1 (6.1 additionally interacts with Chunk 4.3's metering seam —
   coordinate, don't serialize). Pulling 6.1 forward early is encouraged: the
@@ -238,11 +238,51 @@ venv\Scripts\python -m pytest -q tests/test_tutorial.py tests/test_close_prompt.
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: complete
+- Commit/PR: branch `claude/phase-6-concurrency-responsiveness-xncqik`
+- Tests: 5 new. `tests/test_tutorial.py` (4): finish / forced restore /
+  tutorial repair all refuse while a build holds the slot, and the guard
+  lifts when it completes; a failed build releases its own slot; an
+  abandoned build cannot release a newer transition's reservation; a
+  refused finish lets the build's spend reach the original exactly once.
+  `tests/test_close_prompt.py` (1): native close vetoes a scenario build
+  instead of waiting on it. Three go red against the old code; the other
+  two pin behavior that already held and must keep holding under
+  ownership (regression guards, stated as such rather than claimed as
+  fixes). Full suite 1368 passed / 9 skipped (no new skips); `npm test`
+  193; `npm run build` clean.
 - Deviations:
-- Manual QA owed:
+  - **`replace_tutorial` got the same guard**, which the plan did not
+    enumerate. It is the same class of bug: the enrichment repair swaps
+    the very tutorial session an in-flight scenario build is holding and
+    will merge its usage onto, so leaving it out would ship the chunk with
+    a hole in its own stated invariant.
+  - **`begin_tutorial` gained a transition check it never had.** Its scope
+    guard cannot stand in, because activation happens at the end of the
+    method — during a build the scope is still `original`, so two
+    overlapping starts both cloned and the loser only found out at the
+    commit re-check.
+  - **Callers check `_transition_active_locked()` before reserving**, and
+    `_begin_transition_locked()` also raises. The duplication is
+    deliberate: the explicit check preserves the existing precedence of
+    "another tutorial transition" among the other busy reasons, and the
+    helper's raise is the backstop that keeps the slot un-double-bookable.
+  - **`force_restore_original` keeps an `abandon_transition=True` escape**
+    used only by `reset_session()`, the hard-reset primitive the autouse
+    test fixture calls around every test. Refusing unconditionally there
+    would let one leaked reservation cascade into every later test.
+    Ownership is what makes abandoning safe — the abandoned build then
+    owns nothing and clears nothing.
+  - **Native-close callers needed no change.**
+    `restore_original_for_native_close` already refused on the flag and
+    `main._CloseController` already turns that into the `tutorial-busy`
+    prompt, so the "surface the busy result safely / do not block a UI
+    thread" requirement was already met; it is now covered by a test.
+  - `pop_scenario` left unguarded, as the plan directs.
+- Manual QA owed: none specific to this chunk. Worth exercising in the
+  6.5 pass: enter Chapter 6 (live figure generation) and try to end the
+  tour while it is preparing — expect the busy refusal, then a normal
+  finish once it lands, with the attempt's spend visible in the meter.
 
 ## Chunk 6.3 — Event-loop offload and coherent short endpoint snapshots
 

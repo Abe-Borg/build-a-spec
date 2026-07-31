@@ -2819,13 +2819,15 @@ here.
   activate). `app.py`'s `references` branch passes
   `build=media_practice_copy` instead of computing `staged` eagerly, so the
   reservation check happens before the (possibly billed) model call, not
-  after. `push_scenario` also gained a `_transitioning` guard it was
+  after. `push_scenario` also gained a transition guard it was
   missing (review finding, fixed before merge): without it, two overlapping
   `scenario/start` requests could both pass the reservation check and both
   pay for their own build before either discovered the slot was taken —
-  `_transitioning` is exactly the in-progress-build signal
+  the transition reservation is exactly the in-progress-build signal
   `restore_original_for_native_close` already reads, so checking it here
-  closes the same race for every scenario kind, not just figures. Every
+  closes the same race for every scenario kind, not just figures. (It was
+  a shared boolean then; Chunk 6.2 gave it an owner — see "A transition
+  reservation has an owner" below.) Every
   other kind's construction stays cheap enough that pre-computing it (the
   existing `staged =` pattern) remains fine — only `references` needed the
   deferred path. Pinned by
@@ -4905,6 +4907,72 @@ SSE event, no new dep, no project-format bump.
   lock there under either arrangement instead of deadlocking against the
   fix it exists to check). All eight were reverted in place to prove them
   load-bearing (4 red on the research runner alone, 4 more across both).
+
+## A transition reservation has an owner — implemented notes
+
+Deep-dive remediation Chunk 6.2. `SessionManager` guarded workspace
+transitions with a shared `_transitioning` boolean, and a boolean can be
+cleared by anyone. `push_scenario` reserves the slot, then builds OUTSIDE
+the lock — deliberately, since a build can be an unbounded model call
+(Chapter 6 generates its figures live) — so the whole point of the
+reservation is that it survives that window. It did not. No new endpoint,
+no new SSE event, no new dep, no project-format bump.
+
+- **Three ways to orphan a paid build.** `finish_tutorial` never looked at
+  the flag at all; `force_restore_original` set it to `False`
+  unconditionally; `replace_tutorial` (the enrichment repair) never
+  checked either. Each discards or swaps the tutorial session while a
+  build is still holding it — and `media_practice_copy` merges its
+  attempt's usage onto that session when it returns, **win or lose**. So
+  the reservation was cleared, the build's merge landed on an object
+  nobody held any more, and real spend disappeared. All three now refuse
+  with `WorkspaceBusyError(["another tutorial transition"])`.
+- **The token is the fix, not the extra checks.**
+  `_begin_transition_locked()` mints an owner, `_finish_transition_locked
+  (owner)` releases it ONLY if that owner still holds the slot, and
+  `_transition_active_locked()` answers the busy checks. A build that lost
+  its workspace, or was abandoned outright, therefore clears its own
+  reservation or nothing at all — never a later transition's.
+- **`begin_tutorial` gained a check it never had.** `push_scenario`
+  already refused a concurrent transition; `begin_tutorial` did not, and
+  its scope guard could not stand in (activation happens at the END, so
+  during a build the scope is still `original`). Two overlapping starts
+  both cloned, and the loser only discovered it at the commit re-check.
+  Now the second is refused before it builds anything, which is also what
+  `push_scenario`'s `build=` deferral exists for.
+- **Callers check `_transition_active_locked()` themselves, then reserve.**
+  The helper raises too, but that raise is a backstop for a future caller
+  that forgets: the explicit check is what keeps "another tutorial
+  transition" in its existing place among the other busy reasons
+  (`_active_writes` → transition → `_busy_reasons`), uniformly across all
+  four call sites.
+- **`force_restore_original` keeps a teardown escape, and ownership is
+  what makes it safe.** `abandon_transition=True` clears the slot, so the
+  build it abandoned finds it owns nothing and clears nothing — a
+  transition starting afterwards keeps its reservation. Only
+  `reset_session()` passes it: that is the hard-reset primitive (the
+  autouse test fixture calls it around every test, and a reservation
+  leaked by a crashed build must not wedge the process). The user-facing
+  New session is `POST /api/session/reset`, which refuses outside the
+  original scope entirely and never reaches this path.
+- **`pop_scenario` deliberately gets no guard**, per the plan: while a
+  build is in flight `self._scenario` is still None and the scope is still
+  `tutorial`, so it already raises "No tutorial scenario is active".
+- **Native close needed no change and proves the shape was right.**
+  `restore_original_for_native_close` already refused on the flag and
+  `main._CloseController` already turns that into the `tutorial-busy`
+  prompt — it vetoes on the UI thread rather than waiting on an unbounded
+  model call. That path is now covered by a test rather than only by
+  reading.
+- **Tests: 5 new** (`test_tutorial.py` 4, `test_close_prompt.py` 1), all
+  built on `_HeldBuild` — a `build=` callable parked outside the lock on a
+  real thread, the technique the neighbouring start/restart race tests
+  already use. Three go red on the old code (finish/force-restore/repair
+  refusing, the stale owner not clearing a successor's slot, and the
+  refused finish letting the stranded spend reach the original exactly
+  once). The other two — a failed build releasing its slot, and native
+  close vetoing — pin behavior that already held and has to keep holding
+  under ownership; they are regression guards, not fixes.
 
 ## Commands
 

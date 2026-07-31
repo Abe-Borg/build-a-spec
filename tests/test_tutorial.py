@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -811,6 +812,178 @@ def test_push_scenario_rejects_a_second_request_before_the_first_pays_for_its_bu
     release_build.set()
     thread.join(timeout=5)
     assert first_result[0].scope == "scenario"
+
+
+class _HeldBuild:
+    """A scenario build parked outside the manager lock, on its own thread.
+
+    The reservation these tests are about is only observable while a build
+    is running unlocked, so every case needs one held open deterministically
+    — a `build=` callable that blocks until released, driven from a real
+    background thread (the technique the neighbouring start/restart race
+    tests already use). Always `release()` in a finally: a leaked
+    reservation would otherwise outlive the test.
+
+    ``on_build`` runs after the release, against the base session the real
+    builders receive, so a test can make the build spend exactly the way
+    ``media_practice_copy`` does.
+    """
+
+    def __init__(
+        self,
+        manager: SessionManager,
+        workspace_id: int,
+        *,
+        on_build=None,
+    ) -> None:
+        self.entered = threading.Event()
+        self._release = threading.Event()
+        self.result: list = []
+        self.error: list[BaseException] = []
+
+        def _build(tutorial: SessionState) -> SessionState:
+            self.entered.set()
+            assert self._release.wait(timeout=5)
+            if on_build is not None:
+                on_build(tutorial)
+            return SessionState()
+
+        def _run() -> None:
+            try:
+                self.result.append(
+                    manager.push_scenario(
+                        workspace_id, kind="references", build=_build
+                    )
+                )
+            except BaseException as exc:  # noqa: BLE001 — inspected by the test
+                self.error.append(exc)
+
+        self._thread = threading.Thread(target=_run)
+        self._thread.start()
+        assert self.entered.wait(timeout=5), "the build never started"
+
+    def release(self) -> None:
+        self._release.set()
+        self._thread.join(timeout=5)
+
+
+def test_a_paid_scenario_build_cannot_be_discarded_out_from_under_itself():
+    """Finish and forced restore must refuse while a build holds the slot.
+
+    Neither used to. `finish_tutorial` never looked at the transition flag
+    at all, and `force_restore_original` cleared it outright — so ending the
+    tour, or a New session, while Chapter 6's live figure generation was
+    still running discarded the tutorial session that build was about to
+    merge its already-billed usage onto. The spend simply vanished.
+    """
+    manager = SessionManager()
+    tutorial = manager.begin_tutorial(request_id="orphan-contract")
+    held = _HeldBuild(manager, tutorial.workspace_id)
+    try:
+        with pytest.raises(WorkspaceBusyError, match="transition"):
+            manager.finish_tutorial(tutorial.workspace_id)
+        with pytest.raises(WorkspaceBusyError, match="transition"):
+            manager.force_restore_original()
+        # Same reason the repair path must wait: it swaps the very session
+        # the build is holding.
+        with pytest.raises(WorkspaceBusyError, match="transition"):
+            manager.replace_tutorial(tutorial.workspace_id, SessionState())
+        assert manager.current().scope == "tutorial"
+    finally:
+        held.release()
+
+    # …and the guard lifts the moment the owner is done with it.
+    assert held.result and held.result[0].scope == "scenario"
+    manager.pop_scenario(held.result[0].workspace_id)
+    assert manager.finish_tutorial(manager.current().workspace_id).scope == (
+        "original"
+    )
+
+
+def test_a_failed_build_releases_the_slot_it_reserved():
+    """The owner clears its own reservation on every path, exceptions too."""
+    manager = SessionManager()
+    tutorial = manager.begin_tutorial(request_id="release-contract")
+
+    def _explode(_tutorial):
+        raise RuntimeError("the build blew up")
+
+    with pytest.raises(RuntimeError, match="blew up"):
+        manager.push_scenario(
+            tutorial.workspace_id, kind="references", build=_explode
+        )
+    # Nothing is holding the slot, so the ordinary operations work again.
+    assert manager.finish_tutorial(tutorial.workspace_id).scope == "original"
+
+
+def test_an_abandoned_build_cannot_release_a_newer_transitions_reservation():
+    """Ownership is the point: a losing build clears its own slot or nothing.
+
+    With a shared boolean, the abandoned build's conflict path set it back
+    to False — releasing whatever reservation had been taken since. The
+    teardown escape (`abandon_transition`) is only safe because of this:
+    it clears the slot, and the build it abandoned then finds it owns
+    nothing.
+    """
+    manager = SessionManager()
+    first = manager.begin_tutorial(request_id="stale-owner-first")
+    stale = _HeldBuild(manager, first.workspace_id)
+    try:
+        # Tear the workspace out from under the in-flight build.
+        manager.force_restore_original(abandon_transition=True)
+        assert manager.current().scope == "original"
+
+        # A brand-new tutorial takes the slot the stale build no longer owns.
+        second = manager.begin_tutorial(request_id="stale-owner-second")
+        successor = _HeldBuild(manager, second.workspace_id)
+        try:
+            # The stale build now unwinds and must clear nothing.
+            stale.release()
+            assert stale.error and isinstance(
+                stale.error[0], WorkspaceConflictError
+            )
+            with pytest.raises(WorkspaceBusyError, match="transition"):
+                manager.finish_tutorial(second.workspace_id)
+        finally:
+            successor.release()
+        assert successor.result and successor.result[0].scope == "scenario"
+    finally:
+        stale.release()
+
+
+def test_a_refused_finish_lets_the_build_it_would_have_stranded_pay_in():
+    """The whole point of refusing: the spend still reaches the original.
+
+    `media_practice_copy` merges its attempt's usage onto the base tutorial
+    session before returning, win or lose. Discarding that session mid-build
+    dropped the merge on the floor; refusing lets it land, and the ordinary
+    finish then carries it to the original exactly once.
+    """
+    manager = SessionManager()
+    original = manager.current().session
+    tutorial = manager.begin_tutorial(request_id="stranded-spend")
+
+    held = _HeldBuild(
+        manager,
+        tutorial.workspace_id,
+        on_build=lambda base: base.usage.add(
+            "interview", {"input_tokens": 30}, count_turn=True
+        ),
+    )
+    try:
+        with pytest.raises(WorkspaceBusyError, match="transition"):
+            manager.finish_tutorial(tutorial.workspace_id)
+    finally:
+        held.release()
+
+    assert held.result and held.result[0].scope == "scenario"
+    manager.pop_scenario(held.result[0].workspace_id)
+    restored = manager.finish_tutorial(manager.current().workspace_id)
+    assert restored.session is original
+    # Counted once: not zero (stranded on a discarded session) and not twice.
+    assert original.usage.snapshot()["categories"]["interview"] == {
+        "input_tokens": 30
+    }
 
 
 def test_enrichment_validator_rejects_rewriting_existing_user_content():

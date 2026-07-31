@@ -71,6 +71,7 @@ import re
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
@@ -575,6 +576,38 @@ def _stage_project_load(
             "The project contains a source map without its source DOCX."
         )
     return parsed, staged, typed_map, source_context
+
+
+@dataclass(frozen=True)
+class _ExportInputs:
+    """One coherent export snapshot, fully detached from the live session.
+
+    Captured under ``session_state_guard`` and rendered without it. A ZIP
+    rebuild, an XML reparse or a python-docx render is seconds of work on a
+    real section, and the turn-state lock is what a chat turn needs to claim
+    — so holding it across the render blocks the very turn (and the stop
+    request for it) that the lock exists to serialize.
+
+    Coherence does not depend on holding the lock, only on capturing
+    together: every field here comes from one guarded read, so the bytes,
+    the filename and the QC closing describe the same document however long
+    the render takes and whatever the session does meanwhile.
+    """
+
+    selected_mode: str
+    #: Detached copies — safe to walk after the guard releases.
+    current: SpecSection
+    redline_base: SpecSection | None = None
+    source_bytes: bytes | None = None
+    source_map: Any | None = None
+    baseline: SpecSection | None = None
+    #: Only when already built. When absent the renderer builds one outside
+    #: the lock (inside ``build_source_preserving_docx``) and deliberately
+    #: does not write it back — caching is not required for correctness, and
+    #: publishing it would need the identity revalidated under the guard.
+    source_context: Any | None = None
+    audit_result: Any | None = None
+    qc_result: dict[str, Any] | None = None
 
 
 def _source_baseline(session) -> SpecSection | None:
@@ -3148,14 +3181,16 @@ def create_app() -> FastAPI:
         )
         return JSONResponse({"ok": True, "applied": applied, **payload})
 
-    def _redline_for_export(
+    def _redline_base_for_export(
         store, redline: str | None, base: int | None
-    ) -> tuple[Any | None, JSONResponse | None]:
-        """Resolve the ``?redline=`` export mode into a SectionDiff (or 400).
+    ) -> tuple[SpecSection | None, JSONResponse | None]:
+        """Resolve the ``?redline=`` export mode into a base section (or 400).
 
-        ``master`` diffs the current doc against the imported baseline;
-        ``version`` against ``versions[base]``. Returns ``(diff, None)`` on
-        success or ``(None, error_response)`` on a bad request.
+        ``master`` compares the current doc against the imported baseline;
+        ``version`` against ``versions[base]``. Returns ``(section, None)`` on
+        success or ``(None, error_response)`` on a bad request. The section is
+        detached, so the caller can run ``diff_sections`` after releasing the
+        guard — the diff is the expensive half and needs no lock.
         """
         if redline is None:
             return None, None
@@ -3182,15 +3217,22 @@ def create_app() -> FastAPI:
                 {"ok": False, "error": "redline must be 'master' or 'version'."},
                 status_code=400,
             )
-        base_section = SpecSection.from_dict(store.versions[base_index])
-        return diff_sections(base_section, store.doc), None
+        return SpecSection.from_dict(store.versions[base_index]), None
 
-    def _export_docx_locked(
+    def _capture_export_inputs(
         session,
         redline: str | None = None,
         base: int | None = None,
         mode: str | None = None,
-    ) -> Response:
+    ) -> _ExportInputs | JSONResponse:
+        """Validate the request and snapshot everything the render needs.
+
+        The CALLER holds ``session_state_guard``; nothing here builds a
+        document. Returns the detached inputs, or the error response the
+        request earns — every existing status code and message is preserved,
+        including the fail-closed 409 when source-preserving export is asked
+        for without a validated source package.
+        """
         store = session.doc
         if mode not in (None, "source", "normalized"):
             return JSONResponse(
@@ -3209,7 +3251,7 @@ def create_app() -> FastAPI:
                 },
                 status_code=400,
             )
-        redline_diff, error = _redline_for_export(store, redline, base)
+        redline_base, error = _redline_base_for_export(store, redline, base)
         if error is not None:
             return error
 
@@ -3221,9 +3263,12 @@ def create_app() -> FastAPI:
         )
         selected_mode = (
             "normalized"
-            if redline_diff is not None
+            if redline_base is not None
             else (mode or ("source" if imported_scope else "normalized"))
         )
+        # Detach the current tree: the render walks it long after the guard
+        # is gone, and a committing turn replaces ``store.doc`` outright.
+        current = SpecSection.from_dict(store.doc.to_dict())
         if selected_mode == "source":
             baseline = _source_baseline(session)
             source_map = getattr(session, "source_docx_map", None)
@@ -3242,28 +3287,15 @@ def create_app() -> FastAPI:
                     },
                     status_code=409,
                 )
-            try:
-                context = session.ensure_source_patch_context(
-                    baseline=baseline
-                )
-                payload = build_source_preserving_docx(
-                    source_bytes=session.source_docx_bytes,
-                    source_map=source_map,
-                    baseline=baseline,
-                    current=store.doc,
-                    context=context,
-                )
-            except SourcePatchError as exc:
-                return JSONResponse(
-                    {"ok": False, "error": str(exc)}, status_code=409
-                )
-            return Response(
-                content=payload,
-                media_type=(
-                    "application/vnd.openxmlformats-officedocument."
-                    "wordprocessingml.document"
-                ),
-                headers=_attachment_headers(export_filename(store.doc)),
+            return _ExportInputs(
+                selected_mode="source",
+                current=current,
+                # Immutable by contract: the retained package bytes and the
+                # map built from them at import.
+                source_bytes=session.source_docx_bytes,
+                source_map=source_map,
+                baseline=baseline,
+                source_context=session.source_patch_context,
             )
 
         qc_record = session.qc.audit_record_snapshot()
@@ -3283,16 +3315,53 @@ def create_app() -> FastAPI:
             if isinstance(retained_report, dict) and qc_is_issue_grade
             else None
         )
-        payload = build_docx(
-            store.doc,
+        return _ExportInputs(
+            selected_mode="normalized",
+            current=current,
+            redline_base=redline_base,
             audit_result=session.audit.result,
             qc_result=qc_result,
+        )
+
+    def _render_export(inputs: _ExportInputs) -> Response:
+        """Render a captured snapshot. Runs WITHOUT the session guard."""
+        redline_diff = (
+            diff_sections(inputs.redline_base, inputs.current)
+            if inputs.redline_base is not None
+            else None
+        )
+        if inputs.selected_mode == "source":
+            try:
+                payload = build_source_preserving_docx(
+                    source_bytes=inputs.source_bytes,
+                    source_map=inputs.source_map,
+                    baseline=inputs.baseline,
+                    current=inputs.current,
+                    context=inputs.source_context,
+                )
+            except SourcePatchError as exc:
+                return JSONResponse(
+                    {"ok": False, "error": str(exc)}, status_code=409
+                )
+            return Response(
+                content=payload,
+                media_type=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+                headers=_attachment_headers(export_filename(inputs.current)),
+            )
+
+        payload = build_docx(
+            inputs.current,
+            audit_result=inputs.audit_result,
+            qc_result=inputs.qc_result,
             redline=redline_diff,
         )
         filename = (
-            redline_filename(store.doc)
+            redline_filename(inputs.current)
             if redline_diff is not None
-            else export_filename(store.doc)
+            else export_filename(inputs.current)
         )
         return Response(
             content=payload,
@@ -3310,11 +3379,18 @@ def create_app() -> FastAPI:
         mode: str | None = None,
     ) -> Response:
         session = sessions.get_session()
-        # Export one coherent snapshot. This intentionally holds the session
-        # guard through generation so a concurrent edit, rerun completion, or
-        # disposition cannot mix document bytes with a different QC closing.
+        # Capture one coherent snapshot under the guard, then render it
+        # without. Coherence comes from capturing together, not from holding
+        # the lock: the ZIP/XML/python-docx work is seconds on a real
+        # section, and the turn-state lock is what a chat turn must claim —
+        # so holding it across the render blocked the turn, and the stop.
         with session.session_state_guard():
-            response = _export_docx_locked(session, redline, base, mode)
+            captured = _capture_export_inputs(session, redline, base, mode)
+        response = (
+            captured
+            if isinstance(captured, JSONResponse)
+            else _render_export(captured)
+        )
         _trace_capture.app_event(
             "export",
             kind="docx",

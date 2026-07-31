@@ -1,6 +1,6 @@
 # Phase 6 — Concurrency, responsiveness, and release
 
-- Status: **in progress** (6.1-6.3 landed; 6.4-6.5 planned)
+- Status: **in progress** (6.1-6.3 landed, 6.4 Part A landed; 6.4 Part B and 6.5 planned)
 - Prerequisites: Chunk 6.5 requires Phases 1-5 complete. Chunks 6.1-6.4 depend
   only on Phase 1 (6.1 additionally interacts with Chunk 4.3's metering seam —
   coordinate, don't serialize). Pulling 6.1 forward early is encouraged: the
@@ -494,11 +494,40 @@ unless output semantics intentionally changed and the owner approves.
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
-- Deviations:
-- Manual QA owed:
+- Status: **Part A complete; Part B planned**
+- Commit/PR: branch `claude/phase-6-concurrency-responsiveness-xncqik`
+  (Part A). Split deliberately: Part A touches the source-preserving export
+  gate — per CLAUDE.md the most safety-critical subsystem in the repo, with
+  its own contract in `docs/DOCX_FIDELITY.md` — so it gets an undiluted
+  review and its own revert boundary. Part B (chat resend sanitization) is
+  a separate change against the chat request builder.
+- Tests (Part A): 3 new, each reverted in place to confirm it goes red.
+  `tests/test_import_responsiveness.py` (2): a blocked `build_docx` and a
+  blocked `build_source_preserving_docx` each leave `/api/doc` — which takes
+  exactly the turn-state lock a chat claim needs — answering promptly, so
+  both branches are covered. `tests/test_redline_export.py` (1): an export
+  renders the snapshot it captured, not a later document. Full suite 1377
+  passed / 9 skipped (no new skips); `tests/test_docx_corpus.py` +
+  `tests/test_source_preserving_export.py` green with no fixture
+  regeneration; `npm test` 193; `npm run build` clean.
+- Deviations (Part A):
+  - **The capture keeps detached `SpecSection` objects, not version
+    dictionaries**, for the current tree and the redline base. Building
+    them under the guard is far cheaper than the render it replaces, and it
+    preserves `_source_baseline`'s `from_dict` try/except — which is what
+    turns a malformed persisted baseline into the existing 409 rather than
+    a 500 escaping from the unguarded renderer.
+  - **No pure context builder was extracted.**
+    `build_source_preserving_docx` already accepts `context=None` and
+    builds one internally, so the cold path builds outside the lock with no
+    new seam. Nothing is written back to the cache, as the plan permits.
+  - **Fixed while here:** the filename was computed from a SECOND live read
+    of `store.doc` after the render. Under the old always-locked route that
+    was invisible; releasing the guard would have made it a mixed-state
+    reply, so it is now read from the captured snapshot.
+- Manual QA owed (Part A): the 6.5 responsiveness item covers it — export a
+  large source DOCX while chat streams and confirm both the stream and the
+  export behave, and that the file opens in Microsoft Word.
 
 ## Chunk 6.5 — Full release validation and documentation closeout
 

@@ -645,3 +645,112 @@ def test_memoized_lookups_match_a_linear_scan():
         index.body_child(10_000)
     with pytest.raises(XmlLexicalError):
         index.word_text(10_000, 0)
+
+
+def test_docx_export_does_not_hold_the_turn_lock_while_it_renders(monkeypatch):
+    """A DOCX render must not block the lock a chat turn has to claim.
+
+    Export used to hold ``session_state_guard`` — the turn-state lock —
+    through ZIP rebuild, XML reparse, source-plan validation and the
+    python-docx render, which is seconds on a real section. For that whole
+    time no turn could start and no stop could be processed, on the one
+    action a user is most likely to take right after asking for a draft.
+
+    Coherence never needed the lock held, only the inputs captured
+    together, so export now snapshots under the guard and renders without
+    it. ``/api/doc`` is the probe because it takes exactly that lock.
+    """
+    real_build = app_module.build_docx
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_build(*args, **kwargs):
+        entered.set()
+        # Stands in for the seconds of real render CPU.
+        release.wait(_BLOCK_SECONDS)
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "build_docx", blocking_build)
+
+    with TestClient(app_module.create_app()) as client:
+        assert client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"}
+                ]
+            },
+        ).status_code == 200
+
+        worker_outcome: dict = {}
+
+        def run_export() -> None:
+            worker_outcome["response"] = client.get("/api/export/docx")
+
+        worker = threading.Thread(target=run_export, daemon=True)
+        worker.start()
+        assert entered.wait(_BLOCK_SECONDS + 5), "the render never started"
+        started = time.perf_counter()
+        doc = client.get("/api/doc")
+        elapsed = time.perf_counter() - started
+        release.set()
+        worker.join(_BLOCK_SECONDS + 10)
+
+    assert doc.status_code == 200
+    assert worker_outcome["response"].status_code == 200
+    assert elapsed < _RESPONSIVE_SECONDS, (
+        f"a request needing the turn-state lock waited {elapsed:.2f}s for a "
+        "DOCX render — the export is holding the lock across it again"
+    )
+
+
+def test_source_preserving_export_does_not_hold_the_turn_lock_either(monkeypatch):
+    """The same guarantee for the source-preserving branch.
+
+    That path is the heavier of the two — a lexical index, a source-plan
+    validation and a raw-ZIP rebuild — so it is the one that held the lock
+    longest. Rendering from a captured snapshot means the imported bytes,
+    map and baseline are all bound before the guard releases.
+    """
+    from backend.spec_doc import source_patch as source_patch_module
+
+    real_build = app_module.build_source_preserving_docx
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_build(**kwargs):
+        entered.set()
+        release.wait(_BLOCK_SECONDS)
+        return real_build(**kwargs)
+
+    monkeypatch.setattr(app_module, "build_source_preserving_docx", blocking_build)
+    assert source_patch_module.build_source_preserving_docx is not blocking_build
+
+    with TestClient(app_module.create_app()) as client:
+        assert client.post(
+            "/api/import/master", files=_upload(_master_bytes())
+        ).status_code == 200
+        settle_capability_sweep()
+
+        worker_outcome: dict = {}
+
+        def run_export() -> None:
+            worker_outcome["response"] = client.get(
+                "/api/export/docx", params={"mode": "source"}
+            )
+
+        worker = threading.Thread(target=run_export, daemon=True)
+        worker.start()
+        assert entered.wait(_BLOCK_SECONDS + 5), "the source render never started"
+        started = time.perf_counter()
+        doc = client.get("/api/doc")
+        elapsed = time.perf_counter() - started
+        release.set()
+        worker.join(_BLOCK_SECONDS + 10)
+
+    assert doc.status_code == 200
+    assert worker_outcome["response"].status_code == 200
+    assert elapsed < _RESPONSIVE_SECONDS, (
+        f"a request needing the turn-state lock waited {elapsed:.2f}s for a "
+        "source-preserving render"
+    )

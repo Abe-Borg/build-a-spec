@@ -5065,6 +5065,58 @@ project-format bump.
   has to be `git checkout HEAD~1 -- backend/app.py` or it silently
   measures the fixed code and every conclusion drawn from it is wrong.
 
+## An export renders a snapshot, not the live session — implemented notes
+
+Deep-dive remediation Chunk 6.4 Part A. `/api/export/docx` held
+`session_state_guard()` — the turn-state lock — through ZIP rebuild, XML
+reparse, source-plan validation and the python-docx render, which is
+seconds on a real section. For all of it no chat turn could be claimed and
+no stop processed, on the one action a user is most likely to take right
+after asking for a draft. No new endpoint, no new dep, no format bump, and
+every HTTP status, message and byte of output is unchanged.
+
+- **Coherence never needed the lock held, only the inputs captured
+  together.** The route now has two phases: `_capture_export_inputs`
+  (under the guard, builds nothing) returns a frozen `_ExportInputs` or the
+  error response the request earns, and `_render_export` (no guard) does
+  the work. Every field of the snapshot comes from one guarded read, so
+  the bytes, the filename and the QC closing describe the same document
+  however long the render takes.
+- **The two live reads had to become one, and that was a latent bug the
+  chunk would otherwise have exposed.** `build_docx(store.doc, …)` bound
+  the tree as an argument, but the filename was computed from `store.doc`
+  AGAIN after the render returned. Holding the guard hid it; releasing it
+  would have handed back bytes from one version under a filename derived
+  from another. Both now read `inputs.current`.
+- **Detached means detached.** The current tree is
+  `SpecSection.from_dict(store.doc.to_dict())` — a committing turn
+  replaces `store.doc` outright, so a reference would not have survived.
+  `_redline_for_export` became `_redline_base_for_export`: it validates the
+  index and returns the base SECTION under the guard, and `diff_sections`
+  (the expensive half) runs outside. The baseline still goes through
+  `_source_baseline`, whose `from_dict` try/except is what turns a
+  malformed persisted record into the 409 rather than a 500 — so it stays
+  under the guard and the section, not the record, is captured.
+- **The source-patch context is captured only when already built.** When
+  absent, `build_source_preserving_docx(context=None)` builds one itself,
+  outside the lock, and nothing is written back: publishing a new cache
+  would need the source identity revalidated under the guard, and caching
+  is not required for export correctness (the plan says so explicitly).
+  `_source_readiness` already warms it on most paths.
+- **Fail-closed source mode is untouched.** The 409 for "no validated
+  source DOCX, source map, and imported baseline" is raised during
+  capture, before anything renders; a `SourcePatchError` from the render is
+  still a 409. Nothing silently falls back to a normalized export.
+- **Tests: 3 new, each reverted in place.**
+  `test_import_responsiveness.py` (2): a blocked `build_docx` and a
+  blocked `build_source_preserving_docx` each leave `/api/doc` — which
+  takes exactly the turn-state lock a chat claim needs — answering
+  promptly. `test_redline_export.py` (1): a document mutated from inside
+  the renderer does not reach the reply, in the filename or the content.
+  The mutation runs on the request's own thread so the interleaving is
+  deterministic; a real concurrent edit can now land in that window, which
+  is precisely why the two reads had to become one snapshot.
+
 ## Commands
 
 ```

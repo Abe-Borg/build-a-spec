@@ -4955,6 +4955,19 @@ no new SSE event, no new dep, no project-format bump.
   leaked by a crashed build must not wedge the process). The user-facing
   New session is `POST /api/session/reset`, which refuses outside the
   original scope entirely and never reaches this path.
+- **Revoking a reservation has to mean something, and it has to happen
+  before the scope check** (review finding on PR #108, Codex). Two halves,
+  both load-bearing. (1) `begin_tutorial` activates at the END, so while
+  it clones outside the lock the scope is still `original` — and
+  `force_restore_original` returned early on exactly that, silently
+  ignoring `abandon_transition`. (2) Even revoked, the builders' commit
+  re-check compared only workspace id and session identity, neither of
+  which that early return touches, so the build committed a tutorial on
+  top of the session the reset had just cleared and the next test began
+  inside a tutorial workspace. Both builders now check
+  `self._transition_owner is not owner` FIRST: **ownership is the
+  authority, and losing it is losing the right to commit** — the same
+  shape as the run token in `ResearchRunner._try_resolve`.
 - **`pop_scenario` deliberately gets no guard**, per the plan: while a
   build is in flight `self._scenario` is still None and the scope is still
   `tutorial`, so it already raises "No tutorial scenario is active".
@@ -4964,15 +4977,17 @@ no new SSE event, no new dep, no project-format bump.
   prompt — it vetoes on the UI thread rather than waiting on an unbounded
   model call. That path is now covered by a test rather than only by
   reading.
-- **Tests: 5 new** (`test_tutorial.py` 4, `test_close_prompt.py` 1), all
-  built on `_HeldBuild` — a `build=` callable parked outside the lock on a
-  real thread, the technique the neighbouring start/restart race tests
-  already use. Three go red on the old code (finish/force-restore/repair
-  refusing, the stale owner not clearing a successor's slot, and the
-  refused finish letting the stranded spend reach the original exactly
-  once). The other two — a failed build releasing its slot, and native
-  close vetoing — pin behavior that already held and has to keep holding
-  under ownership; they are regression guards, not fixes.
+- **Tests: 6 new** (`test_tutorial.py` 5, `test_close_prompt.py` 1), all
+  built on a build parked outside the lock on a real thread (`_HeldBuild`
+  for scenarios, a blocked `clone_session_for_tutorial` for the tutorial
+  start) — the technique the neighbouring start/restart race tests already
+  use. Four go red on the old code (finish/force-restore/repair refusing,
+  the stale owner not clearing a successor's slot, the refused finish
+  letting the stranded spend reach the original exactly once, and the
+  abandoned setup committing over a hard reset). The other two — a failed
+  build releasing its slot, and native close vetoing — pin behavior that
+  already held and has to keep holding under ownership; they are
+  regression guards, not fixes.
 
 ## Commands
 

@@ -229,7 +229,15 @@ class SessionManager:
                 self._finish_transition_locked(owner)
             raise
         with self._lock:
-            if self._workspace_id != activation or self._active is not original:
+            # Ownership is checked FIRST and is the authority: a hard reset
+            # revokes the reservation without moving the scope (activation
+            # happens below, so an in-flight setup still reads `original`),
+            # and the workspace-identity checks alone would not notice.
+            if (
+                self._transition_owner is not owner
+                or self._workspace_id != activation
+                or self._active is not original
+            ):
                 self._finish_transition_locked(owner)
                 raise WorkspaceConflictError("The workspace changed during tutorial setup.")
             self._original = original
@@ -302,7 +310,13 @@ class SessionManager:
                 self._finish_transition_locked(owner)
             raise
         with self._lock:
-            if self._workspace_id != activation or self._active is not tutorial:
+            # Same rule as begin_tutorial: a revoked reservation is a lost
+            # right to commit, checked before the workspace identity.
+            if (
+                self._transition_owner is not owner
+                or self._workspace_id != activation
+                or self._active is not tutorial
+            ):
                 self._finish_transition_locked(owner)
                 raise WorkspaceConflictError("The workspace changed during scenario setup.")
             # Scenario construction may intentionally pass through production
@@ -434,14 +448,22 @@ class SessionManager:
 
         ``abandon_transition`` is the teardown escape (see
         :func:`reset_session`) and is only safe because the reservation is
-        owned: clearing the slot here means the abandoned build's own
-        release finds it no longer owns anything and clears nothing — so a
+        owned: clearing the slot revokes the pending build's authority to
+        commit (both builders re-check ownership), while its own release
+        finds it no longer owns anything and clears nothing — so a
         transition that starts afterwards keeps its reservation.
         """
         with self._lock:
+            if abandon_transition:
+                # Revoked BEFORE the scope check, deliberately. An in-flight
+                # begin_tutorial has not activated anything yet, so the scope
+                # is still `original` — returning early there would leave the
+                # reservation held and let that build commit a tutorial on
+                # top of the session this reset just cleared.
+                self._transition_owner = None
             if self._scope == "original":
                 return self.current()
-            if not abandon_transition and self._transition_active_locked():
+            if self._transition_active_locked():
                 raise WorkspaceBusyError(["another tutorial transition"])
             if self._original is None or self._tutorial is None:
                 raise WorkspaceConflictError("The original workspace is unavailable.")

@@ -240,16 +240,17 @@ venv\Scripts\python -m pytest -q tests/test_tutorial.py tests/test_close_prompt.
 
 - Status: complete
 - Commit/PR: branch `claude/phase-6-concurrency-responsiveness-xncqik`
-- Tests: 5 new. `tests/test_tutorial.py` (4): finish / forced restore /
+- Tests: 6 new. `tests/test_tutorial.py` (5): finish / forced restore /
   tutorial repair all refuse while a build holds the slot, and the guard
   lifts when it completes; a failed build releases its own slot; an
   abandoned build cannot release a newer transition's reservation; a
-  refused finish lets the build's spend reach the original exactly once.
+  refused finish lets the build's spend reach the original exactly once;
+  a hard reset cannot be overwritten by the tutorial setup it abandoned.
   `tests/test_close_prompt.py` (1): native close vetoes a scenario build
-  instead of waiting on it. Three go red against the old code; the other
+  instead of waiting on it. Four go red against the old code; the other
   two pin behavior that already held and must keep holding under
   ownership (regression guards, stated as such rather than claimed as
-  fixes). Full suite 1368 passed / 9 skipped (no new skips); `npm test`
+  fixes). Full suite 1369 passed / 9 skipped (no new skips); `npm test`
   193; `npm run build` clean.
 - Deviations:
   - **`replace_tutorial` got the same guard**, which the plan did not
@@ -278,6 +279,17 @@ venv\Scripts\python -m pytest -q tests/test_tutorial.py tests/test_close_prompt.
     `main._CloseController` already turns that into the `tutorial-busy`
     prompt, so the "surface the busy result safely / do not block a UI
     thread" requirement was already met; it is now covered by a test.
+  - **Review finding (Codex, PR #108), fixed in the same branch:**
+    `abandon_transition` was ignored whenever the scope was still
+    `original` — which is exactly the in-flight `begin_tutorial` case,
+    since activation happens at the end of the method — and even once
+    revoked, the builders' commit re-check compared only workspace id and
+    session identity, so the abandoned setup still committed a tutorial
+    over the just-reset session. Both halves fixed and independently
+    proven load-bearing: abandonment is handled before the scope early
+    return, and both builders check `self._transition_owner is not owner`
+    first. Ownership is the authority — losing it is losing the right to
+    commit, the same shape as the run token in Chunk 6.1.
   - `pop_scenario` left unguarded, as the plan directs.
 - Manual QA owed: none specific to this chunk. Worth exercising in the
   6.5 pass: enter Chapter 6 (live figure generation) and try to end the

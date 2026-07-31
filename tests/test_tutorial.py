@@ -951,6 +951,55 @@ def test_an_abandoned_build_cannot_release_a_newer_transitions_reservation():
         stale.release()
 
 
+def test_a_hard_reset_cannot_be_overwritten_by_the_tutorial_it_abandoned(
+    monkeypatch,
+):
+    """Abandoning has to revoke the reservation, and that has to mean something.
+
+    `begin_tutorial` activates at the END, so while it is cloning outside
+    the lock the scope is still `original` — and `force_restore_original`
+    returned early on exactly that, before honouring `abandon_transition`.
+    The reservation stayed held, and the builder's commit checked only
+    workspace id and session identity, neither of which the early return
+    touched. So it committed a tutorial on top of the session the reset had
+    just cleared, and the next test began inside a tutorial workspace.
+
+    Reported by Codex on PR #108.
+    """
+    manager = SessionManager()
+    entered, release = threading.Event(), threading.Event()
+    real_clone = sessions.clone_session_for_tutorial
+
+    def _slow_clone(source: SessionState) -> SessionState:
+        entered.set()
+        assert release.wait(timeout=5)
+        return real_clone(source)
+
+    monkeypatch.setattr(sessions, "clone_session_for_tutorial", _slow_clone)
+    result: list = []
+    error: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            result.append(manager.begin_tutorial(request_id="reset-race"))
+        except BaseException as exc:  # noqa: BLE001 — inspected below
+            error.append(exc)
+
+    thread = threading.Thread(target=_run)
+    thread.start()
+    try:
+        assert entered.wait(timeout=5)
+        assert manager.current().scope == "original", "not activated yet"
+        manager.force_restore_original(abandon_transition=True)
+    finally:
+        release.set()
+        thread.join(timeout=5)
+
+    assert not result, "the abandoned setup must not commit"
+    assert error and isinstance(error[0], WorkspaceConflictError)
+    assert manager.current().scope == "original"
+
+
 def test_a_refused_finish_lets_the_build_it_would_have_stranded_pay_in():
     """The whole point of refusing: the spend still reaches the original.
 

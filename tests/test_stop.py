@@ -36,6 +36,10 @@ from tests.test_research_engine import (  # noqa: F401 (reuse)
     PROFILE as RESEARCH_PROFILE,
     _scripts,
 )
+from tests.test_research_rounds import (  # noqa: F401 (reuse)
+    _ReleaseHook,
+    _start_blocked,
+)
 
 
 def _client() -> TestClient:
@@ -494,6 +498,44 @@ def test_research_stop_discards_running_work_and_allows_immediate_restart(
     )
     assert client.post("/api/research/start").json()["ok"] is True
     assert _wait_terminal(client, "/api/research/status")["status"] == "complete"
+
+
+def test_a_stop_cannot_cancel_the_round_that_replaces_it():
+    """The stop signal belongs to the round the user actually stopped.
+
+    ``stop()`` used to set ``self._cancel_event`` after its compare-and-set
+    had released the lock — and a fresh ``start()`` installs its own cancel
+    event at exactly that seam. A user who stopped a round and immediately
+    started another therefore cancelled the new one, which would then bail
+    out of every dimension before spending anything and report itself
+    stopped by a user who had asked for the opposite.
+    """
+    runner = ResearchRunner()
+    runner._lock = _ReleaseHook(runner._lock)
+    release = threading.Event()
+    first_settled, second_settled = threading.Event(), threading.Event()
+    _start_blocked(runner, release, first_settled)
+    stopped_cancel = runner._cancel_event
+
+    def _start_successor() -> None:
+        if runner.status not in ("complete", "failed"):
+            return
+        runner._lock.on_release = None  # one-shot: start() locks too
+        _start_blocked(runner, release, second_settled)
+
+    runner._lock.on_release = _start_successor
+    assert runner.stop() is True
+    runner._lock.on_release = None
+
+    successor_cancel = runner._cancel_event
+    assert successor_cancel is not stopped_cancel, "the successor really started"
+    assert runner.status == "running"
+    assert stopped_cancel.is_set(), "the stopped round was cancelled"
+    assert not successor_cancel.is_set(), "the successor was not"
+
+    release.set()
+    assert first_settled.wait(timeout=10)
+    assert second_settled.wait(timeout=10)
 
 
 def test_a_stopped_research_round_still_meters_what_it_already_spent():

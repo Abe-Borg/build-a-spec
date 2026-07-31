@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 from backend.tracing import capture, config, recorder as recorder_module
 from backend.tracing.recorder import TraceRecorder, set_recorder
@@ -220,6 +221,206 @@ def test_the_research_span_records_which_coverage_never_completed(
         spans = _read_jsonl(newest / "spans.jsonl")
         research = [s for s in spans if s.get("kind") == "research"]
         assert "incomplete_dimensions" not in research[0]["outputs"]
+    finally:
+        set_recorder(None)
+
+
+class _BlockedProviderClient:
+    """Every streaming call waits for ``release``, then fails fast."""
+
+    def __init__(self, release: threading.Event) -> None:
+        self._release = release
+        self.messages = self
+
+    def stream(self, **_request):
+        self._release.wait(timeout=10)
+        raise RuntimeError("aborted")
+
+
+def test_a_stopped_research_run_closes_its_span_at_the_stop(
+    monkeypatch, tmp_path
+):
+    """A stopped run used to leave its span open for the rest of the app's life.
+
+    The worker closed the span only when it WON the compare-and-set, and a
+    stop is precisely the case where it loses — so every stopped research
+    run left an unclosed span, which the viewer renders as a crash node and
+    a support bundle cannot tell apart from a hang.
+
+    Research closes at the stop rather than at the worker's finalizer
+    because the round's result is discarded outright: there is nothing left
+    to wait for. (Final QC is the opposite call — see the next test.)
+    """
+    monkeypatch.setenv(config.ENV_TRACE, "1")
+    monkeypatch.setenv(config.ENV_TRACE_DIR, str(tmp_path))
+    set_recorder(None)
+    try:
+        from backend.project_profile import ProjectProfile
+        from backend.research.runner import ResearchRunner
+        from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
+
+        release = threading.Event()
+        settled = threading.Event()
+        runner = ResearchRunner()
+        assert runner.start(
+            module=HYPERSCALE_FIRE,
+            project_profile=ProjectProfile("Ashburn", "VA", "USA", "ExampleCo"),
+            client=_BlockedProviderClient(release),
+            model="claude-sonnet-5",
+            max_tokens=4096,
+            on_settled=settled.set,
+        )
+        rec = recorder_module.get_recorder()
+        assert rec is not None
+        assert [s["kind"] for s in rec.open_span_summaries()] == ["research"]
+
+        assert runner.stop() is True
+        assert rec.open_span_summaries() == [], "the stop closed the span"
+
+        # The abandoned worker unwinds; it lost the race, so it must not
+        # close a second time (or reopen anything).
+        release.set()
+        assert settled.wait(timeout=10)
+        assert rec.open_span_summaries() == []
+        rec.stop()
+
+        run_dirs = list(tmp_path.iterdir())
+        spans = _read_jsonl(run_dirs[0] / "spans.jsonl")
+        research = [s for s in spans if s.get("kind") == "research"]
+        assert len(research) == 1, "closed exactly once"
+        assert research[0]["outputs"]["status"] == "failed"
+        assert "stopped" in (research[0]["error"] or "").lower()
+    finally:
+        set_recorder(None)
+
+
+def test_a_stops_span_close_never_precedes_an_event_it_already_accepted(
+    monkeypatch, tmp_path
+):
+    """Closing the span made ordering matter, so the mirror moved under the lock.
+
+    A dimension thread preempted between "the log accepted my event" and
+    "mirror it to the trace" would let a concurrent stop close the span in
+    the gap — and ``add_event`` does not check whether a span is still
+    open, so the event landed timestamped past its own span's ``ended_at``.
+    Harmless before this chunk (a stop closed nothing), and exactly the
+    kind of incoherent timeline the chunk exists to remove.
+
+    Reported by Codex on PR #107.
+    """
+    monkeypatch.setenv(config.ENV_TRACE, "1")
+    monkeypatch.setenv(config.ENV_TRACE_DIR, str(tmp_path))
+    set_recorder(None)
+    try:
+        from backend.project_profile import ProjectProfile
+        from backend.research.runner import ResearchRunner
+        from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
+        from tests.test_research_rounds import _ReleaseHook
+
+        release = threading.Event()
+        settled = threading.Event()
+        runner = ResearchRunner()
+        runner._lock = _ReleaseHook(runner._lock)
+
+        def _stop_in_the_gap() -> None:
+            # The seam is the release AFTER the first accepted event: with
+            # the mirror outside the lock that is precisely the window;
+            # with it inside, the mirror is already enqueued. Running after
+            # the release (never during) is what lets stop() take the lock
+            # here under either arrangement instead of deadlocking.
+            if runner.status != "running" or not runner.events:
+                return
+            runner._lock.on_release = None
+            runner.stop()
+
+        runner._lock.on_release = _stop_in_the_gap
+        assert runner.start(
+            module=HYPERSCALE_FIRE,
+            project_profile=ProjectProfile("Ashburn", "VA", "USA", "ExampleCo"),
+            client=_BlockedProviderClient(release),
+            model="claude-sonnet-5",
+            max_tokens=4096,
+            on_settled=settled.set,
+        )
+        release.set()
+        assert settled.wait(timeout=10)
+        runner._lock.on_release = None
+        assert runner.status == "failed"
+
+        rec = recorder_module.get_recorder()
+        assert rec is not None
+        rec.stop()
+
+        run_dirs = list(tmp_path.iterdir())
+        spans = _read_jsonl(run_dirs[0] / "spans.jsonl")
+        events = _read_jsonl(run_dirs[0] / "events.jsonl")
+        research = [s for s in spans if s.get("kind") == "research"]
+        assert len(research) == 1
+        span_id, ended_at = research[0]["span_id"], research[0]["ended_at"]
+        assert ended_at is not None
+
+        mirrored = [
+            e
+            for e in events
+            if e.get("span_id") == span_id and e.get("type") == "research_progress"
+        ]
+        assert mirrored, "the run really did mirror progress before the stop"
+        late = [e for e in mirrored if e["ts"] > ended_at]
+        assert late == [], "an accepted event was recorded after its span closed"
+    finally:
+        set_recorder(None)
+
+
+def test_a_stopped_qc_run_closes_its_span_when_the_attempt_settles(
+    monkeypatch, tmp_path
+):
+    """Final QC closes at settlement, not at the stop — and only there.
+
+    A stopped QC attempt keeps assembling the partial report it already paid
+    for, and that report (and its finding counts) is what the span should
+    describe. So the close belongs at the one point both outcomes pass
+    through, ``_finalize_attempt``; stopping never closes it, which is what
+    makes "exactly once" structural rather than a convention.
+    """
+    monkeypatch.setenv(config.ENV_TRACE, "1")
+    monkeypatch.setenv(config.ENV_TRACE_DIR, str(tmp_path))
+    set_recorder(None)
+    try:
+        from fastapi.testclient import TestClient
+
+        from backend import sessions
+        from backend.app import create_app
+        from tests.test_qc import _seed_doc
+
+        client = TestClient(create_app())
+        _seed_doc(client, monkeypatch)
+
+        release = threading.Event()
+        monkeypatch.setattr(
+            "backend.app.get_client",
+            lambda: _BlockedProviderClient(release),
+        )
+        assert client.post("/api/qc/start").json()["ok"] is True
+        rec = recorder_module.get_recorder()
+        assert rec is not None
+        assert [s["kind"] for s in rec.open_span_summaries()] == ["qc"]
+
+        assert client.post("/api/qc/stop").json()["ok"] is True
+        # Still open: the paid worker has not attached its report yet, and
+        # that attachment is what the span's counts describe.
+        assert [s["kind"] for s in rec.open_span_summaries()] == ["qc"]
+
+        release.set()
+        sessions.get_session().qc._thread.join(timeout=10)
+        assert rec.open_span_summaries() == [], "settlement closed the span"
+        rec.stop()
+
+        run_dirs = list(tmp_path.iterdir())
+        spans = _read_jsonl(run_dirs[0] / "spans.jsonl")
+        qc_spans = [s for s in spans if s.get("kind") == "qc"]
+        assert len(qc_spans) == 1, "closed exactly once"
+        assert qc_spans[0]["outputs"]["status"] == "cancelled"
+        assert "stopped" in (qc_spans[0]["error"] or "").lower()
     finally:
         set_recorder(None)
 

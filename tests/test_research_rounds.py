@@ -24,6 +24,7 @@ from backend.research import (
     ResearchRunner,
     append_research_round,
 )
+from backend.research import runner as research_runner_module
 from backend.research.engine import (
     DimensionStatus,
     _mint_item_id,
@@ -936,6 +937,281 @@ def test_a_superseded_runs_late_events_never_reach_the_next_rounds_log():
     profile = runner.profile_result
     assert profile.round_count == 2
     assert [i.requirement for i in profile.items] == ["Rule A.", "Rule C."]
+
+
+# ---------------------------------------------------------------------------
+# The terminal transaction
+# ---------------------------------------------------------------------------
+
+
+class _ReleaseHook:
+    """A runner lock with seams at the two moments a race can be observed.
+
+    Everything Chunk 6.1 closes is a *window between two critical sections*,
+    so the only deterministic place to act is around a lock release — a
+    sleep would only make the failures rarer, not reproducible.
+
+    ``while_locked`` runs inside the critical section (probes reading state
+    that other threads may be mutating; it must not take the lock, which is
+    not reentrant). ``on_release`` runs the instant the lock is free, which
+    is where a competing ``start()`` goes. Install the wrapper BEFORE the
+    first ``start()`` — swapping a lock some thread may be holding is itself
+    a race — and disarm inside a hook before doing anything that locks again.
+    """
+
+    def __init__(self, inner: threading.Lock) -> None:
+        self._inner = inner
+        self.while_locked = None
+        self.on_release = None
+
+    def acquire(self, *args, **kwargs):
+        return self._inner.acquire(*args, **kwargs)
+
+    def release(self) -> None:
+        self._inner.release()
+
+    def __enter__(self) -> "_ReleaseHook":
+        self._inner.acquire()
+        return self
+
+    def __exit__(self, *_exc) -> bool:
+        probe = self.while_locked
+        if probe is not None:
+            probe()
+        self._inner.release()
+        hook = self.on_release
+        if hook is not None:
+            hook()
+        return False
+
+
+class _BlockedClient:
+    """Every streaming call waits for ``release``, then fails fast."""
+
+    def __init__(self, release: threading.Event) -> None:
+        self._release = release
+        self.messages = self
+
+    def stream(self, **_request):
+        self._release.wait(timeout=10)
+        raise RuntimeError("aborted")
+
+
+def _start_blocked(runner: ResearchRunner, release, settled) -> None:
+    assert runner.start(
+        module=HYPERSCALE_FIRE,
+        project_profile=PROFILE,
+        client=_BlockedClient(release),
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        on_settled=settled.set,
+    )
+
+
+def test_a_stop_publishes_everything_before_the_next_round_can_start():
+    """A stop used to resolve the run, release the lock, and only THEN read
+    ``self.error`` back and append its terminal event.
+
+    The very next thing that can happen at that release is a fresh
+    ``start()``, which clears the event log and blanks ``error``. So a stop
+    raced by an immediate restart published its terminal frame into the
+    SUCCESSOR's log, carrying the successor's (empty) message — the round
+    the user actually stopped ended silently.
+    """
+    runner = ResearchRunner()
+    runner._lock = _ReleaseHook(runner._lock)
+    release = threading.Event()
+    first_settled, second_settled = threading.Event(), threading.Event()
+    _start_blocked(runner, release, first_settled)
+
+    log_when_the_successor_started: list[dict] = []
+
+    def _start_successor() -> None:
+        if runner.status not in ("complete", "failed"):
+            return  # not the release we are waiting for
+        runner._lock.on_release = None  # one-shot: start() locks too
+        log_when_the_successor_started.extend(runner.events)
+        _start_blocked(runner, release, second_settled)
+
+    runner._lock.on_release = _start_successor
+    assert runner.stop() is True
+    runner._lock.on_release = None
+
+    assert runner.status == "running", "the successor really did start"
+    # The stopped round's terminal frame was already in ITS log.
+    assert log_when_the_successor_started[-1]["type"] == "research_failed"
+    assert log_when_the_successor_started[-1]["round"] == 1
+    assert "stopped" in log_when_the_successor_started[-1]["error"].lower()
+    # And nothing about it reached the successor's.
+    assert [e for e in runner.events if e["type"] == "research_failed"] == []
+
+    release.set()
+    assert first_settled.wait(timeout=10)
+    assert second_settled.wait(timeout=10)
+
+
+def test_a_finished_rounds_terminal_event_never_lands_in_the_next_rounds_log():
+    """The same window on the success path.
+
+    The winning worker published ``research_complete`` after the
+    compare-and-set released the lock, so a round that started in between
+    inherited the previous round's completion — a follower reads it as its
+    own round finishing, minutes early.
+    """
+    runner = ResearchRunner()
+    runner._lock = _ReleaseHook(runner._lock)
+    release = threading.Event()
+    second_settled = threading.Event()
+    log_when_the_successor_started: list[dict] = []
+
+    def _start_successor() -> None:
+        if runner.status not in ("complete", "failed"):
+            return
+        runner._lock.on_release = None
+        log_when_the_successor_started.extend(runner.events)
+        _start_blocked(runner, release, second_settled)
+
+    runner._lock.on_release = _start_successor
+    _run_round(
+        runner,
+        SequencedFakeClient(
+            _scripts_for_rounds(
+                {
+                    "governing_codes": research_response(
+                        items=[_item("Rule A.", ["https://a.gov"])],
+                        searched_urls=["https://a.gov"],
+                    )
+                }
+            )
+        ),
+        lambda _u: None,
+    )
+    runner._lock.on_release = None
+
+    assert runner.status == "running", "the successor really did start"
+    assert log_when_the_successor_started[-1]["type"] == "research_complete"
+    assert log_when_the_successor_started[-1]["round"] == 1
+    assert [e for e in runner.events if e["type"] == "research_complete"] == []
+
+    release.set()
+    assert second_settled.wait(timeout=10)
+
+
+def test_the_terminal_status_and_its_event_are_never_visible_apart():
+    """``sse_events`` reads both under one lock, so they must move together.
+
+    Its "terminal and drained" test is ``status in _TERMINAL and every
+    event sent`` — sampled in one critical section. A follower that landed
+    between a published terminal status and its not-yet-appended terminal
+    event therefore saw a finished, fully drained run, broke out of the
+    loop, and closed with ``stream_end`` having never sent the terminal
+    frame at all.
+    """
+    runner = ResearchRunner()
+    runner._lock = _ReleaseHook(runner._lock)
+    apart: list[tuple[str, list[str]]] = []
+
+    def _probe() -> None:
+        # Inside the critical section: exactly what an SSE poll would see.
+        if runner.status not in ("complete", "failed"):
+            return
+        types = [e["type"] for e in runner.events]
+        if not types or types[-1] not in (
+            "research_complete",
+            "research_failed",
+        ):
+            apart.append((runner.status, types))
+
+    runner._lock.while_locked = _probe
+    _run_round(
+        runner,
+        SequencedFakeClient(
+            _scripts_for_rounds(
+                {
+                    "governing_codes": research_response(
+                        items=[_item("Rule A.", ["https://a.gov"])],
+                        searched_urls=["https://a.gov"],
+                    )
+                }
+            )
+        ),
+        lambda _u: None,
+    )
+    assert runner.status == "complete"
+
+    # …and the same for a stop, which resolves from a different thread.
+    release = threading.Event()
+    settled = threading.Event()
+    _start_blocked(runner, release, settled)
+    assert runner.stop() is True
+    release.set()
+    assert settled.wait(timeout=10)
+
+    runner._lock.while_locked = None
+    assert apart == []
+
+
+def test_a_lock_free_reader_never_sees_complete_beside_the_old_profile(
+    monkeypatch,
+):
+    """Readiness, ``_doc_payload`` and the diagnostics snapshot read
+    ``status`` and ``profile_result`` as plain attributes — deliberately not
+    under the runner lock, which would nest a second lock inside the session
+    guard. So the adoption has to land BEFORE the status flips, or one of
+    them reads "research is complete" beside the round it superseded.
+
+    The merge is the seam: it runs inside the transaction, so what it
+    observes is exactly what a lock-free reader interleaving there would.
+    """
+    runner = ResearchRunner()
+    _run_round(
+        runner,
+        SequencedFakeClient(
+            _scripts_for_rounds(
+                {
+                    "governing_codes": research_response(
+                        items=[_item("Rule A.", ["https://a.gov"])],
+                        searched_urls=["https://a.gov"],
+                    )
+                }
+            )
+        ),
+        lambda _u: None,
+    )
+    first_profile = runner.profile_result
+    assert first_profile is not None
+
+    seen: list[tuple[str, object]] = []
+    real_merge = research_runner_module.append_research_round
+
+    def _watched(previous, fresh):
+        seen.append((runner.status, previous))
+        return real_merge(previous, fresh)
+
+    monkeypatch.setattr(
+        research_runner_module, "append_research_round", _watched
+    )
+    _run_round(
+        runner,
+        SequencedFakeClient(
+            _scripts_for_rounds(
+                {
+                    "governing_codes": research_response(
+                        items=[_item("Rule B.", ["https://b.gov"])],
+                        searched_urls=["https://b.gov"],
+                    )
+                }
+            )
+        ),
+        lambda _u: None,
+    )
+
+    assert len(seen) == 1
+    status_during_merge, profile_during_merge = seen[0]
+    assert status_during_merge == "running"
+    assert profile_during_merge is first_profile
+    assert runner.status == "complete"
+    assert runner.profile_result is not first_profile
 
 
 # ---------------------------------------------------------------------------

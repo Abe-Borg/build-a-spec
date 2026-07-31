@@ -1,6 +1,6 @@
 # Phase 6 — Concurrency, responsiveness, and release
 
-- Status: planned
+- Status: **in progress** (6.1 landed; 6.2-6.5 planned)
 - Prerequisites: Chunk 6.5 requires Phases 1-5 complete. Chunks 6.1-6.4 depend
   only on Phase 1 (6.1 additionally interacts with Chunk 4.3's metering seam —
   coordinate, don't serialize). Pulling 6.1 forward early is encouraged: the
@@ -115,11 +115,70 @@ venv\Scripts\python -m pytest -q tests/test_research_rounds.py tests/test_stop.p
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: complete
+- Commit/PR: branch `claude/phase-6-concurrency-responsiveness-xncqik`
+- Tests: 8 new, all reverted in place to confirm they go red.
+  `tests/test_research_rounds.py` (4): stop publishes everything before the
+  next round can start; a finished round's terminal event never lands in the
+  next round's log; the terminal status and its event are never visible
+  apart; a lock-free reader never sees `complete` beside the old profile.
+  `tests/test_stop.py` (1): a stop cannot cancel the round that replaces it.
+  `tests/test_tracing.py` (3): a stopped research run closes its span at the
+  stop; a stopped QC run closes its span when the attempt settles; a stop's
+  span close never precedes an event the log already accepted. Full suite
+  1363 passed / 9 skipped (no new skips); `npm test` 193; `npm run build`
+  clean.
 - Deviations:
-- Manual QA owed:
+  - **`_try_resolve` returns a `_Resolution`, not a bool.** The plan asked
+    for explicit inputs (terminal event, round, adopt, cancel identity) and
+    for the winner not to reread mutable fields. Round number and cancel
+    event are *read inside the transaction* rather than passed in: while
+    `status == running` — which the transaction has just verified — both are
+    provably still this run's, so passing them would only add a way for a
+    caller to pass the wrong one.
+  - **The terminal event is a factory, not a dict**
+    (`Callable[[_Resolution], dict]`). The success event's counts come from
+    the merged profile, which only exists once `adopt` has run inside the
+    lock. `_research_failed_event` is the one shared failure shape.
+  - **`_failure_message` → `_failure_message_locked`**, folded into the
+    transaction (it reads `profile_result`, which the same critical section
+    is writing).
+  - **The trace fix needed no `capture.py` helper.** Exactly-once is
+    structural instead: each runner holds the open handle and the terminal
+    transition CLAIMS it, so the loser has nothing to close. Research closes
+    at the stop; QC closes at settlement (`_finalize_attempt`, whoever won
+    the status race) and never at `stop()` — encoded once each and tested.
+  - **A span is opened only after the compare-and-set**, so a refused
+    double-start never fabricates one. That leaves a window in which a stop
+    can resolve first, so adoption is token-checked and an orphan closes on
+    the spot, reading the runner's terminal state only while it is still
+    terminal (a successor started in the same window owns it by then).
+  - **The QC span now records `latest_attempt_status`**
+    (`complete|partial|failed|cancelled`) and its error rather than a flat
+    `complete`/`failed` — the plan's "terminal status/error and available
+    counts".
+  - **`restore()` appends its compatibility event inside its own lock** for
+    the same reason as the transaction; it still opens no span.
+  - **Review finding (Codex, PR #107), fixed in the same branch:** closing
+    the span made event ORDER matter, so research's trace mirror moved
+    inside `_emit`'s lock. A dimension thread preempted between "the log
+    accepted my event" and "mirror it" let a concurrent stop close the span
+    in the gap, and `recorder.add_event` does not check whether a span is
+    open — so the event landed stamped past its own `ended_at`. Harmless
+    before this chunk (a stop closed nothing); incoherent after it. QC needs
+    no equivalent and deliberately does not have one: its span closes in
+    `_finalize_attempt`, which the worker reaches only after its own pools
+    have joined.
+  - The deterministic seam is `tests/test_research_rounds.py::_ReleaseHook`,
+    a lock wrapper with `while_locked` / `on_release` hooks. No sleeps, no
+    timing assertions. `on_release` fires after the release rather than
+    during it, which is what lets the ordering test drive a stop at the
+    exact seam under both the old and fixed arrangements instead of
+    deadlocking against the fix.
+- Manual QA owed: none specific to this chunk beyond the Phase 6.5 gate
+  items already listed (research transport recovery, QC live state and
+  container). Worth watching in the 6.5 live runs: a stopped research or QC
+  run should now appear as a CLOSED span in the trace viewer.
 
 ## Chunk 6.2 — Owned tutorial transition tokens
 

@@ -673,3 +673,83 @@ def test_clean_export_has_no_tracked_changes():
     body = Document(io.BytesIO(first)).element.body
     assert body.findall(".//" + _W_INS) == []
     assert body.findall(".//" + _W_DEL) == []
+
+
+def test_an_export_renders_the_snapshot_it_captured_not_a_later_document(
+    monkeypatch,
+):
+    """Filename and content must describe ONE document, the captured one.
+
+    Export used to read the live tree twice: ``build_docx(store.doc, ...)``
+    bound the tree as an argument, but the filename was computed from
+    ``store.doc`` again *after* the render returned. Holding the guard hid
+    that — and releasing it for the render (which is the point of this
+    chunk) would expose it, handing back bytes from one version under a
+    filename derived from another.
+
+    The mutation runs from inside the renderer, on the request's own
+    thread, so the interleaving is deterministic; a real concurrent edit
+    can now land in exactly that window, which is why the two reads had to
+    become one captured snapshot.
+    """
+    from backend import sessions
+    from backend import app as app_module
+
+    client = TestClient(create_app())
+    session = sessions.get_session()
+    assert client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": "sec",
+                    "text": "WET-PIPE SPRINKLER SYSTEMS",
+                    "numbering": "21 13 13",
+                },
+                {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+            ]
+        },
+    ).status_code == 200
+
+    real_build = app_module.build_docx
+    mutated: list[str] = []
+
+    def mutate_then_build(*args, **kwargs):
+        if not mutated:
+            session.doc.begin_turn()
+            session.doc.apply_edits(
+                [
+                    {
+                        "action": "replace",
+                        "target_id": "sec",
+                        "text": "DRY-PIPE SPRINKLER SYSTEMS",
+                        "numbering": "21 13 16",
+                    },
+                    {
+                        "action": "add_article",
+                        "target_id": "pt1",
+                        "text": "LATER ARTICLE",
+                    },
+                ]
+            )
+            session.doc.commit_turn()
+            mutated.append(session.doc.doc.number)
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "build_docx", mutate_then_build)
+    response = client.get("/api/export/docx")
+    assert response.status_code == 200
+
+    # The intruding edit really did land, and really is a different document.
+    assert mutated == ["21 13 16"]
+    assert session.doc.doc.number == "21 13 16"
+
+    # …and both halves of the reply still describe the captured snapshot.
+    disposition = response.headers["content-disposition"]
+    assert "21 13 13" in disposition
+    assert "21 13 16" not in disposition
+    texts = [p.text for p in Document(io.BytesIO(response.content)).paragraphs]
+    assert "SECTION 21 13 13" in texts
+    assert "SUMMARY" in " ".join(texts)
+    assert "LATER ARTICLE" not in " ".join(texts)

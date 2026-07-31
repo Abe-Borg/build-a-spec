@@ -2343,7 +2343,11 @@ def _qc_render_executive_readiness(
     blocking = [
         item
         for item in checks
-        if not item.get("ok") and not item.get("advisory")
+        if not item.get("ok")
+        and not item.get("advisory")
+        # A derived check restates others; listing it here reports one
+        # defect as two blockers with identical detail.
+        and not item.get("derived")
     ]
     # The sign-off is controlling, exactly as on the identity page: a
     # retained pre-5.4 payload can say "ready" beside open findings.

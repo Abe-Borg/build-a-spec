@@ -4776,6 +4776,16 @@ endpoint, no new dep, no schema change.
   derivation free to drift — precisely what this chunk exists to prevent.
   The modal consumes the live `/api/readiness` payload instead, which is
   authoritative and aligned by construction.
+- **The alias is marked `derived`, and that keyword is doing work** (review
+  finding on PR #106, Codex). Because it is the conjunction of the two split
+  checks, a failing constituent fails it too — so every surface listing
+  "what is blocking issue" reported ONE open finding as TWO blockers with
+  byte-identical detail. `derived: True` says the check RESTATES others
+  rather than adding a fact; both blocker surfaces (the Word executive
+  layer, `qcBlockingReadinessChecks`) filter on the flag rather than
+  hard-coding the id. Deliberately NOT `advisory`, which in this payload
+  means "shown but does not gate" — the alias does gate; it is simply not
+  independent. The annex's full checklist still shows it.
 - **`no_open_items` keeps its id** and now says "open document item(s)
   ([TBD]/needs-input)" — it was easy to confuse with QC findings when only
   one of the two checks existed.

@@ -3078,3 +3078,90 @@ def test_a_legacy_v3_report_keeps_its_historical_rendering():
     )
     assert "FINAL QC AUDIT REPORT" in text
     assert "final-qc/3" in text
+
+
+def test_the_derived_alias_is_never_counted_as_a_second_blocker():
+    """Regression, PR #106 review (Codex P2).
+
+    `qc_audit_complete` is the conjunction of the two split checks, so when
+    either fails the alias fails too — and every surface listing "what is
+    blocking issue" reported ONE open finding as TWO blockers with
+    byte-identical detail. The alias is kept (API compatibility) and still
+    gates; it is simply marked as restating others.
+    """
+    _store, result, session, client = _live_rich_result()
+    for finding in result.findings:
+        finding.severity = "medium"
+        finding.status = "open"
+    session.qc.restore(result)
+
+    checks = client.get("/api/readiness").json()["checks"]
+    by_id = {check["id"]: check for check in checks}
+    alias = by_id["qc_audit_complete"]
+    # Preserved, still non-advisory, still gating — just marked derived.
+    assert alias["derived"] is True
+    assert alias["advisory"] is False
+    assert alias["ok"] is False
+    assert (
+        alias["ok"]
+        is (by_id["qc_execution_complete"]["ok"] and by_id["no_open_qc_findings"]["ok"])
+    )
+    # No constituent check claims to be derived.
+    assert by_id["no_open_qc_findings"].get("derived") is not True
+    assert by_id["qc_execution_complete"].get("derived") is not True
+
+    blocking = [
+        check
+        for check in checks
+        if not check["ok"] and not check["advisory"] and not check.get("derived")
+    ]
+    ids = [check["id"] for check in blocking]
+    assert "qc_audit_complete" not in ids
+    assert "no_open_qc_findings" in ids
+    # One defect, one blocker: no two blockers share a detail string.
+    details = [check["detail"] for check in blocking]
+    assert len(details) == len(set(details))
+
+
+def test_the_word_executive_layer_lists_one_blocker_per_defect():
+    store, result = _rich_audit_result()
+    for finding in result.findings:
+        finding.severity = "medium"
+        finding.status = "open"
+    payload = result.to_dict()
+    detail = "1 surviving finding(s) still open (1 medium)."
+    payload["export_current_state"] = {
+        "generated_at": "2026-07-31T12:00:00+00:00",
+        "document_version": payload["version_index"],
+        "document_fingerprint": payload["version_fingerprint"],
+        "stale": False,
+        "runner": {"status": "complete", "error": ""},
+        "latest_attempt": {"run_id": payload["run_id"], "status": "complete"},
+        "readiness": {
+            "ready": False,
+            "checks": [
+                {
+                    "id": "no_open_qc_findings",
+                    "ok": False,
+                    "detail": detail,
+                    "advisory": False,
+                },
+                {
+                    "id": "qc_audit_complete",
+                    "ok": False,
+                    "detail": detail,
+                    "advisory": False,
+                    "derived": True,
+                },
+            ],
+        },
+    }
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False)))
+    )
+    assert f"Blocking: no_open_qc_findings — {detail}" in text
+    assert "Blocking: qc_audit_complete" not in text
+    assert "Issue readiness: No — 1 check(s) blocking" in text
+    # The annex's full checklist still shows the alias; only the executive
+    # blocker list excludes it.
+    assert "qc_audit_complete" in text

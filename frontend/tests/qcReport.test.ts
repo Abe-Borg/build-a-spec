@@ -1273,3 +1273,43 @@ test("a missing or malformed readiness payload names nothing", () => {
   assert.deepEqual(qcBlockingReadinessChecks(undefined), []);
   assert.deepEqual(qcBlockingReadinessChecks({}), []);
 });
+
+test("a derived check is never counted as a second blocker", () => {
+  // Regression, PR #106 review. `qc_audit_complete` is the conjunction of
+  // the two split checks, so one open finding used to render as two
+  // blockers with byte-identical detail.
+  const detail = "1 surviving finding(s) still open (1 medium).";
+  const blocking = qcBlockingReadinessChecks({
+    checks: [
+      { id: "no_open_qc_findings", ok: false, advisory: false, detail },
+      {
+        id: "qc_audit_complete",
+        ok: false,
+        advisory: false,
+        derived: true,
+        detail,
+      },
+    ],
+  });
+  assert.deepEqual(
+    blocking.map((check) => check.id),
+    ["no_open_qc_findings"],
+  );
+  // One defect, one blocker: no two share a detail string.
+  const details = blocking.map((check) => check.detail);
+  assert.equal(new Set(details).size, details.length);
+});
+
+test("a payload without the derived flag still lists its blockers", () => {
+  // Forward/backward compatibility: a pre-5.4 readiness payload has no
+  // `derived` key at all, and must not silently lose blockers.
+  const blocking = qcBlockingReadinessChecks({
+    checks: [
+      { id: "lint_clean", ok: false, advisory: false, detail: "1 issue." },
+    ],
+  });
+  assert.deepEqual(
+    blocking.map((check) => check.id),
+    ["lint_clean"],
+  );
+});

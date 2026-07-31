@@ -1660,6 +1660,14 @@ def _readiness_payload(
             # A derived alias for API compatibility: exactly the conjunction
             # of the two checks above. Kept non-advisory so an existing
             # consumer that branches on it alone still sees the same gate.
+            #
+            # `derived` says it RESTATES other checks rather than adding a
+            # fact. Without it, a surface listing "what is blocking issue"
+            # reports one open finding as two blockers with byte-identical
+            # detail (caught in review on PR #106). Deliberately not
+            # `advisory`, which in this payload means "shown but does not
+            # gate" — the alias does gate; it is simply not independent.
+            "derived": True,
             "id": "qc_audit_complete",
             "ok": qc_audit_complete,
             "detail": (

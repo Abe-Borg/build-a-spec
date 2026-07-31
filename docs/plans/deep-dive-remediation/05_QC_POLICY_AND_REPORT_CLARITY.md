@@ -952,6 +952,20 @@ Then run the full standard verification commands from the master plan.
     the live `/api/readiness` payload, which is authoritative and already
     aligned by construction. The Word sign-off page is a signed artifact;
     the modal's equivalent is the checklist it already renders.
+  - **Review follow-up (PR #106, Codex P2): the derived alias was counted as
+    a second blocker.** `qc_audit_complete` is the conjunction of the two
+    split checks, so a failing constituent fails it too — and both new
+    blocker surfaces (the Word executive layer and
+    `qcBlockingReadinessChecks`) presented one open finding as TWO blockers
+    with byte-identical detail. Fixed with a `derived: True` flag on the
+    alias that both surfaces filter on, rather than hard-coding the id:
+    self-describing, and a future derived check gets the behaviour for
+    free. Deliberately not `advisory` (which means "does not gate" — the
+    alias does gate, it is just not independent). The annex's full
+    checklist still lists it. Four tests (two backend incl. one asserting
+    no two blockers share a detail string, two frontend incl. a pre-5.4
+    payload with no `derived` key not losing blockers); reverting the
+    filter turns 1 red.
   - **`no_open_items` keeps its id and gains clarified copy** ("open
     document item(s) ([TBD]/needs-input)"), per item 1 — it was easy to
     confuse with QC findings when only one of the two existed.

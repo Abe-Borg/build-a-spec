@@ -1773,11 +1773,25 @@ export function qcPreRemediationState(
  * what to go and fix. Reads the same serialized checklist the annex
  * renders — never a second derivation. */
 export function qcBlockingReadinessChecks(
-  readiness: { checks?: { id?: string; ok?: boolean; advisory?: boolean; detail?: string }[] } | null | undefined,
+  readiness:
+    | {
+        checks?: {
+          id?: string;
+          ok?: boolean;
+          advisory?: boolean;
+          derived?: boolean;
+          detail?: string;
+        }[];
+      }
+    | null
+    | undefined,
 ): { id: string; detail: string }[] {
   if (!readiness || !Array.isArray(readiness.checks)) return [];
   return readiness.checks
-    .filter((check) => check && !check.ok && !check.advisory)
+    // `derived` checks restate others (`qc_audit_complete` is the
+    // conjunction of two). Listing one here reports a single defect as two
+    // blockers with identical detail.
+    .filter((check) => check && !check.ok && !check.advisory && !check.derived)
     .map((check) => ({
       id: String(check.id ?? "unnamed check"),
       detail: String(check.detail ?? "no detail recorded"),

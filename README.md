@@ -359,9 +359,12 @@ actions.
   content/input fingerprints, input manifest, model, effective QC
   configuration, start/finish timestamps and duration, research-profile
   availability, and current/stale status. A later document edit cannot be
-  mistaken for the version that was reviewed. New reports use schema `3` and
-  protocol `final-qc/3`; schema-2 reports remain readable and exportable as
-  historical evidence, but cannot provide an actionable fix queue.
+  mistaken for the version that was reviewed. New reports use schema `4` and
+  protocol `final-qc/4`; earlier reports remain readable and exportable as
+  historical evidence, but cannot provide an actionable fix queue — a
+  schema-3 report was adjudicated under the superseded panel rule, so it is
+  kept as the record of what was decided and never re-scored under the
+  current one.
 - **Each lens leaves an observable work record, including failures.** The
   report keeps the lens title, completion status or error, summary, explicit
   coverage checks and outcomes, search queries, retrieved sources, finding and

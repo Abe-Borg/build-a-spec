@@ -1352,7 +1352,11 @@ what happened next?* Four rules follow, and they bind every future change:
   proposal or its validation history.
 
 - **Versioned run/input envelope.** `QCResult` carries
-  `schema_version=3`, `protocol_version="final-qc/3"`, a UUID `run_id`,
+  `schema_version=3`, `protocol_version="final-qc/3"` — **both superseded by
+  4 / `final-qc/4` in Chunk 5.1; see "Final QC v4 panel outcomes" below, and
+  read the schema-2 sentence at the end of this bullet as applying to
+  schema-3 too, since the actionability guard is `>=` the current version** —
+  a UUID `run_id`,
   `execution_status` (`complete|partial|failed|cancelled`),
   start/finish/duration, reviewed
   `version_index` + `version_fingerprint`, and a deterministic

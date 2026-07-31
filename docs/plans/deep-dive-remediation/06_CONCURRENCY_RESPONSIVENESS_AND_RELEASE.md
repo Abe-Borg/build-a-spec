@@ -831,11 +831,19 @@ scenario busy-guard claim, broad terminal-event duplication, and
    research coverage, per-TTL pricing and the rolling breakpoint, v4 panel
    outcomes, runner and transition ownership, and the two
    snapshot-before-heavy-work sections.
-2. `README.md` needed no correction: research readiness, QC limitations
-   (three-state research coverage), and estimated usage/cost (per-TTL cache
-   writes, failed/stopped work metered, the separate stopped-reply
-   estimate) were each kept current by the chunk that changed them. Verified
-   line by line rather than assumed.
+2. `README.md`: the three topics the gate enumerates — research readiness,
+   QC limitations (three-state research coverage), and estimated usage/cost
+   (per-TTL cache writes, failed/stopped work metered, the separate
+   stopped-reply estimate) — were each already current, kept so by the chunk
+   that changed them. **One claim outside that list was stale and is fixed**:
+   the Final QC report-identity bullet still advertised schema `3` /
+   `final-qc/3` and described only schema-2 as non-actionable. Chunk 5.1
+   shipped schema 4, and the actionability guard is
+   `schema_version >= QC_REPORT_SCHEMA_VERSION`, so v3 is non-actionable
+   too. Found while checking an unrelated review finding, which is the
+   honest provenance: enumerating the gate's three topics is not the same
+   as reading the document, and a version constant is exactly the kind of
+   claim that goes stale silently.
 3. Release notes: the 1.8.0 entry was extended — see the deviation below.
 4. The master implementation record now carries every chunk's commit and PR.
 

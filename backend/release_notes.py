@@ -132,12 +132,16 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                         ),
                     ),
                     ReleaseItem(
-                        title="Nothing about the review got smaller",
+                        title="Cheaper did not mean checking less",
                         body=(
-                            "Five independent reviewers, a panel of two or "
-                            "three refuters for every finding they raise, "
-                            "and the same full audit report. Only the bill "
-                            "and the wait changed."
+                            "Five independent reviewers still read your "
+                            "whole section, every defect that reaches "
+                            "verification still faces a panel of two or "
+                            "three refuters, and the audit report is as "
+                            "complete as it was. What got cheaper was "
+                            "sending your document once instead of on every "
+                            "one of those calls, and a model that costs less "
+                            "per word."
                         ),
                     ),
                     ReleaseItem(

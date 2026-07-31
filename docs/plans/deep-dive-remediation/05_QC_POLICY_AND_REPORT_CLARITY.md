@@ -1,6 +1,6 @@
 # Phase 5 — QC policy and report clarity
 
-- Status: in progress (5.1-5.3 landed; 5.4 planned)
+- Status: **complete** (5.1-5.4 landed)
 - Prerequisites: Phases 1-4 complete
 - Risk: medium-to-high; Chunk 5.1 deliberately changes finding survival
   semantics
@@ -895,11 +895,84 @@ Then run the full standard verification commands from the master plan.
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Tests:
+- Status: **complete**
+- Commit/PR: branch `claude/phase-5-1-qc-panel-jzdd1n` (restarted from master
+  after the 5.3 PR merged)
+- Tests: 9 new backend (`tests/test_qc_audit_report.py`), 5 new frontend
+  (`frontend/tests/qcReport.test.ts`). Backend **1353 passed, 9 skipped**;
+  `npm test` **191**; `npm run build` clean. Three mechanisms reverted in
+  place to prove them load-bearing: the open-findings gate → 2 red, the
+  derived masthead → 1 red, the pre-remediation disclosure → 1 red.
 - Deviations:
-- Manual QA owed:
+  - **`qc_audit_complete` is retained as a derived alias**, per the plan's
+    own option, and is now literally `qc_execution_complete and
+    no_open_qc_findings` rather than an independent predicate — so it cannot
+    drift from the two checks it summarizes. Its MEANING is stricter (all
+    open findings, not just criticals), which is the point of the chunk and
+    is documented rather than silent.
+  - **The masthead is DERIVED, not merely aligned.** The plan asks that the
+    two cannot disagree "by construction". Fixing the readiness gate makes
+    them agree for any report produced from now on, but a retained pre-5.4
+    report carries an embedded readiness payload that really does say
+    "ready" beside open findings. So "Issue readiness at export" renders
+    `recorded readiness AND qc_signoff_state(...).issue_ready`, and a
+    disagreement prints a callout naming the sign-off as controlling. The
+    contradiction is unrenderable even for history.
+  - **`QC_SIGNOFF_CLEAR` is a shared constant, not a string comparison
+    spelled twice.** `issue_ready` is equality against the one verdict that
+    means "nothing blocks issue", so it cannot drift from the rendered
+    wording.
+  - **Item 3's disposition-lineage half was already done.**
+    `QCDispositionEvent` has carried `document_version` /
+    `document_fingerprint` since the Batch 4 audit-grade work, and
+    `QCRunner` already records them on apply and dismiss. Only the LABELING
+    half was missing. `qc_pre_remediation_state` derives it from that
+    existing history — an applied event whose recorded version differs from
+    the reviewed one IS the evidence — rather than inventing a marker. An
+    apply recorded against the reviewed version is deliberately not
+    disclosed (nothing moved).
+  - **The executive layer extends the existing "Executive Status" section
+    rather than adding a second one.** That section already carried the
+    callout, run summary, lens execution and the full disposition-count
+    table; it was missing four of the plan's five items. Adding a parallel
+    section would have created two summaries free to disagree. It now also
+    carries the sign-off verdict, run identity, the readiness verdict with
+    BLOCKING CHECKS NAMED (advisory failures excluded), an Open Queue table
+    of every open finding and undispositioned dispute, and the cost.
+  - **The executive bullets are prefixed `Blocking: <id> — <detail>`.** Not
+    cosmetic: the annex's full checklist legitimately lists advisory
+    failures too, so without a distinct form the test asserting "an
+    advisory check is not presented as blocking" could not tell the two
+    renderings apart. Found by that test failing.
+  - **The frontend does NOT mirror the sign-off recommendation.** It mirrors
+    `qcPreRemediationState` and adds `qcBlockingReadinessChecks`, but the
+    recommendation depends on `_qc_export_control_issues`, and duplicating
+    that in TypeScript would create a fourth derivation free to drift —
+    exactly what this chunk exists to prevent. The modal instead consumes
+    the live `/api/readiness` payload, which is authoritative and already
+    aligned by construction. The Word sign-off page is a signed artifact;
+    the modal's equivalent is the checklist it already renders.
+  - **Review follow-up (PR #106, Codex P2): the derived alias was counted as
+    a second blocker.** `qc_audit_complete` is the conjunction of the two
+    split checks, so a failing constituent fails it too — and both new
+    blocker surfaces (the Word executive layer and
+    `qcBlockingReadinessChecks`) presented one open finding as TWO blockers
+    with byte-identical detail. Fixed with a `derived: True` flag on the
+    alias that both surfaces filter on, rather than hard-coding the id:
+    self-describing, and a future derived check gets the behaviour for
+    free. Deliberately not `advisory` (which means "does not gate" — the
+    alias does gate, it is just not independent). The annex's full
+    checklist still lists it. Four tests (two backend incl. one asserting
+    no two blockers share a detail string, two frontend incl. a pre-5.4
+    payload with no `derived` key not losing blockers); reverting the
+    filter turns 1 red.
+  - **`no_open_items` keeps its id and gains clarified copy** ("open
+    document item(s) ([TBD]/needs-input)"), per item 1 — it was easy to
+    confuse with QC findings when only one of the two existed.
+- Manual QA owed: covered by the Phase 5 manual QA list below, specifically
+  the third bullet (open medium findings blocking, then flipping together
+  once dispositioned) and the fifth (a Word report with active and retained
+  version records read beside the modal and the JSON).
 
 ## Phase 5 manual QA
 

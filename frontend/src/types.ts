@@ -1260,7 +1260,14 @@ export interface ReadinessCheck {
   id: string;
   ok: boolean;
   detail: string;
+  /** Shown but does not gate `ready`. */
   advisory: boolean;
+  /** This check RESTATES others rather than adding a fact —
+   *  `qc_audit_complete` is the conjunction of `qc_execution_complete` and
+   *  `no_open_qc_findings`. It still gates (so it is not `advisory`), but a
+   *  surface listing "what is blocking issue" must exclude it or one defect
+   *  reads as two blockers with identical detail. */
+  derived?: boolean;
 }
 
 export interface ReadinessPayload {

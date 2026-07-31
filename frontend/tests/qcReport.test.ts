@@ -8,6 +8,7 @@ import {
   QC_REQUEST_METHODOLOGY_NOTE,
   buildQcReportMetrics,
   collectQcOperationRecords,
+  qcBlockingReadinessChecks,
   qcCandidateOrigins,
   qcConsolidationSummary,
   qcDisputedCandidates,
@@ -15,6 +16,7 @@ import {
   qcOperationEvaluation,
   qcPrimaryReport,
   qcReportExportUrl,
+  qcPreRemediationState,
   qcReportLimitations,
   qcRequestPopulation,
   qcRequestPopulationNote,
@@ -1178,4 +1180,136 @@ test("a malformed schema version fails closed", () => {
     }),
   );
   assert.equal(population.reconciles, false);
+});
+
+// ---------------------------------------------------------------------------
+// Chunk 5.4 — readiness, sign-off consistency, report layering
+// ---------------------------------------------------------------------------
+
+test("an applied fix makes later views disclose pre-remediation", () => {
+  const report = result({
+    version_index: 1,
+    findings: [
+      finding({
+        status: "applied",
+        disposition_events: [
+          {
+            action: "applied",
+            at: "2026-07-31T12:00:00+00:00",
+            reason: "",
+            document_version: 2,
+            document_fingerprint: "f".repeat(64),
+          },
+        ],
+      }),
+    ],
+  });
+  const state = qcPreRemediationState(report);
+  assert.equal(state.preRemediation, true);
+  assert.equal(state.latestVersion, 2);
+  assert.match(state.label, /modified since this review/);
+  // The version wording matches the backend's shared convention.
+  assert.match(state.detail, /v3 \(stored index 2\)/);
+  assert.match(state.detail, /reviewed at v2 \(stored index 1\)/);
+});
+
+test("a report with no applied fixes discloses nothing", () => {
+  assert.equal(
+    qcPreRemediationState(result({ findings: [finding()] })).preRemediation,
+    false,
+  );
+});
+
+test("an apply recorded against the reviewed version is not pre-remediation", () => {
+  // Same version means the document has not moved, so there is nothing to
+  // disclose — the label is evidence-driven, not "any applied event".
+  const report = result({
+    version_index: 2,
+    findings: [
+      finding({
+        status: "applied",
+        disposition_events: [
+          {
+            action: "applied",
+            at: "2026-07-31T12:00:00+00:00",
+            reason: "",
+            document_version: 2,
+            document_fingerprint: "f".repeat(64),
+          },
+        ],
+      }),
+    ],
+  });
+  assert.equal(qcPreRemediationState(report).preRemediation, false);
+});
+
+test("blocking readiness checks name themselves and exclude advisory ones", () => {
+  const blocking = qcBlockingReadinessChecks({
+    checks: [
+      { id: "lint_clean", ok: true, advisory: false, detail: "Lint clean." },
+      {
+        id: "no_open_qc_findings",
+        ok: false,
+        advisory: false,
+        detail: "2 surviving finding(s) still open (2 medium).",
+      },
+      {
+        id: "profile_complete",
+        ok: false,
+        advisory: true,
+        detail: "Project profile is incomplete.",
+      },
+    ],
+  });
+  assert.deepEqual(
+    blocking.map((check) => check.id),
+    ["no_open_qc_findings"],
+  );
+  assert.match(blocking[0].detail, /still open/);
+});
+
+test("a missing or malformed readiness payload names nothing", () => {
+  assert.deepEqual(qcBlockingReadinessChecks(null), []);
+  assert.deepEqual(qcBlockingReadinessChecks(undefined), []);
+  assert.deepEqual(qcBlockingReadinessChecks({}), []);
+});
+
+test("a derived check is never counted as a second blocker", () => {
+  // Regression, PR #106 review. `qc_audit_complete` is the conjunction of
+  // the two split checks, so one open finding used to render as two
+  // blockers with byte-identical detail.
+  const detail = "1 surviving finding(s) still open (1 medium).";
+  const blocking = qcBlockingReadinessChecks({
+    checks: [
+      { id: "no_open_qc_findings", ok: false, advisory: false, detail },
+      {
+        id: "qc_audit_complete",
+        ok: false,
+        advisory: false,
+        derived: true,
+        detail,
+      },
+    ],
+  });
+  assert.deepEqual(
+    blocking.map((check) => check.id),
+    ["no_open_qc_findings"],
+  );
+  // One defect, one blocker: no two share a detail string.
+  const details = blocking.map((check) => check.detail);
+  assert.equal(new Set(details).size, details.length);
+});
+
+test("a payload without the derived flag still lists its blockers", () => {
+  // Forward/backward compatibility: a pre-5.4 readiness payload has no
+  // `derived` key at all, and must not silently lose blockers.
+  const blocking = qcBlockingReadinessChecks({
+    checks: [
+      { id: "lint_clean", ok: false, advisory: false, detail: "1 issue." },
+    ],
+  });
+  assert.deepEqual(
+    blocking.map((check) => check.id),
+    ["lint_clean"],
+  );
 });

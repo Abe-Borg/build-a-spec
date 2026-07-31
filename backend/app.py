@@ -1347,16 +1347,31 @@ def _readiness_payload(
     # Keeping the predicates distinct makes a failed gate diagnosable instead
     # of collapsing provenance, completeness, and severity into one boolean.
     qc_current = bool(qc_matches_inputs and latest_attempt_matches)
-    qc_audit_complete = bool(
+    # Chunk 5.4 splits the old collapsed `qc_audit_complete` in two, because
+    # it answered two questions with one boolean and a reader could not tell
+    # which half had failed. `qc_execution_complete` is about COVERAGE — did
+    # every lens and verifier seat actually run — and `no_open_qc_findings`
+    # is about DISPOSITION.
+    qc_execution_complete = bool(
+        qc_result is not None and qc_audit_grade and qc_result.is_complete()
+    )
+    # Every surviving open finding, not just the criticals. The old bar let a
+    # report claim issue-readiness on its identity page while its own sign-off
+    # said "OPEN FINDINGS REMAIN" — the sign-off's meaning is the ratified
+    # one. Dismiss-with-reason remains the pressure valve, and an
+    # undispositioned dispute blocks exactly as an open finding does (a
+    # separate term, so dismissing it can actually clear the gate — folding it
+    # into is_complete() deadlocked the dismiss route).
+    no_open_qc_findings = bool(
         qc_result is not None
         and qc_audit_grade
-        and qc_result.is_complete()
-        and qc_result.open_critical_count() == 0
-        # An undispositioned dispute blocks exactly as an open critical
-        # does — a separate term, so dismissing it can actually clear the
-        # gate (folding it into is_complete() deadlocked the dismiss route).
+        and qc_result.open_finding_count() == 0
         and qc_result.open_disputed_count() == 0
     )
+    # Retained as a DERIVED alias so existing API consumers keep a single
+    # boolean to branch on. It is now the conjunction of the two checks above
+    # rather than an independent predicate, so it cannot drift from them.
+    qc_audit_complete = qc_execution_complete and no_open_qc_findings
     evidence_detail = (
         "Its paid report is preserved in QC status and export."
         if latest_has_report
@@ -1440,114 +1455,149 @@ def _readiness_payload(
             "input set."
         )
 
+    # Two details for the two split checks. They share the "there is no
+    # usable report" branches, because neither question can be answered
+    # without one — saying "no open findings" about a review that never
+    # completed would be the same false reassurance this chunk removes.
     if qc_result is None:
         if settling:
-            qc_audit_detail = (
+            unavailable = (
                 "No actionable audit-complete report is available while the "
                 "stopped attempt is still settling."
             )
         elif latest_status in {"partial", "cancelled", "failed"}:
-            qc_audit_detail = (
+            unavailable = (
                 f"The {latest_status} attempt evidence is preserved, but no "
                 "actionable audit-complete retained report is available."
             )
         else:
-            qc_audit_detail = "No retained Final QC report is available."
+            unavailable = "No retained Final QC report is available."
+        qc_execution_detail = unavailable
+        qc_findings_detail = unavailable
     elif not qc_audit_grade:
-        qc_audit_detail = (
+        legacy = (
             "The saved Final QC result is a legacy or unsupported record "
             "without the current full-input audit contract; re-run Final QC."
         )
-    elif qc_result.open_disputed_count():
-        # A complete panel that disagreed is not an incomplete review, and
-        # saying "re-run" would be wrong advice: re-running re-litigates a
-        # disagreement rather than resolving it. The disposition is a
-        # human's — dismiss with a reason, or fix the provision. Already
-        # dismissed disputes are resolved and no longer named here.
+        qc_execution_detail = legacy
+        qc_findings_detail = legacy
+    else:
+        if not qc_result.is_complete():
+            failed_lenses = sum(
+                1
+                for status in qc_result.lens_statuses
+                if status.status != "completed"
+            )
+            missing_lens_records = sum(
+                1
+                for status in qc_result.lens_statuses
+                if status.status == "completed" and not status.reviewed_checks
+            )
+            all_candidates = [
+                *qc_result.findings,
+                *qc_result.refuted,
+                *qc_result.disputed,
+                *qc_result.inconclusive,
+            ]
+            failed_seats = sum(
+                1
+                for finding in all_candidates
+                for verdict in finding.verdicts
+                if verdict.status != "completed"
+            )
+            missing_seats = sum(
+                max(
+                    0,
+                    (
+                        finding.verification_panel_size
+                        or (
+                            max(1, settings.QC_VERIFIERS_CRITICAL)
+                            if (finding.original_severity or finding.severity)
+                            in ("critical", "high")
+                            else max(1, settings.QC_VERIFIERS_STANDARD)
+                        )
+                    )
+                    - len(finding.verdicts),
+                )
+                for finding in all_candidates
+            )
+            qc_execution_detail = (
+                "Final QC has incomplete coverage "
+                f"({failed_lenses} failed lens(es), {missing_lens_records} lens "
+                f"record(s) missing, {failed_seats} failed and {missing_seats} "
+                "missing verifier seat(s)); re-run before issue."
+            )
+        else:
+            qc_execution_detail = (
+                "Audit-grade lens coverage and verifier panels are complete."
+            )
+
         open_disputes = [f for f in qc_result.disputed if f.status == "open"]
-        disputed_count = len(open_disputes)
-        unevidenced = sum(
-            1
-            for finding in open_disputes
-            if finding.dispute_reason == DISPUTE_REASON_INSUFFICIENT_EVIDENCE
-        )
-        qc_audit_detail = (
-            f"Final QC has {disputed_count} disputed finding(s) awaiting "
-            "human review: the verifier panel completed but did not agree"
-            + (
-                f", and {unevidenced} of them refuted a critical/high finding "
-                "without citing evidence"
-                if unevidenced
+        open_findings = [f for f in qc_result.findings if f.status == "open"]
+        if open_disputes:
+            # A complete panel that disagreed is not an incomplete review, and
+            # saying "re-run" would be wrong advice: re-running re-litigates a
+            # disagreement rather than resolving it. The disposition is a
+            # human's — dismiss with a reason, or fix the provision. Already
+            # dismissed disputes are resolved and no longer named here.
+            unevidenced = sum(
+                1
+                for finding in open_disputes
+                if finding.dispute_reason
+                == DISPUTE_REASON_INSUFFICIENT_EVIDENCE
+            )
+            also_open = (
+                f" {len(open_findings)} other finding(s) are also open."
+                if open_findings
                 else ""
             )
-            + ". Review each and dismiss with a reason, or address it, "
-            "before issue."
-        )
-    elif not qc_result.is_complete():
-        failed_lenses = sum(
-            1 for status in qc_result.lens_statuses if status.status != "completed"
-        )
-        missing_lens_records = sum(
-            1
-            for status in qc_result.lens_statuses
-            if status.status == "completed" and not status.reviewed_checks
-        )
-        failed_seats = sum(
-            1
-            for finding in [
-                *qc_result.findings,
-                *qc_result.refuted,
-                *qc_result.disputed,
-                *qc_result.inconclusive,
-            ]
-            for verdict in finding.verdicts
-            if verdict.status != "completed"
-        )
-        missing_seats = sum(
-            max(
-                0,
-                (
-                    finding.verification_panel_size
-                    or (
-                        max(1, settings.QC_VERIFIERS_CRITICAL)
-                        if (finding.original_severity or finding.severity)
-                        in ("critical", "high")
-                        else max(1, settings.QC_VERIFIERS_STANDARD)
-                    )
+            qc_findings_detail = (
+                f"Final QC has {len(open_disputes)} disputed finding(s) "
+                "awaiting human review: the verifier panel completed but did "
+                "not agree"
+                + (
+                    f", and {unevidenced} of them refuted a critical/high "
+                    "finding without citing evidence"
+                    if unevidenced
+                    else ""
                 )
-                - len(finding.verdicts),
+                + ". Review each and dismiss with a reason, or address it, "
+                "before issue." + also_open
             )
-            for finding in [
-                *qc_result.findings,
-                *qc_result.refuted,
-                *qc_result.disputed,
-                *qc_result.inconclusive,
-            ]
-        )
-        qc_audit_detail = (
-            "Final QC has incomplete coverage "
-            f"({failed_lenses} failed lens(es), {missing_lens_records} lens "
-            f"record(s) missing, {failed_seats} failed and {missing_seats} "
-            "missing verifier seat(s)); re-run before issue."
-        )
-    elif qc_result.open_critical_count() > 0:
-        qc_audit_detail = (
-            f"{qc_result.open_critical_count()} open critical finding(s) — "
-            "resolve or dismiss them."
-        )
-    else:
-        qc_audit_detail = (
-            "Audit-grade lens coverage and verifier panels are complete, "
-            "with no open critical findings."
-        )
+        elif open_findings:
+            # Named by severity band so the reader can see at a glance
+            # whether this is a life-safety queue or a tidy-up.
+            by_severity: dict[str, int] = {}
+            for finding in open_findings:
+                by_severity[finding.severity] = (
+                    by_severity.get(finding.severity, 0) + 1
+                )
+            breakdown = ", ".join(
+                f"{by_severity[name]} {name}"
+                for name in ("critical", "high", "medium", "low")
+                if by_severity.get(name)
+            ) or "severity not recorded"
+            qc_findings_detail = (
+                f"{len(open_findings)} surviving finding(s) still open "
+                f"({breakdown}) — apply each fix or dismiss it with a reason "
+                "before issue."
+            )
+        else:
+            qc_findings_detail = (
+                "Every surviving finding is applied or dismissed with a "
+                "recorded reason, and no dispute is awaiting review."
+            )
 
     checks = [
         {
             "id": "no_open_items",
+            # DOCUMENT open items — [TBD] markers and needs_input blocks.
+            # Deliberately not QC findings, which `no_open_qc_findings`
+            # owns; the two were easy to confuse when only one existed.
             "ok": len(open_items) == 0,
-            "detail": "No open items."
+            "detail": "No open document items ([TBD]/needs-input)."
             if not open_items
-            else f"{len(open_items)} open item(s) ([TBD]/needs-input).",
+            else f"{len(open_items)} open document item(s) ([TBD]/needs-input).",
             "advisory": False,
         },
         {
@@ -1595,9 +1645,36 @@ def _readiness_payload(
             "advisory": False,
         },
         {
+            "id": "qc_execution_complete",
+            "ok": qc_execution_complete,
+            "detail": qc_execution_detail,
+            "advisory": False,
+        },
+        {
+            "id": "no_open_qc_findings",
+            "ok": no_open_qc_findings,
+            "detail": qc_findings_detail,
+            "advisory": False,
+        },
+        {
+            # A derived alias for API compatibility: exactly the conjunction
+            # of the two checks above. Kept non-advisory so an existing
+            # consumer that branches on it alone still sees the same gate.
+            #
+            # `derived` says it RESTATES other checks rather than adding a
+            # fact. Without it, a surface listing "what is blocking issue"
+            # reports one open finding as two blockers with byte-identical
+            # detail (caught in review on PR #106). Deliberately not
+            # `advisory`, which in this payload means "shown but does not
+            # gate" — the alias does gate; it is simply not independent.
+            "derived": True,
             "id": "qc_audit_complete",
             "ok": qc_audit_complete,
-            "detail": qc_audit_detail,
+            "detail": (
+                qc_execution_detail
+                if not qc_execution_complete
+                else qc_findings_detail
+            ),
             "advisory": False,
         },
     ]

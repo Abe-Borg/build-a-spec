@@ -4717,6 +4717,79 @@ event, no new dep, no schema change.
   step** (5.2 added it to Word only). Fixed here, since this chunk's whole
   contract is that the two projections do not teach different meanings.
 
+## Issue readiness and sign-off consistency — implemented notes
+
+Deep-dive remediation Chunk 5.4, and the last of Phase 5. The reviewed run's
+export said "Issue readiness at export: Yes" on its identity page and
+"REVIEW REQUIRED - OPEN FINDINGS REMAIN" in its sign-off, with 25 open
+findings. One meaning had to win; the owner ratified the sign-off's. No new
+endpoint, no new dep, no schema change.
+
+- **The cause was one boolean answering two questions.**
+  `qc_audit_complete` gated on `open_critical_count() == 0` while the
+  sign-off spoke for every open finding. It is now split:
+  `qc_execution_complete` (did every lens and verifier seat actually run)
+  and `no_open_qc_findings` (is every surviving finding applied or
+  dismissed-with-reason, and every dispute adjudicated). A reader can now
+  tell WHICH half failed, which the collapsed boolean never allowed.
+- **`qc_audit_complete` survives as a DERIVED alias** — literally the
+  conjunction of the two, so it cannot drift from them — keeping existing
+  API consumers working. Its meaning is stricter than before: open
+  medium/low findings now block issue readiness. Dismiss-with-reason is the
+  pressure valve. If the owner later prefers advisory mediums/lows, the
+  check flips in one place; what can never return is "issue ready" and
+  "open findings remain" being simultaneously true.
+- **The masthead is DERIVED from the sign-off, not merely aligned with
+  it.** Fixing the gate makes them agree for anything produced from now on,
+  but a RETAINED pre-5.4 report carries an embedded readiness payload that
+  really does claim readiness beside open findings. So "Issue readiness at
+  export" renders `recorded readiness AND qc_signoff_state(...).issue_ready`
+  and, when they disagree, prints a callout naming the sign-off as
+  controlling. `QC_SIGNOFF_CLEAR` is a shared constant — `issue_ready` is
+  equality against the one verdict meaning "nothing blocks issue", so it
+  cannot drift from the rendered wording.
+- **Pre-remediation disclosure rides the history that already existed.**
+  `QCDispositionEvent` has carried `document_version`/`document_fingerprint`
+  since Batch 4 and `QCRunner` already records them; only the LABEL was
+  missing. `qc_pre_remediation_state` reads an applied event whose recorded
+  version differs from the reviewed one — that difference IS the evidence —
+  rather than inventing a parallel marker. Fingerprint staleness already
+  forces a re-run for current readiness; this is the DISCLOSURE half, so a
+  reader holding an export knows the defects it describes may already be
+  fixed. An apply recorded against the reviewed version discloses nothing.
+- **The executive layer extends the existing "Executive Status" section**
+  rather than adding a second one that could disagree with it. It gains the
+  sign-off verdict, run identity, the readiness verdict with BLOCKING
+  CHECKS NAMED, an Open Queue table (every open finding and undispositioned
+  dispute, severity/location/title), and the estimated cost. Everything is
+  also in the annex, in more detail — the full-lineage no-truncation
+  posture stands.
+- **The executive bullets are prefixed `Blocking: <id> — <detail>`**, and
+  that is not cosmetic: the annex's checklist legitimately lists advisory
+  failures too, so without a distinct form the test asserting "an advisory
+  check is not presented as blocking" could not tell the two renderings
+  apart. Found by that test failing.
+- **The frontend deliberately does NOT mirror the sign-off
+  recommendation.** It mirrors `qcPreRemediationState` and adds
+  `qcBlockingReadinessChecks`, but the recommendation depends on
+  `_qc_export_control_issues`, and a TypeScript copy would be a fourth
+  derivation free to drift — precisely what this chunk exists to prevent.
+  The modal consumes the live `/api/readiness` payload instead, which is
+  authoritative and aligned by construction.
+- **The alias is marked `derived`, and that keyword is doing work** (review
+  finding on PR #106, Codex). Because it is the conjunction of the two split
+  checks, a failing constituent fails it too — so every surface listing
+  "what is blocking issue" reported ONE open finding as TWO blockers with
+  byte-identical detail. `derived: True` says the check RESTATES others
+  rather than adding a fact; both blocker surfaces (the Word executive
+  layer, `qcBlockingReadinessChecks`) filter on the flag rather than
+  hard-coding the id. Deliberately NOT `advisory`, which in this payload
+  means "shown but does not gate" — the alias does gate; it is simply not
+  independent. The annex's full checklist still shows it.
+- **`no_open_items` keeps its id** and now says "open document item(s)
+  ([TBD]/needs-input)" — it was easy to confuse with QC findings when only
+  one of the two checks existed.
+
 ## Commands
 
 ```

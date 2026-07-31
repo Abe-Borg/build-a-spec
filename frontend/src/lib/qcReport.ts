@@ -1704,6 +1704,86 @@ export const QC_REQUEST_METHODOLOGY_NOTE =
 export const QC_GROUNDING_METHODOLOGY_NOTE =
   '"Grounded" records that a cited source was actually retrieved during the run and matched the citation. It is retrieval confirmation, not truth verification: it does not assert that the source supports the claim, only that the reviewer really read the page it cites.';
 
+export interface QcPreRemediationState {
+  preRemediation: boolean;
+  latestVersion: number | null;
+  label: string;
+  detail: string;
+}
+
+/** Whether this report describes a document that has since been fixed.
+ *
+ * Mirrors `qc_pre_remediation_state` in `backend/spec_doc/docx_export.py`.
+ * Fingerprint staleness already forces a re-run before the report can claim
+ * current readiness; this is the DISCLOSURE half — a reader needs to know
+ * the defects described may already have been remediated, or the report
+ * reads as a description of the current document, which after even one
+ * applied fix it is not.
+ *
+ * Derived from the disposition history the run already records, never from
+ * a parallel marker.
+ */
+export function qcPreRemediationState(
+  rawResult: QcResultView | QcReportResult,
+): QcPreRemediationState {
+  const result = resultFields(rawResult);
+  const reviewed = result.version_index;
+  const versions: number[] = [];
+  const buckets = [
+    arrayOrEmpty(result.findings),
+    arrayOrEmpty((result as { disputed?: QcReportFinding[] }).disputed),
+  ];
+  for (const bucket of buckets) {
+    for (const finding of bucket as QcReportFinding[]) {
+      for (const event of arrayOrEmpty(finding.disposition_events)) {
+        if (event?.action !== "applied") continue;
+        const version = event.document_version;
+        if (typeof version === "number" && Number.isInteger(version) && version !== reviewed) {
+          versions.push(version);
+        }
+      }
+    }
+  }
+  if (!versions.length) {
+    return {
+      preRemediation: false,
+      latestVersion: null,
+      label: "",
+      detail: "",
+    };
+  }
+  const latest = Math.max(...versions);
+  return {
+    preRemediation: true,
+    latestVersion: latest,
+    label: "Pre-remediation — document has been modified since this review",
+    detail:
+      `${versions.length} fix(es) from this report were applied, taking the ` +
+      `document to v${latest + 1} (stored index ${latest}) after it was ` +
+      `reviewed at v${(reviewed ?? 0) + 1} (stored index ${reviewed ?? 0}). ` +
+      "The provisions described below are the reviewed ones, not " +
+      "necessarily the current ones.",
+  };
+}
+
+/** The non-advisory readiness checks currently blocking issue, in order.
+ *
+ * Named rather than counted: a bare "not ready" sends the reader hunting,
+ * and the difference between a summary and a teaser is whether it says
+ * what to go and fix. Reads the same serialized checklist the annex
+ * renders — never a second derivation. */
+export function qcBlockingReadinessChecks(
+  readiness: { checks?: { id?: string; ok?: boolean; advisory?: boolean; detail?: string }[] } | null | undefined,
+): { id: string; detail: string }[] {
+  if (!readiness || !Array.isArray(readiness.checks)) return [];
+  return readiness.checks
+    .filter((check) => check && !check.ok && !check.advisory)
+    .map((check) => ({
+      id: String(check.id ?? "unnamed check"),
+      detail: String(check.detail ?? "no detail recorded"),
+    }));
+}
+
 export function qcReportLimitations(
   rawResult: QcResultView | QcReportResult,
   stale: boolean,

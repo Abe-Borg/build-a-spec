@@ -1563,6 +1563,17 @@ class QCResult:
             if f.severity == "critical" and f.status == "open"
         )
 
+    def open_finding_count(self) -> int:
+        """Surviving findings of ANY severity still awaiting a disposition.
+
+        The readiness term behind ``no_open_qc_findings`` (Chunk 5.4). The
+        gate used to count only open CRITICALS, while the Word sign-off
+        spoke for every open finding — so one report could say "issue
+        readiness: yes" on its identity page and "OPEN FINDINGS REMAIN" in
+        its sign-off, with 25 of them. The sign-off's meaning won.
+        """
+        return sum(1 for f in self.findings if f.status == "open")
+
     def open_disputed_count(self) -> int:
         """Disputed candidates still awaiting a human disposition.
 

@@ -23,6 +23,7 @@ from backend.app import create_app
 from backend.qc.engine import (
     QC_PROTOCOL_VERSION,
     QC_REPORT_SCHEMA_VERSION,
+    QCDispositionEvent,
     QCFanoutError,
     QCResult,
     QCSourceGuard,
@@ -35,6 +36,8 @@ from backend.qc.schema import QC_FINDINGS_SCHEMA, QC_LENSES, normalize_findings
 from backend.research.engine import DimensionStatus, RequirementsProfile, ResearchItem
 from backend.spec_doc.docx_export import (
     QC_GROUNDING_METHODOLOGY_NOTE,
+    qc_pre_remediation_state,
+    qc_signoff_state,
     QC_REQUEST_METHODOLOGY_NOTE,
     build_docx,
     build_qc_memo,
@@ -633,12 +636,29 @@ def test_json_export_contains_complete_report_and_authoritative_current_state() 
     assert isinstance(readiness["checks"], list)
     qc_current = next(check for check in readiness["checks"] if check["id"] == "qc_current")
     assert qc_current["ok"] is True
+    # Chunk 5.4 split the old collapsed check: coverage is complete, but
+    # the surviving findings have not been dispositioned, and THAT is what
+    # blocks issue now — the meaning the Word sign-off always had.
+    execution = next(
+        check
+        for check in readiness["checks"]
+        if check["id"] == "qc_execution_complete"
+    )
+    assert execution["ok"] is True
+    no_open = next(
+        check
+        for check in readiness["checks"]
+        if check["id"] == "no_open_qc_findings"
+    )
+    assert no_open["ok"] is False
+    assert "still open" in no_open["detail"]
     qc_audit = next(
         check
         for check in readiness["checks"]
         if check["id"] == "qc_audit_complete"
     )
-    assert qc_audit["ok"] is True
+    # The derived alias is exactly the conjunction of the two above.
+    assert qc_audit["ok"] is (execution["ok"] and no_open["ok"])
 
 
 def test_project_restore_keeps_dispositions_synchronized_with_exports() -> None:
@@ -1313,15 +1333,16 @@ def test_failed_latest_attempt_blocks_readiness_and_is_exported(monkeypatch) -> 
     )
     assert qc_check["ok"] is False
     assert "latest" in qc_check["detail"].lower()
-    audit_check = next(
+    execution_check = next(
         check
         for check in readiness["checks"]
-        if check["id"] == "qc_audit_complete"
+        if check["id"] == "qc_execution_complete"
     )
-    # The retained success still contains a complete audit record, but the
-    # separate current/latest-attempt gate prevents it from signing off the
-    # document after the failed rerun.
-    assert audit_check["ok"] is True
+    # The retained success still contains a complete audit record — which is
+    # exactly what the split `qc_execution_complete` says — but the separate
+    # current/latest-attempt gate prevents it from signing off the document
+    # after the failed rerun.
+    assert execution_check["ok"] is True
     assert readiness["ready"] is False
 
     exported = client.get("/api/qc/export.json")
@@ -2812,3 +2833,248 @@ def test_a_malformed_schema_version_fails_closed():
         }
     )
     assert population["reconciles"] is False
+
+
+# ---------------------------------------------------------------------------
+# Chunk 5.4 — issue readiness, sign-off consistency, report layering
+# ---------------------------------------------------------------------------
+
+
+def _readiness_by_id(client) -> dict[str, dict]:
+    return {
+        check["id"]: check
+        for check in client.get("/api/readiness").json()["checks"]
+    }
+
+
+def _live_rich_result():
+    """A restored rich result on the live session, plus a client."""
+    store, result = _rich_audit_result()
+    session = sessions.get_session()
+    session.doc = store
+    return store, result, session, TestClient(create_app())
+
+
+def test_open_medium_findings_block_issue_readiness_and_name_themselves():
+    """The ratified default: the sign-off's meaning wins over the old gate.
+
+    Before this, `qc_audit_complete` gated on open CRITICALS only, so a
+    report could say "Issue readiness at export: Yes" beside a sign-off
+    reading "OPEN FINDINGS REMAIN" with 25 of them.
+    """
+    _store, result, session, client = _live_rich_result()
+    for finding in result.findings:
+        finding.severity = "medium"
+        finding.status = "open"
+    session.qc.restore(result)
+
+    checks = _readiness_by_id(client)
+    assert checks["qc_execution_complete"]["ok"] is True
+    assert checks["no_open_qc_findings"]["ok"] is False
+    detail = checks["no_open_qc_findings"]["detail"]
+    assert "still open" in detail
+    assert "medium" in detail
+    assert "dismiss it with a reason" in detail
+    # The derived alias is exactly the conjunction, never an independent rule.
+    assert checks["qc_audit_complete"]["ok"] is False
+
+
+def test_dispositioning_every_finding_clears_the_findings_gate():
+    _store, result, session, client = _live_rich_result()
+    for finding in result.findings:
+        finding.severity = "medium"
+        finding.status = "dismissed"
+        finding.dismiss_reason = "Accepted the risk."
+    session.qc.restore(result)
+
+    checks = _readiness_by_id(client)
+    assert checks["no_open_qc_findings"]["ok"] is True
+    assert "applied or dismissed" in checks["no_open_qc_findings"]["detail"]
+    assert checks["qc_audit_complete"]["ok"] is True
+
+
+def test_an_undispositioned_dispute_blocks_the_findings_gate():
+    _store, result, session, client = _live_rich_result()
+    for finding in result.findings:
+        finding.status = "dismissed"
+        finding.dismiss_reason = "Accepted the risk."
+    disputed = replace(result.findings[0])
+    disputed.finding_id = "qc-disputed-fixture"
+    disputed.status = "open"
+    disputed.verification_outcome = "disputed"
+    disputed.dispute_reason = "split_panel"
+    disputed.original_severity = "medium"
+    disputed.severity = "medium"
+    disputed.verification_panel_size = 2
+    disputed.verification_threshold = 2
+    disputed.proposed_ops = []
+    disputed.ops_semantic_status = "not_proposed"
+    disputed.ops_semantic_reason = "No proposed operations were supplied."
+    disputed.ops_valid = False
+    # One uphold, one refute: the split IS what makes it disputed, and the
+    # runner refuses a result whose recorded outcome its seats do not imply.
+    disputed.verdicts = [
+        replace(disputed.verdicts[0], reviewer_index=1, upholds=True,
+                ops_adequate=False, revised_severity=""),
+        replace(disputed.verdicts[0], reviewer_index=2, upholds=False,
+                ops_adequate=False, revised_severity=""),
+    ]
+    result.disputed = [disputed]
+    session.qc.restore(result)
+
+    checks = _readiness_by_id(client)
+    assert checks["no_open_qc_findings"]["ok"] is False
+    assert "disputed" in checks["no_open_qc_findings"]["detail"].lower()
+
+
+def test_the_masthead_and_the_signoff_can_never_contradict_each_other():
+    """Asserted from the RENDERED document, both verdicts extracted."""
+    store, result = _rich_audit_result()
+    for finding in result.findings:
+        finding.severity = "medium"
+        finding.status = "open"
+    payload = result.to_dict()
+    payload["export_current_state"] = {
+        "generated_at": "2026-07-31T12:00:00+00:00",
+        "document_version": payload["version_index"],
+        "document_fingerprint": payload["version_fingerprint"],
+        "stale": False,
+        "runner": {"status": "complete", "error": ""},
+        "latest_attempt": {"run_id": payload["run_id"], "status": "complete"},
+        # A pre-5.4 payload: it really does claim readiness beside open
+        # findings, which is the contradiction this must make unrenderable.
+        "readiness": {"ready": True, "checks": []},
+    }
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False)))
+    )
+
+    assert "REVIEW REQUIRED - OPEN FINDINGS REMAIN" in text
+    # The masthead cannot say Yes while the sign-off says findings remain.
+    assert "Issue readiness at export: Yes" not in text
+    assert "Issue readiness at export: No" in text
+    assert "READINESS RECORDED BEFORE THE CURRENT GATE" in text
+
+
+def test_a_clean_report_says_yes_in_both_places():
+    store, result = _rich_audit_result()
+    for finding in result.findings:
+        finding.status = "dismissed"
+        finding.dismiss_reason = "Accepted the risk."
+    payload = result.to_dict()
+    payload["export_current_state"] = {
+        "generated_at": "2026-07-31T12:00:00+00:00",
+        "document_version": payload["version_index"],
+        "document_fingerprint": payload["version_fingerprint"],
+        "stale": False,
+        "runner": {"status": "complete", "error": ""},
+        "latest_attempt": {"run_id": payload["run_id"], "status": "complete"},
+        "readiness": {"ready": True, "checks": []},
+    }
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False)))
+    )
+    assert "OPEN FINDINGS REMAIN" not in text
+    assert "Issue readiness at export: Yes" in text
+
+
+def test_the_executive_layer_names_the_blocking_checks_and_the_open_queue():
+    store, result = _rich_audit_result()
+    for finding in result.findings:
+        finding.severity = "medium"
+        finding.status = "open"
+    payload = result.to_dict()
+    payload["export_current_state"] = {
+        "generated_at": "2026-07-31T12:00:00+00:00",
+        "document_version": payload["version_index"],
+        "document_fingerprint": payload["version_fingerprint"],
+        "stale": False,
+        "runner": {"status": "complete", "error": ""},
+        "latest_attempt": {"run_id": payload["run_id"], "status": "complete"},
+        "readiness": {
+            "ready": False,
+            "checks": [
+                {
+                    "id": "no_open_qc_findings",
+                    "ok": False,
+                    "detail": "2 surviving finding(s) still open (2 medium).",
+                    "advisory": False,
+                },
+                {
+                    "id": "profile_complete",
+                    "ok": False,
+                    "detail": "Project profile is incomplete.",
+                    "advisory": True,
+                },
+            ],
+        },
+    }
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False)))
+    )
+    # The verdict, the named blocking check, and the queue itself.
+    assert "Sign-off verdict:" in text
+    assert "Issue readiness: No" in text
+    assert (
+        "Blocking: no_open_qc_findings — 2 surviving finding(s) still open"
+        in text
+    )
+    # An ADVISORY failing check is not presented as blocking. (The annex's
+    # full checklist still lists it, which is why this asserts the
+    # executive layer's own bullet form rather than the bare id.)
+    assert "Blocking: profile_complete" not in text
+    assert "profile_complete" in text
+    assert "Open Queue" in text
+    assert "Run identity" in text
+    assert "Estimated run cost" in text
+    for finding in result.findings:
+        assert finding.title in text
+
+
+def test_an_applied_fix_makes_later_exports_disclose_pre_remediation():
+    store, result = _rich_audit_result()
+    target = result.findings[0]
+    target.status = "applied"
+    target.disposition_events = [
+        QCDispositionEvent(
+            action="applied",
+            at="2026-07-31T12:00:00+00:00",
+            # The apply committed a NEW version; the report reviewed an
+            # earlier one, and that difference IS the evidence.
+            document_version=result.version_index + 1,
+            document_fingerprint="f" * 64,
+        )
+    ]
+    payload = result.to_dict()
+    state = qc_pre_remediation_state(payload)
+    assert state["pre_remediation"] is True
+    assert state["latest_version"] == result.version_index + 1
+
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False)))
+    )
+    assert "PRE-REMEDIATION - DOCUMENT HAS BEEN MODIFIED SINCE THIS REVIEW" in text
+    assert "1 fix(es) from this report were applied" in text
+
+
+def test_a_report_with_no_applied_fixes_discloses_nothing():
+    store, result = _rich_audit_result()
+    payload = result.to_dict()
+    assert qc_pre_remediation_state(payload)["pre_remediation"] is False
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False)))
+    )
+    assert "PRE-REMEDIATION" not in text
+
+
+def test_a_legacy_v3_report_keeps_its_historical_rendering():
+    store, result = _rich_audit_result()
+    payload = result.to_dict()
+    payload["schema_version"] = 3
+    payload["protocol_version"] = "final-qc/3"
+    # It still renders, still carries its own facts, and is not upgraded.
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False)))
+    )
+    assert "FINAL QC AUDIT REPORT" in text
+    assert "final-qc/3" in text

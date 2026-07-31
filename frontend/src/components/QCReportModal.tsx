@@ -29,6 +29,7 @@ import {
   groupFindingsBySeverity,
   isFailedVerifierSeat,
   normalizeSeverity,
+  qcBlockingReadinessChecks,
   qcCandidateOrigins,
   qcConsolidationSummary,
   qcDisputedCandidates,
@@ -37,6 +38,7 @@ import {
   qcOperationEvaluation,
   qcPrimaryReport,
   qcReportExportUrl,
+  qcPreRemediationState,
   qcReportLimitations,
   qcRequestPopulation,
   qcRequestPopulationNote,
@@ -854,6 +856,7 @@ function ReadinessRecord({ readiness }: { readiness: ReadinessPayload | null | u
   if (!readiness) {
     return <EmptyRecord>No issue-readiness snapshot was supplied with this report view.</EmptyRecord>;
   }
+  const blocking = qcBlockingReadinessChecks(readiness);
   return (
     <div className="rounded-lg border border-edge/60 bg-surface/45 px-3 py-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -865,6 +868,13 @@ function ReadinessRecord({ readiness }: { readiness: ReadinessPayload | null | u
       <p className="mt-1 text-[10px] leading-relaxed text-ink-faint">
         This checklist reflects current application state. The run identity below records the document snapshot actually reviewed.
       </p>
+      {blocking.length > 0 && (
+        <p className="mt-1.5 rounded border border-warn/40 bg-warn/5 px-2 py-1.5 text-[10px] leading-relaxed text-warn">
+          Blocking issue: {blocking.map((check) => check.id).join(", ")}. Every
+          open finding must be applied or dismissed with a reason, and every
+          dispute adjudicated, before this section is issue-ready.
+        </p>
+      )}
       <ul className="mt-2 space-y-1.5">
         {readiness.checks.map((check) => (
           <li key={check.id} className="flex min-w-0 items-start gap-2 rounded border border-edge/50 bg-bg/30 px-2.5 py-2">
@@ -942,6 +952,7 @@ export default function QCReportModal({
   const inconclusive = qcInconclusiveCandidates(report);
   const lensCoverage = qcLensCoverage(report);
   const consolidation = qcConsolidationSummary(report);
+  const preRemediation = qcPreRemediationState(report);
   const requestPopulation = qcRequestPopulation(report);
   const traceRecords = collectQcTraceRecords(report);
   const operationRecords = collectQcOperationRecords(report);
@@ -1060,6 +1071,12 @@ export default function QCReportModal({
             title="Executive result and current readiness"
             description="The result returned by the QC run, followed by the application’s current deterministic issue-readiness checks."
           >
+            {preRemediation.preRemediation && (
+              <div className="mb-3 rounded-lg border border-warn/50 bg-warn/5 px-3 py-2.5">
+                <p className="text-[11px] font-semibold text-warn">{preRemediation.label}</p>
+                <p className="mt-1 text-[10px] leading-relaxed text-ink-dim">{preRemediation.detail}</p>
+              </div>
+            )}
             <div className="rounded-lg border border-edge/60 bg-surface/45 px-3 py-3">
               <p className="text-[9px] font-semibold tracking-wide text-ink-faint uppercase">Run summary</p>
               <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-ink-dim">

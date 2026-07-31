@@ -2158,6 +2158,29 @@ def _qc_render_executive_status(
         _qc_heading(document, "Export-Time QC Control Exceptions", 2)
         _qc_add_bullets(document, export_control_issues)
 
+    # --- The executive layer (Chunk 5.4) -----------------------------------
+    # Additive: everything below is also in the full annex, in more detail.
+    # What this buys is that a reader who reads ONLY the first page still
+    # learns what ran, whether it can be issued, what is blocking, and what
+    # it cost — without inferring any of it from the annex.
+    signoff = qc_signoff_state(qc_result, stale=stale)
+    _qc_add_label(
+        document,
+        "Sign-off verdict",
+        f"{signoff['recommendation']}. {signoff['basis']}",
+        color=_QC_POSITIVE if signoff["issue_ready"] else _QC_RISK,
+    )
+    lineage = qc_pre_remediation_state(qc_result)
+    if lineage["pre_remediation"]:
+        _qc_add_callout(
+            document,
+            str(lineage["label"]),
+            str(lineage.get("detail") or ""),
+            accent=_QC_CAUTION,
+        )
+    _qc_render_executive_identity(document, qc_result)
+    _qc_render_executive_readiness(document, qc_result, signoff=signoff)
+
     summary = str(qc_result.get("summary") or "").strip()
     _qc_add_label(
         document,
@@ -2209,6 +2232,187 @@ def _qc_render_executive_status(
         "Counts are derived from the persisted report at export. "
         "Surviving, refuted, and infrastructure-inconclusive candidates are "
         "mutually exclusive."
+    )
+    _qc_render_executive_queue(document, open_findings, disputed)
+    cost = qc_result.get("estimated_cost_usd")
+    _qc_add_label(
+        document,
+        "Estimated run cost",
+        f"${float(cost):,.6f} (application estimate; the provider invoice "
+        "is authoritative)"
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool)
+        else "Not recorded",
+    )
+
+
+def qc_pre_remediation_state(qc_result: dict) -> dict[str, object]:
+    """Whether this report describes a document that has since been fixed.
+
+    Fingerprint staleness already forces a re-run before the report can
+    claim current readiness; this is the DISCLOSURE half. A reader holding
+    an export needs to know that the defects it describes may already have
+    been remediated — otherwise the report reads as a description of the
+    current document, which after even one applied fix it is not.
+
+    Derived from the disposition history the run already records, not from
+    a parallel marker: an applied event carries the document version it
+    acted on, and that version differing from the reviewed one IS the
+    evidence. No applied events means nothing to disclose.
+    """
+    reviewed = qc_result.get("version_index")
+    versions: list[int] = []
+    for bucket in ("findings", "disputed"):
+        for finding in _qc_list(qc_result.get(bucket)):
+            if not isinstance(finding, dict):
+                continue
+            for event in _qc_list(finding.get("disposition_events")):
+                if not isinstance(event, dict):
+                    continue
+                if event.get("action") != "applied":
+                    continue
+                version = event.get("document_version")
+                if (
+                    isinstance(version, int)
+                    and not isinstance(version, bool)
+                    and version != reviewed
+                ):
+                    versions.append(version)
+    if not versions:
+        return {"pre_remediation": False, "label": "", "latest_version": None}
+    latest = max(versions)
+    return {
+        "pre_remediation": True,
+        "latest_version": latest,
+        "label": (
+            "PRE-REMEDIATION - DOCUMENT HAS BEEN MODIFIED SINCE THIS REVIEW"
+        ),
+        "detail": (
+            f"{len(versions)} fix(es) from this report were applied, taking "
+            f"the document to {qc_version_label(latest)} after it was "
+            f"reviewed at {qc_version_label(reviewed)}. The provisions "
+            "described below are the reviewed ones, not necessarily the "
+            "current ones."
+        ),
+    }
+
+
+def _qc_render_executive_identity(document, qc_result: dict) -> None:
+    """Who ran what, against which document version — on the first page."""
+    state = _qc_dict(qc_result.get("export_current_state"))
+    _qc_add_label(
+        document,
+        "Run identity",
+        f"{qc_result.get('run_id') or 'Run ID not recorded'} · "
+        f"{qc_result.get('model') or 'model not recorded'} · finished "
+        f"{qc_result.get('finished_at') or 'not recorded'}",
+    )
+    reviewed = qc_version_label(qc_result.get("version_index"))
+    active = qc_version_label(state.get("document_version")) if state else ""
+    _qc_add_label(
+        document,
+        "Reviewed document version",
+        f"{reviewed} (document is now at {active})"
+        if active and active != reviewed
+        else reviewed,
+    )
+
+
+def _qc_render_executive_readiness(
+    document, qc_result: dict, *, signoff: dict[str, object]
+) -> None:
+    """The readiness verdict with the FAILING CHECKS NAMED.
+
+    A bare "not ready" sends the reader hunting. Naming the blocking checks
+    is the difference between a summary and a teaser, and they come from the
+    same serialized readiness payload the annex renders — never re-derived.
+    """
+    state = _qc_dict(qc_result.get("export_current_state"))
+    readiness = _qc_dict(state.get("readiness"))
+    checks = [
+        item
+        for item in _qc_list(readiness.get("checks"))
+        if isinstance(item, dict)
+    ]
+    if not checks:
+        _qc_add_label(
+            document,
+            "Issue readiness",
+            "No readiness checklist was captured with this export.",
+        )
+        return
+    blocking = [
+        item
+        for item in checks
+        if not item.get("ok") and not item.get("advisory")
+    ]
+    # The sign-off is controlling, exactly as on the identity page: a
+    # retained pre-5.4 payload can say "ready" beside open findings.
+    ready = bool(readiness.get("ready")) and bool(signoff["issue_ready"])
+    _qc_add_label(
+        document,
+        "Issue readiness",
+        "Yes — every non-advisory check passed"
+        if ready
+        else f"No — {len(blocking) or 1} check(s) blocking",
+        color=_QC_POSITIVE if ready else _QC_RISK,
+    )
+    if not ready:
+        _qc_add_bullets(
+            document,
+            [
+                f"Blocking: {item.get('id') or 'unnamed check'} — "
+                f"{item.get('detail') or 'no detail recorded'}"
+                for item in blocking
+            ]
+            or [
+                "The captured checklist reports no blocking check, but the "
+                f"sign-off verdict is controlling: {signoff['recommendation']}."
+            ],
+        )
+
+
+def _qc_render_executive_queue(
+    document, open_findings: list[dict], disputed: list[dict]
+) -> None:
+    """The actionable queue: what is open, and what needs adjudication."""
+    open_disputes = [
+        item
+        for item in disputed
+        if str(item.get("status") or "open") == "open"
+    ]
+    if not open_findings and not open_disputes:
+        return
+    _qc_heading(document, "Open Queue", 2)
+    rows: list[list[object]] = []
+    for item in _sorted_by_severity(open_findings):
+        rows.append(
+            [
+                str(item.get("severity") or "not recorded").upper(),
+                "Open finding",
+                item.get("reviewed_ref") or item.get("element_id") or "section",
+                item.get("title") or "Untitled finding",
+            ]
+        )
+    for item in _sorted_by_severity(open_disputes):
+        rows.append(
+            [
+                str(item.get("severity") or "not recorded").upper(),
+                "Disputed — human review",
+                item.get("reviewed_ref") or item.get("element_id") or "section",
+                item.get("title") or "Untitled candidate",
+            ]
+        )
+    _qc_add_table(
+        document,
+        ["Severity", "Kind", "Location", "Title"],
+        rows,
+        [1200, 2000, 1600, 4560],
+    )
+    citation = document.add_paragraph(style="QC Table Citation")
+    citation.add_run(
+        "Each row is reproduced in full — evidence, verifier votes, proposed "
+        "operations and disposition history — in the registers below. Every "
+        "one must be applied or dismissed with a reason before issue."
     )
 
 
@@ -2327,7 +2531,9 @@ def _qc_render_identity(
     _qc_render_manifest(document, qc_result.get("input_manifest"))
 
 
-def _qc_render_export_current_state(document, qc_result: dict) -> None:
+def _qc_render_export_current_state(
+    document, qc_result: dict, *, stale: bool
+) -> None:
     state = _qc_dict(qc_result.get("export_current_state"))
     if not state:
         return
@@ -2420,7 +2626,23 @@ def _qc_render_export_current_state(document, qc_result: dict) -> None:
             _qc_add_label(document, label, value)
 
     readiness = _qc_dict(state.get("readiness"))
-    _qc_add_label(document, "Issue readiness at export", readiness.get("ready"))
+    signoff = qc_signoff_state(qc_result, stale=stale)
+    recorded_ready = bool(readiness.get("ready"))
+    issue_ready = recorded_ready and bool(signoff["issue_ready"])
+    _qc_add_label(document, "Issue readiness at export", issue_ready)
+    if recorded_ready and not signoff["issue_ready"]:
+        # Only reachable for a report retained from before Chunk 5.4, whose
+        # embedded readiness payload gated on open CRITICALS alone. Say which
+        # answer controls rather than printing the contradiction.
+        _qc_add_callout(
+            document,
+            "READINESS RECORDED BEFORE THE CURRENT GATE",
+            "This report's saved readiness payload predates the current "
+            "issue-readiness rule, under which every open finding blocks "
+            "issue. The reviewer sign-off below is controlling: "
+            f"{signoff['recommendation']}.",
+            accent=_QC_CAUTION,
+        )
     checks = [
         item
         for item in _qc_list(readiness.get("checks"))
@@ -3872,6 +4094,39 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
         )
 
 
+# The single sign-off verdict that means "nothing in this report blocks
+# issue". Every other branch of the recommendation is a HOLD or a REVIEW
+# REQUIRED, so equality against this one constant is what makes
+# `issue_ready` below impossible to drift from the rendered wording.
+QC_SIGNOFF_CLEAR = "QC RECORD COMPLETE - PROFESSIONAL APPROVAL STILL REQUIRED"
+
+
+def qc_signoff_state(qc_result: dict, *, stale: bool) -> dict[str, object]:
+    """The ONE verdict the masthead and the sign-off page both render.
+
+    The reviewed run's export said "Issue readiness at export: Yes" on its
+    identity page and "REVIEW REQUIRED - OPEN FINDINGS REMAIN" in its
+    sign-off, with 25 open findings, because the two were derived
+    independently: the masthead echoed a readiness payload that gated on
+    open CRITICALS only, while the sign-off spoke for every open finding.
+    The sign-off's meaning is the ratified one.
+
+    Chunk 5.4 fixes the readiness gate itself (`no_open_qc_findings` in
+    ``backend/app.py``), which makes the two agree for any report produced
+    from now on. This helper is what makes them unable to disagree AT ALL:
+    the masthead renders `recorded readiness AND this verdict`, so a
+    retained pre-5.4 report — whose embedded readiness payload really does
+    say "ready" beside open findings — still cannot render the
+    contradiction.
+    """
+    recommendation, basis = _qc_signoff_recommendation(qc_result, stale=stale)
+    return {
+        "recommendation": recommendation,
+        "basis": basis,
+        "issue_ready": recommendation == QC_SIGNOFF_CLEAR,
+    }
+
+
 def _qc_signoff_recommendation(
     qc_result: dict, *, stale: bool
 ) -> tuple[str, str]:
@@ -3928,7 +4183,7 @@ def _qc_signoff_recommendation(
             "Resolve or formally disposition every open finding before issue.",
         )
     return (
-        "QC RECORD COMPLETE - PROFESSIONAL APPROVAL STILL REQUIRED",
+        QC_SIGNOFF_CLEAR,
         "No surviving finding is currently open in the saved result.",
     )
 
@@ -3989,7 +4244,9 @@ def _qc_render_limitations_and_signoff(
     _qc_add_bullets(document, limitations)
 
     _qc_heading(document, "Reviewer Sign-off", 1)
-    recommendation, basis = _qc_signoff_recommendation(qc_result, stale=stale)
+    signoff = qc_signoff_state(qc_result, stale=stale)
+    recommendation = str(signoff["recommendation"])
+    basis = str(signoff["basis"])
     _qc_add_callout(
         document,
         "Recommended control state",
@@ -4091,7 +4348,7 @@ def build_qc_memo(qc_result: dict, section: SpecSection, *, stale: bool) -> byte
         stale=stale,
         execution_label=execution_label,
     )
-    _qc_render_export_current_state(document, qc_result)
+    _qc_render_export_current_state(document, qc_result, stale=stale)
     _qc_render_methodology(document, qc_result)
     _qc_render_lenses(document, qc_result)
     _qc_render_consolidation(document, qc_result)

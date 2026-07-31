@@ -1329,13 +1329,18 @@ class _SessionInvalidated(RuntimeError):
     """The session was reset/replaced while this turn was still streaming."""
 
 
-def _stable_system_blocks(session: SessionState) -> list[dict[str, Any]]:
+def _stable_system_blocks(module: SpecModule) -> list[dict[str, Any]]:
     """The system prompt: ONLY the stable module block, cached.
 
     Nothing session-varying may render here (pinned by
     ``test_stable_system_prompt_is_cached_and_module_rendered``); the live
     state travels in the PROJECT CONTEXT block of the newest user message
     (:func:`_turn_context_text`), after the cacheable history prefix.
+
+    Takes the module rather than the session precisely because nothing else
+    about the session may reach it: a ``SpecModule`` is frozen, so a captured
+    reference is a complete snapshot and this renders safely outside
+    ``_turn_state_lock`` (see :func:`_build_chat_request`).
 
     This breakpoint also closes the tools prefix, since tools render ahead
     of system — which is why the request needs no separate tool
@@ -1346,7 +1351,7 @@ def _stable_system_blocks(session: SessionState) -> list[dict[str, Any]]:
     return [
         {
             "type": "text",
-            "text": render_system_prompt(session.module),
+            "text": render_system_prompt(module),
             "cache_control": _cache_control(settings.CHAT_CACHE_TTL),
         }
     ]
@@ -1874,6 +1879,75 @@ def _with_cache_breakpoints(
         }
         out[index] = {**message, "content": [*content[:-1], new_tail]}
     return out
+
+
+@dataclass(frozen=True)
+class _ChatRequestInputs:
+    """The live session state one round's request is built from.
+
+    Captured under ``owned_model_turn_guard`` and never read again, so
+    :func:`_build_chat_request` cannot observe a reset, a project load or a
+    committing turn halfway through assembling a request.
+
+    Detachment is by shallow list copy, and that is enough: ``history`` and
+    the turn's ``new_messages`` are only ever appended to, truncated, or
+    replaced wholesale — nothing mutates a message dict in place — and the
+    resend sanitizer rebuilds rather than mutates (see its docstring). A
+    deep copy of the whole conversation once per round would be real cost
+    for no additional guarantee. ``module`` is a frozen dataclass, so the
+    reference IS the copy.
+    """
+
+    history: list[dict[str, Any]]
+    new_messages: list[dict[str, Any]]
+    module: SpecModule
+    model: str
+    max_tokens: int
+
+
+def _build_chat_request(
+    inputs: _ChatRequestInputs, container_id: str = ""
+) -> dict[str, Any]:
+    """Assemble one round's request from a detached snapshot.
+
+    Deliberately pure — it touches no live session state — because it runs
+    OUTSIDE ``_turn_state_lock``, and the work it does is unbounded.
+    ``sanitize_messages_for_resend`` base64-decodes every fetched PDF still
+    in the conversation and counts its pages with ``PdfReader``; a turn that
+    fetched a full building code (600+ pages, tens of megabytes) then pays
+    that on every later round. Held under the lock, that blocked the stop
+    request for this very turn plus every session-state endpoint, on the one
+    path a user is most likely to interrupt. Coherence never needed the lock
+    held, only the inputs captured together.
+
+    ``container_id`` is a parameter rather than a closure over turn-local
+    state: a closure would bind whatever the variable happened to hold
+    whenever the request was later built.
+    """
+    raw = inputs.history + inputs.new_messages
+    messages = sanitize_messages_for_resend(raw)
+    kwargs: dict[str, Any] = {
+        "model": inputs.model,
+        "max_tokens": inputs.max_tokens,
+        "system": _stable_system_blocks(inputs.module),
+        "messages": _with_cache_breakpoints(
+            messages,
+            committed_boundary=_committed_history_boundary(
+                len(inputs.history), len(raw), len(messages)
+            ),
+            cache_ttl=settings.CHAT_CACHE_TTL,
+            tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
+        ),
+        "tools": _chat_tools(),
+        "thinking": _thinking_param(),
+        "output_config": {"effort": settings.INTERVIEW_EFFORT},
+    }
+    if container_id:
+        # Top level only — never inside system, tools, or messages. A
+        # pending code-execution-called server tool can only be resumed
+        # inside the container it started in.
+        kwargs["container"] = container_id
+    return kwargs
 
 
 def _merge_usage(totals: dict[str, int], usage: Any) -> None:
@@ -2623,7 +2697,7 @@ def stream_user_turn(
             trace_handle,
             system_text="\n\n".join(
                 str(block.get("text", ""))
-                for block in _stable_system_blocks(session)
+                for block in _stable_system_blocks(session.module)
             ),
             context_text=context_text,
             user_text=user_text,
@@ -2644,40 +2718,53 @@ def stream_user_turn(
                     "the turn was discarded."
                 )
 
-    def request_kwargs(container_id: str = "") -> dict[str, Any]:
-        """Build one round's request.
+    def capture_request_inputs() -> _ChatRequestInputs:
+        """Snapshot the mutable inputs one round's request is built from.
 
-        ``container_id`` is passed in rather than closed over: it is
-        turn-local state that changes between rounds, and a closure over it
-        would quietly bind whatever the variable happened to hold when the
-        request was later built — a real hazard once Phase 6 moves request
-        construction outside the turn-state lock.
+        The CALLER holds ``owned_model_turn_guard``. Cheap by construction —
+        two shallow list copies and one frozen module reference — so the
+        turn-state lock is held for microseconds rather than across the
+        resend sanitizer. Everything expensive happens afterwards, in
+        :func:`_build_chat_request`, with the lock released.
         """
-        history = list(session.history)
-        raw = history + new_messages
-        messages = sanitize_messages_for_resend(raw)
-        kwargs: dict[str, Any] = {
-            "model": model or settings.INTERVIEW_MODEL,
-            "max_tokens": max_tokens or settings.INTERVIEW_MAX_TOKENS,
-            "system": _stable_system_blocks(session),
-            "messages": _with_cache_breakpoints(
-                messages,
-                committed_boundary=_committed_history_boundary(
-                    len(history), len(raw), len(messages)
-                ),
-                cache_ttl=settings.CHAT_CACHE_TTL,
-                tail_cache_ttl=settings.CHAT_TAIL_CACHE_TTL,
-            ),
-            "tools": _chat_tools(),
-            "thinking": _thinking_param(),
-            "output_config": {"effort": settings.INTERVIEW_EFFORT},
-        }
-        if container_id:
-            # Top level only — never inside system, tools, or messages. A
-            # pending code-execution-called server tool can only be resumed
-            # inside the container it started in.
-            kwargs["container"] = container_id
-        return kwargs
+        return _ChatRequestInputs(
+            history=list(session.history),
+            new_messages=list(new_messages),
+            module=session.module,
+            model=model or settings.INTERVIEW_MODEL,
+            max_tokens=max_tokens or settings.INTERVIEW_MAX_TOKENS,
+        )
+
+    def close_for_between_round_stop() -> None:
+        """Close this turn's message list for a stop caught between rounds.
+
+        Two callers: the top of the round loop, and the ownership re-check
+        after a request has been built but before it is sent. The message
+        list must still end on an assistant turn — a dangling tool_result
+        (or, before round 0, nothing at all) would leave two consecutive
+        user-role messages once the next turn's message is appended, which
+        the API rejects.
+
+        A stop caught here can also land right after a paused response whose
+        server tools never came back — the use is in the trailing assistant
+        message with no result anywhere — so the pairing scrub runs
+        turn-wide.
+        """
+        if new_messages[-1].get("role") != "assistant":
+            new_messages.append(
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "[Generation stopped by user.]",
+                        }
+                    ],
+                }
+            )
+        new_messages[:] = _without_unpaired_server_tool_uses(
+            new_messages, placeholder="[Generation stopped by user.]"
+        )
 
     stop_reason: str | None = None
     # The provider continuation container for THIS turn, if the model's
@@ -2718,30 +2805,9 @@ def stream_user_turn(
             if session.stop_requested.is_set():
                 # Caught between rounds (e.g. right after a tool dispatch, or
                 # before round 0 even started) rather than mid-stream: end the
-                # turn now with whatever prior rounds produced. The message
-                # list must still end on an assistant turn — a dangling
-                # tool_result (or, at round 0, nothing at all) would leave two
-                # consecutive user-role messages once the next turn's message
-                # is appended, which the API rejects.
+                # turn now with whatever prior rounds produced.
                 stop_reason = "user_stop"
-                if new_messages[-1].get("role") != "assistant":
-                    new_messages.append(
-                        {
-                            "role": "assistant",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": "[Generation stopped by user.]",
-                                }
-                            ],
-                        }
-                    )
-                # A stop caught between rounds can land right after a paused
-                # response whose server tools never came back — the use is
-                # in the trailing assistant message with no result anywhere.
-                new_messages[:] = _without_unpaired_server_tool_uses(
-                    new_messages, placeholder="[Generation stopped by user.]"
-                )
+                close_for_between_round_stop()
                 break
             # Never dead air between rounds: from send to first token there is
             # always a live status. A pause_turn resume keeps server work
@@ -2761,7 +2827,33 @@ def stream_user_turn(
                         "The session was reset while this turn was streaming; "
                         "the turn was discarded."
                     )
-                request = request_kwargs(container_id)
+                inputs = capture_request_inputs()
+            # Built with the lock RELEASED — the sanitizer's PDF decoding and
+            # page counting are unbounded work, and holding the turn-state
+            # lock across them blocks this turn's own stop request.
+            request = _build_chat_request(inputs, container_id)
+            # Nothing has been paid for yet, so re-decide here, in one
+            # critical section: a reset/load that won during the build makes
+            # the request obsolete, and a stop that landed during it means
+            # this request must never be sent at all.
+            stopped_before_send = False
+            with session.owned_model_turn_guard(
+                turn_token,
+                generation,
+            ) as owns_turn:
+                if not owns_turn:
+                    raise _SessionInvalidated(
+                        "The session was reset while this turn was streaming; "
+                        "the turn was discarded."
+                    )
+                stopped_before_send = session.stop_requested.is_set()
+            if stopped_before_send:
+                # The same safe between-round stop path, one round earlier:
+                # the request was built but never sent, so there is nothing
+                # to truncate and nothing to bill.
+                stop_reason = "user_stop"
+                close_for_between_round_stop()
+                break
             round_started = time.perf_counter()
             manager, stream = _enter_stream(
                 client, request, trace_handle

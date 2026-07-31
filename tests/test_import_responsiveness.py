@@ -704,6 +704,65 @@ def test_docx_export_does_not_hold_the_turn_lock_while_it_renders(monkeypatch):
     )
 
 
+def test_building_a_chat_request_does_not_hold_the_turn_lock(monkeypatch):
+    """Assembling a round's request must not block that turn's own stop.
+
+    ``sanitize_messages_for_resend`` base64-decodes every fetched PDF still
+    in the conversation and counts its pages with ``PdfReader``. Fetching a
+    building code is seconds of that, paid again on every later round of the
+    turn. It used to run inside ``owned_model_turn_guard`` — i.e. holding
+    the turn-state lock, which is exactly the lock ``POST /api/chat/stop``
+    needs to signal the turn — so the longer a request took to build, the
+    longer the stop button did nothing. Coherence needed the inputs captured
+    together, not the lock held across the work.
+    """
+    import backend.llm.conversation as conv
+    from tests.fakes import FakeClient, text_turn
+
+    real_sanitize = conv.sanitize_messages_for_resend
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_sanitize(messages):
+        entered.set()
+        # Stands in for the real decode/page-count CPU.
+        release.wait(_BLOCK_SECONDS)
+        return real_sanitize(messages)
+
+    monkeypatch.setattr(conv, "sanitize_messages_for_resend", blocking_sanitize)
+    monkeypatch.setattr(
+        conv, "get_client", lambda: FakeClient([text_turn(["never sent"])])
+    )
+
+    with TestClient(app_module.create_app()) as client:
+        worker_outcome: dict = {}
+
+        def run_turn() -> None:
+            worker_outcome["response"] = client.post(
+                "/api/chat", json={"message": "draft the section"}
+            )
+
+        worker = threading.Thread(target=run_turn, daemon=True)
+        worker.start()
+        assert entered.wait(_BLOCK_SECONDS + 5), "the request build never started"
+        started = time.perf_counter()
+        stop = client.post("/api/chat/stop")
+        elapsed = time.perf_counter() - started
+        # An ordering claim on top of the timing bound: the stop was answered
+        # while the build was still blocked, not after it drained.
+        answered_while_blocked = not release.is_set()
+        release.set()
+        worker.join(_BLOCK_SECONDS + 10)
+
+    assert stop.status_code == 200
+    assert worker_outcome["response"].status_code == 200
+    assert answered_while_blocked
+    assert elapsed < _RESPONSIVE_SECONDS, (
+        f"the stop request waited {elapsed:.2f}s for a chat request to be "
+        "built — the turn-state lock is being held across it again"
+    )
+
+
 def test_source_preserving_export_does_not_hold_the_turn_lock_either(monkeypatch):
     """The same guarantee for the source-preserving branch.
 

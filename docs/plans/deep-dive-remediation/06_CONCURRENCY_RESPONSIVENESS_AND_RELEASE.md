@@ -1,6 +1,6 @@
 # Phase 6 — Concurrency, responsiveness, and release
 
-- Status: **in progress** (6.1-6.3 landed, 6.4 Part A landed; 6.4 Part B and 6.5 planned)
+- Status: **in progress** (6.1-6.3 landed, 6.4 Part A and Part B landed; 6.5 planned)
 - Prerequisites: Chunk 6.5 requires Phases 1-5 complete. Chunks 6.1-6.4 depend
   only on Phase 1 (6.1 additionally interacts with Chunk 4.3's metering seam —
   coordinate, don't serialize). Pulling 6.1 forward early is encouraged: the
@@ -494,9 +494,10 @@ unless output semantics intentionally changed and the owner approves.
 
 ### Implementation record
 
-- Status: **Part A complete; Part B planned**
+- Status: **complete** (Part A and Part B both landed)
 - Commit/PR: branch `claude/phase-6-concurrency-responsiveness-xncqik`
-  (Part A). Split deliberately: Part A touches the source-preserving export
+  (Part A, PR #110); branch `claude/phase-6-4b-chat-resend-ogk9an`
+  (Part B). Split deliberately: Part A touches the source-preserving export
   gate — per CLAUDE.md the most safety-critical subsystem in the repo, with
   its own contract in `docs/DOCX_FIDELITY.md` — so it gets an undiluted
   review and its own revert boundary. Part B (chat resend sanitization) is
@@ -528,6 +529,71 @@ unless output semantics intentionally changed and the owner approves.
 - Manual QA owed (Part A): the 6.5 responsiveness item covers it — export a
   large source DOCX while chat streams and confirm both the stream and the
   export behave, and that the file opens in Microsoft Word.
+- Tests (Part B): 3 new. Reverted in place three ways — the whole change
+  (3 red), then each mechanism on its own, to prove each test pins the
+  mechanism it claims to.
+  `tests/test_import_responsiveness.py` (1): a blocked
+  `sanitize_messages_for_resend` leaves `POST /api/chat/stop` answering
+  promptly. Building back under the guard turns only this one red, at
+  5.00s — the exact diagnostic it was written for. It asserts an ordering
+  (the stop returned while the build was still blocked) on top of the
+  file's established timing bound, and the block is bounded so a
+  regression fails rather than hangs.
+  `tests/test_stop.py` (1): a stop landing during request construction
+  never sends the request, still commits a normal turn, keeps history
+  alternating, and leaves the session able to take another turn. Removing
+  the stop-before-send check turns only this one red.
+  `tests/test_chunk8_stress_concurrency.py` (1): a reset during request
+  construction discards the turn and sends nothing. Removing the post-build
+  ownership re-check turns only this one red.
+  Full suite 1380 passed / 9 skipped (no new skips); `npm test` 193;
+  `npm run build` clean.
+- Deviations (Part B):
+  - **The capture is a turn-local closure; the BUILDER is module level.**
+    `_ChatRequestInputs` + `_build_chat_request` sit beside
+    `_with_cache_breakpoints` rather than inside `stream_user_turn`, which
+    is what makes the detachment checkable — a pure function that takes no
+    session cannot read one by accident. The capture stays a closure
+    because it legitimately needs `session` and the turn's `new_messages`.
+  - **`_stable_system_blocks` now takes the module, not the session.** It
+    renders into the cached system block, so it must not see session state;
+    taking a frozen `SpecModule` makes that mechanical instead of
+    documented, and lets the render move out of the lock with it. Two call
+    sites, both updated; output is byte-identical.
+  - **Shallow list copies, not deep copies** — the same argument Part A
+    made for version records. History and `new_messages` are only appended
+    to, truncated, or replaced wholesale, and the sanitizer rebuilds rather
+    than mutates, so a per-round deep copy of the conversation would be
+    real cost for no additional guarantee.
+  - **Ownership and the stop flag are re-read in ONE critical section**
+    rather than the plan's two steps. "Is this turn still ours, and is it
+    still wanted" is one decision, and splitting it would let the answers
+    come from different moments.
+  - **The between-round stop path was extracted to
+    `close_for_between_round_stop()` rather than reached with `continue`.**
+    The round loop is a `for ... else` whose `else` raises on tool-round
+    exhaustion, so a `continue` from the final iteration would convert a
+    user stop into a failed, rolled-back turn — exactly what Batch 7's stop
+    semantics exist to prevent. One shared implementation, two call sites.
+  - **The reset-during-build test lives in
+    `tests/test_chunk8_stress_concurrency.py`**, not `tests/test_app.py` as
+    listed: its exact sibling
+    (`test_reset_during_turn_context_capture_discards_startup_atomically`)
+    is already there, and that is where a reader looking for "reset during
+    a turn" will look.
+  - **No `backend/research/resend_sanitizer.py` change was needed.** The
+    plan allowed one "only if a pure seam is needed"; the function was
+    already pure, so the seam was on the caller's side.
+  - The residual window between the re-check and `_enter_stream` is not
+    closed and is not pretended away: a stop landing there is still caught
+    by the existing after-every-event check. What changed is that the
+    window is microseconds of dict assembly instead of seconds of PDF
+    parsing.
+- Manual QA owed (Part B): covered by the 6.5 responsiveness item and the
+  chat-stop recovery item. Worth doing deliberately in that pass: have the
+  model `web_fetch` a large PDF, then press Stop on the following round —
+  the button should respond immediately, and the turn should commit what
+  had already arrived.
 
 ## Chunk 6.5 — Full release validation and documentation closeout
 

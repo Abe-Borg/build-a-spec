@@ -189,6 +189,57 @@ def test_chat_stop_between_rounds_after_tool_dispatch_keeps_history_alternating(
     assert events2[-1]["type"] == "turn_complete"
 
 
+def test_a_stop_during_request_construction_never_sends_the_request(monkeypatch):
+    """A stop landing while a round's request is being built must cost nothing.
+
+    A request is now assembled with the turn-state lock released, so a stop
+    can arrive in that window — and the window is as long as the resend
+    sanitizer takes, which on a conversation carrying a fetched PDF is
+    seconds rather than microseconds. The ownership re-check before the
+    stream opens turns that into the ordinary between-round stop instead of
+    one more paid request nobody wanted.
+
+    Driven from inside the seam on the turn's own thread: the stop lands at
+    exactly the point under test, with no threads and no timing.
+    """
+    import backend.llm.conversation as conv
+
+    session = sessions.get_session()
+    fake = FakeClient([text_turn(["must not be requested"])])
+    real_sanitize = conv.sanitize_messages_for_resend
+
+    def stop_during_build(messages):
+        session.stop_requested.set()
+        return real_sanitize(messages)
+
+    monkeypatch.setattr(conv, "get_client", lambda: fake)
+    monkeypatch.setattr(conv, "sanitize_messages_for_resend", stop_during_build)
+    events = list(stream_user_turn(session, "draft it"))
+
+    # The request was built and then thrown away, unsent.
+    assert fake.messages.requests == []
+    # A stop is not a failure: the turn still ends normally, exactly as it
+    # does when the stop is caught anywhere else.
+    assert [event for event in events if event["type"] == "error"] == []
+    assert events[-1]["type"] == "turn_complete"
+    assert events[-1]["stop_reason"] == "user_stop"
+
+    # History still alternates, so the next turn is a legal request.
+    assert session.history[-1]["role"] == "assistant"
+    assert session.history[-1]["content"] == [
+        {"type": "text", "text": "[Generation stopped by user.]"}
+    ]
+    assert session.history[-2]["role"] == "user"
+
+    # And the session really is healthy afterwards.
+    follow_up = FakeClient([text_turn(["Continuing fine."])])
+    monkeypatch.setattr(conv, "sanitize_messages_for_resend", real_sanitize)
+    monkeypatch.setattr(conv, "get_client", lambda: follow_up)
+    assert list(stream_user_turn(session, "and then?"))[-1][
+        "type"
+    ] == "turn_complete"
+
+
 # ---------------------------------------------------------------------------
 # Stopping mid-search: the dangling server_tool_use class
 # ---------------------------------------------------------------------------

@@ -474,7 +474,12 @@ backend/
                            drain); Batch 9 adds the suggest_prompts tool
                            (_run_suggest_prompts + turn-local staged_suggestions
                            committed beside doc/figures — latest-only replace) +
-                           SessionState.suggested_prompts
+                           SessionState.suggested_prompts; Chunk 6.4B splits each
+                           round's request into a guarded capture
+                           (_ChatRequestInputs / capture_request_inputs) and the
+                           pure, UNGUARDED _build_chat_request — the resend
+                           sanitizer's PDF decoding no longer holds the lock this
+                           turn's own stop request needs
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -5116,6 +5121,80 @@ every HTTP status, message and byte of output is unchanged.
   The mutation runs on the request's own thread so the interleaving is
   deterministic; a real concurrent edit can now land in that window, which
   is precisely why the two reads had to become one snapshot.
+
+## A chat request is built from a snapshot, not under the lock — implemented notes
+
+Deep-dive remediation Chunk 6.4 Part B, and the same rule as Part A applied
+to the other end of the app. Every round of a chat turn assembled its
+request inside `owned_model_turn_guard` — i.e. holding `_turn_state_lock`,
+which is exactly the lock `POST /api/chat/stop` takes to signal that turn.
+So the more expensive a request was to build, the longer the stop button did
+nothing. No new endpoint, no new SSE event, no new dep, no format bump.
+
+- **The expensive part is unbounded, and it grows with the turn.**
+  `sanitize_messages_for_resend` base64-decodes every fetched PDF still in
+  the conversation and counts its pages with `PdfReader`. Committed history
+  is PDF-free (`elide_all_pdf_sources` at commit), so the payload is always
+  *this* turn's — a `web_fetch` of a full building code is 600+ pages and
+  tens of megabytes, and every later round of that turn pays the decode
+  again. That is precisely the turn a user reaches for the stop button on,
+  and precisely when the button was least responsive.
+- **Capture and build are now two phases, mirroring the export.**
+  `_ChatRequestInputs` is the detached snapshot — `list(session.history)`,
+  `list(new_messages)`, the frozen `SpecModule`, and the resolved
+  model/max_tokens — taken under the guard by the turn-local
+  `capture_request_inputs()`. `_build_chat_request(inputs, container_id)` is
+  a module-level PURE function that touches no live session and runs with
+  the lock released. Coherence never needed the lock held, only the inputs
+  captured together.
+- **Shallow copies are enough, and that is a claim about the codebase, not
+  an optimization.** History and a turn's `new_messages` are only ever
+  appended to, truncated, or replaced wholesale — nothing mutates a message
+  dict in place — and the sanitizer rebuilds rather than mutates (its own
+  docstring says so; `_to_plain_block` deepcopies). A deep copy of the whole
+  conversation once per round would be real cost for no additional
+  guarantee. `SpecModule` is frozen, so the reference IS the copy. Same
+  reasoning Part A used for version records.
+- **`_stable_system_blocks` now takes the MODULE, not the session.** That is
+  the mechanical enforcement of the rule the function's docstring already
+  stated: nothing session-varying may render into the cached system block.
+  A frozen module reference is a complete snapshot, so the render is safe
+  outside the lock; a session reference would have quietly re-opened the
+  door.
+- **Two things are re-decided after the build, in ONE critical section**,
+  because nothing has been paid for yet. A reset/load that won during the
+  build raises `_SessionInvalidated` (the request is obsolete — discard the
+  turn). A stop that landed during the build breaks to the ordinary
+  between-round stop path, so the built request is thrown away UNSENT
+  rather than sent and then truncated after its first event. Deciding both
+  in one guarded read is what keeps "still ours, still wanted" a single
+  answer.
+- **The between-round stop path is now one function, deliberately.**
+  `close_for_between_round_stop()` has two callers (the top of the round
+  loop and the post-build re-check) and is the reason the second one does
+  not `continue`: the round loop is a `for ... else` whose `else` raises
+  `RuntimeError` on tool-round exhaustion, so a `continue` from the last
+  iteration would turn a user stop into a failed, rolled-back turn — the
+  one thing Batch 7 exists to prevent.
+- **The residual window cannot be closed and is not pretended away.** The
+  lock is released between the re-check and `_enter_stream`; a stop landing
+  in *that* gap is still caught by the existing after-every-event check and
+  truncates the round as before. What changed is that the window is now
+  microseconds of dict assembly instead of seconds of PDF parsing.
+- **Tests: 3 new, each reverted in place — and each mechanism reverted
+  SEPARATELY to prove it is the one its test pins.** Full revert → 3 red.
+  `test_import_responsiveness.py` (1): a blocked sanitizer leaves
+  `POST /api/chat/stop` answering promptly (asserts the ordering — the stop
+  returned while the build was still blocked — on top of the file's
+  established timing bound); building back under the lock → only this one
+  red, at 5.00s. `test_stop.py` (1): a stop landing during construction
+  never sends the request and still commits a normal turn with alternating
+  history; removing the stop-before-send check → only this one red.
+  `test_chunk8_stress_concurrency.py` (1): a reset during construction
+  discards the turn and sends nothing, beside its existing
+  reset-during-context-capture sibling; removing the ownership re-check →
+  only this one red. Both seam-driven tests run on the turn's own thread,
+  so neither depends on thread scheduling.
 
 ## Commands
 

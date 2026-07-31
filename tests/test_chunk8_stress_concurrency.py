@@ -243,6 +243,48 @@ def test_reset_during_turn_context_capture_discards_startup_atomically(
     assert fake.messages.requests == []
 
 
+def test_reset_during_request_construction_sends_nothing(monkeypatch):
+    """A round's request is assembled with the turn-state lock released, so a
+    reset can land in that window — and the window is as long as the resend
+    sanitizer takes, which on a fetched PDF is seconds rather than
+    microseconds. The ownership re-check before the stream opens is what
+    keeps that from becoming a paid request against a session that no longer
+    exists.
+
+    Driven from inside the seam on the turn's own thread: the reset lands at
+    exactly the point under test, with no threads and no timing.
+    """
+    session = SessionState()
+    fake = FakeClient([text_turn(["must not be requested"])])
+    monkeypatch.setattr(
+        "backend.llm.conversation.get_client",
+        lambda: fake,
+    )
+    real_sanitize = conversation.sanitize_messages_for_resend
+
+    def reset_during_build(messages):
+        session.reset()
+        return real_sanitize(messages)
+
+    monkeypatch.setattr(
+        conversation, "sanitize_messages_for_resend", reset_during_build
+    )
+    events = list(stream_user_turn(session, "racing reset"))
+
+    assert [event["type"] for event in events] == ["status", "error"]
+    assert events[-1]["message"] == (
+        "The session was reset while this turn was streaming; "
+        "the turn was discarded."
+    )
+    # The whole point: the obsolete request was built but never sent.
+    assert fake.messages.requests == []
+    # The fresh session is exactly as the reset left it.
+    assert session.turn_active is False
+    assert session.history == []
+    assert session.doc._turn_backup is None
+    assert session.figures._turn_mark is None
+
+
 def test_model_turn_blocks_undo_redo_manual_edit_qc_and_another_model(
     monkeypatch,
 ):

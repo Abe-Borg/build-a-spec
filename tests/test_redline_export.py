@@ -450,6 +450,86 @@ def test_doc_diff_endpoint_validation():
     assert client.get("/api/doc/diff?base=-1").status_code == 400
 
 
+def test_a_concurrent_truncation_cannot_turn_a_diff_into_a_500(monkeypatch):
+    """Bounds are checked against the version list, so the reads must be atomic
+    with the check.
+
+    An edit made after an undo truncates the redo tail, so the list can get
+    SHORTER. The route validated both indexes against ``len(versions)`` and
+    then read them afterwards — a truncation landing in between raised
+    IndexError, i.e. a 500 from a route whose entire contract for a bad index
+    is a 400. Binding both records inside the guard makes the window
+    unreachable; the expensive tree build and diff still run outside it.
+
+    The seam is ``SpecSection.from_dict``, which on the unguarded route runs
+    BETWEEN the two version reads. The truncation is driven from inside it,
+    on the request's own thread, so the test does not depend on TestClient's
+    threading semantics at all — whether a second thread's request really
+    runs concurrently varies with how the client was constructed, and a
+    regression test that only sometimes races proves nothing the rest of the
+    time. Raised by Codex on PR #109, which proposed a persistent portal;
+    removing the concurrency is the stronger answer to the same concern.
+
+    ``commit_turn`` after an undo is exactly what a concurrent edit does to
+    the list, so the synthetic mutation is the real one.
+    """
+    from backend import sessions
+    from backend.spec_doc import model as model_module
+
+    client = TestClient(create_app())
+    session = sessions.get_session()
+    for index in range(3):
+        assert client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {
+                        "action": "add_article",
+                        "target_id": "pt1",
+                        "text": f"ARTICLE {index}",
+                    }
+                ]
+            },
+        ).status_code == 200
+    assert len(session.doc.versions) == 4
+
+    # Two undos leave a redo tail of two versions; index 3 is still valid at
+    # the bounds check, and gone once the tail is truncated.
+    assert client.post("/api/doc/undo").status_code == 200
+    assert client.post("/api/doc/undo").status_code == 200
+    assert session.doc.index == 1 and len(session.doc.versions) == 4
+
+    real_from_dict = model_module.SpecSection.from_dict
+    truncations: list[int] = []
+
+    def hooked_from_dict(payload):
+        if not truncations:
+            session.doc.begin_turn()
+            session.doc.apply_edits(
+                [
+                    {
+                        "action": "add_article",
+                        "target_id": "pt1",
+                        "text": "BRANCHED",
+                    }
+                ]
+            )
+            session.doc.commit_turn()
+            truncations.append(len(session.doc.versions))
+        return real_from_dict(payload)
+
+    monkeypatch.setattr(model_module.SpecSection, "from_dict", hooked_from_dict)
+    response = client.get("/api/doc/diff?base=0&cur=3")
+
+    # The redo tail really was truncated at the seam — index 3 no longer
+    # exists. Without this the test could pass by never racing at all.
+    assert truncations == [3]
+
+    # Either answer is defensible; a 500 is not.
+    assert response.status_code in (200, 400), response.text
+    assert response.json()["ok"] is (response.status_code == 200)
+
+
 def test_export_redline_master_requires_baseline():
     from backend import sessions
 

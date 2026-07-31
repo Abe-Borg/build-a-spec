@@ -1153,11 +1153,24 @@ def _source_preservation_payload(
     }
 
 
-def _doc_payload(session) -> dict[str, Any]:
+def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
+    """Build the full document payload.
+
+    ``workspace`` MUST be supplied by any caller holding
+    ``session_state_guard()`` without an ``active_write`` lease. Looking the
+    lease up here takes the SessionManager lock, and a tutorial transition
+    takes those two locks in the opposite order — manager lock held while
+    calling ``invalidate_model_turn()``, which takes the session's
+    turn-state lock. That is an AB/BA deadlock, and it wedges every later
+    workspace access with it. Undo/redo/edit are safe without this because
+    ``active_write`` and the transitions mutually exclude each other under
+    the manager lock; ``/api/doc`` and QC apply take no such lease.
+    """
     profile = ProjectProfile.from_dict(session.doc.doc.project_profile)
     preservation = _source_readiness(session)
     capabilities = session.source_edit_capabilities()
-    workspace = sessions.get_workspace()
+    if workspace is None:
+        workspace = sessions.get_workspace()
     workspace_fields = (
         {
             "workspace_id": workspace.workspace_id,
@@ -2441,7 +2454,13 @@ def create_app() -> FastAPI:
                 status_code=413,
             )
         try:
-            summary = get_template_catalog().import_bytes(data)
+            # The event-loop rule: this is an ``async def`` handler, and
+            # importing a template parses and atomically writes up to 16 MiB
+            # under the catalog lock. Inline, that is seconds during which
+            # the server answers nothing at all.
+            summary = await run_in_threadpool(
+                get_template_catalog().import_bytes, data
+            )
         except TemplateError as exc:
             return _template_error(exc)
         _trace_capture.app_event(
@@ -2954,7 +2973,19 @@ def create_app() -> FastAPI:
 
     @app.get("/api/doc")
     def get_doc() -> dict:
-        return _doc_payload(sessions.get_session())
+        # The lease is captured BEFORE the guard and passed in: looking it
+        # up inside would take the manager lock in the opposite order from
+        # a tutorial transition and deadlock (see ``_doc_payload``). This
+        # route takes no ``active_write`` lease, so nothing else excludes a
+        # transition while it runs.
+        lease = sessions.get_workspace()
+        session = lease.session
+        # One guarded state: the document, its lint report, open questions,
+        # figures, suggestions and version pair are read together or not at
+        # all. Unguarded, a turn committing mid-payload could return a tree
+        # from one version beside a lint report computed against another.
+        with session.session_state_guard():
+            return _doc_payload(session, workspace=lease)
 
     @app.get("/api/doc/capabilities")
     def get_doc_capabilities() -> dict:
@@ -3300,24 +3331,37 @@ def create_app() -> FastAPI:
         ``cur`` defaults to the current version index. Indices must be in
         range and distinct.
         """
-        store = sessions.get_session().doc
-        cur_index = store.index if cur is None else cur
-        n = len(store.versions)
-        if not (0 <= base < n) or not (0 <= cur_index < n):
-            return JSONResponse(
-                {"ok": False, "error": "Version index out of range."},
-                status_code=400,
-            )
-        if base == cur_index:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "Choose two different versions to compare.",
-                },
-                status_code=400,
-            )
-        base_section = SpecSection.from_dict(store.versions[base])
-        cur_section = SpecSection.from_dict(store.versions[cur_index])
+        session = sessions.get_session()
+        with session.session_state_guard():
+            store = session.doc
+            cur_index = store.index if cur is None else cur
+            n = len(store.versions)
+            if not (0 <= base < n) or not (0 <= cur_index < n):
+                return JSONResponse(
+                    {"ok": False, "error": "Version index out of range."},
+                    status_code=400,
+                )
+            if base == cur_index:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Choose two different versions to compare.",
+                    },
+                    status_code=400,
+                )
+            # Bind the two records while the guard still holds. Bounds were
+            # checked against the list length a moment ago, and an edit after
+            # an undo truncates the redo tail — so reading them afterwards
+            # could raise IndexError and surface as a 500 rather than the 400
+            # this route defines. A version record is immutable history (QC
+            # apply's staleness check depends on that identity), so holding
+            # the reference is enough; the expensive tree build and diff then
+            # run outside the lock.
+            base_record = store.versions[base]
+            cur_record = store.versions[cur_index]
+            baseline_index = store.baseline_index
+        base_section = SpecSection.from_dict(base_record)
+        cur_section = SpecSection.from_dict(cur_record)
         diff = diff_sections(base_section, cur_section)
         return JSONResponse(
             {
@@ -3325,7 +3369,7 @@ def create_app() -> FastAPI:
                 **diff.to_dict(),
                 "base_index": base,
                 "cur_index": cur_index,
-                "baseline_index": store.baseline_index,
+                "baseline_index": baseline_index,
             }
         )
 
@@ -4626,6 +4670,11 @@ def create_app() -> FastAPI:
                 # let a new QC run start, producing a 409 response after the
                 # document had already committed.
                 record_skipped_outcomes()
+                # Frozen inside the same guard that committed it: the reply
+                # has to describe the version this apply produced, not one a
+                # turn landed while the response was being assembled. The
+                # lease rides in from outside — see ``_doc_payload``.
+                applied_payload = _doc_payload(session, workspace=lease)
         else:
             # No document mutation occurred, but outcome events still belong
             # only to the exact result/version validated above.
@@ -4657,6 +4706,7 @@ def create_app() -> FastAPI:
                         status_code=409,
                     )
                 record_skipped_outcomes()
+                applied_payload = _doc_payload(session, workspace=lease)
 
         outcome_counts: dict[str, int] = {}
         for outcome in outcomes.values():
@@ -4668,7 +4718,7 @@ def create_app() -> FastAPI:
             finding_ids=sorted(outcomes)[:20],
         )
         return JSONResponse(
-            {"ok": True, "outcomes": outcomes, **_doc_payload(session)}
+            {"ok": True, "outcomes": outcomes, **applied_payload}
         )
 
     @app.post("/api/qc/dismiss")

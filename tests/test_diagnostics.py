@@ -205,7 +205,10 @@ def test_catch_all_handler_returns_the_error_idiom_and_logs(
     monkeypatch.setattr("backend.sessions.get_session", maybe_boom)
     client = TestClient(create_app(), raise_server_exceptions=False)
     with caplog.at_level(logging.WARNING, logger="buildaspec.api"):
-        resp = client.get("/api/doc")
+        # Any route that reaches ``get_session`` will do — this one is
+        # deliberately trivial, so the test stays about the catch-all
+        # handler rather than about how a busier route acquires its state.
+        resp = client.get("/api/figures")
     state["boom"] = False
     assert resp.status_code == 500
     data = resp.json()
@@ -213,7 +216,7 @@ def test_catch_all_handler_returns_the_error_idiom_and_logs(
     assert data["code"] == "internal_error"
     assert "kaboom" in data["error"]
     # The traceback is in the log, not just the response.
-    assert "Unhandled error on GET /api/doc" in caplog.text
+    assert "Unhandled error on GET /api/figures" in caplog.text
     assert "RuntimeError: kaboom" in caplog.text
 
 

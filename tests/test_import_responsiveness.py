@@ -154,6 +154,71 @@ def test_reference_upload_does_not_block_concurrent_requests(monkeypatch):
     )
 
 
+def test_template_import_does_not_block_concurrent_requests(monkeypatch, tmp_path):
+    """Importing a template is the fourth ``async def`` upload path.
+
+    Up to 16 MiB of JSON parsed, validated and atomically written under the
+    catalog lock — the same seconds-of-CPU shape as a master parse, and
+    subject to the same rule: it belongs on a worker thread, never inline on
+    the loop.
+    """
+    from pathlib import Path
+
+    from backend.templates import TemplateCatalog, template_bytes
+
+    curated_root = (
+        Path(__file__).resolve().parents[1] / "backend" / "templates" / "curated"
+    )
+    catalog = TemplateCatalog(
+        personal_root=tmp_path / "personal", curated_root=curated_root
+    )
+    curated, _source = catalog.get("curated:complete-section-starter")
+    payload = template_bytes(curated)
+
+    entered = threading.Event()
+    release = threading.Event()
+    real_import = catalog.import_bytes
+
+    def blocking_import(data: bytes):
+        entered.set()
+        release.wait(_BLOCK_SECONDS)
+        return real_import(data)
+
+    catalog.import_bytes = blocking_import
+    monkeypatch.setattr(app_module, "get_template_catalog", lambda: catalog)
+
+    with TestClient(app_module.create_app()) as client:
+        worker_outcome: dict = {}
+
+        def run_import() -> None:
+            worker_outcome["response"] = client.post(
+                "/api/templates/import",
+                files={
+                    "file": (
+                        "starter.bastemplate",
+                        payload,
+                        "application/vnd.buildaspec.template+json",
+                    )
+                },
+            )
+
+        worker = threading.Thread(target=run_import, daemon=True)
+        worker.start()
+        assert entered.wait(_BLOCK_SECONDS + 5), "template import never started"
+        started = time.perf_counter()
+        health = client.get("/api/health")
+        elapsed = time.perf_counter() - started
+        release.set()
+        worker.join(_BLOCK_SECONDS + 10)
+
+    assert health.status_code == 200
+    assert worker_outcome["response"].status_code == 200
+    assert elapsed < _RESPONSIVE_SECONDS, (
+        f"an unrelated request waited {elapsed:.2f}s for a template import — "
+        "the parse and atomic write are back on the event loop"
+    )
+
+
 def test_project_load_does_not_block_concurrent_requests(monkeypatch):
     """The same guarantee for opening a project (it re-parses the master)."""
     real_stage = app_module._stage_project_load

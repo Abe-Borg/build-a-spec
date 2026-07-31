@@ -1314,3 +1314,141 @@ def test_tail_cache_breakpoint_rides_requests_not_history(monkeypatch):
     assert request["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     # …and stored history carries none (breakpoints are per-request).
     assert "cache_control" not in json.dumps(sessions.get_session().history)
+
+
+def test_api_doc_reads_one_state_not_a_mixture_of_two(monkeypatch):
+    """Every field in the payload has to describe the same document.
+
+    ``_doc_payload`` reads ``session.doc.doc`` several times over — the
+    snapshot, the open items, the lint pass — and a commit swaps in a NEW
+    tree. Unguarded, an edit landing mid-payload therefore returned a tree
+    from one version beside a lint report computed against another, which is
+    exactly the kind of disagreement the panel has no way to detect.
+
+    The probe records the tree object each reader was handed: one guarded
+    state means one object.
+    """
+    import threading
+
+    from backend import app as app_module
+
+    real_open_questions = app_module.open_questions
+    real_lint = app_module.lint_document
+    # Keyed by thread: the concurrent edit builds a payload of its OWN, so a
+    # single shared record would be overwritten by the wrong request.
+    per_thread: dict[int, dict[str, int]] = {}
+    watched: dict[str, int] = {}
+    reached = threading.Event()
+    edited = threading.Event()
+
+    def hooked_open_questions(section):
+        tid = threading.get_ident()
+        per_thread.setdefault(tid, {})["open_questions"] = id(section)
+        if not watched:
+            # The first payload built is the one under test.
+            watched["tid"] = tid
+            reached.set()
+            # Bounded: once the payload is guarded the edit CANNOT land
+            # until this request releases, and the test must not deadlock
+            # proving exactly that.
+            edited.wait(0.75)
+        return real_open_questions(section)
+
+    def hooked_lint(section, module, **kwargs):
+        tid = threading.get_ident()
+        per_thread.setdefault(tid, {})["lint"] = id(section)
+        return real_lint(section, module, **kwargs)
+
+    # Entered as a context manager on purpose: that starts a persistent
+    # portal, so a request issued from another thread really does run
+    # concurrently instead of queueing behind the one under test.
+    with TestClient(create_app()) as client:
+        assert client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"}
+                ]
+            },
+        ).status_code == 200
+
+        monkeypatch.setattr(app_module, "open_questions", hooked_open_questions)
+        monkeypatch.setattr(app_module, "lint_document", hooked_lint)
+
+        def _edit() -> None:
+            assert reached.wait(5)
+            client.post(
+                "/api/doc/edit",
+                json={
+                    "ops": [
+                        {
+                            "action": "add_article",
+                            "target_id": "pt1",
+                            "text": "MID-PAYLOAD",
+                        }
+                    ]
+                },
+            )
+            edited.set()
+
+        worker = threading.Thread(target=_edit, daemon=True)
+        worker.start()
+        try:
+            payload = client.get("/api/doc").json()
+        finally:
+            edited.set()
+            worker.join(10)
+
+    observed = per_thread[watched["tid"]]
+    assert observed["open_questions"] == observed["lint"], (
+        "the open-items and lint passes were handed different document trees"
+    )
+    titles = [
+        article["title"]
+        for part in payload["doc"]["parts"]
+        for article in part["articles"]
+    ]
+    assert "MID-PAYLOAD" not in titles
+
+
+def test_the_workspace_is_never_looked_up_while_the_session_guard_is_held(
+    monkeypatch,
+):
+    """AB/BA: the transition path takes these two locks the other way round.
+
+    ``SessionManager`` holds its own lock while calling
+    ``invalidate_model_turn()``, which takes the session's turn-state lock.
+    So a route that holds ``session_state_guard()`` and THEN looks the
+    workspace up — the manager lock — can deadlock against a tutorial
+    finish, permanently, wedging every later workspace access with it.
+
+    Undo/redo/edit are safe without this rule because ``active_write`` and
+    the transitions mutually exclude each other under the manager lock:
+    while a write lease is held every transition raises busy, and the check
+    and the invalidate share one critical section. ``/api/doc`` and QC apply
+    take no such lease, so they must capture the lease before the guard.
+
+    Reported by Codex on PR #109.
+    """
+    from backend import app as app_module
+
+    client = _client()
+    session = sessions.get_session()
+    real_get_workspace = sessions.get_workspace
+    owned_at_lookup: list[bool] = []
+
+    def probing_get_workspace():
+        # `_turn_state_lock` is an RLock, so a same-thread re-acquire would
+        # succeed and prove nothing; `_is_owned()` answers the real question.
+        owned_at_lookup.append(session._turn_state_lock._is_owned())
+        return real_get_workspace()
+
+    monkeypatch.setattr(sessions, "get_workspace", probing_get_workspace)
+    monkeypatch.setattr(app_module.sessions, "get_workspace", probing_get_workspace)
+
+    assert client.get("/api/doc").status_code == 200
+    assert owned_at_lookup, "the route really did look the workspace up"
+    assert not any(owned_at_lookup), (
+        "the workspace was looked up while the session guard was held — "
+        "that is the deadlocking lock order"
+    )

@@ -4989,6 +4989,82 @@ no new SSE event, no new dep, no project-format bump.
   already held and has to keep holding under ownership; they are
   regression guards, not fixes.
 
+## Short endpoints answer from one state — implemented notes
+
+Deep-dive remediation Chunk 6.3. Four small surfaces that either did
+seconds of work on the event loop or built a reply out of two different
+document versions. No new endpoint, no new SSE event, no new dep, no
+project-format bump.
+
+- **Template import was the fourth `async def` upload path**, and the only
+  one still parsing inline. Up to 16 MiB of JSON validated and atomically
+  written under the catalog lock, on the loop — the same shape as the
+  master parse the upload-responsiveness work already moved off it.
+  `get_template_catalog().import_bytes` now goes through
+  `run_in_threadpool`; every `TemplateError`, status code, size limit and
+  trace event is unchanged. **The event-loop rule stands: an `async def`
+  handler in this app must never do seconds of CPU inline.**
+- **`/api/doc/diff` could 500 on a race it has a 400 for.** Both indexes
+  were validated against `len(store.versions)` and then read afterwards —
+  and an edit made after an undo TRUNCATES the redo tail, so the list can
+  get shorter. The bounds check and both reads now happen inside
+  `session_state_guard()`; the expensive part (two `SpecSection.from_dict`
+  builds plus `diff_sections`) still runs outside it. A version record is
+  immutable history — QC apply's staleness check depends on that identity
+  — so binding the reference under the guard is enough, and a deepcopy of
+  two whole documents per compare-view poll is not.
+- **`/api/doc` now builds its payload under the guard.** `_doc_payload`
+  reads `session.doc.doc` several times over (the snapshot, the open
+  items, the lint pass) and a commit swaps in a NEW tree, so an edit
+  landing mid-payload returned a tree from one version beside a lint
+  report computed against another — a disagreement the panel has no way
+  to detect. Precedent already existed: undo/redo/edit have always built
+  theirs inside the guard.
+- **QC apply's response describes the version it committed.** The payload
+  was built after the committing guard released, so anything landing in
+  that window — another edit, a turn's commit — was what the caller got
+  back, beside outcomes describing an apply it never saw. Both final
+  branches now freeze `_doc_payload` inside the same guard and return the
+  frozen dict; the trace event and JSON serialization stay outside it.
+- **The workspace is never looked up while the session guard is held**
+  (review finding on PR #109, Codex). `_doc_payload` ends with
+  `sessions.get_workspace()`, which takes the SessionManager lock — and a
+  tutorial transition takes the two locks the OTHER way round, holding the
+  manager lock while calling `invalidate_model_turn()`, which takes the
+  session's turn-state lock. AB/BA, and it wedges every later workspace
+  access with it. `_doc_payload` now takes an optional `workspace` and
+  guarded callers capture the lease first. **Undo/redo/edit were already
+  safe and still are**: they hold an `active_write` lease, and
+  `active_write` and every transition exclude each other under the manager
+  lock (the busy check and the invalidate share one critical section), so
+  a transition can never be mid-flight while one is held. `/api/doc` and
+  QC apply take no such lease, which is exactly why they needed the lease
+  passed in. `_turn_state_lock` is an RLock, so `_is_owned()` — not a
+  non-blocking re-acquire — is what a test must probe.
+- **Tests: 5 new, each reverted in place.**
+  `test_import_responsiveness.py` (the blocked-worker + `/api/health`
+  pattern the file already uses), `test_redline_export.py` (the diff
+  TOCTOU — the seam is `SpecSection.from_dict`, which on the unguarded
+  route runs BETWEEN the two version reads, exactly where the truncation
+  landed; it reproduces the real `IndexError`), `test_qc_apply_history.py`
+  (the seam is the trace event, which genuinely runs between the guard and
+  the response), and `test_app.py` (the payload probe records the tree
+  object each reader was handed — one guarded state means one object).
+- **Three things that made the concurrency probes lie, worth knowing.**
+  (1) Whether a second thread's request through `TestClient` really runs
+  concurrently depends on how the client was constructed — entering it as
+  a context manager starts a persistent portal, and a bare one behaves
+  differently. Do not build a regression test on that: the diff test
+  drives its truncation from INSIDE the seam, on the request's own thread,
+  so there is no concurrency to depend on. (2) A hook on
+  `open_questions`/`lint_document` fires for EVERY payload built,
+  including the concurrent edit's own response, so a single shared record
+  gets overwritten by the wrong request — key it by
+  `threading.get_ident()`. (3) `git stash push backend/app.py` only
+  reverts UNCOMMITTED work: once the chunk is committed, a revert check
+  has to be `git checkout HEAD~1 -- backend/app.py` or it silently
+  measures the fixed code and every conclusion drawn from it is wrong.
+
 ## Commands
 
 ```

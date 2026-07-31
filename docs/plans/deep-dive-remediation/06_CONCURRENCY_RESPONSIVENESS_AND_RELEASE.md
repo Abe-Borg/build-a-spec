@@ -117,16 +117,17 @@ venv\Scripts\python -m pytest -q tests/test_research_rounds.py tests/test_stop.p
 
 - Status: complete
 - Commit/PR: branch `claude/phase-6-concurrency-responsiveness-xncqik`
-- Tests: 7 new, all reverted in place to confirm they go red.
+- Tests: 8 new, all reverted in place to confirm they go red.
   `tests/test_research_rounds.py` (4): stop publishes everything before the
   next round can start; a finished round's terminal event never lands in the
   next round's log; the terminal status and its event are never visible
   apart; a lock-free reader never sees `complete` beside the old profile.
   `tests/test_stop.py` (1): a stop cannot cancel the round that replaces it.
-  `tests/test_tracing.py` (2): a stopped research run closes its span at the
-  stop; a stopped QC run closes its span when the attempt settles. Full
-  suite 1362 passed / 9 skipped (no new skips); `npm test` 193; `npm run
-  build` clean.
+  `tests/test_tracing.py` (3): a stopped research run closes its span at the
+  stop; a stopped QC run closes its span when the attempt settles; a stop's
+  span close never precedes an event the log already accepted. Full suite
+  1363 passed / 9 skipped (no new skips); `npm test` 193; `npm run build`
+  clean.
 - Deviations:
   - **`_try_resolve` returns a `_Resolution`, not a bool.** The plan asked
     for explicit inputs (terminal event, round, adopt, cancel identity) and
@@ -158,9 +159,22 @@ venv\Scripts\python -m pytest -q tests/test_research_rounds.py tests/test_stop.p
     counts".
   - **`restore()` appends its compatibility event inside its own lock** for
     the same reason as the transaction; it still opens no span.
+  - **Review finding (Codex, PR #107), fixed in the same branch:** closing
+    the span made event ORDER matter, so research's trace mirror moved
+    inside `_emit`'s lock. A dimension thread preempted between "the log
+    accepted my event" and "mirror it" let a concurrent stop close the span
+    in the gap, and `recorder.add_event` does not check whether a span is
+    open — so the event landed stamped past its own `ended_at`. Harmless
+    before this chunk (a stop closed nothing); incoherent after it. QC needs
+    no equivalent and deliberately does not have one: its span closes in
+    `_finalize_attempt`, which the worker reaches only after its own pools
+    have joined.
   - The deterministic seam is `tests/test_research_rounds.py::_ReleaseHook`,
     a lock wrapper with `while_locked` / `on_release` hooks. No sleeps, no
-    timing assertions.
+    timing assertions. `on_release` fires after the release rather than
+    during it, which is what lets the ordering test drive a stop at the
+    exact seam under both the old and fixed arrangements instead of
+    deadlocking against the fix.
 - Manual QA owed: none specific to this chunk beyond the Phase 6.5 gate
   items already listed (research transport recovery, QC live state and
   container). Worth watching in the 6.5 live runs: a stopped research or QC

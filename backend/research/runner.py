@@ -159,16 +159,29 @@ class ResearchRunner:
         *,
         round_number: int = 0,
         run_token: object | None = None,
+        mirror: Callable[[dict[str, Any]], None] | None = None,
     ) -> bool:
         """Append to the event log; True if the event landed.
 
         A ``run_token`` that no longer matches the runner's current one is
         a stale worker talking past its run's end — the event is dropped.
+
+        ``mirror`` (the trace) runs INSIDE the critical section, and has to.
+        The terminal transition claims the trace handle at this same lock
+        and closes the span only afterwards, so an event accepted here is
+        always enqueued on the recorder's queue — which is FIFO — before
+        the close is. Mirroring after the release instead let a dimension
+        thread preempted in that gap record progress against a span a
+        concurrent stop had already ended, timestamping it past its own
+        ``ended_at``. Only possible since stops began closing the span at
+        all; the whole point of doing that is a truthful timeline.
         """
         with self._lock:
             if run_token is not None and run_token is not self._run_token:
                 return False
             self._append_event_locked(event, round_number=round_number)
+            if mirror is not None:
+                mirror(event)
             return True
 
     def events_since(self, seq: int) -> list[dict[str, Any]]:
@@ -257,11 +270,20 @@ class ResearchRunner:
                 trace_handle, status=orphaned[0], error=orphaned[1]
             )
 
+        def _mirror(event: dict) -> None:
+            _trace.research_event(trace_handle, event)
+
         def _sink(event: dict) -> None:
             # A dropped (stale-token) event stays out of the trace too —
-            # the trace mirrors the log, not the abandoned worker.
-            if self._emit(event, round_number=round_number, run_token=run_token):
-                _trace.research_event(trace_handle, event)
+            # the trace mirrors the log, not the abandoned worker. The
+            # mirror runs under the runner lock (see ``_emit``), so it
+            # cannot land after a concurrent stop has closed the span.
+            self._emit(
+                event,
+                round_number=round_number,
+                run_token=run_token,
+                mirror=_mirror,
+            )
 
         def _work() -> None:
             try:

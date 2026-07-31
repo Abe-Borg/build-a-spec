@@ -294,6 +294,83 @@ def test_a_stopped_research_run_closes_its_span_at_the_stop(
         set_recorder(None)
 
 
+def test_a_stops_span_close_never_precedes_an_event_it_already_accepted(
+    monkeypatch, tmp_path
+):
+    """Closing the span made ordering matter, so the mirror moved under the lock.
+
+    A dimension thread preempted between "the log accepted my event" and
+    "mirror it to the trace" would let a concurrent stop close the span in
+    the gap — and ``add_event`` does not check whether a span is still
+    open, so the event landed timestamped past its own span's ``ended_at``.
+    Harmless before this chunk (a stop closed nothing), and exactly the
+    kind of incoherent timeline the chunk exists to remove.
+
+    Reported by Codex on PR #107.
+    """
+    monkeypatch.setenv(config.ENV_TRACE, "1")
+    monkeypatch.setenv(config.ENV_TRACE_DIR, str(tmp_path))
+    set_recorder(None)
+    try:
+        from backend.project_profile import ProjectProfile
+        from backend.research.runner import ResearchRunner
+        from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
+        from tests.test_research_rounds import _ReleaseHook
+
+        release = threading.Event()
+        settled = threading.Event()
+        runner = ResearchRunner()
+        runner._lock = _ReleaseHook(runner._lock)
+
+        def _stop_in_the_gap() -> None:
+            # The seam is the release AFTER the first accepted event: with
+            # the mirror outside the lock that is precisely the window;
+            # with it inside, the mirror is already enqueued. Running after
+            # the release (never during) is what lets stop() take the lock
+            # here under either arrangement instead of deadlocking.
+            if runner.status != "running" or not runner.events:
+                return
+            runner._lock.on_release = None
+            runner.stop()
+
+        runner._lock.on_release = _stop_in_the_gap
+        assert runner.start(
+            module=HYPERSCALE_FIRE,
+            project_profile=ProjectProfile("Ashburn", "VA", "USA", "ExampleCo"),
+            client=_BlockedProviderClient(release),
+            model="claude-sonnet-5",
+            max_tokens=4096,
+            on_settled=settled.set,
+        )
+        release.set()
+        assert settled.wait(timeout=10)
+        runner._lock.on_release = None
+        assert runner.status == "failed"
+
+        rec = recorder_module.get_recorder()
+        assert rec is not None
+        rec.stop()
+
+        run_dirs = list(tmp_path.iterdir())
+        spans = _read_jsonl(run_dirs[0] / "spans.jsonl")
+        events = _read_jsonl(run_dirs[0] / "events.jsonl")
+        research = [s for s in spans if s.get("kind") == "research"]
+        assert len(research) == 1
+        span_id, ended_at = research[0]["span_id"], research[0]["ended_at"]
+        assert ended_at is not None
+
+        mirrored = [
+            e
+            for e in events
+            if e.get("span_id") == span_id and e.get("type") == "research_progress"
+        ]
+        assert mirrored, "the run really did mirror progress before the stop"
+        late = [e for e in mirrored if e["ts"] > ended_at]
+        assert late == [], "an accepted event was recorded after its span closed"
+    finally:
+        set_recorder(None)
+
+
 def test_a_stopped_qc_run_closes_its_span_when_the_attempt_settles(
     monkeypatch, tmp_path
 ):

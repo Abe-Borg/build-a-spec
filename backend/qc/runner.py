@@ -170,6 +170,11 @@ class QCRunner:
             _trace.qc_end(trace_handle, status=orphaned[0], error=orphaned[1])
 
         def _sink(event: dict) -> None:
+            # Mirrored outside the lock, unlike research's — QC's span
+            # closes in ``_finalize_attempt``, which the worker reaches only
+            # after its own fan-out pools have joined, so no lens or
+            # verifier thread can still be emitting when the close happens.
+            # ``stop()`` deliberately does not close it.
             if self._emit(event, run_token=run_token):
                 _trace.qc_event(trace_handle, event)
 

@@ -4873,10 +4873,24 @@ SSE event, no new dep, no project-format bump.
   only while it is still terminal: a successor that started in that same
   window owns `status`/`error` by then, and recording its `running` as
   this span's outcome would be a false record.
+- **Closing the span made event ORDER matter, so research's trace mirror
+  moved inside `_emit`'s lock** (review finding on PR #107, Codex). A
+  dimension thread preempted between "the log accepted my event" and
+  "mirror it to the trace" let a concurrent stop close the span in the
+  gap — and `recorder.add_event` does not check whether a span is still
+  open, so the event landed stamped past its own `ended_at`. Harmless
+  before this chunk, because a stop closed nothing; incoherent after it,
+  which is the opposite of the point. The terminal transition claims the
+  handle at that same lock and closes only afterwards, and the recorder's
+  queue is FIFO, so an accepted event is always written first. **QC needs
+  no equivalent and deliberately does not have one**: its span closes in
+  `_finalize_attempt`, which the worker reaches only after its own
+  ThreadPool contexts have joined, so no lens or verifier thread can still
+  be emitting — `stop()` closing nothing is what makes that hold.
 - **`restore()` appends inside its own lock** for the same reason as the
   transaction — it publishes a terminal status, and a `start()` racing the
   gap would have taken the compatibility event with it.
-- **Tests: 7 new, and the seam is a lock wrapper, not a sleep.** Every
+- **Tests: 8 new, and the seam is a lock wrapper, not a sleep.** Every
   race here is a window BETWEEN two critical sections, so
   `tests/test_research_rounds.py::_ReleaseHook` wraps the runner lock with
   two hooks — `while_locked` (probes reading state other threads mutate)
@@ -4885,9 +4899,12 @@ SSE event, no new dep, no project-format bump.
   locks again. `test_research_rounds.py` gets the stop-publishes-first,
   worker-vs-successor, status-and-event-never-apart and lock-free-profile
   cases; `test_stop.py` gets cancel-event ownership; `test_tracing.py`
-  gets one span test per runner, each also pinning WHICH point closes it.
-  All seven were reverted in place to prove them load-bearing (4 red on
-  the research runner alone, 3 more across both).
+  gets one span test per runner, each also pinning WHICH point closes it,
+  plus the close-never-precedes-an-accepted-event ordering pin (whose
+  hook fires AFTER the release — never during — so `stop()` can take the
+  lock there under either arrangement instead of deadlocking against the
+  fix it exists to check). All eight were reverted in place to prove them
+  load-bearing (4 red on the research runner alone, 4 more across both).
 
 ## Commands
 

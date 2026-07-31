@@ -231,6 +231,57 @@ def test_native_close_never_orphans_running_tutorial_work():
     assert "tutorial-busy" in window.evaluated[0]
 
 
+def test_native_close_vetoes_a_scenario_build_instead_of_waiting_on_it():
+    """Native close runs on the UI thread, so it must veto, never block.
+
+    A scenario build can be an unbounded model call (Chapter 6 generates
+    its figures live), and it merges its already-billed usage onto the
+    tutorial session when it returns. Restoring through it would strand
+    that spend; waiting for it would freeze the window. The close asks,
+    is told the workspace is transitioning, and hands the user the
+    busy prompt.
+    """
+    import threading
+
+    from backend.llm.conversation import SessionState
+
+    manager = sessions.workspace_manager()
+    tutorial = manager.begin_tutorial(request_id="native-close-transition")
+    entered, release = threading.Event(), threading.Event()
+
+    def _build(_base):
+        entered.set()
+        assert release.wait(timeout=5)
+        return SessionState()
+
+    result: list = []
+    builder = threading.Thread(
+        target=lambda: result.append(
+            manager.push_scenario(
+                tutorial.workspace_id, kind="references", build=_build
+            )
+        )
+    )
+    builder.start()
+    try:
+        assert entered.wait(timeout=5)
+        window = _FakeWindow(evaluate_return=True)
+        controller = _controller_with(window)
+        assert controller._on_closing() is False
+        for _ in range(200):
+            if window.evaluated:
+                break
+            time.sleep(0.01)
+        assert sessions.get_workspace().scope == "tutorial"
+        assert window.destroyed is False
+        assert "tutorial-busy" in window.evaluated[0]
+    finally:
+        release.set()
+        builder.join(timeout=5)
+    # The build it refused to discard still landed.
+    assert result and result[0].scope == "scenario"
+
+
 def test_unhandled_busy_tutorial_close_stays_vetoed():
     tutorial = sessions.workspace_manager().begin_tutorial(
         request_id="native-close-unhandled-busy"

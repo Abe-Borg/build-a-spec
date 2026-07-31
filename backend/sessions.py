@@ -59,9 +59,43 @@ class SessionManager:
         self._tutorial_source: str | None = None
         self._scenario_kind: str | None = None
         self._active_writes = 0
-        self._transitioning = False
+        # Who holds the workspace-transition slot, not merely whether someone
+        # does. A bare boolean was clearable by anyone, so a tutorial finish
+        # or a forced restore could release a reservation whose (possibly
+        # billed) build was still running outside the lock — stranding that
+        # build's usage merge on a session about to be discarded.
+        self._transition_owner: object | None = None
         self._tutorial_usage_before: dict[str, Any] | None = None
         self._scenario_usage_before: dict[str, Any] | None = None
+
+    # -- transition ownership ------------------------------------------------
+
+    def _begin_transition_locked(self) -> object:
+        """Reserve the transition slot and return the token that OWNS it.
+
+        Callers check :meth:`_transition_active_locked` themselves first, so
+        that "another tutorial transition" keeps its place among the other
+        busy reasons; the raise here is the backstop that makes the slot
+        un-double-bookable by a future caller that forgets.
+        """
+        if self._transition_owner is not None:
+            raise WorkspaceBusyError(["another tutorial transition"])
+        owner = object()
+        self._transition_owner = owner
+        return owner
+
+    def _finish_transition_locked(self, owner: object) -> None:
+        """Release the slot only if ``owner`` still holds it.
+
+        A build that lost its workspace — or was abandoned outright — has
+        nothing left to release, and must not clear a reservation some later
+        transition has since taken.
+        """
+        if self._transition_owner is owner:
+            self._transition_owner = None
+
+    def _transition_active_locked(self) -> bool:
+        return self._transition_owner is not None
 
     def _activate(self, session: SessionState, scope: WorkspaceScope) -> None:
         self._active = session
@@ -122,7 +156,7 @@ class SessionManager:
     ) -> Iterator[WorkspaceLease]:
         with self._lock:
             self._check_expected(expected_workspace_id)
-            if self._transitioning:
+            if self._transition_active_locked():
                 raise WorkspaceConflictError("A workspace transition is in progress.")
             lease = self.current()
             self._active_writes += 1
@@ -180,21 +214,31 @@ class SessionManager:
                 raise WorkspaceConflictError("A tutorial is already active.")
             if self._active_writes:
                 raise WorkspaceBusyError(["another edit or upload"])
+            if self._transition_active_locked():
+                raise WorkspaceBusyError(["another tutorial transition"])
             reasons = self._busy_reasons(self._active)
             if reasons:
                 raise WorkspaceBusyError(reasons)
-            self._transitioning = True
+            owner = self._begin_transition_locked()
             original = self._active
             activation = self._workspace_id
         try:
             tutorial = staged_session or clone_session_for_tutorial(original)
         except Exception:
             with self._lock:
-                self._transitioning = False
+                self._finish_transition_locked(owner)
             raise
         with self._lock:
-            if self._workspace_id != activation or self._active is not original:
-                self._transitioning = False
+            # Ownership is checked FIRST and is the authority: a hard reset
+            # revokes the reservation without moving the scope (activation
+            # happens below, so an in-flight setup still reads `original`),
+            # and the workspace-identity checks alone would not notice.
+            if (
+                self._transition_owner is not owner
+                or self._workspace_id != activation
+                or self._active is not original
+            ):
+                self._finish_transition_locked(owner)
                 raise WorkspaceConflictError("The workspace changed during tutorial setup.")
             self._original = original
             self._tutorial = tutorial
@@ -203,7 +247,7 @@ class SessionManager:
             self._tutorial_source = source
             self._tutorial_usage_before = tutorial.usage.snapshot()
             self._activate(tutorial, "tutorial")
-            self._transitioning = False
+            self._finish_transition_locked(owner)
             return self.current()
 
     def push_scenario(
@@ -246,12 +290,12 @@ class SessionManager:
                 )
             if self._active_writes:
                 raise WorkspaceBusyError(["another edit or upload"])
-            if self._transitioning:
+            if self._transition_active_locked():
                 raise WorkspaceBusyError(["another tutorial transition"])
             reasons = self._busy_reasons(self._active)
             if reasons:
                 raise WorkspaceBusyError(reasons)
-            self._transitioning = True
+            owner = self._begin_transition_locked()
             tutorial = self._active
             activation = self._workspace_id
         try:
@@ -263,11 +307,17 @@ class SessionManager:
                 scenario = clone_session_for_tutorial(tutorial)
         except Exception:
             with self._lock:
-                self._transitioning = False
+                self._finish_transition_locked(owner)
             raise
         with self._lock:
-            if self._workspace_id != activation or self._active is not tutorial:
-                self._transitioning = False
+            # Same rule as begin_tutorial: a revoked reservation is a lost
+            # right to commit, checked before the workspace identity.
+            if (
+                self._transition_owner is not owner
+                or self._workspace_id != activation
+                or self._active is not tutorial
+            ):
+                self._finish_transition_locked(owner)
                 raise WorkspaceConflictError("The workspace changed during scenario setup.")
             # Scenario construction may intentionally pass through production
             # import/template/project loaders, all of which start a fresh
@@ -278,7 +328,7 @@ class SessionManager:
             self._scenario_kind = kind
             self._scenario_usage_before = scenario.usage.snapshot()
             self._activate(scenario, "scenario")
-            self._transitioning = False
+            self._finish_transition_locked(owner)
             return self.current()
 
     def pop_scenario(self, expected_workspace_id: int) -> WorkspaceLease:
@@ -324,6 +374,11 @@ class SessionManager:
                 )
             if self._active_writes:
                 raise WorkspaceBusyError(["another edit or upload"])
+            if self._transition_active_locked():
+                # A scenario build in flight is reading THIS tutorial session
+                # and will merge its spend onto it; swapping it out now would
+                # send that merge to an object nobody holds any more.
+                raise WorkspaceBusyError(["another tutorial transition"])
             reasons = self._busy_reasons(self._active)
             if reasons:
                 raise WorkspaceBusyError(reasons)
@@ -352,6 +407,12 @@ class SessionManager:
                 )
             if self._active_writes:
                 raise WorkspaceBusyError(["another edit or upload"])
+            if self._transition_active_locked():
+                # Refuse rather than discard: a scenario build running outside
+                # the lock merges its (already billed) usage onto this
+                # tutorial session when it returns, and finishing first would
+                # drop the object that merge lands on.
+                raise WorkspaceBusyError(["another tutorial transition"])
             reasons = self._busy_reasons(self._active)
             if reasons:
                 raise WorkspaceBusyError(reasons)
@@ -375,10 +436,35 @@ class SessionManager:
             self._activate(original, "original")
             return self.current()
 
-    def force_restore_original(self) -> WorkspaceLease:
+    def force_restore_original(
+        self, *, abandon_transition: bool = False
+    ) -> WorkspaceLease:
+        """Restore the original workspace, refusing an in-flight transition.
+
+        "Force" is about the tutorial's own state machine, not about other
+        people's reservations: a scenario build running outside the lock
+        merges its already-billed usage onto the tutorial session when it
+        returns, so restoring first would strand that spend.
+
+        ``abandon_transition`` is the teardown escape (see
+        :func:`reset_session`) and is only safe because the reservation is
+        owned: clearing the slot revokes the pending build's authority to
+        commit (both builders re-check ownership), while its own release
+        finds it no longer owns anything and clears nothing — so a
+        transition that starts afterwards keeps its reservation.
+        """
         with self._lock:
+            if abandon_transition:
+                # Revoked BEFORE the scope check, deliberately. An in-flight
+                # begin_tutorial has not activated anything yet, so the scope
+                # is still `original` — returning early there would leave the
+                # reservation held and let that build commit a tutorial on
+                # top of the session this reset just cleared.
+                self._transition_owner = None
             if self._scope == "original":
                 return self.current()
+            if self._transition_active_locked():
+                raise WorkspaceBusyError(["another tutorial transition"])
             if self._original is None or self._tutorial is None:
                 raise WorkspaceConflictError("The original workspace is unavailable.")
             if self._scenario is not None:
@@ -401,7 +487,7 @@ class SessionManager:
             self._tutorial_usage_before = None
             self._scenario_usage_before = None
             self._active_writes = 0
-            self._transitioning = False
+            self._transition_owner = None
             self._activate(original, "original")
             return self.current()
 
@@ -419,7 +505,7 @@ class SessionManager:
             reasons = self._busy_reasons(self._active)
             if self._active_writes:
                 reasons.append("another edit or upload")
-            if self._transitioning:
+            if self._transition_active_locked():
                 reasons.append("workspace transition")
             if reasons:
                 raise WorkspaceBusyError(reasons)
@@ -448,7 +534,16 @@ def active_write(
 
 
 def reset_session() -> None:
-    _manager.force_restore_original().session.reset()
+    """Hard-reset the manager to a fresh original session.
+
+    A teardown/emergency primitive, NOT the user-facing New session — that
+    is ``POST /api/session/reset``, which refuses outside the original scope
+    entirely. This one abandons an in-flight tutorial transition rather than
+    refusing, so a reservation leaked by a crashed build cannot wedge the
+    process; abandoning is safe because the slot is owned (see
+    :meth:`SessionManager.force_restore_original`).
+    """
+    _manager.force_restore_original(abandon_transition=True).session.reset()
 
 
 def busy_reasons(session: SessionState) -> list[str]:

@@ -4489,9 +4489,9 @@ new dep; one new SSE payload field and one new persisted collection.
   to `disputed` mints a new id and its remembered dismissal does not carry
   across. That is expected protocol-change behavior, not a bug — **and it
   has to be stated in the release notes of whatever version ships this.**
-  It is not in them yet: the version is not bumped in this chunk, and a
-  notes entry for a version that does not exist would fail the
-  version-consistency gate. The release chunk owns it.
+  Discharged in Chunk 6.5: "Findings you dismissed will come back once", in
+  the 1.8.0 entry, which is the unreleased version this work ships in. If
+  the release is ever renumbered, that item moves with it.
 - **Surfaces**: the roster event carries `uphold_requires` + `rule` +
   `evidence_gated` instead of a bare `threshold`; `candidate_complete`
   carries `outcome` + `dispute_reason`; `verification_complete` and the

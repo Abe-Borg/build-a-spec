@@ -13,7 +13,9 @@
   sign-off, provider-reported usage is never blended with estimates, and the
   strict sequential roadmap is replaced with dependency edges.
 - Repository baseline inspected for this plan: `6f10c94`
-- Plan status: ready for implementation
+- Plan status: **implementation complete** (all six phases, chunks 1.1-6.5).
+  The owner-authorized live/manual QA in Chunk 6.5 is deliberately outstanding
+  — it spends real money and is Abraham's to run. No release has been cut.
 
 This directory turns the diagnostics review into an implementation program that
 can be handed to a reasoning-capable coding agent. It is intentionally more
@@ -264,7 +266,7 @@ including duplicate and refuted entries, is in
 | R08 | Persist interpretable partial-research manifest facts and limitations | Missing QC report limitation finding | 3.1, 3.3 |
 | R09 | Require all dimensions by default and make readiness truthful | False research-complete pass plus no must-have dimension | 3.2 |
 | R10 | Add a rolling committed-history cache breakpoint | Structural whole-history cache miss | 4.2 |
-| R11 | Use a uniform configurable interview cache TTL (default 1h) and correct docs | Both TTL findings plus inaccurate cache docstrings | 4.2 |
+| R11 | Use a configurable interview cache TTL (default 1h), non-increasing across the request, and correct docs | Both TTL findings plus inaccurate cache docstrings | 4.2 |
 | R12 | Price one-hour cache creation separately | Verifier and future interview 1h write underpricing | 4.1 |
 | R13 | Meter all-dimension research failures/stops | `ResearchFanoutError` usage loss | 4.3 |
 | R14 | Meter stopped-turn output as a separate disclosed estimate | Missing terminal `message_delta` output usage | 4.4 |
@@ -346,16 +348,16 @@ tests and phase gate are recorded in the phase file.
 | 3.1 | **complete** | `4d3c0f2` (PR #96) | incomplete coverage NAMED in context/manifest/trace/diagnostics; `DimensionStatus.error_kind` |
 | 3.2 | **complete** | `5e24b5c` (PR #97) | `required` defaults True + bound rationale; readiness joins declared coverage to cumulative statuses |
 | 3.3 | **complete** | `c10df8b` (PR #98) | Word + in-app both read the captured research manifest; three-state identity — **Phase 3 done** |
-| 4.1 | **complete** | branch `claude/deep-dive-remediation-4-1-thvbrv` | per-TTL cache-write rates; disjoint-slice math; legacy + new cost basis both read and preserved |
-| 4.2 | **complete** | branch `claude/deep-dive-remediation-4-1-thvbrv` | rolling committed-history breakpoint + uniform configurable TTL (default 1h); tail-only never cached across turns |
-| 4.3 | planned | | |
-| 4.4 | planned | | |
-| 5.1 | planned | | |
-| 5.2 | planned | | |
-| 5.3 | planned | | |
-| 5.4 | planned | | |
-| 6.1 | planned | | may be pulled forward after Phase 1 |
-| 6.2 | planned | | |
-| 6.3 | planned | | |
-| 6.4 | planned | | |
-| 6.5 | planned | | |
+| 4.1 | **complete** | `0b1d1df` (PR #99) | per-TTL cache-write rates; disjoint-slice math; legacy + new cost basis both read and preserved |
+| 4.2 | **complete** | `f3cfcf1` (PR #100) | rolling committed-history breakpoint + configurable TTL (default 1h); tail pinned shortest — see the amendment to frozen decision 7 |
+| 4.3 | **complete** | `fd10e48` (PR #101) | `ResearchFanoutError.usage_totals`; metered BEFORE the CAS so a stop still bills |
+| 4.4 | **complete** | `a7ddc12` (PR #102) | stopped-turn output estimate, disjoint from `output_tokens`; the gauge gets a different figure from the bill — **Phase 4 done** |
+| 5.1 | **complete** | `4aabb9b` (PR #103) | `final-qc/4`: upheld/disputed/refuted/inconclusive + the severity-gated evidence rule |
+| 5.2 | **complete** | `e39431c` (PR #104) | cross-lens consolidation; hard-compatibility buckets, singleton fallback, `duplicate_provision` lint |
+| 5.3 | **complete** | `a2cb161` (PR #105) | version labels, request-count populations, two verbatim methodology notes |
+| 5.4 | **complete** | `c113ee2` (PR #106) | `qc_execution_complete` / `no_open_qc_findings`; masthead derived from the sign-off — **Phase 5 done** |
+| 6.1 | **complete** | `e5991f0` (PR #107) | one-transaction runner settlement; stopped runs close their span. Pulled forward per the roadmap |
+| 6.2 | **complete** | `97e7438` (PR #108) | transition owner token; only the owner may clear or commit |
+| 6.3 | **complete** | `5b76ecb` (PR #109) | template import off the loop; diff/`/api/doc`/QC-apply answer from one guarded state |
+| 6.4 | **complete** | `3db68d5` (PR #110, Part A) · `63fa528` (PR #111, Part B) | DOCX render and chat request construction both from a captured snapshot, outside the turn lock |
+| 6.5 | **complete** | this chunk | full automated gate, stale-pattern sweep, documentation closeout, 1.8.0 notes — **program done** |

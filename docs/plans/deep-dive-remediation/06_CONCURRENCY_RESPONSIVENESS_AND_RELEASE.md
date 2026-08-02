@@ -1,6 +1,6 @@
 # Phase 6 — Concurrency, responsiveness, and release
 
-- Status: **in progress** (6.1-6.3 landed, 6.4 Part A and Part B landed; 6.5 planned)
+- Status: **complete** (6.1-6.5 landed; owner-authorized live/manual QA still owed)
 - Prerequisites: Chunk 6.5 requires Phases 1-5 complete. Chunks 6.1-6.4 depend
   only on Phase 1 (6.1 additionally interacts with Chunk 4.3's metering seam —
   coordinate, don't serialize). Pulling 6.1 forward early is encouraged: the
@@ -628,7 +628,12 @@ rg -n "pause_turn|messages\.stream|server_tool_use|allowed_callers|cache_control
      (defense-in-depth even in direct mode);
    - no stop/truncation path filters only `tool_use` while retaining dangling
      server tools, and the load/resend repair boundaries are active;
-   - all interview breakpoints share the configured TTL (default one hour);
+   - interview cache TTLs are non-increasing across the request — the
+     system and committed-history breakpoints carry the configured TTL
+     (default one hour) and the tail is pinned to the shortest supported one,
+     so no setting can build an out-of-order request (frozen decision 7 as
+     amended during 4.2; the original "all breakpoints share one TTL" wording
+     is superseded and must not be re-imposed);
    - old four-rate and new five-rate audit bases have tests, and
      provider-reported usage is never blended with estimates;
    - v3/v4 outcome handling (including disputed and the evidence rule) is
@@ -728,11 +733,163 @@ research canary after any future change to the web-tool definitions.
 
 ### Implementation record
 
-- Status: planned
-- Commit/PR:
-- Full pytest result:
-- Frontend test result:
-- Frontend build result:
-- Manual QA completed:
-- Manual QA owed:
+- Status: **complete** (automated + documentation gates; the live/manual gate
+  is owner-owed by explicit instruction, not skipped silently)
+- Commit/PR: branch `claude/phase-6-5-release-closeout`
+- Full pytest result: **1380 passed, 9 skipped** — the same 9 skips the
+  program started with, no new skips, no xfails, no network.
+- Frontend test result: `npm test` **193 passed**
+- Frontend build result: `npm run build` clean (tsc + vite)
+- Version consistency gate: `check_release_version.py` → ok, 1.8.0 (also run
+  inside pytest as `test_version_consistency_gate`)
+
+### Stale-pattern sweep — every match reviewed
+
+| Pattern | Matches | Verdict |
+|---|---:|---|
+| `_transitioning` | 0 | 6.2 removed the shared boolean outright |
+| `(size // 2) + 1` | 2 | both comments explaining the RETIRED v3 rule, in `qc/engine.py` and `test_qc.py` |
+| `_panel_outcome` | 0 | the helper is public `panel_outcome` |
+| `allowed_callers` | 12 | one declaration (`WEB_TOOL_ALLOWED_CALLERS`), two builders, the rest documentation |
+| `pause_turn` / `messages.stream` / `server_tool_use` / `cache_control` / `session_state_guard` / `settling` | 72 / 7 / 141 / 58 / 47 / 102 | all live usage; spot-checked against the confirmations below |
+
+### The ten confirmations
+
+1. **Direct callers.** Five consumers — chat `_chat_tools`, research
+   `_run_dimension`, and two QC sites — all go through
+   `build_web_search_tool`/`build_web_fetch_tool`; **zero hand-rolled web
+   tool dicts anywhere in `backend/`**, so nothing can silently take the
+   provider default. `WEB_TOOL_ALLOWED_CALLERS = ("direct",)`, spread as a
+   fresh list per request. ZDR claims in `TrustDeepDiveModal` and CLAUDE.md
+   are coupled to both halves (model + caller mode).
+2. **Containers.** All three continuation sites refresh
+   `container_id = response_container_id(...) or container_id` and add a
+   top-level `container` key only when nonblank: research and QC keep it
+   attempt-local (reset inside the retry loop, outside the continuation
+   loop), chat keeps it turn-local and passes it as a parameter.
+3. **Dangling server tools.** Five boundaries active — mid-stream
+   truncation, between-round stop, `_committed_messages`,
+   `sanitize_messages_for_resend` (outgoing, `protect_trailing_assistant`),
+   and `project.py` load repair. The single `tool_use`-only content filter
+   is immediately followed by the turn-wide pairing scrub, so no path
+   filters one kind and retains the other.
+4. **Cache TTLs.** Non-increasing, not uniform — see the amendment recorded
+   against this checklist item. `SUPPORTED_CACHE_TTLS` is shortest-first
+   and that order is load-bearing; `CHAT_TAIL_CACHE_TTL` is pinned to
+   `[0]` and deliberately not env-overridable;
+   `test_no_setting_can_build_an_out_of_order_request` sweeps every
+   supported setting.
+5. **Cost bases and estimates.** `_COST_BASIS_SHAPES` validates the outer
+   field set and the rate map **as a pair**, so neither four-rate nor
+   five-rate hybrids validate; both shapes have tests and a legacy basis
+   reproduces its saved estimate exactly. `estimated_output_tokens` /
+   `usage_estimated` are disjoint from `output_tokens`, which always holds
+   the provider's figure.
+6. **v3/v4 outcomes.** Schema 4 / `final-qc/4`; `panel_outcome` is the one
+   decision point; `VERIFICATION_RULE_V4` is persisted per finding;
+   `DISPUTE_REASON_INSUFFICIENT_EVIDENCE` implements the severity gate; and
+   `_structural_verification_outcome` branches on schema version so a v3
+   report is re-checked under v3's rule and never re-adjudicated.
+7. **One sign-off helper.** `qc_signoff_state` + the shared
+   `QC_SIGNOFF_CLEAR` constant drive the masthead, the sign-off, and the
+   executive layer; `issue_ready` is equality against that one constant.
+   The frontend deliberately does not re-derive the recommendation.
+8. **No redundant terminal mirroring.** Neither runner calls `add_event`
+   with a terminal frame; normal outcomes remain span closes, per frozen
+   decision 9. The only trace change was closing STOPPED spans.
+9. **`finding_id` not weakened, guards not duplicated.** The hash still
+   covers lens, element, title, issue, rationale, severity, source URLs,
+   proposed ops, reviewed text, final severity, verification outcome, the
+   full panel projection, grounding decisions and accepted sources — and
+   5.2 **added** `origin_ids`. `_transition_active_locked` remains the one
+   paid-run start guard, checked at 8 sites.
+10. **Concurrency test determinism reviewed; nothing removed.** Ordering is
+    carried by `threading.Event` barriers and by seams driven on the
+    request's own thread (6.3's diff race, 6.4's export and request-build
+    races) — never by sleeps. The three `time.sleep` calls in the suite are
+    all inside deadline-bounded *condition* polls waiting for a daemon
+    runner to go terminal, and the assertion is on the condition, not on
+    elapsed time. The `elapsed < _RESPONSIVE_SECONDS` assertions in
+    `test_import_responsiveness.py` are retained deliberately: for a
+    responsiveness test the elapsed time IS the property under test, and
+    removing it removes the test. Each is a bounded 5s block against a 1.5s
+    threshold (3.3x margin) and 6.4B additionally asserts the structural
+    ordering.
+
+### Coverage matrix
+
+Every R01-R26 and R28-R35 row maps to a chunk that is now complete, with
+tests recorded in that chunk's own implementation record. R27 (the refuted
+scenario busy-guard claim, broad terminal-event duplication, and
+`finding_id` simplification) is unchanged, as intended.
+
+### Documentation gate
+
+1. CLAUDE.md carries a section for all seven required topics — provider
+   caller mode/containers and the dangling-server-tool invariants, live
+   event extraction plus follower reconnect and the replay index, required
+   research coverage, per-TTL pricing and the rolling breakpoint, v4 panel
+   outcomes, runner and transition ownership, and the two
+   snapshot-before-heavy-work sections.
+2. `README.md`: the three topics the gate enumerates — research readiness,
+   QC limitations (three-state research coverage), and estimated usage/cost
+   (per-TTL cache writes, failed/stopped work metered, the separate
+   stopped-reply estimate) — were each already current, kept so by the chunk
+   that changed them. **One claim outside that list was stale and is fixed**:
+   the Final QC report-identity bullet still advertised schema `3` /
+   `final-qc/3` and described only schema-2 as non-actionable. Chunk 5.1
+   shipped schema 4, and the actionability guard is
+   `schema_version >= QC_REPORT_SCHEMA_VERSION`, so v3 is non-actionable
+   too. Found while checking an unrelated review finding, which is the
+   honest provenance: enumerating the gate's three topics is not the same
+   as reading the document, and a version constant is exactly the kind of
+   claim that goes stale silently.
+3. Release notes: the 1.8.0 entry was extended — see the deviation below.
+4. The master implementation record now carries every chunk's commit and PR.
+
+- Manual QA completed: **none.** The owner elected to defer the entire
+  live/manual gate until implementation was finished. Nothing in this record
+  claims a live provider validation.
+- Manual QA owed: the full nine-item owner-authorized list above, unchanged,
+  plus the per-chunk items each phase file records. Worth running first,
+  because they are the ones with a behavior change behind them: (5) partial
+  research agreeing across model context, readiness, modal, JSON and Word;
+  (7) v4 outcomes including a disputed candidate blocking readiness; (6)
+  cache economics across a >5-minute gap; (1) the direct-mode research
+  canary. **Rerun the research canary after any future change to the
+  web-tool definitions.**
 - Deviations:
+  - **Product version deliberately NOT bumped.** The plan says to bump only
+    if the owner has selected a release version; none was selected, so
+    `backend/settings.py::VERSION` and `frontend/package.json` stay at
+    1.8.0 and no release was cut.
+  - **The release-note obligation was still discharged, without a bump.**
+    Chunk 5.1 parked the v3→v4 `finding_id`/dismiss-memory break on the
+    grounds that "a notes entry for a version that does not exist would
+    fail the version-consistency gate". That constraint turned out not to
+    bind: **1.8.0 already exists as the shipped version and already has a
+    notes entry, and it was never released** (GitHub Releases holds only
+    v1.0.0 and v1.7.0). Everything from `e62dd61` onward — 37 merges,
+    including this entire program — is unreleased work that 1.8.0 will
+    carry. Its entry therefore had to describe that work or a user
+    upgrading from 1.7.0 would get notes covering a fraction of what
+    changed. The entry gained "Findings you dismissed will come back once"
+    plus three sections (Research, What things cost, The window stops
+    freezing) and a rewritten headline/summary. If the release is
+    renumbered later, the whole entry moves as a unit.
+  - **A stale claim was found and fixed in those unreleased notes.** The
+    1.8.0 item "Nothing about the review got smaller" asserted "a tie still
+    going to the refuters" — the v3 rule that Chunk 5.1 replaced. Under v4
+    a tie is `disputed`. Shipping it would have told users the opposite of
+    what the app does.
+  - **Two plan documents still carried the pre-amendment TTL wording** and
+    were reconciled: this chunk's own confirmation item 4 and the matrix row
+    R11 both said "uniform", which frozen decision 7 was explicitly amended
+    away from during 4.2 (PR #100). Taken literally, the checklist item
+    would have failed against correct code. The amended criterion — non-
+    increasing, tail pinned shortest, no setting able to build an
+    out-of-order request — is strictly stronger.
+  - **No timing-only assertions were removed**, contrary to the literal
+    instruction in step 5 of the automated gate; see confirmation 10 for the
+    reasoning. Removing them would delete the only assertion that tests
+    responsiveness at all.

@@ -90,15 +90,20 @@ class ReleaseNote:
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
         version="1.8.0",
-        date="2026-07-28",
-        headline="Final QC is much cheaper and much faster",
+        date="2026-07-31",
+        headline="Cheaper, faster, and a good deal more honest",
         summary=(
-            "The pre-issue review pass now costs roughly a third of what it "
-            "did and finishes in a fraction of the time, without checking "
-            "any less of your section. Same five reviewers, same panel of "
-            "refuters for every finding, same audit report. The assistant "
-            "also knows today's date now, which changes how it talks about "
-            "code editions."
+            "The pre-issue review pass costs roughly a third of what it did "
+            "and finishes in a fraction of the time, without checking any "
+            "less of your section. Beyond that, a long pass over the whole "
+            "app tightened the places where it was telling you something "
+            "more comforting than the truth: research that only half ran now "
+            "says so and holds up issue readiness, reviewers who disagree "
+            "about a serious finding now say that out loud instead of "
+            "quietly dropping it, the running meter counts work you paid for "
+            "and did not get, and the window stops freezing while it exports "
+            "or imports. The assistant also knows today's date now, which "
+            "changes how it talks about code editions."
         ),
         sections=(
             ReleaseSection(
@@ -127,13 +132,79 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                         ),
                     ),
                     ReleaseItem(
-                        title="Nothing about the review got smaller",
+                        title="Cheaper did not mean checking less",
                         body=(
-                            "Five independent reviewers, a panel of two or "
-                            "three refuters for every finding they raise, a "
-                            "tie still going to the refuters, and the same "
-                            "full audit report. Only the bill and the wait "
-                            "changed."
+                            "Five independent reviewers still read your "
+                            "whole section, every defect that reaches "
+                            "verification still faces a panel of two or "
+                            "three refuters, and the audit report is as "
+                            "complete as it was. What got cheaper was "
+                            "sending your document once instead of on every "
+                            "one of those calls, and a model that costs less "
+                            "per word."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Reviewers are allowed to disagree out loud",
+                        body=(
+                            "A finding used to be either kept or killed. "
+                            "When the refuters split — two of three saying a "
+                            "life-safety finding is real — the old rule "
+                            "quietly dropped it. A split now comes back to "
+                            "you as disputed, with both sides shown, and it "
+                            "holds up issue readiness until you decide. "
+                            "Address it or dismiss it with a reason; the "
+                            "app will not make that call for you."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Knocking down a serious finding takes evidence",
+                        body=(
+                            "A reviewer refuting a critical or high finding "
+                            "now has to point at something it actually read "
+                            "— a source it retrieved, or a place in your "
+                            "document. Having run a search is not evidence. "
+                            "Without it the finding is treated as disputed "
+                            "and comes to you rather than disappearing."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The same defect no longer arrives five times",
+                        body=(
+                            "Five reviewers reading one section routinely "
+                            "raise the same problem in different words, and "
+                            "each copy used to buy its own panel of refuters "
+                            "— and land in your fix queue separately. "
+                            "Versions of one defect are now grouped before "
+                            "verification, so you see it once. Every "
+                            "original wording is kept in the full report."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Findings you dismissed will come back once",
+                        body=(
+                            "The way a finding is identified includes how "
+                            "its panel voted, and the voting rules changed. "
+                            "A review saved by an earlier version therefore "
+                            "cannot match its dismissals to the findings a "
+                            "fresh pass raises: anything you had set aside "
+                            "reappears the first time you re-run. Dismiss it "
+                            "again and it stays dismissed from then on."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="\"Ready to issue\" and \"open findings\" can "
+                        "no longer both be true",
+                        body=(
+                            "The report could print \"Issue readiness: Yes\" "
+                            "on its front page and \"REVIEW REQUIRED — OPEN "
+                            "FINDINGS REMAIN\" on its sign-off page, of the "
+                            "same review. The sign-off wins: an open finding "
+                            "of any severity, or an undecided dispute, "
+                            "blocks issue readiness, and the front page now "
+                            "names which check is blocking. There is also a "
+                            "short executive summary at the top of the Word "
+                            "report — the full annex is unchanged."
                         ),
                     ),
                     ReleaseItem(
@@ -186,6 +257,144 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "you to a new one you never adopted. Your "
                             "recorded editions still only change when you "
                             "say so."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Research",
+                items=(
+                    ReleaseItem(
+                        title="Half-finished research says so",
+                        body=(
+                            "A research run succeeds if any of its areas "
+                            "finish, so it was normal to get findings for "
+                            "governing codes and nothing at all for the "
+                            "authority having jurisdiction — with no way to "
+                            "tell that apart from \"nothing applies here.\" "
+                            "Areas that never completed are now named, to "
+                            "you and to the assistant, and the assistant is "
+                            "told to flag a provision that would have "
+                            "depended on one rather than assuming it is "
+                            "clear."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Issue readiness now checks that, too",
+                        body=(
+                            "\"Research complete\" used to mean the run "
+                            "ended, even if three of four areas had failed. "
+                            "It now means every area actually finished at "
+                            "some point across your rounds — so a missing "
+                            "one blocks readiness and tells you which, and "
+                            "pressing Research again to fill the gap "
+                            "restores it. A later round that fails never "
+                            "takes away coverage an earlier one established."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="You can see what the agents are searching for",
+                        body=(
+                            "The live board showed \"Searching the web…\" "
+                            "with no query attached, because of how the "
+                            "search tool was being called. The actual "
+                            "queries and the pages being read now appear as "
+                            "they happen — in research, in Final QC, and in "
+                            "chat. The same change fixed research areas that "
+                            "would occasionally die part-way through a long "
+                            "run."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A dropped connection no longer freezes the board",
+                        body=(
+                            "A research run takes half an hour, and if the "
+                            "connection carrying its progress dropped, the "
+                            "board simply stopped moving — the run carried "
+                            "on, but the only way to see it again was to "
+                            "restart the app. It now reconnects on its own "
+                            "and picks up where it left off, without the "
+                            "board ever jumping backwards."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="What things cost",
+                items=(
+                    ReleaseItem(
+                        title="A long conversation costs much less",
+                        body=(
+                            "Every chat turn re-sends the conversation so "
+                            "far, and the app was paying full price for all "
+                            "of it every time, despite claiming otherwise. "
+                            "It now re-uses what it already sent, so only "
+                            "your newest exchange is charged at full rate. "
+                            "The saving grows with the length of the "
+                            "conversation."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Work you paid for and did not get is counted",
+                        body=(
+                            "A research round where every area failed, and "
+                            "one you stopped part-way, both cost real money "
+                            "and neither reached the meter. They do now. "
+                            "Stopping a chat reply is the one case where the "
+                            "token count is itself an estimate — the reply "
+                            "is cut off before the provider sends its final "
+                            "tally — so it is shown separately and never "
+                            "mixed into the reported numbers."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The estimate matches the real rate card",
+                        body=(
+                            "Longer-lived reuse of a prompt costs more to "
+                            "set up than short-lived reuse, and the meter "
+                            "was charging the cheaper rate for both. Each is "
+                            "now priced as billed. Saved review reports keep "
+                            "the rate card they were actually priced under "
+                            "rather than being quietly re-costed."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="The window stops freezing",
+                items=(
+                    ReleaseItem(
+                        title="Exporting and importing no longer lock the app",
+                        body=(
+                            "Exporting a large section, importing a master "
+                            "or a template, and opening a project each did "
+                            "seconds of work that stopped everything else — "
+                            "including the chat you were in the middle of. "
+                            "They now take a snapshot and get out of the "
+                            "way, so the rest of the app keeps answering."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Stop responds immediately",
+                        body=(
+                            "The stop button could sit dead for several "
+                            "seconds on exactly the reply you most wanted to "
+                            "stop — a long one that had just read a large "
+                            "PDF. It answers straight away now, and a reply "
+                            "stopped before it was sent costs nothing at "
+                            "all."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Stopping a run cannot disturb the next one",
+                        body=(
+                            "Stopping research or Final QC and immediately "
+                            "starting again could let the stopped run's "
+                            "ending land on its replacement — cancelling a "
+                            "run you never stopped, or showing its progress "
+                            "as the new one's. A run now ends in one piece, "
+                            "and the tutorial can no longer be torn down "
+                            "while it is still preparing a chapter."
                         ),
                     ),
                 ),

@@ -1850,18 +1850,22 @@ two of the three places fails the suite — that is the contract working.
   `bareImport`, where inventing a section number is exactly what the
   non-spec-upload framing exists to prevent.
 - **The `blank` scenario + chapter** exist because every other chapter runs
-  on a populated workspace, so the panel's empty-state controls could never
+  on a populated workspace, so the empty-state controls could never
   be on screen. `blank_practice_copy` returns a genuinely empty session
   carrying only module/discipline/primer — not a cleared clone, because a
   transcript describing a document that is no longer there is worse than no
-  transcript. Its step deliberately carries **no `readiness`**: emptiness
+  transcript. Its steps deliberately carry **no `readiness`**: emptiness
   is the thing the user is about to destroy by doing the exercise, so a
-  readiness check would flip the step into its own "could not be prepared"
+  readiness check would flip a step into its own "could not be prepared"
   warning the moment they succeeded. Anchor resolution already covers the
   case honestly — if the fixture failed, `section-header` does not resolve
   and the step degrades to the standard "control is not available" card.
-  (It was two steps until the by-hand article form was retired; the chapter
-  now teaches naming the section only.)
+  It teaches naming the section and — since the starter chips moved here
+  (see "The starter chips are taught where they render") — the on-ramps a
+  fresh session offers. That empties BOTH panes, so the chapter's coverage
+  test admits `ArtifactPanel` and Chat's **empty-state branch** only:
+  `SpecDocument`, and Chat's populated branch, are as unreachable here as
+  they ever were.
 - **Lint finally has its own step.** `document.lint` lives on the always-
   rendered Issues strip (`data-tour="lint-issues"`), which returns `null`
   only when there are no findings — so the step needs no drawer plumbing, and
@@ -5241,14 +5245,82 @@ uses.
   opened with "Or…" and now names the on-ramps that remain),
   `HelpModal`'s `HowToUse` step and its "From a blank page" recipe, and
   `blank_practice_copy`'s docstring in `backend/tutorial.py`.
-- **The `blank` chapter survives with one step.** It still teaches naming
-  the section on an empty page, which is the other thing only that
-  workspace can show; `useOnboarding` and `OnboardingOverlay` drive
-  chapters off `steps.length`, so a single-step chapter advances to the
-  next chunk with no special case. `TOUR_VERSION` is deliberately NOT
-  bumped: an in-flight resume record for `blank-start` step 1 is clamped
-  by the existing `TOUR[chunk].steps.length - 1` guard rather than
-  resetting every tutorial in progress.
+- **The `blank` chapter survived the removal with one step** (it has two
+  again since the starter chips moved into it — see the next section). It
+  still teaches naming the section on an empty page, which is the other
+  thing only that workspace can show; `useOnboarding` and
+  `OnboardingOverlay` drive chapters off `steps.length`, so a single-step
+  chapter advances to the next chunk with no special case. `TOUR_VERSION`
+  was deliberately NOT bumped for this removal: an in-flight resume record
+  for `blank-start` step 1 is clamped by the existing
+  `TOUR[chunk].steps.length - 1` guard rather than resetting every tutorial
+  in progress.
+
+## The starter chips are taught where they render — implemented notes
+
+Reported symptom (Abraham): Chapter 1's "Four ways into the same document"
+step described the empty chat's starter prompts while the chat pane behind
+the spotlight showed the showcase's conversation. The step's own body
+admitted it — "this showcase already has a conversation, so you will see
+them next time you start a session" — which is a tutorial apologizing for
+teaching a control it cannot show. Frontend only: no route, no SSE event,
+no dep, no backend change.
+
+- **The cause is the same one the `blank` chapter already exists to solve.**
+  The chips render only when `messages.length === 0`, and every chapter but
+  `blank-start` runs on a populated workspace. Chapter 1 cannot be the fix:
+  its first two steps spotlight the populated showcase document and the
+  project heading, and a scenario is per-CHAPTER, not per-step. So the step
+  moved to `blank-start`, whose `blank` scenario is a genuinely empty
+  session — `blank_practice_copy` leaves `history == []`, `_session_bundle`
+  therefore sends `chat: []`, and `applySessionBundle` clears `messages`.
+  Both panes are empty for that chapter, which is exactly the state the
+  chips need.
+- **It is the chapter's FIRST step**, ahead of naming the section: the
+  chips are how you get onto an empty page, and the header edit is what you
+  do once you are there.
+- **The anchor is the chips, not the pane.** `Chat.tsx`'s starter container
+  gained `data-tour="starter-prompts"` beside the `data-capability=
+  "session.starters"` it already carried, so the spotlight lands on the
+  five chips instead of the whole `chat-pane`. If the fixture ever failed,
+  the anchor does not resolve and the step degrades to the standard
+  "control is not available" card — the honest path the manifest already
+  relies on everywhere else.
+- **The step stays `explanatory`, deliberately.** The chips are live and
+  clickable (the spotlight leaves real controls interactive), and each one
+  sends a real billed chat turn. Recognizing the on-ramps is the lesson;
+  spending money on one is not, and drafting into the blank fixture would
+  undercut the very next step.
+- **`start()` is now inert while a protected workspace is held, and that is
+  a bug fix, not a guard for the new step** (Codex review, PR #117). One of
+  the five chips is the tutorial launcher, so the step spotlights a control
+  that calls `onboarding.start()` from INSIDE the tour. That fell through to
+  `beginShowcase()`, whose second `begin_tutorial` the backend refuses — and
+  the conflict path adopts the live tutorial and re-enters at
+  `pendingStartChunkRef` 0, which finishes the active scenario and dumps the
+  user back at chapter 1. `startAtChapter` had always guarded on
+  `workspaceRef.current`; `start` had not, so the Header's Tour button
+  carried the same defect the whole time — the chips only made it easy to
+  hit. The `paused` branch is checked first (resume is unaffected) and every
+  ending nulls the ref (the tour can always be started again), so the guard
+  cannot strand anyone. **Two independent mechanisms, because they fail
+  differently**: the ref check makes the action inert wherever it is
+  triggered, and `Chat`'s `tourActive` prop disables the chip (and stops its
+  pulse) so that inertness is visible rather than a dead click.
+- **`TOUR_VERSION` 4 → 5.** Chapter 1 lost a step and chapter 3 gained one,
+  so stored chunk/step indexes no longer mean what they meant; a bump
+  discards in-flight resume records, which is the correct outcome. (Contrast
+  the by-hand-article removal, which only SHORTENED a chapter and was
+  covered by the existing `steps.length - 1` clamp.)
+- **The coverage test's premise widened with the chapter.** It asserted
+  every blank-start capability is declared in `ArtifactPanel` — true when
+  the chapter only taught the document panel, and false the moment it also
+  teaches a chat control. It now admits `ArtifactPanel` plus Chat's
+  **empty-state branch**, extracted by regex from the `messages.length === 0`
+  ternary, so `SpecDocument` and Chat's populated branch (`figure.create`)
+  stay unreachable and the test keeps biting. Both mechanisms were reverted
+  in place: dropping the `data-tour` turns 2 red (the anchor contract and
+  this one).
 
 ## Commands
 

@@ -316,6 +316,73 @@ def test_an_outline_starting_at_level_one_matches_one_starting_at_zero(
     assert from_one.section.to_dict() == from_zero.section.to_dict()
 
 
+def test_a_second_list_that_begins_deeper_than_the_first_is_not_corrupted(
+    tmp_path,
+):
+    """Each article's list answers for itself, not for the document.
+
+    A master can hold several numbering definitions that disagree about
+    where they begin. A document-wide minimum is 0 as soon as *any* list
+    uses level 0, which leaves every other list to reproduce the original
+    sibling-becomes-child corruption.
+    """
+    document = Document()
+    document.add_paragraph("PART 1 - GENERAL")
+    document.add_paragraph("1.1 SUMMARY")
+    _numbered(document, "Section includes seismic restraint.", 0, num_id="1")
+    _numbered(document, "Related: Section 23 05 29.", 0, num_id="1")
+    document.add_paragraph("1.2 REFERENCE STANDARDS")
+    _numbered(document, "ASHRAE Handbook - HVAC Applications.", 1, num_id="2")
+    _numbered(document, "SMACNA Seismic Restraint Manual.", 1, num_id="2")
+    path = tmp_path / "twolists.docx"
+    document.save(str(path))
+
+    part = parse_master_docx(path).section.parts[0]
+    first, second = part.articles[0], part.articles[1]
+    assert [p.text for p in first.paragraphs] == [
+        "Section includes seismic restraint.",
+        "Related: Section 23 05 29.",
+    ]
+    # The list that begins at level 1 must not adopt its own sibling.
+    assert [p.text for p in second.paragraphs] == [
+        "ASHRAE Handbook - HVAC Applications.",
+        "SMACNA Seismic Restraint Manual.",
+    ]
+    assert all(p.children == [] for p in second.paragraphs)
+
+
+def test_a_restarted_sub_list_keeps_the_depth_its_parent_supports(tmp_path):
+    """A deliberately deep list under a real parent is left alone.
+
+    Word mints a fresh ``numId`` whenever a list restarts, so a nested
+    sub-list routinely carries its own definition at a deep ``ilvl``.
+    Rebasing each definition by its own minimum level would read that as
+    "this list starts at its top level" and promote it out of its parent.
+    Nothing shifts unless a paragraph was going to be pushed shallower
+    anyway.
+    """
+    document = Document()
+    document.add_paragraph("PART 2 - PRODUCTS")
+    document.add_paragraph("2.1 PIPE AND FITTINGS")
+    _numbered(document, "Steel pipe: ASTM A53.", 0, num_id="1")
+    _numbered(document, "Schedule 40 for 2 inches and smaller.", 1, num_id="1")
+    # A restarted a)/b) sub-list: its own numId, used only at level 2.
+    _numbered(document, "Threaded joints.", 2, num_id="7")
+    _numbered(document, "Grooved joints.", 2, num_id="7")
+    path = tmp_path / "restarted.docx"
+    document.save(str(path))
+
+    article = parse_master_docx(path).section.parts[1].articles[0]
+    top = article.paragraphs[0]
+    assert [p.text for p in article.paragraphs] == ["Steel pipe: ASTM A53."]
+    nested = top.children[0]
+    assert nested.text == "Schedule 40 for 2 inches and smaller."
+    assert [p.text for p in nested.children] == [
+        "Threaded joints.",
+        "Grooved joints.",
+    ]
+
+
 def test_a_document_that_uses_level_zero_is_parsed_exactly_as_before(tmp_path):
     """The normalization is a no-op for any document reaching level 0.
 

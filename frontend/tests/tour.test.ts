@@ -173,6 +173,21 @@ test("workspace lifecycle protects current work and always restores it", () => {
   assert.match(tour, /id:\s*"paper"[\s\S]*?scenario:\s*"structural"/);
 });
 
+test("repeated starts join one in-flight backend transition", () => {
+  // A double-clicked Tour button must not mint a second idempotency key or
+  // orphan the first start into restoring the workspace its successor just
+  // adopted (Codex review on PR #113). The in-flight guard makes the second
+  // click a join, and the pending request id survives until a start
+  // succeeds — starting again never resets it.
+  assert.match(hook, /startInFlightRef/);
+  assert.match(hook, /if \(startInFlightRef\.current\) return;/);
+  assert.match(hook, /startRequestRef\.current \?\? requestId\(\)/);
+  assert.doesNotMatch(
+    hook,
+    /const start = useCallback[\s\S]{0,500}?startRequestRef\.current = null/,
+  );
+});
+
 test("the bundled showcase is the tutorial's only source", () => {
   // No chooser modal, no current-project copy, no live generation: Start
   // goes straight to the protected showcase workspace.

@@ -98,6 +98,8 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
   const pendingStartChunkRef = useRef(0);
   const runRef = useRef(0);
   const startRequestRef = useRef<string | null>(null);
+  // True while a /api/tutorial/start request is in flight — see beginShowcase.
+  const startInFlightRef = useRef(false);
   // Where to put the user back when a restore fails. There is no longer a
   // modal to dismiss to, so the last visited step is the only honest landing.
   const lastStepRef = useRef<{ chunk: number; step: number }>({ chunk: 0, step: 0 });
@@ -198,6 +200,15 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
    * is set aside untouched and restored on every ending.
    */
   const beginShowcase = useCallback(async () => {
+    // A second click while a start is in flight JOINS it rather than racing
+    // it: the in-flight request keeps its idempotency key, and the resolved
+    // start reads pendingStartChunkRef, so a caller that only moved the
+    // target chapter has already had its effect. Firing a second request
+    // here would mint a fresh key and bump the run, orphaning the first
+    // start into restoring the very workspace its successor was adopting
+    // (Codex review, PR #113).
+    if (startInFlightRef.current) return;
+    startInFlightRef.current = true;
     const run = (runRef.current += 1);
     setPhase({ kind: "preparing", stage: "starting", error: null });
     try {
@@ -262,6 +273,8 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
         stage: "starting",
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      startInFlightRef.current = false;
     }
   }, []);
 
@@ -273,8 +286,11 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
       enterChunkRef.current?.(current.chunk, current.step);
       return;
     }
+    // The pending request id is deliberately NOT reset here: a repeated
+    // click reuses it, so the backend's idempotent begin_tutorial folds
+    // both into one transition. It clears when a start succeeds or the
+    // tour ends.
     pendingStartChunkRef.current = 0;
-    startRequestRef.current = null;
     void beginShowcase();
   }, [beginShowcase]);
 

@@ -238,6 +238,175 @@ def test_auto_numbered_master_uses_ilvl(tmp_path):
     assert top.children[0].text == "Support piping per NFPA 13."
 
 
+def _numbered(document, text: str, ilvl: int, num_id: str = "1"):
+    """A body paragraph carrying real Word auto-numbering at ``ilvl``."""
+    paragraph = document.add_paragraph(text)
+    p_pr = paragraph._p.get_or_add_pPr()
+    num_pr = OxmlElement("w:numPr")
+    ilvl_el = OxmlElement("w:ilvl")
+    ilvl_el.set(qn("w:val"), str(ilvl))
+    num_id_el = OxmlElement("w:numId")
+    num_id_el.set(qn("w:val"), num_id)
+    num_pr.append(ilvl_el)
+    num_pr.append(num_id_el)
+    p_pr.append(num_pr)
+    return paragraph
+
+
+def _outline_master(tmp_path, base: int, name="outline.docx"):
+    """A master whose numbered outline starts at ``base`` rather than 0.
+
+    Three sibling headings at the outline's top level, each with one child —
+    the shape every office master uses, and the one that came back
+    mis-parented when ``ilvl`` was read as an absolute depth.
+    """
+    document = Document()
+    document.add_paragraph("SECTION 23 05 48")
+    document.add_paragraph("VIBRATION AND SEISMIC CONTROLS FOR HVAC")
+    document.add_paragraph("PART 1 - GENERAL")
+    _numbered(document, "SECTION INCLUDES", base)
+    _numbered(document, "Vibration isolation for HVAC equipment.", base + 1)
+    _numbered(document, "REFERENCE STANDARDS", base)
+    _numbered(document, "ASHRAE Handbook - HVAC Applications.", base + 1)
+    _numbered(document, "QUALITY ASSURANCE", base)
+    _numbered(document, "Minimum three years documented experience.", base + 1)
+    path = tmp_path / name
+    document.save(str(path))
+    return path
+
+
+def test_numbering_depth_is_relative_to_the_documents_own_top_level(tmp_path):
+    """An outline starting at ``ilvl`` 1 keeps siblings as siblings.
+
+    ``ilvl`` is an indent level inside a numbering definition, not an
+    absolute outline depth. Reading it as one clamped the first numbered
+    paragraph of a part to depth 0 and then hung its same-level siblings
+    off it as children — a flat list of headings came back as one heading
+    owning all the others.
+    """
+    result = parse_master_docx(_outline_master(tmp_path, base=1))
+    article = result.section.parts[0].articles[0]
+
+    assert [p.text for p in article.paragraphs] == [
+        "SECTION INCLUDES",
+        "REFERENCE STANDARDS",
+        "QUALITY ASSURANCE",
+    ]
+    assert [
+        [child.text for child in p.children] for p in article.paragraphs
+    ] == [
+        ["Vibration isolation for HVAC equipment."],
+        ["ASHRAE Handbook - HVAC Applications."],
+        ["Minimum three years documented experience."],
+    ]
+    # The old clamp announced itself; nothing jumped once depth is relative.
+    assert not any("jumped deeper" in w for w in result.warnings)
+
+
+def test_an_outline_starting_at_level_one_matches_one_starting_at_zero(
+    tmp_path,
+):
+    """The same outline is the same tree wherever its levels are numbered."""
+    from_zero = parse_master_docx(
+        _outline_master(tmp_path, base=0, name="zero.docx")
+    )
+    from_one = parse_master_docx(
+        _outline_master(tmp_path, base=1, name="one.docx")
+    )
+    assert from_one.section.to_dict() == from_zero.section.to_dict()
+
+
+def test_a_second_list_that_begins_deeper_than_the_first_is_not_corrupted(
+    tmp_path,
+):
+    """Each article's list answers for itself, not for the document.
+
+    A master can hold several numbering definitions that disagree about
+    where they begin. A document-wide minimum is 0 as soon as *any* list
+    uses level 0, which leaves every other list to reproduce the original
+    sibling-becomes-child corruption.
+    """
+    document = Document()
+    document.add_paragraph("PART 1 - GENERAL")
+    document.add_paragraph("1.1 SUMMARY")
+    _numbered(document, "Section includes seismic restraint.", 0, num_id="1")
+    _numbered(document, "Related: Section 23 05 29.", 0, num_id="1")
+    document.add_paragraph("1.2 REFERENCE STANDARDS")
+    _numbered(document, "ASHRAE Handbook - HVAC Applications.", 1, num_id="2")
+    _numbered(document, "SMACNA Seismic Restraint Manual.", 1, num_id="2")
+    path = tmp_path / "twolists.docx"
+    document.save(str(path))
+
+    part = parse_master_docx(path).section.parts[0]
+    first, second = part.articles[0], part.articles[1]
+    assert [p.text for p in first.paragraphs] == [
+        "Section includes seismic restraint.",
+        "Related: Section 23 05 29.",
+    ]
+    # The list that begins at level 1 must not adopt its own sibling.
+    assert [p.text for p in second.paragraphs] == [
+        "ASHRAE Handbook - HVAC Applications.",
+        "SMACNA Seismic Restraint Manual.",
+    ]
+    assert all(p.children == [] for p in second.paragraphs)
+
+
+def test_a_restarted_sub_list_keeps_the_depth_its_parent_supports(tmp_path):
+    """A deliberately deep list under a real parent is left alone.
+
+    Word mints a fresh ``numId`` whenever a list restarts, so a nested
+    sub-list routinely carries its own definition at a deep ``ilvl``.
+    Rebasing each definition by its own minimum level would read that as
+    "this list starts at its top level" and promote it out of its parent.
+    Nothing shifts unless a paragraph was going to be pushed shallower
+    anyway.
+    """
+    document = Document()
+    document.add_paragraph("PART 2 - PRODUCTS")
+    document.add_paragraph("2.1 PIPE AND FITTINGS")
+    _numbered(document, "Steel pipe: ASTM A53.", 0, num_id="1")
+    _numbered(document, "Schedule 40 for 2 inches and smaller.", 1, num_id="1")
+    # A restarted a)/b) sub-list: its own numId, used only at level 2.
+    _numbered(document, "Threaded joints.", 2, num_id="7")
+    _numbered(document, "Grooved joints.", 2, num_id="7")
+    path = tmp_path / "restarted.docx"
+    document.save(str(path))
+
+    article = parse_master_docx(path).section.parts[1].articles[0]
+    top = article.paragraphs[0]
+    assert [p.text for p in article.paragraphs] == ["Steel pipe: ASTM A53."]
+    nested = top.children[0]
+    assert nested.text == "Schedule 40 for 2 inches and smaller."
+    assert [p.text for p in nested.children] == [
+        "Threaded joints.",
+        "Grooved joints.",
+    ]
+
+
+def test_a_document_that_uses_level_zero_is_parsed_exactly_as_before(tmp_path):
+    """The normalization is a no-op for any document reaching level 0.
+
+    Every Build-a-Spec normalized export writes provisions at ``w:ilvl`` 0,
+    so this is what keeps the export/re-import round trip byte-identical:
+    the base is 0 and no depth moves. A deeper sibling elsewhere in the
+    document must not shift the paragraphs that do use level 0.
+    """
+    document = Document()
+    document.add_paragraph("PART 3 - EXECUTION")
+    document.add_paragraph("3.1 INSTALLATION")
+    _numbered(document, "Install per the working plans.", 0)
+    _numbered(document, "Support piping per NFPA 13.", 1)
+    _numbered(document, "Brace per the seismic drawings.", 2)
+    path = tmp_path / "haslevelzero.docx"
+    document.save(str(path))
+
+    article = parse_master_docx(path).section.parts[2].articles[0]
+    top = article.paragraphs[0]
+    assert top.text == "Install per the working plans."
+    assert top.children[0].text == "Support piping per NFPA 13."
+    assert top.children[0].children[0].text == "Brace per the seismic drawings."
+
+
 def test_unreadable_and_empty_files_error(tmp_path):
     bogus = tmp_path / "not_a_docx.docx"
     bogus.write_bytes(b"this is not a zip")

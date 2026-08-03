@@ -23,7 +23,9 @@ interview pivots to gap-and-adapt mode.
 Both manual-label masters ("A. Provide...") and Word-auto-numbered masters
 (labels live in ``w:numPr``, not the text) are handled: explicit text
 labels win; otherwise the paragraph's numbering indent level (``ilvl``)
-drives the depth.
+drives the depth — placed *relative to its own list*, because ``ilvl`` is
+an indent level inside a numbering definition and not an absolute outline
+depth (see :meth:`_TreeBuilder.numbered_paragraph`).
 """
 from __future__ import annotations
 
@@ -200,8 +202,9 @@ def _numbering_level(paragraph: DocxParagraph) -> int | None:
     """The Word auto-numbering indent level (``ilvl``) or ``None``.
 
     Auto-numbered masters carry no visible "A."/"1." text — the label
-    lives in the numbering definition. The indent level maps directly to
-    SectionFormat depth for the common single-list masters.
+    lives in the numbering definition. It is an indent level *within* that
+    definition, not an outline depth — see
+    :meth:`_TreeBuilder.numbered_paragraph`, which places it.
     """
     p_pr = paragraph._p.pPr
     if p_pr is None or p_pr.numPr is None or p_pr.numPr.ilvl is None:
@@ -331,6 +334,9 @@ class _TreeBuilder:
         self.current_article: Article | None = None
         # Paragraph stack by depth for nesting (index = depth).
         self.stack: list[Paragraph] = []
+        # How far this article's Word numbering has been shifted shallower —
+        # see numbered_paragraph. Resets with the stack it is relative to.
+        self.numbering_offset = 0
         self.warnings: list[str] = []
         self.imported_count = 0
 
@@ -338,6 +344,7 @@ class _TreeBuilder:
         self.current_part = self.section.parts[number - 1]
         self.current_article = None
         self.stack = []
+        self.numbering_offset = 0
 
     def article(self, part_number: int, title: str) -> None:
         self.part(part_number)
@@ -347,6 +354,7 @@ class _TreeBuilder:
         part.articles.append(article)
         self.current_article = article
         self.stack = []
+        self.numbering_offset = 0
 
     def ensure_article(self, line_no: int) -> None:
         """Synthesize a container when content precedes any article."""
@@ -360,6 +368,44 @@ class _TreeBuilder:
             f"{self.current_part.title}."
         )
         self.article(self.current_part.number, "IMPORTED CONTENT")
+
+    def numbered_paragraph(self, ilvl: int, text: str, line_no: int) -> Paragraph:
+        """A Word-auto-numbered paragraph, placed relative to its own list.
+
+        ``ilvl`` is an *indent level within a numbering definition*, not an
+        absolute outline depth. A list that reserves level 0 and starts at
+        level 1 is as ordinary as one that starts at 0, and a document can
+        hold several definitions that disagree about where they begin.
+
+        Reading ``ilvl`` as absolute depth corrupted such a list, and not by
+        an off-by-one: its first paragraph had no parent to hang from, so it
+        was pushed to the shallowest free depth — while every *sibling* at
+        the same ``ilvl`` then found that stack sufficient and landed one
+        deeper, i.e. as its **child**. A flat list of articles came back as
+        one article owning all the others.
+
+        The shift is therefore remembered for the rest of the article, so
+        the siblings move with the paragraph that was already moved. That is
+        the whole rule, and it is what makes it safe: the offset can only
+        grow at the moment a paragraph was going to be pushed shallower
+        anyway, so it never relocates content the old code left alone. In
+        particular a list nested under a parent the stack does support — a
+        restarted sub-list carrying its own ``numId`` at a deliberately deep
+        ``ilvl`` — triggers nothing and keeps its depth, which a per-``numId``
+        rebasing of the raw levels would have promoted to top level.
+
+        It is deliberately scoped to the article rather than the document:
+        the stack it is relative to resets there, and two articles whose
+        lists begin at different levels each get their own answer. A
+        document-wide minimum cannot do that, and it also cannot help the
+        second list at all when the first one already uses level 0.
+        """
+        self.ensure_article(line_no)
+        depth = max(0, ilvl - self.numbering_offset)
+        if depth > len(self.stack):
+            self.numbering_offset += depth - len(self.stack)
+            depth = len(self.stack)
+        return self.paragraph(depth, text, line_no)
 
     def paragraph(self, depth: int, text: str, line_no: int) -> Paragraph:
         self.ensure_article(line_no)
@@ -461,8 +507,16 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                 "paragraphs (cells joined with ' | ') — review formatting."
             )
 
-        def add_mapped_paragraph(depth: int, semantic_text: str) -> None:
-            paragraph = builder.paragraph(depth, semantic_text, line_no)
+        def add_mapped_paragraph(
+            depth: int, semantic_text: str, *, numbered: bool = False
+        ) -> None:
+            # `depth` is a raw ``w:numPr`` indent level for a numbered
+            # paragraph and an absolute depth for a manual label ("A." is
+            # depth 0 by definition), so only the former is rebased.
+            place = (
+                builder.numbered_paragraph if numbered else builder.paragraph
+            )
+            paragraph = place(depth, semantic_text, line_no)
             if entry.opaque_blocker:
                 binding = bind_opaque_projection(
                     uid=paragraph.uid,
@@ -493,9 +547,9 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             ilvl = _numbering_level(docx_paragraph)
             if ilvl is not None:
                 pending_title = False
-                add_mapped_paragraph(
-                    min(ilvl, MAX_PARAGRAPH_DEPTH - 1), text
-                )
+                # The raw indent level: numbered_paragraph places it against
+                # its own list, never as an absolute depth.
+                add_mapped_paragraph(max(0, ilvl), text, numbered=True)
                 continue
 
         # The normalized renderer emits this exact line only to show that a

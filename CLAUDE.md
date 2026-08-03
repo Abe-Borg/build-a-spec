@@ -5322,6 +5322,103 @@ no dep, no backend change.
   in place: dropping the `data-tour` turns 2 red (the anchor contract and
   this one).
 
+## `ilvl` is an indent level, not an outline depth — implemented notes
+
+Reported symptom (Abraham, from a real 23 05 48 master + a diagnostics
+bundle): importing an office master produced three synthetic `IMPORTED
+CONTENT` articles and a document whose sibling headings had become each
+other's children — `A. SECTION INCLUDES` owning `1. REFERENCE STANDARDS`
+owning `a. ASHRAE …`, with `2. QUALITY ASSURANCE` alongside. Two distinct
+defects sit behind that screenshot; this section fixes the second and
+records the first. No new endpoint, no new SSE event, no new dep, no
+project-format bump.
+
+- **The bug: `ilvl` was read as an absolute depth.** It is an indent level
+  *within a numbering definition*. A master whose multilevel list reserves
+  level 0 for something it never uses starts its outline at `ilvl` 1, and
+  that is as ordinary as starting at 0. Reading it absolutely meant the
+  first numbered paragraph in each PART had no parent to hang from, so the
+  existing "jumped deeper than its context" clamp attached it at depth 0 —
+  while every **sibling** at the same `ilvl` then satisfied the stack and
+  landed at depth 1, i.e. as its **child**. A flat list of articles came
+  back as one article owning all the others, and the clamp warning was the
+  only trace.
+- **The fix is that the shift is REMEMBERED, not that the levels are
+  rebased** (`_TreeBuilder.numbered_paragraph`). When a numbered paragraph
+  is pushed shallower than its `ilvl` asked for, the offset is kept for the
+  rest of the article so its siblings move with it. That single rule is
+  also the whole safety argument: the offset can only grow at the moment a
+  paragraph was *already* going to be pushed shallower, so it never
+  relocates content the old code left alone — which makes "no document
+  parses differently unless it was being corrupted" a property of the
+  mechanism rather than a claim needing a corpus.
+- **Scoped to the article, because that is what the stack is scoped to.**
+  Two articles whose lists begin at different levels each get their own
+  answer. The first attempt normalized against a **document-wide minimum
+  `ilvl`** and was wrong for exactly that reason (caught in review on PR
+  #118, Codex): the minimum is 0 as soon as *any* list uses level 0, so a
+  second definition beginning at level 1 kept reproducing the original
+  corruption. Pinned by `test_a_second_list_that_begins_deeper_than_the_
+  first_is_not_corrupted`, which fails against that first attempt.
+- **Per-`numId` rebasing — the literal review suggestion — is NOT what
+  landed, and would have introduced its own corruption.** Word mints a
+  fresh `numId` whenever a list restarts, so a nested a)/b) sub-list
+  routinely carries its own definition used only at `ilvl` 2. Rebasing each
+  definition by its own minimum reads that as "this list starts at its top
+  level" and promotes it out of the parent it was nested under. Remembering
+  the clamp instead leaves it alone: its parent stack supports it, nothing
+  is pushed, no offset accrues. Pinned by
+  `test_a_restarted_sub_list_keeps_the_depth_its_parent_supports`, which
+  fails against a per-`numId` implementation.
+- **Manual labels are never rebased.** "A." is depth 0 by definition, so
+  `add_mapped_paragraph(..., numbered=True)` is what routes a raw `w:numPr`
+  level through the relative placement; the text-label branch keeps calling
+  `paragraph()` with an absolute depth. The "jumped deeper" warning
+  therefore survives where it is still meaningful, and stops firing on
+  auto-numbered content, where it was only ever reporting this bug.
+- **A document that uses level 0 is untouched**, which includes every
+  Build-a-Spec normalized export (`docx_export._qc_apply_numbering` and the
+  clean body writer both emit `w:ilvl` 0). Nothing is ever pushed, so no
+  offset accrues and the export/re-import round trip is untouched. Pinned
+  by `test_a_document_that_uses_level_zero_is_parsed_exactly_as_before`.
+- **Still open, and deliberately not guessed at: an auto-numbered ARTICLE
+  heading is not recognized as an article.** The `w:numPr` branch
+  short-circuits ahead of `_SECTION_RE`/`_PART_RE`/`_ARTICLE_RE` — correct
+  and load-bearing for the round trip, since a normalized export's semantic
+  text may legitimately begin "PART 2" or "1.2" with the label living in
+  the numbering. But in an auto-numbered master the article heading's
+  visible text is the title alone ("SECTION INCLUDES"), so **no text
+  pattern can reach it either** and relaxing the short-circuit would fix
+  nothing. Recognizing them needs a structural signal (the numbering
+  definition's `lvlText`, or "normalized depth 0 directly under a PART in a
+  document where no `N.M` article was ever matched"), and it is a parse
+  *policy* change: promoting a paragraph to an article also makes it a
+  heading, which `source_patch` denies `replace_text` on — so it would trade
+  a wrong tree for a less editable one. Left as an owner decision.
+- **The diagnostics snapshot now says why an imported document is
+  read-only.** `_source_capability_facts` adds `capabilities_status` and an
+  `edit_blockers` histogram to the session's `source` block, so a bundle
+  distinguishes a package-wide `pass_through_only` cause (one
+  `document_protection` or `signed_package` disabling the whole document)
+  from ordinary per-element ones (`heading_change`,
+  `complex_paragraph_markup`) without asking the user to hover a badge. It
+  reads **non-blocking** (`block=False`) for the same reason `_doc_payload`
+  and the QC downloads do — a display surface must never wait out a sweep —
+  so `pending` is itself the answer when every operation reads as denied.
+  Only the closed blocker vocabulary travels, never a message or any
+  provision text (the `DimensionStatus.error_kind` posture).
+- **Tests**: 6 new. `test_importer.py` (5 — siblings stay siblings on an
+  outline starting at `ilvl` 1, that outline parsing identically to the
+  same one written from `ilvl` 0, a second list beginning deeper than the
+  first, a restarted sub-list keeping the depth its parent supports, and
+  the level-0 no-op); `test_diagnostics.py` (1 — a clean master's
+  per-element blockers vs a `w:documentProtection` package's
+  `pass_through_only`, plus the no-source-document and no-provision-text
+  claims). Each behavioral importer test was reverted in place to prove it
+  load-bearing, and the two review cases were additionally run against the
+  document-wide-minimum and per-`numId` implementations to show each of
+  those fails one of them.
+
 ## Commands
 
 ```

@@ -1832,6 +1832,11 @@ two of the three places fails the suite — that is the contract working.
   `chat.stop` already existed for the cheap one), `document.section-header`
   and `document.first-article` (the from-scratch on-ramp), and `help.trust`
   (the trust dossier, which had been sharing `help.topics`).
+  `document.first-article` was later **retired** with the control it named —
+  see "The empty page has no by-hand article form" below. Retiring a
+  capability is the same three-place edit in reverse: the control's
+  `data-capability`, the tour step, and the registry entry all go, or the
+  contract fails in one direction or the other.
 - **Anchors are now validated too.** `tour.test.ts` checks that every step's
   non-empty `anchor` exists as a `data-tour` attribute in production UI, and
   that an anchorless step supplies a `resolve` instead. Before this a typo
@@ -1849,12 +1854,14 @@ two of the three places fails the suite — that is the contract working.
   be on screen. `blank_practice_copy` returns a genuinely empty session
   carrying only module/discipline/primer — not a cleared clone, because a
   transcript describing a document that is no longer there is worse than no
-  transcript. Its two steps deliberately carry **no `readiness`**: emptiness
+  transcript. Its step deliberately carries **no `readiness`**: emptiness
   is the thing the user is about to destroy by doing the exercise, so a
   readiness check would flip the step into its own "could not be prepared"
   warning the moment they succeeded. Anchor resolution already covers the
-  case honestly — if the fixture failed, `first-article` does not resolve and
-  the step degrades to the standard "control is not available" card.
+  case honestly — if the fixture failed, `section-header` does not resolve
+  and the step degrades to the standard "control is not available" card.
+  (It was two steps until the by-hand article form was retired; the chapter
+  now teaches naming the section only.)
 - **Lint finally has its own step.** `document.lint` lives on the always-
   rendered Issues strip (`data-tour="lint-issues"`), which returns `null`
   only when there are no findings — so the step needs no drawer plumbing, and
@@ -5199,6 +5206,49 @@ nothing. No new endpoint, no new SSE event, no new dep, no format bump.
   reset-during-context-capture sibling; removing the ownership re-check →
   only this one red. Both seam-driven tests run on the turn's own thread,
   so neither depends on thread scheduling.
+
+## The empty page has no by-hand article form — implemented notes
+
+Owner ask (Abraham): get rid of the option to draft the first article
+yourself, from the UI and from the tutorial. Frontend plus documentation
+only — no route, no SSE event, no dep, no project-format bump, and no
+change to the `add_article` op, which every other authoring path still
+uses.
+
+- **One control, retired in all three places the contract polices.**
+  `ArtifactPanel`'s `EmptyState` carried a PART chooser, an article-title
+  field and an **Add article** button posting a single `add_article`
+  through `POST /api/doc/edit`. It is gone, along with its state, its
+  `sourceCapability` probe and its tooltip ladder; `document.first-article`
+  is out of `capabilities.ts`; and the `first-article` step is out of
+  `tour.ts`'s `blank-start` chapter. Leaving any one of the three would
+  fail `tour.test.ts` in one direction or the other — that is the coverage
+  contract doing its job on a **removal**, not just an addition.
+- **The op vocabulary is untouched, and that is the point.** Only the
+  from-scratch on-ramp is gone. `SpecDocument`'s between-block inserters
+  (`+ Add article here`, capability `document.insert`) still author
+  articles by hand the moment the page has content, the model still calls
+  `add_article` through `apply_spec_edits`, and a QC fix may still propose
+  one. What changed is the entry point on a blank page: the interview, the
+  full-draft pass, a template, or a master import.
+- **`noUnusedLocals`/`noUnusedParameters` make a partial removal
+  unbuildable**, which is why the `FormEvent` and `sourceCapabilityTitle`
+  imports had to go with the form — the same reason Batch 4's audit-UI
+  retirement had to be wholesale rather than button-only.
+- **Every surface that described the control was resynced**, because copy
+  claiming an affordance that is not there is the failure mode the help
+  and trust documents exist to avoid: `EmptyState`'s closing prose (it
+  opened with "Or…" and now names the on-ramps that remain),
+  `HelpModal`'s `HowToUse` step and its "From a blank page" recipe, and
+  `blank_practice_copy`'s docstring in `backend/tutorial.py`.
+- **The `blank` chapter survives with one step.** It still teaches naming
+  the section on an empty page, which is the other thing only that
+  workspace can show; `useOnboarding` and `OnboardingOverlay` drive
+  chapters off `steps.length`, so a single-step chapter advances to the
+  next chunk with no special case. `TOUR_VERSION` is deliberately NOT
+  bumped: an in-flight resume record for `blank-start` step 1 is clamped
+  by the existing `TOUR[chunk].steps.length - 1` guard rather than
+  resetting every tutorial in progress.
 
 ## Commands
 

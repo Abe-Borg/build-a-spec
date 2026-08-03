@@ -219,7 +219,7 @@ function HowToUse({
           },
           {
             t: "Draft the section",
-            d: "Hit “Draft full section” to lay down every PART and article in one pass, build it through chat, or use Add first article on the blank page and continue with the inline structure controls.",
+            d: "Hit “Draft full section” to lay down every PART and article in one pass, or build it through chat. Once there is content on the page, the inline structure controls let you add and rearrange articles by hand.",
           },
           {
             t: "Walk the Review queue",
@@ -306,7 +306,7 @@ function Workflows() {
         steps={[
           "Add your key, then tell Claude the project basics.",
           "Run Research to ground the requirements for the jurisdiction.",
-          "Use “Draft full section” for a complete first pass, or add the first article directly to PART 1, 2, or 3 and build the hierarchy yourself.",
+          "Use “Draft full section” for a complete first pass, then build out the hierarchy yourself with the inline structure controls.",
           "Walk the Review queue, confirming or editing each assumption.",
           "Final QC, apply the fixes, export a clean .docx.",
         ]}

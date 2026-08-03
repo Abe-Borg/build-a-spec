@@ -38,6 +38,31 @@ interface Rect {
 
 const CUTOUT_PAD = 6;
 
+/** Stamps the tour's own modals so the Escape guard below can skip them. */
+const TOUR_DIALOG = "tour";
+
+/**
+ * True when a modal stacked OVER the tour owns the keyboard.
+ *
+ * The step card is deliberately non-blocking, so production modals render
+ * above it while the tour stays in `touring` — the template studio the
+ * `template-create` step opens, help, a stop confirmation. Several of them
+ * listen for Escape on `window` exactly as the tour does and never call
+ * `preventDefault`, so `defaultPrevented` alone cannot report that the key was
+ * already handled: window listeners fire in registration order, and a dialog
+ * opened mid-tour registers second. Ask the DOM instead — any `aria-modal`
+ * dialog that is not one of the tour's own is what Escape belongs to. The step
+ * card is `aria-modal="false"`, so the selector never matches it.
+ *
+ * This could not happen before the pause removal: opening the studio suspended
+ * the tour, so the phase check was already false (Codex review, PR #120).
+ */
+function anotherDialogOwnsEscape(): boolean {
+  return Array.from(
+    document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
+  ).some((dialog) => dialog.getAttribute("data-dialog") !== TOUR_DIALOG);
+}
+
 /**
  * Stable structural fingerprint used by the rearrangement exercise. Text and
  * numbering are deliberately excluded: completion means that a real sibling
@@ -479,11 +504,17 @@ export default function OnboardingOverlay({
   // Escape asks to END, the same as every ✕ and backdrop click. The tour runs
   // start to finish, so there is no suspended state for it to drop into, and
   // the confirmation is what keeps a stray keypress from throwing the tour
-  // away. It yields while that confirmation owns the keyboard.
+  // away. It yields while that confirmation owns the keyboard, and — two
+  // independent guards, because they cover different dialogs — while any other
+  // modal does: `defaultPrevented` catches the useDialogFocus family (they
+  // listen on `document`, which bubbles first), and anotherDialogOwnsEscape
+  // catches the ones with a bare `window` listener, where ordering is not ours
+  // to rely on.
   useEffect(() => {
     if (phase.kind === "idle") return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || ob.endConfirm) return;
+      if (event.key !== "Escape" || ob.endConfirm || event.defaultPrevented) return;
+      if (anotherDialogOwnsEscape()) return;
       if (phase.kind === "touring" || phase.kind === "chunk-break") ob.requestEnd();
     };
     window.addEventListener("keydown", onKey);
@@ -502,6 +533,7 @@ export default function OnboardingOverlay({
           : "Returning you to your project…";
     return (
       <ModalShell
+        marker={TOUR_DIALOG}
         title={
           phase.error
             ? finishing
@@ -572,6 +604,7 @@ export default function OnboardingOverlay({
     const next = TOUR[phase.nextChunk];
     return (
       <ModalShell
+        marker={TOUR_DIALOG}
         title={`Chapter ${phase.nextChunk} of ${TOUR.length} done — ${completed.title}`}
         onClose={ob.requestEnd}
       >

@@ -46,6 +46,10 @@ const chat = readFileSync(
   "utf8",
 );
 const api = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+const modalShell = readFileSync(
+  new URL("../src/components/ModalShell.tsx", import.meta.url),
+  "utf8",
+);
 
 const quoted = (text: string) => [...text.matchAll(/"([a-z][a-z0-9.-]+)"/g)].map((m) => m[1]);
 
@@ -372,6 +376,32 @@ test("every tutorial surface offers a way back to the user's project", () => {
   // backdrop click is the easiest way to hit one by accident.
   assert.match(overlay, /aria-label="End tutorial"/);
   assert.doesNotMatch(overlay, /onClose=\{\(\) => setPhase/);
+});
+
+test("a modal stacked over the tour owns Escape", () => {
+  // The step card is non-blocking, so the template studio the template-create
+  // step opens (and help, and a stop confirmation) renders above a tour that
+  // stays in `touring`. Those listen for Escape on `window` exactly as the
+  // tour does, so one keypress reached both handlers and dismissing the studio
+  // also prompted to end the tutorial (Codex review, PR #120). Pause used to
+  // hide this: opening the studio suspended the tour.
+  //
+  // Two independent guards, because they cover different dialogs.
+  assert.match(overlay, /event\.defaultPrevented/);
+  assert.match(overlay, /\[role="dialog"\]\[aria-modal="true"\]/);
+  assert.match(overlay, /anotherDialogOwnsEscape\(\)\) return;/);
+  // The guard must run BEFORE the phase check, or it guards nothing.
+  assert.match(
+    overlay,
+    /anotherDialogOwnsEscape\(\)\) return;[\s\S]{0,120}phase\.kind === "touring"/,
+  );
+
+  // It skips the tour's OWN modals by marker, so Escape still works on the
+  // checkpoint and the preparing card — both are stamped, and the step card
+  // is aria-modal="false" so the selector never matches it in the first place.
+  assert.equal([...overlay.matchAll(/marker=\{TOUR_DIALOG\}/g)].length, 2);
+  assert.match(modalShell, /data-dialog=\{marker\}/);
+  assert.match(overlay, /aria-modal="false"/);
 });
 
 test("rearrangement is a required real-document exercise", () => {

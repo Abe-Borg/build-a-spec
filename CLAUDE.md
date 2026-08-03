@@ -5560,6 +5560,28 @@ no project-format bump.
   in the tour, and still gated by the "End the guided tour?" confirmation, so
   a stray keypress cannot throw the tour away. It keeps yielding while that
   confirmation owns the keyboard (`ob.endConfirm`).
+- **A modal stacked over the tour owns Escape, and that needs TWO guards**
+  (caught in review on PR #120, Codex) — the same class of bug, and the same
+  answer, as the TrustDeepDiveModal/help stacking above. The step card is
+  non-blocking, so the template studio the `template-create` step opens (and
+  help, and a stop confirmation) renders above a tour still in `touring`, and
+  one Escape reached both handlers: the studio closed AND the end-tour
+  confirmation appeared. Pause had hidden this — opening the studio suspended
+  the tour, so the phase check was already false. (1) `event.defaultPrevented`
+  covers the `useDialogFocus` family, which `preventDefault`s and listens on
+  `document`, so it bubbles before the tour's `window` listener. (2)
+  `anotherDialogOwnsEscape()` covers the dialogs with a bare `window` listener
+  and no `preventDefault` (`NewSessionDialog`, `ConfirmDialog`, `HelpModal`,
+  `CloseDialog`, `ResearchReportModal`, `QCDrawer`), where **registration
+  order is not ours to rely on** — a dialog opened mid-tour registers second,
+  so `defaultPrevented` alone would still be false. It asks the DOM instead:
+  any `[role="dialog"][aria-modal="true"]` whose `data-dialog` is not `tour`.
+  The tour's own two `ModalShell`s pass `marker={TOUR_DIALOG}` (that is what
+  the shell's optional `marker` prop exists for), and the step card is
+  `aria-modal="false"`, so the selector never matches it. Keep the guard
+  AHEAD of the phase check — behind it, it guards nothing.
+  `SettingsPanel` is deliberately out of scope: it has no Escape handler to
+  conflict with, and at `z-50` the tour card renders over it.
 - **"Ask a question" went with pause, because it depended on it.** It lived
   only on the between-chapters checkpoint, which is the tour's one *modal*
   surface — its backdrop covers the composer, so prefilling without
@@ -5582,15 +5604,17 @@ no project-format bump.
   resume record still points where it says. An older record carrying
   `paused: true` simply loads with the field ignored and re-enters the tour,
   which is the new behavior anyway.
-- **Tests**: 2 new in `frontend/tests/tour.test.ts`, both reverted in place to
-  prove them load-bearing (2 red). "the tutorial runs start to finish and
+- **Tests**: 3 new in `frontend/tests/tour.test.ts`, each reverted in place to
+  prove it load-bearing. "the tutorial runs start to finish and
   cannot be suspended" pins the absent phase/API/pill/stored flag, the
   `enterChunk` reload path, Escape routing to `requestEnd`, the two
   non-suspending step actions, and the manifest not promising pausing
   anywhere. "every tutorial surface offers a way back to the user's project"
   slices the overlay into its phase branches and requires an end control in
   each, plus exactly one `tour.finish` declaration per reachable surface —
-  so a future phase added without an exit fails the suite.
+  so a future phase added without an exit fails the suite. "a modal stacked
+  over the tour owns Escape" pins both guards, the marker on both of the
+  tour's own modals, and the guard sitting ahead of the phase check.
 
 ## Commands
 

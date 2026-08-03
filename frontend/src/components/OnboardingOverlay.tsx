@@ -476,11 +476,15 @@ export default function OnboardingOverlay({
     if (rawStep?.drawer) bumpDrawer(rawStep.drawer);
   }, [rawStep, bumpDrawer]);
 
+  // Escape asks to END, the same as every ✕ and backdrop click. The tour runs
+  // start to finish, so there is no suspended state for it to drop into, and
+  // the confirmation is what keeps a stray keypress from throwing the tour
+  // away. It yields while that confirmation owns the keyboard.
   useEffect(() => {
     if (phase.kind === "idle") return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || ob.endConfirm) return;
-      if (phase.kind === "touring" || phase.kind === "chunk-break") ob.pause();
+      if (phase.kind === "touring" || phase.kind === "chunk-break") ob.requestEnd();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -542,6 +546,21 @@ export default function OnboardingOverlay({
             <p className="mt-2 text-[11px] text-ink-faint">
               Content streaming onto the paper is the same structured content the app edits and exports.
             </p>
+            {/* A restore already IS the ending, so it offers no way out of
+                itself. Every other waiting state does — see the End control
+                on the checkpoint and step cards. */}
+            {!finishing && (
+              <div className="mt-4">
+                <button
+                  onClick={ob.requestEnd}
+                  className={quietBtn}
+                  title="End the tour and return to your project exactly as you left it"
+                  data-capability="tour.finish"
+                >
+                  End the tour
+                </button>
+              </div>
+            )}
           </>
         )}
       </ModalShell>
@@ -567,37 +586,24 @@ export default function OnboardingOverlay({
           ))}
         </div>
         <p className="mt-3 text-sm leading-relaxed text-ink-dim">
-          Next: <b className="text-ink">{next.title}</b>. Pause to inspect the actual
-          document or ask a question at any checkpoint.
+          Next: <b className="text-ink">{next.title}</b>. This checkpoint is the only
+          part of the tour that covers the app — step cards leave every control
+          live, so you can inspect the document or ask a question in the chat as
+          you go.
         </p>
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <button onClick={ob.continueChunk} className={primaryBtn}>Continue</button>
-          <button onClick={ob.askQuestion} className={quietBtn}>Ask a question</button>
-          <button onClick={ob.pause} className={quietBtn}>Pause</button>
+          <span className="flex-1" />
+          <button
+            onClick={ob.requestEnd}
+            className={quietBtn}
+            title="End the tour and return to your project exactly as you left it"
+            data-capability="tour.finish"
+          >
+            End tour
+          </button>
         </div>
       </ModalShell>
-    );
-  }
-
-  if (phase.kind === "paused") {
-    return (
-      <div className="fixed bottom-5 left-5 z-[65] flex items-center gap-1.5">
-        <button
-          onClick={ob.resume}
-          className="rounded-full border border-accent/60 bg-surface px-4 py-2 text-sm text-accent shadow-2xl hover:bg-accent/10"
-        >
-          ▶ Resume tutorial
-        </button>
-        <button
-          onClick={ob.requestEnd}
-          aria-label="End tutorial"
-          title="End the tour and return to your project exactly as you left it"
-          data-capability="tour.finish"
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-edge bg-surface text-ink-dim shadow-2xl"
-        >
-          ✕
-        </button>
-      </div>
     );
   }
 
@@ -704,7 +710,6 @@ export default function OnboardingOverlay({
           >
             {step.continueLabel ?? (step.mode === "optional" ? "Continue / skip" : "Continue")}
           </button>
-          <button onClick={ob.pause} className={quietBtn}>Pause</button>
           <span className="flex-1" />
           <button
             onClick={ob.requestEnd}

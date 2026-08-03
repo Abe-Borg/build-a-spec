@@ -270,10 +270,13 @@ however you end it, it comes back exactly as it was.
   same document, same history, same version list. One short confirmation, then
   it happens; nothing to choose and nothing to lose. Want the practice work
   too? Save it from the panel before you finish.
-- **Resume, jump, and restart.** Pause any time; the tutorial resumes only
-  when the server agrees the same protected workspace is still live. Help
-  restarts it or jumps straight to any named chapter. Reduced motion is
-  honored.
+- **A guided run, start to finish.** The tour cannot be parked half-done
+  holding your project aside — it either runs or ends and gives your session
+  back, and every card and checkpoint carries an End. Step cards never block
+  the app, so you can read the document or ask a question in the chat as you
+  go, and reloading picks the tour back up where you left it — but only when
+  the server agrees the same protected workspace is still live. Help restarts
+  it or jumps straight to any named chapter. Reduced motion is honored.
 
 ## Shipped in v1.0.0 (Batch 5: Redline export + version diff) and still current
 

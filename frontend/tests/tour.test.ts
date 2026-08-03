@@ -290,6 +290,90 @@ test("the tutorial has exactly one ending, and it is a restore", () => {
   assert.doesNotMatch(app, /choose what to keep/i);
 });
 
+test("the tutorial runs start to finish and cannot be suspended", () => {
+  // A guided tour has two states — running, or ended and the project back.
+  // A third "paused" state let the tour sit indefinitely holding the user's
+  // real session in a protected workspace, with a pill as the only reminder.
+  assert.doesNotMatch(hook, /kind:\s*"paused"/);
+  assert.doesNotMatch(hook, /\bpause:\s*\(\)|\bresume:\s*\(\)|askQuestion/);
+  assert.doesNotMatch(overlay, /ob\.pause|ob\.resume|ob\.askQuestion/);
+  assert.doesNotMatch(overlay, /Resume tutorial/);
+  // Nothing persists a suspended flag, so no stored record can restore one.
+  assert.doesNotMatch(storage, /paused/);
+
+  // A reload re-enters the tour at the stored step instead of parking it, and
+  // goes through enterChunk so a chapter whose scenario the server no longer
+  // holds gets it swapped back in.
+  assert.match(
+    hook,
+    /enterChunkRef\.current\?\.\([\s\S]{0,120}Math\.min\(stored\.step/,
+  );
+
+  // Escape asks to end, the same as every ✕ and backdrop click in the tour.
+  assert.match(
+    overlay,
+    /event\.key !== "Escape"[\s\S]{0,220}ob\.requestEnd\(\)/,
+  );
+
+  // Step actions hand the user a control and stay put. The card is
+  // non-blocking, so suspending the tour to reach the composer is not the
+  // trade it once was.
+  assert.match(
+    hook,
+    /prefillComposer\(action\.prefillText \?\? ""\);\s*\n\s*break;/,
+  );
+  assert.match(hook, /openTemplates\(\);\s*\n\s*break;/);
+
+  // And the manifest may not promise an affordance that is gone.
+  assert.doesNotMatch(tour, /\bpause\b/i);
+});
+
+test("every tutorial surface offers a way back to the user's project", () => {
+  // The tour holds the real session aside in a protected workspace, so a
+  // surface a user can reach but not leave strands their project behind a
+  // modal. Every phase the overlay renders is checked here.
+  const branch = (start: string, end: string) => {
+    const from = overlay.indexOf(start);
+    assert.ok(from >= 0, `overlay branch not found: ${start}`);
+    const to = overlay.indexOf(end, from + start.length);
+    assert.ok(to > from, `overlay branch has no end: ${end}`);
+    return overlay.slice(from, to);
+  };
+  const preparing = branch(
+    'if (phase.kind === "preparing") {',
+    'if (phase.kind === "chunk-break") {',
+  );
+  const checkpoint = branch(
+    'if (phase.kind === "chunk-break") {',
+    "const chapter = TOUR[phase.chunk];",
+  );
+  const touring = branch("const chapter = TOUR[phase.chunk];", "function CardHeader(");
+
+  // Waiting on a start or a scenario swap: an explicit End beside the bar.
+  // Waiting on the RESTORE is the one exception — that already IS the ending,
+  // so it offers nothing to leave to, which is why the guard is on `finishing`.
+  assert.match(preparing, /\{!finishing && \([\s\S]{0,400}?onClick=\{ob\.requestEnd\}/);
+  // A failure leaves both doors open: retry, or go the other way.
+  assert.match(preparing, /onClick=\{finishing \? ob\.stayInTutorial : ob\.requestEnd\}/);
+  // The between-chapters checkpoint is modal and blocks the app behind it.
+  assert.match(checkpoint, /ob\.continueChunk[\s\S]{0,220}?onClick=\{ob\.requestEnd\}/);
+  // The step card: the ✕ in its header and the End button in its footer.
+  assert.match(touring, /onClose=\{ob\.requestEnd\}/);
+  assert.match(touring, /ob\.advance[\s\S]{0,600}?onClick=\{ob\.requestEnd\}/);
+
+  // Each of those three is a labelled control, not just a ✕ glyph, and each
+  // declares the capability so the coverage contract sees it.
+  assert.equal(
+    [...overlay.matchAll(/data-capability="tour\.finish"/g)].length,
+    3,
+    "one End control per reachable tutorial surface",
+  );
+  // The ✕ that closes a ModalShell must route to the confirmation too — a
+  // backdrop click is the easiest way to hit one by accident.
+  assert.match(overlay, /aria-label="End tutorial"/);
+  assert.doesNotMatch(overlay, /onClose=\{\(\) => setPhase/);
+});
+
 test("rearrangement is a required real-document exercise", () => {
   assert.match(overlay, /documentOrderSignature/);
   assert.match(overlay, /paragraphs\.map\(\(item\) => item\.id\)/);

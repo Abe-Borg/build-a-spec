@@ -111,7 +111,12 @@ from .llm.conversation import (
     standards_payload,
     stream_user_turn,
 )
-from .llm.prompts import FULL_DRAFT_DIRECTIVE
+from .llm.prompts import (
+    DraftPrerequisites,
+    draft_prerequisites,
+    draft_prerequisites_directive,
+    full_draft_directive,
+)
 from .project_profile import ProjectProfile
 from .research.engine import (
     research_coverage,
@@ -1239,6 +1244,31 @@ def _source_preservation_payload(
     }
 
 
+def _draft_prerequisites(session) -> DraftPrerequisites:
+    """The full-draft gate for the session's current document.
+
+    ONE derivation, two callers — the payload (so the panel can say what is
+    still needed before the click) and ``POST /api/draft/full`` (which is
+    authoritative at the click). A frontend reimplementation would be free
+    to disagree with the endpoint about whether the button is about to
+    draft or about to ask.
+
+    The tree is bound once and every field read off that one reference: a
+    committing turn swaps ``store.doc`` wholesale, so re-reading per field
+    could mix a section number from one version with a country from
+    another. Coherence needs the inputs captured together, not a lock held.
+    """
+    doc = session.doc.doc
+    identity = getattr(doc, "project_identity", {}) or {}
+    profile = getattr(doc, "project_profile", {}) or {}
+    return draft_prerequisites(
+        section_number=doc.number,
+        section_title=doc.title,
+        project_type=str(identity.get("project_type", "") or ""),
+        country=str(profile.get("country", "") or ""),
+    )
+
+
 def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
     """Build the full document payload.
 
@@ -1277,6 +1307,10 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         ),
         "standards": standards_payload(session),
         "profile_complete": bool(profile and profile.is_complete()),
+        # What "Draft full section" still needs before it can draft rather
+        # than ask (section / project type / country). Server-derived so the
+        # panel's tooltip and the endpoint's decision share one answer.
+        "draft_prerequisites": _draft_prerequisites(session).to_dict(),
         "research_status": session.research.status,
         # The imported-master version index (Batch 5), for the compare
         # picker's "Master (import)" option; ``None`` for from-scratch.
@@ -2858,15 +2892,24 @@ def create_app() -> FastAPI:
 
     @app.post("/api/draft/full")
     def draft_full() -> JSONResponse:
-        """Hand the frontend the canned full-section draft directive (WI1).
+        """Hand the frontend the user message the full-draft click should send.
 
         Deliberately thin: it owns no drafting machinery of its own. The
-        directive is an ordinary user message the frontend sends back through
+        message is an ordinary user message the frontend sends back through
         ``/api/chat``, so the pass rides the existing SSE stream, tool loop,
         status strip, one-undo-step commit, and rollback — one code path for
         turns, no duplicated pipeline. Refused (409) while a model turn is
         streaming or research is running, mirroring the manual-edit guard: a
         drafting turn launched into either would collide with in-flight work.
+
+        WHICH message depends on the draft prerequisites. A whole-section
+        draft anchors on the section, the project type, and the country, and
+        every defaulted provision it lays down inherits them — so with any
+        of the three unknown this returns a directive that COLLECTS the
+        missing facts instead of one that drafts blind. That is a 200 with
+        ``ready: false``, not an error: the request succeeded and the
+        payload says what happens next. The click is always honored and
+        always advances the work; only the turn it buys changes.
         """
         session = sessions.get_session()
         if session.turn_active:
@@ -2887,7 +2930,19 @@ def create_app() -> FastAPI:
                 },
                 status_code=409,
             )
-        return JSONResponse({"ok": True, "message": FULL_DRAFT_DIRECTIVE})
+        prereqs = _draft_prerequisites(session)
+        return JSONResponse(
+            {
+                "ok": True,
+                "ready": prereqs.ready,
+                "missing": list(prereqs.missing),
+                "message": (
+                    full_draft_directive(prereqs)
+                    if prereqs.ready
+                    else draft_prerequisites_directive(prereqs)
+                ),
+            }
+        )
 
     # --- Document ----------------------------------------------------------
 

@@ -4,6 +4,7 @@ import type {
   DiagnosticsSnapshot,
   DiagnosticsTraces,
   DocPayload,
+  DraftPrerequisiteId,
   EditOp,
   Figure,
   Health,
@@ -335,18 +336,40 @@ async function* readSse<T>(
   }
 }
 
+/** What the full-draft click buys: a draft, or the questions it needs first. */
+export interface DraftFullPlan {
+  /** True when the section, project type, and country are all known. */
+  ready: boolean;
+  /** The prerequisites still unknown; [] when `ready`. */
+  missing: DraftPrerequisiteId[];
+  /** The user message to send — the draft directive, or the one that
+   *  collects the missing facts. Either way it goes through the same
+   *  {@link streamChat} path as any other turn. */
+  message: string;
+}
+
 /**
- * Fetch the canned full-section draft directive (WI1). The caller sends the
- * returned text back through {@link streamChat} as a normal user turn, so the
- * draft pass rides the one chat pipeline. 409 while a turn or research runs.
+ * Fetch the user message the full-draft click should send (WI1). The caller
+ * sends `message` back through {@link streamChat} as a normal user turn, so
+ * the pass rides the one chat pipeline. 409 while a turn or research runs.
+ *
+ * A whole-section draft anchors on the section, the project type, and the
+ * country, so when any is unknown the server returns a message that COLLECTS
+ * them rather than one that drafts blind (`ready: false`, still a 200 — the
+ * request succeeded, and the click still advances the work). Callers send
+ * `message` either way; `ready` is only for telling the user which they got.
  */
-export async function draftFull(): Promise<string> {
+export async function draftFull(): Promise<DraftFullPlan> {
   const resp = await fetch("/api/draft/full", { method: "POST" });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
     throw new Error(data.error ?? `draft failed (${resp.status})`);
   }
-  return data.message as string;
+  return {
+    ready: data.ready !== false,
+    missing: (data.missing ?? []) as DraftPrerequisiteId[],
+    message: data.message as string,
+  };
 }
 
 /** POST /api/chat and yield parsed SSE events as they arrive. */

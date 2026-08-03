@@ -605,6 +605,18 @@ From-scratch drafting is a first-class path, not the fallback.
   directive appears as a visible user turn), so there's no second pipeline to
   trust. Once research completes and the page is still sparse, the button
   gives a one-time attention pulse.
+- **It never drafts blind.** A whole-section draft anchors on three facts —
+  the **CSI section** (number and title), the **project type** (facility/use),
+  and the **country** — and every defaulted provision it lays down inherits
+  them. The section decides what the document *is*; the project type is what
+  the defaults are defended by; the country picks the code family and the
+  units (I-codes/NFPA/UL and inch-pound, or NBC-NFC/CSA/ULC and SI). So while
+  any of the three is unrecorded the button sends a turn that **asks you for
+  exactly those**, defaults-first with a recommendation for each, and is
+  forbidden from drafting that turn; answer, then draft. The tooltip names
+  what is still needed before you click. City, state, and client are
+  deliberately *not* prerequisites — they refine a draft rather than decide
+  its shape (the full profile is the *research* gate).
 - **The review queue — turn the assumptions schedule into a workflow.** A
   Review drawer under the panel shows the outstanding count ("Review 87") and
   walks every block that needs a human decision — `imported` blocks after a

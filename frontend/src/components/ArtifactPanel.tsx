@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  DraftPrerequisites,
   EditOp,
   FileLoading,
   ImportNotice,
@@ -43,6 +44,8 @@ interface Props {
   lintIssues: LintIssue[];
   standards: StandardInfo[];
   profileComplete: boolean;
+  /** Full-draft gate (section / project type / country); null until loaded. */
+  draftPrerequisites: DraftPrerequisites | null;
   research: ResearchSnapshot | null;
   qc: QcSnapshot | null;
   readiness: ReadinessPayload | null;
@@ -247,6 +250,7 @@ export default function ArtifactPanel({
   lintIssues,
   standards,
   profileComplete,
+  draftPrerequisites,
   research,
   qc,
   readiness,
@@ -380,6 +384,23 @@ export default function ArtifactPanel({
   const draftDisabled = busy || !isSparse || bodyEditingDisabled;
   const draftSourceReason =
     sourceCapabilities?.elements.sec?.replace_text?.message;
+  // A whole-section draft anchors on the section, the project type, and the
+  // country, so the click collects whatever is missing before it drafts. The
+  // report is the server's — never recomputed here, or the tooltip could
+  // promise a draft the endpoint is about to turn into questions.
+  const draftNeeds =
+    draftPrerequisites?.ready === false
+      ? draftPrerequisites.requirements
+        .filter((r) => !r.satisfied)
+        .map((r) => r.label)
+      : [];
+  const draftNeedsPhrase =
+    draftNeeds.length > 1
+      ? `${draftNeeds.slice(0, -1).join(", ")} and ${
+        draftNeeds[draftNeeds.length - 1]
+      }`
+      : (draftNeeds[0] ?? "");
+  const draftNeedsPronoun = draftNeeds.length === 1 ? "it" : "them";
   const draftTip = bodyEditingDisabled
     ? draftSourceReason
       ? `Body drafting is disabled: ${draftSourceReason}`
@@ -390,7 +411,9 @@ export default function ArtifactPanel({
       } — a one-pass full draft is for starting from an empty or sparse section. Edit inline or ask the model to extend it.`
       : busy
         ? "Finish the current turn first."
-        : "Draft the complete section in one pass — every PART and article, stamped from what's known so far. One click to undo.";
+        : draftNeeds.length > 0
+          ? `Needs ${draftNeedsPhrase} first — every provision a full draft lays down inherits ${draftNeedsPronoun}. Clicking asks you about ${draftNeedsPronoun}; then draft.`
+          : "Draft the complete section in one pass — every PART and article, stamped from what's known so far. One click to undo.";
 
   // --- Compare (diff) mode (Batch 5) ---
   const curIndex = version.index;

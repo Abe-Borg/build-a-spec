@@ -219,7 +219,7 @@ function HowToUse({
           },
           {
             t: "Draft the section",
-            d: "Hit “Draft full section” to lay down every PART and article in one pass, or build it through chat. Once there is content on the page, the inline structure controls let you add and rearrange articles by hand.",
+            d: "Hit “Draft full section” to lay down every PART and article in one pass, or build it through chat. A full draft anchors on the section, the project type, and the country, so if any of the three is still unrecorded the button asks you about them first — answer, then draft. Once there is content on the page, the inline structure controls let you add and rearrange articles by hand.",
           },
           {
             t: "Walk the Review queue",

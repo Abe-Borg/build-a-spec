@@ -450,10 +450,6 @@ export default function OnboardingOverlay({
     [rawStep, ready],
   );
   const { rect, missing } = useAnchorRect(anchorStep, doc, reducedMotion);
-  const canBuildFixture =
-    rawStep?.readiness === "content" ||
-    rawStep?.readiness === "rich-structure" ||
-    rawStep?.readiness === "versioned";
   const orderSignature = useMemo(() => documentOrderSignature(doc), [doc]);
   const rearrangeKey =
     phase.kind === "touring" && rawStep?.id === "rearrange"
@@ -485,7 +481,6 @@ export default function OnboardingOverlay({
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || ob.endConfirm) return;
       if (phase.kind === "touring" || phase.kind === "chunk-break") ob.pause();
-      else if (phase.kind === "source-choice") ob.requestEnd();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -493,92 +488,14 @@ export default function OnboardingOverlay({
 
   if (phase.kind === "idle") return null;
 
-  if (phase.kind === "source-choice") {
-    return (
-      <ModalShell title="Choose the spec for your full tutorial" onClose={ob.requestEnd} wide>
-        <p className="text-sm leading-relaxed text-ink-dim">
-          The tutorial always uses actual document content in a protected workspace. Your current
-          project is copied, never edited in place. If it is sparse, the assistant fills the copy
-          with the examples needed to demonstrate every feature.
-        </p>
-        <div className="mt-4 grid gap-2 sm:grid-cols-3">
-          <button
-            onClick={() => ob.chooseSource("current")}
-            disabled={!hasContent}
-            className={primaryBtn + " min-h-20 text-left disabled:opacity-40"}
-            data-capability="tour.workspace"
-          >
-            <span className="block">Use my current spec</span>
-            <span className="mt-1 block text-[11px] font-normal opacity-80">
-              Work from a protected copy and restore the original later.
-            </span>
-          </button>
-          <button
-            onClick={() => ob.chooseSource("generated")}
-            className={quietBtn + " min-h-20 text-left"}
-            data-capability="tour.workspace"
-          >
-            <span className="block">Generate a tutorial spec with AI</span>
-            <span className="mt-1 block text-[11px] font-normal text-ink-faint">
-              Optional live generation using your API key, network tools, and real spend.
-            </span>
-          </button>
-          <button
-            onClick={() => ob.chooseSource("showcase")}
-            className={quietBtn + " min-h-20 text-left"}
-            data-capability="tour.workspace"
-          >
-            <span className="block">Use bundled showcase</span>
-            <span className="mt-1 block text-[11px] font-normal text-ink-faint">
-              Offline, pre-generated LLM-authored fallback with complete reusable content.
-            </span>
-          </button>
-        </div>
-        {!hasContent && (
-          <p className="mt-2 text-[11px] text-ink-faint">
-            There is no current spec content yet. Generate one live or use the bundled offline showcase.
-          </p>
-        )}
-      </ModalShell>
-    );
-  }
-
-  if (phase.kind === "enrichment-choice") {
-    return (
-      <ModalShell title="This protected copy needs more examples" onClose={ob.requestEnd} wide>
-        <p className="text-sm leading-relaxed text-ink-dim">
-          Your current spec is too sparse to demonstrate every feature. Existing wording, IDs,
-          order, decisions, and source links will stay unchanged; additions exist only in the
-          tutorial copy. Choose how to add the missing examples.
-        </p>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          <button onClick={ob.chooseLiveEnrichment} className={primaryBtn + " min-h-20 text-left"}>
-            <span className="block">Enrich the copy with AI</span>
-            <span className="mt-1 block text-[11px] font-normal opacity-80">
-              Uses your API key, network access, and real billed model usage for this operation.
-            </span>
-          </button>
-          <button onClick={ob.chooseBundledEnrichment} className={quietBtn + " min-h-20 text-left"}>
-            <span className="block">Add bundled showcase examples</span>
-            <span className="mt-1 block text-[11px] font-normal text-ink-faint">
-              Offline and unbilled; merges pre-generated LLM-authored fixtures around your copy.
-            </span>
-          </button>
-        </div>
-      </ModalShell>
-    );
-  }
-
   if (phase.kind === "preparing") {
     const finishing = phase.stage === "finishing";
     const label =
       phase.stage === "starting"
-        ? "Protecting the original and opening the tutorial copy…"
-        : phase.stage === "enriching"
-          ? "Building the missing real examples in the specification…"
-          : phase.stage === "scenario"
-            ? `Preparing the ${phase.label ?? "next"} chapter…`
-            : "Returning you to your project…";
+        ? "Setting your project aside and opening the bundled tutorial showcase…"
+        : phase.stage === "scenario"
+          ? `Preparing the ${phase.label ?? "next"} chapter…`
+          : "Returning you to your project…";
     return (
       <ModalShell
         title={
@@ -729,13 +646,8 @@ export default function OnboardingOverlay({
                   ? "There is no completed Final QC result in this tutorial state. Final QC is optional and paid. If you declined the live run, the details above remain instructional; no findings or readiness state will be fabricated."
                   : step.readiness === "imported"
                     ? "The real imported-source scenario could not be prepared. Continue without it; the tutorial will not synthesize imported provenance or source-preservation permissions."
-                    : "This protected workspace does not yet contain the real example required for this step."}
+                    : "The bundled showcase state for this step could not be prepared. You can continue; the explanation above stands, and nothing will be fabricated to fill the gap."}
             </p>
-            {canBuildFixture && (
-              <button onClick={ob.ensureContent} className={primaryBtn + " mt-2"}>
-                Build the missing example
-              </button>
-            )}
           </div>
         )}
         {ready && !missing && step.details && (

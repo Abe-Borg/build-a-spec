@@ -237,10 +237,11 @@ what the honest-framing rule above exists to prevent.)
 
 ## The guided tutorial — an actual specification, not a slideshow
 
-**The tutorial teaches against real document state in a protected copy of
-your work.** Pick your own spec, a freshly generated one, or the bundled
-showcase, and practice on it. However you end the tour, your original project
-comes back exactly as it was before it started.
+**The tutorial teaches against real document state.** It runs on the bundled
+showcase — a complete, pre-generated example section — in a protected
+practice workspace, with no choices to make and no model calls to pay for:
+your own project is set aside untouched the moment the tour starts, and
+however you end it, it comes back exactly as it was.
 
 - **Eleven chapters over a real workspace.** Start from an empty page ·
   the paper · grounding · review and compare · figures and references ·
@@ -800,8 +801,7 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/readiness, /api/audit/* (deprecated),
                          /api/templates (+preview/import/{id}/export/
                          {id}/instantiate),
-                         /api/tutorial/status|start|enrich|scenario/*|
-                         restore|keep,
+                         /api/tutorial/status|start|scenario/*|restore,
                          /api/reference/upload + /api/references,
                          /api/figures + /api/figure/{fid}/csv,
                          /api/session/unsaved|bundle, /api/usage,
@@ -810,9 +810,9 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
   templates.py           TemplateCatalog: curated + personal libraries, the
                          preview→commit create flow (Exact / AI-generalize),
                          import/export/instantiate
-  tutorial.py            tutorial coverage analysis, the enrichment directive and
-                         its additive-only validator, the bundled showcase, and
-                         the per-chapter practice-copy builders
+  tutorial.py            tutorial coverage analysis, the bundled showcase (the
+                         tour's only source), and the per-chapter practice-copy
+                         builders — all deterministic, no model calls
   qc/
     schema.py            QC lens definitions + submit_qc_findings/consolidation/
                          verdict strict tools + observable reviewed-check and
@@ -941,8 +941,8 @@ frontend/                Vite + React + TypeScript + Tailwind v4
   src/lib/tour.ts        the versioned tutorial manifest: starter prompts,
                          chapters (with backend scenarios), steps, anchors,
                          document resolvers, readiness, and step actions
-  src/lib/useOnboarding.ts  tutorial lifecycle: workspace start/enrich, scenario
-                         swap, chapter jump, restore/keep, resume persistence
+  src/lib/useOnboarding.ts  tutorial lifecycle: showcase workspace start,
+                         scenario swap, chapter jump, restore, resume persistence
   src/lib/onboardingStorage.ts  "tour completed" flag + the resume record
   src/components/        Chat (starter chips), MessageBubble (markdown),
                          Composer (ask-model prefill),

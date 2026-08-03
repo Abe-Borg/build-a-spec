@@ -352,45 +352,6 @@ class SessionManager:
             self._activate(tutorial, "tutorial")
             return self.current()
 
-    def replace_tutorial(
-        self,
-        expected_workspace_id: int,
-        staged_session: SessionState,
-        *,
-        source: str | None = None,
-    ) -> WorkspaceLease:
-        """Replace an incomplete tutorial copy with a validated repair.
-
-        This is used only after enrichment has stopped and failed its fixture
-        validation.  Spend already incurred stays additive, while the
-        retained original and the original tutorial-usage baseline remain
-        untouched for exact restoration accounting.
-        """
-        with self._lock:
-            self._check_expected(expected_workspace_id)
-            if self._scope != "tutorial" or self._tutorial is None:
-                raise WorkspaceConflictError(
-                    "Only the active tutorial copy can be repaired."
-                )
-            if self._active_writes:
-                raise WorkspaceBusyError(["another edit or upload"])
-            if self._transition_active_locked():
-                # A scenario build in flight is reading THIS tutorial session
-                # and will merge its spend onto it; swapping it out now would
-                # send that merge to an object nobody holds any more.
-                raise WorkspaceBusyError(["another tutorial transition"])
-            reasons = self._busy_reasons(self._active)
-            if reasons:
-                raise WorkspaceBusyError(reasons)
-            old = self._active
-            staged_session.usage.load_snapshot(old.usage.snapshot())
-            old.invalidate_model_turn()
-            self._tutorial = staged_session
-            if source is not None:
-                self._tutorial_source = source
-            self._activate(staged_session, "tutorial")
-            return self.current()
-
     def finish_tutorial(self, expected_workspace_id: int) -> WorkspaceLease:
         """End the tutorial the only way it can end: restore the original.
 

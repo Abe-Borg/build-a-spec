@@ -1,4 +1,10 @@
-"""Content-driven tutorial fixtures, readiness analysis, and directives."""
+"""Content-driven tutorial fixtures and coverage analysis.
+
+The tutorial runs exclusively on the bundled showcase (decided with Abraham,
+2026-08-03): no source choice, no live enrichment, no billed model calls.
+Every fixture here is deterministic, and the whole tour works without an
+API key.
+"""
 from __future__ import annotations
 
 import copy
@@ -8,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .figures import FIGURE_KINDS, FigureError
-from .llm.conversation import SessionState, stream_user_turn
+from .llm.conversation import SessionState
 from .reference_extract import extract_reference_document
 from .spec_doc.docx_export import build_docx
 from .spec_doc.model import SpecSection, iter_paragraphs
@@ -183,10 +189,9 @@ def analyze_tutorial_coverage(session: SessionState) -> TutorialCoverage:
         gaps.append("tbd_content")
     if len(session.doc.versions) < 2:
         gaps.append("version_history")
-    # Figures are no longer part of upfront coverage — Chapter 6 generates
-    # them (live, with a bundled fallback) when the tour reaches it, not at
-    # tutorial start. See media_practice_copy. Kept only as an informational
-    # count below.
+    # Figures are not part of upfront coverage — Chapter 6 attaches its
+    # bundled fixtures when the tour reaches it, not at tutorial start. See
+    # media_practice_copy. Kept only as an informational count below.
     valid_figure_kinds = _valid_figure_kinds(session)
     if not session.suggested_prompts:
         gaps.append("suggested_prompts")
@@ -223,118 +228,6 @@ def analyze_tutorial_coverage(session: SessionState) -> TutorialCoverage:
     return TutorialCoverage(not gaps, tuple(gaps), anchors, counts, session.doc.index)
 
 
-def tutorial_enrichment_directive(coverage: TutorialCoverage) -> str:
-    gaps = ", ".join(coverage.gaps) or "none"
-    return f"""TUTORIAL WORKSPACE ENRICHMENT
-
-You are working only in a disposable tutorial copy. Preserve every existing
-section heading, article, provision, and user decision. Add only the material
-needed to make the live specification demonstrate the application's editing
-and review features. Current validated gaps: {gaps}.
-
-Use the normal document tools. Ensure all three PARTs contain useful
-domain-relevant content; one PART has at least two articles; one article has
-movable sibling provisions; and one branch demonstrates all four supported
-paragraph levels. Include at least one genuine unresolved [TBD: ...] provision
-with status needs_input and at least one defensible default with status assumed.
-Never mark new material confirmed or imported. Never invent research citations,
-source_item_id values, governing editions, client requirements, or QC results.
-If discipline or project type is unknown, keep wording broadly applicable and
-use needs_input rather than guessing. Offer two short suggested next replies.
-Finish with a concise explanation that all additions are tutorial-only and
-require project review.
-"""
-
-
-def tutorial_figures_directive() -> str:
-    """Scoped directive for Chapter 6: a few figures, nothing else touched."""
-    return """TUTORIAL WORKSPACE FIGURES
-
-You are working only in a disposable tutorial copy. Do not add, remove, or
-edit any section, article, provision, or other document content this turn —
-this turn is about figures only. Using create_figure, add two or three
-simple, representative figures for the current specification: for example a
-coordination/sequence Mermaid diagram, a status or decision SVG schematic,
-and a short schedule table. Each figure must be attached to your assistant
-response. Never invent research citations, source_item_id values, governing
-editions, client requirements, or QC results in a figure's caption or
-labels. Finish with one brief sentence noting these are tutorial-only
-examples.
-"""
-
-
-def validate_tutorial_enrichment(
-    before: SpecSection, after: SpecSection
-) -> tuple[bool, tuple[str, ...]]:
-    """Prove enrichment only added truthful fixtures around existing work."""
-    reasons: list[str] = []
-
-    if before.number and before.number != after.number:
-        reasons.append("section number changed")
-    if before.title and before.title != after.title:
-        reasons.append("section title changed")
-    for field in (
-        "project_identity",
-        "project_profile",
-        "edition_overrides",
-        "suppressed_standards",
-    ):
-        if getattr(before, field) != getattr(after, field):
-            reasons.append(f"section metadata {field} changed")
-
-    before_parts = [
-        (part.uid, part.number, part.title) for part in before.parts
-    ]
-    after_parts = [(part.uid, part.number, part.title) for part in after.parts]
-    if before_parts != after_parts:
-        reasons.append("PART identity, order, or title changed")
-
-    before_articles: dict[str, tuple[str, int, str]] = {}
-    after_articles: dict[str, tuple[str, int, str]] = {}
-    for part in before.parts:
-        for index, article in enumerate(part.articles):
-            before_articles[article.uid] = (part.uid, index, article.title)
-    for part in after.parts:
-        for index, article in enumerate(part.articles):
-            after_articles[article.uid] = (part.uid, index, article.title)
-    for uid, value in before_articles.items():
-        if after_articles.get(uid) != value:
-            reasons.append(f"existing article {uid} changed or moved")
-
-    def paragraph_map(section: SpecSection) -> dict[str, tuple[Any, ...]]:
-        mapped: dict[str, tuple[Any, ...]] = {}
-
-        def visit(paragraphs: list[Any], parent: str) -> None:
-            for index, paragraph in enumerate(paragraphs):
-                mapped[paragraph.uid] = (
-                    parent,
-                    index,
-                    paragraph.text,
-                    paragraph.status,
-                    paragraph.source_item_id,
-                )
-                visit(paragraph.children, paragraph.uid)
-
-        for part in section.parts:
-            for article in part.articles:
-                visit(article.paragraphs, article.uid)
-        return mapped
-
-    old_paragraphs = paragraph_map(before)
-    new_paragraphs = paragraph_map(after)
-    for uid, value in old_paragraphs.items():
-        if new_paragraphs.get(uid) != value:
-            reasons.append(f"existing provision {uid} changed or moved")
-    for uid, (_parent, _index, _text, status, source_item_id) in new_paragraphs.items():
-        if uid in old_paragraphs:
-            continue
-        if status not in {"assumed", "needs_input"}:
-            reasons.append(f"new provision {uid} has unsupported provenance")
-        if source_item_id:
-            reasons.append(f"new provision {uid} invented source provenance")
-    return not reasons, tuple(reasons)
-
-
 def build_showcase_session() -> SessionState:
     """Return the bundled, transparently pre-generated tutorial project."""
     curated = Path(__file__).resolve().parent / "templates" / "curated"
@@ -351,7 +244,11 @@ def build_showcase_session() -> SessionState:
     session = SessionState()
     session.module = get_module("generic")
     session.doc.seed_template(section)
-    # Make Compare meaningful with one real committed refinement.
+    # One real committed refinement makes Compare meaningful, and one
+    # recorded standard edition makes the standards strip render — the
+    # generic module ships no pins, so without a recorded override the
+    # strip self-hides and the standards tutorial step would degrade to
+    # the "control is not available" card on every run.
     first = next(iter(iter_paragraphs(session.doc.doc)), None)
     if first is not None:
         paragraph = first[2]
@@ -363,7 +260,21 @@ def build_showcase_session() -> SessionState:
                     "target_id": paragraph.uid,
                     "text": paragraph.text.replace("necessary", "required"),
                     "status": paragraph.status,
-                }
+                },
+                {
+                    "action": "set_standard_edition",
+                    "target_id": "sec",
+                    "standard": "ASTM E84",
+                    "edition": "2024",
+                    "basis": (
+                        "Bundled showcase example — a recorded edition with a "
+                        "stated basis, exactly what the standards chapter teaches"
+                    ),
+                    "title": (
+                        "Standard Test Method for Surface Burning "
+                        "Characteristics of Building Materials"
+                    ),
+                },
             ]
         )
         session.doc.commit_turn()
@@ -392,145 +303,6 @@ def build_showcase_session() -> SessionState:
         "Show me the next open item",
     ]
     return session
-
-
-def repair_tutorial_copy(source: SessionState) -> SessionState:
-    """Append deterministic showcase fixtures without rewriting user content.
-
-    Live enrichment is allowed to stop or return an invalid partial result.
-    Recovery must still leave every pre-enrichment node under the same parent
-    and at the same sibling position.  These additions use the production
-    document/figure stores, carry only assumed or needs-input provenance, and
-    retain any real source package attached to the protected copy.
-    """
-    from .sessions import clone_session_for_tutorial
-
-    repaired = clone_session_for_tutorial(source)
-    store = repaired.doc
-    store.begin_turn()
-    try:
-        if not store.doc.number.strip() or not store.doc.title.strip():
-            store.apply_edits(
-                [
-                    {
-                        "action": "replace",
-                        "target_id": "sec",
-                        "numbering": store.doc.number or "01 80 00",
-                        "text": store.doc.title
-                        or "PERFORMANCE AND COORDINATION REQUIREMENTS",
-                    }
-                ]
-            )
-
-        # Every PART gets real content. Appending avoids changing the order of
-        # any article the user already had.
-        for part in store.doc.parts:
-            if part.articles:
-                continue
-            created = store.apply_edits(
-                [
-                    {
-                        "action": "add_article",
-                        "target_id": part.uid,
-                        "text": "TUTORIAL PRACTICE REQUIREMENTS",
-                    }
-                ]
-            )[0]["id"]
-            store.apply_edits(
-                [
-                    {
-                        "action": "add_paragraph",
-                        "target_id": created,
-                        "text": (
-                            "Coordinate this tutorial-only requirement with adjacent work "
-                            "and verify the final project criteria before issue."
-                        ),
-                        "status": "assumed",
-                    }
-                ]
-            )
-
-        # One appended article supplies movable siblings, eight substantive
-        # provisions, a truthful open item, and all four supported depths.
-        fixture_article = store.apply_edits(
-            [
-                {
-                    "action": "add_article",
-                    "target_id": store.doc.parts[0].uid,
-                    "text": "TUTORIAL COORDINATION AND VERIFICATION",
-                }
-            ]
-        )[0]["id"]
-
-        roots: list[str] = []
-        root_specs = [
-            (
-                "Coordinate interfaces, access, sequencing, and responsibilities with "
-                "related work before procurement so conflicts are resolved in the project record.",
-                "assumed",
-            ),
-            (
-                "[TBD: Confirm the owner review interval and responsible approving party "
-                "before the final specification is issued for construction.]",
-                "needs_input",
-            ),
-            (
-                "Submit coordinated product data, installation instructions, and identified "
-                "deviations early enough to support a complete project review.",
-                "assumed",
-            ),
-            (
-                "Protect completed work and document corrective action when field conditions "
-                "do not match the reviewed coordination basis.",
-                "assumed",
-            ),
-            (
-                "Record verification results, responsible participants, and unresolved items "
-                "in a closeout record available to the project team.",
-                "assumed",
-            ),
-        ]
-        for text, status in root_specs:
-            roots.append(
-                store.apply_edits(
-                    [
-                        {
-                            "action": "add_paragraph",
-                            "target_id": fixture_article,
-                            "text": text,
-                            "status": status,
-                        }
-                    ]
-                )[0]["id"]
-            )
-
-        parent = roots[0]
-        for text in (
-            "Identify each affected interface and assign a responsible coordinator in the project record.",
-            "For each interface, compare dimensions, tolerances, access needs, and required completion dates.",
-            "When a conflict remains, document the accepted resolution before dependent work proceeds.",
-        ):
-            parent = store.apply_edits(
-                [
-                    {
-                        "action": "add_paragraph",
-                        "target_id": parent,
-                        "text": text,
-                        "status": "assumed",
-                    }
-                ]
-            )[0]["id"]
-        store.commit_turn()
-    except Exception:
-        store.rollback_turn()
-        raise
-
-    if not repaired.suggested_prompts:
-        repaired.suggested_prompts = [
-            "Use the recommended default",
-            "Show me the next open item",
-        ]
-    return repaired
 
 
 def detached_practice_copy(source: SessionState) -> SessionState:
@@ -741,9 +513,6 @@ def _attach_reference_fixtures(
     Derived from ``section``'s heading and first provisions; each fixture
     flows through the same DOCX/PDF/plain-text extractors as a user upload,
     and only the extracted text is retained — exactly like production.
-    Shared by ``reference_practice_copy`` and ``media_practice_copy`` so
-    both scenario builders attach identical reference fixtures without
-    double-cloning.
     """
     provisions = [
         paragraph.text
@@ -791,77 +560,13 @@ def _attach_reference_fixtures(
 def media_practice_copy(source: SessionState) -> SessionState:
     """Build Chapter 6's combined figures + references scenario.
 
-    Tries one real, scoped model turn asking for a few figures through the
-    normal create_figure tool, at the moment the tour actually reaches this
-    chapter (never earlier). Any failure — no key, an API/network error, the
-    model touching document content it must not, or simply producing no
-    usable figure — discards that attempt and falls back to the bundled
-    fixtures, mirroring /api/tutorial/enrich's live-then-bundled pattern.
-    _ensure_tutorial_figures only backfills whatever kind(s) the live
-    attempt did not produce, so a partial live success is kept and topped
-    up rather than discarded outright.
-    """
-    from .sessions import clone_session_for_tutorial
-
-    attempt = clone_session_for_tutorial(source)
-    usage_before = attempt.usage.snapshot()
-    doc_before = copy.deepcopy(attempt.doc.doc.to_dict())
-    figures_before = len(attempt.figures.figures)
-    history_start = len(attempt.history)
-    live_ok = False
-    try:
-        for _event in stream_user_turn(attempt, tutorial_figures_directive()):
-            pass
-        live_ok = (
-            attempt.doc.doc.to_dict() == doc_before
-            and len(attempt.figures.figures) > figures_before
-        )
-    except Exception:
-        live_ok = False
-
-    # push_scenario always re-derives the returned clone's usage from the
-    # base tutorial session's own ledger, so real spend from this attempt
-    # must be merged onto `source` regardless of outcome, or a
-    # failed/discarded attempt would silently lose billed usage.
-    source.usage.merge_delta(usage_before, attempt.usage.snapshot())
-
-    if live_ok:
-        clone = attempt
-        if len(clone.history) > history_start:
-            first_added = clone.history[history_start]
-            if first_added.get("role") == "user":
-                # Never leak the raw internal directive into the visible
-                # transcript — same rewrite /api/tutorial/enrich already
-                # does for its own directive.
-                first_added["content"] = [
-                    {
-                        "type": "text",
-                        "text": (
-                            "Add a few simple, representative figures to "
-                            "this protected copy without changing my "
-                            "existing content."
-                        ),
-                    }
-                ]
-    else:
-        clone = clone_session_for_tutorial(source)
-
-    # A figures-only turn must never wind down the reply-chip bar (a
-    # successful commit unconditionally replaces suggested_prompts with
-    # whatever this turn staged — [] if suggest_prompts was never called).
-    clone.suggested_prompts = list(source.suggested_prompts)
-    _ensure_tutorial_figures(clone)
-    return _attach_reference_fixtures(clone, source.doc.doc)
-
-
-def reference_practice_copy(source: SessionState) -> SessionState:
-    """Clone the tutorial and attach five extractor-produced references.
-
-    These files are derived from the active spec and flow through the same
-    DOCX/PDF/plain-text extractors as user uploads.  Only extracted text is
-    retained, exactly like production; the byte fixtures are disposable.
+    Bundled-only, like the rest of the tutorial: one renderable fixture of
+    every supported figure kind attaches to the cloned transcript, and five
+    extractor-produced reference documents ride beside them.  No model call,
+    no spend — the showcase tour works end to end without an API key.
     """
     from .sessions import clone_session_for_tutorial
 
     clone = clone_session_for_tutorial(source)
+    _ensure_tutorial_figures(clone)
     return _attach_reference_fixtures(clone, source.doc.doc)

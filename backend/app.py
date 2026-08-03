@@ -196,11 +196,8 @@ from .tutorial import (
     blank_practice_copy,
     build_showcase_session,
     media_practice_copy,
-    repair_tutorial_copy,
     review_practice_copy,
     structural_practice_copy,
-    tutorial_enrichment_directive,
-    validate_tutorial_enrichment,
 )
 
 _DEV_ORIGINS = [
@@ -382,7 +379,10 @@ class TemplateUpdateRequest(BaseModel):
 
 class TutorialStartRequest(BaseModel):
     request_id: str
-    source: Literal["current", "generated", "showcase"] = "current"
+    # The bundled showcase is the tutorial's only source (no current-project
+    # copy, no live generation) — the field survives so a stale client
+    # sending another value gets a clear 422 rather than a silent showcase.
+    source: Literal["showcase"] = "showcase"
     workspace_id: int
     generation: int
 
@@ -391,10 +391,6 @@ class TutorialRequest(BaseModel):
     tutorial_id: str
     workspace_id: int
     generation: int
-
-
-class TutorialEnrichRequest(TutorialRequest):
-    mode: Literal["live", "bundled"] = "live"
 
 
 class TutorialScenarioRequest(TutorialRequest):
@@ -2593,27 +2589,19 @@ def create_app() -> FastAPI:
     def tutorial_start(body: TutorialStartRequest) -> JSONResponse:
         manager = sessions.workspace_manager()
         try:
-            staged = build_showcase_session() if body.source == "showcase" else None
-            if body.source == "generated":
-                current = sessions.get_workspace().session
-                staged = SessionState()
-                staged.module = current.module
-                staged.discipline = current.discipline
-                staged.project_context = current.project_context
-                staged.usage.load_snapshot(current.usage.snapshot())
             lease = manager.begin_tutorial(
                 body.workspace_id,
                 expected_generation=body.generation,
-                staged_session=staged,
+                staged_session=build_showcase_session(),
                 request_id=body.request_id,
-                source=body.source,
+                source="showcase",
             )
             coverage = analyze_tutorial_coverage(lease.session)
             _trace_capture.app_event(
                 "tutorial",
                 action="start",
-                source=body.source,
-                needs_enrichment=not coverage.ready,
+                source="showcase",
+                coverage_ready=coverage.ready,
             )
             return JSONResponse(
                 {
@@ -2621,178 +2609,13 @@ def create_app() -> FastAPI:
                     "tutorial_id": lease.tutorial_id,
                     "workspace_id": lease.workspace_id,
                     "generation": lease.generation,
-                    "source": body.source,
-                    "needs_enrichment": not coverage.ready,
+                    "source": "showcase",
                     "coverage": coverage.to_dict(),
                     "session": _session_bundle(lease),
                 }
             )
         except (sessions.WorkspaceConflictError, sessions.WorkspaceBusyError) as exc:
             return _tutorial_error(exc)
-
-    @app.post("/api/tutorial/enrich")
-    def tutorial_enrich(body: TutorialEnrichRequest) -> Response:
-        lease = sessions.get_workspace()
-        if lease.scope != "tutorial" or not _tutorial_request_is_current(lease, body):
-            return _stale_tutorial_response()
-        coverage = analyze_tutorial_coverage(lease.session)
-        if coverage.ready:
-            return StreamingResponse(
-                iter(
-                    [
-                        _sse(
-                            {
-                                "type": "tutorial_coverage",
-                                "workspace_id": lease.workspace_id,
-                                "generation": lease.generation,
-                                "coverage": coverage.to_dict(),
-                            }
-                        )
-                    ]
-                ),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-        directive = tutorial_enrichment_directive(coverage)
-        _trace_capture.app_event("tutorial", action="enrich", mode=body.mode)
-        before_section = SpecSection.from_dict(lease.session.doc.doc.to_dict())
-        fallback_base = sessions.clone_session_for_tutorial(lease.session)
-        history_start = len(lease.session.history)
-
-        def events() -> Iterator[str]:
-            updated = None
-            failure = ""
-            valid_enrichment = True
-            if body.mode == "bundled":
-                try:
-                    repaired = sessions.workspace_manager().replace_tutorial(
-                        lease.workspace_id,
-                        repair_tutorial_copy(fallback_base),
-                        source=(
-                            "showcase"
-                            if lease.tutorial_source == "generated"
-                            else None
-                        ),
-                    )
-                    repaired_coverage = analyze_tutorial_coverage(repaired.session)
-                    yield _sse(
-                        {
-                            "type": "tutorial_fallback",
-                            "reason": "bundled_enrichment_selected",
-                            "replaces_workspace_id": lease.workspace_id,
-                            "replaces_generation": lease.generation,
-                            "workspace_id": repaired.workspace_id,
-                            "generation": repaired.generation,
-                            "source": repaired.tutorial_source,
-                            "coverage": repaired_coverage.to_dict(),
-                            "session": _session_bundle(repaired),
-                        }
-                    )
-                except sessions.WorkspaceConflictError as exc:
-                    yield _sse({"type": "error", "message": str(exc)})
-                return
-            try:
-                with sessions.active_write(lease.workspace_id):
-                    for event in stream_user_turn(lease.session, directive):
-                        yield _sse(
-                            {
-                                **event,
-                                "workspace_id": lease.workspace_id,
-                                "generation": lease.session.generation,
-                            }
-                        )
-                    if len(lease.session.history) > history_start:
-                        first_added = lease.session.history[history_start]
-                        if first_added.get("role") == "user":
-                            first_added["content"] = [
-                                {
-                                    "type": "text",
-                                    "text": (
-                                        "Build the missing tutorial examples in this "
-                                        "protected copy without changing my existing content."
-                                    ),
-                                }
-                            ]
-                    updated = analyze_tutorial_coverage(lease.session)
-                    valid_enrichment, validation_reasons = validate_tutorial_enrichment(
-                        before_section, lease.session.doc.doc
-                    )
-                    if not valid_enrichment:
-                        failure = "; ".join(validation_reasons[:4])
-                    yield _sse(
-                        {
-                            "type": "tutorial_coverage",
-                            "workspace_id": lease.workspace_id,
-                            "generation": lease.session.generation,
-                            "coverage": updated.to_dict(),
-                        }
-                    )
-            except sessions.WorkspaceConflictError as exc:
-                yield _sse({"type": "error", "message": str(exc)})
-                return
-            except Exception as exc:  # noqa: BLE001 - recover with bundled fixture
-                failure = str(exc)
-
-            if updated is not None and updated.ready and valid_enrichment:
-                current = sessions.get_workspace()
-                if (
-                    current.scope == "tutorial"
-                    and current.tutorial_id == lease.tutorial_id
-                    and current.session is lease.session
-                ):
-                    yield _sse(
-                        {
-                            "type": "tutorial_session",
-                            "workspace_id": current.workspace_id,
-                            "generation": current.generation,
-                            "source": current.tutorial_source,
-                            "session": _session_bundle(current),
-                        }
-                    )
-                return
-
-            # A stopped/failed/partial generation is never allowed to carry
-            # the user into chapters whose anchors do not exist.  Revalidate
-            # the actual document, then atomically replace only the protected
-            # tutorial copy with the bundled LLM-authored showcase when the
-            # attempted repair is still incomplete.  The retained original
-            # is untouched and paid usage from the attempt remains visible.
-            if updated is None:
-                updated = analyze_tutorial_coverage(lease.session)
-            if not updated.ready or not valid_enrichment:
-                try:
-                    fallback = repair_tutorial_copy(fallback_base)
-                    repaired = sessions.workspace_manager().replace_tutorial(
-                        lease.workspace_id,
-                        fallback,
-                        source=(
-                            "showcase"
-                            if lease.tutorial_source == "generated"
-                            else None
-                        ),
-                    )
-                    repaired_coverage = analyze_tutorial_coverage(repaired.session)
-                    yield _sse(
-                        {
-                            "type": "tutorial_fallback",
-                            "reason": failure or "incomplete_enrichment",
-                            "replaces_workspace_id": lease.workspace_id,
-                            "replaces_generation": lease.generation,
-                            "workspace_id": repaired.workspace_id,
-                            "generation": repaired.generation,
-                            "source": repaired.tutorial_source,
-                            "coverage": repaired_coverage.to_dict(),
-                            "session": _session_bundle(repaired),
-                        }
-                    )
-                except sessions.WorkspaceConflictError as exc:
-                    yield _sse({"type": "error", "message": str(exc)})
-
-        return StreamingResponse(
-            events(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
 
     @app.post("/api/tutorial/scenario/start")
     def tutorial_scenario_start(body: TutorialScenarioRequest) -> JSONResponse:
@@ -2860,13 +2683,11 @@ def create_app() -> FastAPI:
                     project_bytes
                 )
             build = media_practice_copy if kind == "references" else None
-            # "references" defers to push_scenario's own reserve-then-build
-            # sequence (via `build=`) rather than computing `staged` here,
-            # because media_practice_copy can make a real, billed model
-            # call: computing it eagerly would let two overlapping requests
-            # both pay for it before either discovered the scenario slot was
-            # already taken. Every other kind's construction is cheap enough
-            # that pre-computing it (the existing pattern above) is fine.
+            # "references" goes through push_scenario's reserve-then-build
+            # sequence (via `build=`) rather than computing `staged` here.
+            # The build is bundled-only now — no billed model call — but the
+            # ordering (reserve the scenario slot, then construct) is still
+            # the safe shape and is what the manager's race tests pin.
             scenario = sessions.workspace_manager().push_scenario(
                 body.workspace_id, kind=kind, staged_session=staged, build=build
             )

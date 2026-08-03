@@ -135,7 +135,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "left",
         title: "This is an actual specification",
         body:
-          "The tutorial is running in a protected copy of your current project, a newly AI-generated spec, or the bundled LLM-authored showcase you selected. Every block you see is real document state. Back, pause, ask a question, or end the tour at any time — however you end it, your project comes straight back exactly as it was.",
+          "The tutorial runs on the bundled showcase spec — a complete, pre-generated example section — in a protected practice workspace. Every block you see is real document state the app can edit, lint, and export. Your own project was set aside untouched when the tour began: back, pause, ask a question, or end at any time, and it comes straight back exactly as it was.",
       },
       {
         id: "identity",
@@ -155,7 +155,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "right",
         title: "Four ways into the same document",
         body:
-          "Start with the two-minute pitch, immediate drafting, a guided interview, or an office master. These starter prompts send ordinary chat messages; they never lock you into a workflow.",
+          "A fresh session's empty chat offers starter prompts: the two-minute pitch, immediate drafting, a guided interview, or an office master. They send ordinary chat messages and never lock you into a workflow — this showcase already has a conversation, so you will see them next time you start a session.",
       },
       {
         id: "api-key",
@@ -206,11 +206,11 @@ export const TOUR: readonly TourChunk[] = [
         id: "streaming",
         capabilities: ["chat.streaming", "chat.stop", "chat.thinking"],
         mode: "interactive",
-        anchor: "chat-pane",
-        placement: "right",
-        title: "Watch work land live",
+        anchor: "doc-panel",
+        placement: "left",
+        title: "The document is generated in front of you",
         body:
-          "Thinking, searching, fetching, drafting, and drawing statuses appear in chat while document patches land on the paper. Changed blocks glow briefly and scroll-follow stays with the work. Expand Thinking on a reply to read the reasoning summary as it streams — it is shown, never stored, so it is absent from history, traces, and the project file. Stop preserves visible partial progress; a failed turn restores the prior document while its already-used tokens remain in usage.",
+          "This paper is where the assistant's work lands: as a reply streams, document edits are applied batch by batch, changed blocks glow briefly, and scroll-follow stays with the work — the document builds dynamically rather than appearing all at once at the end. Chat, meanwhile, shows live thinking, searching, fetching, drafting, and drawing statuses, and expanding Thinking on a reply reads the reasoning summary as it streams (shown, never stored — absent from history, traces, and the project file). Stop preserves visible partial progress; a failed turn restores the prior document while its already-used tokens remain in usage.",
       },
       {
         id: "full-draft",
@@ -438,7 +438,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "right",
         title: "Figures live with the conversation",
         body:
-          "The assistant can create Mermaid diagrams, SVG schematics, and data tables inline. Expand or minimize them, confirm removal, and download SVG/PNG or table CSV. Figures persist in the project and return to the assistant message that created them.",
+          "This chapter attaches one bundled example of each figure kind to the conversation: in normal work the assistant creates Mermaid diagrams, SVG schematics, and data tables inline as it drafts. Expand or minimize them, confirm removal, and download SVG/PNG or table CSV. Figures persist in the project and return to the assistant message that created them.",
       },
       {
         id: "references",

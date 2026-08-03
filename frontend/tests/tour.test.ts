@@ -167,14 +167,40 @@ test("review tutorial does not offer a one-click confirmation shortcut", () => {
 
 test("workspace lifecycle protects current work and always restores it", () => {
   assert.match(hook, /startTutorialWorkspace/);
-  assert.match(hook, /enrichTutorialWorkspace/);
   assert.match(hook, /startTutorialScenario/);
   assert.match(hook, /finishTutorialScenario/);
   assert.match(hook, /restoreTutorialWorkspace/);
-  assert.match(overlay, /Use my current spec/);
-  assert.match(overlay, /Generate a tutorial spec with AI/);
-  assert.match(overlay, /Use bundled showcase/);
   assert.match(tour, /id:\s*"paper"[\s\S]*?scenario:\s*"structural"/);
+});
+
+test("repeated starts join one in-flight backend transition", () => {
+  // A double-clicked Tour button must not mint a second idempotency key or
+  // orphan the first start into restoring the workspace its successor just
+  // adopted (Codex review on PR #113). The in-flight guard makes the second
+  // click a join, and the pending request id survives until a start
+  // succeeds — starting again never resets it.
+  assert.match(hook, /startInFlightRef/);
+  assert.match(hook, /if \(startInFlightRef\.current\) return;/);
+  assert.match(hook, /startRequestRef\.current \?\? requestId\(\)/);
+  assert.doesNotMatch(
+    hook,
+    /const start = useCallback[\s\S]{0,500}?startRequestRef\.current = null/,
+  );
+});
+
+test("the bundled showcase is the tutorial's only source", () => {
+  // No chooser modal, no current-project copy, no live generation: Start
+  // goes straight to the protected showcase workspace.
+  assert.doesNotMatch(overlay, /Use my current spec/);
+  assert.doesNotMatch(overlay, /Generate a tutorial spec with AI/);
+  assert.doesNotMatch(overlay, /Use bundled showcase/);
+  assert.doesNotMatch(hook, /source-choice|enrichment-choice/);
+  assert.doesNotMatch(hook, /chooseSource|chooseLiveEnrichment|chooseBundledEnrichment/);
+  assert.match(hook, /beginShowcase/);
+  assert.match(api, /source:\s*"showcase"/);
+  // The manifest's own copy must not resurrect the choice.
+  assert.doesNotMatch(tour, /you selected|AI-generated spec/);
+  assert.match(tour, /bundled showcase spec/);
 });
 
 test("the tutorial has exactly one ending, and it is a restore", () => {
@@ -244,23 +270,27 @@ test("rearrangement is a required real-document exercise", () => {
   assert.match(tour, /disposable practice state/);
 });
 
-test("spotlight leaves real controls interactive and missing fixtures are repairable", () => {
+test("spotlight leaves real controls interactive and missing fixtures degrade honestly", () => {
   assert.match(overlay, /pointer-events-none fixed inset-0/);
   assert.match(overlay, /pointer-events-auto fixed z-\[65\]/);
   assert.match(overlay, /readinessMet/);
   assert.match(overlay, /data-tour=\\?"doc-panel/);
   assert.doesNotMatch(overlay, /left-1\/2 top-1\/3/);
-  assert.match(overlay, /Build the missing example/);
-  assert.match(overlay, /ob\.ensureContent/);
+  // The repair path went with the enrichment surface: a missing fixture is
+  // explained beside the real document, never rebuilt with a model call.
+  assert.doesNotMatch(overlay, /Build the missing example/);
+  assert.doesNotMatch(overlay, /ensureContent/);
+  assert.match(overlay, /could not be prepared\. You can continue/);
 });
 
 test("paid research and QC results are truthful optional skips, never generic enrichment", () => {
   assert.match(overlay, /There is no completed research result/);
   assert.match(overlay, /There is no completed Final QC result/);
   assert.match(overlay, /no findings or readiness state will be fabricated/);
-  assert.match(hook, /readiness === "content"[\s\S]*?readiness === "rich-structure"[\s\S]*?readiness === "versioned"/);
-  assert.doesNotMatch(hook, /readiness === "research"[\s\S]{0,120}?void enrich/);
-  assert.doesNotMatch(hook, /readiness === "qc"[\s\S]{0,120}?void enrich/);
+  // The enrichment machinery is gone entirely, so no readiness gap can
+  // trigger a model call from inside the tour.
+  assert.doesNotMatch(hook, /enrich/i);
+  assert.doesNotMatch(overlay, /enrich/i);
 });
 
 test("template paths are active and cover create, preview, import, manage, and start", () => {
@@ -298,16 +328,12 @@ test("help can restart the full tutorial or jump to any named chapter", () => {
   assert.match(app, /onboarding\.startAtChapter\(chapterId\)/);
 });
 
-test("tutorial streams reject stale workspace generations and only explicit fallback replaces state", () => {
-  assert.match(hook, /event\.type === "tutorial_fallback"/);
-  assert.match(hook, /event\.replaces_workspace_id !== workspace\.workspaceId/);
-  assert.match(hook, /event\.replaces_generation !== workspace\.generation/);
-  assert.match(hook, /event\.workspace_id !== workspace\.workspaceId/);
-  assert.match(hook, /event\.generation !== workspace\.generation/);
+test("the enrichment surface is gone with the source choice", () => {
+  // The showcase satisfies coverage by construction (pinned in the backend
+  // suite), so no route, stream, or UI may reintroduce an enrichment pass.
+  assert.doesNotMatch(api, /tutorial\/enrich/);
+  assert.doesNotMatch(api, /mode:\s*args\.mode/);
+  assert.doesNotMatch(hook, /tutorial_fallback|tutorial_session|tutorial_coverage/);
   assert.match(api, /workspace_id:\s*args\.workspaceId/);
   assert.match(api, /generation:\s*args\.generation/);
-  assert.match(overlay, /Enrich the copy with AI/);
-  assert.match(overlay, /Add bundled showcase examples/);
-  assert.match(overlay, /real billed model usage/);
-  assert.match(api, /mode:\s*args\.mode \?\? "live"/);
 });

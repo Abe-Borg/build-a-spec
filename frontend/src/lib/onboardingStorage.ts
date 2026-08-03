@@ -12,7 +12,6 @@ export interface StoredOnboardingProgress {
   tutorialId: string;
   workspaceId: number;
   generation: number;
-  source?: "current" | "generated" | "showcase";
   chunk: number;
   step: number;
   paused: boolean;

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import threading
 from pathlib import Path
 
@@ -11,7 +10,6 @@ from fastapi.testclient import TestClient
 
 from backend import sessions
 from backend.app import _prepare_master_import, create_app
-from backend.llm.client import MissingApiKeyError
 from backend.llm.conversation import SessionState
 from backend.sessions import SessionManager, WorkspaceBusyError, WorkspaceConflictError
 from backend.spec_doc.docx_export import build_docx
@@ -23,15 +21,11 @@ from backend.tutorial import (
     build_showcase_session,
     detached_practice_copy,
     media_practice_copy,
-    reference_practice_copy,
-    repair_tutorial_copy,
     review_practice_copy,
     structural_practice_copy,
-    validate_tutorial_enrichment,
 )
 from backend.templates import TemplateCatalog
 from backend.spec_doc.project_package import parse_project_package
-from tests.fakes import FakeClient, text_turn, tool_turn
 
 
 def _replace_first(session: SessionState, suffix: str) -> None:
@@ -51,6 +45,9 @@ def _replace_first(session: SessionState, suffix: str) -> None:
 
 
 def test_bundled_llm_authored_showcase_satisfies_real_content_fixtures():
+    # The showcase is the tutorial's ONLY source now, so its coverage being
+    # ready is what guarantees the tour never needs an enrichment pass —
+    # a regression here strands every teaching anchor, not just one path.
     session = build_showcase_session()
     coverage = analyze_tutorial_coverage(session)
 
@@ -85,8 +82,8 @@ def test_bundled_llm_authored_showcase_satisfies_real_content_fixtures():
         1 for message in session.history if message.get("role") == "assistant"
     )
     assert assistant_count == 1
-    # Figures no longer come from tutorial start — Chapter 6 (media_practice_copy)
-    # generates them live when the tour reaches that chapter, not before.
+    # Figures do not come from tutorial start — Chapter 6 (media_practice_copy)
+    # attaches its bundled fixtures when the tour reaches that chapter.
     assert session.figures.snapshot() == []
     assert session.template_origin is None
 
@@ -154,14 +151,14 @@ def test_rich_source_backed_restore_preserves_every_original_store_exactly():
     imported, report, context = _prepare_master_import(source_bytes, "rich-source.docx")
     original.doc.adopt_imported(imported.section)
     original.history = copy.deepcopy(showcase.history)
-    # build_showcase_session() no longer seeds figures (Chapter 6 generates
-    # them live); seed one directly so the store-independence assertions
-    # below still have a figure to exercise.
+    # build_showcase_session() does not seed figures (Chapter 6 attaches its
+    # bundled fixtures); seed one directly so the store-independence
+    # assertions below still have a figure to exercise.
     original.figures.create(
         {"kind": "table", "title": "Original figure", "columns": ["A"], "rows": [["1"]]},
         message_index=0,
     )
-    referenced = reference_practice_copy(showcase)
+    referenced = media_practice_copy(showcase)
     original.references.load(referenced.references.to_dict())
     original.suggested_prompts = list(showcase.suggested_prompts)
     original.module = showcase.module
@@ -378,97 +375,86 @@ def test_detached_structural_practice_clears_every_source_claim():
         )
 
 
-def test_incomplete_live_enrichment_atomically_falls_back_to_showcase(monkeypatch):
-    monkeypatch.setattr("backend.app.stream_user_turn", lambda _session, _message: iter(()))
+def test_tutorial_start_only_accepts_the_bundled_showcase():
+    """The retired sources are refused loudly, never quietly downgraded."""
+    client = TestClient(create_app())
+    original = sessions.get_workspace()
+    base = {
+        "request_id": "showcase-only-contract",
+        "workspace_id": original.workspace_id,
+        "generation": original.generation,
+    }
+    for retired in ("current", "generated"):
+        refused = client.post("/api/tutorial/start", json={**base, "source": retired})
+        assert refused.status_code == 422
+        assert sessions.get_workspace().scope == "original"
+
+    started = client.post("/api/tutorial/start", json=base)
+    assert started.status_code == 200
+    payload = started.json()
+    assert payload["source"] == "showcase"
+    # Pinned ready: with one source and no enrichment pass, the showcase's
+    # own coverage is the only thing standing between every chapter and a
+    # missing teaching anchor.
+    assert payload["coverage"]["ready"] is True
+    assert client.get("/api/tutorial/status").json()["source"] == "showcase"
+
+
+def test_tutorial_start_stages_the_showcase_not_a_copy_of_the_current_project():
     current = sessions.get_session()
     current.doc.begin_turn()
-    article_id = current.doc.apply_edits(
+    current.doc.apply_edits(
         [
             {
                 "action": "replace",
                 "target_id": "sec",
                 "numbering": "09 91 23",
                 "text": "DISTINCTIVE USER SECTION",
-            },
-            {
-                "action": "add_article",
-                "target_id": "pt1",
-                "text": "USER ARTICLE — KEEP EXACTLY",
-            },
-        ]
-    )[1]["id"]
-    paragraph_id = current.doc.apply_edits(
-        [
-            {
-                "action": "add_paragraph",
-                "target_id": article_id,
-                "text": "Distinctive user-authored wording that the fallback must preserve exactly.",
-                "status": "confirmed",
             }
         ]
-    )[0]["id"]
+    )
     current.doc.commit_turn()
     client = TestClient(create_app())
     original = sessions.get_workspace()
     started = client.post(
         "/api/tutorial/start",
         json={
-            "request_id": "fallback-contract",
-            "source": "current",
+            "request_id": "showcase-staging-contract",
             "workspace_id": original.workspace_id,
             "generation": original.generation,
         },
     ).json()
-    assert started["needs_enrichment"] is True
+    # The tutorial workspace is the bundled showcase, not the user's spec.
+    assert "DISTINCTIVE USER SECTION" not in str(started["session"]["doc"])
+    tutorial_doc = SpecSection.from_dict(started["session"]["doc"])
+    assert tutorial_doc.number and tutorial_doc.title
 
-    response = client.post(
-        "/api/tutorial/enrich",
+    restored = client.post(
+        "/api/tutorial/restore",
         json={
             "tutorial_id": started["tutorial_id"],
             "workspace_id": started["session"]["workspace_id"],
             "generation": started["session"]["generation"],
         },
     )
-    assert response.status_code == 200
-    events = [
-        json.loads(line.removeprefix("data: "))
-        for line in response.text.splitlines()
-        if line.startswith("data: ")
-    ]
-    fallback = next(event for event in events if event["type"] == "tutorial_fallback")
-    assert fallback["coverage"]["ready"] is True
-    assert fallback["session"]["workspace_scope"] == "tutorial"
-    assert fallback["workspace_id"] != started["session"]["workspace_id"]
-    repaired = SpecSection.from_dict(fallback["session"]["doc"])
-    assert repaired.number == "09 91 23"
-    assert repaired.title == "DISTINCTIVE USER SECTION"
-    kept_article = next(
-        article
-        for part in repaired.parts
-        for article in part.articles
-        if article.uid == article_id
-    )
-    assert kept_article.title == "USER ARTICLE — KEEP EXACTLY"
-    assert kept_article.paragraphs[0].uid == paragraph_id
-    assert kept_article.paragraphs[0].text == (
-        "Distinctive user-authored wording that the fallback must preserve exactly."
-    )
-    assert kept_article.paragraphs[0].status == "confirmed"
-    # The bundled fallback no longer creates figures either — Chapter 6
-    # generates them live when the tour reaches it.
-    assert fallback["session"]["figures"] == []
-    assert fallback["source"] == "current"
+    assert restored.status_code == 200, restored.text
+    assert sessions.get_session() is current
+    assert sessions.get_session().doc.doc.title == "DISTINCTIVE USER SECTION"
 
 
-def test_generated_live_failure_is_disclosed_as_bundled_showcase(monkeypatch):
-    monkeypatch.setattr("backend.app.stream_user_turn", lambda _s, _m: iter(()))
+def test_the_enrichment_surface_is_gone():
+    """No live or bundled enrichment call exists any more.
+
+    The showcase satisfies coverage by construction (pinned above), so the
+    whole enrichment pass — its route, its billed model turn, and its
+    replace-the-tutorial fallback — was removed with the source choice.
+    """
     client = TestClient(create_app())
     original = sessions.get_workspace()
     started = client.post(
         "/api/tutorial/start",
         json={
-            "request_id": "generated-fallback-source",
-            "source": "generated",
+            "request_id": "no-enrichment-contract",
             "workspace_id": original.workspace_id,
             "generation": original.generation,
         },
@@ -477,121 +463,17 @@ def test_generated_live_failure_is_disclosed_as_bundled_showcase(monkeypatch):
         "/api/tutorial/enrich",
         json={
             "tutorial_id": started["tutorial_id"],
-            "workspace_id": started["workspace_id"],
-            "generation": started["generation"],
+            "workspace_id": started["session"]["workspace_id"],
+            "generation": started["session"]["generation"],
             "mode": "live",
         },
     )
-    events = [
-        json.loads(line.removeprefix("data: "))
-        for line in response.text.splitlines()
-        if line.startswith("data: ")
-    ]
-    fallback = next(event for event in events if event["type"] == "tutorial_fallback")
-    assert fallback["source"] == "showcase"
-    assert "message" not in fallback
-    assert client.get("/api/tutorial/status").json()["source"] == "showcase"
-
-
-def test_explicit_bundled_enrichment_choice_carries_no_disclosure_message():
-    client = TestClient(create_app())
-    original = sessions.get_workspace()
-    started = client.post(
-        "/api/tutorial/start",
-        json={
-            "request_id": "bundled-enrichment-choice",
-            "source": "generated",
-            "workspace_id": original.workspace_id,
-            "generation": original.generation,
-        },
-    ).json()
-    response = client.post(
-        "/api/tutorial/enrich",
-        json={
-            "tutorial_id": started["tutorial_id"],
-            "workspace_id": started["workspace_id"],
-            "generation": started["generation"],
-            "mode": "bundled",
-        },
-    )
-    events = [
-        json.loads(line.removeprefix("data: "))
-        for line in response.text.splitlines()
-        if line.startswith("data: ")
-    ]
-    fallback = next(event for event in events if event["type"] == "tutorial_fallback")
-    assert fallback["reason"] == "bundled_enrichment_selected"
-    assert "message" not in fallback
-
-
-def test_successful_live_enrichment_finishes_with_authoritative_session(monkeypatch):
-    def complete_enrichment(session, message):
-        repaired = repair_tutorial_copy(session)
-        # A real successful stream_user_turn call always appends at least one
-        # user/assistant pair to history; repair_tutorial_copy no longer does
-        # this itself (it stopped seeding figures, which was the only thing
-        # that used to inject synthetic history here), so this fake mimics
-        # that real-turn effect directly instead of relying on it.
-        session.history = repaired.history + [
-            {"role": "user", "content": [{"type": "text", "text": message}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "Enriched."}]},
-        ]
-        session.doc = repaired.doc
-        session.figures = repaired.figures
-        session.suggested_prompts = repaired.suggested_prompts
-        return iter(())
-
-    monkeypatch.setattr("backend.app.stream_user_turn", complete_enrichment)
-    client = TestClient(create_app())
-    original = sessions.get_workspace()
-    started = client.post(
-        "/api/tutorial/start",
-        json={
-            "request_id": "live-session-hydration",
-            "source": "generated",
-            "workspace_id": original.workspace_id,
-            "generation": original.generation,
-        },
-    ).json()
-    response = client.post(
-        "/api/tutorial/enrich",
-        json={
-            "tutorial_id": started["tutorial_id"],
-            "workspace_id": started["workspace_id"],
-            "generation": started["generation"],
-            "mode": "live",
-        },
-    )
-    events = [
-        json.loads(line.removeprefix("data: "))
-        for line in response.text.splitlines()
-        if line.startswith("data: ")
-    ]
-    hydrated = next(event for event in events if event["type"] == "tutorial_session")
-    assert hydrated["source"] == "generated"
-    assert len(hydrated["session"]["chat"]) >= 2
-    # repair_tutorial_copy no longer creates figures either — Chapter 6
-    # generates them live when the tour reaches it.
-    assert hydrated["session"]["figures"] == []
-
-
-def test_bundled_repair_preserves_existing_content_and_creates_no_figures():
-    source = SessionState()
-    source.history.append(
-        {"role": "user", "content": [{"type": "text", "text": "Keep this."}]}
-    )
-    before_history = copy.deepcopy(source.history)
-    repaired = repair_tutorial_copy(source)
-
-    # No synthetic history injection happens here any more — figures are no
-    # longer created by repair_tutorial_copy at all.
-    assert repaired.history == before_history
-    assert analyze_tutorial_coverage(repaired).ready is True
-    assert repaired.figures.snapshot() == []
+    assert response.status_code == 404
+    assert not hasattr(SessionManager, "replace_tutorial")
 
 
 def test_review_practice_has_truthful_template_starter_imported_item():
-    source = repair_tutorial_copy(SessionState())
+    source = build_showcase_session()
     source.template_origin = None
     scenario = review_practice_copy(source)
     imported = [
@@ -607,86 +489,24 @@ def test_review_practice_has_truthful_template_starter_imported_item():
     assert scenario.source_docx_bytes is None
 
 
-def test_reference_scenario_uses_all_real_extractors_without_touching_the_spec():
-    tutorial = build_showcase_session()
-    before = copy.deepcopy(tutorial.doc.to_dict())
-    scenario = reference_practice_copy(tutorial)
+def test_media_practice_copy_is_bundled_only_and_never_calls_the_model(monkeypatch):
+    """Chapter 6 attaches its fixtures with zero spend and no client at all."""
 
-    assert scenario.doc.to_dict() == before
-    metadata = scenario.references.snapshot()
-    assert {item["kind"] for item in metadata} == {"docx", "pdf", "txt", "xml", "csv"}
-    assert all(item["block_count"] > 0 for item in metadata)
-    pdf = next(item for item in metadata if item["kind"] == "pdf")
-    assert "[page 1]" in pdf["excerpt"]
-    assert tutorial.references.snapshot() == []
+    def _must_not_be_called():
+        raise AssertionError("the bundled-only tutorial must not construct a client")
 
-
-def test_media_practice_copy_live_success_backfills_missing_kinds_and_hides_directive(
-    monkeypatch,
-):
-    tutorial = build_showcase_session()
-    before_doc = copy.deepcopy(tutorial.doc.to_dict())
-    live_figure = {
-        "kind": "mermaid",
-        "title": "Live Coordination Sequence",
-        "source": "flowchart LR\n  A[Start] --> B[Verify]",
-    }
     monkeypatch.setattr(
-        "backend.llm.conversation.get_client",
-        lambda: FakeClient(
-            [
-                tool_turn(
-                    ["Here is a figure. "],
-                    live_figure,
-                    tool_id="toolu_live_fig",
-                    name="create_figure",
-                ),
-                text_turn(["Done — tutorial-only examples above."]),
-            ]
-        ),
+        "backend.llm.conversation.get_client", _must_not_be_called
     )
-
-    scenario = media_practice_copy(tutorial)
-
-    assert scenario.doc.to_dict() == before_doc
-    figures = scenario.figures.snapshot()
-    assert {figure["kind"] for figure in figures} == {"mermaid", "svg", "table"}
-    live = next(
-        figure for figure in figures if figure["title"] == "Live Coordination Sequence"
-    )
-    assert live["kind"] == "mermaid"
-    # The missing kinds (svg/table) were backfilled by the bundled fixtures
-    # rather than the whole live attempt being discarded.
-    assert {figure["title"] for figure in figures} == {
-        "Live Coordination Sequence",
-        "Tutorial Review Status Key",
-        "Tutorial Review Checklist",
-    }
-    assert {item["kind"] for item in scenario.references.snapshot()} == {
-        "docx",
-        "pdf",
-        "txt",
-        "xml",
-        "csv",
-    }
-    # The raw internal directive never leaks into the visible transcript.
-    assert "TUTORIAL WORKSPACE FIGURES" not in json.dumps(scenario.history)
-
-
-def test_media_practice_copy_falls_back_to_bundled_fixtures_without_api_key(
-    monkeypatch,
-):
     tutorial = build_showcase_session()
     before_doc = copy.deepcopy(tutorial.doc.to_dict())
-
-    def _no_key():
-        raise MissingApiKeyError("no key configured")
-
-    monkeypatch.setattr("backend.llm.conversation.get_client", _no_key)
+    before_history = copy.deepcopy(tutorial.history)
+    before_usage = tutorial.usage.snapshot()
 
     scenario = media_practice_copy(tutorial)
 
     assert scenario.doc.to_dict() == before_doc
+    assert scenario.history == before_history
     assert {figure["kind"] for figure in scenario.figures.snapshot()} == {
         "mermaid",
         "svg",
@@ -697,71 +517,15 @@ def test_media_practice_copy_falls_back_to_bundled_fixtures_without_api_key(
         "Tutorial Review Status Key",
         "Tutorial Review Checklist",
     }
-    assert {item["kind"] for item in scenario.references.snapshot()} == {
-        "docx",
-        "pdf",
-        "txt",
-        "xml",
-        "csv",
-    }
-
-
-def test_media_practice_copy_falls_back_when_model_creates_no_figure(monkeypatch):
-    tutorial = build_showcase_session()
-    before_doc = copy.deepcopy(tutorial.doc.to_dict())
-    monkeypatch.setattr(
-        "backend.llm.conversation.get_client",
-        lambda: FakeClient([text_turn(["Nothing to add here."])]),
-    )
-
-    scenario = media_practice_copy(tutorial)
-
-    assert scenario.doc.to_dict() == before_doc
-    assert {figure["kind"] for figure in scenario.figures.snapshot()} == {
-        "mermaid",
-        "svg",
-        "table",
-    }
-
-
-def test_media_practice_copy_discards_attempt_that_touches_existing_content(
-    monkeypatch,
-):
-    tutorial = build_showcase_session()
-    before_doc = copy.deepcopy(tutorial.doc.to_dict())
-    first = next(iter(iter_paragraphs(tutorial.doc.doc)))[2]
-    monkeypatch.setattr(
-        "backend.llm.conversation.get_client",
-        lambda: FakeClient(
-            [
-                tool_turn(
-                    ["Updating... "],
-                    {
-                        "edits": [
-                            {
-                                "action": "replace",
-                                "target_id": first.uid,
-                                "text": "HIJACKED existing content",
-                                "status": first.status,
-                            }
-                        ]
-                    },
-                    tool_id="toolu_hijack",
-                ),
-                text_turn(["Done."]),
-            ]
-        ),
-    )
-
-    scenario = media_practice_copy(tutorial)
-
-    # The hijacked edit does not survive — the whole attempt is discarded.
-    assert scenario.doc.to_dict() == before_doc
-    assert {figure["kind"] for figure in scenario.figures.snapshot()} == {
-        "mermaid",
-        "svg",
-        "table",
-    }
+    metadata = scenario.references.snapshot()
+    assert {item["kind"] for item in metadata} == {"docx", "pdf", "txt", "xml", "csv"}
+    assert all(item["block_count"] > 0 for item in metadata)
+    pdf = next(item for item in metadata if item["kind"] == "pdf")
+    assert "[page 1]" in pdf["excerpt"]
+    # The base tutorial session is untouched, and nothing was billed.
+    assert tutorial.references.snapshot() == []
+    assert tutorial.figures.snapshot() == []
+    assert tutorial.usage.snapshot() == before_usage
 
 
 def test_push_scenario_rejects_a_second_request_before_the_first_pays_for_its_build():
@@ -825,8 +589,9 @@ class _HeldBuild:
     reservation would otherwise outlive the test.
 
     ``on_build`` runs after the release, against the base session the real
-    builders receive, so a test can make the build spend exactly the way
-    ``media_practice_copy`` does.
+    builders receive, so a test can make the build spend the way a paid
+    builder would (the shipped builders are bundled-only today, but the
+    manager contract must hold for any future paid one).
     """
 
     def __init__(
@@ -872,9 +637,10 @@ def test_a_paid_scenario_build_cannot_be_discarded_out_from_under_itself():
 
     Neither used to. `finish_tutorial` never looked at the transition flag
     at all, and `force_restore_original` cleared it outright — so ending the
-    tour, or a New session, while Chapter 6's live figure generation was
-    still running discarded the tutorial session that build was about to
-    merge its already-billed usage onto. The spend simply vanished.
+    tour, or a New session, while a scenario build was still running
+    discarded the tutorial session that build was about to merge its usage
+    onto. The spend simply vanished. (The builds are all bundled-only now,
+    but the manager contract stays: a build owns the session it is reading.)
     """
     manager = SessionManager()
     tutorial = manager.begin_tutorial(request_id="orphan-contract")
@@ -884,10 +650,6 @@ def test_a_paid_scenario_build_cannot_be_discarded_out_from_under_itself():
             manager.finish_tutorial(tutorial.workspace_id)
         with pytest.raises(WorkspaceBusyError, match="transition"):
             manager.force_restore_original()
-        # Same reason the repair path must wait: it swaps the very session
-        # the build is holding.
-        with pytest.raises(WorkspaceBusyError, match="transition"):
-            manager.replace_tutorial(tutorial.workspace_id, SessionState())
         assert manager.current().scope == "tutorial"
     finally:
         held.release()
@@ -1003,10 +765,10 @@ def test_a_hard_reset_cannot_be_overwritten_by_the_tutorial_it_abandoned(
 def test_a_refused_finish_lets_the_build_it_would_have_stranded_pay_in():
     """The whole point of refusing: the spend still reaches the original.
 
-    `media_practice_copy` merges its attempt's usage onto the base tutorial
-    session before returning, win or lose. Discarding that session mid-build
-    dropped the merge on the floor; refusing lets it land, and the ordinary
-    finish then carries it to the original exactly once.
+    A build that spends merges its usage onto the base tutorial session.
+    Discarding that session mid-build dropped the merge on the floor;
+    refusing lets it land, and the ordinary finish then carries it to the
+    original exactly once.
     """
     manager = SessionManager()
     original = manager.current().session
@@ -1033,51 +795,6 @@ def test_a_refused_finish_lets_the_build_it_would_have_stranded_pay_in():
     assert original.usage.snapshot()["categories"]["interview"] == {
         "input_tokens": 30
     }
-
-
-def test_enrichment_validator_rejects_rewriting_existing_user_content():
-    before = build_showcase_session().doc.doc
-    after = SpecSection.from_dict(before.to_dict())
-    first = next(iter(iter_paragraphs(after)))[2]
-    first.text += " silently rewritten"
-    valid, reasons = validate_tutorial_enrichment(before, after)
-    assert valid is False
-    assert any(first.uid in reason for reason in reasons)
-
-
-def test_enrichment_validator_rejects_reordering_or_metadata_rewrites():
-    before = build_showcase_session().doc.doc
-
-    reordered_articles = SpecSection.from_dict(before.to_dict())
-    reordered_articles.parts[0].articles[:2] = reversed(
-        reordered_articles.parts[0].articles[:2]
-    )
-    valid, reasons = validate_tutorial_enrichment(before, reordered_articles)
-    assert valid is False
-    assert any("article" in reason for reason in reasons)
-
-    reordered_paragraphs = SpecSection.from_dict(before.to_dict())
-    article = next(
-        article
-        for part in reordered_paragraphs.parts
-        for article in part.articles
-        if len(article.paragraphs) >= 2
-    )
-    article.paragraphs[:2] = reversed(article.paragraphs[:2])
-    valid, reasons = validate_tutorial_enrichment(before, reordered_paragraphs)
-    assert valid is False
-    assert any("provision" in reason for reason in reasons)
-
-    changed_metadata = SpecSection.from_dict(before.to_dict())
-    changed_metadata.project_profile = {
-        "city": "Changed",
-        "state_or_province": "State",
-        "country": "Country",
-        "client_name": "Client",
-    }
-    valid, reasons = validate_tutorial_enrichment(before, changed_metadata)
-    assert valid is False
-    assert any("project_profile" in reason for reason in reasons)
 
 
 def test_structural_practice_uses_real_document_state_for_every_lint_rule():
@@ -1109,12 +826,6 @@ def test_chapter_scenarios_exercise_production_round_trips_and_restore_base(
     monkeypatch.setattr(
         "backend.templates._CATALOG",
         TemplateCatalog(personal_root=tmp_path / "templates", curated_root=curated),
-    )
-    # The "references" case now also generates Chapter 6's figures live
-    # (media_practice_copy) — keep this hermetic, same as every other
-    # tutorial test that exercises a model call.
-    monkeypatch.setattr(
-        "backend.tutorial.stream_user_turn", lambda _session, _message: iter(())
     )
     client = TestClient(create_app())
     original = sessions.get_workspace()
@@ -1172,8 +883,8 @@ def test_chapter_scenarios_exercise_production_round_trips_and_restore_base(
                 "xml",
                 "csv",
             }
-            # The stubbed model turn produces no figures, so the bundled
-            # fallback backfills all three kinds; the document is untouched.
+            # Chapter 6's bundled fixtures cover all three figure kinds;
+            # the document is untouched.
             assert scenario["doc"] == base_doc
             assert {f["kind"] for f in scenario["figures"]} == {
                 "mermaid",

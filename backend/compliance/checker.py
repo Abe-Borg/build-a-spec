@@ -542,7 +542,19 @@ def run_compliance_audit(
                 f"(stop_reason: {stop_reason}).",
                 usage_totals=usage_totals,
             )
-        result = _normalize_result(payload, profile)
+        try:
+            result = _normalize_result(payload, profile)
+        except Exception as exc:  # noqa: BLE001 — model-shaped JSON, any shape
+            # Valid JSON with an impossible shape (the tagged fallback has
+            # no schema behind it) is the same terminal failure as no
+            # payload at all — and it must carry the same receipt, or the
+            # raw TypeError routes the runner to its generic branch and a
+            # paid response's bill is dropped on the floor after all.
+            raise ComplianceAuditError(
+                "The audit payload could not be normalized "
+                f"({type(exc).__name__}: {exc}).",
+                usage_totals=usage_totals,
+            ) from exc
         result["parse_source"] = parse_source
         result["usage"] = dict(usage_totals)
         return result

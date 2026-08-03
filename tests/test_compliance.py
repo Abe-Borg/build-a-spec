@@ -565,3 +565,47 @@ def test_a_failed_audit_still_reaches_the_meter(monkeypatch):
     assert audit["input_tokens"] == 700
     assert audit["output_tokens"] == 90
     assert spent["estimated_cost_usd"]["by_category"]["audit"] > 0
+
+
+def test_a_parsed_but_malformed_payload_still_bills_on_the_error():
+    """Codex review on PR #115: valid JSON with an impossible shape (the
+    tagged fallback has no schema) raised a raw TypeError out of
+    _normalize_result, routing the runner to its generic branch — which
+    meters nothing. The receipt must ride ComplianceAuditError here too."""
+    from types import SimpleNamespace
+
+    import pytest
+
+    from backend.compliance.checker import (
+        ComplianceAuditError,
+        run_compliance_audit,
+    )
+    from tests.fakes import usage
+
+    tagged = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="text",
+                text=(
+                    "<compliance_json>"
+                    '{"summary": "x", "coverage": 5, "findings": []}'
+                    "</compliance_json>"
+                ),
+            )
+        ],
+        stop_reason="end_turn",
+        usage=usage(input=888, output=44),
+    )
+    audit_client = _ScriptedAuditClient([tagged])
+    with pytest.raises(
+        ComplianceAuditError, match="could not be normalized"
+    ) as ei:
+        run_compliance_audit(
+            sessions.get_session().doc.doc,
+            _profile_with([_GROUNDED]),
+            DEFAULT_MODULE,
+            audit_client,
+            model="claude-sonnet-5",
+            max_tokens=2048,
+        )
+    assert ei.value.usage_totals == {"input_tokens": 888, "output_tokens": 44}

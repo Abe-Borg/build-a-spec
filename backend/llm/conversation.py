@@ -806,11 +806,14 @@ class SessionState:
         state through the real source gate.
 
         ``block=True`` is for the callers that ACT on the answer rather than
-        display it — starting a Final QC run, applying its fixes, and its two
-        exports — which must reason from real permissions. It joins an
-        in-flight warm rather than sweeping the same document twice. Those
-        endpoints call it through ``app._settle_source_capabilities`` before
-        taking the session guard, so no lock is ever held across a sweep.
+        display it — starting a Final QC run and applying its fixes — which
+        must reason from real permissions. It joins an in-flight warm rather
+        than sweeping the same document twice. Those endpoints call it
+        through ``app._settle_source_capabilities`` before taking the
+        session guard, so no lock is ever held across a sweep. The two QC
+        report downloads used to settle too, and it made them look broken —
+        they now answer from the pending state and disclose it in the
+        export.
         """
         if not self._active_source_scope():
             return None

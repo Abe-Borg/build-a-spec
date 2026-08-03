@@ -507,7 +507,10 @@ frontend/src/
                            start/status/stream/apply/dismiss + readiness; Batch 5
                            getDocDiff; Batch 7 stopChat/stopResearch/stopQc (409
                            from an already-settled run/turn is swallowed, not
-                           thrown); resetSession(opts?) retains compatibility APIs
+                           thrown); resetSession(opts?) retains compatibility APIs;
+                           downloadQcReport (fetch-then-save so a failed QC
+                           report download surfaces its server message — see
+                           lib/useQcReportDownloads.ts)
   lib/qcLive.ts            Final QC's pure live-state layer: discriminated event
                            fold, seq-deduplicating merge, same-run snapshot
                            reconciliation, milestone policy and three-stage board
@@ -1464,7 +1467,13 @@ what happened next?* Four rules follow, and they bind every future change:
   the snapshot so a changed backend selection returns a conflict. Non-HTTP or
   unsafe source strings render
   as inert text, never clickable links. `QCDrawer` stays compact and optimized
-  for apply/dismiss work. The Word artifact stamps Build-a-Spec title/subject,
+  for apply/dismiss work. **The report downloads live ONLY on these two Final
+  QC surfaces** (owner directive, 2026-08-03 — they were also in the panel's
+  Export menu, which exports the SPECIFICATION and must stay that way), and
+  both go through `downloadQcReport`/`useQcReportDownloads` rather than a bare
+  `<a download>`: the click shows a preparing state and a failed download
+  surfaces the server's exact message beside the button instead of silently
+  doing nothing in the shell. The Word artifact stamps Build-a-Spec title/subject,
   author, last-modifier, and current creation/modification metadata. Its
   masthead and sign-off treat a failed/cancelled/partial/running latest attempt
   or blocked `qc_current`/`qc_audit_complete` check as controlling; any retained
@@ -2434,12 +2443,23 @@ No new deps, no new SSE event, one new REST route.
   recorded inputs no longer match", i.e. stale, which is conservative and,
   after an import (empty document required) or a body change (QC stale
   anyway), also correct. The paths that ACT on the answer — `POST
-  /api/qc/start`, `POST /api/qc/apply/preview`, `POST /api/qc/apply`, and both
-  QC exports — pass `block=True`, and all five call
-  `_settle_source_capabilities(session)`
+  /api/qc/start`, `POST /api/qc/apply/preview`, `POST /api/qc/apply` — pass
+  `block=True`, and all three call `_settle_source_capabilities(session)`
   **before** taking `session_state_guard()` so they never hold
   `_turn_state_lock` across a sweep (that lock is what `claim_model_turn`
   needs, so holding it was a second, independent way to freeze the chat).
+  **The two QC report downloads used to settle too, and it presented in the
+  field as "the Final QC download DOCX isn't working"**: after any body
+  change (most ordinarily, applying a QC fix) the memo missed and the
+  download silently waited out the whole sweep — minutes on a real master,
+  behind an `<a download>` with no feedback. They now answer from the
+  non-blocking read; a pending sweep degrades the export's staleness verdict
+  to the conservative readiness answer and is DISCLOSED, not recorded as a
+  settled fact — `current_state.input_verification_pending` in the JSON
+  envelope, an "Input verification pending at export" row plus a
+  conservative-verdict limitation in the Word memo (the report body itself
+  is immutable history and is untouched either way). Pinned by
+  `test_the_qc_report_download_never_waits_out_the_permission_sweep`.
   When the sweep settles, the panel's poll also re-asks QC status and
   readiness: both compare against the capability summary, so while it was
   pending they answered "stale"/"not ready", and nothing else would have

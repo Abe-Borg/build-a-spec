@@ -2577,6 +2577,10 @@ def _qc_render_export_current_state(
         ("Active full-input fingerprint", state.get("current_input_fingerprint")),
         ("Report matches all active inputs", state.get("report_matches_current_inputs")),
         ("Report stale at export", state.get("stale")),
+        (
+            "Input verification pending at export",
+            state.get("input_verification_pending"),
+        ),
         ("Runner status", runner.get("status")),
         ("Runner error", runner.get("error") or "None recorded"),
         ("Latest attempt run ID", attempt_run_id or "Not recorded"),
@@ -4213,6 +4217,16 @@ def _qc_render_limitations_and_signoff(
             0,
             "This report is stale because at least one material QC input no longer matches the recorded run. The changed input may be the document, research profile, standards, module or discipline, model configuration, or source policy.",
         )
+        # The staleness verdict never waits for the imported-source
+        # permission sweep; when the sweep was still pending at export the
+        # verdict is conservative and the reader must be told so.
+        if _qc_dict(qc_result.get("export_current_state")).get(
+            "input_verification_pending"
+        ):
+            limitations.insert(
+                1,
+                "The imported-source input verification was still in progress when this export was generated, so the staleness verdict above is conservative: the recorded inputs could not be confirmed unchanged, not proven changed. Re-export after the document panel's permission analysis settles for an exact verdict.",
+            )
     failed_lenses = [
         item
         for item in _qc_list(qc_result.get("lens_statuses"))

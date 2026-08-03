@@ -7,6 +7,7 @@ logging state down again (``diagnostics.reset_for_tests``).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -74,15 +75,53 @@ def _wait_events(predicate, timeout=3.0):
     return events
 
 
+def _make_log_run(
+    root,
+    token: str,
+    *,
+    timestamp: float,
+    pid: int,
+    clean: bool,
+    payload_bytes: int = 16,
+):
+    run_id = "process-" + token * 32
+    run_dir = root / run_id
+    run_dir.mkdir(parents=True)
+    marker = {
+        "run_id": run_id,
+        "started_at": timestamp - 1,
+        "updated_at": timestamp,
+        "pid": pid,
+        "clean": clean,
+        "state": "clean_shutdown" if clean else "active",
+    }
+    if clean:
+        marker["ended_at"] = timestamp
+    marker_path = run_dir / diagnostics.RUN_MARKER_FILENAME
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    log_path = run_dir / diagnostics.LOG_FILENAME
+    log_path.write_bytes(b"x" * payload_bytes)
+    os.utime(marker_path, (timestamp, timestamp))
+    os.utime(log_path, (timestamp, timestamp))
+    os.utime(run_dir, (timestamp, timestamp))
+    return run_dir
+
+
 # --- logging bootstrap ------------------------------------------------------
 
 
 def test_init_logging_writes_to_the_configured_dir_and_is_idempotent(log_env):
     path = diagnostics.init_logging(force=True)
-    assert path is not None and path.parent == log_env
+    assert path is not None and path.parent.parent == log_env
+    assert path.parent == diagnostics.current_log_dir()
+    assert path.parent.name.startswith("process-")
     logging.getLogger("buildaspec.test").info("hello file")
     assert path.exists()
-    assert "hello file" in path.read_text(encoding="utf-8")
+    written = path.read_text(encoding="utf-8")
+    assert "hello file" in written
+    assert f"pid={os.getpid()}" in written
+    assert "version=" in written
+    assert "trace=" in written
 
     handler_count = sum(
         1
@@ -98,6 +137,59 @@ def test_init_logging_writes_to_the_configured_dir_and_is_idempotent(log_env):
         )
         == handler_count
     )
+    health = diagnostics.snapshot()["logging"]
+    assert health["initialization_attempted"] is True
+    assert health["initialization_succeeded"] is True
+    assert health["handler_attached"] is True
+    assert health["capture_active"] is True
+
+
+def test_logging_startup_failure_is_visible_without_exposing_message(
+    log_env, monkeypatch
+):
+    class SensitiveFailureHandler:
+        def __init__(self, *args, **kwargs):
+            raise PermissionError("private-path-should-not-be-reported")
+
+    monkeypatch.setattr(
+        logging.handlers, "RotatingFileHandler", SensitiveFailureHandler
+    )
+    assert diagnostics.init_logging(force=True) is None
+
+    health = diagnostics.snapshot()["logging"]
+    assert health["initialization_attempted"] is True
+    assert health["initialization_succeeded"] is False
+    assert health["handler_attached"] is False
+    assert health["capture_active"] is False
+    assert health["initialization_failure_type"] == "PermissionError"
+    assert health["initialization_failure_count"] == 1
+    assert "private-path" not in json.dumps(health)
+
+
+def test_file_log_redacts_credentials_in_messages_and_tracebacks(log_env):
+    path = diagnostics.init_logging(force=True)
+    assert path is not None
+    secret = "sk-ant-abcdefghijklmnop"
+    logger = logging.getLogger("buildaspec.redaction-test")
+    logger.error("pasted credential: %s", secret)
+    try:
+        raise RuntimeError(f"provider rejected {secret}")
+    except RuntimeError:
+        logger.exception("request failed with %s", secret)
+
+    written = path.read_text(encoding="utf-8")
+    assert secret not in written
+    assert written.count("<redacted>") >= 3
+    assert "RuntimeError: provider rejected <redacted>" in written
+
+
+def test_file_log_preserves_lone_surrogates_as_visible_escapes(log_env):
+    path = diagnostics.init_logging(force=True)
+    assert path is not None
+    logging.getLogger("buildaspec.unicode-test").error("bad %s marker", "\ud800")
+
+    written = path.read_text(encoding="utf-8")
+    assert "bad \\ud800 marker" in written
 
 
 def test_log_env_off_and_level_knobs(monkeypatch, tmp_path):
@@ -117,25 +209,247 @@ def test_log_env_off_and_level_knobs(monkeypatch, tmp_path):
         diagnostics.reset_for_tests()
 
 
-def test_unclean_shutdown_marker_round_trip(log_env, caplog):
+def test_log_retention_policy_env_defaults_zero_and_invalid(monkeypatch):
+    for name in (
+        diagnostics.ENV_LOG_MAX_RUNS,
+        diagnostics.ENV_LOG_MAX_AGE_DAYS,
+        diagnostics.ENV_LOG_MAX_MIB,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    assert diagnostics.log_retention_policy().to_dict() == {
+        "max_runs": diagnostics.DEFAULT_LOG_MAX_RUNS,
+        "max_age_days": diagnostics.DEFAULT_LOG_MAX_AGE_DAYS,
+        "max_bytes": diagnostics.DEFAULT_LOG_MAX_MIB * 1024 * 1024,
+    }
+
+    monkeypatch.setenv(diagnostics.ENV_LOG_MAX_RUNS, "0")
+    monkeypatch.setenv(diagnostics.ENV_LOG_MAX_AGE_DAYS, "12")
+    monkeypatch.setenv(diagnostics.ENV_LOG_MAX_MIB, "3")
+    assert diagnostics.log_retention_policy().to_dict() == {
+        "max_runs": 0,
+        "max_age_days": 12,
+        "max_bytes": 3 * 1024 * 1024,
+    }
+
+    monkeypatch.setenv(diagnostics.ENV_LOG_MAX_RUNS, "invalid")
+    monkeypatch.setenv(diagnostics.ENV_LOG_MAX_AGE_DAYS, "-1")
+    monkeypatch.setenv(diagnostics.ENV_LOG_MAX_MIB, "-2")
+    assert diagnostics.log_retention_policy().to_dict() == {
+        "max_runs": diagnostics.DEFAULT_LOG_MAX_RUNS,
+        "max_age_days": diagnostics.DEFAULT_LOG_MAX_AGE_DAYS,
+        "max_bytes": diagnostics.DEFAULT_LOG_MAX_MIB * 1024 * 1024,
+    }
+
+
+def test_live_sibling_is_not_misclassified_as_a_crash(
+    log_env, monkeypatch, caplog
+):
+    live_pid = 515151
+    live_dir = _make_log_run(
+        log_env,
+        "a",
+        timestamp=time.time() - 60,
+        pid=live_pid,
+        clean=False,
+    )
+    monkeypatch.setattr(
+        diagnostics,
+        "_process_is_alive",
+        lambda pid: pid in {os.getpid(), live_pid},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="buildaspec"):
+        diagnostics.init_logging(force=True)
+
+    assert "did not shut down cleanly" not in caplog.text
+    assert live_dir.exists()
+    process = diagnostics.snapshot()["process"]
+    assert process["previous_run_marker"]["present"] is False
+    retention = diagnostics.snapshot()["logging"]["last_retention"]
+    assert retention["protected_runs"] >= 2
+
+
+def test_unclean_shutdown_marker_round_trip(log_env, caplog, monkeypatch):
     diagnostics.init_logging(force=True)
-    marker_path = log_env / diagnostics.RUN_MARKER_FILENAME
+    marker_path = diagnostics.current_log_dir() / diagnostics.RUN_MARKER_FILENAME
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
     assert marker["clean"] is False and marker["pid"] == os.getpid()
+    assert marker["state"] == "active" and marker["run_id"].startswith(
+        "process-"
+    )
+    process = diagnostics.snapshot()["process"]
+    assert process["capture_state"] == "active_at_capture"
+    assert process["current_run_marker"]["shutdown_state"] == (
+        "active_at_capture"
+    )
+    assert process["current_run_marker"]["unclean_shutdown_evidence"] is False
 
     diagnostics.mark_clean_shutdown()
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
     assert marker["clean"] is True and "ended_at" in marker
 
-    # Simulate a crashed previous run: a marker left with clean=False.
-    marker_path.write_text(
-        json.dumps({"clean": False, "pid": 4242, "started_at": 1000.0}),
+    # Simulate a distinct crashed launch. The current launch keeps its own
+    # marker, so another live instance can never overwrite or impersonate it.
+    prior_run_id = "process-" + "d" * 32
+    prior_dir = log_env / prior_run_id
+    prior_dir.mkdir()
+    (prior_dir / diagnostics.RUN_MARKER_FILENAME).write_text(
+        json.dumps(
+            {
+                "run_id": prior_run_id,
+                "clean": False,
+                "pid": 4242,
+                "started_at": 1000.0,
+                "updated_at": 1000.0,
+            }
+        ),
         encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        diagnostics,
+        "_process_is_alive",
+        lambda pid: pid == os.getpid(),
     )
     with caplog.at_level(logging.WARNING, logger="buildaspec"):
         diagnostics.init_logging(force=True)
     assert "did not shut down cleanly" in caplog.text
     assert "4242" in caplog.text
+    previous = diagnostics.snapshot()["process"]["previous_run_marker"]
+    assert previous["pid"] == 4242
+    assert previous["shutdown_state"] == "unclean_shutdown"
+    assert previous["unclean_shutdown_evidence"] is True
+
+
+def test_log_retention_count_protects_current_live_and_recent_crash(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "logs"
+    now = time.time()
+    current = _make_log_run(
+        root, "1", timestamp=now - 1000, pid=1001, clean=True
+    )
+    live = _make_log_run(
+        root, "2", timestamp=now - 900, pid=1002, clean=True
+    )
+    recent_crash = _make_log_run(
+        root, "3", timestamp=now - 60, pid=1003, clean=False
+    )
+    oldest_eligible = _make_log_run(
+        root, "4", timestamp=now - 800, pid=1004, clean=True
+    )
+    newest_eligible = _make_log_run(
+        root, "5", timestamp=now - 100, pid=1005, clean=True
+    )
+    legacy = root / diagnostics.LOG_FILENAME
+    legacy.write_text("legacy flat log", encoding="utf-8")
+    unrelated = root / "do-not-delete"
+    unrelated.mkdir()
+    monkeypatch.setattr(
+        diagnostics, "_process_is_alive", lambda pid: pid == 1002
+    )
+
+    result = diagnostics.prune_log_runs(
+        root,
+        current_run_id=current.name,
+        policy=diagnostics.LogRetentionPolicy(
+            max_runs=3, max_age_days=0, max_bytes=0
+        ),
+        now=now,
+    )
+
+    assert current.exists() and live.exists() and recent_crash.exists()
+    assert not oldest_eligible.exists() and not newest_eligible.exists()
+    assert legacy.read_text(encoding="utf-8") == "legacy flat log"
+    assert unrelated.exists()
+    assert result["removed_by_reason"] == {"count": 2}
+    assert result["protected_runs"] == 3
+    assert result["remaining_runs"] == 3
+    assert result["limits_satisfied"] is True
+
+
+def test_log_retention_age_removes_dead_clean_and_stale_unclean_runs(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "logs"
+    now = time.time()
+    old_clean = _make_log_run(
+        root,
+        "6",
+        timestamp=now - 40 * 24 * 60 * 60,
+        pid=2001,
+        clean=True,
+    )
+    recent_clean = _make_log_run(
+        root,
+        "7",
+        timestamp=now - 24 * 60 * 60,
+        pid=2002,
+        clean=True,
+    )
+    stale_crash = _make_log_run(
+        root,
+        "8",
+        timestamp=now - 8 * 24 * 60 * 60,
+        pid=2003,
+        clean=False,
+    )
+    recent_crash = _make_log_run(
+        root,
+        "9",
+        timestamp=now - 24 * 60 * 60,
+        pid=2004,
+        clean=False,
+    )
+    monkeypatch.setattr(diagnostics, "_process_is_alive", lambda _pid: False)
+
+    result = diagnostics.prune_log_runs(
+        root,
+        current_run_id="process-" + "f" * 32,
+        policy=diagnostics.LogRetentionPolicy(
+            max_runs=0, max_age_days=7, max_bytes=0
+        ),
+        now=now,
+    )
+
+    assert not old_clean.exists() and not stale_crash.exists()
+    assert recent_clean.exists() and recent_crash.exists()
+    assert result["removed_by_reason"] == {"age": 2}
+    assert result["protected_runs"] == 1
+    assert result["limits_satisfied"] is True
+
+
+def test_log_retention_byte_limit_removes_oldest_first(tmp_path, monkeypatch):
+    root = tmp_path / "logs"
+    now = time.time()
+    oldest = _make_log_run(
+        root, "a", timestamp=now - 30, pid=3001, clean=True, payload_bytes=300
+    )
+    middle = _make_log_run(
+        root, "b", timestamp=now - 20, pid=3002, clean=True, payload_bytes=200
+    )
+    newest = _make_log_run(
+        root, "c", timestamp=now - 10, pid=3003, clean=True, payload_bytes=100
+    )
+    monkeypatch.setattr(diagnostics, "_process_is_alive", lambda _pid: False)
+    infos, _ignored, _scan_failed = diagnostics._scan_log_runs(root)
+    assert _scan_failed is False
+    sizes = {info.path: info.size_bytes for info in infos}
+    budget = sum(sizes.values()) - sizes[oldest]
+
+    result = diagnostics.prune_log_runs(
+        root,
+        current_run_id="process-" + "f" * 32,
+        policy=diagnostics.LogRetentionPolicy(
+            max_runs=0, max_age_days=0, max_bytes=budget
+        ),
+        now=now,
+    )
+
+    assert not oldest.exists()
+    assert middle.exists() and newest.exists()
+    assert result["removed_by_reason"] == {"bytes": 1}
+    assert result["remaining_bytes"] <= budget
+    assert result["limits_satisfied"] is True
 
 
 def test_usage_count_keys_survive_the_scrub():
@@ -157,6 +471,17 @@ def test_usage_count_keys_survive_the_scrub():
     assert scrubbed["api_key"] == "<redacted>"
 
 
+def test_credential_shaped_mapping_keys_are_redacted_without_collision():
+    first = "sk-ant-dynamicmapcredential111"
+    second = "sk-ant-dynamicmapcredential222"
+    scrubbed = scrub_data({first: "one", second: "two"})
+
+    assert first not in scrubbed and second not in scrubbed
+    assert set(scrubbed.values()) == {"one", "two"}
+    assert len(scrubbed) == 2
+    assert all(str(key).startswith("<redacted-key:") for key in scrubbed)
+
+
 # --- request middleware + exception handlers --------------------------------
 
 
@@ -168,9 +493,12 @@ def test_request_middleware_logs_and_traces_requests(trace_env, caplog):
     assert "GET /api/doc -> 200" in caplog.text
 
     events = _wait_events(
-        lambda evs: any(
-            e["type"] == "api_request" and e["path"] == "/api/doc"
-            for e in evs
+        lambda evs: all(
+            any(
+                e["type"] == "api_request" and e["path"] == path
+                for e in evs
+            )
+            for path in ("/api/doc", "/api/health")
         )
     )
     doc_requests = [
@@ -179,10 +507,21 @@ def test_request_middleware_logs_and_traces_requests(trace_env, caplog):
         if e["type"] == "api_request" and e["path"] == "/api/doc"
     ]
     assert doc_requests and doc_requests[0]["status"] == 200
+    assert doc_requests[0]["outcome_code"] == "success"
     assert isinstance(doc_requests[0]["ms"], int)
-    # Poll endpoints stay out of the trace (quiet list).
+    # Poll endpoints are log-quiet but still counted in trace coverage.
+    health_requests = [
+        e
+        for e in events
+        if e["type"] == "api_request" and e["path"] == "/api/health"
+    ]
+    assert health_requests and all(
+        e["outcome_code"] == "success"
+        for e in health_requests
+    )
     assert not any(
         e["type"] == "api_request" and e["path"] == "/api/health"
+        and e["status"] != 200
         for e in events
     )
     # Boot itself is recorded.
@@ -214,7 +553,8 @@ def test_catch_all_handler_returns_the_error_idiom_and_logs(
     data = resp.json()
     assert data["ok"] is False
     assert data["code"] == "internal_error"
-    assert "kaboom" in data["error"]
+    assert "kaboom" not in data["error"]
+    assert data["request_id"] == resp.headers["X-Request-ID"]
     # The traceback is in the log, not just the response.
     assert "Unhandled error on GET /api/figures" in caplog.text
     assert "RuntimeError: kaboom" in caplog.text
@@ -245,6 +585,7 @@ def test_diagnostics_snapshot_shape_and_no_key_material():
     assert resp.status_code == 200
     data = resp.json()
     assert data["ok"] is True
+    assert data["schema_version"] == 1
     for block in ("app", "tracing", "logging", "key", "workspace", "session", "usage"):
         assert block in data
     assert data["app"]["name"] and data["app"]["version"]
@@ -254,11 +595,56 @@ def test_diagnostics_snapshot_shape_and_no_key_material():
     assert data["workspace"]["scope"] == "original"
     assert data["session"]["history_len"] == 0
     assert data["session"]["doc_empty"] is True
+    assert data["process"]["pid"] == os.getpid()
+    assert data["process"]["uptime_seconds"] >= 0
+    assert data["process"]["capture_state"] == "active_at_capture"
+    assert data["session"]["document_shape"] == {
+        "parts": 3,
+        "articles": 0,
+        "paragraphs": 0,
+        "maximum_paragraph_depth": 0,
+    }
+    assert data["session"]["research"]["worker_alive"] is False
+    assert data["session"]["audit"]["status"] == "idle"
+    assert data["session"]["qc"]["worker_settled"] is True
+    assert data["session"]["import"]["present"] is False
     assert data["usage"]["turns"] == 0
 
     # Suite defaults: logging and tracing are off — grace, not errors.
     assert client.get("/api/diagnostics/log").json()["enabled"] is False
     assert client.get("/api/diagnostics/activity").json()["enabled"] is False
+
+
+def test_import_warning_snapshot_uses_codes_and_fingerprints_not_prose():
+    secret_title = "PRIVATE PROJECT SECTION TITLE"
+    facts = diagnostics._import_report_facts(
+        {
+            "warnings": [
+                "This file does not look like a SectionFormat master; "
+                + secret_title,
+                "Unrecognized warning mentioning " + secret_title,
+            ]
+        }
+    )
+    assert facts["warning_count"] == 2
+    assert facts["warning_code_counts"] == {
+        "other": 1,
+        "unstructured_document": 1,
+    }
+    assert len(facts["warning_evidence"]) == 2
+    assert all(len(item["fingerprint"]) == 64 for item in facts["warning_evidence"])
+    assert secret_title not in json.dumps(facts)
+    assert "warnings" not in facts
+
+
+def test_import_warning_snapshot_counts_beyond_the_evidence_cap():
+    facts = diagnostics._import_report_facts(
+        {"warnings": [f"Unrecognized warning {index}" for index in range(1100)]}
+    )
+    assert facts["warning_count"] == 1100
+    assert facts["warning_code_counts"] == {"other": 1100}
+    assert len(facts["warning_evidence"]) == 64
+    assert facts["warning_evidence_truncated"] == 1036
 
 
 def test_the_snapshot_says_why_an_imported_document_is_read_only():
@@ -321,7 +707,16 @@ def test_the_snapshot_says_why_an_imported_document_is_read_only():
         )
         assert resp.status_code == 200, resp.text
         settle_capability_sweep()
-        return client.get("/api/diagnostics").json()["session"]["source"]
+        session_facts = client.get("/api/diagnostics").json()["session"]
+        imported = session_facts["import"]
+        assert imported["present"] is True
+        assert imported["filename"] == "230548.docx"
+        assert imported["imported_block_count"] > 0
+        assert imported["warning_count"] == sum(
+            imported["warning_code_counts"].values()
+        )
+        assert imported["warning_count"] == len(imported["warning_evidence"])
+        return session_facts["source"]
 
     # No source document at all: nothing to explain, and no empty scaffolding
     # implying there was.
@@ -335,10 +730,20 @@ def test_the_snapshot_says_why_an_imported_document_is_read_only():
     # blockers — the point is that they are per-element and named.
     assert "heading_change" in ordinary["edit_blockers"]
     assert "document_protection" not in ordinary["edit_blockers"]
+    assert ordinary["global_edit_blockers"]["causes"] == []
+    assert "heading_change" in ordinary["per_operation_edit_blockers"]
+    assert ordinary["capability_operation_counts"]["denied"] > 0
 
     protected = imported_source_facts(protected=True)
     assert protected["capabilities_status"] == "pass_through_only"
     assert "document_protection" in protected["edit_blockers"]
+    assert protected["global_edit_blockers"]["causes"] == [
+        "document_protection"
+    ]
+    assert protected["global_edit_blockers"]["denial_counts"][
+        "document_protection"
+    ] == protected["edit_blockers"]["document_protection"]
+    assert "document_protection" not in protected["per_operation_edit_blockers"]
 
     # The closed blocker vocabulary travels; provision text never does.
     for facts in (ordinary, protected):
@@ -400,6 +805,67 @@ def test_traces_list_newest_first_with_current_flag(trace_env):
     assert current[0]["run_id"] == recorder_module.get_recorder().run_id
 
 
+def test_bundle_excludes_trace_owned_by_another_live_process(log_env, trace_env):
+    now = time.time()
+    live_id = "session-live-sibling-3000"
+    dead_id = "session-dead-prior-2000"
+    for run_id, stamp, pid in (
+        (live_id, now - 10, os.getpid()),
+        (dead_id, now - 20, None),
+    ):
+        run_dir = trace_env / run_id
+        run_dir.mkdir(parents=True)
+        metadata = {
+            "run_id": run_id,
+            "started_at": stamp - 5,
+            "ended_at": stamp,
+        }
+        if pid is not None:
+            metadata["environment"] = {"pid": pid}
+        (run_dir / "run.json").write_text(
+            json.dumps(metadata), encoding="utf-8"
+        )
+        (run_dir / "events.jsonl").write_text(
+            json.dumps({"ts": stamp, "type": "error", "status": 500}) + "\n",
+            encoding="utf-8",
+        )
+        os.utime(run_dir, (stamp, stamp))
+
+    diagnostics.init_logging(force=True)
+    capture.app_event("server_started")
+    inventory = diagnostics.list_trace_runs(limit=100)["runs"]
+    live = next(run for run in inventory if run["run_id"] == live_id)
+    assert live["owner_pid"] == os.getpid()
+    assert live["owner_process_alive"] is True
+
+    bundle_path, _filename = diagnostics.build_bundle()
+    try:
+        with zipfile.ZipFile(bundle_path) as zf:
+            names = set(zf.namelist())
+            manifest = json.loads(zf.read("bundle-manifest.json"))
+    finally:
+        diagnostics.unlink_quietly(bundle_path)
+
+    assert not any(name.startswith(f"traces/{live_id}/") for name in names)
+    assert any(name.startswith(f"traces/{dead_id}/") for name in names)
+    assert live_id in manifest["scope"]["excluded_live_trace_run_ids"]
+    assert live_id not in manifest["included_run_ids"]
+    assert dead_id in manifest["included_run_ids"]
+
+
+def test_recent_trace_incident_limit_uses_timestamps_not_append_order():
+    current = {"ts": 10_000.0, "run_id": "current", "type": "error"}
+    historical = [
+        {"ts": float(index), "run_id": "prior", "type": "error"}
+        for index in range(100)
+    ]
+
+    recent = diagnostics._recent_trace_incidents([current, *historical])
+
+    assert len(recent) == diagnostics._INCIDENT_LIMIT
+    assert current in recent
+
+
 def test_activity_endpoint_returns_recent_events_and_open_spans(trace_env):
     capture.app_event("session_reset", module_id="generic", had_content=False)
     handle = capture.turn_start(model="claude-sonnet-5", history_len=0)
@@ -415,6 +881,27 @@ def test_activity_endpoint_returns_recent_events_and_open_spans(trace_env):
         capture.turn_end(handle)
 
 
+def test_snapshot_surfaces_bounded_current_trace_summary_and_health(trace_env):
+    capture.app_event("session_reset", module_id="generic", had_content=False)
+    TestClient(create_app()).get("/api/doc")
+    data = diagnostics.snapshot()["tracing"]
+    assert data["run_id"] == recorder_module.get_recorder().run_id
+    assert data["metadata_flush_complete"] is True
+    assert data["metadata_size_bytes"] <= diagnostics._RUN_META_READ_CAP
+    assert data["trace_schema_version"] == 2
+    assert data["summary"]["events_total"] >= 1
+    assert data["summary"]["events_by_type"]["session_reset"] >= 1
+    assert data["summary"]["request_outcome_counts"]["success"] >= 1
+    assert data["recorder_health"]["state"] == "running"
+    assert data["recorder_health"]["thread_alive"] is True
+    assert data["recorder_health"]["dropped_records"] == 0
+    assert data["retention_policy"] == {
+        "max_runs": trace_config.DEFAULT_TRACE_MAX_RUNS,
+        "max_age_days": trace_config.DEFAULT_TRACE_MAX_AGE_DAYS,
+        "max_bytes": trace_config.DEFAULT_TRACE_MAX_MIB * 1024 * 1024,
+    }
+
+
 def test_bundle_zip_contains_snapshot_log_and_trace_and_never_the_key(
     log_env, trace_env
 ):
@@ -422,6 +909,43 @@ def test_bundle_zip_contains_snapshot_log_and_trace_and_never_the_key(
     from pathlib import Path
 
     diagnostics.init_logging(force=True)
+    boot_nonce = "diagnostic-bootstrap-nonce-must-never-be-persisted"
+    nonce_fingerprint = hashlib.sha256(boot_nonce.encode("utf-8")).hexdigest()
+    diagnostics.set_runtime_server_identity(
+        host="127.0.0.1", port=43123, boot_nonce=boot_nonce
+    )
+    identity = diagnostics.runtime_server_identity()
+    assert identity["boot_nonce_fingerprint"] == nonce_fingerprint
+    assert "boot_nonce" not in identity
+    current_marker_path = (
+        diagnostics.current_log_dir() / diagnostics.RUN_MARKER_FILENAME
+    )
+    current_marker_text = current_marker_path.read_text(encoding="utf-8")
+    assert boot_nonce not in current_marker_text
+    assert nonce_fingerprint in current_marker_text
+    # Simulate a rotation produced by an older release, before file-log
+    # formatting scrubbed credential-shaped substrings. Bundle assembly is a
+    # second redaction boundary for those historical files.
+    legacy_secret = "sk-ant-legacycredential1234"
+    legacy_name = f"{diagnostics.LOG_FILENAME}.1"
+    (log_env / legacy_name).write_text(
+        f"2026-01-01 ERROR legacy provider failure {legacy_secret}\n",
+        encoding="utf-8",
+    )
+    # The legacy flat marker may come from the version that persisted the raw
+    # bootstrap nonce. Bundle migration sanitizes it without rewriting source.
+    legacy_marker = log_env / diagnostics.RUN_MARKER_FILENAME
+    legacy_marker.write_text(
+        json.dumps(
+            {
+                "run_id": "legacy-run",
+                "pid": 4444,
+                "clean": True,
+                "server": {"boot_nonce": boot_nonce},
+            }
+        ),
+        encoding="utf-8",
+    )
     client = TestClient(create_app())
     client.get("/api/doc")  # an api_request event + log lines
 
@@ -441,7 +965,23 @@ def test_bundle_zip_contains_snapshot_log_and_trace_and_never_the_key(
     zf = zipfile.ZipFile(BytesIO(resp.content))
     names = zf.namelist()
     assert "snapshot.json" in names
-    assert f"logs/{diagnostics.LOG_FILENAME}" in names
+    assert "bundle-manifest.json" in names
+    assert "incident-index.json" in names
+    current_log_member = (
+        f"logs/{diagnostics._PROCESS_RUN_ID}/{diagnostics.LOG_FILENAME}"
+    )
+    assert current_log_member in names
+    archived_log = zf.read(current_log_member).decode("utf-8")
+    assert f"trace={recorder_module.get_recorder().run_id}" in archived_log
+    archived_legacy = zf.read(f"logs/{legacy_name}").decode("utf-8")
+    assert legacy_secret not in archived_legacy
+    assert "<redacted>" in archived_legacy
+    archived_legacy_marker = zf.read(
+        f"logs/{diagnostics.RUN_MARKER_FILENAME}"
+    ).decode("utf-8")
+    assert boot_nonce not in archived_legacy_marker
+    assert nonce_fingerprint in archived_legacy_marker
+    assert boot_nonce in legacy_marker.read_text(encoding="utf-8")
     assert any(
         n.startswith("traces/") and n.endswith("events.jsonl") for n in names
     )
@@ -463,9 +1003,155 @@ def test_bundle_zip_contains_snapshot_log_and_trace_and_never_the_key(
     # The hermetic fake key must not appear in ANY member, decompressed.
     for name in names:
         assert b"test-key-hermetic" not in zf.read(name), name
+        assert boot_nonce.encode("utf-8") not in zf.read(name), name
     snapshot = json.loads(zf.read("snapshot.json"))
+    assert boot_nonce not in json.dumps(snapshot)
+    assert snapshot["server"]["boot_nonce_fingerprint"] == nonce_fingerprint
     assert snapshot["app"]["version"]
+    manifest = json.loads(zf.read("bundle-manifest.json"))
+    incidents = json.loads(zf.read("incident-index.json"))
+    assert manifest["schema_version"] == 1
+    assert manifest["capture_id"] == incidents["capture_id"]
+    assert manifest["current_trace_run_id"] in manifest["included_run_ids"]
+    assert manifest["scope"]["current_trace"] == "through_pre_copy_flush"
+    assert manifest["current_trace_flush_complete"] is True
+    legacy_meta = next(
+        item
+        for item in manifest["artifacts"]
+        if item["path"] == f"logs/{legacy_name}"
+    )
+    assert legacy_meta["transformation"] == "credential_substring_redaction"
+    assert legacy_meta["truncated"] is False
+    assert incidents["capture_state"] == "active_at_capture"
     assert snapshot["key"]["masked"].startswith("…")
+
+
+def test_bundle_adds_bounded_prior_context_and_an_incident_index(
+    log_env, trace_env
+):
+    prior_id = "session-prior-incident-1000"
+    recent_prior = time.time() - 60
+    prior = trace_env / prior_id
+    prior.mkdir(parents=True)
+    (prior / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": prior_id,
+                "started_at": recent_prior - 10,
+                "ended_at": recent_prior,
+            }
+        ),
+        encoding="utf-8",
+    )
+    # One oversized historical record proves the bundle keeps a bounded,
+    # line-aligned tail while retaining the incident after it.
+    oversized = json.dumps({"type": "noise", "payload": "x" * 600_000})
+    legacy_trace_secret = "sk-ant-legacybundlecredential123"
+    failed_record = {
+        "type": "api_request",
+        "path": "/api/qc/export",
+        "status": 500,
+        "code": "export_failed",
+        "request_id": "request-correlation-1",
+        "outcome_code": "export_failed",
+        "exception_type": "ExportError",
+        "process_instance_id": "process-instance-1",
+        "record_seq": 42,
+        "workspace_id_before": 7,
+        "generation_before": 3,
+        "workspace_id_after": 7,
+        "generation_after": 3,
+        legacy_trace_secret: "non-secret diagnostic value",
+    }
+    failed = json.dumps(failed_record)
+    (prior / "events.jsonl").write_text(
+        oversized + "\n" + failed + "\n", encoding="utf-8"
+    )
+    (prior / "spans.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "turn",
+                "status": "failed",
+                "error_kind": "provider_error",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.utime(prior, (recent_prior, recent_prior))
+
+    diagnostics.init_logging(force=True)
+    logging.getLogger("buildaspec.test").error("synthetic export incident")
+    client = TestClient(create_app())
+    client.get("/api/doc")
+    inventory = diagnostics.list_trace_runs(limit=10)
+    assert prior_id in [item["run_id"] for item in inventory["runs"]], inventory
+    resp = client.get("/api/diagnostics/bundle")
+    assert resp.status_code == 200
+
+    zf = zipfile.ZipFile(BytesIO(resp.content))
+    names = set(zf.namelist())
+    events_tail = f"traces/{prior_id}/events-tail.jsonl"
+    spans_tail = f"traces/{prior_id}/spans-tail.jsonl"
+    assert events_tail in names and spans_tail in names, sorted(names)
+    archived_events = [
+        json.loads(line)
+        for line in zf.read(events_tail).decode("utf-8").splitlines()
+    ]
+    assert archived_events == [scrub_data(failed_record)]
+    assert legacy_trace_secret.encode("utf-8") not in zf.read(events_tail)
+
+    manifest = json.loads(zf.read("bundle-manifest.json"))
+    assert prior_id in manifest["included_run_ids"]
+    scope = next(
+        item
+        for item in manifest["scope"]["prior_traces"]
+        if item["run_id"] == prior_id
+    )
+    events_meta = scope["artifacts"]["events-tail.jsonl"]
+    assert events_meta["truncated"] is True
+    assert events_meta["included_bytes"] < events_meta["source_size_bytes"]
+    assert events_meta["transformation"] == (
+        "current_recursive_credential_redaction"
+    )
+
+    incidents = json.loads(zf.read("incident-index.json"))
+    assert any(
+        "synthetic export incident" in item["line"]
+        for item in incidents["recent_log_errors"]
+    )
+    assert any(
+        item.get("run_id") == prior_id
+        and item.get("path") == "/api/qc/export"
+        and item.get("status") == 500
+        and item.get("request_id") == "request-correlation-1"
+        and item.get("outcome_code") == "export_failed"
+        and item.get("record_seq") == 42
+        and item.get("generation_before") == 3
+        and item.get("generation_after") == 3
+        for item in incidents["recent_trace_incidents"]
+    )
+
+
+def test_bundle_text_artifacts_use_a_manifested_line_aligned_tail(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "crash.log"
+    source.write_text("old-stack-" * 100 + "\nrecent-stack\n", encoding="utf-8")
+    monkeypatch.setattr(diagnostics, "_BUNDLE_LOG_TEXT_BYTES", 64)
+    archive = BytesIO()
+
+    with zipfile.ZipFile(archive, "w") as zf:
+        metadata = diagnostics._add_redacted_text_file_if_present(
+            zf, source, "logs/crash.log"
+        )
+
+    assert metadata is not None
+    assert metadata["coverage"] == "bounded_recent_tail"
+    assert metadata["truncated"] is True
+    with zipfile.ZipFile(BytesIO(archive.getvalue())) as zf:
+        bundled = zf.read("logs/crash.log").decode("utf-8")
+    assert bundled == "recent-stack\n"
 
 
 def test_client_event_collector_logs_traces_and_bounds(

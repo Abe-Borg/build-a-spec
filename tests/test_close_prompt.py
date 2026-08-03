@@ -121,13 +121,19 @@ class _FakeEvents:
 class _FakeWindow:
     """Records the controller's calls; no GUI involved."""
 
-    def __init__(self, evaluate_return=True, dialog_path=None) -> None:
+    def __init__(
+        self,
+        evaluate_return=True,
+        dialog_path=None,
+        current_url: str = "http://127.0.0.1:8787/",
+    ) -> None:
         self.events = _FakeEvents()
         self.destroyed = False
         self.evaluated: list[str] = []
         self.dialog_calls: list = []
         self._evaluate_return = evaluate_return
         self._dialog_path = dialog_path
+        self.current_url = current_url
 
     def evaluate_js(self, js: str):
         self.evaluated.append(js)
@@ -142,6 +148,9 @@ class _FakeWindow:
         self.dialog_calls.append((args, kwargs))
         return self._dialog_path
 
+    def get_current_url(self) -> str:
+        return self.current_url
+
 
 def _controller_with(window: _FakeWindow) -> main._CloseController:
     controller = main._CloseController()
@@ -149,6 +158,58 @@ def _controller_with(window: _FakeWindow) -> main._CloseController:
     # _bind subscribes the closing handler.
     assert controller._on_closing in window.events.closing.handlers
     return controller
+
+
+def test_guarded_bridge_accepts_only_the_exact_live_app_origin():
+    window = _FakeWindow(current_url="http://127.0.0.1:8787/app?step=2#panel")
+    controller = main._CloseController(("http://127.0.0.1:8787/",))
+    controller._bind(window)
+
+    assert controller._trusted_page() is True
+    for untrusted_url in (
+        "http://127.0.0.1:8788/",
+        "http://127.0.0.1.evil.example:8787/",
+        "http://user@127.0.0.1:8787/",
+        "https://127.0.0.1:8787/",
+        "file:///tmp/copied-app.html",
+        "about:blank",
+    ):
+        window.current_url = untrusted_url
+        assert controller._trusted_page() is False, untrusted_url
+
+
+def test_untrusted_page_cannot_use_any_public_native_bridge(monkeypatch):
+    window = _FakeWindow(current_url="https://untrusted.example/")
+    controller = main._CloseController(("http://127.0.0.1:8787/",))
+    controller._bind(window)
+    browser_calls: list[str] = []
+    monkeypatch.setattr(
+        "webbrowser.open", lambda url: browser_calls.append(url) or True
+    )
+
+    controller.save_and_close()
+    controller.discard_and_close()
+    assert controller.save_project() is False
+    assert controller.save_template("personal:" + "a" * 32) is False
+    assert controller.open_file("project") is None
+    assert controller.open_external_link("https://example.com/") is False
+
+    assert window.destroyed is False
+    assert window.dialog_calls == []
+    assert browser_calls == []
+
+
+def test_untrusted_page_native_window_close_skips_the_app_prompt():
+    sessions.get_session().history.append(
+        {"role": "user", "content": [{"type": "text", "text": "unsaved"}]}
+    )
+    window = _FakeWindow(current_url="https://untrusted.example/")
+    controller = main._CloseController(("http://127.0.0.1:8787/",))
+    controller._bind(window)
+
+    assert controller._on_closing() is None
+    assert controller._prompting is False
+    assert window.evaluated == []
 
 
 def test_on_closing_after_confirmation_lets_it_close():

@@ -1341,7 +1341,7 @@ function Dossier() {
             ],
             [
               "Trace files and the activity log",
-              "Both on by default and written only to your machine’s application-state folder, with credential-shaped strings redacted. Traces contain your draft text — that is what makes them useful as an audit record — and the activity log records what the application did (requests, errors, crashes), not your content. Both are visible in Settings → Developer tools, which can also save them as one diagnostics bundle. Disable with the BUILD_A_SPEC_TRACE and BUILD_A_SPEC_LOG environment variables.",
+              "Both are on by default and written only to your machine’s application-state folder, with credential-shaped strings redacted before trace or normal log text is written. Traces can contain draft text and prompts — that is what makes them useful as an audit record — while logs can include document titles, file paths, frontend error text, and exception context. Settings → Developer tools shows capture coverage and writer health and can save a bundle containing the current trace plus bounded prior-run context, logs, a manifest, and an incident index. Treat all of it as sensitive project data. Disable capture with the BUILD_A_SPEC_TRACE and BUILD_A_SPEC_LOG environment variables.",
             ],
             [
               "Project files",

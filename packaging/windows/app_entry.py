@@ -79,8 +79,8 @@ def _boot_check() -> int:
     try:
         from main import _start_backend, _wait_for_health
 
-        _start_backend()
-        healthy = _wait_for_health(timeout_s=30.0)
+        runtime = _start_backend()
+        healthy = _wait_for_health(runtime, timeout_s=30.0)
     except Exception:
         import traceback
 

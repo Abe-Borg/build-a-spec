@@ -38,7 +38,8 @@ export interface OnboardingCaps {
   startQc: () => void;
   prefillComposer: (text: string) => void;
   openTemplates: () => void;
-  applySession: (session: SessionBundle) => void;
+  /** Apply only if its workspace lease is not superseded. */
+  applySession: (session: SessionBundle) => boolean;
   health: Health | null;
   doc: SpecDoc | null;
   hasContent: boolean;

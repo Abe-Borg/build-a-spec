@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from backend import sessions
 from tests.conftest import settle_capability_sweep
 from backend.app import _qc_source_guard, create_app
-from backend.llm.conversation import _source_editing_boundary_block
+from backend.llm.conversation import SessionState, _source_editing_boundary_block
 from backend.qc.engine import (
     QCFinding,
     _lens_shared_prefix,
@@ -34,6 +34,7 @@ from backend.spec_doc.source_mapping import SourceBodyMap
 from backend.spec_doc.source_patch import (
     SourceCapabilityReport,
     SourcePatchContext,
+    blocked_source_edit_capabilities,
     build_source_patch_context,
     source_capability_summary,
     source_edit_capabilities,
@@ -1164,6 +1165,51 @@ def test_capability_sweep_is_not_repeated_for_unchanged_state(
     assert _source_editing_boundary_block(session) is not None
     assert session.source_edit_capabilities() is not None
     assert counts["probes"] == 0
+
+
+def test_passive_capability_peek_never_materializes_a_report(monkeypatch):
+    """Diagnostics may inspect existing state but must not start its work."""
+    session = SessionState()
+    session.source_docx_bytes = b"retained-source"
+    session.doc.baseline_index = 0
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("passive capability lookup started work")
+
+    monkeypatch.setattr(session, "start_capability_warm", unexpected)
+    monkeypatch.setattr(session, "_pending_capability_report", unexpected)
+    monkeypatch.setattr(session, "_compute_source_edit_capabilities", unexpected)
+    monkeypatch.setattr(session, "_capability_work", unexpected)
+
+    assert session.peek_source_edit_capabilities() is None
+    assert session._pending_capability_cache is None
+    assert session._capability_warm is None
+
+    state_key = session._capability_lookup_key()
+    assert state_key is not None
+    pending = blocked_source_edit_capabilities(
+        session.doc.doc,
+        blocker="capabilities_pending",
+        status="pending",
+    )
+    session._pending_capability_cache = (state_key, pending)
+    assert session.peek_source_edit_capabilities() is pending
+
+    settled = blocked_source_edit_capabilities(
+        session.doc.doc,
+        blocker="source_unavailable",
+    )
+    session._capability_cache = (
+        (
+            state_key[0],
+            state_key[1],
+            session.source_patch_context,
+            state_key[2],
+            state_key[3],
+        ),
+        settled,
+    )
+    assert session.peek_source_edit_capabilities() is settled
 
 
 def test_capability_sweep_reruns_when_the_document_changes(

@@ -11,13 +11,19 @@ opening the default browser against the same local server.
 """
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import os
+import secrets
+import socket
 import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 
 import uvicorn
 
@@ -83,39 +89,188 @@ def _ensure_std_streams() -> None:
                 setattr(sys, f"__{name}__", stream)
 
 
-def _start_backend() -> threading.Thread:
+@dataclass(repr=False)
+class _BackendRuntime:
+    server: uvicorn.Server
+    thread: threading.Thread
+    listener: socket.socket
+    host: str
+    port: int
+    boot_nonce: str
+
+
+def _desired_backend_port() -> int:
+    """Vite's proxy needs the configured port; packaged/browser uses ephemeral."""
+    return settings.PORT if settings.dev_mode() else 0
+
+
+def _reserve_backend_socket(port: int) -> socket.socket:
+    """Exclusively reserve the loopback listener before any server probing."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            listener.setsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_EXCLUSIVEADDRUSE,
+                1,
+            )
+        listener.bind((settings.HOST, int(port)))
+        return listener
+    except Exception:
+        listener.close()
+        raise
+
+
+def _desktop_origins_and_hosts(port: int) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    origins = {
+        f"http://{settings.HOST}:{port}",
+        f"http://localhost:{port}",
+    }
+    hosts = {f"{settings.HOST}:{port}", f"localhost:{port}"}
+    if settings.dev_mode():
+        parsed = urllib.parse.urlsplit(settings.DEV_FRONTEND_URL)
+        if parsed.scheme and parsed.netloc:
+            origins.add(f"{parsed.scheme}://{parsed.netloc}")
+            hosts.add(parsed.netloc)
+            frontend_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            if parsed.hostname == "localhost":
+                origins.add(f"{parsed.scheme}://127.0.0.1:{frontend_port}")
+                hosts.add(f"127.0.0.1:{frontend_port}")
+            elif parsed.hostname == "127.0.0.1":
+                origins.add(f"{parsed.scheme}://localhost:{frontend_port}")
+                hosts.add(f"localhost:{frontend_port}")
+    return (
+        tuple(sorted(value.lower() for value in origins)),
+        tuple(sorted(value.lower() for value in hosts)),
+    )
+
+
+def _start_backend() -> _BackendRuntime:
     # Must run before uvicorn.Config configures logging (see the docstring).
     _ensure_std_streams()
+    listener = _reserve_backend_socket(_desired_backend_port())
+    host, port = listener.getsockname()[:2]
+    boot_nonce = secrets.token_urlsafe(32)
+    api_token = secrets.token_urlsafe(48)
+    diagnostics.set_runtime_server_identity(
+        host=str(host), port=int(port), boot_nonce=boot_nonce
+    )
+    origins, hosts = _desktop_origins_and_hosts(int(port))
+    try:
+        from backend.app import DesktopSecurityConfig, create_app
+
+        secured_app = create_app(
+            desktop_security=DesktopSecurityConfig(
+                boot_nonce=boot_nonce,
+                api_token=api_token,
+                bound_host=str(host),
+                bound_port=int(port),
+                allowed_hosts=hosts,
+                allowed_origins=origins,
+            )
+        )
+    except Exception:
+        listener.close()
+        raise
     # log_config=None: uvicorn installs no handlers of its own, so its
     # loggers propagate to the root handler diagnostics.init_logging()
     # attached — the only place output survives in the packaged windowed
     # build (stdout/stderr are devnull there). access_log=False because
     # the app's request middleware is the access log.
     config = uvicorn.Config(
-        "backend.app:app",
-        host=settings.HOST,
-        port=settings.PORT,
+        secured_app,
+        host=str(host),
+        port=int(port),
         log_level="info",
         log_config=None,
         access_log=False,
     )
     server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, daemon=True)
+    thread = threading.Thread(
+        target=server.run,
+        kwargs={"sockets": [listener]},
+        name="build-a-spec-backend",
+        daemon=True,
+    )
+    runtime = _BackendRuntime(
+        server=server,
+        thread=thread,
+        listener=listener,
+        host=str(host),
+        port=int(port),
+        boot_nonce=boot_nonce,
+    )
+    diagnostics.log_startup_banner()
     thread.start()
-    return thread
+    return runtime
 
 
-def _wait_for_health(timeout_s: float = 15.0) -> bool:
+def _health_identity_matches(runtime: _BackendRuntime, payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    fingerprint = payload.get("boot_nonce_fingerprint")
+    expected_fingerprint = hashlib.sha256(
+        runtime.boot_nonce.encode("utf-8")
+    ).hexdigest()
+    try:
+        port = int(payload.get("bound_port"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        payload.get("status") == "ok"
+        and payload.get("app") == settings.APP_NAME
+        and payload.get("version") == settings.VERSION
+        and isinstance(fingerprint, str)
+        and secrets.compare_digest(fingerprint, expected_fingerprint)
+        and port == runtime.port
+    )
+
+
+def _wait_for_health(runtime: _BackendRuntime, timeout_s: float = 15.0) -> bool:
     deadline = time.monotonic() + timeout_s
-    url = f"http://{settings.HOST}:{settings.PORT}/api/health"
+    url = f"http://{runtime.host}:{runtime.port}/api/health"
     while time.monotonic() < deadline:
+        if not runtime.thread.is_alive():
+            return False
         try:
             with urllib.request.urlopen(url, timeout=1) as resp:
+                payload = json.loads(resp.read(16_384).decode("utf-8"))
+                if resp.status == 200 and _health_identity_matches(runtime, payload):
+                    return bool(runtime.thread.is_alive() and runtime.server.started)
                 if resp.status == 200:
-                    return True
+                    return False
         except Exception:
             time.sleep(0.2)
     return False
+
+
+def _url_with_boot_fragment(base_url: str, boot_nonce: str) -> str:
+    parsed = urllib.parse.urlsplit(base_url)
+    fragment = urllib.parse.urlencode({"buildaspec_boot": boot_nonce})
+    return urllib.parse.urlunsplit(parsed._replace(fragment=fragment))
+
+
+def _http_origin(url: str) -> tuple[str, str, int] | None:
+    """Return a browser-style HTTP origin tuple, or ``None`` if invalid."""
+    if not isinstance(url, str):
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    scheme = parsed.scheme.lower()
+    hostname = parsed.hostname
+    if (
+        scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, hostname.lower(), port
 
 
 class _CloseController:
@@ -164,7 +319,18 @@ class _CloseController:
         "}catch(e){}return false;})()"
     )
 
-    def __init__(self) -> None:
+    def __init__(self, allowed_origins: tuple[str, ...] | None = None) -> None:
+        # ``None`` retains the unguarded seam used by the existing unit fakes.
+        # The real desktop launcher always supplies an explicit allowlist.
+        self._allowed_origins = (
+            None
+            if allowed_origins is None
+            else frozenset(
+                origin
+                for url in allowed_origins
+                if (origin := _http_origin(url)) is not None
+            )
+        )
         self._window = None
         self._allow_close = False
         self._prompting = False
@@ -174,8 +340,25 @@ class _CloseController:
         self._window = window
         window.events.closing += self._on_closing
 
+    def _trusted_page(self) -> bool:
+        """Fail closed if the live webview is no longer on an app origin."""
+        if self._allowed_origins is None:
+            return True
+        if self._window is None:
+            return False
+        try:
+            current_url = self._window.get_current_url()
+        except Exception:
+            return False
+        return _http_origin(current_url) in self._allowed_origins
+
     # --- pywebview 'closing' handler (synchronous, on the UI thread) --------
     def _on_closing(self):
+        if self._window is not None and not self._trusted_page():
+            # pywebview keeps js_api injected after navigation. An untrusted
+            # page may close the containing window, but must never run the
+            # app's session inspection or save-before-leaving bridge flow.
+            return None
         # Returning False cancels the close (winforms sets args.Cancel); any
         # other value lets it proceed.
         if self._allow_close or self._window is None:
@@ -211,6 +394,14 @@ class _CloseController:
     def _ask_frontend(self) -> None:
         handled = False
         reason = self._close_reason
+        if not self._trusted_page():
+            # The page can navigate after the synchronous closing callback but
+            # before this worker runs. The user already requested a close, so
+            # complete it without evaluating app JavaScript on the new page.
+            self._prompting = False
+            self._close_reason = "unsaved"
+            self._force_close()
+            return
         try:
             script = (
                 self._REQUEST_BUSY_TUTORIAL_CLOSE_JS
@@ -232,6 +423,8 @@ class _CloseController:
     # --- exposed to the window's JS as window.pywebview.api.* --------------
     def save_and_close(self) -> None:
         """Frontend chose 'Save & close': write a project file, then close."""
+        if not self._trusted_page():
+            return
         if self._save_project_file():
             self._force_close()
         # If the user backed out of the native Save dialog, stay in the app —
@@ -239,6 +432,8 @@ class _CloseController:
 
     def discard_and_close(self) -> None:
         """Frontend chose 'Don't save': close without writing anything."""
+        if not self._trusted_page():
+            return
         self._force_close()
 
     def save_project(self) -> bool:
@@ -251,6 +446,8 @@ class _CloseController:
         session. Same payload + native dialog as ``save_and_close``, minus the
         ``_force_close()``.
         """
+        if not self._trusted_page():
+            return False
         return self._save_project_file()
 
     def open_external_link(self, url: str) -> bool:
@@ -262,6 +459,8 @@ class _CloseController:
         the app with no way back. The frontend intercepts every such click
         and calls this instead. Only http/https URLs are honored.
         """
+        if not self._trusted_page():
+            return False
         import urllib.parse
         import webbrowser
 
@@ -275,6 +474,8 @@ class _CloseController:
 
     def save_template(self, template_id: str) -> bool:
         """Export one validated catalog entry through a scoped Save dialog."""
+        if not self._trusted_page():
+            return False
         import webview
 
         from backend.templates import get_template_catalog
@@ -292,6 +493,8 @@ class _CloseController:
             return False
         if isinstance(target, (tuple, list)):
             target = target[0]
+        if not self._trusted_page():
+            return False
         return self._atomic_write_target(target, payload, prefix=".buildaspec-template-")
 
     def open_file(self, kind: str = "project") -> dict[str, str] | None:
@@ -315,12 +518,12 @@ class _CloseController:
         fails — the frontend then does nothing, exactly like a cancelled HTML
         picker.
         """
+        if self._window is None or not self._trusted_page():
+            return None
         import base64
 
         import webview
 
-        if self._window is None:
-            return None
         file_types = _OPEN_FILE_TYPES_BY_KIND.get(kind, _PROJECT_OPEN_FILE_TYPES)
         try:
             result = self._window.create_file_dialog(
@@ -335,10 +538,14 @@ class _CloseController:
         # create_file_dialog returns a path string on some backends, a
         # 1-tuple/list on others (mirrors the FileDialog.SAVE handling).
         target = result[0] if isinstance(result, (tuple, list)) else result
+        if not self._trusted_page():
+            return None
         try:
             with open(os.fspath(target), "rb") as handle:
                 payload = handle.read()
         except (OSError, TypeError, ValueError):
+            return None
+        if not self._trusted_page():
             return None
         return {
             "name": os.path.basename(os.fspath(target)),
@@ -361,6 +568,8 @@ class _CloseController:
 
         from backend import sessions
 
+        if not self._trusted_page():
+            return False
         workspace = sessions.get_workspace()
         if workspace.scope != "original":
             return False
@@ -381,6 +590,8 @@ class _CloseController:
         # 1-tuple on others.
         if isinstance(target, (tuple, list)):
             target = target[0]
+        if not self._trusted_page():
+            return False
         temp_path: str | None = None
         try:
             # Write beside the selected target, close it, then atomically
@@ -446,24 +657,41 @@ def main() -> None:
     # a GUI failure below — has a durable destination even in the
     # windowed build where stdout/stderr are devnull.
     diagnostics.init_logging()
-    diagnostics.log_startup_banner()
-    _start_backend()
-    if not _wait_for_health():
+    try:
+        runtime = _start_backend()
+    except OSError as exc:
+        import logging
+
+        logging.getLogger("buildaspec.main").exception(
+            "Could not reserve the exclusive loopback backend socket"
+        )
         raise SystemExit(
-            "Backend failed to start on "
-            f"http://{settings.HOST}:{settings.PORT} — see logs above."
+            "Backend could not reserve its local listener. Close any other "
+            "Build-a-Spec instance and try again."
+        ) from exc
+    if not _wait_for_health(runtime):
+        try:
+            runtime.listener.close()
+        except OSError:
+            pass
+        raise SystemExit(
+            "Backend failed its launch-identity check on the reserved local "
+            "listener; see the diagnostics log."
         )
 
+    backend_url = f"http://{runtime.host}:{runtime.port}"
     if settings.dev_mode():
-        url = settings.DEV_FRONTEND_URL
+        frontend_base_url = settings.DEV_FRONTEND_URL
     else:
-        url = f"http://{settings.HOST}:{settings.PORT}/"
+        frontend_base_url = f"{backend_url}/"
         if not settings.FRONTEND_DIST.is_dir():
             raise SystemExit(
                 "frontend/dist not found. Build the UI first:\n"
                 "  cd frontend && npm install && npm run build\n"
                 "or run in dev mode (BUILD_A_SPEC_DEV=1 with `npm run dev`)."
             )
+    # Fragments never reach HTTP request lines, logs, traces, or Referer.
+    url = _url_with_boot_fragment(frontend_base_url, runtime.boot_nonce)
 
     try:
         import webview  # pywebview
@@ -485,7 +713,9 @@ def main() -> None:
         # The close controller is passed as js_api (exposing save_and_close /
         # discard_and_close) and bound to the window's `closing` event so a
         # window-close offers to save unsaved progress first.
-        close_controller = _CloseController()
+        # pywebview leaves js_api injected after in-window navigation. Bind
+        # every native bridge method to this launch's frontend origin.
+        close_controller = _CloseController((frontend_base_url,))
         window = webview.create_window(
             settings.APP_NAME,
             url,
@@ -511,9 +741,12 @@ def main() -> None:
         )
         webbrowser.open(url)
         logging.getLogger("buildaspec.main").info(
-            "browser fallback serving at %s", url
+            "browser fallback serving at %s", frontend_base_url
         )
-        print(f"{settings.APP_NAME} running at {url} — Ctrl+C to quit.")
+        print(
+            f"{settings.APP_NAME} running at {frontend_base_url} "
+            "— Ctrl+C to quit."
+        )
         try:
             while True:
                 time.sleep(3600)

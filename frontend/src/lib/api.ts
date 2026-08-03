@@ -41,7 +41,31 @@ import { qcReportExportUrl } from "./qcReport.ts";
 export async function getHealth(): Promise<Health> {
   const resp = await fetch("/api/health");
   if (!resp.ok) throw new Error(`health ${resp.status}`);
-  return resp.json();
+  const data: unknown = await resp.json();
+  if (!isFullHealth(data)) {
+    // Secure /api/health deliberately returns a minimal 200 identity probe
+    // when authentication is missing. Never let that partial shape replace
+    // normal application health after a lost or stale desktop credential.
+    throw new Error("health authentication required");
+  }
+  return data;
+}
+
+function isFullHealth(value: unknown): value is Health {
+  if (typeof value !== "object" || value === null) return false;
+  const health = value as Partial<Record<keyof Health, unknown>>;
+  return (
+    health.status === "ok" &&
+    typeof health.app === "string" &&
+    typeof health.version === "string" &&
+    typeof health.model === "string" &&
+    typeof health.api_key_present === "boolean" &&
+    typeof health.workspace_id === "number" &&
+    (health.workspace_scope === "original" ||
+      health.workspace_scope === "tutorial" ||
+      health.workspace_scope === "scenario") &&
+    typeof health.generation === "number"
+  );
 }
 
 export async function saveApiKey(apiKey: string): Promise<void> {
@@ -64,16 +88,25 @@ export async function resetSession(opts?: {
   module_id?: string;
   discipline?: string;
   project_context?: string;
-}): Promise<void> {
-  if (opts) {
-    await fetch("/api/session/reset", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(opts),
-    });
-    return;
+}): Promise<Pick<Health, "workspace_id" | "workspace_scope" | "generation">> {
+  const resp = await fetch("/api/session/reset", {
+    method: "POST",
+    ...(opts
+      ? {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(opts),
+        }
+      : {}),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `reset session failed (${resp.status})`);
   }
-  await fetch("/api/session/reset", { method: "POST" });
+  return {
+    workspace_id: data.workspace_id,
+    workspace_scope: data.workspace_scope,
+    generation: data.generation,
+  };
 }
 
 /**

@@ -37,6 +37,23 @@ function fmtWhen(ts: number | null | undefined): string {
   return typeof ts === "number" ? new Date(ts * 1000).toLocaleString() : "—";
 }
 
+function fmtDuration(seconds: number | null | undefined): string {
+  if (typeof seconds !== "number") return "not available";
+  const whole = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const secs = whole % 60;
+  return hours ? `${hours}h ${minutes}m` : minutes ? `${minutes}m ${secs}s` : `${secs}s`;
+}
+
+function fmtCounts(values: Record<string, number> | undefined): string {
+  if (!values) return "none";
+  const entries = Object.entries(values).filter(([, count]) => count > 0);
+  return entries.length
+    ? entries.map(([name, count]) => `${name} ${count}`).join(" / ")
+    : "none";
+}
+
 /** Compact `k=v` rendering of an event's own fields (ts/span_id/type cut). */
 function eventFields(event: Record<string, unknown>): string {
   return Object.entries(event)
@@ -149,6 +166,12 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
     "rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm text-ink transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
   const app = snapshot?.app;
   const sess = snapshot?.session;
+  const process = snapshot?.process;
+  const trace = snapshot?.tracing;
+  const traceSummary = trace?.summary;
+  const recorder = trace?.recorder_health;
+  const logRetention = snapshot?.logging.retention_policy;
+  const lastLogRetention = snapshot?.logging.last_retention;
 
   return (
     <div
@@ -223,6 +246,22 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                 <Row name="App" value={`${app.name} ${app.version}${app.frozen ? " (packaged)" : ""}${app.dev_mode ? " (dev mode)" : ""}`} />
                 <Row name="Platform" value={`${app.platform} · Python ${app.python} · port ${app.port}`} />
                 <Row name="Models" value={`interview ${app.models.interview} · research ${app.models.research} · QC ${app.models.qc}`} />
+                {process && (
+                  <Row
+                    name="Process"
+                    value={`PID ${process.pid} (parent ${process.parent_pid}) / up ${fmtDuration(process.uptime_seconds)} / ${process.thread_count} threads / ${process.timezone ?? "local time"} ${process.utc_offset}`}
+                  />
+                )}
+                {process && (
+                  <Row name="Diagnostic run" value={process.diagnostic_run_id} mono />
+                )}
+                {snapshot.server && (
+                  <Row
+                    name="Bound server"
+                    value={`${snapshot.server.host}:${snapshot.server.bound_port}`}
+                    mono
+                  />
+                )}
                 <Row
                   name="API key"
                   value={
@@ -235,22 +274,142 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                 <Row
                   name="Tracing"
                   value={
-                    snapshot.tracing.enabled
-                      ? `on (${snapshot.tracing.level})${snapshot.tracing.run_id ? ` · run ${snapshot.tracing.run_id}` : ""}`
-                      : "off (BUILD_A_SPEC_TRACE=0)"
+                    !snapshot.tracing.enabled
+                      ? "off (BUILD_A_SPEC_TRACE=0)"
+                      : snapshot.tracing.capture_active
+                        ? `on (${snapshot.tracing.level})${snapshot.tracing.run_id ? ` · run ${snapshot.tracing.run_id}` : ""}`
+                        : recorder?.state === "failed"
+                          ? `FAILED (writer ${recorder.fatal_error ?? "unknown"})`
+                        : snapshot.tracing.initialization_succeeded === false
+                          ? `FAILED (${snapshot.tracing.startup_failure?.exception_type ?? "unknown"})`
+                          : `inactive (${recorder?.state ?? "not initialized"})`
                   }
                 />
+                {snapshot.tracing.startup_failure && (
+                  <Row
+                    name="Trace startup failure"
+                    value={`${snapshot.tracing.startup_failure.exception_type} / ${snapshot.tracing.startup_failure.count} attempt${snapshot.tracing.startup_failure.count === 1 ? "" : "s"} / ${fmtWhen(snapshot.tracing.startup_failure.last_failed_at)}`}
+                    mono
+                  />
+                )}
                 <Row name="Trace folder" value={snapshot.tracing.run_dir ?? snapshot.tracing.root} mono />
                 <Row
                   name="Activity log"
                   value={
-                    snapshot.logging.enabled
-                      ? `on (${snapshot.logging.level}) · ${fmtBytes(snapshot.logging.size_bytes)}`
-                      : "off (BUILD_A_SPEC_LOG=0)"
+                    !snapshot.logging.enabled
+                      ? "off (BUILD_A_SPEC_LOG=0)"
+                      : snapshot.logging.capture_active
+                        ? `on (${snapshot.logging.level}) · ${fmtBytes(snapshot.logging.size_bytes)}`
+                        : snapshot.logging.initialization_succeeded === false
+                          ? `FAILED (${snapshot.logging.initialization_failure_type ?? "unknown"})`
+                          : "configured, not initialized"
                   }
                 />
+                {snapshot.logging.initialization_failure_type && (
+                  <Row
+                    name="Log startup failure"
+                    value={`${snapshot.logging.initialization_failure_type} / ${snapshot.logging.initialization_failure_count} attempt${snapshot.logging.initialization_failure_count === 1 ? "" : "s"}${snapshot.logging.initialization_last_failure_at ? ` / ${fmtWhen(snapshot.logging.initialization_last_failure_at)}` : ""}`}
+                    mono
+                  />
+                )}
                 {snapshot.logging.file && (
                   <Row name="Log file" value={snapshot.logging.file} mono />
+                )}
+                <Row
+                  name="Log run folder"
+                  value={snapshot.logging.run_dir}
+                  mono
+                />
+                {logRetention && (
+                  <Row
+                    name="Log retention"
+                    value={`${logRetention.max_runs || "unlimited"} runs / ${logRetention.max_age_days || "unlimited"} days / ${logRetention.max_bytes ? fmtBytes(logRetention.max_bytes) : "unlimited bytes"}`}
+                  />
+                )}
+                {lastLogRetention && Object.keys(lastLogRetention).length > 0 && (
+                  <Row
+                    name="Last log cleanup"
+                    value={`${Number(lastLogRetention.removed_runs ?? 0)} runs removed / ${Number(lastLogRetention.protected_runs ?? 0)} protected / ${Number(lastLogRetention.failures ?? 0)} failures`}
+                  />
+                )}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-ink-faint">Not loaded.</p>
+            )}
+          </section>
+
+          {/* --- Trace integrity and coverage --- */}
+          <section>
+            <p className={label}>Trace integrity</p>
+            {trace ? (
+              <div className="mt-2">
+                <Row
+                  name="Capture"
+                  value={
+                    !trace.enabled
+                      ? "off"
+                      : trace.capture_active
+                        ? `schema ${trace.trace_schema_version ?? "unknown"} / ${traceSummary?.coverage ?? "unknown coverage"} / metadata flush ${trace.metadata_flush_complete ? "complete" : "incomplete"}`
+                        : recorder?.state === "failed"
+                          ? `writer failed: ${recorder.fatal_error ?? "unknown"}`
+                        : trace.initialization_succeeded === false
+                          ? `startup failed: ${trace.startup_failure?.exception_type ?? "unknown"}`
+                          : `inactive: ${recorder?.state ?? "not initialized"}`
+                  }
+                />
+                <Row
+                  name="Writer"
+                  value={
+                    recorder
+                      ? `${recorder.state ?? "unknown"} / thread ${recorder.thread_alive ? "alive" : "not alive"} / ${recorder.records_written ?? 0} written / ${recorder.dropped_records ?? 0} dropped / ${(recorder.write_failures ?? 0) + (recorder.metadata_write_failures ?? 0)} write failures`
+                      : "not active"
+                  }
+                />
+                {recorder && (
+                  <Row
+                    name="Writer queue"
+                    value={`${recorder.queue_depth ?? 0} / ${recorder.queue_max_records ?? "?"} records / ${fmtBytes(recorder.resident_payload_bytes)} / ${fmtBytes(recorder.queue_max_bytes)} resident / high-water ${recorder.queue_high_watermark ?? 0} records, ${fmtBytes(recorder.queue_payload_high_watermark)} / ${recorder.open_spans ?? 0} open spans${recorder.drain_timed_out ? " / drain timed out" : ""}`}
+                  />
+                )}
+                {recorder && (
+                  <Row
+                    name="Active-run storage"
+                    value={`${fmtBytes(recorder.data_bytes_written)} written / ${recorder.max_run_bytes ? fmtBytes(recorder.max_run_bytes) : "unlimited"}${recorder.storage_limit_reached ? " / limit affected capture" : ""}`}
+                  />
+                )}
+                {recorder && (
+                  <Row
+                    name="Health checkpoint"
+                    value={`${recorder.metadata_checkpointed_revision ?? 0} / ${recorder.metadata_revision ?? 0} persisted${recorder.metadata_dirty ? " / pending checkpoint" : ""}`}
+                  />
+                )}
+                {recorder && (recorder.dropped_records ?? 0) > 0 && (
+                  <Row
+                    name="Capture gaps"
+                    value={`${recorder.dropped_records ?? 0} total / queue count ${recorder.queue_count_drops ?? 0} / queue bytes ${recorder.queue_byte_drops ?? 0} / run cap ${recorder.run_byte_limit_drops ?? 0} / serialization ${recorder.serialization_failures ?? 0} / unknown file ${recorder.unknown_file_drops ?? 0} / write ${recorder.write_failure_drops ?? 0}${recorder.last_drop_reason ? ` / last: ${recorder.last_drop_reason}` : ""}`}
+                  />
+                )}
+                {recorder?.fatal_error && (
+                  <Row name="Writer fatal error" value={recorder.fatal_error} mono />
+                )}
+                {traceSummary && (
+                  <Row
+                    name="Coverage totals"
+                    value={`${traceSummary.events_total ?? 0} events (${traceSummary.failed_events ?? 0} failed) / ${traceSummary.spans_closed ?? 0} spans (${traceSummary.failed_spans ?? 0} failed) / ${traceSummary.prompts_stored ?? 0} prompts`}
+                  />
+                )}
+                {traceSummary && (
+                  <Row
+                    name="Request outcomes"
+                    value={fmtCounts(traceSummary.request_outcome_counts)}
+                  />
+                )}
+                <Row
+                  name="Retention"
+                  value={`${trace.retention_policy.max_runs || "unlimited"} runs / ${trace.retention_policy.max_age_days || "unlimited"} days / ${trace.retention_policy.max_bytes ? fmtBytes(trace.retention_policy.max_bytes) : "unlimited bytes"}`}
+                />
+                {traceSummary?.last_recorded_at && (
+                  <Row name="Last trace record" value={fmtWhen(traceSummary.last_recorded_at)} />
                 )}
               </div>
             ) : (
@@ -272,6 +431,14 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                   value={`version ${sess.doc_version_index + 1} of ${sess.doc_version_count}${sess.baseline_index !== null ? ` · master at ${sess.baseline_index}` : ""}${sess.doc_empty ? " · empty" : ""}`}
                 />
                 <Row
+                  name="Document shape"
+                  value={`${sess.document_shape.parts} parts / ${sess.document_shape.articles} articles / ${sess.document_shape.paragraphs} paragraphs / max depth ${sess.document_shape.maximum_paragraph_depth}`}
+                />
+                <Row
+                  name="Edit state"
+                  value={`undo ${sess.can_undo ? "yes" : "no"} / redo ${sess.can_redo ? "yes" : "no"} / transaction ${sess.turn_transaction_open ? (sess.turn_transaction_dirty ? "open/dirty" : "open/clean") : "closed"}`}
+                />
+                <Row
                   name="Module"
                   value={`${sess.module_id}${sess.discipline ? ` · ${sess.discipline}` : ""}`}
                 />
@@ -289,6 +456,23 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                     value={`${sess.source.filename || "(unnamed)"} · ${fmtBytes(sess.source.bytes)}`}
                   />
                 )}
+                {sess.source.retained && (
+                  <Row
+                    name="Source editing"
+                    value={`${sess.source.capabilities_status ?? "not analyzed"} / ${sess.source.capability_operation_counts.allowed} allowed / ${sess.source.capability_operation_counts.denied} denied${sess.source.global_edit_blockers.causes.length ? ` / global: ${sess.source.global_edit_blockers.causes.join(", ")}` : ""}`}
+                  />
+                )}
+                {sess.source.retained && (
+                  <Row
+                    name="Capability evidence"
+                    value={sess.source.capabilities_snapshot_source}
+                    mono
+                  />
+                )}
+                <Row
+                  name="Context gauge"
+                  value={sess.last_context_tokens === null ? "not measured" : `${sess.last_context_tokens.toLocaleString()} tokens`}
+                />
                 <Row
                   name="Spend (est.)"
                   value={`$${snapshot.usage.estimated_cost_usd.total.toFixed(3)} across ${snapshot.usage.turns} turn${snapshot.usage.turns === 1 ? "" : "s"}`}
@@ -298,6 +482,54 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
               <p className="mt-2 text-xs text-ink-faint">Not loaded.</p>
             )}
           </section>
+
+          {/* --- Long-running engines and import evidence --- */}
+          <section>
+            <p className={label}>Engine state</p>
+            {sess ? (
+              <div className="mt-2">
+                <Row
+                  name="Research"
+                  value={`${sess.research.status} / worker ${sess.research.worker_alive ? "alive" : "idle"} / round ${sess.research.active_round} / ${sess.research.event_count} events / ${sess.research.incomplete_dimensions.length} incomplete dimensions${sess.research.error_present ? ` / error ${sess.research.error_kind ?? "unclassified"}` : ""}`}
+                />
+                <Row
+                  name="Audit"
+                  value={`${sess.audit.status} / worker ${sess.audit.worker_alive ? "alive" : "idle"} / ${sess.audit.findings} findings${sess.audit.error_present ? " / error present" : ""}`}
+                />
+                <Row
+                  name="Final QC"
+                  value={`${sess.qc.status} / worker ${sess.qc.worker_alive ? "alive" : "idle"}/${sess.qc.worker_settled ? "settled" : "settling"} / ${sess.qc.event_count} events${sess.qc.error_present ? ` / error ${sess.qc.error_kind ?? "unclassified"}` : ""}`}
+                />
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-ink-faint">Not loaded.</p>
+            )}
+          </section>
+
+          {sess?.import.present && (
+            <section>
+              <p className={label}>Last import evidence</p>
+              <div className="mt-2">
+                <Row
+                  name="Source"
+                  value={`${sess.import.filename ?? "(unnamed)"} / ${fmtBytes(sess.import.size_bytes)} / SHA-256 ${sess.import.sha256 ?? "unavailable"}`}
+                  mono
+                />
+                <Row
+                  name="Package"
+                  value={`${sess.import.zip_member_count ?? 0} ZIP members / ${fmtBytes(sess.import.zip_uncompressed_bytes)} expanded / ${sess.import.imported_block_count ?? 0} blocks imported / ${sess.import.skipped_empty_count ?? 0} empty skipped`}
+                />
+                <Row
+                  name="Detection"
+                  value={`tracked changes ${sess.import.tracked_changes_detected ? "yes" : "no"} / specification shape ${sess.import.spec_shape_detected ? "yes" : "no"}`}
+                />
+                <Row
+                  name="Warning codes"
+                  value={`${fmtCounts(sess.import.warning_code_counts)}${sess.import.warning_evidence_truncated ? ` / ${sess.import.warning_evidence_truncated} evidence records omitted` : ""}`}
+                />
+              </div>
+            </section>
+          )}
 
           {/* --- Recent activity (trace events) --- */}
           <section>
@@ -415,6 +647,11 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                           current
                         </span>
                       )}
+                      {!run.current && run.owner_process_alive && (
+                        <span className="flex-none rounded-full bg-amber-500/15 px-2 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                          live process {run.owner_pid ?? "?"}
+                        </span>
+                      )}
                       <span className="flex-none text-ink-faint">
                         {fmtWhen(run.started_at)} · {fmtBytes(run.size_bytes)}
                       </span>
@@ -441,10 +678,15 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
           <section>
             <p className={label}>Diagnostics bundle</p>
             <p className="mt-2 text-xs text-ink-faint">
-              One .zip with the snapshot above, the log files, and the current
-              run&apos;s trace — everything a developer needs to reconstruct
-              what happened. It contains your draft text and prompts (that is
-              what makes it useful) and is generated locally and saved to your
+              One .zip with the snapshot above, this launch&apos;s bounded log
+              rotations, read-only legacy flat logs, the current trace through
+              a flush barrier, and bounded tails from up to three completed
+              prior runs. Live sibling processes are identified but never
+              copied. An exact inclusion manifest and time-ordered incident
+              index state what was captured. It can contain draft text,
+              prompts, document titles, file paths, and error context.
+              Credential-shaped strings are redacted; the bundle is generated
+              locally and saved to your
               machine only — share it deliberately.
             </p>
             <a

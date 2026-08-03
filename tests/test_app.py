@@ -183,6 +183,7 @@ def test_session_reset_clears_history_and_document(monkeypatch):
     assert sessions.get_session().history
     assert not sessions.get_session().doc.doc.is_empty()
 
+    before = client.get("/api/health").json()
     resp = client.post("/api/session/reset")
     # Batch 10: the reset response reports the (kept) module + discipline. The
     # neutral default is now the generic module; project_context is echoed too.
@@ -192,6 +193,9 @@ def test_session_reset_clears_history_and_document(monkeypatch):
         "module": sessions.get_session().module.display_name,
         "discipline": "",
         "project_context": "",
+        "workspace_id": before["workspace_id"],
+        "workspace_scope": "original",
+        "generation": before["generation"] + 1,
     }
     assert sessions.get_session().history == []
     assert sessions.get_session().doc.doc.is_empty()
@@ -422,6 +426,16 @@ def test_doc_snapshot_undo_redo_endpoints(monkeypatch):
     client = _client()
 
     empty = client.get("/api/doc").json()
+    health = client.get("/api/health").json()
+    assert (
+        empty["workspace_id"],
+        empty["workspace_scope"],
+        empty["generation"],
+    ) == (
+        health["workspace_id"],
+        "original",
+        health["generation"],
+    )
     assert empty["doc"]["version"] == {"index": 0, "count": 1}
     assert empty["open_questions"] == []
 
@@ -435,12 +449,18 @@ def test_doc_snapshot_undo_redo_endpoints(monkeypatch):
     assert undone.status_code == 200
     assert undone.json()["doc"]["section"]["number"] == ""
     assert undone.json()["open_questions"] == []
+    assert undone.json()["workspace_id"] == health["workspace_id"]
+    assert undone.json()["workspace_scope"] == "original"
+    assert undone.json()["generation"] == health["generation"]
 
     assert client.post("/api/doc/undo").status_code == 409
 
     redone = client.post("/api/doc/redo")
     assert redone.status_code == 200
     assert redone.json()["doc"]["section"]["number"] == "21 13 13"
+    assert redone.json()["workspace_id"] == health["workspace_id"]
+    assert redone.json()["workspace_scope"] == "original"
+    assert redone.json()["generation"] == health["generation"]
     assert client.post("/api/doc/redo").status_code == 409
 
 

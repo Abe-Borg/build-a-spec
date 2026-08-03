@@ -68,9 +68,11 @@ import hashlib
 import json
 import logging
 import re
+import secrets
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -226,6 +228,118 @@ _QUIET_PATHS = frozenset(
         "/api/usage",
     }
 )
+
+_REQUEST_ID_HEADER = "X-Request-ID"
+_REQUEST_OUTCOME_HEADER = "X-BuildASpec-Outcome-Code"
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+_DESKTOP_TOKEN_HEADER = "X-BuildASpec-Token"
+_DESKTOP_BOOT_HEADER = "X-BuildASpec-Boot-Nonce"
+_DESKTOP_COOKIE_PREFIX = "buildaspec_session_"
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_UNAUTHENTICATED_API_PATHS = frozenset(
+    {"/api/health", "/api/bootstrap", "/api/trace/viewer"}
+)
+
+
+@dataclass(frozen=True, repr=False)
+class DesktopSecurityConfig:
+    """Per-launch loopback trust material supplied only by ``main.py``.
+
+    The global ``backend.app:app`` and ordinary ``create_app()`` calls remain
+    intentionally unsecured for hermetic TestClient use and explicit ASGI
+    embedding.  The token must never enter repr/log/trace output.
+    """
+
+    boot_nonce: str
+    api_token: str
+    bound_host: str
+    bound_port: int
+    allowed_hosts: tuple[str, ...]
+    allowed_origins: tuple[str, ...]
+
+
+def _desktop_token_matches(candidate: str, expected: str) -> bool:
+    return bool(candidate) and secrets.compare_digest(candidate, expected)
+
+
+def _desktop_cookie_name(config: DesktopSecurityConfig) -> str:
+    """Return a launch-unique, non-secret cookie name.
+
+    Cookies are scoped by host/path, not port. A fixed name lets a second
+    ephemeral-port instance overwrite the first instance's download cookie.
+    Deriving only the name from the boot nonce lets independent instances'
+    HttpOnly cookies coexist without exposing either API token.
+    """
+    suffix = hashlib.sha256(config.boot_nonce.encode("utf-8")).hexdigest()[:16]
+    return f"{_DESKTOP_COOKIE_PREFIX}{suffix}"
+
+
+def _desktop_boot_nonce_fingerprint(config: DesktopSecurityConfig) -> str:
+    """Return a correlation-safe launch identity, never the capability."""
+    return hashlib.sha256(config.boot_nonce.encode("utf-8")).hexdigest()
+
+
+def _apply_defensive_headers(response: Response, *, api_path: bool) -> None:
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+    )
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; base-uri 'none'; object-src 'none'; "
+        "frame-ancestors 'none'; form-action 'self'; connect-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob: https:; font-src 'self' data:",
+    )
+    if api_path:
+        response.headers.setdefault("Cache-Control", "no-store")
+
+
+def _desktop_security_error(
+    *, status_code: int, code: str, message: str
+) -> JSONResponse:
+    return _coded_error_response(
+        {"ok": False, "code": code, "error": message},
+        status_code=status_code,
+    )
+
+
+def _request_correlation_id(request: Request) -> str:
+    """Accept a bounded opaque caller ID or create a launch-local one."""
+    supplied = request.headers.get(_REQUEST_ID_HEADER, "").strip()
+    if _REQUEST_ID_RE.fullmatch(supplied):
+        return supplied
+    return uuid.uuid4().hex
+
+
+def _workspace_diagnostic_state() -> dict[str, Any] | None:
+    """Best-effort lease identity for traces; diagnostics must never block."""
+    try:
+        lease = sessions.get_workspace()
+        return {
+            "workspace_id": lease.workspace_id,
+            "workspace_scope": lease.scope,
+            "generation": lease.generation,
+        }
+    except Exception:  # noqa: BLE001 - request handling must stay independent
+        return None
+
+
+def _coded_error_response(
+    payload: dict[str, Any], *, status_code: int
+) -> JSONResponse:
+    """Tag a declared API error for body-free request diagnostics."""
+    response = JSONResponse(payload, status_code=status_code)
+    declared = str(payload.get("code", "") or "")
+    normalized = _trace_capture.normalize_request_outcome_code(
+        status_code, declared
+    )
+    if normalized == declared:
+        response.headers[_REQUEST_OUTCOME_HEADER] = normalized
+    return response
 
 
 class ChatRequest(BaseModel):
@@ -1293,7 +1407,7 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
             "workspace_scope": workspace.scope,
             "generation": session.generation,
         }
-        if workspace.session is session and workspace.scope != "original"
+        if workspace.session is session
         else {}
     )
     return {
@@ -1888,7 +2002,7 @@ def _session_bundle(lease: sessions.WorkspaceLease | None = None) -> dict[str, A
     lease = lease or sessions.get_workspace()
     session = lease.session
     with session.session_state_guard():
-        doc_payload = _doc_payload(session)
+        doc_payload = _doc_payload(session, workspace=lease)
         return {
             "workspace_id": lease.workspace_id,
             "workspace_scope": lease.scope,
@@ -2041,8 +2155,19 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
     return generalized.to_dict()
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title=settings.APP_NAME, version=settings.VERSION)
+def create_app(
+    *,
+    desktop_security: DesktopSecurityConfig | None = None,
+    _record_start_event: bool = True,
+) -> FastAPI:
+    app = FastAPI(
+        title=settings.APP_NAME,
+        version=settings.VERSION,
+        docs_url=None if desktop_security is not None else "/docs",
+        redoc_url=None if desktop_security is not None else "/redoc",
+        openapi_url=None if desktop_security is not None else "/openapi.json",
+    )
+    app.state.desktop_security = desktop_security
 
     # Whether the app has ever run on this machine, sampled ONCE at boot —
     # before any request can race it. ``/api/release-notes`` needs to tell a
@@ -2059,12 +2184,118 @@ def create_app() -> FastAPI:
     except Exception:  # noqa: BLE001 — cosmetic signal, never fatal at boot
         app.state.ran_before = False
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=_DEV_ORIGINS,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    if desktop_security is None:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=_DEV_ORIGINS,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(desktop_security.allowed_origins),
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=[
+                "Accept",
+                "Content-Type",
+                _DESKTOP_TOKEN_HEADER,
+                _DESKTOP_BOOT_HEADER,
+                _REQUEST_ID_HEADER,
+            ],
+        )
+
+    # Registration is intentionally deferred until after the lease middleware
+    # below. Starlette prepends each new user middleware, giving the effective
+    # order diagnostics -> desktop security -> lease -> CORS. Direct
+    # create_app() callers have no DesktopSecurityConfig and retain the
+    # historical open ASGI API.
+    async def _desktop_loopback_security(request: Request, call_next):
+        if desktop_security is None:
+            return await call_next(request)
+
+        path = request.url.path
+        is_api = path == "/api" or path.startswith("/api/")
+        host = request.headers.get("host", "").strip().lower()
+        allowed_hosts = {
+            value.strip().lower() for value in desktop_security.allowed_hosts
+        }
+        if host not in allowed_hosts:
+            response = _desktop_security_error(
+                status_code=421,
+                code="invalid_host",
+                message="This local server does not accept that Host header.",
+            )
+            _apply_defensive_headers(response, api_path=is_api)
+            return response
+
+        origin = request.headers.get("origin", "").strip().rstrip("/").lower()
+        allowed_origins = {
+            value.strip().rstrip("/").lower()
+            for value in desktop_security.allowed_origins
+        }
+        if origin and origin not in allowed_origins:
+            response = _desktop_security_error(
+                status_code=403,
+                code="invalid_origin",
+                message="This local server does not accept that Origin.",
+            )
+            _apply_defensive_headers(response, api_path=is_api)
+            return response
+
+        header_valid = _desktop_token_matches(
+            request.headers.get(_DESKTOP_TOKEN_HEADER, ""),
+            desktop_security.api_token,
+        )
+        cookie_valid = _desktop_token_matches(
+            request.cookies.get(_desktop_cookie_name(desktop_security), ""),
+            desktop_security.api_token,
+        )
+        request.state.desktop_authenticated = header_valid or cookie_valid
+
+        if is_api and request.method == "OPTIONS":
+            # CORS validates the requested method/headers after this guard.
+            response = await call_next(request)
+        elif path == "/api/bootstrap":
+            if not _desktop_token_matches(
+                request.headers.get(_DESKTOP_BOOT_HEADER, ""),
+                desktop_security.boot_nonce,
+            ):
+                response = _desktop_security_error(
+                    status_code=403,
+                    code="invalid_boot_nonce",
+                    message="The desktop bootstrap identity is invalid.",
+                )
+            else:
+                response = await call_next(request)
+        elif path in _UNAUTHENTICATED_API_PATHS:
+            response = await call_next(request)
+        elif is_api and not (header_valid or cookie_valid):
+            response = _desktop_security_error(
+                status_code=401,
+                code="desktop_auth_required",
+                message="Desktop API authentication is required.",
+            )
+        elif (
+            is_api
+            and request.method in _MUTATING_METHODS
+            and not header_valid
+            and not (cookie_valid and origin in allowed_origins)
+        ):
+            # Cookie-only browser mutations must prove same-origin. The custom
+            # token header independently proves bootstrap and also makes a
+            # cross-origin browser issue a preflight.
+            response = _desktop_security_error(
+                status_code=403,
+                code="csrf_required",
+                message="This mutation requires same-origin CSRF proof.",
+            )
+        else:
+            response = await call_next(request)
+
+        _apply_defensive_headers(response, api_path=is_api)
+        return response
 
     @app.middleware("http")
     async def _lease_slow_session_operations(request: Request, call_next):
@@ -2100,9 +2331,10 @@ def create_app() -> FastAPI:
                 "workspace_conflict",
                 method=request.method,
                 path=request.url.path,
-                error=str(exc),
+                error_kind=type(exc).__name__,
+                request_id=getattr(request.state, "request_id", ""),
             )
-            return JSONResponse(
+            return _coded_error_response(
                 {
                     "ok": False,
                     "code": "stale_workspace",
@@ -2111,55 +2343,75 @@ def create_app() -> FastAPI:
                 status_code=409,
             )
 
-    # Registered AFTER the lease middleware — Starlette prepends, so the
-    # last-registered user middleware is OUTERMOST and this one also
-    # records the lease middleware's 409s. Duration is time-to-response-
-    # START: for the SSE endpoints that is time-to-first-frame, which is
-    # the correct, non-blocking reading (awaiting the body would hold the
-    # middleware open for the whole stream).
+    # Diagnostics is registered last and is therefore outermost, recording
+    # security failures and lease 409s. Duration is time-to-response-START;
+    # for SSE that is time-to-first-frame, avoiding a lease held for a stream.
+    # Security is registered after the lease so it is outside the lease at
+    # runtime; rejected requests therefore never acquire active_write.
+    app.middleware("http")(_desktop_loopback_security)
+
     @app.middleware("http")
     async def _request_diagnostics(request: Request, call_next):
+        request_id = _request_correlation_id(request)
+        request.state.request_id = request_id
+        workspace_before = _workspace_diagnostic_state()
         started = time.perf_counter()
         try:
             response = await call_next(request)
         except Exception as exc:
             ms = int((time.perf_counter() - started) * 1000)
             _api_log.warning(
-                "%s %s -> unhandled %s after %dms",
+                "%s %s -> unhandled %s after %dms [request_id=%s]",
                 request.method,
                 request.url.path,
                 type(exc).__name__,
                 ms,
+                request_id,
             )
-            _trace_capture.app_event(
-                "api_request",
+            _trace_capture.request_event(
                 method=request.method,
                 path=request.url.path,
                 status=500,
-                ms=ms,
-                error=type(exc).__name__,
+                duration_ms=ms,
+                request_id=request_id,
+                query=str(request.url.query)[:200],
+                declared_outcome_code="internal_error",
+                exception_type=type(exc).__name__,
+                workspace_before=workspace_before,
+                workspace_after=_workspace_diagnostic_state(),
             )
             raise
         ms = int((time.perf_counter() - started) * 1000)
+        response.headers[_REQUEST_ID_HEADER] = request_id
+        workspace_after = _workspace_diagnostic_state()
         quiet = request.url.path in _QUIET_PATHS or not request.url.path.startswith(
             "/api"
         )
         _api_log.log(
             logging.DEBUG if quiet else logging.INFO,
-            "%s %s -> %d in %dms",
+            "%s %s -> %d in %dms [request_id=%s]",
             request.method,
             request.url.path,
             response.status_code,
             ms,
+            request_id,
         )
-        if not quiet:
-            _trace_capture.app_event(
-                "api_request",
+        # Every API outcome contributes to the run summary. Poll paths remain
+        # DEBUG-only in the text log, but suppressing them from JSONL made
+        # request totals look complete when they were not.
+        if request.url.path == "/api" or request.url.path.startswith("/api/"):
+            _trace_capture.request_event(
                 method=request.method,
                 path=request.url.path,
                 status=response.status_code,
-                ms=ms,
+                duration_ms=ms,
+                request_id=request_id,
                 query=str(request.url.query)[:200],
+                declared_outcome_code=response.headers.get(
+                    _REQUEST_OUTCOME_HEADER, ""
+                ),
+                workspace_before=workspace_before,
+                workspace_after=workspace_after,
             )
         return response
 
@@ -2173,16 +2425,35 @@ def create_app() -> FastAPI:
         ``raise_server_exceptions=False``.
         """
         _api_log.exception(
-            "Unhandled error on %s %s", request.method, request.url.path
+            "Unhandled error on %s %s [request_id=%s]",
+            request.method,
+            request.url.path,
+            getattr(request.state, "request_id", "unknown"),
         )
-        return JSONResponse(
+        request_id = getattr(request.state, "request_id", "unknown")
+        response = _coded_error_response(
             {
                 "ok": False,
-                "error": f"Internal error: {exc}",
+                "error": (
+                    "An internal error occurred. Use the request ID when "
+                    "reporting this problem."
+                ),
                 "code": "internal_error",
+                "request_id": request_id,
             },
             status_code=500,
         )
+        # Unhandled exceptions are converted by Starlette's outer error
+        # middleware, so the normal request/security middleware cannot add
+        # these response headers on this path.
+        response.headers[_REQUEST_ID_HEADER] = request_id
+        if desktop_security is not None:
+            _apply_defensive_headers(
+                response,
+                api_path=request.url.path == "/api"
+                or request.url.path.startswith("/api/"),
+            )
+        return response
 
     app.add_exception_handler(Exception, _internal_error)
 
@@ -2197,9 +2468,13 @@ def create_app() -> FastAPI:
             for e in exc.errors()[:5]
         )[:500]
         _api_log.warning(
-            "422 on %s %s: %s", request.method, request.url.path, detail
+            "422 on %s %s: %s [request_id=%s]",
+            request.method,
+            request.url.path,
+            detail,
+            getattr(request.state, "request_id", "unknown"),
         )
-        return JSONResponse(
+        return _coded_error_response(
             {
                 "ok": False,
                 "error": f"Invalid request: {detail}",
@@ -2210,11 +2485,60 @@ def create_app() -> FastAPI:
 
     app.add_exception_handler(RequestValidationError, _validation_error)
 
+    @app.get("/api/bootstrap", include_in_schema=False)
+    def desktop_bootstrap() -> JSONResponse:
+        """Exchange the launch nonce for the in-memory desktop API token.
+
+        Middleware validates Host/Origin and the nonce header before this
+        handler runs. The token is returned once to the same-origin frontend
+        and mirrored into an HttpOnly Strict session cookie for downloads and
+        streaming clients that cannot attach a custom header.
+        """
+        if desktop_security is None:
+            return JSONResponse(
+                {"ok": False, "error": "Desktop bootstrap is not active."},
+                status_code=404,
+            )
+        response = JSONResponse(
+            {
+                "ok": True,
+                "api_token": desktop_security.api_token,
+                "boot_nonce": desktop_security.boot_nonce,
+                "bound_port": desktop_security.bound_port,
+            }
+        )
+        response.set_cookie(
+            _desktop_cookie_name(desktop_security),
+            desktop_security.api_token,
+            path="/api",
+            httponly=True,
+            secure=False,  # loopback is intentionally HTTP-only
+            samesite="strict",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.get("/api/health")
-    def health() -> dict:
+    def health(request: Request) -> dict:
+        if desktop_security is not None and not bool(
+            getattr(request.state, "desktop_authenticated", False)
+        ):
+            # Startup's unauthenticated identity probe is deliberately
+            # minimal: enough to reject a wrong listener, no project/key data
+            # and no replayable bootstrap capability.
+            return {
+                "status": "ok",
+                "app": settings.APP_NAME,
+                "version": settings.VERSION,
+                "boot_nonce_fingerprint": _desktop_boot_nonce_fingerprint(
+                    desktop_security
+                ),
+                "bound_host": desktop_security.bound_host,
+                "bound_port": desktop_security.bound_port,
+            }
         workspace = sessions.get_workspace()
         session = workspace.session
-        return {
+        payload = {
             "status": "ok",
             "app": settings.APP_NAME,
             "version": settings.VERSION,
@@ -2232,6 +2556,17 @@ def create_app() -> FastAPI:
             "workspace_scope": workspace.scope,
             "generation": session.generation,
         }
+        if desktop_security is not None:
+            payload.update(
+                {
+                    "boot_nonce_fingerprint": _desktop_boot_nonce_fingerprint(
+                        desktop_security
+                    ),
+                    "bound_host": desktop_security.bound_host,
+                    "bound_port": desktop_security.bound_port,
+                }
+            )
+        return payload
 
     @app.post("/api/key")
     def save_key(body: SaveKeyRequest) -> JSONResponse:
@@ -2318,7 +2653,7 @@ def create_app() -> FastAPI:
     def reset(body: SessionResetRequest | None = Body(default=None)) -> Response:
         workspace = sessions.get_workspace()
         if workspace.scope != "original":
-            return JSONResponse(
+            return _coded_error_response(
                 {
                     "ok": False,
                     "code": "tutorial_active",
@@ -2351,6 +2686,12 @@ def create_app() -> FastAPI:
                 "module": session.module.display_name,
                 "discipline": effective_discipline(session),
                 "project_context": session.project_context,
+                # Reset advances the generation synchronously. Returning the
+                # resulting lease closes the interval where the UI could send
+                # a fresh-session mutation with the discarded generation.
+                "workspace_id": workspace.workspace_id,
+                "workspace_scope": workspace.scope,
+                "generation": session.generation,
             }
         )
 
@@ -2603,7 +2944,7 @@ def create_app() -> FastAPI:
         if lease.scope == "tutorial" or (
             lease.scope == "scenario" and lease.scenario_kind != "template"
         ):
-            return JSONResponse(
+            return _coded_error_response(
                 {
                     "ok": False,
                     "code": "tutorial_scenario_required",
@@ -2639,7 +2980,7 @@ def create_app() -> FastAPI:
                 if isinstance(exc, sessions.WorkspaceBusyError)
                 else "stale_workspace"
             )
-        return JSONResponse(payload, status_code=status)
+        return _coded_error_response(payload, status_code=status)
 
     def _tutorial_request_is_current(
         lease: sessions.WorkspaceLease, body: TutorialRequest
@@ -2652,7 +2993,7 @@ def create_app() -> FastAPI:
         )
 
     def _stale_tutorial_response() -> JSONResponse:
-        return JSONResponse(
+        return _coded_error_response(
             {
                 "ok": False,
                 "code": "stale_workspace",
@@ -3016,7 +3357,7 @@ def create_app() -> FastAPI:
                         return JSONResponse(
                             {"ok": False, "error": "Nothing to undo."}, status_code=409
                         )
-                    payload = _doc_payload(session)
+                    payload = _doc_payload(session, workspace=lease)
                     version_index = session.doc.index
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
@@ -3051,7 +3392,7 @@ def create_app() -> FastAPI:
                         return JSONResponse(
                             {"ok": False, "error": "Nothing to redo."}, status_code=409
                         )
-                    payload = _doc_payload(session)
+                    payload = _doc_payload(session, workspace=lease)
                     version_index = session.doc.index
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
@@ -3097,7 +3438,7 @@ def create_app() -> FastAPI:
                         payload = None
                     else:
                         session.doc.commit_turn()
-                        payload = _doc_payload(session)
+                        payload = _doc_payload(session, workspace=lease)
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
         actions = sorted(
@@ -3555,7 +3896,7 @@ def create_app() -> FastAPI:
             try:
                 sessions.workspace_manager().assert_active(entry_lease)
             except sessions.WorkspaceConflictError:
-                return JSONResponse(
+                return _coded_error_response(
                     {
                         "ok": False,
                         "code": "stale_workspace",
@@ -3564,7 +3905,7 @@ def create_app() -> FastAPI:
                     status_code=409,
                 )
             if session.generation != entry_generation:
-                return JSONResponse(
+                return _coded_error_response(
                     {
                         "ok": False,
                         "code": "stale_workspace",
@@ -3669,11 +4010,11 @@ def create_app() -> FastAPI:
     # --- Master-spec import (Phase 5) ---------------------------------------
 
     @app.post("/api/import/master")
-    async def import_master(file: UploadFile) -> JSONResponse:
+    async def import_master(request: Request, file: UploadFile) -> JSONResponse:
         entry_lease = sessions.get_workspace()
         session = entry_lease.session
         if entry_lease.scope == "tutorial":
-            return JSONResponse(
+            return _coded_error_response(
                 {
                     "ok": False,
                     "code": "tutorial_scenario_required",
@@ -3740,7 +4081,7 @@ def create_app() -> FastAPI:
                 try:
                     sessions.workspace_manager().assert_active(entry_lease)
                 except sessions.WorkspaceConflictError:
-                    return JSONResponse(
+                    return _coded_error_response(
                         {
                             "ok": False,
                             "code": "stale_workspace",
@@ -3749,7 +4090,7 @@ def create_app() -> FastAPI:
                         status_code=409,
                     )
                 if session.generation != entry_generation:
-                    return JSONResponse(
+                    return _coded_error_response(
                         {
                             "ok": False,
                             "code": "stale_workspace",
@@ -3798,6 +4139,7 @@ def create_app() -> FastAPI:
                 # The import counts as session-changing work: invalidate any
                 # turn that was streaming against the empty document.
                 session.invalidate_model_turn()
+                import_generation_after = session.generation
         except ValueError as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400
@@ -3806,6 +4148,18 @@ def create_app() -> FastAPI:
             blocks=result.imported_block_count,
             warnings=len(report["warnings"]),
             tracked_changes=result.tracked_changes_detected,
+            warning_messages=report["warnings"],
+            skipped_empty=report["skipped_empty_count"],
+            source_sha256=report["sha256"],
+            source_bytes=report["size_bytes"],
+            zip_member_count=report["zip_member_count"],
+            zip_uncompressed_bytes=report["zip_uncompressed_bytes"],
+            spec_shape_detected=report.get("spec_shape_detected", True),
+            workspace_id=entry_lease.workspace_id,
+            workspace_scope=entry_lease.scope,
+            generation_before=entry_generation,
+            generation_after=import_generation_after,
+            request_id=getattr(request.state, "request_id", ""),
         )
         # The per-element permission sweep is the most expensive thing this
         # app does (O(document) per probe, ~5 probes per paragraph). It no
@@ -3817,7 +4171,9 @@ def create_app() -> FastAPI:
         # imported master. Every other endpoint reaches it through a plain
         # ``def`` handler, i.e. already on a worker thread — this async
         # handler is the one that has to say so.
-        payload = await run_in_threadpool(_doc_payload, session)
+        payload = await run_in_threadpool(
+            _doc_payload, session, workspace=entry_lease
+        )
         return JSONResponse(
             {
                 "ok": True,
@@ -4134,7 +4490,7 @@ def create_app() -> FastAPI:
                 body is not None and body.acknowledge_scope_mismatch
             )
             if compatibility["status"] == "mismatch" and not acknowledged:
-                return JSONResponse(
+                return _coded_error_response(
                     {
                         "ok": False,
                         "code": "module_section_mismatch",
@@ -4467,7 +4823,7 @@ def create_app() -> FastAPI:
             working = SpecSection.from_dict(version_record)
 
         def preview_binding_error(code: str, message: str) -> JSONResponse:
-            return JSONResponse(
+            return _coded_error_response(
                 {"ok": False, "code": code, "error": message},
                 status_code=409,
             )
@@ -4588,7 +4944,7 @@ def create_app() -> FastAPI:
                     for write_key in conflict["write_keys"]
                 }
             )
-            return JSONResponse(
+            return _coded_error_response(
                 {
                     "ok": False,
                     "code": "qc_operation_conflict",
@@ -4952,7 +5308,7 @@ def create_app() -> FastAPI:
     def project_save(scope: str | None = None) -> Response:
         workspace = sessions.get_workspace()
         if workspace.scope != "original" and scope != "tutorial":
-            return JSONResponse(
+            return _coded_error_response(
                 {
                     "ok": False,
                     "code": "tutorial_active",
@@ -4999,7 +5355,7 @@ def create_app() -> FastAPI:
         """Legacy format-1 JSON load (source-less compatibility endpoint)."""
         workspace = sessions.get_workspace()
         if workspace.scope != "original":
-            return JSONResponse(
+            return _coded_error_response(
                 {
                     "ok": False,
                     "code": "tutorial_active",
@@ -5027,7 +5383,7 @@ def create_app() -> FastAPI:
             {
                 "ok": True,
                 "chat": chat_transcript(session.history),
-                **_doc_payload(session),
+                **_doc_payload(session, workspace=workspace),
             }
         )
 
@@ -5045,7 +5401,7 @@ def create_app() -> FastAPI:
         # discard the session the user just deliberately started.
         entry_lease = sessions.get_workspace()
         if entry_lease.scope != "original":
-            return JSONResponse(
+            return _coded_error_response(
                 {
                     "ok": False,
                     "code": "tutorial_active",
@@ -5086,7 +5442,7 @@ def create_app() -> FastAPI:
             try:
                 sessions.workspace_manager().assert_active(entry_lease)
             except sessions.WorkspaceConflictError:
-                return JSONResponse(
+                return _coded_error_response(
                     {
                         "ok": False,
                         "code": "stale_workspace",
@@ -5095,7 +5451,7 @@ def create_app() -> FastAPI:
                     status_code=409,
                 )
             if session.generation != entry_generation:
-                return JSONResponse(
+                return _coded_error_response(
                     {
                         "ok": False,
                         "code": "stale_workspace",
@@ -5122,7 +5478,9 @@ def create_app() -> FastAPI:
         )
         # Same reason as the import response: a source-backed project pays for
         # the first capability sweep here, which must not run on the loop.
-        payload = await run_in_threadpool(_doc_payload, session)
+        payload = await run_in_threadpool(
+            _doc_payload, session, workspace=entry_lease
+        )
         return JSONResponse(
             {
                 "ok": True,
@@ -5162,15 +5520,18 @@ def create_app() -> FastAPI:
 
     @app.get("/api/diagnostics/bundle", include_in_schema=False)
     def diagnostics_bundle() -> FileResponse:
-        """The downloadable support bundle (snapshot + logs + current trace).
+        """Download the bounded, manifest-described local support bundle.
 
-        Contains draft text and prompts by design (the trace posture — that
-        is what makes it useful); the modal copy says so before this link.
-        Never contains key material: the snapshot is masked+scrubbed,
-        nothing ever logs the key, and prompt capture redacts pasted
-        credential-shaped text at write time. Streamed from a temp file —
-        a deep-trace run can be hundreds of MB and an in-memory zip would
-        spike the desktop process exactly when the user needs it least.
+        Includes a point-in-time snapshot, this launch's bounded log rotations,
+        the current trace through a flush barrier, bounded tails from up to
+        three completed prior runs, an inclusion/truncation manifest, and a
+        time-ordered incident index. Live sibling runs are never copied. It
+        contains draft text and prompts by design (the trace posture — that is what
+        makes it useful); the modal copy says so before this link. Credential
+        shapes are redacted from snapshots, prompts, normal log messages, and
+        exception text. Streamed from a temp file — a deep-trace run can be
+        hundreds of MB and an in-memory zip would spike the desktop process
+        exactly when the user needs it least.
         """
         path, filename = diagnostics.build_bundle()
         try:
@@ -5399,14 +5760,23 @@ def create_app() -> FastAPI:
 
     # The trace run dir exists from boot, not first turn — a launch that
     # crashes before any chat still leaves a run to inspect.
-    _trace_capture.app_event(
-        "server_started",
-        version=settings.VERSION,
-        port=settings.PORT,
-        frozen=bool(getattr(sys, "frozen", False)),
-        dev_mode=settings.dev_mode(),
-    )
+    if _record_start_event:
+        _trace_capture.app_event(
+            "server_started",
+            version=settings.VERSION,
+            port=(
+                desktop_security.bound_port
+                if desktop_security is not None
+                else settings.PORT
+            ),
+            desktop_security=desktop_security is not None,
+            frozen=bool(getattr(sys, "frozen", False)),
+            dev_mode=settings.dev_mode(),
+        )
     return app
 
 
-app = create_app()
+# The importable ASGI surface is created for uvicorn/embedding, not necessarily
+# served. Explicit create_app() and the secure desktop launcher record the
+# actual server start instead of leaving a false boot event at import time.
+app = create_app(_record_start_event=False)

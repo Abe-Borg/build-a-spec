@@ -53,6 +53,7 @@ def _reset_generic(client: TestClient, discipline: str = "Electrical") -> dict:
 def test_bodyless_reset_keeps_module_and_discipline():
     client = _client()
     _reset_generic(client)
+    before = client.get("/api/health").json()
     # The historical contract: a bodyless POST (no content-type at all)
     # resets state but keeps the active module and discipline.
     resp = client.post("/api/session/reset")
@@ -63,6 +64,9 @@ def test_bodyless_reset_keeps_module_and_discipline():
         "module": sessions.get_session().module.display_name,
         "discipline": "Electrical",
         "project_context": "",
+        "workspace_id": before["workspace_id"],
+        "workspace_scope": "original",
+        "generation": before["generation"] + 1,
     }
     session = sessions.get_session()
     assert session.module.module_id == "generic"

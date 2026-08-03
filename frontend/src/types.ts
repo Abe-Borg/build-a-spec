@@ -75,9 +75,9 @@ export interface Health {
   /** Legacy optional project-description primer. */
   project_context?: string;
   /** Lease identity for every operation that can switch tutorial workspaces. */
-  workspace_id?: number;
-  workspace_scope?: "original" | "tutorial" | "scenario";
-  generation?: number;
+  workspace_id: number;
+  workspace_scope: "original" | "tutorial" | "scenario";
+  generation: number;
 }
 
 /** API-key resolution status (WI3 settings panel). Never carries the key. */
@@ -450,6 +450,10 @@ export interface DraftPrerequisites {
 }
 
 export interface DocPayload {
+  /** Authoritative active-workspace lease after this snapshot/mutation. */
+  workspace_id: number;
+  workspace_scope: "original" | "tutorial" | "scenario";
+  generation: number;
   doc: SpecDoc;
   open_questions: OpenItem[];
   lint: LintIssue[];
@@ -1473,7 +1477,26 @@ export type StreamEvent =
 /** `GET /api/diagnostics` — environment + session snapshot. */
 export interface DiagnosticsSnapshot {
   ok: boolean;
+  schema_version: number;
   generated_at: number;
+  process: {
+    diagnostic_run_id: string;
+    pid: number;
+    parent_pid: number;
+    started_at: number;
+    uptime_seconds: number;
+    capture_state: string;
+    thread_count: number;
+    timezone: string | null;
+    utc_offset: string;
+    current_run_marker: Record<string, unknown> | null;
+    previous_run_marker: Record<string, unknown> | null;
+  };
+  server?: {
+    host: string;
+    bound_port: number;
+    boot_nonce_fingerprint: string;
+  };
   app: {
     name: string;
     version: string;
@@ -1486,15 +1509,102 @@ export interface DiagnosticsSnapshot {
   };
   tracing: {
     enabled: boolean;
+    initialization_attempted: boolean;
+    initialization_succeeded: boolean | null;
+    capture_active: boolean;
+    startup_failure: {
+      exception_type: string;
+      last_failed_at: number;
+      count: number;
+    } | null;
     level: string;
     root: string;
     run_id?: string;
     run_dir?: string;
+    retention_policy: {
+      max_runs: number;
+      max_age_days: number;
+      max_bytes: number;
+    };
+    metadata_flush_complete?: boolean;
+    metadata_size_bytes?: number;
+    metadata_omitted_reason?: string;
+    trace_schema_version?: number;
+    process_instance_id?: string;
+    summary?: {
+      coverage?: string;
+      records_enqueued?: number;
+      events_total?: number;
+      failed_events?: number;
+      spans_closed?: number;
+      failed_spans?: number;
+      prompts_stored?: number;
+      includes_estimated_turn_usage?: boolean;
+      last_recorded_at?: number | null;
+      events_by_type: Record<string, number>;
+      event_status_counts: Record<string, number>;
+      request_outcome_counts: Record<string, number>;
+      spans_by_kind: Record<string, number>;
+      spans_by_status: Record<string, number>;
+      turn_usage_totals: Record<string, number>;
+    };
+    recorder_health?: {
+      state?: string;
+      records_written?: number;
+      dropped_records?: number;
+      queue_count_drops?: number;
+      queue_byte_drops?: number;
+      run_byte_limit_drops?: number;
+      serialization_failures?: number;
+      unknown_file_drops?: number;
+      write_failure_drops?: number;
+      last_drop_reason?: string | null;
+      write_failures?: number;
+      metadata_write_failures?: number;
+      queue_depth?: number;
+      control_queue_depth?: number;
+      queue_max_records?: number;
+      queue_high_watermark?: number;
+      queue_max_bytes?: number;
+      queue_payload_bytes?: number;
+      resident_payload_bytes?: number;
+      inflight_payload_bytes?: number;
+      queue_payload_high_watermark?: number;
+      max_run_bytes?: number;
+      data_bytes_written?: number;
+      storage_limit_scope?: string;
+      storage_limit_reached?: boolean;
+      metadata_revision?: number;
+      metadata_checkpointed_revision?: number;
+      metadata_dirty?: boolean;
+      thread_alive?: boolean;
+      open_spans?: number;
+      drain_timed_out?: boolean;
+      fatal_error?: string | null;
+      last_write_at?: number | null;
+      captured_at?: number;
+      open_spans_by_kind: Record<string, number>;
+    };
   };
   logging: {
     enabled: boolean;
+    initialization_attempted: boolean;
+    initialization_succeeded: boolean | null;
+    handler_attached: boolean;
+    capture_active: boolean;
+    initialization_failure_type: string | null;
+    initialization_failure_count: number;
+    initialization_last_failure_at: number | null;
     level: string;
     dir: string;
+    run_dir: string;
+    run_id: string;
+    retention_policy: {
+      max_runs: number;
+      max_age_days: number;
+      max_bytes: number;
+    };
+    last_retention: Record<string, unknown>;
     file?: string;
     size_bytes?: number;
   };
@@ -1511,16 +1621,97 @@ export interface DiagnosticsSnapshot {
     doc_version_count: number;
     baseline_index: number | null;
     doc_empty: boolean;
+    document_shape: {
+      parts: number;
+      articles: number;
+      paragraphs: number;
+      maximum_paragraph_depth: number;
+    };
+    can_undo: boolean;
+    can_redo: boolean;
+    turn_transaction_open: boolean;
+    turn_transaction_dirty: boolean;
     figures: number;
     references: number;
     suggested_prompts: number;
     turn_active: boolean;
     stop_requested: boolean;
+    last_context_tokens: number | null;
     unsaved: boolean;
     import_report_present: boolean;
     module_id: string;
     discipline: string;
-    source: { retained: boolean; filename: string; bytes: number };
+    research: {
+      status: string;
+      worker_alive: boolean;
+      event_count: number;
+      active_round: number;
+      error_present: boolean;
+      error_kind: string | null;
+      rounds: number;
+      dimension_count: number;
+      incomplete_dimensions: unknown[];
+    };
+    audit: {
+      status: string;
+      worker_alive: boolean;
+      error_present: boolean;
+      result_present: boolean;
+      version_index: number | null;
+      findings: number;
+    };
+    qc: {
+      status: string;
+      worker_alive: boolean;
+      worker_settled: boolean;
+      event_count: number;
+      error_present: boolean;
+      error_kind: string | null;
+      retained_result: Record<string, unknown> | null;
+      latest_attempt: Record<string, unknown>;
+    };
+    import: {
+      present: boolean;
+      filename?: string;
+      sha256?: string;
+      size_bytes?: number;
+      zip_member_count?: number;
+      zip_uncompressed_bytes?: number;
+      imported_block_count?: number;
+      skipped_empty_count?: number;
+      tracked_changes_detected?: boolean;
+      spec_shape_detected?: boolean;
+      fidelity_notice?: string;
+      warning_count: number;
+      warning_code_counts: Record<string, number>;
+      warning_evidence: unknown[];
+      warning_evidence_truncated: number;
+    };
+    source: {
+      retained: boolean;
+      filename: string;
+      bytes: number;
+      map_present: boolean;
+      patch_context_present: boolean;
+      capability_cache_present: boolean;
+      capability_analysis_running: boolean;
+      capability_analysis_queued: boolean;
+      capabilities_status: string | null;
+      capabilities_snapshot_source: string;
+      edit_blockers: Record<string, number>;
+      global_edit_blockers: {
+        causes: string[];
+        denial_counts: Record<string, number>;
+        origins: Record<string, string[]>;
+      };
+      per_operation_edit_blockers: Record<string, number>;
+      capability_operation_counts: {
+        elements: number;
+        total: number;
+        allowed: number;
+        denied: number;
+      };
+    };
   };
   usage: UsageSummary;
 }
@@ -1539,6 +1730,8 @@ export interface DiagnosticsTraceRun {
   started_at: number | null;
   ended_at: number | null;
   current: boolean;
+  owner_pid: number | null;
+  owner_process_alive: boolean;
   size_bytes: number;
   files: Record<string, number>;
 }

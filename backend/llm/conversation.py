@@ -845,6 +845,35 @@ class SessionState:
             return self._compute_source_edit_capabilities()
         return self._sweep_and_publish(*work)
 
+    def peek_source_edit_capabilities(self) -> SourceCapabilityReport | None:
+        """Return an already-materialized report for the current state.
+
+        This is the passive counterpart to :meth:`source_edit_capabilities`,
+        intended for diagnostics sampled outside ``session_state_guard``.  It
+        may hash the live semantic projection to prove a memo describes the
+        current source-backed state, but it never starts or joins a warm,
+        copies the document tree, allocates a pending report, or computes a
+        capability sweep.  Consequently ``None`` means either that the active
+        branch is not source-backed, its projection could not be keyed, or no
+        report for this exact state has been materialized yet.
+
+        A settled memo wins when both slots exist.  Otherwise an existing
+        fail-closed pending memo is returned only when its full state key still
+        matches; even the pending per-element map is never rebuilt here.
+        """
+        state_key = self._capability_lookup_key()
+        if state_key is None:
+            return None
+
+        settled = self._capability_memo_hit(state_key)
+        if settled is not None:
+            return settled
+
+        pending = self._pending_capability_cache
+        if pending is None or not _same_capability_state(pending[0], state_key):
+            return None
+        return pending[1]
+
     def _capability_memo_hit(
         self,
         state_key: tuple[Any, ...],

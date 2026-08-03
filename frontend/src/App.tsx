@@ -233,6 +233,12 @@ export default function App() {
   // and streams captured against an older workspace must never repaint the
   // newly hydrated document with discarded scenario state.
   const workspaceEpochRef = useRef(0);
+  // Mutation leases are synchronization state, not presentation state. React
+  // may not commit a health update before the user's next click, so every
+  // accepted health/document/session payload updates this ref synchronously.
+  const workspaceLeaseRef = useRef<
+    Pick<Health, "workspace_id" | "workspace_scope" | "generation"> | null
+  >(null);
 
   const replaceQcSnapshot = useCallback((snapshot: QcSnapshot | null) => {
     qcSnapshotRef.current = snapshot;
@@ -272,16 +278,59 @@ export default function App() {
     replaceResearchSnapshot(null);
   }, [replaceResearchSnapshot]);
 
+  const adoptWorkspaceLease = useCallback(
+    (
+      payload: Partial<
+        Pick<Health, "workspace_id" | "workspace_scope" | "generation">
+      >,
+    ) => {
+      if (
+        typeof payload.workspace_id !== "number" ||
+        payload.workspace_scope === undefined ||
+        typeof payload.generation !== "number"
+      ) {
+        return true;
+      }
+      const current = workspaceLeaseRef.current;
+      if (
+        current !== null &&
+        (payload.workspace_id < current.workspace_id ||
+          (payload.workspace_id === current.workspace_id &&
+            payload.generation < current.generation))
+      ) {
+        return false;
+      }
+      workspaceLeaseRef.current = {
+        workspace_id: payload.workspace_id,
+        workspace_scope: payload.workspace_scope,
+        generation: payload.generation,
+      };
+      return true;
+    },
+    [],
+  );
+
+  const currentWorkspaceLease = useCallback(() => {
+    const lease = workspaceLeaseRef.current;
+    return {
+      workspaceId: lease?.workspace_id,
+      generation: lease?.generation,
+    };
+  }, []);
+
   const refreshHealth = useCallback(() => {
     const epoch = workspaceEpochRef.current;
     getHealth()
       .then((value) => {
-        if (workspaceEpochRef.current === epoch) setHealth(value);
+        if (workspaceEpochRef.current === epoch) {
+          if (!adoptWorkspaceLease(value)) return;
+          setHealth(value);
+        }
       })
       .catch(() => {
         if (workspaceEpochRef.current === epoch) setHealth(null);
       });
-  }, []);
+  }, [adoptWorkspaceLease]);
 
   const acceptResearchSnapshot = useCallback((
     value: ResearchSnapshot,
@@ -336,6 +385,7 @@ export default function App() {
     getDoc()
       .then((payload) => {
         if (workspaceEpochRef.current !== epoch) return;
+        if (!adoptWorkspaceLease(payload)) return;
         setDoc(payload.doc);
         setOpenItems(payload.open_questions);
         setLintIssues(payload.lint);
@@ -355,7 +405,7 @@ export default function App() {
       .catch(() => {
         if (workspaceEpochRef.current === epoch) setDoc(null);
       });
-  }, []);
+  }, [adoptWorkspaceLease]);
 
   const acceptQcSnapshot = useCallback((
     value: QcSnapshot,
@@ -615,10 +665,7 @@ export default function App() {
 
   const onStartQc = useCallback(async (acknowledgeScopeMismatch = false) => {
     try {
-      await startQc(acknowledgeScopeMismatch, {
-        workspaceId: health?.workspace_id,
-        generation: health?.generation,
-      });
+      await startQc(acknowledgeScopeMismatch, currentWorkspaceLease());
       // Clear the auth-modal dedup ref for this fresh attempt — see its
       // declaration comment: refreshQc (not an effect) is what actually
       // reopens the modal, so this reset is read on the very next poll.
@@ -643,22 +690,19 @@ export default function App() {
             : qcSnapshotRef.current?.module_section_compatibility,
       });
     }
-  }, [followQc, addNote, health, bumpDrawer, replaceQcSnapshot]);
+  }, [followQc, addNote, bumpDrawer, replaceQcSnapshot, currentWorkspaceLease]);
 
   /** Stop Final QC while its worker preserves any completed paid activity. */
   const onStopQc = useCallback(async () => {
     try {
-      await stopQc({
-        workspaceId: health?.workspace_id,
-        generation: health?.generation,
-      });
+      await stopQc(currentWorkspaceLease());
     } catch {
       // Best-effort — the run may have already settled on its own.
     } finally {
       refreshQc();
       refreshReadiness();
     }
-  }, [refreshQc, refreshReadiness, health]);
+  }, [refreshQc, refreshReadiness, currentWorkspaceLease]);
 
   // A page load during a running QC (or a resumed project) picks it back up.
   useEffect(() => {
@@ -691,11 +735,8 @@ export default function App() {
 
   const onPreviewQc = useCallback(
     (findingIds: string[]): Promise<QcApplyPreviewResult> =>
-      previewQcApply(findingIds, {
-        workspaceId: health?.workspace_id,
-        generation: health?.generation,
-      }),
-    [health],
+      previewQcApply(findingIds, currentWorkspaceLease()),
+    [currentWorkspaceLease],
   );
 
   const onApplyQc = useCallback(
@@ -716,12 +757,13 @@ export default function App() {
         ]),
       );
       try {
-        const payload = await applyQc(findingIds, {
-          workspaceId: health?.workspace_id,
-          generation: health?.generation,
-        }, previewBasis);
+        const payload = await applyQc(
+          findingIds,
+          currentWorkspaceLease(),
+          previewBasis,
+        );
         if (workspaceEpochRef.current !== epoch) return;
-        applyDocPayload(payload);
+        if (!applyDocPayload(payload)) return;
         refreshQc();
         refreshReadiness();
         const digest = buildQcApplicationDigest(
@@ -754,17 +796,18 @@ export default function App() {
     },
     // applyDocPayload is stable in practice; listing it is noise.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [refreshQc, refreshReadiness, refreshDoc, health, qc],
+    [refreshQc, refreshReadiness, refreshDoc, qc, currentWorkspaceLease],
   );
 
   const onDismissQc = useCallback(
     async (findingId: string, reason: string) => {
       const epoch = workspaceEpochRef.current;
       try {
-        const snapshot = await dismissQc(findingId, reason, {
-          workspaceId: health?.workspace_id,
-          generation: health?.generation,
-        });
+        const snapshot = await dismissQc(
+          findingId,
+          reason,
+          currentWorkspaceLease(),
+        );
         if (workspaceEpochRef.current !== epoch) return;
         replaceQcSnapshot(snapshot);
         refreshReadiness();
@@ -785,7 +828,7 @@ export default function App() {
         throw e;
       }
     },
-    [refreshQc, refreshReadiness, health, replaceQcSnapshot],
+    [refreshQc, refreshReadiness, replaceQcSnapshot, currentWorkspaceLease],
   );
 
   const onImportMaster = useCallback(
@@ -803,7 +846,22 @@ export default function App() {
       // button label, skeleton sheet, and the error slot below).
       try {
         const result = await importMaster(file);
-        applyDocPayload(result);
+        if (!applyDocPayload(result)) return;
+        // Import advances the original session generation. Keep the full
+        // presentation Health object on the same accepted lease immediately
+        // so a tutorial click cannot issue the now-stale pre-import lease;
+        // then refresh the remaining health fields authoritatively.
+        setHealth((current) =>
+          current === null
+            ? current
+            : {
+                ...current,
+                workspace_id: result.workspace_id,
+                workspace_scope: result.workspace_scope,
+                generation: result.generation,
+              },
+        );
+        refreshHealth();
         refreshReadiness();
         // A clean import says nothing at all. A lossy one still has to warn
         // loudly (the importer's keep-everything-warn-loudly rule) — as a
@@ -827,7 +885,7 @@ export default function App() {
     // applyDocPayload is stable in practice (defined per render but only
     // touches setters); listing setters here is unnecessary noise.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [refreshReadiness],
+    [refreshHealth, refreshReadiness],
   );
 
   // Attaching background material is deliberately lighter than importing a
@@ -842,10 +900,10 @@ export default function App() {
     setReferenceBusy(true);
     setImportNotice(null);
     try {
-      const { reference_docs, warnings } = await uploadReference(file, {
-        workspaceId: health?.workspace_id,
-        generation: health?.generation,
-      });
+      const { reference_docs, warnings } = await uploadReference(
+        file,
+        currentWorkspaceLease(),
+      );
       setReferenceDocs(reference_docs);
       if (warnings.length) {
         setImportNotice({
@@ -867,15 +925,12 @@ export default function App() {
     } finally {
       setReferenceBusy(false);
     }
-  }, [health]);
+  }, [currentWorkspaceLease]);
 
   const onRemoveReference = useCallback(async (rid: string) => {
     setReferenceBusy(true);
     try {
-      const result = await deleteReference(rid, {
-        workspaceId: health?.workspace_id,
-        generation: health?.generation,
-      });
+      const result = await deleteReference(rid, currentWorkspaceLease());
       setReferenceDocs(result.reference_docs);
       setSuggestions(result.suggested_prompts);
       setFigures(result.figures);
@@ -889,7 +944,7 @@ export default function App() {
     } finally {
       setReferenceBusy(false);
     }
-  }, [health]);
+  }, [currentWorkspaceLease]);
 
   const onInstallUpdate = useCallback(async () => {
     try {
@@ -1007,10 +1062,7 @@ export default function App() {
 
   const onStartResearch = useCallback(async () => {
     try {
-      await startResearch({
-        workspaceId: health?.workspace_id,
-        generation: health?.generation,
-      });
+      await startResearch(currentWorkspaceLease());
       // Clear the auth-modal dedup ref for this fresh attempt — see
       // researchAuthHandledRef's declaration comment: refreshResearch (not
       // an effect) is what actually reopens the modal.
@@ -1032,21 +1084,24 @@ export default function App() {
         events: researchSnapshotRef.current?.events ?? [],
       });
     }
-  }, [followResearch, addNote, health, bumpDrawer, replaceResearchSnapshot]);
+  }, [
+    followResearch,
+    addNote,
+    bumpDrawer,
+    replaceResearchSnapshot,
+    currentWorkspaceLease,
+  ]);
 
   /** Stop the running research fan-out (confirmed in the drawer — loses progress). */
   const onStopResearch = useCallback(async () => {
     try {
-      await stopResearch({
-        workspaceId: health?.workspace_id,
-        generation: health?.generation,
-      });
+      await stopResearch(currentWorkspaceLease());
     } catch {
       // Best-effort — the run may have already settled on its own.
     } finally {
       refreshResearch();
     }
-  }, [refreshResearch, health]);
+  }, [refreshResearch, currentWorkspaceLease]);
 
   // A page load during a running research (or a resumed project) picks the
   // stream back up.
@@ -1280,16 +1335,13 @@ export default function App() {
     async (fid: string) => {
       const epoch = workspaceEpochRef.current;
       try {
-        const remaining = await deleteFigure(fid, {
-          workspaceId: health?.workspace_id,
-          generation: health?.generation,
-        });
+        const remaining = await deleteFigure(fid, currentWorkspaceLease());
         if (workspaceEpochRef.current === epoch) setFigures(remaining);
       } catch {
         refreshDoc();
       }
     },
-    [health, refreshDoc],
+    [refreshDoc, currentWorkspaceLease],
   );
 
   /** Shared post-reset clear+refresh — every session-start path runs this. */
@@ -1326,16 +1378,20 @@ export default function App() {
   const startBlankSession = async () => {
     setNewSessionOpen(false);
     setTemplatesOnly(false);
-    await resetSession({
+    const lease = await resetSession({
       module_id: "generic",
       discipline: "",
       project_context: "",
     });
+    if (!adoptWorkspaceLease(lease)) return;
     clearSessionState();
     refreshHealth();
   };
 
   const applyDocPayload = (payload: {
+    workspace_id?: number;
+    workspace_scope?: "original" | "tutorial" | "scenario";
+    generation?: number;
     doc: SpecDoc;
     open_questions: OpenItem[];
     lint: LintIssue[];
@@ -1351,7 +1407,8 @@ export default function App() {
     preservation_ready?: boolean;
     source_capabilities?: SourceCapabilitiesState | null;
     template_origin?: TemplateOrigin | null;
-  }) => {
+  }): boolean => {
+    if (!adoptWorkspaceLease(payload)) return false;
     setDoc(payload.doc);
     setOpenItems(payload.open_questions);
     setLintIssues(payload.lint);
@@ -1368,18 +1425,25 @@ export default function App() {
     setSuggestions(payload.suggested_prompts ?? []);
     setReferenceDocs(payload.reference_docs ?? []);
     setChangedIds(new Set());
+    return true;
   };
 
   /** Hydrate a tutorial/template transition without assuming whether the
    * backend initially returns a flat payload or a nested doc_payload. */
-  const applySessionBundle = (bundle: SessionBundle) => {
-    advanceWorkspaceEpoch();
+  const applySessionBundle = (bundle: SessionBundle): boolean => {
     const merged = {
       ...bundle,
       ...(bundle.doc_payload ?? {}),
     } as SessionBundle;
+    // A superseded transition must not advance the epoch or repaint any of
+    // the document, transcript, runner, or health state it carried.
+    if (!adoptWorkspaceLease(merged)) return false;
+    advanceWorkspaceEpoch();
     if (merged.doc) {
-      applyDocPayload({
+      const accepted = applyDocPayload({
+        workspace_id: merged.workspace_id,
+        workspace_scope: merged.workspace_scope,
+        generation: merged.generation,
         doc: merged.doc,
         open_questions: merged.open_questions ?? [],
         lint: merged.lint ?? [],
@@ -1396,6 +1460,7 @@ export default function App() {
         source_capabilities: merged.source_capabilities ?? null,
         template_origin: merged.template_origin ?? null,
       });
+      if (!accepted) return false;
     }
     const transcript = merged.chat ?? merged.messages;
     if (transcript) {
@@ -1422,12 +1487,15 @@ export default function App() {
     if (merged.qc) replaceQcSnapshot(merged.qc);
     if (merged.readiness) setReadiness(merged.readiness);
     if (merged.usage) setUsage(merged.usage);
-    if (merged.health) setHealth(merged.health);
+    if (merged.health) {
+      if (adoptWorkspaceLease(merged.health)) setHealth(merged.health);
+    }
     refreshHealth();
     refreshResearch();
     refreshQc();
     refreshReadiness();
     refreshUsage();
+    return true;
   };
 
   const onEditDoc = async (ops: EditOp[]) => {
@@ -1447,12 +1515,9 @@ export default function App() {
     setManualEditBusy(true);
     const epoch = workspaceEpochRef.current;
     try {
-      const payload = await editDoc(ops, {
-        workspaceId: health?.workspace_id,
-        generation: health?.generation,
-      });
+      const payload = await editDoc(ops, currentWorkspaceLease());
       if (workspaceEpochRef.current !== epoch) return;
-      applyDocPayload(payload);
+      if (!applyDocPayload(payload)) return;
       refreshReadiness();
       refreshQc();
       // Flash the blocks the user just touched (deletes have nothing to flash).
@@ -1480,12 +1545,9 @@ export default function App() {
 
   const onUndo = async () => {
     const epoch = workspaceEpochRef.current;
-    const payload = await undoDoc({
-      workspaceId: health?.workspace_id,
-      generation: health?.generation,
-    }).catch(() => null);
+    const payload = await undoDoc(currentWorkspaceLease()).catch(() => null);
     if (payload && workspaceEpochRef.current === epoch) {
-      applyDocPayload(payload);
+      if (!applyDocPayload(payload)) return;
       refreshReadiness();
       refreshQc();
     }
@@ -1493,12 +1555,9 @@ export default function App() {
 
   const onRedo = async () => {
     const epoch = workspaceEpochRef.current;
-    const payload = await redoDoc({
-      workspaceId: health?.workspace_id,
-      generation: health?.generation,
-    }).catch(() => null);
+    const payload = await redoDoc(currentWorkspaceLease()).catch(() => null);
     if (payload && workspaceEpochRef.current === epoch) {
-      applyDocPayload(payload);
+      if (!applyDocPayload(payload)) return;
       refreshReadiness();
       refreshQc();
     }
@@ -1547,7 +1606,7 @@ export default function App() {
     setTemplateStarting(true);
     try {
       const session = await instantiateTemplate(templateId);
-      applySessionBundle(session);
+      if (!applySessionBundle(session)) return;
       onboardingRef.current?.syncSessionIdentity(session);
       if (session.template_warning) {
         setImportNotice({
@@ -1644,8 +1703,9 @@ export default function App() {
     setFileLoading({ kind: "open", name: file.name });
     try {
       const result = await loadProjectFile(file);
+      if (!adoptWorkspaceLease(result)) return;
       advanceWorkspaceEpoch();
-      applyDocPayload(result);
+      if (!applyDocPayload(result)) return;
       // The .baspec carries the original import's content-loss warnings, and
       // with the imported-DOCX banner gone this is the only place they can
       // still surface. Without it, reopening a project silently drops the

@@ -29,6 +29,13 @@ from .model import (
     open_questions,
 )
 from .word_numbering import SectionFormatNumbering
+from .xml_text import (
+    filename_safe_text,
+    xml_safe_clone,
+    xml_safe_text,
+    xml_safe_title,
+    xml_safe_upper,
+)
 
 _LEVEL_INDENT = Inches(0.45)
 
@@ -47,7 +54,7 @@ def _style_base(document) -> None:
 def _centered(document, text: str, *, bold: bool = True):
     p = document.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run(text)
+    run = p.add_run(xml_safe_text(text))
     run.bold = bold
     return p
 
@@ -58,12 +65,12 @@ def _schedule_table(document, rows: list[tuple[str, str]], headers: tuple[str, s
     hdr = table.rows[0].cells
     for cell, text in zip(hdr, headers):
         cell.text = ""
-        run = cell.paragraphs[0].add_run(text)
+        run = cell.paragraphs[0].add_run(xml_safe_text(text))
         run.bold = True
     for ref, text in rows:
         ref_cell, text_cell = table.add_row().cells
-        ref_cell.text = ref
-        text_cell.text = text
+        ref_cell.text = xml_safe_text(ref)
+        text_cell.text = xml_safe_text(text)
     table.columns[0].width = Inches(1.1)
     table.columns[1].width = Inches(5.4)
     return table
@@ -97,6 +104,16 @@ def build_docx(
     document), never redlined. ``redline_date`` overrides the ISO-8601
     ``w:date`` stamp.
     """
+    # python-docx ultimately writes XML 1.0, which rejects most C0 controls
+    # and lone surrogates.  Sanitize cloned inputs once at the boundary so all
+    # clean, redline, schedule, QC-closing, and audit-closing writers are
+    # covered without mutating the live document or persisted review record.
+    section = xml_safe_clone(section)
+    audit_result = xml_safe_clone(audit_result)
+    qc_result = xml_safe_clone(qc_result)
+    redline = xml_safe_clone(redline)
+    redline_date = xml_safe_clone(redline_date)
+
     document = Document()
     _style_base(document)
 
@@ -184,7 +201,7 @@ def build_docx(
             document.add_paragraph(summary)
         coverage_rows = [
             (
-                str(entry.get("status", "")).upper(),
+                xml_safe_upper(str(entry.get("status", ""))),
                 f"[{entry.get('requirement_id', '')}] "
                 + str(entry.get("note") or entry.get("evidence_quote") or ""),
             )
@@ -198,7 +215,7 @@ def build_docx(
             _centered(document, "AUDIT FINDINGS")
             finding_rows = [
                 (
-                    str(finding.get("severity", "")).upper(),
+                    xml_safe_upper(str(finding.get("severity", ""))),
                     str(finding.get("issue", ""))
                     + (
                         f" Suggestion: {finding['suggestion']}"
@@ -237,7 +254,7 @@ def _render_clean_body(document, section: SpecSection) -> None:
             apf.space_before = Pt(10)
             apf.tab_stops.add_tab_stop(_LEVEL_INDENT, WD_TAB_ALIGNMENT.LEFT)
             ap.add_run(
-                f"{part.number}.{a_idx + 1}\t{article.title.upper()}"
+                f"{part.number}.{a_idx + 1}\t{xml_safe_upper(article.title)}"
             ).bold = True
 
             def walk(paragraphs, depth: int) -> None:
@@ -261,6 +278,12 @@ def export_filename(section: SpecSection) -> str:
     stem = f"SECTION {section.number}" if section.number else "DRAFT SECTION"
     if section.title:
         stem += f" - {section.title}"
+    # Keep XML-illegal/control input diagnosable in the suggested filename as
+    # well as in the document. The existing Windows filename scrub removes
+    # the escape's backslash, yielding a portable visible token (``u000B``)
+    # rather than allowing the raw control into Content-Disposition or a
+    # native save path.
+    stem = filename_safe_text(stem)
     stem = re.sub(r'[\\/:*?"<>|]+', "", stem).strip() or "DRAFT SECTION"
     return f"{stem}.docx"
 
@@ -294,8 +317,8 @@ def _redline_now() -> str:
 
 def _set_revision_attrs(element, ids, author: str, date: str) -> None:
     element.set(qn("w:id"), str(next(ids)))
-    element.set(qn("w:author"), author)
-    element.set(qn("w:date"), date)
+    element.set(qn("w:author"), xml_safe_text(author))
+    element.set(qn("w:date"), xml_safe_text(date))
 
 
 def _content_run(text: str, *, del_text: bool = False, bold: bool = False):
@@ -304,6 +327,7 @@ def _content_run(text: str, *, del_text: bool = False, bold: bool = False):
     Uses ``w:delText`` inside deletions (required) and ``w:t`` otherwise;
     ``xml:space=preserve`` keeps token whitespace byte-exact.
     """
+    text = xml_safe_text(text)
     run = OxmlElement("w:r")
     if bold:
         rpr = OxmlElement("w:rPr")
@@ -410,22 +434,35 @@ def _render_redline_article(document, element: ElementDiff, ids, author, date):
     number = element.ref_cur or element.ref_base
     if element.kind == "inserted":
         _append_ins(
-            p, f"{number}\t{element.cur_text.upper()}", ids, author, date, bold=True
+            p,
+            f"{number}\t{xml_safe_upper(element.cur_text)}",
+            ids,
+            author,
+            date,
+            bold=True,
         )
         _mark_paragraph(p, "w:ins", ids, author, date)
     elif element.kind == "deleted":
         _append_del(
-            p, f"{number}\t{element.base_text.upper()}", ids, author, date, bold=True
+            p,
+            f"{number}\t{xml_safe_upper(element.base_text)}",
+            ids,
+            author,
+            date,
+            bold=True,
         )
         _mark_paragraph(p, "w:del", ids, author, date)
     elif element.kind == "changed":
         _append_equal(p, f"{number}\t", bold=True)
         upper = [
-            type(run)(run.op, run.text.upper()) for run in (element.runs or [])
+            type(run)(run.op, xml_safe_upper(run.text))
+            for run in (element.runs or [])
         ]
         _append_runs(p, upper, ids, author, date, bold=True)
     else:  # unchanged
-        _append_equal(p, f"{number}\t{element.cur_text.upper()}", bold=True)
+        _append_equal(
+            p, f"{number}\t{xml_safe_upper(element.cur_text)}", bold=True
+        )
 
 
 def _render_redline_paragraph(document, element: ElementDiff, ids, author, date):
@@ -766,8 +803,12 @@ def _qc_is_safe_http_url(value: object) -> bool:
     if not isinstance(value, str):
         return False
     url = value.strip()
-    if not url or any(ord(char) < 32 for char in url) or any(
-        char.isspace() for char in url
+    if (
+        not url
+        or xml_safe_text(url) != url
+        or "\\" in url
+        or any(ord(char) < 32 for char in url)
+        or any(char.isspace() for char in url)
     ):
         return False
     try:
@@ -785,7 +826,7 @@ def _qc_is_safe_http_url(value: object) -> bool:
 
 def _qc_add_hyperlink(paragraph, url: str, label: str | None = None):
     """Add a clickable relationship only for a validated HTTP(S) target."""
-    text = label or url
+    text = xml_safe_text(label or url)
     if not _qc_is_safe_http_url(url):
         run = paragraph.add_run(text)
         _qc_set_run_font(run, color="000000")
@@ -825,21 +866,21 @@ def _qc_add_hyperlink(paragraph, url: str, label: str | None = None):
 
 def _qc_heading(document, text: str, level: int = 1):
     p = document.add_paragraph(style=f"Heading {level}")
-    p.add_run(text)
+    p.add_run(xml_safe_text(text))
     return p
 
 
 def _qc_text(value: object, fallback: str = "Not recorded") -> str:
     if value is None:
-        return fallback
+        return xml_safe_text(fallback)
     if isinstance(value, bool):
         return "Yes" if value else "No"
     if isinstance(value, float):
         return f"{value:,.6f}".rstrip("0").rstrip(".")
     if isinstance(value, int):
         return f"{value:,}"
-    text = str(value).strip()
-    return text or fallback
+    text = xml_safe_text(str(value)).strip()
+    return text or xml_safe_text(fallback)
 
 
 def _qc_json(value: object) -> str:
@@ -852,7 +893,7 @@ def _qc_json(value: object) -> str:
             default=str,
         )
     except (TypeError, ValueError, OverflowError):
-        return str(value)
+        return xml_safe_text(str(value))
 
 
 def _qc_list(value: object) -> list:
@@ -1238,7 +1279,7 @@ def _qc_render_candidate_origins(document, origins: list[dict]) -> None:
         _qc_heading(
             document,
             f"Origin {index}: {origin.get('lens_id') or 'Unknown lens'} | "
-            f"{str(origin.get('severity') or 'not recorded').upper()}",
+            f"{xml_safe_upper(str(origin.get('severity') or 'not recorded'))}",
             4,
         )
         _qc_add_label(
@@ -1449,7 +1490,7 @@ def _qc_add_bullets(document, items: list[str]) -> None:
     for item in items:
         p = document.add_paragraph()
         _qc_apply_numbering(p, num_id)
-        p.add_run(str(item))
+        p.add_run(_qc_text(item))
 
 
 def _qc_add_numbered_steps(document, items: list[tuple[str, str]]) -> None:
@@ -1459,7 +1500,7 @@ def _qc_add_numbered_steps(document, items: list[tuple[str, str]]) -> None:
         _qc_apply_numbering(p, num_id)
         label_run = p.add_run(f"{label}. ")
         _qc_set_run_font(label_run, color=_QC_DARK_BLUE, bold=True)
-        p.add_run(detail)
+        p.add_run(xml_safe_text(detail))
 
 
 def _qc_add_source_list(
@@ -1683,7 +1724,7 @@ def _render_qc_closing(document, qc_result: dict, *, compact: bool) -> None:
     if open_findings:
         rows = [
             (
-                str(f.get("severity", "")).upper(),
+                xml_safe_upper(str(f.get("severity", ""))),
                 (f"[{f.get('element_id')}] " if f.get("element_id") else "")
                 + str(f.get("title", "")),
             )
@@ -1811,7 +1852,7 @@ def _qc_expected_lens_specs(qc_result: dict) -> list[dict[str, str]]:
     return [
         {
             "lens_id": lens_id,
-            "title": lens_id.replace("_", " ").title(),
+            "title": xml_safe_title(lens_id.replace("_", " ")),
             "brief": "",
         }
         for lens_id in _QC_EXPECTED_LENS_IDS
@@ -1976,7 +2017,7 @@ def _qc_execution_label(qc_result: dict, stale: bool) -> str:
         return "BLOCKED - NOT ISSUE-READY"
     recorded = str(qc_result.get("execution_status") or "").strip().lower()
     if recorded and recorded not in {"complete", "completed", "success"}:
-        return f"{recorded.upper()} - COVERAGE INCOMPLETE"
+        return f"{xml_safe_upper(recorded)} - COVERAGE INCOMPLETE"
     if _qc_execution_issues(qc_result):
         return "PARTIAL - EXECUTION COVERAGE INCOMPLETE"
     return "COMPLETE"
@@ -2391,7 +2432,7 @@ def _qc_render_executive_queue(
     for item in _sorted_by_severity(open_findings):
         rows.append(
             [
-                str(item.get("severity") or "not recorded").upper(),
+                xml_safe_upper(str(item.get("severity") or "not recorded")),
                 "Open finding",
                 item.get("reviewed_ref") or item.get("element_id") or "section",
                 item.get("title") or "Untitled finding",
@@ -2400,7 +2441,7 @@ def _qc_render_executive_queue(
     for item in _sorted_by_severity(open_disputes):
         rows.append(
             [
-                str(item.get("severity") or "not recorded").upper(),
+                xml_safe_upper(str(item.get("severity") or "not recorded")),
                 "Disputed — human review",
                 item.get("reviewed_ref") or item.get("element_id") or "section",
                 item.get("title") or "Untitled candidate",
@@ -2431,7 +2472,7 @@ def _qc_render_manifest(
         )
         return
     for key, value in manifest.items():
-        label = str(key).replace("_", " ").strip().title()
+        label = xml_safe_title(str(key).replace("_", " ").strip())
         if isinstance(value, dict):
             _qc_add_label(document, label, _qc_json(value))
         elif isinstance(value, list):
@@ -2561,7 +2602,7 @@ def _qc_render_export_current_state(
     elif attempt_status.lower() in {"failed", "cancelled", "partial", "running"}:
         _qc_add_callout(
             document,
-            f"LATEST ATTEMPT: {attempt_status.upper()}",
+            f"LATEST ATTEMPT: {xml_safe_upper(attempt_status)}",
             str(attempt.get("error") or "See the preserved execution records."),
             accent=_QC_CAUTION,
         )
@@ -2768,7 +2809,7 @@ def _qc_render_record(
     for key, value in record.items():
         if key in ignored:
             continue
-        label = str(key).replace("_", " ").strip().title()
+        label = xml_safe_title(str(key).replace("_", " ").strip())
         if isinstance(value, list) and any(
             token in key.lower() for token in ("source", "url")
         ):
@@ -2781,12 +2822,16 @@ def _qc_render_record(
 
 def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> None:
     lens_id = str(lens.get("lens_id") or f"lens-{index}")
-    title = str(lens.get("title") or lens_id.replace("_", " ").title())
+    title = str(
+        lens.get("title") or xml_safe_title(lens_id.replace("_", " "))
+    )
     status = str(lens.get("status") or "not_recorded").lower()
     _qc_heading(document, f"Lens {index}: {title}", 2)
     color = _QC_POSITIVE if status == "completed" else _QC_RISK
     _qc_add_label(document, "Lens ID", lens_id)
-    _qc_add_label(document, "Execution status", status.upper(), color=color)
+    _qc_add_label(
+        document, "Execution status", xml_safe_upper(status), color=color
+    )
     if lens.get("error"):
         _qc_add_callout(
             document,
@@ -2911,7 +2956,7 @@ def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> N
                 accent=_QC_RISK,
             )
     for check_index, check in enumerate(checks, start=1):
-        outcome = str(check.get("outcome") or "not_recorded").upper()
+        outcome = xml_safe_upper(str(check.get("outcome") or "not_recorded"))
         check_name = str(check.get("check") or "Unnamed check")
         p = document.add_paragraph()
         p.paragraph_format.space_before = Pt(5)
@@ -3018,7 +3063,7 @@ def _qc_vote_counts(verdicts: list[dict]) -> tuple[int, int, int, int]:
 def _qc_render_verdict(document, verdict: dict, index: int) -> None:
     reviewer_index = verdict.get("reviewer_index")
     label = reviewer_index if reviewer_index not in (None, "", 0) else index
-    status = str(verdict.get("status") or "completed").upper()
+    status = xml_safe_upper(str(verdict.get("status") or "completed"))
     _qc_heading(document, f"Verifier {label}: {status}", 3)
     if "upholds" in verdict:
         _qc_add_label(
@@ -3166,7 +3211,8 @@ def _qc_render_ops(
         _qc_add_label(
             document,
             "Semantic fix decision",
-            semantic_status.upper().replace("_", " ") or "NOT RECORDED",
+            xml_safe_upper(semantic_status).replace("_", " ")
+            or "NOT RECORDED",
             color=(
                 _QC_POSITIVE
                 if semantic_status == "approved"
@@ -3311,7 +3357,7 @@ def _qc_render_disposition(
         _qc_add_label(
             document,
             "Current disposition",
-            str(finding.get("status") or "open").upper(),
+            xml_safe_upper(str(finding.get("status") or "open")),
         )
     _qc_add_label(
         document,
@@ -3343,7 +3389,9 @@ def _render_memo_finding(
 ) -> None:
     legacy = _qc_legacy_schema(document)
     origins = origins or []
-    severity = str(finding.get("severity") or "not recorded").upper()
+    severity = xml_safe_upper(
+        str(finding.get("severity") or "not recorded")
+    )
     title = str(finding.get("title") or "Untitled finding")
     prefix = f"{ordinal} | " if ordinal else ""
     _qc_heading(document, f"{prefix}{severity} | {title}", 2)
@@ -4008,7 +4056,7 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
         for key, value in usage.items():
             rows.append(
                 [
-                    str(key).replace("_", " ").title(),
+                    xml_safe_title(str(key).replace("_", " ")),
                     _qc_text(value),
                     "Overall persisted run total",
                 ]
@@ -4092,7 +4140,7 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
         for key, value in cost_basis.items():
             _qc_add_label(
                 document,
-                str(key).replace("_", " ").title(),
+                xml_safe_title(str(key).replace("_", " ")),
                 _qc_json(value) if isinstance(value, (dict, list)) else value,
             )
     else:
@@ -4315,8 +4363,10 @@ def _qc_configure_core_properties(
     run_id = str(qc_result.get("run_id") or "legacy run ID not recorded")
     generated_at = datetime.now(timezone.utc)
     properties = document.core_properties
-    properties.title = f"Final QC Audit Report - {section_ref}"[:255]
-    properties.subject = (
+    properties.title = xml_safe_text(
+        f"Final QC Audit Report - {section_ref}"
+    )[:255]
+    properties.subject = xml_safe_text(
         f"Build-a-Spec Final QC audit record for run {run_id} | {section_ref}"
     )[:255]
     properties.author = "Build-a-Spec"
@@ -4334,6 +4384,12 @@ def build_qc_memo(qc_result: dict, section: SpecSection, *, stale: bool) -> byte
     usage/cost, limitations, and human sign-off. Missing legacy fields are
     labeled as missing rather than treated as passes.
     """
+    # See ``build_docx``: the standalone memo is fed a much larger, deeply
+    # nested diagnostic/model record, so clone-and-sanitize the entire graph
+    # before any body text, hyperlink label, or core property reaches lxml.
+    qc_result = xml_safe_clone(qc_result)
+    section = xml_safe_clone(section)
+
     document = Document()
     _qc_configure_core_properties(document, qc_result, section)
     try:

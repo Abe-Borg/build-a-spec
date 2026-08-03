@@ -439,6 +439,7 @@ def test_import_endpoint_gates_and_gap_adapt_context(tmp_path, monkeypatch):
 
     client = TestClient(create_app())
     path = _write_docx(tmp_path, _MASTER_LINES)
+    lease_before = client.get("/api/health").json()
 
     # Wrong extension refused.
     resp = client.post(
@@ -464,6 +465,11 @@ def test_import_endpoint_gates_and_gap_adapt_context(tmp_path, monkeypatch):
     assert data["imported_block_count"] == 8
     assert data["doc"]["section"]["number"] == "21 13 13"
     assert data["doc"]["version"] == {"index": 1, "count": 2}
+    lease_after = client.get("/api/health").json()
+    assert data["workspace_id"] == lease_before["workspace_id"]
+    assert data["workspace_scope"] == "original"
+    assert data["generation"] > lease_before["generation"]
+    assert data["generation"] == lease_after["generation"]
     statuses = {
         p["status"]
         for part in data["doc"]["parts"]

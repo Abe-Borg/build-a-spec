@@ -383,6 +383,41 @@ def _format_ts(value: Any) -> str:
 # ---- read-only surfaces behind /api/diagnostics* ------------------------
 
 
+def _source_capability_facts(session: Any) -> dict[str, Any]:
+    """Why an imported document's editing affordances are what they are.
+
+    "Everything says READ-ONLY" is a support question a bundle could not
+    answer: the snapshot recorded that a source package was retained but
+    nothing about the permissions derived from it, so telling a
+    package-wide blocker (one ``pass_through_only`` cause disabling the
+    whole document) apart from a per-paragraph one (markup Word cannot be
+    patched through) meant asking the user to hover a badge.
+
+    Only the closed blocker vocabulary travels — never a message, URL, or
+    any provision text — the same posture as ``DimensionStatus.error_kind``.
+    ``capabilities_status`` is ``pending`` while the sweep is still running,
+    which is itself the answer when every operation reads as denied.
+    """
+    try:
+        report = session.source_edit_capabilities()
+    except Exception:  # noqa: BLE001 - diagnostics never break a snapshot
+        return {"capabilities_status": "unavailable", "edit_blockers": {}}
+    if report is None:
+        return {"capabilities_status": None, "edit_blockers": {}}
+
+    blockers: dict[str, int] = {}
+    for element in report.elements.values():
+        for capability in element.to_dict().values():
+            if not isinstance(capability, dict) or capability.get("allowed"):
+                continue
+            blocker = str(capability.get("blocker") or "unrecorded")
+            blockers[blocker] = blockers.get(blocker, 0) + 1
+    return {
+        "capabilities_status": report.status,
+        "edit_blockers": dict(sorted(blockers.items())),
+    }
+
+
 def snapshot() -> dict[str, Any]:
     """The full environment + session snapshot (scrubbed on the way out).
 
@@ -442,6 +477,12 @@ def snapshot() -> dict[str, Any]:
                 "retained": source_bytes is not None,
                 "filename": session.source_docx_filename,
                 "bytes": len(source_bytes) if source_bytes else 0,
+                # Why an imported document is showing read-only affordances.
+                # Never blocking (`block=False`): this is a display read, and
+                # the sweep runs for minutes on a real master — the same
+                # reason `_doc_payload` and the QC downloads answer from the
+                # pending state. `null` means the branch is not source-backed.
+                **_source_capability_facts(session),
             },
         }
         busy = sessions.busy_reasons(session)

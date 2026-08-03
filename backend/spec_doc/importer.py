@@ -23,7 +23,9 @@ interview pivots to gap-and-adapt mode.
 Both manual-label masters ("A. Provide...") and Word-auto-numbered masters
 (labels live in ``w:numPr``, not the text) are handled: explicit text
 labels win; otherwise the paragraph's numbering indent level (``ilvl``)
-drives the depth.
+drives the depth — *relative to the shallowest level the document itself
+uses*, because ``ilvl`` is an indent level inside a numbering definition
+and not an absolute outline depth (see :func:`_numbering_base_level`).
 """
 from __future__ import annotations
 
@@ -200,14 +202,49 @@ def _numbering_level(paragraph: DocxParagraph) -> int | None:
     """The Word auto-numbering indent level (``ilvl``) or ``None``.
 
     Auto-numbered masters carry no visible "A."/"1." text — the label
-    lives in the numbering definition. The indent level maps directly to
-    SectionFormat depth for the common single-list masters.
+    lives in the numbering definition. The indent level maps to
+    SectionFormat depth for the common single-list masters, *relative to
+    the shallowest level the document actually uses* (see
+    :func:`_numbering_base_level`).
     """
     p_pr = paragraph._p.pPr
     if p_pr is None or p_pr.numPr is None or p_pr.numPr.ilvl is None:
         return None
     ilvl = p_pr.numPr.ilvl.val
     return int(ilvl) if ilvl is not None else None
+
+
+def _numbering_base_level(entries: list["_BodyTextEntry"]) -> int:
+    """The shallowest ``ilvl`` any numbered body paragraph uses.
+
+    ``ilvl`` is an *indent level within a numbering definition*, not an
+    absolute outline depth: a master whose multilevel list reserves level 0
+    for something it never uses starts its outline at ``ilvl`` 1, and one
+    that starts at 0 is equally ordinary. Reading it as absolute depth broke
+    such a master in a way that looked like content, not like a parse bug —
+    the first numbered paragraph in each PART had no parent to hang from, so
+    it was clamped to depth 0 while every *sibling* at the same ``ilvl``
+    landed at depth 1 and became its **child**. A flat list of articles came
+    back as one article owning all the others.
+
+    Subtracting the document's own minimum makes its shallowest level mean
+    depth 0, so siblings stay siblings. A document that already uses level 0
+    anywhere yields a base of 0 and is therefore byte-identical to before —
+    which includes every Build-a-Spec normalized export, since
+    ``docx_export._qc_apply_numbering`` and the clean body writer emit
+    ``w:ilvl`` 0 for provisions. The export/re-import round trip is
+    untouched by construction.
+    """
+    base: int | None = None
+    for entry in entries:
+        if entry.paragraph is None:
+            continue
+        level = _numbering_level(entry.paragraph)
+        if level is None or level < 0:
+            continue
+        if base is None or level < base:
+            base = level
+    return base or 0
 
 
 @dataclass(frozen=True)
@@ -447,6 +484,7 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     source_bindings: list[SourceParagraphBinding] = []
 
     entries = _iter_body_texts(document)
+    base_ilvl = _numbering_base_level(entries)
     for line_no, entry in enumerate(entries, start=1):
         raw_text = entry.text
         docx_paragraph = entry.paragraph
@@ -493,8 +531,11 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             ilvl = _numbering_level(docx_paragraph)
             if ilvl is not None:
                 pending_title = False
+                # Relative to the document's own shallowest level, never the
+                # raw ``ilvl`` — see _numbering_base_level.
+                depth = max(0, ilvl - base_ilvl)
                 add_mapped_paragraph(
-                    min(ilvl, MAX_PARAGRAPH_DEPTH - 1), text
+                    min(depth, MAX_PARAGRAPH_DEPTH - 1), text
                 )
                 continue
 

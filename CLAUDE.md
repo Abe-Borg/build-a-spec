@@ -5250,6 +5250,75 @@ uses.
   by the existing `TOUR[chunk].steps.length - 1` guard rather than
   resetting every tutorial in progress.
 
+## `ilvl` is an indent level, not an outline depth — implemented notes
+
+Reported symptom (Abraham, from a real 23 05 48 master + a diagnostics
+bundle): importing an office master produced three synthetic `IMPORTED
+CONTENT` articles and a document whose sibling headings had become each
+other's children — `A. SECTION INCLUDES` owning `1. REFERENCE STANDARDS`
+owning `a. ASHRAE …`, with `2. QUALITY ASSURANCE` alongside. Two distinct
+defects sit behind that screenshot; this section fixes the second and
+records the first. No new endpoint, no new SSE event, no new dep, no
+project-format bump.
+
+- **The bug: `ilvl` was read as an absolute depth.** It is an indent level
+  *within a numbering definition*. A master whose multilevel list reserves
+  level 0 for something it never uses starts its outline at `ilvl` 1, and
+  that is as ordinary as starting at 0. Reading it absolutely meant the
+  first numbered paragraph in each PART had no parent to hang from, so the
+  existing "jumped deeper than its context" clamp attached it at depth 0 —
+  while every **sibling** at the same `ilvl` then satisfied the stack and
+  landed at depth 1, i.e. as its **child**. A flat list of articles came
+  back as one article owning all the others, and the clamp warning was the
+  only trace. `_numbering_base_level` subtracts the document's own minimum
+  so its shallowest level means depth 0.
+- **The safety property is that it is a no-op for any document that uses
+  level 0 anywhere**, which includes every Build-a-Spec normalized export
+  (`docx_export._qc_apply_numbering` and the clean body writer both emit
+  `w:ilvl` 0). The base is 0, no depth moves, and the export/re-import
+  round trip is untouched **by construction** rather than by a special
+  case. Pinned by `test_a_document_that_uses_level_zero_is_parsed_exactly_
+  as_before`, which puts a deeper sibling in the same document to prove the
+  minimum is what is subtracted, not the maximum.
+- **The base is the global minimum, deliberately, not a per-`numId` one.**
+  Two numbering definitions each starting at 0 would each claim their own
+  depth 0, which is today's behavior and stays it; taking the minimum can
+  only ever make a document's shallowest content top-level, never invent a
+  peer relationship between two lists.
+- **Still open, and deliberately not guessed at: an auto-numbered ARTICLE
+  heading is not recognized as an article.** The `w:numPr` branch
+  short-circuits ahead of `_SECTION_RE`/`_PART_RE`/`_ARTICLE_RE` — correct
+  and load-bearing for the round trip, since a normalized export's semantic
+  text may legitimately begin "PART 2" or "1.2" with the label living in
+  the numbering. But in an auto-numbered master the article heading's
+  visible text is the title alone ("SECTION INCLUDES"), so **no text
+  pattern can reach it either** and relaxing the short-circuit would fix
+  nothing. Recognizing them needs a structural signal (the numbering
+  definition's `lvlText`, or "normalized depth 0 directly under a PART in a
+  document where no `N.M` article was ever matched"), and it is a parse
+  *policy* change: promoting a paragraph to an article also makes it a
+  heading, which `source_patch` denies `replace_text` on — so it would trade
+  a wrong tree for a less editable one. Left as an owner decision.
+- **The diagnostics snapshot now says why an imported document is
+  read-only.** `_source_capability_facts` adds `capabilities_status` and an
+  `edit_blockers` histogram to the session's `source` block, so a bundle
+  distinguishes a package-wide `pass_through_only` cause (one
+  `document_protection` or `signed_package` disabling the whole document)
+  from ordinary per-element ones (`heading_change`,
+  `complex_paragraph_markup`) without asking the user to hover a badge. It
+  reads **non-blocking** (`block=False`) for the same reason `_doc_payload`
+  and the QC downloads do — a display surface must never wait out a sweep —
+  so `pending` is itself the answer when every operation reads as denied.
+  Only the closed blocker vocabulary travels, never a message or any
+  provision text (the `DimensionStatus.error_kind` posture).
+- **Tests**: 4 new. `test_importer.py` (3 — siblings stay siblings on an
+  outline starting at `ilvl` 1, that outline parsing identically to the
+  same one written from `ilvl` 0, and the level-0 no-op);
+  `test_diagnostics.py` (1 — a clean master's per-element blockers vs a
+  `w:documentProtection` package's `pass_through_only`, plus the
+  no-source-document and no-provision-text claims). The two behavioral
+  importer tests were reverted in place to prove them load-bearing → 2 red.
+
 ## Commands
 
 ```

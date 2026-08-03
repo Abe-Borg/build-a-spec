@@ -261,6 +261,93 @@ def test_diagnostics_snapshot_shape_and_no_key_material():
     assert client.get("/api/diagnostics/activity").json()["enabled"] is False
 
 
+def test_the_snapshot_says_why_an_imported_document_is_read_only():
+    """A bundle must answer "everything says READ-ONLY" on its own.
+
+    It recorded that a source package was retained but nothing about the
+    permissions derived from it, so a package-wide blocker disabling the
+    whole document was indistinguishable from ordinary per-element ones
+    without asking the user to hover a badge.
+    """
+    from tests.conftest import settle_capability_sweep
+    from tests.test_importer import _numbered
+
+    from docx import Document
+
+    def master(protected: bool) -> bytes:
+        document = Document()
+        document.add_paragraph("SECTION 23 05 48")
+        document.add_paragraph("VIBRATION AND SEISMIC CONTROLS FOR HVAC")
+        document.add_paragraph("PART 1 - GENERAL")
+        _numbered(document, "SECTION INCLUDES", 0)
+        _numbered(document, "Vibration isolation for HVAC equipment.", 1)
+        buffer = BytesIO()
+        document.save(buffer)
+        raw = buffer.getvalue()
+        if not protected:
+            return raw
+        # What many office masters ship with, and a package-wide blocker.
+        source = zipfile.ZipFile(BytesIO(raw))
+        out = BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                data = source.read(item.filename)
+                if item.filename == "word/settings.xml":
+                    cut = data.index(b">", data.index(b"<w:settings")) + 1
+                    data = (
+                        data[:cut]
+                        + b'<w:documentProtection w:edit="readOnly" '
+                        b'w:enforcement="1"/>'
+                        + data[cut:]
+                    )
+                target.writestr(item, data)
+        return out.getvalue()
+
+    def imported_source_facts(protected: bool) -> dict:
+        # An import refuses a non-empty document, and the session is a
+        # process singleton — start each case from a blank one.
+        sessions.get_session().reset()
+        client = TestClient(create_app())
+        resp = client.post(
+            "/api/import/master",
+            files={
+                "file": (
+                    "230548.docx",
+                    master(protected),
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document",
+                )
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        settle_capability_sweep()
+        return client.get("/api/diagnostics").json()["session"]["source"]
+
+    # No source document at all: nothing to explain, and no empty scaffolding
+    # implying there was.
+    fresh = TestClient(create_app()).get("/api/diagnostics").json()
+    assert fresh["session"]["source"]["capabilities_status"] is None
+
+    ordinary = imported_source_facts(protected=False)
+    assert ordinary["retained"] is True
+    assert ordinary["capabilities_status"] == "ready"
+    # Headings are never source-patched, so a clean master still records
+    # blockers — the point is that they are per-element and named.
+    assert "heading_change" in ordinary["edit_blockers"]
+    assert "document_protection" not in ordinary["edit_blockers"]
+
+    protected = imported_source_facts(protected=True)
+    assert protected["capabilities_status"] == "pass_through_only"
+    assert "document_protection" in protected["edit_blockers"]
+
+    # The closed blocker vocabulary travels; provision text never does.
+    for facts in (ordinary, protected):
+        assert all(
+            key.replace("_", "").isalnum() for key in facts["edit_blockers"]
+        )
+        assert "Vibration isolation" not in json.dumps(facts)
+
+
 def test_log_tail_bounds_and_missing_file_grace(log_env, monkeypatch):
     diagnostics.init_logging(force=True)
     log = logging.getLogger("buildaspec.test")

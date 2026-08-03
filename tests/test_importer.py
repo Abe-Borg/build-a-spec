@@ -238,6 +238,108 @@ def test_auto_numbered_master_uses_ilvl(tmp_path):
     assert top.children[0].text == "Support piping per NFPA 13."
 
 
+def _numbered(document, text: str, ilvl: int, num_id: str = "1"):
+    """A body paragraph carrying real Word auto-numbering at ``ilvl``."""
+    paragraph = document.add_paragraph(text)
+    p_pr = paragraph._p.get_or_add_pPr()
+    num_pr = OxmlElement("w:numPr")
+    ilvl_el = OxmlElement("w:ilvl")
+    ilvl_el.set(qn("w:val"), str(ilvl))
+    num_id_el = OxmlElement("w:numId")
+    num_id_el.set(qn("w:val"), num_id)
+    num_pr.append(ilvl_el)
+    num_pr.append(num_id_el)
+    p_pr.append(num_pr)
+    return paragraph
+
+
+def _outline_master(tmp_path, base: int, name="outline.docx"):
+    """A master whose numbered outline starts at ``base`` rather than 0.
+
+    Three sibling headings at the outline's top level, each with one child —
+    the shape every office master uses, and the one that came back
+    mis-parented when ``ilvl`` was read as an absolute depth.
+    """
+    document = Document()
+    document.add_paragraph("SECTION 23 05 48")
+    document.add_paragraph("VIBRATION AND SEISMIC CONTROLS FOR HVAC")
+    document.add_paragraph("PART 1 - GENERAL")
+    _numbered(document, "SECTION INCLUDES", base)
+    _numbered(document, "Vibration isolation for HVAC equipment.", base + 1)
+    _numbered(document, "REFERENCE STANDARDS", base)
+    _numbered(document, "ASHRAE Handbook - HVAC Applications.", base + 1)
+    _numbered(document, "QUALITY ASSURANCE", base)
+    _numbered(document, "Minimum three years documented experience.", base + 1)
+    path = tmp_path / name
+    document.save(str(path))
+    return path
+
+
+def test_numbering_depth_is_relative_to_the_documents_own_top_level(tmp_path):
+    """An outline starting at ``ilvl`` 1 keeps siblings as siblings.
+
+    ``ilvl`` is an indent level inside a numbering definition, not an
+    absolute outline depth. Reading it as one clamped the first numbered
+    paragraph of a part to depth 0 and then hung its same-level siblings
+    off it as children — a flat list of headings came back as one heading
+    owning all the others.
+    """
+    result = parse_master_docx(_outline_master(tmp_path, base=1))
+    article = result.section.parts[0].articles[0]
+
+    assert [p.text for p in article.paragraphs] == [
+        "SECTION INCLUDES",
+        "REFERENCE STANDARDS",
+        "QUALITY ASSURANCE",
+    ]
+    assert [
+        [child.text for child in p.children] for p in article.paragraphs
+    ] == [
+        ["Vibration isolation for HVAC equipment."],
+        ["ASHRAE Handbook - HVAC Applications."],
+        ["Minimum three years documented experience."],
+    ]
+    # The old clamp announced itself; nothing jumped once depth is relative.
+    assert not any("jumped deeper" in w for w in result.warnings)
+
+
+def test_an_outline_starting_at_level_one_matches_one_starting_at_zero(
+    tmp_path,
+):
+    """The same outline is the same tree wherever its levels are numbered."""
+    from_zero = parse_master_docx(
+        _outline_master(tmp_path, base=0, name="zero.docx")
+    )
+    from_one = parse_master_docx(
+        _outline_master(tmp_path, base=1, name="one.docx")
+    )
+    assert from_one.section.to_dict() == from_zero.section.to_dict()
+
+
+def test_a_document_that_uses_level_zero_is_parsed_exactly_as_before(tmp_path):
+    """The normalization is a no-op for any document reaching level 0.
+
+    Every Build-a-Spec normalized export writes provisions at ``w:ilvl`` 0,
+    so this is what keeps the export/re-import round trip byte-identical:
+    the base is 0 and no depth moves. A deeper sibling elsewhere in the
+    document must not shift the paragraphs that do use level 0.
+    """
+    document = Document()
+    document.add_paragraph("PART 3 - EXECUTION")
+    document.add_paragraph("3.1 INSTALLATION")
+    _numbered(document, "Install per the working plans.", 0)
+    _numbered(document, "Support piping per NFPA 13.", 1)
+    _numbered(document, "Brace per the seismic drawings.", 2)
+    path = tmp_path / "haslevelzero.docx"
+    document.save(str(path))
+
+    article = parse_master_docx(path).section.parts[2].articles[0]
+    top = article.paragraphs[0]
+    assert top.text == "Install per the working plans."
+    assert top.children[0].text == "Support piping per NFPA 13."
+    assert top.children[0].children[0].text == "Brace per the seismic drawings."
+
+
 def test_unreadable_and_empty_files_error(tmp_path):
     bogus = tmp_path / "not_a_docx.docx"
     bogus.write_bytes(b"this is not a zip")

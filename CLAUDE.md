@@ -202,7 +202,11 @@ backend/
   compliance/runner.py     AuditRunner: thread/status; result stamps
                            audited_at + version_index (staleness marker).
                            DEPRECATED (Batch 4): the qc/ code_compliance +
-                           completeness lenses supersede it; endpoints retained
+                           completeness lenses supersede it; endpoints retained;
+                           ComplianceAuditError carries usage_totals (folded per
+                           completed response — a paid-but-unparseable payload
+                           included) and the runner meters it before the failed
+                           flip, research/QC parity: a failed audit still bills
   qc/schema.py             [Batch 4] QCLens defs (5 lenses) + submit_qc_findings /
                            submit_qc_verdict strict tools (strict conventions from
                            research/schema; Opus 5 added to _STRICT_CAPABLE_MODELS) +

@@ -425,3 +425,143 @@ def test_audit_user_message_carries_discipline_only_when_stated():
 
     with_d = build_audit_user_message(section, profile, "Electrical")
     assert "<project_discipline>\nElectrical\n</project_discipline>" in with_d
+
+
+# ---------------------------------------------------------------------------
+# A failed audit is still a paid audit (parity with research/QC metering)
+# ---------------------------------------------------------------------------
+
+
+def _unparseable_response(tokens: "SimpleNamespace"):
+    """A completed — therefore billed — response no parser can use."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="I have thoughts, no JSON.")],
+        stop_reason="end_turn",
+        usage=tokens,
+    )
+
+
+class _ScriptedAuditClient:
+    """Yields one scripted outcome per stream() call; exceptions raise."""
+
+    def __init__(self, outcomes):
+        self.messages = self
+        self._outcomes = list(outcomes)
+        self.requests = 0
+
+    def stream(self, **_request):
+        self.requests += 1
+        outcome = self._outcomes.pop(0)
+
+        class _Ctx:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *exc):
+                return False
+
+            def get_final_message(self_inner):
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                return outcome
+
+        return _Ctx()
+
+
+def test_a_paid_but_unparseable_response_bills_on_the_error():
+    """The one terminal failure with a paid response behind it: the model
+    answered (billed in full), the payload would not parse, and until the
+    error carried usage_totals that whole bill vanished with the raise."""
+    import pytest
+
+    from backend.compliance.checker import (
+        ComplianceAuditError,
+        run_compliance_audit,
+    )
+    from tests.fakes import usage
+
+    audit_client = _ScriptedAuditClient(
+        [_unparseable_response(usage(input=1234, output=56))]
+    )
+    with pytest.raises(ComplianceAuditError, match="no parseable payload") as ei:
+        run_compliance_audit(
+            sessions.get_session().doc.doc,
+            _profile_with([_GROUNDED]),
+            DEFAULT_MODULE,
+            audit_client,
+            model="claude-sonnet-5",
+            max_tokens=2048,
+        )
+    assert ei.value.usage_totals == {"input_tokens": 1234, "output_tokens": 56}
+
+
+def test_a_transport_retry_then_success_bills_the_completed_response_once(
+    monkeypatch,
+):
+    """A died attempt has no response object (nothing measurable to fold),
+    and the retry's completed response is folded exactly once — the exact
+    equality guards against a double-count as much as an undercount."""
+    from types import SimpleNamespace
+
+    from backend.compliance.checker import run_compliance_audit
+    from tests.fakes import tool_use_block, usage
+
+    monkeypatch.setattr(
+        "backend.compliance.checker.time",
+        SimpleNamespace(sleep=lambda _s: None),
+    )
+    success = SimpleNamespace(
+        content=[
+            tool_use_block(
+                "toolu_audit", "submit_compliance_audit", _audit_payload()
+            )
+        ],
+        stop_reason="tool_use",
+        usage=usage(input=100, output=10),
+    )
+    audit_client = _ScriptedAuditClient(
+        [RuntimeError("connection reset by peer"), success]
+    )
+    result = run_compliance_audit(
+        sessions.get_session().doc.doc,
+        _profile_with([_GROUNDED]),
+        DEFAULT_MODULE,
+        audit_client,
+        model="claude-sonnet-5",
+        max_tokens=2048,
+    )
+    assert audit_client.requests == 2
+    assert result["usage"] == {"input_tokens": 100, "output_tokens": 10}
+
+
+def test_a_failed_audit_still_reaches_the_meter(monkeypatch):
+    """End to end: the audit fails, the session meter still shows what it
+    spent — mirroring test_a_research_round_that_failed_outright_still_
+    reaches_the_meter, because the trust posture is channel-agnostic."""
+    from tests.fakes import usage
+
+    client = _client()
+    _seed_doc_and_research(client, monkeypatch)
+
+    audit_client = _ScriptedAuditClient(
+        [_unparseable_response(usage(input=700, output=90))]
+    )
+    monkeypatch.setattr("backend.app.get_client", lambda: audit_client)
+    assert client.post("/api/audit/start").json()["ok"] is True
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        status = client.get("/api/audit/status").json()
+        if status["status"] in ("complete", "failed"):
+            break
+        time.sleep(0.05)
+    assert status["status"] == "failed"
+    assert "no parseable payload" in status["error"]
+
+    spent = client.get("/api/usage").json()
+    audit = spent["categories"]["audit"]
+    assert audit["input_tokens"] == 700
+    assert audit["output_tokens"] == 90
+    assert spent["estimated_cost_usd"]["by_category"]["audit"] > 0

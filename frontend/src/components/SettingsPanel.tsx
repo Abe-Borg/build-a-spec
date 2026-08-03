@@ -113,8 +113,9 @@ function UsageTable({ usage }: { usage: UsageSummary }) {
       </table>
       {usage.cache_saved_usd > 0 && (
         <p className="mt-2 text-[11px] text-ok">
-          Prompt caching saved ≈ ${usage.cache_saved_usd.toFixed(3)} this
-          session.
+          Cache reads saved ≈ ${usage.cache_saved_usd.toFixed(3)} vs. paying
+          full input price for them this session. Writing those cache entries
+          is billed in the estimates above, not deducted here.
         </p>
       )}
       {usage.includes_estimated_output && (

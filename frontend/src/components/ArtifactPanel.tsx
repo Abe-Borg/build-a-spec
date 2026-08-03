@@ -3,14 +3,7 @@
  * tree, a per-turn version stepper (undo/redo), export / save / open
  * actions, and the open-items list ([TBD] markers + needs-input blocks).
  */
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   EditOp,
   FileLoading,
@@ -39,7 +32,6 @@ import ReviewDrawer from "./ReviewDrawer";
 import SpecDocument, { SectionHeader } from "./SpecDocument";
 import {
   sourceCapability,
-  sourceCapabilityTitle,
   sourceCapabilitiesExpected,
   sourceCapabilitiesPending,
 } from "../lib/sourceCapabilities";
@@ -174,44 +166,12 @@ function EmptyState({
   unstructuredImport: boolean;
   onEditDoc: (ops: EditOp[]) => void;
 }) {
-  const [partId, setPartId] = useState(doc.parts[0]?.id ?? "");
-  const [title, setTitle] = useState("");
-  const selectedPart =
-    doc.parts.find((part) => part.id === partId) ?? doc.parts[0];
-  const addCapability = sourceCapability(
-    sourceCapabilities,
-    sourceExpected,
-    selectedPart?.id ?? "",
-    "add_article",
-  );
   const sectionReplaceCapability = sourceCapability(
     sourceCapabilities,
     sourceExpected,
     "sec",
     "replace_text",
   );
-  const articleTitle = title.trim();
-  const addDisabled =
-    busy || !selectedPart || !articleTitle || !addCapability.allowed;
-  const addTip = !addCapability.allowed
-    ? sourceCapabilityTitle(addCapability, "")
-    : busy
-      ? "Finish the current document change first."
-      : !articleTitle
-        ? "Enter an article title."
-        : "Add the first article to this PART.";
-
-  const addFirstArticle = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (addDisabled || !selectedPart) return;
-    onEditDoc([
-      {
-        action: "add_article",
-        target_id: selectedPart.id,
-        text: articleTitle,
-      },
-    ]);
-  };
 
   return (
     <div className="mx-auto max-w-2xl rounded-xl border border-paper-edge bg-paper px-10 py-12 text-paper-ink shadow-[0_2px_16px_rgba(0,0,0,0.25)]">
@@ -267,55 +227,10 @@ function EmptyState({
         )}
       </div>
 
-      <form
-        className="mt-10 rounded-lg border border-paper-edge bg-white/35 p-4"
-        onSubmit={addFirstArticle}
-        data-tour="first-article"
-        data-capability="document.first-article"
-      >
-        <div className="flex flex-wrap items-end gap-2">
-          <label className="min-w-36 flex-1 text-[11px] font-medium text-paper-dim">
-            PART
-            <select
-              className="mt-1 block w-full rounded border border-paper-edge bg-paper px-2.5 py-2 text-xs text-paper-ink outline-none focus:border-accent"
-              value={selectedPart?.id ?? ""}
-              onChange={(event) => setPartId(event.target.value)}
-              disabled={busy || doc.parts.length === 0}
-            >
-              {doc.parts.map((part) => (
-                <option key={part.id} value={part.id}>
-                  {part.title}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="min-w-56 flex-[2] text-[11px] font-medium text-paper-dim">
-            Article title
-            <input
-              className="mt-1 block w-full rounded border border-paper-edge bg-paper px-2.5 py-2 text-xs text-paper-ink outline-none placeholder:text-paper-dim/70 focus:border-accent disabled:opacity-50"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="e.g. SUMMARY"
-              maxLength={200}
-              disabled={busy || !addCapability.allowed}
-              autoFocus
-            />
-          </label>
-          <Tip tip={addTip}>
-            <button
-              type="submit"
-              className="rounded-md bg-accent px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
-              disabled={addDisabled}
-            >
-              Add article
-            </button>
-          </Tip>
-        </div>
-      </form>
-
-      <p className="mt-8 text-center text-xs leading-relaxed text-paper-dim">
-        Or use the interview and Draft full section to build the document for
-        you. Changes appear in place and every [TBD] stays tracked.
+      <p className="mt-12 text-center text-xs leading-relaxed text-paper-dim">
+        Use the interview and Draft full section to build the document, or
+        import an office master to start from. Changes appear in place and every
+        [TBD] stays tracked.
       </p>
     </div>
   );

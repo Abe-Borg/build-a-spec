@@ -28,7 +28,6 @@ export const END_USER_CAPABILITIES = [
   "document.structure",
   "document.provenance",
   "document.section-header",
-  "document.first-article",
   "document.insert",
   "document.edit",
   "document.rearrange",

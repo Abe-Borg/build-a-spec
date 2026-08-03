@@ -251,16 +251,6 @@ export const TOUR: readonly TourChunk[] = [
         body:
           "An unnamed section reads SECTION [TBD]. Hover the header and edit it to set the number and title yourself, or state them in chat and the assistant records the same change. Either way it is one undoable version, and the number is what the export filename, the module scope check, and Final QC all read.",
       },
-      {
-        id: "first-article",
-        capabilities: ["document.first-article"],
-        mode: "interactive",
-        anchor: "first-article",
-        placement: "top",
-        title: "Add the first article yourself",
-        body:
-          "A blank document offers a PART chooser and a title field. Adding the first article is a normal edit — user-authored content enters confirmed, not assumed. From there the between-block inserters appear and you can build the outline by hand, ask for a full draft, or import a master instead. Nothing here requires the assistant.",
-      },
     ],
   },
   {

@@ -693,6 +693,82 @@ def test_the_qc_report_download_never_waits_out_the_permission_sweep(monkeypatch
         )
 
 
+def test_the_export_verdict_is_derived_from_one_capability_sample(monkeypatch):
+    """A warm publish landing mid-request must not split the export verdict.
+
+    The background sweep publishes under its own lock — the session guard
+    does not exclude it — so a route that samples capabilities more than
+    once can capture "pending" in one field and "settled" in another. For
+    the QC export that is an audit artifact contradicting itself:
+    ``input_verification_pending: true`` beside ``stale: false``, with a
+    fingerprint keyed on a manifest neither claim describes. The seam hands
+    the FIRST sample a pending report and every later sample the real
+    settled one — exactly the shape of a mid-request publish — and requires
+    the whole export to speak from the first. (Review finding on PR #116.)
+    """
+    source = _master_bytes(articles=2, paragraphs=3)
+    scripts = {
+        f"[[QC-LENS:{lens.lens_id}]]": [
+            qc_findings_response(lens.lens_id, findings=[])
+        ]
+        for lens in QC_LENSES
+    }
+    monkeypatch.setattr(
+        "backend.app.get_client", lambda: SequencedFakeClient(scripts)
+    )
+
+    with TestClient(app_module.create_app()) as client:
+        assert client.post(
+            "/api/import/master", files=_upload(source)
+        ).status_code == 200
+        settle_capability_sweep()
+        assert client.post("/api/qc/start", json={}).json()["ok"] is True
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            snapshot = client.get("/api/qc/status").json()
+            if snapshot["status"] in ("complete", "failed"):
+                break
+            time.sleep(0.05)
+        assert snapshot["status"] == "complete", snapshot.get("error")
+
+        # The retained report matches the settled state, so a settled sample
+        # answers "current" — which is what makes a split verdict visible.
+        state = client.get("/api/qc/export.json").json()["current_state"]
+        assert state["stale"] is False
+
+        from backend.spec_doc.source_patch import (
+            CAPABILITY_STATUS_PENDING,
+            blocked_source_edit_capabilities,
+        )
+
+        session = sessions.get_session()
+        pending_report = blocked_source_edit_capabilities(
+            session.doc.doc,
+            blocker="capabilities_pending",
+            status=CAPABILITY_STATUS_PENDING,
+        )
+        real_read = SessionState.source_edit_capabilities
+        calls = {"count": 0}
+
+        def flipping_read(self, *args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return pending_report
+            return real_read(self, *args, **kwargs)
+
+        monkeypatch.setattr(
+            SessionState, "source_edit_capabilities", flipping_read
+        )
+
+        state = client.get("/api/qc/export.json").json()["current_state"]
+        assert calls["count"] >= 1
+        assert state["input_verification_pending"] is True
+        # The verdict must speak from the SAME sample as the disclosure: a
+        # pending verification can only yield the conservative answer.
+        assert state["report_matches_current_inputs"] is False
+        assert state["stale"] is True
+
+
 def test_anchor_lookups_never_rescan_the_element_table():
     """Anchor resolution must be O(1), not a scan of every element.
 

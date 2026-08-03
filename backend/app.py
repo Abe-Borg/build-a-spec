@@ -660,7 +660,14 @@ def _settle_source_capabilities(session) -> None:
     session.source_edit_capabilities(block=True)
 
 
-def _qc_source_guard(session, *, block: bool = False) -> QCSourceGuard | None:
+# Sentinel distinguishing "the caller did not pre-sample" from a genuine
+# pre-sampled None (a session that is not source-backed).
+_UNSAMPLED: Any = object()
+
+
+def _qc_source_guard(
+    session, *, block: bool = False, capability_report: Any = _UNSAMPLED
+) -> QCSourceGuard | None:
     """Capture immutable source inputs for the exact QC document snapshot.
 
     Presence means the runner must enforce source preservation. An active
@@ -675,12 +682,19 @@ def _qc_source_guard(session, *, block: bool = False) -> QCSourceGuard | None:
     conservative answer, and after an import (which requires an empty
     document) or a body change (which makes a prior QC stale anyway) it is
     also the correct one.
+
+    ``capability_report`` lets a caller that must derive SEVERAL facts from
+    ONE capability state pre-sample it and thread it through — the background
+    warm publishes under its own lock, not the session guard, so two samples
+    inside one request can straddle the publish and disagree (the QC export's
+    coherence bug, caught in review on PR #116).
     """
     # Use the same active-branch/source-less boundary as manual/model edits
     # and the capability payload. In particular, a legacy JSON project may
     # retain an import baseline while intentionally carrying neither source
     # bytes nor a source map; QC for that project remains semantic-only.
-    capability_report = session.source_edit_capabilities(block=block)
+    if capability_report is _UNSAMPLED:
+        capability_report = session.source_edit_capabilities(block=block)
     if capability_report is None:
         return None
 
@@ -723,17 +737,23 @@ def _qc_source_guard(session, *, block: bool = False) -> QCSourceGuard | None:
     )
 
 
-def _qc_matches_current_inputs(session, result, *, block: bool = False) -> bool:
+def _qc_matches_current_inputs(
+    session, result, *, block: bool = False, source_guard: Any = _UNSAMPLED
+) -> bool:
     """Server-authoritative freshness over document + all QC inputs.
 
     ``block`` decides whether the imported-source half of the comparison may
     wait for the background permission sweep. Set it on paths that ACT on the
-    answer — applying fixes, producing an export — because a not-yet-derived
-    capability summary reads as a mismatch, i.e. "stale", and refusing a fix
-    for a sweep that simply has not finished would be wrong. Leave it False
-    on the hot ``/api/readiness`` and ``/api/qc/status`` polls, where waiting
-    minutes on a large master is exactly the freeze this design removes and
-    the conservative "assume stale" answer is harmless.
+    answer — applying fixes — because a not-yet-derived capability summary
+    reads as a mismatch, i.e. "stale", and refusing a fix for a sweep that
+    simply has not finished would be wrong. Leave it False on the hot
+    ``/api/readiness`` and ``/api/qc/status`` polls, where waiting minutes on
+    a large master is exactly the freeze this design removes and the
+    conservative "assume stale" answer is harmless.
+
+    ``source_guard`` lets a caller thread ONE pre-built guard through every
+    comparison it makes, so all its answers describe the same capability
+    state (see ``_qc_source_guard``); ``block`` is ignored when it is given.
     """
     return bool(
         result is not None
@@ -743,7 +763,11 @@ def _qc_matches_current_inputs(session, result, *, block: bool = False) -> bool:
             session.research.profile_result,
             session.module,
             effective_discipline(session),
-            _qc_source_guard(session, block=block),
+            (
+                _qc_source_guard(session, block=block)
+                if source_guard is _UNSAMPLED
+                else source_guard
+            ),
             model=settings.QC_MODEL,
             max_tokens=settings.QC_MAX_TOKENS,
         )
@@ -1066,22 +1090,31 @@ def _qc_export_current_state(
     """
     if qc_record is None:
         qc_record = session.qc.audit_record_snapshot()
+    # ONE capability sample, threaded through everything derived below. The
+    # background warm publishes under its own lock — the session guard does
+    # not exclude it — so a second sample inside this same request can land
+    # after the publish and disagree with the first, and an export that says
+    # "verification pending" beside "matches current inputs" is an audit
+    # artifact contradicting itself (caught in review on PR #116).
     capability_report = session.source_edit_capabilities(block=False)
     verification_pending = bool(
         capability_report is not None
         and capability_report.status == CAPABILITY_STATUS_PENDING
     )
+    source_guard = _qc_source_guard(session, capability_report=capability_report)
     current_manifest = build_qc_input_manifest(
         session.doc.doc,
         session.research.profile_result,
         session.module,
         version_index=session.doc.index,
         discipline=effective_discipline(session),
-        source_guard=_qc_source_guard(session, block=False),
+        source_guard=source_guard,
         model=settings.QC_MODEL,
         max_tokens=settings.QC_MAX_TOKENS,
     )
-    matches = _qc_matches_current_inputs(session, result, block=False)
+    matches = _qc_matches_current_inputs(
+        session, result, source_guard=source_guard
+    )
     state = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "document_version": session.doc.index,
@@ -1093,7 +1126,9 @@ def _qc_export_current_state(
         "input_verification_pending": verification_pending,
         "runner": dict(qc_record.get("runner") or {}),
         "latest_attempt": qc_record.get("latest_attempt"),
-        "readiness": _readiness_payload(session, qc_record=qc_record),
+        "readiness": _readiness_payload(
+            session, qc_record=qc_record, source_guard=source_guard
+        ),
     }
     retained = qc_record.get("result")
     if (
@@ -1334,7 +1369,10 @@ def _research_readiness(session: SessionState) -> tuple[bool, str]:
 
 
 def _readiness_payload(
-    session, *, qc_record: dict[str, Any] | None = None
+    session,
+    *,
+    qc_record: dict[str, Any] | None = None,
+    source_guard: Any = _UNSAMPLED,
 ) -> dict[str, Any]:
     """The deterministic issue-readiness checklist.
 
@@ -1343,6 +1381,10 @@ def _readiness_payload(
     imported/assumed blocks, lint clean, research complete, and a current QC
     with no open criticals. ``profile_complete`` is shown but advisory —
     ``research_complete`` already subsumes it.
+
+    ``source_guard`` is the QC export's one-capability-state threading (see
+    ``_qc_source_guard``); the live ``/api/readiness`` poll omits it and
+    samples for itself as before.
     """
     doc = session.doc.doc
     open_items = open_questions(doc)
@@ -1367,7 +1409,9 @@ def _readiness_payload(
     qc_result = qc_record.get("result_model")
     runner_state = qc_record.get("runner") or {}
     runner_status = str(runner_state.get("status") or "idle")
-    qc_matches_inputs = _qc_matches_current_inputs(session, qc_result)
+    qc_matches_inputs = _qc_matches_current_inputs(
+        session, qc_result, source_guard=source_guard
+    )
     latest_attempt = qc_record.get("latest_attempt")
     latest_status = (
         str(latest_attempt.get("status") or "").lower()

@@ -1,14 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  EditOp,
-  Health,
-  SessionBundle,
-  SpecDoc,
-  TutorialEvent,
-  TutorialSource,
-} from "../types";
+import type { EditOp, Health, SessionBundle, SpecDoc } from "../types";
 import {
-  enrichTutorialWorkspace,
   finishTutorialScenario,
   getSessionBundle,
   getTutorialStatus,
@@ -28,21 +20,12 @@ export type DrawerName = "review" | "research" | "qc" | "openItems";
 
 export type OnboardingPhase =
   | { kind: "idle" }
-  | { kind: "source-choice" }
-  | {
-      kind: "enrichment-choice";
-      source: TutorialSource;
-      targetChunk: number;
-      targetStep: number;
-    }
   | {
       kind: "preparing";
-      source: TutorialSource;
-      stage: "starting" | "enriching" | "scenario" | "finishing";
+      stage: "starting" | "scenario" | "finishing";
       label?: string;
       targetChunk?: number;
       targetStep?: number;
-      enrichmentMode?: "live" | "bundled";
       error: string | null;
     }
   | { kind: "touring"; chunk: number; step: number }
@@ -56,7 +39,6 @@ export interface OnboardingCaps {
   prefillComposer: (text: string) => void;
   openTemplates: () => void;
   applySession: (session: SessionBundle) => void;
-  applyTutorialEvent: (event: TutorialEvent) => void;
   health: Health | null;
   doc: SpecDoc | null;
   hasContent: boolean;
@@ -67,11 +49,7 @@ export interface OnboardingApi {
   endConfirm: boolean;
   start: () => void;
   startAtChapter: (chapter: string | number) => void;
-  chooseSource: (source: TutorialSource) => void;
-  chooseLiveEnrichment: () => void;
-  chooseBundledEnrichment: () => void;
   retryPrepare: () => void;
-  ensureContent: () => void;
   advance: () => void;
   back: () => void;
   continueChunk: () => void;
@@ -97,7 +75,6 @@ interface WorkspaceState {
   tutorialId: string;
   workspaceId: number;
   generation: number;
-  source: TutorialSource;
   activeScenario?: string;
 }
 
@@ -120,7 +97,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
   >(null);
   const pendingStartChunkRef = useRef(0);
   const runRef = useRef(0);
-  const lastSourceRef = useRef<TutorialSource>("showcase");
   const startRequestRef = useRef<string | null>(null);
   // Where to put the user back when a restore fails. There is no longer a
   // modal to dismiss to, so the last visited step is the only honest landing.
@@ -146,7 +122,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
       tutorialId: workspace.tutorialId,
       workspaceId: workspace.workspaceId,
       generation: workspace.generation,
-      source: workspace.source,
       chunk,
       step,
       paused,
@@ -182,7 +157,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
           tutorialId: status.tutorial_id,
           workspaceId: status.workspace_id,
           generation: status.generation,
-          source: status.source ?? stored?.source ?? "showcase",
           activeScenario:
             status.scope === "scenario"
               ? status.scenario_kind ?? status.chapter
@@ -216,6 +190,81 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     };
   }, []);
 
+  /**
+   * Open the protected tutorial workspace on the bundled showcase.
+   *
+   * The showcase is the tutorial's only source — there is no chooser, no
+   * copy of the current project, and no live generation. The user's session
+   * is set aside untouched and restored on every ending.
+   */
+  const beginShowcase = useCallback(async () => {
+    const run = (runRef.current += 1);
+    setPhase({ kind: "preparing", stage: "starting", error: null });
+    try {
+      const currentLease = capsRef.current.health;
+      if (
+        currentLease?.workspace_id === undefined ||
+        currentLease.generation === undefined
+      ) {
+        throw new Error(
+          "The current workspace identity is still loading. Try the tutorial again.",
+        );
+      }
+      const pendingRequestId = startRequestRef.current ?? requestId();
+      startRequestRef.current = pendingRequestId;
+      const result = await startTutorialWorkspace({
+        requestId: pendingRequestId,
+        workspaceId: currentLease.workspace_id,
+        generation: currentLease.generation,
+      });
+      if (runRef.current !== run) {
+        await restoreTutorialWorkspace({
+          tutorialId: result.tutorial_id,
+          workspaceId: result.workspace_id,
+          generation: result.generation,
+        }).catch(() => undefined);
+        return;
+      }
+      workspaceRef.current = {
+        tutorialId: result.tutorial_id,
+        workspaceId: result.workspace_id,
+        generation: result.generation,
+      };
+      startRequestRef.current = null;
+      capsRef.current.applySession(result.session);
+      enterChunkRef.current?.(pendingStartChunkRef.current, 0);
+    } catch (error) {
+      if (runRef.current !== run) return;
+      const status = await getTutorialStatus().catch(() => null);
+      if (
+        status?.active &&
+        status.tutorial_id &&
+        status.workspace_id !== undefined &&
+        status.generation !== undefined &&
+        status.session
+      ) {
+        // A protected workspace already exists (an earlier start raced or
+        // partially completed) — adopt it rather than failing the tour.
+        workspaceRef.current = {
+          tutorialId: status.tutorial_id,
+          workspaceId: status.workspace_id,
+          generation: status.generation,
+          activeScenario:
+            status.scope === "scenario" ? status.scenario_kind : undefined,
+        };
+        startRequestRef.current = null;
+        capsRef.current.applySession(status.session);
+        enterChunkRef.current?.(pendingStartChunkRef.current, 0);
+        return;
+      }
+      setPhase({
+        kind: "preparing",
+        stage: "starting",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, []);
+
   const start = useCallback(() => {
     setEndConfirm(false);
     if (phaseRef.current.kind === "paused") {
@@ -226,296 +275,47 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     }
     pendingStartChunkRef.current = 0;
     startRequestRef.current = null;
-    runRef.current += 1;
-    setPhase({ kind: "source-choice" });
-  }, [persist]);
+    void beginShowcase();
+  }, [beginShowcase]);
 
-  const startAtChapter = useCallback((chapter: string | number) => {
-    const requested =
-      typeof chapter === "number"
-        ? chapter
-        : TOUR.findIndex((candidate) => candidate.id === chapter);
-    const chunk = Math.min(Math.max(requested, 0), TOUR.length - 1);
-    pendingStartChunkRef.current = chunk;
-    setEndConfirm(false);
-    if (workspaceRef.current) {
-      runRef.current += 1;
-      enterChunkRef.current?.(chunk, 0);
-      return;
-    }
-    runRef.current += 1;
-    setPhase({ kind: "source-choice" });
-  }, []);
-
-  const enrich = useCallback(async (
-    resume?: { chunk: number; step: number },
-    mode: "live" | "bundled" = "live",
-  ) => {
-    const workspace = workspaceRef.current;
-    if (!workspace) return;
-    const run = runRef.current;
-    setPhase({
-      kind: "preparing",
-      source: workspace.source,
-      stage: "enriching",
-      targetChunk: resume?.chunk,
-      targetStep: resume?.step,
-      enrichmentMode: mode,
-      error: null,
-    });
-    try {
-      for await (const event of enrichTutorialWorkspace({
-        tutorialId: workspace.tutorialId,
-        workspaceId: workspace.workspaceId,
-        generation: workspace.generation,
-        mode,
-      })) {
-        if (runRef.current !== run) return;
-        if (event.type === "tutorial_fallback") {
-          if (
-            event.replaces_workspace_id !== workspace.workspaceId ||
-            event.replaces_generation !== workspace.generation
-          ) {
-            continue;
-          }
-          const replacementWorkspaceId =
-            event.workspace_id ?? event.session.workspace_id;
-          if (replacementWorkspaceId === undefined) continue;
-          capsRef.current.applySession(event.session);
-          workspace.workspaceId = replacementWorkspaceId;
-          workspace.generation =
-            event.generation ?? event.session.generation ?? workspace.generation;
-          workspace.source =
-            event.source ?? event.session.tutorial_source ?? workspace.source;
-          continue;
-        }
-        if (event.type === "tutorial_session") {
-          capsRef.current.applySession(event.session);
-          workspace.workspaceId =
-            event.workspace_id ?? event.session.workspace_id ?? workspace.workspaceId;
-          workspace.generation =
-            event.generation ?? event.session.generation ?? workspace.generation;
-          workspace.source =
-            event.source ?? event.session.tutorial_source ?? workspace.source;
-          continue;
-        }
-        if (
-          event.workspace_id !== undefined &&
-          workspace.workspaceId !== undefined &&
-          event.workspace_id !== workspace.workspaceId
-        ) {
-          continue;
-        }
-        if (
-          event.generation !== undefined &&
-          workspace.generation !== undefined &&
-          event.generation !== workspace.generation
-        ) {
-          continue;
-        }
-        if (event.workspace_id !== undefined) workspace.workspaceId = event.workspace_id;
-        if (event.generation !== undefined) workspace.generation = event.generation;
-        capsRef.current.applyTutorialEvent(event);
-      }
-      if (runRef.current !== run) return;
-      const next = resume ?? { chunk: 0, step: 0 };
-      if (enterChunkRef.current) enterChunkRef.current(next.chunk, next.step);
-      else {
-        setPhase({ kind: "touring", ...next });
-        persist(next.chunk, next.step, false);
-      }
-    } catch (error) {
-      if (runRef.current !== run) return;
-      const status = await getTutorialStatus().catch(() => null);
-      if (
-        status?.active &&
-        status.tutorial_id === workspace.tutorialId &&
-        status.workspace_id !== undefined &&
-        status.generation !== undefined &&
-        status.session &&
-        status.coverage?.ready
-      ) {
-        workspace.workspaceId = status.workspace_id;
-        workspace.generation = status.generation;
-        workspace.activeScenario =
-          status.scope === "scenario" ? status.scenario_kind : undefined;
-        capsRef.current.applySession(status.session);
-        const next = resume ?? { chunk: 0, step: 0 };
-        enterChunkRef.current?.(next.chunk, next.step);
+  const startAtChapter = useCallback(
+    (chapter: string | number) => {
+      const requested =
+        typeof chapter === "number"
+          ? chapter
+          : TOUR.findIndex((candidate) => candidate.id === chapter);
+      const chunk = Math.min(Math.max(requested, 0), TOUR.length - 1);
+      pendingStartChunkRef.current = chunk;
+      setEndConfirm(false);
+      if (workspaceRef.current) {
+        runRef.current += 1;
+        enterChunkRef.current?.(chunk, 0);
         return;
       }
-      setPhase({
-        kind: "preparing",
-        source: workspace.source,
-        stage: "enriching",
-        targetChunk: resume?.chunk,
-        targetStep: resume?.step,
-        enrichmentMode: mode,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }, [persist]);
-
-  const chooseSource = useCallback(
-    async (source: TutorialSource) => {
-      const run = (runRef.current += 1);
-      lastSourceRef.current = source;
-      setPhase({ kind: "preparing", source, stage: "starting", error: null });
-      try {
-        const currentLease = capsRef.current.health;
-        if (
-          currentLease?.workspace_id === undefined ||
-          currentLease.generation === undefined
-        ) {
-          throw new Error(
-            "The current workspace identity is still loading. Try the tutorial again.",
-          );
-        }
-        const pendingRequestId = startRequestRef.current ?? requestId();
-        startRequestRef.current = pendingRequestId;
-        const result = await startTutorialWorkspace({
-          source,
-          requestId: pendingRequestId,
-          workspaceId: currentLease.workspace_id,
-          generation: currentLease.generation,
-        });
-        if (runRef.current !== run) {
-          await restoreTutorialWorkspace({
-            tutorialId: result.tutorial_id,
-            workspaceId: result.workspace_id,
-            generation: result.generation,
-          }).catch(() => undefined);
-          return;
-        }
-        const workspace: WorkspaceState = {
-          tutorialId: result.tutorial_id,
-          workspaceId: result.workspace_id,
-          generation: result.generation,
-          source,
-        };
-        workspaceRef.current = workspace;
-        startRequestRef.current = null;
-        capsRef.current.applySession(result.session);
-        const target = {
-          chunk: pendingStartChunkRef.current,
-          step: 0,
-        };
-        if (result.needs_enrichment && source === "current") {
-          setPhase({
-            kind: "enrichment-choice",
-            source,
-            targetChunk: target.chunk,
-            targetStep: target.step,
-          });
-        }
-        else if (result.needs_enrichment) await enrich(target, "live");
-        else enterChunkRef.current?.(target.chunk, target.step);
-      } catch (error) {
-        if (runRef.current !== run) return;
-        const status = await getTutorialStatus().catch(() => null);
-        if (
-          status?.active &&
-          status.tutorial_id &&
-          status.workspace_id !== undefined &&
-          status.generation !== undefined &&
-          status.session
-        ) {
-          const recovered: WorkspaceState = {
-            tutorialId: status.tutorial_id,
-            workspaceId: status.workspace_id,
-            generation: status.generation,
-            source: status.source ?? source,
-            activeScenario:
-              status.scope === "scenario" ? status.scenario_kind : undefined,
-          };
-          workspaceRef.current = recovered;
-          startRequestRef.current = null;
-          capsRef.current.applySession(status.session);
-          const target = { chunk: pendingStartChunkRef.current, step: 0 };
-          if (status.coverage?.ready) {
-            enterChunkRef.current?.(target.chunk, target.step);
-          } else if (recovered.source === "current") {
-            setPhase({
-              kind: "enrichment-choice",
-              source: "current",
-              targetChunk: target.chunk,
-              targetStep: target.step,
-            });
-          } else {
-            await enrich(target, "live");
-          }
-          return;
-        }
-        setPhase({
-          kind: "preparing",
-          source,
-          stage: "starting",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      void beginShowcase();
     },
-    [enrich, persist],
+    [beginShowcase],
   );
 
   const retryPrepare = useCallback(() => {
     const current = phaseRef.current;
     if (current.kind !== "preparing") return;
-    if (workspaceRef.current && current.stage === "enriching") {
-      void enrich({
-        chunk: current.targetChunk ?? pendingStartChunkRef.current,
-        step: current.targetStep ?? 0,
-      }, current.enrichmentMode ?? "live");
-    }
-    else if (current.stage === "scenario" && current.targetChunk !== undefined) {
+    if (current.stage === "scenario" && current.targetChunk !== undefined) {
       enterChunkRef.current?.(current.targetChunk, current.targetStep ?? 0);
     }
-    // A failed restore retries the restore. Falling through to chooseSource
+    // A failed restore retries the restore. Falling through to a fresh start
     // here would start the whole tutorial over on the way OUT of it.
     else if (current.stage === "finishing") {
       restoreOriginalRef.current?.({ completed: pendingCompletedRef.current });
     }
-    else void chooseSource(current.source);
-  }, [chooseSource, enrich]);
-
-  const ensureContent = useCallback(() => {
-    const current = phaseRef.current;
-    if (current.kind === "touring") {
-      const readiness = TOUR[current.chunk].steps[current.step].readiness;
-      if (
-        readiness === "content" ||
-        readiness === "rich-structure" ||
-        readiness === "versioned"
-      ) {
-        if (workspaceRef.current?.source === "current") {
-          setPhase({
-            kind: "enrichment-choice",
-            source: "current",
-            targetChunk: current.chunk,
-            targetStep: current.step,
-          });
-        }
-        else void enrich({ chunk: current.chunk, step: current.step }, "live");
-      }
-    }
-  }, [enrich]);
-
-  const chooseEnrichment = useCallback(
-    (mode: "live" | "bundled") => {
-      const current = phaseRef.current;
-      if (current.kind !== "enrichment-choice") return;
-      void enrich(
-        { chunk: current.targetChunk, step: current.targetStep },
-        mode,
-      );
-    },
-    [enrich],
-  );
+    else void beginShowcase();
+  }, [beginShowcase]);
 
   const enterChunk = useCallback(
     async (chunk: number, step = 0) => {
       const workspace = workspaceRef.current;
       if (!workspace) {
-        setPhase({ kind: "source-choice" });
+        void beginShowcase();
         return;
       }
       const run = runRef.current;
@@ -527,7 +327,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
       }
       setPhase({
         kind: "preparing",
-        source: workspace.source,
         stage: "scenario",
         label: TOUR[chunk].title,
         targetChunk: chunk,
@@ -601,7 +400,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
         }
         setPhase({
           kind: "preparing",
-          source: workspace.source,
           stage: "scenario",
           label: TOUR[chunk].title,
           targetChunk: chunk,
@@ -610,7 +408,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
         });
       }
     },
-    [persist],
+    [beginShowcase, persist],
   );
   enterChunkRef.current = (chunk, step) => {
     void enterChunk(chunk, step);
@@ -695,12 +493,11 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
         settle();
         return true;
       }
-      // Bump before the first await so an in-flight enrich or scenario swap is
+      // Bump before the first await so an in-flight scenario swap is
       // orphaned and cannot apply a tutorial payload over the restored project.
       const run = (runRef.current += 1);
       setPhase({
         kind: "preparing",
-        source: workspace.source,
         stage: "finishing",
         error: null,
       });
@@ -761,7 +558,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
         if (runRef.current !== run) return true;
         setPhase({
           kind: "preparing",
-          source: workspace.source,
           stage: "finishing",
           error: error instanceof Error ? error.message : String(error),
         });
@@ -898,11 +694,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     endConfirm,
     start,
     startAtChapter,
-    chooseSource,
-    chooseLiveEnrichment: () => chooseEnrichment("live"),
-    chooseBundledEnrichment: () => chooseEnrichment("bundled"),
     retryPrepare,
-    ensureContent,
     advance,
     back,
     continueChunk,

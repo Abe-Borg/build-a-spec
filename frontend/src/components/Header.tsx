@@ -77,8 +77,8 @@ export default function Header({
         ))}
         <button
           onClick={onStartTour}
-          data-capability="tour.controls"
-          title="Full guided tutorial using an actual specification"
+          data-capability="tour.workspace tour.controls"
+          title="Full guided tutorial on the bundled showcase spec — your project is set aside and restored when you finish"
           className="rounded-md px-2.5 py-1 text-xs text-ink-dim transition-colors hover:bg-raised hover:text-ink"
         >
           Tour

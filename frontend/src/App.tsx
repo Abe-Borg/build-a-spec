@@ -19,7 +19,6 @@ import type {
   SourceCapabilitiesState,
   SpecDoc,
   StandardInfo,
-  TutorialEvent,
   TemplateOrigin,
   ReleaseNote,
   UpdateCheckPayload,
@@ -1410,39 +1409,6 @@ export default function App() {
     refreshUsage();
   };
 
-  /** Apply normal stream events emitted by tutorial enrichment. */
-  const applyTutorialEvent = (event: TutorialEvent) => {
-    switch (event.type) {
-      case "doc_patch":
-        setDoc(event.doc);
-        setChangedIds(new Set(event.ops.map((op) => op.id).filter(Boolean)));
-        break;
-      case "doc_snapshot":
-        setDoc(event.doc);
-        break;
-      case "open_questions":
-        setOpenItems(event.items);
-        break;
-      case "lint":
-        setLintIssues(event.items);
-        setStandards(event.standards);
-        break;
-      case "figure":
-        setFigures((current) => [
-          ...current.filter((figure) => figure.fid !== event.figure.fid),
-          event.figure,
-        ]);
-        break;
-      case "suggested_prompts":
-        setSuggestions(event.prompts);
-        break;
-      case "turn_complete":
-        refreshUsage();
-        refreshReadiness();
-        break;
-    }
-  };
-
   const onEditDoc = async (ops: EditOp[]) => {
     // A model turn, file load, or earlier manual mutation owns the server-side
     // tree. Refuse locally rather than queueing an edit against a stale sibling
@@ -1764,7 +1730,6 @@ export default function App() {
     prefillComposer: onAskModel,
     openTemplates: openTemplateStudio,
     applySession: applySessionBundle,
-    applyTutorialEvent,
     health,
     doc,
     hasContent,

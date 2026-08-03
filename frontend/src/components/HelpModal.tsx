@@ -262,8 +262,9 @@ function HowToUse({
       >
         <h3 className="text-sm font-medium text-ink">Full interactive tutorial</h3>
         <p className="mt-1 text-xs leading-relaxed text-ink-dim">
-          Practice every feature against a protected copy of your spec, a newly generated spec,
-          or the complete bundled showcase. Start at the beginning or jump to a named chapter.
+          Practice every feature against the complete bundled showcase spec in a protected
+          workspace — your own project is set aside untouched and comes back when you finish.
+          Start at the beginning or jump to a named chapter.
         </p>
         <button
           onClick={() => onStartTutorialAtChapter(TOUR[0].id)}

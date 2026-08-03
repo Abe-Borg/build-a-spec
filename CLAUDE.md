@@ -66,10 +66,11 @@ backend/
                            adds GET /api/doc/diff + ?redline=master|version on
                            /api/export/docx (+ baseline_index in _doc_payload);
                            the tutorial is NOT frontend-only any more: it owns
-                           /api/tutorial/status|start|enrich|scenario/start|
-                           scenario/finish|restore|keep, and ~two dozen unrelated
-                           routes call _stale_tutorial_response() for the same
-                           lease check; templates own /api/templates(+preview,
+                           /api/tutorial/status|start|scenario/start|
+                           scenario/finish|restore (showcase-only — start 422s
+                           any other source; there is no enrich route), and
+                           ~two dozen unrelated routes call
+                           _stale_tutorial_response() for the same lease check; templates own /api/templates(+preview,
                            import, {id}/export, {id}/instantiate);
                            Batch 7 adds POST /api/chat/stop + /api/research/stop
                            + /api/qc/stop (409 when nothing is running/streaming);
@@ -346,11 +347,15 @@ backend/
                            + personal libraries, preview→commit two-phase create,
                            Exact vs AI-Generalize, import/export/instantiate);
                            templates/curated/*.bastemplate ship with the app
-  tutorial.py              tutorial fixtures + coverage: analyze_tutorial_coverage,
-                           tutorial_enrichment_directive, validate_tutorial_
-                           enrichment (additive-only proof), build_showcase_session,
-                           repair_tutorial_copy, and the practice-copy builders
-                           (blank / detached / structural / review / references)
+  tutorial.py              tutorial fixtures + coverage, showcase-only
+                           (2026-08-03): analyze_tutorial_coverage,
+                           build_showcase_session (the tour's ONLY source;
+                           seeds one recorded standard edition so the
+                           standards strip renders on the pinless generic
+                           module) and the practice-copy builders (blank /
+                           detached / structural / review / media) — all
+                           bundled and deterministic, no model call anywhere
+                           in the tutorial
   sessions.py              SessionState (history + DocumentStore
                            + SpecModule + discipline (Batch 10, session-level
                            like module) + ResearchRunner + AuditRunner + QCRunner
@@ -359,7 +364,7 @@ backend/
                            ACTIVE one across three scopes (original → tutorial →
                            scenario, never nested): begin_tutorial (idempotent per
                            request_id, refuses while busy), push/pop_scenario,
-                           replace_tutorial, finish_tutorial(restore|keep),
+                           finish_tutorial,
                            clone_session_for_tutorial. Every scope change mints a
                            new workspace_id; that + generation is the lease the
                            tutorial routes re-check —
@@ -1674,10 +1679,15 @@ events, no new env vars, no new Python deps (`difflib` is stdlib).
 ## Guided tutorial — implemented notes (real workspaces + per-chapter scenarios)
 
 The tutorial teaches against **actual document state**, not a scripted
-mock-up. It runs in a protected server-owned copy of the user's project (or a
-generated spec, or the bundled showcase), and each chapter can swap in a
-purpose-built practice copy. The original is retained throughout and is
-**always** restored on exit — there is no other ending.
+mock-up. It runs exclusively on the **bundled showcase** (decided with
+Abraham, 2026-08-03 — the three-way source chooser and both enrichment
+paths are gone) in a protected server-owned workspace, and each chapter can
+swap in a purpose-built practice copy. Every tutorial fixture is bundled
+and deterministic — no model call builds tutorial content, so the whole
+tour works without an API key; the optional research/Final-QC exercises
+remain real, per-click-confirmed paid runs. The original session is
+retained throughout and is **always** restored on exit — there is no other
+ending.
 
 - **Three scopes, one lease.** `SessionManager` (`backend/sessions.py`) moves
   `original` → `tutorial` → `scenario`; scenarios never nest. Every
@@ -1688,27 +1698,36 @@ purpose-built practice copy. The original is retained throughout and is
   `begin_tutorial` is idempotent per `request_id` and refuses while a chat
   turn, research, audit, or QC run is active or settling.
 - **Routes** (`backend/app.py`): `GET /api/tutorial/status`, `POST
-  /api/tutorial/{start,enrich,scenario/start,scenario/finish,restore}`.
-  `enrich` is SSE. `restore` has no `keep` counterpart — see "One ending"
-  below. `GET /api/project/save?scope=tutorial` is the only mid-tutorial
-  save; there is no original-scope download, because the original is never
-  replaced and is always there to save after the tour ends.
-- **Coverage, not decoration.** `analyze_tutorial_coverage`
-  (`backend/tutorial.py`) checks 15+ teaching anchors the manifest needs
-  (section number/title, substantive content, all three PARTs, sibling
-  articles and paragraphs, four paragraph levels, assumed/needs_input/TBD
-  content, version history, one figure of each kind, suggested prompts).
-  Gaps drive enrichment.
-- **Enrichment is additive and proven so.** `mode:"live"` runs a real
-  `stream_user_turn` against the enrichment directive; `mode:"bundled"` adds
-  deterministic fixtures with zero spend. `validate_tutorial_enrichment`
-  rejects the result outright if any pre-existing PART, article, paragraph,
-  identity or metadata value changed or moved, or if a new block claims
-  provenance. A failed/incomplete/invalid enrichment atomically swaps in the
-  bundled showcase (`tutorial_fallback`) — paid usage from the attempt stays
-  visible. The swap is silent to the end user (no notice banner or disclosure
-  copy): `tutorial_fallback` carries `reason`/`source` for callers that want
-  it, but no `message` field, and the frontend no longer surfaces one.
+  /api/tutorial/{start,scenario/start,scenario/finish,restore}`. `start`
+  accepts only `source: "showcase"` (anything else is a 422 — a stale
+  client is refused loudly, never silently downgraded) and always stages
+  `build_showcase_session()`; the user's own content never rides into the
+  tutorial workspace. `restore` has no `keep` counterpart — see "One
+  ending" below. `GET /api/project/save?scope=tutorial` is the only
+  mid-tutorial save; there is no original-scope download, because the
+  original is never replaced and is always there to save after the tour
+  ends.
+- **Coverage is a pinned guarantee, not a repair trigger.**
+  `analyze_tutorial_coverage` (`backend/tutorial.py`) checks the teaching
+  anchors the manifest needs (section number/title, substantive content,
+  all three PARTs, sibling articles and paragraphs, four paragraph levels,
+  assumed/needs_input/TBD content, version history, suggested prompts).
+  With one source and no enrichment pass, the showcase's coverage being
+  `ready` is load-bearing — pinned by
+  `test_bundled_llm_authored_showcase_satisfies_real_content_fixtures`, so
+  a curated-template regression fails the suite instead of stranding a
+  chapter. `build_showcase_session` also records one standard edition
+  (ASTM E84-2024, with title + stated basis) because the generic module
+  ships no pins and `StandardsStrip` self-hides on an empty list — without
+  it the standards chapter's control could never be on screen.
+- **No enrichment, no fallback machinery.** `/api/tutorial/enrich`, the
+  live directive, `validate_tutorial_enrichment`, `repair_tutorial_copy`
+  and `SessionManager.replace_tutorial` were deleted with the source
+  choice — dead paths once the pinned-ready showcase became the only
+  source. A readiness gap mid-tour degrades to the honest "could not be
+  prepared" card; nothing rebuilds fixtures with a model call (pinned both
+  ways: `test_the_enrichment_surface_is_gone` server-side, the
+  no-`enrich` assertions in `tour.test.ts` client-side).
 - **Nine scenario kinds** (`push_scenario`'s allowlist): `blank`,
   `structural`, `review`, `import`, `template`, `project_roundtrip`,
   `references`, `research`, `qc`. Several run **production** code paths — the
@@ -1721,12 +1740,13 @@ purpose-built practice copy. The original is retained throughout and is
   Every new kind needs its own branch ahead of the fallback, and a test that
   pins it (`test_an_unmapped_chapter_name_does_not_silently_start_a_practice_fixture`).
 - **Frontend.** `lib/useOnboarding.ts` is the lifecycle machine (phases
-  `idle`, `source-choice`, `enrichment-choice`, `preparing`, `touring`,
-  `chunk-break`, `paused`); `OnboardingOverlay.tsx` renders the
-  spotlight, per-step actions, readiness repair, and the restore
-  progress/error card; `lib/onboardingStorage.ts` holds the resume record
-  keyed on `TOUR_VERSION` + the workspace lease (the server is authoritative
-  — only an exact three-way match restores progress).
+  `idle`, `preparing`, `touring`, `chunk-break`, `paused` — Start goes
+  straight to `beginShowcase()`, no chooser or enrichment modal);
+  `OnboardingOverlay.tsx` renders the
+  spotlight, per-step actions, honest degraded-readiness cards, and the
+  restore progress/error card; `lib/onboardingStorage.ts` holds the resume
+  record keyed on `TOUR_VERSION` + the workspace lease (the server is
+  authoritative — only an exact three-way match restores progress).
 - **One ending, one code path.** `restoreOriginal({completed})` in
   `useOnboarding.ts` is the single terminal transition; the natural finish,
   `end()` (the "End the guided tour?" confirm), the post-reload
@@ -1740,13 +1760,17 @@ purpose-built practice copy. The original is retained throughout and is
   pre-tutorial `SessionState` object**, so the project comes back whole.
   Progress and failure ride the existing `preparing`/`stage:"finishing"`
   phase — note `retryPrepare` needs its `finishing` branch ahead of the
-  `chooseSource` fall-through, or a failed restore restarts the tutorial.
+  fresh-start fall-through, or a failed restore restarts the tutorial.
   The `tour.finish` capability lives on the touring card's **End** button and
-  the paused pill's ✕ (both reachable states), not on a modal wrapper.
+  the paused pill's ✕ (both reachable states), not on a modal wrapper. The
+  `tour.workspace` capability lives on the header's Tour button — the
+  control that opens the protected workspace — since the chooser that used
+  to declare it is gone.
 - **Paid results are never fabricated.** `research`, `imported` and `qc`
-  readiness are deliberately **not** repairable by "Build the missing
-  example"; a missing result renders honest copy saying so. Two
-  `doesNotMatch` assertions in `tour.test.ts` keep it that way.
+  readiness render honest copy saying the result is absent — and with the
+  repair button gone alongside the enrichment surface, no readiness gap of
+  any kind can trigger a model call from inside the tour (pinned in
+  `tour.test.ts`).
 
 ## Reusable templates — implemented notes
 
@@ -2769,104 +2793,53 @@ outside the modal.
   the dossier is part of help, and the tour manifest is a coverage contract
   over that vocabulary.
 
-## Guided tutorial figures — implemented notes (Chapter 6 generates its own figures)
+## Guided tutorial figures — implemented notes (Chapter 6 is bundled-only)
 
-The 10-chapter guided tour (`frontend/src/lib/tour.ts`'s `TOUR`, rendered as
-"Chapter N/10" in `OnboardingOverlay.tsx`) runs against a disposable
+The guided tour (`frontend/src/lib/tour.ts`'s `TOUR`, rendered as
+"Chapter N/…" in `OnboardingOverlay.tsx`) runs against a disposable
 protected tutorial workspace with its own REST surface
-(`/api/tutorial/start|enrich|scenario/start|scenario/finish|restore|keep|
-status`, `backend/tutorial.py` + the corresponding routes in `backend/app.py`)
+(`/api/tutorial/status|start|scenario/start|scenario/finish|restore`,
+`backend/tutorial.py` + the corresponding routes in `backend/app.py`)
 and a scenario mechanism: several chapters build a throwaway `SessionState`
 clone via `SessionManager.push_scenario`/`pop_scenario` (`backend/sessions.py`)
-for that chapter only, discarded on exit. Picking a tutorial source can
-trigger a coverage-gap-driven enrichment pass (a live model turn, with a
-deterministic bundled fallback) before Chapter 1 begins. This supersedes the
+for that chapter only, discarded on exit. This supersedes the
 "onboarding is frontend-only and passive" framing elsewhere in this file,
 which predates the tutorial's REST/scenario rewrite; fully reconciling that
 older description is a separate, larger documentation cleanup, not attempted
 here.
 
-- **Chapter 6's figures now come from Chapter 6, not tutorial start.**
-  Reported symptom: the tour's "Figures and references" chapter has a step
-  describing the model's live `create_figure` ability, and does show a real
-  loading pause when entered — but the example figures visible at that point
-  were actually attached to the session much earlier (either hardcoded
-  fixtures or, on the live-AI-enrichment path, genuinely model-generated
-  content, but still upfront, before Chapter 1). `tutorial.py`'s
-  `media_practice_copy` fixes the timing: it builds Chapter 6's combined
-  figures + references scenario by trying one real, scoped model turn
-  (`tutorial_figures_directive`) asking for 2-3 simple figures through the
-  normal `create_figure` tool, at the moment the tour actually reaches this
-  chapter. Any failure — no key, an API/network error, the model touching
-  document content it must not, or simply producing no usable figure —
-  discards the attempt and falls back to `_ensure_tutorial_figures`'s bundled
-  fixtures (backfilling only whichever kind(s) are still missing), mirroring
-  `/api/tutorial/enrich`'s existing live-then-bundled pattern.
-  `build_showcase_session`/`repair_tutorial_copy` no longer create figures
-  upfront, and `tutorial_enrichment_directive` no longer asks for them either.
-  `reference_practice_copy` is unchanged in behavior, refactored to share its
-  fixture-attachment logic (`_attach_reference_fixtures`) with
-  `media_practice_copy` so both scenario builders attach identical reference
-  fixtures without double-cloning.
-- **Coverage no longer gates on figures.** `analyze_tutorial_coverage` dropped
-  its `figure_{kind}` gaps — under the new timing, no upfront path ever
-  creates figures, so that gap would otherwise be permanently unresolvable
-  and wrongly keep `coverage.ready`/`needs_enrichment` from ever settling.
-  `counts["figures"]`/`counts["valid_figure_kinds"]` remain as informational
+- **Chapter 6's figures come from Chapter 6, not tutorial start — and they
+  are bundled, not generated.** `media_practice_copy` builds the combined
+  figures + references scenario when the tour actually reaches the chapter:
+  `_ensure_tutorial_figures` attaches one deterministic, renderable fixture
+  of every supported figure kind to the showcase's existing assistant
+  message, and `_attach_reference_fixtures` attaches five extractor-produced
+  reference documents (real DOCX/PDF/TXT/XML/CSV bytes through the same
+  extractors as a user upload; only extracted text is retained). The live
+  `create_figure` attempt this chapter used to make was removed with the
+  showcase-only decision (2026-08-03) — no billed model call anywhere in the
+  tutorial, pinned by
+  `test_media_practice_copy_is_bundled_only_and_never_calls_the_model`.
+  `build_showcase_session` still creates no figures upfront.
+- **Coverage does not gate on figures.** No upfront path creates them, so a
+  `figure_{kind}` gap would be permanently unresolvable;
+  `counts["figures"]`/`counts["valid_figure_kinds"]` remain informational
   counts only.
-- **`/api/tutorial/scenario/start` stays a plain JSON endpoint** (the
-  "behind the scenes" decision — no new SSE surface). The figure-generation
-  turn is fully drained server-side (`for _event in stream_user_turn(...):
-  pass`, events discarded) before the handler returns, behind the existing
-  "Preparing the … chapter…" modal, which simply takes a bit longer now.
-- **The scenario slot is reserved BEFORE paying for the build, not after.**
-  `SessionManager.push_scenario` gained an optional `build:
-  Callable[[SessionState], SessionState]` alongside `staged_session` — the
-  same reserve-then-build ordering it already used for its own
-  `clone_session_for_tutorial` fallback (check scope/no-existing-scenario/
-  not-busy under lock, THEN construct outside the lock, THEN re-verify and
-  activate). `app.py`'s `references` branch passes
-  `build=media_practice_copy` instead of computing `staged` eagerly, so the
-  reservation check happens before the (possibly billed) model call, not
-  after. `push_scenario` also gained a transition guard it was
-  missing (review finding, fixed before merge): without it, two overlapping
-  `scenario/start` requests could both pass the reservation check and both
-  pay for their own build before either discovered the slot was taken —
-  the transition reservation is exactly the in-progress-build signal
-  `restore_original_for_native_close` already reads, so checking it here
-  closes the same race for every scenario kind, not just figures. (It was
-  a shared boolean then; Chunk 6.2 gave it an owner — see "A transition
-  reservation has an owner" below.) Every
-  other kind's construction stays cheap enough that pre-computing it (the
-  existing `staged =` pattern) remains fine — only `references` needed the
-  deferred path. Pinned by
-  `test_push_scenario_rejects_a_second_request_before_the_first_pays_for_its_build`
-  (a genuine background-thread race, not a state-poking unit test: a
-  blocked-until-released `build` proves a second overlapping call is
-  rejected — and never invokes its own `build` — before the first
-  releases).
-- **Real spend from a discarded attempt is never lost.** The attempt runs on
-  a session clone (never the live tutorial session), so it's safe to build
-  outside any lock; but `SessionManager.push_scenario` always re-derives the
-  returned scenario's usage ledger from the base tutorial session's own
-  ledger (`scenario.usage.load_snapshot(tutorial.usage.snapshot())`), so
-  `media_practice_copy` merges the attempt's usage delta onto the base
-  session (`source.usage.merge_delta(usage_before, attempt.usage.snapshot())`)
-  before returning, win or lose — otherwise a failed live attempt would
-  silently drop real billed usage. The same function also restores
-  `suggested_prompts` from the base session afterward (a figures-only turn
-  must not wind down the reply-chip bar the way an ordinary chat turn's
-  unconditional latest-only replace would) and rewrites the committed
-  directive's user message to a short honest summary (mirroring
-  `/api/tutorial/enrich`'s existing rewrite) so the raw internal directive
-  text never leaks into the visible chat transcript.
-- **Idempotency.** Re-entering Chapter 6 without leaving it never re-triggers
-  generation (`useOnboarding.ts`'s `enterChunk` short-circuits when the
-  desired scenario is already active). Leaving and returning always rebuilds
-  fresh from the same figureless base tutorial session (scenarios are
-  discarded on `pop_scenario`, never merged back), so repeated visits cost a
-  repeated (and potentially re-billed) generation rather than ever
-  duplicating figures or reference docs — an accepted tradeoff, not a bug.
+- **The scenario slot is still reserved BEFORE the build.** `app.py`'s
+  `references` branch passes `build=media_practice_copy` through
+  `push_scenario`'s reserve-then-build ordering (check scope/no-existing-
+  scenario/not-busy under lock, THEN construct outside the lock, THEN
+  re-verify ownership and activate). Construction is cheap now, but the
+  ordering is what the manager's race tests pin
+  (`test_push_scenario_rejects_a_second_request_before_the_first_pays_for_its_build`)
+  and it must stay ahead of any future builder that pays. Chunk 6.2's owned
+  transition reservation (see "A transition reservation has an owner")
+  keeps protecting every scenario kind.
+- **Idempotency.** Re-entering Chapter 6 without leaving it never rebuilds
+  (`useOnboarding.ts`'s `enterChunk` short-circuits when the desired
+  scenario is already active). Leaving and returning rebuilds fresh from
+  the same figureless base tutorial session (scenarios are discarded on
+  `pop_scenario`, never merged back) — cheap and unbilled either way.
 
 ## Developer tools + always-on diagnostics — implemented notes (v1.6.0)
 
@@ -4922,19 +4895,22 @@ SSE event, no new dep, no project-format bump.
 Deep-dive remediation Chunk 6.2. `SessionManager` guarded workspace
 transitions with a shared `_transitioning` boolean, and a boolean can be
 cleared by anyone. `push_scenario` reserves the slot, then builds OUTSIDE
-the lock — deliberately, since a build can be an unbounded model call
-(Chapter 6 generates its figures live) — so the whole point of the
-reservation is that it survives that window. It did not. No new endpoint,
-no new SSE event, no new dep, no project-format bump.
+the lock — deliberately, since a build could be an unbounded model call
+(Chapter 6 generated its figures live at the time; the tutorial is
+bundled-only since 2026-08-03, but the ownership contract must hold for
+any future paid builder) — so the whole point of the reservation is that
+it survives that window. It did not. No new endpoint, no new SSE event,
+no new dep, no project-format bump.
 
 - **Three ways to orphan a paid build.** `finish_tutorial` never looked at
   the flag at all; `force_restore_original` set it to `False`
-  unconditionally; `replace_tutorial` (the enrichment repair) never
-  checked either. Each discards or swaps the tutorial session while a
-  build is still holding it — and `media_practice_copy` merges its
-  attempt's usage onto that session when it returns, **win or lose**. So
-  the reservation was cleared, the build's merge landed on an object
-  nobody held any more, and real spend disappeared. All three now refuse
+  unconditionally; `replace_tutorial` (the enrichment repair, since
+  deleted with the enrichment surface) never checked either. Each
+  discards or swaps the tutorial session while a build is still holding
+  it — and a build that spends merges its usage onto that session when it
+  returns, **win or lose**. So the reservation was cleared, the build's
+  merge landed on an object nobody held any more, and real spend
+  disappeared. The survivors now refuse
   with `WorkspaceBusyError(["another tutorial transition"])`.
 - **The token is the fix, not the extra checks.**
   `_begin_transition_locked()` mints an owner, `_finish_transition_locked

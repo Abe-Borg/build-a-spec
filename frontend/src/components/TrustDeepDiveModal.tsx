@@ -1118,18 +1118,19 @@ function Dossier() {
           trigger="Start it from Help or the header."
           runs={
             <>
-              It runs against a <b className="text-ink">protected copy</b> of your
-              work, a freshly generated example, or a bundled showcase — your
-              original is held aside untouched and comes back whenever the tour
-              ends. The tour itself is scripted
-              data in the application: it explains and highlights, and never sends
-              chat, edits your document, or spends anything on your behalf. The
-              one optional step that can call the model is clearly offered as a
-              choice, and has a bundled alternative that makes no API call at all.
+              It runs against the <b className="text-ink">bundled showcase</b> — a
+              complete, pre-generated example specification shipped inside the
+              application — in a protected practice workspace. Your own project is
+              held aside untouched and comes back whenever the tour ends. Every
+              tutorial fixture is bundled and deterministic: nothing in the tour
+              makes a model call or spends anything on your behalf. The only paid
+              actions inside it are the ordinary optional exercises (a live
+              research run, Final QC) that you trigger and confirm yourself,
+              exactly as outside the tour.
             </>
           }
-          sent="Nothing, unless you choose the optional model-assisted step."
-          model="None by default."
+          sent="Nothing, unless you yourself trigger an optional research or QC exercise."
+          model="None — tutorial content is bundled."
           bounds="Ending the tour is always one click away, and it has exactly one outcome: your project returns exactly as it was, with the practice copy discarded. Nothing you do in the tutorial can replace it."
         />
 

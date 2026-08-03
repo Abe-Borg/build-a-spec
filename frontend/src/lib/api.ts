@@ -26,10 +26,8 @@ import type {
   StreamEvent,
   TemplatePreviewResult,
   TemplateSummary,
-  TutorialEvent,
   TutorialStartPayload,
   TutorialStatusPayload,
-  TutorialSource,
   ReleaseNotesPayload,
   UpdateCheckPayload,
   UsageSummary,
@@ -379,18 +377,19 @@ export async function getTutorialStatus(): Promise<TutorialStatusPayload> {
 
 export async function startTutorialWorkspace(
   args: {
-    source: TutorialSource;
     requestId: string;
     workspaceId: number;
     generation: number;
   },
 ): Promise<TutorialStartPayload> {
+  // The bundled showcase is the tutorial's only source. It is stated
+  // explicitly so a mismatched server refuses loudly instead of guessing.
   const resp = await fetch("/api/tutorial/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       request_id: args.requestId,
-      source: args.source,
+      source: "showcase",
       workspace_id: args.workspaceId,
       generation: args.generation,
     }),
@@ -400,29 +399,6 @@ export async function startTutorialWorkspace(
     throw new Error(data.error ?? `tutorial start failed (${resp.status})`);
   }
   return data;
-}
-
-export async function* enrichTutorialWorkspace(args: {
-  tutorialId: string;
-  workspaceId?: number;
-  generation?: number;
-  mode?: "live" | "bundled";
-}): AsyncGenerator<TutorialEvent> {
-  const resp = await fetch("/api/tutorial/enrich", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      tutorial_id: args.tutorialId,
-      workspace_id: args.workspaceId,
-      generation: args.generation,
-      mode: args.mode ?? "live",
-    }),
-  });
-  if (!resp.ok || !resp.body) {
-    const data = await resp.json().catch(() => ({}));
-    throw new Error(data.error ?? `tutorial enrichment failed (${resp.status})`);
-  }
-  yield* readSse<TutorialEvent>(resp);
 }
 
 async function tutorialTransition(

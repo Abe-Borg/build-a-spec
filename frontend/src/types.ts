@@ -1359,7 +1359,7 @@ export type SessionBundle = Partial<DocPayload> & {
   generation?: number;
   tutorial_id?: string;
   scenario_kind?: string;
-  tutorial_source?: "current" | "generated" | "showcase";
+  tutorial_source?: TutorialSource;
   research?: ResearchSnapshot;
   qc?: QcSnapshot;
   readiness?: ReadinessPayload;
@@ -1374,7 +1374,8 @@ export type SessionBundle = Partial<DocPayload> & {
 
 /* --- Full guided tutorial workspace --- */
 
-export type TutorialSource = "current" | "generated" | "showcase";
+/** The bundled showcase is the tutorial's only source. */
+export type TutorialSource = "showcase";
 
 export interface TutorialCoverage {
   ready: boolean;
@@ -1404,38 +1405,9 @@ export interface TutorialStartPayload {
   workspace_id: number;
   generation: number;
   source: TutorialSource;
-  needs_enrichment: boolean;
   coverage?: TutorialCoverage;
   session: SessionBundle;
 }
-
-interface TutorialEventMeta {
-  workspace_id?: number;
-  generation?: number;
-}
-
-export type TutorialEvent =
-  | (StreamEvent & TutorialEventMeta)
-  | (TutorialEventMeta & {
-      type: "tutorial_coverage";
-      coverage: TutorialCoverage;
-    })
-  | (TutorialEventMeta & {
-      type: "tutorial_fallback";
-      /** Identity of the lease being replaced; must match the caller's
-       * expected workspace before the replacement session is accepted. */
-      replaces_workspace_id?: number;
-      replaces_generation?: number;
-      reason?: string;
-      source?: TutorialSource;
-      session: SessionBundle;
-      coverage?: TutorialCoverage;
-    })
-  | (TutorialEventMeta & {
-      type: "tutorial_session";
-      source?: TutorialSource;
-      session: SessionBundle;
-    });
 
 /** Aggregated billed usage for one turn (all continuation rounds). */
 export interface TurnUsage {

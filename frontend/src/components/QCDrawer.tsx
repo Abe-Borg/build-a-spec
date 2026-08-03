@@ -45,13 +45,13 @@ import {
   qcInconclusiveCandidates,
   qcOperationEvaluation,
   qcPrimaryReport,
-  qcReportExportUrl,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
   safeHttpUrl,
   type QcOperationEvaluation,
   type QcReportFinding,
 } from "../lib/qcReport";
+import { useQcReportDownloads } from "../lib/useQcReportDownloads";
 import {
   classifyQcRemediation,
   qcDecisionContextByElement,
@@ -1853,6 +1853,7 @@ function QCReportActions({
   onView: () => void;
 }) {
   const target = reportRunId || "ID not recorded";
+  const { busy, error, download } = useQcReportDownloads();
   return (
     <div
       className="flex flex-wrap items-center gap-1.5"
@@ -1865,25 +1866,30 @@ function QCReportActions({
       >
         View full QC report
       </button>
-      <a
-        className="rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent"
-        href={qcReportExportUrl("docx", reportRunId)}
-        download
+      <button
+        className="rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-50"
+        onClick={() => void download("docx", reportRunId)}
+        disabled={busy !== null}
         title={`Download the backend-selected human-readable report (snapshot target ${target})`}
       >
-        Download DOCX
-      </a>
-      <a
-        className="rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent"
-        href={qcReportExportUrl("json", reportRunId)}
-        download
+        {busy === "docx" ? "Preparing…" : "Download DOCX"}
+      </button>
+      <button
+        className="rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-50"
+        onClick={() => void download("json", reportRunId)}
+        disabled={busy !== null}
         title={`Download the backend-selected machine-readable report (snapshot target ${target})`}
       >
-        Download JSON
-      </a>
+        {busy === "json" ? "Preparing…" : "Download JSON"}
+      </button>
       <span className="break-all font-mono text-[9px] text-ink-faint">
         snapshot report target: {target}
       </span>
+      {error && (
+        <span className="w-full text-[10px] text-err" role="alert">
+          {error}
+        </span>
+      )}
     </div>
   );
 }

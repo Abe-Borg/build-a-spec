@@ -23,7 +23,9 @@ from backend.llm.conversation import (
     _source_editing_boundary_block,
     _turn_context_text,
 )
+from backend.qc.schema import QC_LENSES
 from tests.conftest import settle_capability_sweep
+from tests.fakes import SequencedFakeClient, qc_findings_response
 
 # How long a stalled request is allowed to hold the server before the test
 # gives up on it. A blocked event loop cannot honour an asyncio timeout — the
@@ -574,6 +576,121 @@ def test_a_chat_turn_starts_promptly_on_a_freshly_imported_master():
     # The model is still told the boundary exists; it just says the exact
     # per-element map is still being derived. The real gate remains authority.
     assert "IMPORTED DOCX EDITING BOUNDARY" in context
+
+
+def test_the_qc_report_download_never_waits_out_the_permission_sweep(monkeypatch):
+    """The reported symptom: "the Final QC download DOCX isn't working."
+
+    Both QC report downloads used to settle the imported-source permission
+    sweep before answering (``block=True``), so after any body change — most
+    ordinarily, applying a QC fix — clicking Download DOCX blocked for the
+    whole O(n²) sweep: minutes on a real master, with an ``<a download>``
+    giving no feedback at all. The download must answer while the sweep is
+    provably still running, and the export must DISCLOSE that its staleness
+    verdict is conservative rather than record the guess as a settled fact.
+    """
+    source = _master_bytes(articles=2, paragraphs=3)
+    scripts = {
+        f"[[QC-LENS:{lens.lens_id}]]": [
+            qc_findings_response(lens.lens_id, findings=[])
+        ]
+        for lens in QC_LENSES
+    }
+    monkeypatch.setattr(
+        "backend.app.get_client", lambda: SequencedFakeClient(scripts)
+    )
+
+    with TestClient(app_module.create_app()) as client:
+        assert client.post(
+            "/api/import/master", files=_upload(source)
+        ).status_code == 200
+        settle_capability_sweep()
+        assert client.post("/api/qc/start", json={}).json()["ok"] is True
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            snapshot = client.get("/api/qc/status").json()
+            if snapshot["status"] in ("complete", "failed"):
+                break
+            time.sleep(0.05)
+        assert snapshot["status"] == "complete", snapshot.get("error")
+
+        # Hold the sweep FIRST, then invalidate the memo with a genuine body
+        # change (the edit itself goes through the real gate inline, not the
+        # sweep, so it stays fast; its response starts the held warm).
+        release = threading.Event()
+        real_sweep = SessionState._sweep_and_publish
+
+        def held_sweep(self, *args, **kwargs):
+            release.wait(_BLOCK_SECONDS)
+            return real_sweep(self, *args, **kwargs)
+
+        monkeypatch.setattr(SessionState, "_sweep_and_publish", held_sweep)
+        try:
+            edited = client.post(
+                "/api/doc/edit",
+                json={
+                    "ops": [
+                        {
+                            "action": "replace",
+                            "target_id": "pt1.a1.p1",
+                            "text": (
+                                "A. Provision 1.1: install per NFPA 13 "
+                                "as amended."
+                            ),
+                            "status": "confirmed",
+                        }
+                    ]
+                },
+            )
+            assert edited.json().get("ok") is True, edited.text
+
+            started = time.perf_counter()
+            word = client.get("/api/qc/export")
+            word_elapsed = time.perf_counter() - started
+            started = time.perf_counter()
+            envelope = client.get("/api/qc/export.json")
+            json_elapsed = time.perf_counter() - started
+            assert word.status_code == 200, word.text
+            assert envelope.status_code == 200, envelope.text
+            assert word_elapsed < _RESPONSIVE_SECONDS, (
+                f"the Word download took {word_elapsed:.2f}s — it is waiting "
+                "out the capability sweep again"
+            )
+            assert json_elapsed < _RESPONSIVE_SECONDS, (
+                f"the JSON download took {json_elapsed:.2f}s — it is waiting "
+                "out the capability sweep again"
+            )
+
+            # The conservative verdict is DISCLOSED, in both projections.
+            state = envelope.json()["current_state"]
+            assert state["stale"] is True
+            assert state["input_verification_pending"] is True
+            texts = [
+                p.text for p in Document(io.BytesIO(word.content)).paragraphs
+            ]
+            assert "Input verification pending at export: Yes" in texts
+            assert any(
+                "verification was still in progress" in text for text in texts
+            )
+        finally:
+            release.set()
+
+        # Once the sweep settles, the same download states the exact verdict:
+        # still stale (the body really did change) but no longer provisional.
+        settle_capability_sweep()
+        state = client.get("/api/qc/export.json").json()["current_state"]
+        assert state["stale"] is True
+        assert state["input_verification_pending"] is False
+        texts = [
+            p.text
+            for p in Document(
+                io.BytesIO(client.get("/api/qc/export").content)
+            ).paragraphs
+        ]
+        assert "Input verification pending at export: No" in texts
+        assert not any(
+            "verification was still in progress" in text for text in texts
+        )
 
 
 def test_anchor_lookups_never_rescan_the_element_table():

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   applyQc,
   QcStartError,
+  downloadQcReport,
   previewQcApply,
   startQc,
 } from "../src/lib/api.ts";
@@ -72,6 +73,61 @@ test("Final QC start preserves structured mismatch details from a 409", async (t
       assert.deepEqual(error.moduleSectionCompatibility, compatibility);
       return true;
     },
+  );
+});
+
+test("Final QC report download pins the request to the snapshot's run id", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let capturedInput: RequestInfo | URL | undefined;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  // A non-ok response makes the function throw before it reaches the DOM
+  // save path, so the request shape is observable under node.
+  globalThis.fetch = async (input) => {
+    capturedInput = input;
+    return new Response(JSON.stringify({ ok: false, error: "nope" }), {
+      status: 409,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  await assert.rejects(downloadQcReport("docx", "qc-run-abc 1"), /nope/);
+  assert.equal(capturedInput, "/api/qc/export?run_id=qc-run-abc%201");
+
+  await assert.rejects(downloadQcReport("json", "qc-run-abc"), /nope/);
+  assert.equal(capturedInput, "/api/qc/export.json?run_id=qc-run-abc");
+
+  // No run id recorded → the unpinned endpoint, not run_id=undefined.
+  await assert.rejects(downloadQcReport("docx", undefined), /nope/);
+  assert.equal(capturedInput, "/api/qc/export");
+});
+
+test("Final QC report download surfaces the server's message, not a dead click", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        ok: false,
+        error:
+          "The selected Final QC report changed before download; refresh QC status and try again.",
+      }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    );
+  await assert.rejects(
+    downloadQcReport("docx", "qc-run-old"),
+    /changed before download; refresh QC status/,
+  );
+
+  // A non-JSON failure body still produces a readable error.
+  globalThis.fetch = async () =>
+    new Response("<html>proxy error</html>", { status: 502 });
+  await assert.rejects(
+    downloadQcReport("json", "qc-run-old"),
+    /QC report download failed \(502\)/,
   );
 });
 

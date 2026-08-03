@@ -11,6 +11,7 @@ import { useRef } from "react";
 import type { ReactNode } from "react";
 import type { QcCandidateOrigin, QcSnapshot, ReadinessPayload } from "../types";
 import { useDialogFocus } from "../lib/dialogFocus";
+import { useQcReportDownloads } from "../lib/useQcReportDownloads";
 import {
   QC_GROUNDING_METHODOLOGY_NOTE,
   QC_OPS_SOURCE_LABELS,
@@ -37,7 +38,6 @@ import {
   qcLensCoverage,
   qcOperationEvaluation,
   qcPrimaryReport,
-  qcReportExportUrl,
   qcPreRemediationState,
   qcReportLimitations,
   qcRequestPopulation,
@@ -914,6 +914,11 @@ export default function QCReportModal({
   const latestAttempt = snapshot?.latest_attempt;
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const {
+    busy: downloadBusy,
+    error: downloadError,
+    download,
+  } = useQcReportDownloads();
   useDialogFocus(
     open && Boolean(selectedReport),
     dialogRef,
@@ -1019,23 +1024,28 @@ export default function QCReportModal({
             </button>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <a
-              href={qcReportExportUrl("docx", report.run_id)}
-              download
+            <button
+              onClick={() => void download("docx", report.run_id)}
+              disabled={downloadBusy !== null}
               title={`Download the backend-selected Word report; snapshot target is run ${report.run_id || "ID not recorded"}`}
-              className="rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-accent-hover"
+              className="rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-accent-hover disabled:cursor-default disabled:opacity-60"
             >
-              Download Word report
-            </a>
-            <a
-              href={qcReportExportUrl("json", report.run_id)}
-              download
+              {downloadBusy === "docx" ? "Preparing…" : "Download Word report"}
+            </button>
+            <button
+              onClick={() => void download("json", report.run_id)}
+              disabled={downloadBusy !== null}
               title={`Download the backend-selected JSON report; snapshot target is run ${report.run_id || "ID not recorded"}`}
-              className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-[11px] font-semibold text-ink-dim transition-colors hover:border-accent hover:text-accent"
+              className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-[11px] font-semibold text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-60"
             >
-              Download JSON record
-            </a>
+              {downloadBusy === "json" ? "Preparing…" : "Download JSON record"}
+            </button>
             <span className="text-[10px] text-ink-faint">This view and the download controls target backend-selected report run <span className="font-mono">{report.run_id || "ID not recorded"}</span> for this snapshot. When a run ID is available, each download is pinned to it and the server rejects a changed selection; every artifact also embeds its authoritative run ID. JSON is the unabridged machine-readable record.</span>
+            {downloadError && (
+              <span className="w-full text-[10px] text-err" role="alert">
+                {downloadError}
+              </span>
+            )}
           </div>
         </header>
 

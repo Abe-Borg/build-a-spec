@@ -165,6 +165,7 @@ from .spec_doc.project_package import (
 from .spec_doc.source_mapping import SourceBodyMap, source_blocker_message
 from .spec_doc import source_patch as source_patch_module
 from .spec_doc.source_patch import (
+    CAPABILITY_STATUS_PENDING,
     SourcePatchIssue,
     SourcePatchReadiness,
     SourcePatchError,
@@ -642,15 +643,19 @@ def _source_readiness(session):
 def _settle_source_capabilities(session) -> None:
     """Derive the imported-source permission report before taking the guard.
 
-    The QC endpoints below reason from real permissions (``block=True``), and
-    the sweep that derives them is minutes of work on a large master. Doing it
-    inside ``session_state_guard()`` would hold ``_turn_state_lock`` for that
-    whole time — the same lock ``claim_model_turn`` needs — so a chat turn
-    could not even start. Settle first, then take the guard and re-check,
-    exactly as the import handler does with its parse. A body change landing
-    in that window just costs one more sweep behind the lock, which needs a
-    manual edit inside the gap; an audit-grade result reasoning from real
-    permissions is worth that.
+    The QC endpoints that ACT on permissions — starting a run and both apply
+    paths — reason from real ones (``block=True``), and the sweep that
+    derives them is minutes of work on a large master. Doing it inside
+    ``session_state_guard()`` would hold ``_turn_state_lock`` for that whole
+    time — the same lock ``claim_model_turn`` needs — so a chat turn could
+    not even start. Settle first, then take the guard and re-check, exactly
+    as the import handler does with its parse. A body change landing in that
+    window just costs one more sweep behind the lock, which needs a manual
+    edit inside the gap; an audit-grade result reasoning from real
+    permissions is worth that. The two QC report DOWNLOADS deliberately do
+    NOT call this: a download that silently waits out the sweep reads as a
+    dead button, so they answer promptly and disclose a pending verification
+    inside the export instead (see ``_qc_export_current_state``).
     """
     session.source_edit_capabilities(block=True)
 
@@ -1045,22 +1050,38 @@ def _qc_export_current_state(
     *,
     qc_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Canonical export-time context shared by JSON and Word reports."""
+    """Canonical export-time context shared by JSON and Word reports.
+
+    The staleness verdict here deliberately does NOT wait for the imported-
+    source permission sweep. The sweep is minutes of work on a large master,
+    and a download that silently blocks for it reads as a dead button — the
+    exact field report that prompted this. The report being exported is
+    already paid, immutable history; only this generated companion changes.
+    A pending sweep therefore degrades to the same conservative answer the
+    hot ``/api/readiness`` and ``/api/qc/status`` polls give ("stale"), and
+    the export SAYS the verification was still pending rather than recording
+    the conservative guess as a settled fact — the disclosure rides
+    ``input_verification_pending`` into the JSON envelope and the Word
+    limitations, so the artifact never claims a verdict it did not compute.
+    """
     if qc_record is None:
         qc_record = session.qc.audit_record_snapshot()
-    # An export is an audit artifact, so its staleness verdict must come from
-    # real permissions rather than from a sweep that has not finished yet.
+    capability_report = session.source_edit_capabilities(block=False)
+    verification_pending = bool(
+        capability_report is not None
+        and capability_report.status == CAPABILITY_STATUS_PENDING
+    )
     current_manifest = build_qc_input_manifest(
         session.doc.doc,
         session.research.profile_result,
         session.module,
         version_index=session.doc.index,
         discipline=effective_discipline(session),
-        source_guard=_qc_source_guard(session, block=True),
+        source_guard=_qc_source_guard(session, block=False),
         model=settings.QC_MODEL,
         max_tokens=settings.QC_MAX_TOKENS,
     )
-    matches = _qc_matches_current_inputs(session, result, block=True)
+    matches = _qc_matches_current_inputs(session, result, block=False)
     state = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "document_version": session.doc.index,
@@ -1069,6 +1090,7 @@ def _qc_export_current_state(
         "current_input_manifest": current_manifest,
         "report_matches_current_inputs": matches,
         "stale": not matches,
+        "input_verification_pending": verification_pending,
         "runner": dict(qc_record.get("runner") or {}),
         "latest_attempt": qc_record.get("latest_attempt"),
         "readiness": _readiness_payload(session, qc_record=qc_record),
@@ -4703,8 +4725,10 @@ def create_app() -> FastAPI:
 
     @app.get("/api/qc/export")
     def qc_export(run_id: str = "") -> Response:
+        # Deliberately NOT settled behind the capability sweep: downloading
+        # an already-paid report must answer promptly. A pending sweep is
+        # disclosed inside the export instead (see _qc_export_current_state).
         session = sessions.get_session()
-        _settle_source_capabilities(session)
         with session.session_state_guard():
             qc_record = session.qc.audit_record_snapshot()
             result = qc_record.get("report_for_export_model")
@@ -4749,9 +4773,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/qc/export.json")
     def qc_export_json(run_id: str = "") -> Response:
-        """Machine-readable twin of the detailed Word Final QC report."""
+        """Machine-readable twin of the detailed Word Final QC report.
+
+        Like the Word route above, this never waits for the capability
+        sweep — a pending verification is disclosed in ``current_state``.
+        """
         session = sessions.get_session()
-        _settle_source_capabilities(session)
         with session.session_state_guard():
             qc_record = session.qc.audit_record_snapshot()
             result = qc_record.get("report_for_export_model")

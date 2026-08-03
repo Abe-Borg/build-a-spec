@@ -32,6 +32,10 @@ import type {
   UpdateCheckPayload,
   UsageSummary,
 } from "../types";
+// The .ts extension is required: `npm test` runs node --test over the
+// sources and Node's resolver needs a real extension on a value import
+// (see lib/eventSeqIndex.ts).
+import { qcReportExportUrl } from "./qcReport.ts";
 
 export async function getHealth(): Promise<Health> {
   const resp = await fetch("/api/health");
@@ -838,6 +842,48 @@ export async function previewQcApply(
     throw new Error(data.error ?? `QC apply preview failed (${resp.status})`);
   }
   return data;
+}
+
+/**
+ * Download a Final QC report artifact, surfacing failures instead of losing
+ * them. A bare `<a download>` gives no feedback at all when the server
+ * answers 409 (report selection changed) or 500 — in the native shell the
+ * click just looks dead. Fetch first so an error's exact server message can
+ * be shown beside the button, then hand the bytes to the same anchor-click
+ * save `downloadProjectFile` uses. The server names the file via
+ * Content-Disposition; `runId` pins the request to the report identity shown
+ * in the snapshot (the server rejects a changed selection).
+ */
+export async function downloadQcReport(
+  format: "docx" | "json",
+  runId: unknown,
+): Promise<void> {
+  const resp = await fetch(qcReportExportUrl(format, runId));
+  if (!resp.ok) {
+    let message = "";
+    try {
+      const data = await resp.json();
+      message = typeof data?.error === "string" ? data.error : "";
+    } catch {
+      // A non-JSON failure body still gets the status-code fallback.
+    }
+    throw new Error(message || `QC report download failed (${resp.status})`);
+  }
+  const blob = await resp.blob();
+  const cd = resp.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(cd);
+  const filename =
+    match?.[1] ?? (format === "json" ? "final-qc-report.json" : "final-qc-report.docx");
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Deferred revocation, same as downloadProjectFile / lib/figures.downloadBlob:
+  // revoking synchronously after click() can cancel the download.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** Dismiss a finding (remembered across re-runs). */

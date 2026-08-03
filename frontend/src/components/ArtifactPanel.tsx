@@ -760,29 +760,10 @@ export default function ArtifactPanel({
                     Redline vs version…
                   </span>
                 )}
-                {(qc?.report ?? qc?.result) && (
-                  <>
-                    <span className="my-1 block border-t border-edge" />
-                    <a
-                      className="block px-3 py-1.5 font-medium text-accent hover:bg-surface hover:text-accent-hover"
-                      href="/api/qc/export"
-                      download
-                      onClick={() => setExportMenuOpen(false)}
-                      title="Complete human-readable Final QC report with findings, evidence, verification, and disposition history"
-                    >
-                      Final QC report (DOCX)
-                    </a>
-                    <a
-                      className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
-                      href="/api/qc/export.json"
-                      download
-                      onClick={() => setExportMenuOpen(false)}
-                      title="Complete machine-readable Final QC record"
-                    >
-                      Final QC record (JSON)
-                    </a>
-                  </>
-                )}
+                {/* The Final QC report downloads deliberately do NOT appear
+                    here: they live only in the Final QC surfaces (QCDrawer +
+                    QCReportModal), beside the run identity they are pinned
+                    to. This menu exports the SPECIFICATION. */}
               </div>
             )}
           </div>

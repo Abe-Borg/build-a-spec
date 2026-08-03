@@ -59,7 +59,21 @@ _COMPLIANCE_JSON_TAG_PATTERN = re.compile(
 
 
 class ComplianceAuditError(RuntimeError):
-    """The audit call failed terminally (retries exhausted / no payload)."""
+    """The audit call failed terminally (retries exhausted / no payload).
+
+    ``usage_totals`` carries whatever the failed audit already billed —
+    in practice the completed-but-unparseable response, the one terminal
+    failure with a paid response behind it. Mirrors
+    :exc:`backend.research.engine.ResearchFanoutError`: the runner meters
+    it before flipping to failed, and empty totals (nothing completed)
+    stay a ledger no-op rather than a zero-valued entry.
+    """
+
+    def __init__(
+        self, message: str, *, usage_totals: dict[str, int] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.usage_totals = dict(usage_totals or {})
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +501,12 @@ def run_compliance_audit(
     policy = DEFAULT_REALTIME_RETRY_POLICY
     attempts = max(1, policy.max_attempts)
     last_error = "audit did not run"
+    # Billed usage across the whole call, folded per COMPLETED response —
+    # the research/QC posture: the meter never under-reports, so a paid
+    # response that later fails parsing carries its bill out on the error
+    # instead of vanishing with the raise. (An attempt that dies before
+    # completing has no response object and nothing measurable to fold.)
+    usage_totals: dict[str, int] = {}
     for attempt in range(attempts):
         try:
             with client.messages.stream(**request_kwargs) as stream:
@@ -500,7 +520,9 @@ def run_compliance_audit(
                 not is_retryable_failure_class(failure_class)
                 or attempt == attempts - 1
             ):
-                raise ComplianceAuditError(last_error) from exc
+                raise ComplianceAuditError(
+                    last_error, usage_totals=usage_totals
+                ) from exc
             time.sleep(
                 compute_backoff_seconds(
                     policy, attempt=attempt, failure_class=failure_class
@@ -508,15 +530,32 @@ def run_compliance_audit(
             )
             continue
 
+        for key, value in usage_to_dict(
+            getattr(response, "usage", None)
+        ).items():
+            usage_totals[key] = usage_totals.get(key, 0) + value
         payload, parse_source = _parse_audit_payload(response)
         if payload is None:
             stop_reason = getattr(response, "stop_reason", None)
             raise ComplianceAuditError(
                 "The audit produced no parseable payload "
-                f"(stop_reason: {stop_reason})."
+                f"(stop_reason: {stop_reason}).",
+                usage_totals=usage_totals,
             )
-        result = _normalize_result(payload, profile)
+        try:
+            result = _normalize_result(payload, profile)
+        except Exception as exc:  # noqa: BLE001 — model-shaped JSON, any shape
+            # Valid JSON with an impossible shape (the tagged fallback has
+            # no schema behind it) is the same terminal failure as no
+            # payload at all — and it must carry the same receipt, or the
+            # raw TypeError routes the runner to its generic branch and a
+            # paid response's bill is dropped on the floor after all.
+            raise ComplianceAuditError(
+                "The audit payload could not be normalized "
+                f"({type(exc).__name__}: {exc}).",
+                usage_totals=usage_totals,
+            ) from exc
         result["parse_source"] = parse_source
-        result["usage"] = usage_to_dict(getattr(response, "usage", None))
+        result["usage"] = dict(usage_totals)
         return result
-    raise ComplianceAuditError(last_error)
+    raise ComplianceAuditError(last_error, usage_totals=usage_totals)

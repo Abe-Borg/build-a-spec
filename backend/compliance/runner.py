@@ -80,6 +80,16 @@ class AuditRunner:
                     discipline=discipline,
                 )
             except ComplianceAuditError as exc:
+                # Meter BEFORE flipping to terminal, and unconditionally —
+                # a failed audit still spent real money on any response it
+                # completed (a paid payload that would not parse is still
+                # a paid payload). Same posture as the research runner's
+                # ResearchFanoutError branch; empty totals stay a no-op.
+                if usage_sink is not None and exc.usage_totals:
+                    try:
+                        usage_sink(exc.usage_totals)
+                    except Exception:  # noqa: BLE001 — metering never hides failure
+                        pass
                 with self._lock:
                     self.status = STATUS_FAILED
                     self.error = str(exc)

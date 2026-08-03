@@ -133,6 +133,31 @@ def test_secure_desktop_bootstrap_auth_cookie_host_origin_and_headers():
     assert fresh.get("/openapi.json").status_code == 404
 
 
+def test_secure_desktop_rejects_non_ascii_header_and_cookie_credentials():
+    raw_obs_text = b"\xff"
+
+    header_response = _secure_client().get(
+        "/api/doc",
+        headers=[(b"x-buildaspec-token", raw_obs_text)],
+    )
+    assert header_response.status_code == 401
+    assert header_response.json()["code"] == "desktop_auth_required"
+
+    bootstrap = _secure_client().get(
+        "/api/bootstrap",
+        headers={"X-BuildASpec-Boot-Nonce": _BOOT_NONCE},
+    )
+    cookie_name = bootstrap.headers["set-cookie"].split("=", 1)[0]
+    cookie_response = _secure_client().get(
+        "/api/doc",
+        headers=[
+            (b"cookie", cookie_name.encode("ascii") + b"=" + raw_obs_text)
+        ],
+    )
+    assert cookie_response.status_code == 401
+    assert cookie_response.json()["code"] == "desktop_auth_required"
+
+
 def test_security_rejection_does_not_acquire_workspace_write(monkeypatch):
     def forbidden_active_write(*_args, **_kwargs):
         raise AssertionError("unauthenticated request acquired active_write")

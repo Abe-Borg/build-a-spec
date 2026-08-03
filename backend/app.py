@@ -259,7 +259,15 @@ class DesktopSecurityConfig:
 
 
 def _desktop_token_matches(candidate: str, expected: str) -> bool:
-    return bool(candidate) and secrets.compare_digest(candidate, expected)
+    # ``compare_digest`` rejects non-ASCII ``str`` values. Raw HTTP obs-text
+    # bytes are decoded by Starlette as Latin-1, so reject those candidates
+    # before they can turn an unauthenticated request into a 500 response.
+    return (
+        bool(candidate)
+        and candidate.isascii()
+        and expected.isascii()
+        and secrets.compare_digest(candidate, expected)
+    )
 
 
 def _desktop_cookie_name(config: DesktopSecurityConfig) -> str:

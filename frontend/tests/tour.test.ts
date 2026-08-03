@@ -105,11 +105,13 @@ test("every step anchor resolves to a real production data-tour attribute", () =
   assert.deepEqual(missing, []);
 });
 
-test("the blank-start chapter's controls exist in the empty-document renderer", () => {
-  // A blank document renders ArtifactPanel's EmptyState, NOT SpecDocument, so
-  // a capability declared only in SpecDocument is unreachable in the very
-  // chapter that teaches it — the step would spotlight nothing and degrade to
-  // the "control is not available" card.
+test("the blank-start chapter's controls exist in the empty-workspace renderers", () => {
+  // The blank scenario empties BOTH panes, so exactly two renderers are on
+  // screen: ArtifactPanel's EmptyState (never SpecDocument) and Chat's
+  // empty-state branch (never the message list). A capability declared only
+  // in SpecDocument — or only in Chat's populated branch — is unreachable in
+  // the very chapter that teaches it, and the step would spotlight nothing
+  // and degrade to the "control is not available" card.
   const chapter = /id:\s*"blank-start"[\s\S]*?\n\s{2}\}/.exec(tour)?.[0];
   assert.ok(chapter, "the blank-start chapter must exist");
   assert.match(chapter, /scenario:\s*"blank"/);
@@ -118,14 +120,22 @@ test("the blank-start chapter's controls exist in the empty-document renderer", 
     for (const id of quoted(match[1])) taught.add(id);
   }
   assert.ok(taught.size > 0);
+  const emptyChat = /messages\.length === 0 \? \(([\s\S]*?)\n\s*\) : \(/.exec(chat)?.[1];
+  assert.ok(emptyChat, "Chat must branch on an empty transcript");
   const declared = new Set<string>();
-  for (const match of artifact.matchAll(/data-capability\s*=\s*"([^"]+)"/g)) {
-    for (const id of match[1].split(/\s+/)) declared.add(id);
+  for (const source of [artifact, emptyChat]) {
+    for (const match of source.matchAll(/data-capability\s*=\s*"([^"]+)"/g)) {
+      for (const id of match[1].split(/\s+/)) declared.add(id);
+    }
   }
   const unreachable = [...taught].filter((id) => !declared.has(id));
   assert.deepEqual(unreachable, []);
   // And #el-sec must exist there, or the section-header resolver cannot bind.
   assert.match(artifact, /id="el-sec"/);
+  // The starter chips are the empty chat's own control: anchored where they
+  // render, so the step spotlights the chips rather than the whole pane.
+  assert.match(emptyChat, /data-tour="starter-prompts"/);
+  assert.match(chapter, /anchor:\s*"starter-prompts"/);
 });
 
 test("a step with no anchor supplies a document resolver instead", () => {

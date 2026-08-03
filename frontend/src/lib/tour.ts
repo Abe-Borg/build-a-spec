@@ -22,7 +22,7 @@ import {
  * with instructions that no longer match the active scenario. A bump simply
  * discards stale records, which is the correct outcome.
  */
-export const TOUR_VERSION = 4;
+export const TOUR_VERSION = 5;
 
 export interface StarterPrompt {
   label: string;
@@ -148,16 +148,6 @@ export const TOUR: readonly TourChunk[] = [
           "Build-a-Spec supports any U.S. or Canadian discipline. The heading grows from discipline to Discipline · Project Type · City, Region as the conversation establishes facts, and follows document history when corrected.",
       },
       {
-        id: "starter-paths",
-        capabilities: ["session.starters"],
-        mode: "explanatory",
-        anchor: "chat-pane",
-        placement: "right",
-        title: "Four ways into the same document",
-        body:
-          "A fresh session's empty chat offers starter prompts: the two-minute pitch, immediate drafting, a guided interview, or an office master. They send ordinary chat messages and never lock you into a workflow — this showcase already has a conversation, so you will see them next time you start a session.",
-      },
-      {
         id: "api-key",
         capabilities: ["session.api-key"],
         mode: "optional",
@@ -240,6 +230,16 @@ export const TOUR: readonly TourChunk[] = [
     title: "Start from an empty page",
     scenario: "blank",
     steps: [
+      {
+        id: "starter-paths",
+        capabilities: ["session.starters"],
+        mode: "explanatory",
+        anchor: "starter-prompts",
+        placement: "right",
+        title: "Four ways into the same document",
+        body:
+          "An empty chat offers these starter prompts: the two-minute pitch, immediate drafting, a guided interview, or an office master — above them sits the tutorial chip that opened this tour. Each one sends an ordinary chat message and locks you into nothing, and typing your own opening does exactly the same job. They are on screen right now because this practice page is empty; they clear the moment a conversation starts and return on every fresh session.",
+      },
       {
         id: "section-header",
         capabilities: ["document.section-header"],

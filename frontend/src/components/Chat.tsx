@@ -104,6 +104,7 @@ export default function Chat({
             </p>
             <div
               className="mt-6 flex w-full max-w-md flex-col gap-2 text-left"
+              data-tour="starter-prompts"
               data-capability="session.starters"
             >
               {starterPrompts(discipline).map((p) =>

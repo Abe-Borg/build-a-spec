@@ -19,6 +19,12 @@ interface Props {
   discipline?: string;
   /** Start the full interactive guided tutorial — the onboarding starter chip. */
   onStartOnboarding: () => void;
+  /**
+   * A guided tutorial is already running. The tutorial's own blank-page
+   * chapter puts these chips on screen, so the launcher among them would
+   * otherwise invite a click that restarts the tour the user is taking.
+   */
+  tourActive?: boolean;
   /** Stop the in-flight turn, forwarded to the composer. */
   onStop: () => void;
   /** A file upload is in flight; the composer holds sending and says so. */
@@ -38,6 +44,7 @@ export default function Chat({
   suggestions,
   discipline,
   onStartOnboarding,
+  tourActive,
   onStop,
   uploading,
   prefill,
@@ -112,20 +119,24 @@ export default function Chat({
                   <button
                     key={p.label}
                     onClick={onStartOnboarding}
-                    disabled={busy}
+                    disabled={busy || tourActive}
                     className={`rounded-xl border border-accent/50 bg-accent/10 px-4 py-2.5 transition-colors hover:border-accent hover:bg-accent/15 disabled:pointer-events-none disabled:opacity-40 ${
-                      toured && !tutorialUpdated ? "" : "chip-pulse"
+                      tourActive || (toured && !tutorialUpdated)
+                        ? ""
+                        : "chip-pulse"
                     }`}
                   >
                     <span className="block text-sm text-ink">
                       🧭 {p.label}
                     </span>
                     <span className="mt-0.5 block text-[11px] text-ink-faint">
-                      {tutorialUpdated
-                        ? "Full tutorial updated — see every feature"
-                        : toured
-                          ? "Take the full interactive tutorial again"
-                          : "Full interactive tutorial · uses an actual spec"}
+                      {tourActive
+                        ? "You are taking it right now"
+                        : tutorialUpdated
+                          ? "Full tutorial updated — see every feature"
+                          : toured
+                            ? "Take the full interactive tutorial again"
+                            : "Full interactive tutorial · uses an actual spec"}
                     </span>
                   </button>
                 ) : (

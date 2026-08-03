@@ -138,6 +138,29 @@ test("the blank-start chapter's controls exist in the empty-workspace renderers"
   assert.match(chapter, /anchor:\s*"starter-prompts"/);
 });
 
+test("the tour launcher cannot restart the tour from inside the tour", () => {
+  // The blank-start chapter spotlights the starter chips, and the overlay
+  // deliberately leaves real controls clickable — so the tutorial launcher
+  // sits highlighted inside the tour that is running. Starting again from
+  // there hits the backend's already-in-a-tutorial conflict, whose recovery
+  // path adopts the live tutorial and re-enters at chapter 1, finishing the
+  // active scenario and losing the user's place (Codex review, PR #117).
+  //
+  // Two independent guards, because they fail differently: the ref check
+  // makes the action inert wherever it is triggered (the Header's Tour
+  // button reaches the same callback), and the disabled chip makes that
+  // inertness visible instead of a dead click.
+  assert.match(
+    hook,
+    /if \(workspaceRef\.current\) return;\s*\n[\s\S]{0,400}?void beginShowcase\(\);\s*\n\s*\}, \[beginShowcase\]\);/,
+  );
+  assert.match(chat, /tourActive\?: boolean/);
+  assert.match(chat, /disabled=\{busy \|\| tourActive\}/);
+  assert.match(app, /tourActive=\{onboarding\.phase\.kind !== "idle"\}/);
+  // A disabled control must not keep inviting the click it will refuse.
+  assert.match(chat, /tourActive \|\| \(toured && !tutorialUpdated\)/);
+});
+
 test("a step with no anchor supplies a document resolver instead", () => {
   const steps = [...tour.matchAll(/\{\s*\n\s*id:\s*"[^"]+",[\s\S]*?\n\s{6}\}/g)].map(
     (m) => m[0],

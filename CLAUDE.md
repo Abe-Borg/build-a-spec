@@ -5290,9 +5290,23 @@ no dep, no backend change.
   clickable (the spotlight leaves real controls interactive), and each one
   sends a real billed chat turn. Recognizing the on-ramps is the lesson;
   spending money on one is not, and drafting into the blank fixture would
-  undercut the very next step. Clicking the tutorial chip mid-tour is no
-  new hazard — the Header's Tour button is equally on screen and equally
-  live throughout.
+  undercut the very next step.
+- **`start()` is now inert while a protected workspace is held, and that is
+  a bug fix, not a guard for the new step** (Codex review, PR #117). One of
+  the five chips is the tutorial launcher, so the step spotlights a control
+  that calls `onboarding.start()` from INSIDE the tour. That fell through to
+  `beginShowcase()`, whose second `begin_tutorial` the backend refuses — and
+  the conflict path adopts the live tutorial and re-enters at
+  `pendingStartChunkRef` 0, which finishes the active scenario and dumps the
+  user back at chapter 1. `startAtChapter` had always guarded on
+  `workspaceRef.current`; `start` had not, so the Header's Tour button
+  carried the same defect the whole time — the chips only made it easy to
+  hit. The `paused` branch is checked first (resume is unaffected) and every
+  ending nulls the ref (the tour can always be started again), so the guard
+  cannot strand anyone. **Two independent mechanisms, because they fail
+  differently**: the ref check makes the action inert wherever it is
+  triggered, and `Chat`'s `tourActive` prop disables the chip (and stops its
+  pulse) so that inertness is visible rather than a dead click.
 - **`TOUR_VERSION` 4 → 5.** Chapter 1 lost a step and chapter 3 gained one,
   so stored chunk/step indexes no longer mean what they meant; a bump
   discards in-flight resume records, which is the correct outcome. (Contrast

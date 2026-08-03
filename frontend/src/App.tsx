@@ -1918,6 +1918,7 @@ export default function App() {
           suggestions={suggestions}
           discipline={activeDiscipline}
           onStartOnboarding={onboarding.start}
+          tourActive={onboarding.phase.kind !== "idle"}
           onStop={onStop}
           uploading={fileLoading !== null}
           prefill={prefill}

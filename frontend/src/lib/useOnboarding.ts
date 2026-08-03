@@ -286,6 +286,17 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
       enterChunkRef.current?.(current.chunk, current.step);
       return;
     }
+    // Already holding the protected workspace: the tour is on screen, or a
+    // scenario for it is being prepared, so there is nothing left to start.
+    // Falling through would re-run beginShowcase, whose backend refuses the
+    // second begin_tutorial — and the conflict path then ADOPTS the live
+    // tutorial and re-enters at chapter 1, finishing the active scenario and
+    // throwing away the user's place in the tour. `startAtChapter` has always
+    // guarded on this ref; `start` did not, and the starter chips put the
+    // launcher on screen inside the tour (Codex review, PR #117).
+    // The `paused` branch above runs first, so resuming is unaffected, and
+    // every ending clears the ref, so the tour can always be started again.
+    if (workspaceRef.current) return;
     // The pending request id is deliberately NOT reset here: a repeated
     // click reuses it, so the backend's idempotent begin_tutorial folds
     // both into one transition. It clears when a start succeeds or the

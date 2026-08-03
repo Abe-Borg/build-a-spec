@@ -38,6 +38,31 @@ interface Rect {
 
 const CUTOUT_PAD = 6;
 
+/** Stamps the tour's own modals so the Escape guard below can skip them. */
+const TOUR_DIALOG = "tour";
+
+/**
+ * True when a modal stacked OVER the tour owns the keyboard.
+ *
+ * The step card is deliberately non-blocking, so production modals render
+ * above it while the tour stays in `touring` — the template studio the
+ * `template-create` step opens, help, a stop confirmation. Several of them
+ * listen for Escape on `window` exactly as the tour does and never call
+ * `preventDefault`, so `defaultPrevented` alone cannot report that the key was
+ * already handled: window listeners fire in registration order, and a dialog
+ * opened mid-tour registers second. Ask the DOM instead — any `aria-modal`
+ * dialog that is not one of the tour's own is what Escape belongs to. The step
+ * card is `aria-modal="false"`, so the selector never matches it.
+ *
+ * This could not happen before the pause removal: opening the studio suspended
+ * the tour, so the phase check was already false (Codex review, PR #120).
+ */
+function anotherDialogOwnsEscape(): boolean {
+  return Array.from(
+    document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
+  ).some((dialog) => dialog.getAttribute("data-dialog") !== TOUR_DIALOG);
+}
+
 /**
  * Stable structural fingerprint used by the rearrangement exercise. Text and
  * numbering are deliberately excluded: completion means that a real sibling
@@ -476,11 +501,21 @@ export default function OnboardingOverlay({
     if (rawStep?.drawer) bumpDrawer(rawStep.drawer);
   }, [rawStep, bumpDrawer]);
 
+  // Escape asks to END, the same as every ✕ and backdrop click. The tour runs
+  // start to finish, so there is no suspended state for it to drop into, and
+  // the confirmation is what keeps a stray keypress from throwing the tour
+  // away. It yields while that confirmation owns the keyboard, and — two
+  // independent guards, because they cover different dialogs — while any other
+  // modal does: `defaultPrevented` catches the useDialogFocus family (they
+  // listen on `document`, which bubbles first), and anotherDialogOwnsEscape
+  // catches the ones with a bare `window` listener, where ordering is not ours
+  // to rely on.
   useEffect(() => {
     if (phase.kind === "idle") return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || ob.endConfirm) return;
-      if (phase.kind === "touring" || phase.kind === "chunk-break") ob.pause();
+      if (event.key !== "Escape" || ob.endConfirm || event.defaultPrevented) return;
+      if (anotherDialogOwnsEscape()) return;
+      if (phase.kind === "touring" || phase.kind === "chunk-break") ob.requestEnd();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -498,6 +533,7 @@ export default function OnboardingOverlay({
           : "Returning you to your project…";
     return (
       <ModalShell
+        marker={TOUR_DIALOG}
         title={
           phase.error
             ? finishing
@@ -542,6 +578,21 @@ export default function OnboardingOverlay({
             <p className="mt-2 text-[11px] text-ink-faint">
               Content streaming onto the paper is the same structured content the app edits and exports.
             </p>
+            {/* A restore already IS the ending, so it offers no way out of
+                itself. Every other waiting state does — see the End control
+                on the checkpoint and step cards. */}
+            {!finishing && (
+              <div className="mt-4">
+                <button
+                  onClick={ob.requestEnd}
+                  className={quietBtn}
+                  title="End the tour and return to your project exactly as you left it"
+                  data-capability="tour.finish"
+                >
+                  End the tour
+                </button>
+              </div>
+            )}
           </>
         )}
       </ModalShell>
@@ -553,6 +604,7 @@ export default function OnboardingOverlay({
     const next = TOUR[phase.nextChunk];
     return (
       <ModalShell
+        marker={TOUR_DIALOG}
         title={`Chapter ${phase.nextChunk} of ${TOUR.length} done — ${completed.title}`}
         onClose={ob.requestEnd}
       >
@@ -567,37 +619,24 @@ export default function OnboardingOverlay({
           ))}
         </div>
         <p className="mt-3 text-sm leading-relaxed text-ink-dim">
-          Next: <b className="text-ink">{next.title}</b>. Pause to inspect the actual
-          document or ask a question at any checkpoint.
+          Next: <b className="text-ink">{next.title}</b>. This checkpoint is the only
+          part of the tour that covers the app — step cards leave every control
+          live, so you can inspect the document or ask a question in the chat as
+          you go.
         </p>
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <button onClick={ob.continueChunk} className={primaryBtn}>Continue</button>
-          <button onClick={ob.askQuestion} className={quietBtn}>Ask a question</button>
-          <button onClick={ob.pause} className={quietBtn}>Pause</button>
+          <span className="flex-1" />
+          <button
+            onClick={ob.requestEnd}
+            className={quietBtn}
+            title="End the tour and return to your project exactly as you left it"
+            data-capability="tour.finish"
+          >
+            End tour
+          </button>
         </div>
       </ModalShell>
-    );
-  }
-
-  if (phase.kind === "paused") {
-    return (
-      <div className="fixed bottom-5 left-5 z-[65] flex items-center gap-1.5">
-        <button
-          onClick={ob.resume}
-          className="rounded-full border border-accent/60 bg-surface px-4 py-2 text-sm text-accent shadow-2xl hover:bg-accent/10"
-        >
-          ▶ Resume tutorial
-        </button>
-        <button
-          onClick={ob.requestEnd}
-          aria-label="End tutorial"
-          title="End the tour and return to your project exactly as you left it"
-          data-capability="tour.finish"
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-edge bg-surface text-ink-dim shadow-2xl"
-        >
-          ✕
-        </button>
-      </div>
     );
   }
 
@@ -704,7 +743,6 @@ export default function OnboardingOverlay({
           >
             {step.continueLabel ?? (step.mode === "optional" ? "Continue / skip" : "Continue")}
           </button>
-          <button onClick={ob.pause} className={quietBtn}>Pause</button>
           <span className="flex-1" />
           <button
             onClick={ob.requestEnd}

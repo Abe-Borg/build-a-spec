@@ -14,7 +14,6 @@ export interface StoredOnboardingProgress {
   generation: number;
   chunk: number;
   step: number;
-  paused: boolean;
 }
 
 export function hasCompletedOnboarding(): boolean {

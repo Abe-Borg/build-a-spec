@@ -18,7 +18,7 @@ import {
  *
  * Resume records persist numeric chunk and step indexes and are accepted
  * whenever this matches, so inserting a chapter without bumping would resume
- * a saved tutorial at a different chapter than the one it was paused in —
+ * a saved tutorial at a different chapter than the one it was left at —
  * with instructions that no longer match the active scenario. A bump simply
  * discards stale records, which is the correct outcome.
  */
@@ -135,7 +135,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "left",
         title: "This is an actual specification",
         body:
-          "The tutorial runs on the bundled showcase spec — a complete, pre-generated example section — in a protected practice workspace. Every block you see is real document state the app can edit, lint, and export. Your own project was set aside untouched when the tour began: back, pause, ask a question, or end at any time, and it comes straight back exactly as it was.",
+          "The tutorial runs on the bundled showcase spec — a complete, pre-generated example section — in a protected practice workspace. Every block you see is real document state the app can edit, lint, and export. This card never blocks the app, so you can inspect the document or ask a question in the chat as you go. Your own project was set aside untouched when the tour began: step back or end at any time, and it comes straight back exactly as it was.",
       },
       {
         id: "identity",
@@ -178,7 +178,7 @@ export const TOUR: readonly TourChunk[] = [
             kind: "prefill-composer",
             label: "Try a guided answer",
             prefillText: "I don't know — use your recommended default and show me what you assumed.",
-            note: "Pauses the tour with the sentence in the composer; edit or send it normally.",
+            note: "Puts the sentence in the composer; edit or send it normally. The tour stays on this step.",
           },
         ],
       },

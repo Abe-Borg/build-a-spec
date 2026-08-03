@@ -1765,7 +1765,7 @@ ending.
   Every new kind needs its own branch ahead of the fallback, and a test that
   pins it (`test_an_unmapped_chapter_name_does_not_silently_start_a_practice_fixture`).
 - **Frontend.** `lib/useOnboarding.ts` is the lifecycle machine (phases
-  `idle`, `preparing`, `touring`, `chunk-break`, `paused` — Start goes
+  `idle`, `preparing`, `touring`, `chunk-break` — Start goes
   straight to `beginShowcase()`, no chooser or enrichment modal);
   `OnboardingOverlay.tsx` renders the
   spotlight, per-step actions, honest degraded-readiness cards, and the
@@ -1786,8 +1786,10 @@ ending.
   Progress and failure ride the existing `preparing`/`stage:"finishing"`
   phase — note `retryPrepare` needs its `finishing` branch ahead of the
   fresh-start fall-through, or a failed restore restarts the tutorial.
-  The `tour.finish` capability lives on the touring card's **End** button and
-  the paused pill's ✕ (both reachable states), not on a modal wrapper. The
+  The `tour.finish` capability lives on the **End** control of each reachable
+  tutorial surface (the step card, the between-chapters checkpoint, and the
+  preparing card while it waits on a start or a scenario swap), not on a modal
+  wrapper — see "The tutorial cannot be paused" below. The
   `tour.workspace` capability lives on the header's Tour button — the
   control that opens the protected workspace — since the chooser that used
   to declare it is gone.
@@ -5313,9 +5315,10 @@ no dep, no backend change.
   user back at chapter 1. `startAtChapter` had always guarded on
   `workspaceRef.current`; `start` had not, so the Header's Tour button
   carried the same defect the whole time — the chips only made it easy to
-  hit. The `paused` branch is checked first (resume is unaffected) and every
-  ending nulls the ref (the tour can always be started again), so the guard
-  cannot strand anyone. **Two independent mechanisms, because they fail
+  hit. Every ending nulls the ref (the tour can always be started again), so
+  the guard cannot strand anyone — and since the pause removal it is the
+  whole of `start`'s state handling, because there is no suspended tour left
+  to resume ahead of it. **Two independent mechanisms, because they fail
   differently**: the ref check makes the action inert wherever it is
   triggered, and `Chat`'s `tourActive` prop disables the chip (and stops its
   pulse) so that inertness is visible rather than a dead click.
@@ -5521,6 +5524,97 @@ endpoint, no new SSE event, no new dep, no project-format bump.
   pins that a satisfied gate still buys the ordinary multi-round pass. Both
   mechanisms were reverted in place to prove them load-bearing: the
   collection branch → 2 red, the payload report → 2 red.
+
+## The tutorial cannot be paused — implemented notes
+
+Owner ask (Abraham): remove the option to pause the tutorial — it must be a
+guided tour from start to finish — and make sure every modal in it offers a
+way to end. Frontend only: no route, no SSE event, no dep, no backend change,
+no project-format bump.
+
+- **A paused tour is not a stopped tour, and that was the problem.** The
+  tutorial holds the user's real `SessionState` aside in a protected
+  server-owned workspace, so `paused` was a state that kept the whole app
+  leased with a floating pill as the only reminder — indefinitely, across
+  reloads. There are two honest states: running, or ended with the project
+  back. `OnboardingPhase` loses its `paused` member, and `pause`/`resume`/
+  `askQuestion` leave `OnboardingApi` with the controls that called them.
+- **A reload re-enters the tour rather than parking it.** The resume effect
+  used to land on `paused` so the user clicked ▶ before anything continued;
+  it now calls `enterChunkRef.current?.(chunk, step)`. Going through
+  `enterChunk` and not `setPhase` is load-bearing: a reload can land on a
+  chapter whose scenario the server is no longer holding, and only
+  `enterChunk` knows how to swap one back in.
+- **`stayInTutorial` returns to `touring`.** A failed restore changed
+  nothing, so the guided run simply continues from the step End was clicked
+  on — which is what `lastStepRef` has always recorded. No scenario swap is
+  needed: the workspace still holds the one that step was prepared against.
+- **The two step actions stopped suspending the tour, and lost nothing.**
+  `prefill-composer` and `open-templates` paused so the composer or the
+  studio was reachable. The step card is non-blocking by construction (the
+  overlay root is `pointer-events-none`, only the card takes pointer events),
+  so the composer was always usable underneath it; the template studio is a
+  `ModalShell` at `z-[70]` and simply renders over the card at `z-[65]` until
+  it is closed. Neither needed the tour to stand down.
+- **Escape now asks to END, not to park.** Same as every ✕ and backdrop click
+  in the tour, and still gated by the "End the guided tour?" confirmation, so
+  a stray keypress cannot throw the tour away. It keeps yielding while that
+  confirmation owns the keyboard (`ob.endConfirm`).
+- **A modal stacked over the tour owns Escape, and that needs TWO guards**
+  (caught in review on PR #120, Codex) — the same class of bug, and the same
+  answer, as the TrustDeepDiveModal/help stacking above. The step card is
+  non-blocking, so the template studio the `template-create` step opens (and
+  help, and a stop confirmation) renders above a tour still in `touring`, and
+  one Escape reached both handlers: the studio closed AND the end-tour
+  confirmation appeared. Pause had hidden this — opening the studio suspended
+  the tour, so the phase check was already false. (1) `event.defaultPrevented`
+  covers the `useDialogFocus` family, which `preventDefault`s and listens on
+  `document`, so it bubbles before the tour's `window` listener. (2)
+  `anotherDialogOwnsEscape()` covers the dialogs with a bare `window` listener
+  and no `preventDefault` (`NewSessionDialog`, `ConfirmDialog`, `HelpModal`,
+  `CloseDialog`, `ResearchReportModal`, `QCDrawer`), where **registration
+  order is not ours to rely on** — a dialog opened mid-tour registers second,
+  so `defaultPrevented` alone would still be false. It asks the DOM instead:
+  any `[role="dialog"][aria-modal="true"]` whose `data-dialog` is not `tour`.
+  The tour's own two `ModalShell`s pass `marker={TOUR_DIALOG}` (that is what
+  the shell's optional `marker` prop exists for), and the step card is
+  `aria-modal="false"`, so the selector never matches it. Keep the guard
+  AHEAD of the phase check — behind it, it guards nothing.
+  `SettingsPanel` is deliberately out of scope: it has no Escape handler to
+  conflict with, and at `z-50` the tour card renders over it.
+- **"Ask a question" went with pause, because it depended on it.** It lived
+  only on the between-chapters checkpoint, which is the tour's one *modal*
+  surface — its backdrop covers the composer, so prefilling without
+  suspending would have focused a control the user could not reach. Every
+  step card leaves the chat live, so the affordance survives where it always
+  actually worked; the checkpoint copy now says so instead of offering a
+  button that would do nothing.
+- **Every reachable tutorial surface carries a labelled End**, which is the
+  second half of the ask. The step card already had one (plus its header ✕);
+  the checkpoint had only a ✕, and the preparing card had only a ✕ while it
+  waited on a start or a scenario swap — both now render an End button
+  declaring `data-capability="tour.finish"`, so there are three. The single
+  exception is the preparing card during `stage: "finishing"`: that is the
+  restore, i.e. the ending already running, and it offers no way out of
+  itself because there is nowhere to go (its ✕ stays a deliberate no-op). A
+  restore that FAILED is a different state and does offer both doors — retry,
+  or back to the tutorial.
+- **The stored progress record drops `paused`.** `TOUR_VERSION` is
+  deliberately NOT bumped: no chapter or step order changed, so an in-flight
+  resume record still points where it says. An older record carrying
+  `paused: true` simply loads with the field ignored and re-enters the tour,
+  which is the new behavior anyway.
+- **Tests**: 3 new in `frontend/tests/tour.test.ts`, each reverted in place to
+  prove it load-bearing. "the tutorial runs start to finish and
+  cannot be suspended" pins the absent phase/API/pill/stored flag, the
+  `enterChunk` reload path, Escape routing to `requestEnd`, the two
+  non-suspending step actions, and the manifest not promising pausing
+  anywhere. "every tutorial surface offers a way back to the user's project"
+  slices the overlay into its phase branches and requires an end control in
+  each, plus exactly one `tour.finish` declaration per reachable surface —
+  so a future phase added without an exit fails the suite. "a modal stacked
+  over the tour owns Escape" pins both guards, the marker on both of the
+  tour's own modals, and the guard sitting ahead of the phase check.
 
 ## Commands
 

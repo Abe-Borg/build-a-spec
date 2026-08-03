@@ -29,8 +29,7 @@ export type OnboardingPhase =
       error: string | null;
     }
   | { kind: "touring"; chunk: number; step: number }
-  | { kind: "chunk-break"; nextChunk: number }
-  | { kind: "paused"; chunk: number; step: number };
+  | { kind: "chunk-break"; nextChunk: number };
 
 export interface OnboardingCaps {
   editDoc: (ops: EditOp[]) => Promise<void>;
@@ -53,9 +52,6 @@ export interface OnboardingApi {
   advance: () => void;
   back: () => void;
   continueChunk: () => void;
-  pause: () => void;
-  resume: () => void;
-  askQuestion: () => void;
   requestEnd: () => void;
   cancelEnd: () => void;
   end: () => void;
@@ -102,6 +98,8 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
   const startInFlightRef = useRef(false);
   // Where to put the user back when a restore fails. There is no longer a
   // modal to dismiss to, so the last visited step is the only honest landing.
+  // It is a step of the RUNNING tour: the tutorial has no suspended state to
+  // land in — see the phase union above.
   const lastStepRef = useRef<{ chunk: number; step: number }>({ chunk: 0, step: 0 });
   // Remembered so retrying a failed restore keeps the original request's claim
   // about whether the tour was actually completed.
@@ -109,7 +107,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
   // Serializes restores — see restoreOriginal.
   const restoreInFlightRef = useRef<Promise<boolean> | null>(null);
 
-  const persist = useCallback((chunk: number, step: number, paused: boolean) => {
+  const persist = useCallback((chunk: number, step: number) => {
     lastStepRef.current = { chunk, step };
     const workspace = workspaceRef.current;
     if (
@@ -126,12 +124,13 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
       generation: workspace.generation,
       chunk,
       step,
-      paused,
     });
   }, []);
 
   // Resume after a reload whenever the server confirms a protected tutorial
-  // workspace. Local progress supplies the exact step when available.
+  // workspace. Local progress supplies the exact step when available, and the
+  // tour re-enters it directly: the tutorial runs start to finish, so there is
+  // no suspended state to land in and nothing to click before it continues.
   useEffect(() => {
     const stored = loadOnboardingProgress(TOUR_VERSION);
     const run = runRef.current;
@@ -175,14 +174,13 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
         }
         const storedChunk = stored.chunk;
         const chunk = Math.min(storedChunk, TOUR.length - 1);
-        setPhase({
-          kind: "paused",
+        // enterChunk, not setPhase: the reload may land on a chapter whose
+        // scenario the server is no longer holding, and only enterChunk knows
+        // how to swap one back in.
+        enterChunkRef.current?.(
           chunk,
-          step: Math.min(
-            stored.step,
-            TOUR[chunk].steps.length - 1,
-          ),
-        });
+          Math.min(stored.step, TOUR[chunk].steps.length - 1),
+        );
       })
       .catch(() => {
         if (stored) clearOnboardingProgress();
@@ -280,12 +278,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
 
   const start = useCallback(() => {
     setEndConfirm(false);
-    if (phaseRef.current.kind === "paused") {
-      const current = phaseRef.current;
-      runRef.current += 1;
-      enterChunkRef.current?.(current.chunk, current.step);
-      return;
-    }
     // Already holding the protected workspace: the tour is on screen, or a
     // scenario for it is being prepared, so there is nothing left to start.
     // Falling through would re-run beginShowcase, whose backend refuses the
@@ -294,8 +286,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     // throwing away the user's place in the tour. `startAtChapter` has always
     // guarded on this ref; `start` did not, and the starter chips put the
     // launcher on screen inside the tour (Codex review, PR #117).
-    // The `paused` branch above runs first, so resuming is unaffected, and
-    // every ending clears the ref, so the tour can always be started again.
+    // Every ending clears the ref, so the tour can always be started again.
     if (workspaceRef.current) return;
     // The pending request id is deliberately NOT reset here: a repeated
     // click reuses it, so the backend's idempotent begin_tutorial folds
@@ -349,7 +340,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
       const desiredScenario = TOUR[chunk].scenario;
       if (workspace.activeScenario === desiredScenario) {
         setPhase({ kind: "touring", chunk, step });
-        persist(chunk, step, false);
+        persist(chunk, step);
         return;
       }
       setPhase({
@@ -395,7 +386,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
           workspace.activeScenario = desiredScenario;
         }
         setPhase({ kind: "touring", chunk, step });
-        persist(chunk, step, false);
+        persist(chunk, step);
       } catch (error) {
         if (runRef.current !== run) return;
         const status = await getTutorialStatus().catch(() => null);
@@ -417,7 +408,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
             status.scenario_kind === desiredScenario
           ) {
             setPhase({ kind: "touring", chunk, step });
-            persist(chunk, step, false);
+            persist(chunk, step);
             return;
           }
           if (status.scope === "tutorial") {
@@ -448,10 +439,10 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     if (current.step + 1 < chapter.steps.length) {
       const next = { chunk: current.chunk, step: current.step + 1 };
       setPhase({ kind: "touring", ...next });
-      persist(next.chunk, next.step, false);
+      persist(next.chunk, next.step);
     } else if (current.chunk + 1 < TOUR.length) {
       setPhase({ kind: "chunk-break", nextChunk: current.chunk + 1 });
-      persist(current.chunk, current.step, false);
+      persist(current.chunk, current.step);
     } else {
       // The last step's Continue button says what it does, so the click is
       // the consent; finishing restores the project with nothing else asked.
@@ -465,7 +456,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     if (current.step > 0) {
       const step = current.step - 1;
       setPhase({ kind: "touring", chunk: current.chunk, step });
-      persist(current.chunk, step, false);
+      persist(current.chunk, step);
     } else if (current.chunk > 0) {
       const chunk = current.chunk - 1;
       void enterChunk(chunk, TOUR[chunk].steps.length - 1);
@@ -476,27 +467,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     const current = phaseRef.current;
     if (current.kind === "chunk-break") void enterChunk(current.nextChunk);
   }, [enterChunk]);
-
-  const pause = useCallback(() => {
-    const current = phaseRef.current;
-    if (current.kind === "touring") {
-      setPhase({ kind: "paused", chunk: current.chunk, step: current.step });
-      persist(current.chunk, current.step, true);
-    } else if (current.kind === "chunk-break") {
-      setPhase({ kind: "paused", chunk: current.nextChunk, step: 0 });
-      persist(current.nextChunk, 0, true);
-    }
-  }, [persist]);
-
-  const resume = useCallback(() => {
-    const current = phaseRef.current;
-    if (current.kind === "paused") void enterChunk(current.chunk, current.step);
-  }, [enterChunk]);
-
-  const askQuestion = useCallback(() => {
-    capsRef.current.prefillComposer("");
-    pause();
-  }, [pause]);
 
   const requestEnd = useCallback(() => setEndConfirm(true), []);
   const cancelEnd = useCallback(() => setEndConfirm(false), []);
@@ -636,14 +606,21 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     void restoreOriginal({ completed: true });
   }, [restoreOriginal]);
 
-  /** Leave a failed restore without retrying it; the tutorial is still live. */
+  /**
+   * Leave a failed restore without retrying it; the tutorial is still live.
+   *
+   * The tour resumes at the last visited step rather than suspending — a
+   * restore that failed changed nothing, so the guided run simply continues
+   * from where End was clicked. The scenario the workspace still holds is the
+   * one that step was prepared against, so this needs no swap.
+   */
   const stayInTutorial = useCallback(() => {
     const { chunk, step } = lastStepRef.current;
     if (!workspaceRef.current) {
       setPhase({ kind: "idle" });
       return;
     }
-    setPhase({ kind: "paused", chunk, step });
+    setPhase({ kind: "touring", chunk, step });
   }, []);
 
   const runStepAction = useCallback(
@@ -668,17 +645,19 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
         case "run-qc":
           current.startQc();
           break;
+        // Neither of these suspends the tour. The step card is non-blocking
+        // (the overlay root is pointer-events-none), so the composer stays
+        // usable underneath it, and the template studio simply renders over
+        // it until it is closed.
         case "prefill-composer":
           current.prefillComposer(action.prefillText ?? "");
-          pause();
           break;
         case "open-templates":
           current.openTemplates();
-          pause();
           break;
       }
     },
-    [pause],
+    [],
   );
 
   const syncSessionIdentity = useCallback(
@@ -694,9 +673,7 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
         workspace.activeScenario = undefined;
       }
       const current = phaseRef.current;
-      if (current.kind === "touring" || current.kind === "paused") {
-        persist(current.chunk, current.step, current.kind === "paused");
-      }
+      if (current.kind === "touring") persist(current.chunk, current.step);
     },
     [persist],
   );
@@ -725,9 +702,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     advance,
     back,
     continueChunk,
-    pause,
-    resume,
-    askQuestion,
     requestEnd,
     cancelEnd,
     end,

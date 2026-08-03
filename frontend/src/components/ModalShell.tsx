@@ -6,17 +6,26 @@
  */
 import { type ReactNode } from "react";
 
-/** The app's standard modal shell (SettingsPanel/HelpModal conventions). */
+/**
+ * The app's standard modal shell (SettingsPanel/HelpModal conventions).
+ *
+ * `marker` stamps `data-dialog` on the dialog root so a global key handler can
+ * tell its OWN modal apart from one stacked over it — see the guided tour's
+ * Escape handling in OnboardingOverlay. Purely an identifier; it changes
+ * nothing for a consumer that omits it.
+ */
 export function ModalShell({
   title,
   onClose,
   children,
   wide,
+  marker,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  marker?: string;
 }) {
   return (
     <div
@@ -24,6 +33,7 @@ export function ModalShell({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
+      data-dialog={marker}
     >
       <div
         className={

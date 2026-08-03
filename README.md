@@ -59,10 +59,11 @@ contracts.
 ## Current Status — direct structural editing
 
 The paper is now a practical outline editor as well as a model-authored
-artifact. From a blank native project, add the first article to PART 1, 2, or
-3; then add articles, top-level provisions, and subparagraphs through the four
-SectionFormat provision levels. New user-authored provisions are confirmed,
-and article deletion warns before removing its full provision subtree.
+artifact. Once a native project has content on the page — from the interview,
+a full-section draft, a template, or a master import — add articles, top-level
+provisions, and subparagraphs directly through the four SectionFormat
+provision levels. New user-authored provisions are confirmed, and article
+deletion warns before removing its full provision subtree.
 
 - **Reorder by grip or keyboard.** Articles move only within their PART;
   provisions move only among siblings under their current article or parent.

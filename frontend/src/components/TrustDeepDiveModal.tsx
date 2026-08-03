@@ -760,6 +760,12 @@ function Dossier() {
               instruction written by the application (not by the model, and not
               editable from the interface), and sends it through the ordinary
               chat path as a visible message you can read in the transcript.
+              Which instruction it fetches is decided by the application, not
+              the model, from the document alone: a whole-section draft anchors
+              on the section, the project type, and the country, so while any of
+              the three is unrecorded the button sends an instruction that{" "}
+              <b className="text-ink">asks you for them</b> and forbids drafting
+              that turn. Both messages are visible in the transcript.
             </>
           }
           sent="Identical to a normal turn."

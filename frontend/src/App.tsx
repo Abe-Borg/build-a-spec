@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChatMessage,
+  DraftPrerequisites,
   EditOp,
   Figure,
   FileLoading,
@@ -122,6 +123,11 @@ export default function App() {
   const [lintIssues, setLintIssues] = useState<LintIssue[]>([]);
   const [standards, setStandards] = useState<StandardInfo[]>([]);
   const [profileComplete, setProfileComplete] = useState(false);
+  // What "Draft full section" still needs (section / project type / country).
+  // Server-derived and never recomputed here — the panel's tooltip and the
+  // endpoint's decision must not be able to disagree. Null until first load.
+  const [draftPrereqs, setDraftPrereqs] =
+    useState<DraftPrerequisites | null>(null);
   const [research, setResearch] = useState<ResearchSnapshot | null>(null);
   const [qc, setQc] = useState<QcSnapshot | null>(null);
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
@@ -335,6 +341,7 @@ export default function App() {
         setLintIssues(payload.lint);
         setStandards(payload.standards);
         setProfileComplete(payload.profile_complete);
+        setDraftPrereqs(payload.draft_prerequisites ?? null);
         setBaselineIndex(payload.baseline_index ?? null);
         setImportReport(payload.import_report ?? null);
         setSourceAvailable(payload.source_available ?? false);
@@ -1234,11 +1241,19 @@ export default function App() {
     }
   };
 
-  /** Fetch the canned full-draft directive and send it as a normal turn. */
+  /**
+   * Run the full-draft click as a normal turn.
+   *
+   * The server decides which turn it is: the draft directive when the
+   * section, project type, and country are known, otherwise a turn that
+   * collects the missing ones. Both are ordinary user messages on the one
+   * chat path, so nothing here branches — the message the user sees in the
+   * transcript says which they got.
+   */
   const onDraftFull = async () => {
     if (busyRef.current || manualEditBusyRef.current) return;
     try {
-      const message = await draftFull();
+      const { message } = await draftFull();
       await send(message);
     } catch (e) {
       setMessages((prev) => [
@@ -1284,6 +1299,9 @@ export default function App() {
     setOpenItems([]);
     setLintIssues([]);
     setStandards([]);
+    // The old session's identity is gone; the refreshDoc below re-derives the
+    // gate. Until it lands, null reads as "not yet known", never as "ready".
+    setDraftPrereqs(null);
     setChangedIds(new Set());
     setFigures([]);
     setSuggestions([]);
@@ -1323,6 +1341,7 @@ export default function App() {
     lint: LintIssue[];
     standards: StandardInfo[];
     profile_complete: boolean;
+    draft_prerequisites?: DraftPrerequisites | null;
     baseline_index?: number | null;
     figures?: Figure[];
     suggested_prompts?: string[];
@@ -1338,6 +1357,7 @@ export default function App() {
     setLintIssues(payload.lint);
     setStandards(payload.standards);
     setProfileComplete(payload.profile_complete);
+    setDraftPrereqs(payload.draft_prerequisites ?? null);
     setBaselineIndex(payload.baseline_index ?? null);
     setImportReport(payload.import_report ?? null);
     setSourceAvailable(payload.source_available ?? false);
@@ -1365,6 +1385,7 @@ export default function App() {
         lint: merged.lint ?? [],
         standards: merged.standards ?? [],
         profile_complete: merged.profile_complete ?? false,
+        draft_prerequisites: merged.draft_prerequisites ?? null,
         baseline_index: merged.baseline_index ?? null,
         figures: merged.figures ?? [],
         suggested_prompts: merged.suggested_prompts ?? [],
@@ -1931,6 +1952,7 @@ export default function App() {
           lintIssues={lintIssues}
           standards={standards}
           profileComplete={profileComplete}
+          draftPrerequisites={draftPrereqs}
           research={research}
           qc={qc}
           readiness={readiness}

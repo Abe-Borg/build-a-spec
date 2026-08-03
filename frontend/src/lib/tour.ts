@@ -210,7 +210,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "Draft the whole section once",
         body:
-          "On an empty or sparse document, this uses the profile, research, references, and interview decisions to draft all PARTs. The result is one undoable model turn; a disabled control states exactly which prerequisite is missing.",
+          "On an empty or sparse document, this uses the profile, research, references, and interview decisions to draft all PARTs. The result is one undoable model turn; a disabled control states exactly which prerequisite is missing. A full draft anchors on the section, the project type, and the country — every provision it lays down inherits them — so while any of the three is unknown the click asks you about them instead of drafting blind, and drafting again once they are recorded produces the draft.",
       },
       {
         id: "quick-verify",

@@ -57,7 +57,9 @@ backend/
                            the 1h one) — a new model must land with both or
                            every 1h write on it is silently underpriced
   app.py                   FastAPI app factory; SSE at POST /api/chat; POST
-                           /api/draft/full (Batch 3 directive); doc/undo/redo/edit,
+                           /api/draft/full (Batch 3 directive, gated on the
+                           draft prerequisites via _draft_prerequisites —
+                           which also rides _doc_payload); doc/undo/redo/edit,
                            docx export, project save/load endpoints; Batch 4 adds
                            /api/qc/start|status|stream|apply|apply/preview|
                            dismiss|export +
@@ -463,7 +465,12 @@ backend/
                            reached from resend_sanitizer without a cycle
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
-                           FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message);
+                           FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message)
+                           + the draft-prerequisite gate: DraftPrerequisites /
+                           draft_prerequisites (pure, values in → report out) /
+                           full_draft_directive (obligations + established-facts
+                           anchor) / draft_prerequisites_directive (collect the
+                           missing ones, forbidding a draft that turn);
                            Batch 9 adds _SUGGESTED_PROMPTS_POLICY (after
                            _FIGURE_POLICY);
                            Batch 10 splits sanitize_discipline (public, no
@@ -747,10 +754,13 @@ baseline_index, figures, suggested_prompts}` (load adds `chat`, the rebuilt
 transcript; `baseline_index` is the imported-master version for the redline
 picker; `suggested_prompts` re-syncs the reply-chip bar, incl. restore-on-error). Patches and snapshots
 always carry the full tree — the frontend never applies ops itself. The
-Batch 3 full-draft pass adds NO SSE event: `POST /api/draft/full` returns the
-canned directive `{ok, message}` over REST (409 while a turn or research runs)
+Batch 3 full-draft pass adds NO SSE event: `POST /api/draft/full` returns
+`{ok, ready, missing, message}` over REST (409 while a turn or research runs)
 and the frontend sends `message` straight back through `POST /api/chat`, so
-the pass is an ordinary turn on the one streaming path.
+the pass is an ordinary turn on the one streaming path. `ready` is false —
+still a 200 — when a draft prerequisite is unrecorded, and `message` is then
+the directive that COLLECTS it rather than the one that drafts (see "The full
+draft never drafts blind" below).
 
 The Batch 5 redline/compare surface is REST-only, adds NO SSE event: `GET
 /api/doc/diff?base=N[&cur=M]` returns a serialized `SectionDiff`
@@ -1256,7 +1266,9 @@ status. Frozen decisions honored throughout.
 
 - **Full-section draft (WI1) rides the normal chat path — no new drafting
   machinery.** `POST /api/draft/full` is thin: 409 when `turn_active` or
-  `research.status == "running"`, else `{ok, message: FULL_DRAFT_DIRECTIVE}`.
+  `research.status == "running"`, else `{ok, ready, missing, message}` — the
+  message being `full_draft_directive(...)` or, when a prerequisite is
+  unrecorded, `draft_prerequisites_directive(...)`.
   The frontend (`App.onDraftFull`) fetches the directive and sends it through
   the ordinary `send()` → `/api/chat`, so it appears as a visible, honest
   user turn and inherits the SSE stream, tool loop, one-undo-step commit,
@@ -5418,6 +5430,97 @@ project-format bump.
   load-bearing, and the two review cases were additionally run against the
   document-wide-minimum and per-`numId` implementations to show each of
   those fails one of them.
+
+## The full draft never drafts blind — implemented notes
+
+Owner ask (Abraham): before the "Draft full section" feature runs, the app
+needs to know the section, the project type, and the country at a minimum —
+then it drafts to what the user told it. `POST /api/draft/full` previously
+handed back `FULL_DRAFT_DIRECTIVE` unconditionally, so a click on a blank
+session produced a confident whole document built on nothing. No new
+endpoint, no new SSE event, no new dep, no project-format bump.
+
+- **Why a gate here and nowhere else.** A full draft lays down every PART
+  and article in one turn and stamps provenance across all of it, so a wrong
+  section number, an unknown facility type, or an unknown country is not one
+  bad line — it is a wrong document produced confidently, which the user
+  then walks block by block to unpick. Three questions is far cheaper. An
+  ordinary chat turn needs no such gate: it drafts one thing at a time and
+  the interview is *supposed* to run while facts are still arriving.
+- **Exactly three, and each earns its place.** SECTION decides what the
+  document *is* (number, title, and the scope boundary against the sibling
+  sections it must not duplicate). PROJECT TYPE (facility/use) is what every
+  *defaulted* provision is defended by — a data center and a hospital take
+  different defaults out of the same standard, and a full draft is mostly
+  defaults. COUNTRY selects the code family and the units (US I-codes/NFPA/UL
+  and inch-pound vs Canadian NBC-NFC/CSA/ULC and SI); wrong here invalidates
+  the REFERENCES article and everything drafted to it. **City, state, and
+  client are deliberately NOT prerequisites** — they refine a draft rather
+  than decide its shape, and the defaults-first interview carries a first
+  pass without them. The full profile is the *research* gate
+  (`profile_complete`), which stays a separate, stricter check.
+- **The click is honored, never refused.** A missing prerequisite returns
+  **200 with `ready: false`**, not a 409: the request succeeded, and the
+  payload says what happens next. The frontend sends `message` either way —
+  one code path, no branch — and what it buys is a turn that collects
+  exactly the missing facts (defaults-first, a recommendation per question,
+  "I don't know" a real answer, staged as suggested-reply chips) and is
+  explicitly **forbidden from drafting that turn**. A 409 would have been a
+  dead end with nothing done; this advances the work on every press. `ok`
+  stays `true` because nothing failed — `ok: false` is reserved for errors,
+  and the frontend's `draftFull()` throws on it.
+- **The collection directive names what is ALREADY known**, so the turn is
+  never spent re-asking settled questions, and it asks for each fact by the
+  operation that records it (`replace` on `sec` / `set_project_identity` /
+  `set_project_profile`) rather than leaving the model to pick.
+- **`FULL_DRAFT_DIRECTIVE` is appended to, never rewritten.** The ready path
+  is `FULL_DRAFT_DIRECTIVE + "\n\n" + <established-facts anchor>`, so the
+  constant stays one versioned block and the existing prompt-snapshot tests
+  keep pinning its obligations verbatim. The anchor is redundant with the
+  turn's PROJECT CONTEXT by design: restating the facts *in the directive*
+  makes the instruction self-contained and leaves an honest record in the
+  transcript of exactly what the draft was told to assume.
+- **ONE derivation, two callers.** `prompts.draft_prerequisites()` is pure
+  (values in, report out); `app._draft_prerequisites(session)` extracts them
+  and feeds BOTH `_doc_payload["draft_prerequisites"]` (so the panel tooltip
+  can name the gaps before the click) and the endpoint (authoritative at the
+  click). The frontend must never recompute this from
+  `doc.project_identity`/`doc.project_profile` — a second derivation is free
+  to promise a draft the endpoint is about to turn into questions, which is
+  the `profile_complete` precedent and the opposite of the source-capability
+  mirror's history. Pinned by
+  `test_the_panel_report_and_the_endpoint_never_disagree`, which sweeps six
+  op combinations through both surfaces.
+- **The tree is bound ONCE.** `_draft_prerequisites` reads `session.doc.doc`
+  into a local and pulls every field off that one reference: a committing
+  turn swaps `store.doc` wholesale, so re-reading per field could mix a
+  section number from one version with a country from another. Coherence
+  needs the inputs captured together, not a lock held — the same snapshot
+  discipline as the export and chat-request captures (Chunks 6.3/6.4).
+- **Two fail-closed readings.** A section needs BOTH number and title (the
+  ops that set it always write the pair, so half of one is a half-finished
+  header, not an anchor), and the country must fold to a code the app
+  actually supports — `set_project_profile` refuses anything else, but a
+  legacy or hand-edited project file can still carry free text, and drafting
+  a US section against an unrecognized jurisdiction is exactly the
+  confident-wrong-document failure the gate exists to prevent.
+- **The gate reads live state and never latches.** Undoing past the version
+  that recorded the facts reopens it (pinned) — it is a document-state
+  question, not a session flag.
+- **No new capability id, no `TOUR_VERSION` bump.** The behavior rides the
+  existing `chat.full-draft` control, so the three-place capability contract
+  is untouched; the tour step, `HelpModal`, and `TrustDeepDiveModal`'s
+  runtime card were resynced instead, because copy claiming the button
+  fetches one fixed instruction is no longer true.
+- **Tests**: 8 new in `tests/test_full_draft.py` (derivation units incl. the
+  half-set header and the unsupported country, the collection payload and
+  its ops, asking only for what is missing while naming the settled facts,
+  the established-facts anchor, the payload report's record shape, the
+  panel/endpoint agreement sweep, and undo reopening the gate). The existing
+  end-to-end draft test now establishes the prerequisites first, so it also
+  pins that a satisfied gate still buys the ordinary multi-round pass. Both
+  mechanisms were reverted in place to prove them load-bearing: the
+  collection branch → 2 red, the payload report → 2 red.
 
 ## Commands
 

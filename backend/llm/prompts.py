@@ -17,6 +17,10 @@ change per session and render into the *dynamic* context block instead
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
+from ..project_profile import COUNTRY_DISPLAY, normalize_country
 from ..spec_modules import SpecModule
 
 _HOW_YOU_WORK = """\
@@ -169,6 +173,247 @@ Draft the COMPLETE section now — the full first pass, top to bottom.
 - Stamp provenance honestly: confirmed only for what I've actually stated or approved; assumed for your defensible playbook / standards / domain defaults (say in one line what you assumed); [TBD: …] or needs_input for anything that genuinely can't be defaulted yet. Over-flag rather than silently guess — I'll walk the assumptions afterward.
 - Keep each apply_spec_edits call to a sensible size (an article or a few related articles) so the document assembles visibly as you go, not in one silent mega-batch at the end.
 - When you're done, give me a short summary in chat plus the 2–3 highest-value follow-up questions."""
+
+
+# --- Full-draft prerequisites ---------------------------------------------
+#
+# The minimum the app must know before a whole-section draft is worth
+# running. A full draft lays down every PART and article and stamps
+# provenance across all of it, so a wrong section number, an unknown
+# facility type, or an unknown country is not one bad line — it is a whole
+# document produced confidently, which the user then has to walk block by
+# block to unpick. Three questions first is far cheaper than that.
+#
+# Why exactly these three:
+# - SECTION decides what the document *is*: its number, title, and scope
+#   boundary against the sibling sections it must not duplicate.
+# - PROJECT TYPE (facility/use) is what every *defaulted* provision is
+#   defended by. A data center and a hospital take different defaults out
+#   of the same standard, and a full draft is mostly defaults.
+# - COUNTRY selects the code family and the units — US I-codes/NFPA/UL and
+#   inch-pound, or Canadian NBC/NFC/CSA/ULC and SI. Wrong here invalidates
+#   the REFERENCES article and every provision drafted to it.
+#
+# City, state/province, and client are deliberately NOT prerequisites: they
+# refine a draft rather than decide its shape, and the defaults-first
+# interview can carry a first pass without them. The full profile is a
+# research prerequisite (``profile_complete``), which is a separate gate.
+DRAFT_PREREQUISITE_IDS = ("section", "project_type", "country")
+
+_DRAFT_PREREQUISITE_LABELS = {
+    "section": "the CSI section number and title",
+    "project_type": "the project type (facility or use)",
+    "country": "the project country",
+}
+
+# What the model should ask for, per missing fact: the question's substance
+# plus the operation that records the answer. Phrased for a user message —
+# this whole directive is sent as the user's own turn.
+_DRAFT_PREREQUISITE_ASKS = {
+    "section": (
+        "Which CSI section this is — number and title. Recommend the most "
+        "likely one for my discipline and scope, with one or two "
+        "alternatives if it is genuinely ambiguous. Record it with a "
+        "replace on \"sec\" carrying both the number and the title."
+    ),
+    "project_type": (
+        "The project type — the facility or use (for example Data Center, "
+        "Hospital, K-12 School, Office Tower), not the construction scope "
+        "and not the section. This is what your defaults get defended by, "
+        "so say in one clause what it changes. Record it with "
+        "set_project_identity."
+    ),
+    "country": (
+        "The country — United States or Canada. It picks the code family "
+        "(I-codes / NFPA / UL versus NBC-NFC / CSA / ULC) and the units, "
+        "so I do not want it guessed. Record it with set_project_profile, "
+        "along with city, state or province, and client if I give them."
+    ),
+}
+
+
+@dataclass(frozen=True)
+class DraftPrerequisites:
+    """What the app knows — and still needs — before a full-section draft.
+
+    Values are the resolved display forms (``country`` is the country's
+    display name, not its code), so every surface renders the same string.
+    ``missing`` holds :data:`DRAFT_PREREQUISITE_IDS` entries in that fixed
+    order, so the tooltip, the directive, and the API payload can never
+    list the same gaps in a different sequence.
+    """
+
+    section: str
+    project_type: str
+    country: str
+    missing: tuple[str, ...]
+
+    @property
+    def ready(self) -> bool:
+        """True when a full-section draft has its minimum anchor facts."""
+        return not self.missing
+
+    def missing_labels(self) -> tuple[str, ...]:
+        return tuple(_DRAFT_PREREQUISITE_LABELS[key] for key in self.missing)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for ``_doc_payload`` and the draft endpoint.
+
+        ``requirements`` is a list of records rather than parallel
+        id/label/value arrays: the frontend renders label beside value, and
+        parallel arrays are exactly the shape that falls out of alignment.
+        """
+        values = {
+            "section": self.section,
+            "project_type": self.project_type,
+            "country": self.country,
+        }
+        return {
+            "ready": self.ready,
+            "missing": list(self.missing),
+            "requirements": [
+                {
+                    "id": key,
+                    "label": _DRAFT_PREREQUISITE_LABELS[key],
+                    "satisfied": key not in self.missing,
+                    "value": values[key],
+                }
+                for key in DRAFT_PREREQUISITE_IDS
+            ],
+        }
+
+
+def draft_prerequisites(
+    *,
+    section_number: str = "",
+    section_title: str = "",
+    project_type: str = "",
+    country: str = "",
+) -> DraftPrerequisites:
+    """Derive the full-draft gate from raw document identity values.
+
+    Pure — values in, report out — so the gate stays testable and lives
+    beside the directives whose wording depends on it.
+
+    A section needs BOTH its number and its title: the ops that set it
+    (the model's ``replace`` on ``sec`` and the panel's header edit) always
+    write the pair, so half of one is a half-finished header rather than a
+    usable anchor. The country must fold to a code this app actually
+    supports — ``set_project_profile`` refuses anything else, but a
+    hand-edited or legacy project file can still carry free text, and
+    drafting a US section against an unrecognized jurisdiction is exactly
+    the confident-wrong-document failure this gate exists to prevent.
+    """
+    number = " ".join((section_number or "").split())
+    title = " ".join((section_title or "").split())
+    facility = " ".join((project_type or "").split())
+    country_code = normalize_country(country or "")
+
+    missing = []
+    if not (number and title):
+        missing.append("section")
+    if not facility:
+        missing.append("project_type")
+    if not country_code:
+        missing.append("country")
+
+    return DraftPrerequisites(
+        section=f"{number} {title}".strip(),
+        project_type=facility,
+        country=COUNTRY_DISPLAY.get(country_code, ""),
+        missing=tuple(key for key in DRAFT_PREREQUISITE_IDS if key in missing),
+    )
+
+
+def _established_lines(prereqs: DraftPrerequisites) -> list[str]:
+    labels = {
+        "section": "SECTION",
+        "project_type": "PROJECT TYPE (facility/use)",
+        "country": "COUNTRY",
+    }
+    values = {
+        "section": prereqs.section,
+        "project_type": prereqs.project_type,
+        "country": prereqs.country,
+    }
+    return [
+        f"- {labels[key]}: {values[key]}"
+        for key in DRAFT_PREREQUISITE_IDS
+        if key not in prereqs.missing
+    ]
+
+
+def full_draft_directive(prereqs: DraftPrerequisites) -> str:
+    """The full-draft user message, anchored on the established facts.
+
+    :data:`FULL_DRAFT_DIRECTIVE` carries the obligations and is appended to
+    rather than rewritten, so its wording stays one versioned constant. The
+    anchor restates what the whole draft is being built on — the turn's
+    PROJECT CONTEXT carries the same identity, but naming it *in the
+    directive* makes the instruction self-contained and leaves an honest
+    record in the transcript of exactly what the draft was told to assume.
+    """
+    return "\n\n".join(
+        [
+            FULL_DRAFT_DIRECTIVE,
+            "\n".join(
+                [
+                    "Draft to these established facts — they are settled, "
+                    "not open questions, so do not re-ask them:",
+                    *_established_lines(prereqs),
+                ]
+            ),
+        ]
+    )
+
+
+def draft_prerequisites_directive(prereqs: DraftPrerequisites) -> str:
+    """The user message sent when a full draft is asked for too early.
+
+    The click is honored rather than refused: instead of drafting blind (or
+    bouncing the user with an error and no next step), the app sends a turn
+    that collects exactly the missing facts and nothing else. It follows
+    the same defaults-first posture as the rest of the interview — every
+    question carries a recommendation and "I don't know" is a real answer —
+    and it names what is ALREADY known so the model cannot burn the turn
+    re-asking settled questions.
+    """
+    one = len(prereqs.missing) == 1
+    noun = "one more thing" if one else f"{len(prereqs.missing)} things"
+    pronoun = "it" if one else "them"
+    lines = [
+        f"Before you draft the full section, pin down {noun} with me — a "
+        f"whole-section draft anchors on {pronoun}, and every defaulted "
+        "provision inherits whatever we get wrong here.",
+        "",
+        *(f"- {_DRAFT_PREREQUISITE_ASKS[key]}" for key in prereqs.missing),
+    ]
+    established = _established_lines(prereqs)
+    if established:
+        lines += [
+            "",
+            "Already established — take these as settled and do not "
+            "re-ask them:",
+            *established,
+        ]
+    ask = (
+        "Ask me about it in this turn"
+        if one
+        else "Ask me about all of them together in this one turn"
+    )
+    lines += [
+        "",
+        f"{ask}, with your recommended answer and a one-clause reason. "
+        "\"I don't know\" is a real answer from me: take your recommendation "
+        "as the default and stamp whatever it drives assumed. Stage the "
+        "likely answers as suggested replies so I can pick one.",
+        "",
+        "Record each answer with its operation the moment I give it. Do NOT "
+        "draft the section in this turn — once "
+        + ("it is" if one else "these are")
+        + " recorded, tell me the full draft is ready and I will run it.",
+    ]
+    return "\n".join(lines)
 
 
 # Legacy session-discipline and session-primer bounds. New sessions learn

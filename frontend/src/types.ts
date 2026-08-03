@@ -423,12 +423,40 @@ export interface TemplateOrigin {
   seed_block_ids: string[];
 }
 
+/** The three facts a whole-section draft anchors on. */
+export type DraftPrerequisiteId = "section" | "project_type" | "country";
+
+export interface DraftRequirement {
+  id: DraftPrerequisiteId;
+  /** Human phrasing for the tooltip ("the project country"). */
+  label: string;
+  satisfied: boolean;
+  /** Resolved display value; "" when unsatisfied. */
+  value: string;
+}
+
+/**
+ * What "Draft full section" still needs before it drafts rather than asks.
+ *
+ * Server-derived — the panel renders it, the endpoint decides with it. The
+ * frontend must never recompute this from `doc.project_identity` /
+ * `doc.project_profile`: a second derivation is free to tell the user the
+ * button will draft when the click is about to ask.
+ */
+export interface DraftPrerequisites {
+  ready: boolean;
+  missing: DraftPrerequisiteId[];
+  requirements: DraftRequirement[];
+}
+
 export interface DocPayload {
   doc: SpecDoc;
   open_questions: OpenItem[];
   lint: LintIssue[];
   standards: StandardInfo[];
   profile_complete: boolean;
+  /** Full-draft gate: section, project type, and country. */
+  draft_prerequisites: DraftPrerequisites;
   research_status: ResearchRunStatus;
   /** Imported-master version index (Batch 5); null for from-scratch. */
   baseline_index: number | null;

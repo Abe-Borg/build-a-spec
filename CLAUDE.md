@@ -776,11 +776,17 @@ requests.
 
 Research has its own channel (a run outlives any one chat turn):
 `POST /api/research/start` (400 incomplete profile / no key; 409 while
-running), `GET /api/research/status` (snapshot: status/error/events/
-profile view), and `GET /api/research/stream` — an SSE stream that replays
+running; optional `scope: "all"|"gaps"` — see "Scoped research rounds"
+below, 400 on an unknown scope or a `gaps` round with nothing to retry),
+`GET /api/research/status` (snapshot: status/error/events/
+profile view + a `coverage` block joined in `app.py`), and
+`GET /api/research/stream` — an SSE stream that replays
 the run's event log from seq 0 and follows until terminal, closing with a
 `stream_end` sentinel. Coordinator/runner event types: `research_started`
-(now also `dimension_titles: {id: title}` beside the `dimensions` id list),
+(`dimension_titles: {id: title}` beside the `dimensions` id list — which on
+a scoped round rosters only the dimensions that run — plus
+`declared_dimension_count`, what the module declares, so the board can say
+"2 of 4 areas" without a second fetch),
 `dimension_complete`, `dimension_failed`, `research_complete`,
 `research_failed`. The live-visibility batch adds WORKER events, emitted by
 each dimension thread as it works (all carry `dimension_id`; they
@@ -2765,7 +2771,118 @@ SSE event type, no new dep, no project-format bump (one additive key).
   names what survives; the findings report gains a **Research rounds**
   section (per round: date, new vs re-confirmed, dimensions completed, and a
   "failed this round" chip the cumulative view cannot show) and dates every
-  item once there is more than one round.
+  item once there is more than one round. The button labels and the
+  per-round "N areas run" line were resynced by the next section.
+
+## Scoped research rounds + established facts — implemented notes
+
+The append merge above deduplicates the OUTPUT of a repeat round, after
+paying for it. Nothing deduplicated the INPUT: `run_requirements_research`
+took no previous profile, so round 2's request was byte-identical to round
+1's except the date line — every declared dimension, a fresh
+search/fetch budget each, asking a question the session had already
+answered. A second round therefore cost about what the first cost and
+mostly re-derived it. Two changes, deliberately independent: one scopes
+WHICH dimensions run, the other tells the ones that do run what is already
+known. No new endpoint, no new SSE event type, no new dep, no
+project-format bump.
+
+- **Scope is a round-level choice, not a policy.** `POST
+  /api/research/start` takes an optional `scope`: `all` (the default, and
+  what an absent body means — the historical contract byte-for-byte) or
+  `gaps`, which runs only the dimensions that have never completed.
+  `select_research_dimensions(module, dimension_ids)` is the pure filter;
+  `run_requirements_research` and `ResearchRunner.start` both thread
+  `dimension_ids`, `None` meaning all.
+- **The gap set is resolved SERVER-side, from the one coverage join.**
+  `research_coverage` (Chunk 3.2's readiness derivation) is what turns
+  `scope: "gaps"` into ids, and the same function feeds the new `coverage`
+  block on `GET /api/research/status` that labels the drawer's button. A
+  frontend derivation from `dimension_statuses` would be a second source of
+  truth free to offer a retry the endpoint is about to refuse — the same
+  one-derivation rule `profile_complete` and the draft prerequisites keep.
+- **Order always comes from the module, never the caller's list.** The
+  profile's rendering, `_accumulate_statuses`, and the roster event all read
+  declaration order, so a caller permuting it would make the same round
+  render differently for nothing. An id the module does not declare is
+  filtered out rather than fabricated (a dimension with no brief has nothing
+  to research); a scope matching nothing raises, distinct from the
+  module-declares-none message.
+- **Scoping is safe for the merge because the cumulative view already
+  handled a partial round** — `_accumulate_statuses`'s `after is None`
+  branch keeps a dimension this round did not touch exactly as it was, and
+  item counts are recomputed from merged items rather than summed. So a
+  gap retry cannot make a settled dimension look like it regressed, and
+  readiness (cumulative by construction) closes when the gap closes.
+- **`gaps` with no profile degrades to a full first round** rather than
+  refusing — with nothing recorded, every dimension IS a gap, which is the
+  honest answer and not a special case. `gaps` with nothing left to retry
+  is a 400 that says so: a full round is the more expensive action and must
+  stay a deliberate one, never something a client falls into.
+- **A round record is now "N areas run", not "N/N completed".** A scoped
+  retry that ran 2 of 4 declared areas and completed both would otherwise
+  render "2/2 dimensions completed" in the findings report — true of the
+  round, false of the project. The roster event carries
+  `declared_dimension_count` for the same reason, and the trace span records
+  the count the round actually runs (a span claiming four on a two-dimension
+  retry reads as two silently missing workers).
+- **`established_facts_block(profile, dimension_id)` is the second half**,
+  and it is per-DIMENSION on purpose. Another dimension's findings are noise
+  in a brief this narrow, and a dimension independently corroborating one of
+  them is a feature — the merge confirms such an item in place rather than
+  duplicating it, so suppressing the corroboration would cost evidence and
+  save nothing. Rendered after the dimension's brief (task first, prior
+  knowledge second) and compact: requirement, authority, code reference,
+  date, and `[UNVERIFIED]` when ungrounded — no item id, confidence or
+  source list, because the researcher can act on none of them and every
+  character is re-billed.
+- **The instruction is the load-bearing half.** Without
+  `_ESTABLISHED_FACTS_DIRECTIVE` the block is just more context to
+  confidently re-derive. It says: do not re-derive these; do not spend
+  searches re-confirming one unless you find evidence it is wrong or
+  superseded; DO re-verify anything `[UNVERIFIED]` (cheap, targeted, and
+  the one flag the block asks for action on); DO report a contradiction or
+  a superseded edition as its own item saying what it supersedes; report
+  only what is NEW, CHANGED, or CORRECTED. That last line is why
+  `repeat_items` falls toward zero on a compliant later round and
+  `new_items` becomes the honest signal.
+- **Empty renders nothing, so round 1 is byte-identical.** No profile, no
+  items for this dimension, or no threading at all → `""`, and
+  `build_dimension_user_message` appends nothing. Same posture as
+  `today=""`. Pinned directly.
+- **The runner captures the profile under the lock that numbers the
+  round**, beside `round_number`, rather than reading it from `_work`
+  later: only this run can write `profile_result` while it is running, but
+  a snapshot taken there cannot disagree with the round it is numbering.
+  Same snapshot discipline as the export and chat-request captures.
+- **`ESTABLISHED_FACTS_MAX_TOKENS` (20k est.) is a runaway guard**, and
+  trimming is DISCLOSED — grounded-and-confident first, so the tail goes,
+  and the block says how many were omitted and that the list is partial. An
+  omitted fact is one this round may go and re-derive, which is the thing
+  the block exists to prevent; silently omitting would invite exactly that.
+- **Deliberately NOT done**: reduced web-tool budgets on a briefed round
+  (cutting `max_uses` risks truncating a legitimately large discovery —
+  measure real round-2 telemetry first), and near-duplicate detection at
+  the merge (`item_id` is still an exact-string hash, so a re-found
+  requirement worded differently still mints a new item). Both were
+  scoped out with the owner.
+- **Copy resynced**: `TrustDeepDiveModal`'s Research runtime card, whose
+  "four independent agents" and "what is sent" lines were both made
+  incomplete by this work — the dossier is a contract, not a brochure.
+- **Tests**: 14. `test_research_engine.py` (scope filters the roster and
+  the requests, module order wins over caller order, an unknown id is
+  ignored and an empty scope refuses, an unscoped round still runs
+  everything, round-1 byte identity, per-dimension isolation, the
+  `[UNVERIFIED]` mark and the directive, the disclosed trim);
+  `test_research_rounds.py` (a scoped retry leaves settled dimensions and
+  their items exactly as they were and records only the areas that ran; the
+  runner briefs round 2 and not round 1); `test_research_api.py` (the
+  coverage payload names the gaps, a `gaps` round researches only them and
+  closes readiness, nothing-to-retry and unknown-scope 400s, an absent body
+  still runs four). Every mechanism was reverted in place to prove it
+  load-bearing: the engine filter → 5 red, the block → 4 red, each runner
+  pass-through → 1–2 red, the server-side gap resolution → 1 red, the
+  status payload's coverage → 2 red.
 
 ## Trust dossier — implemented notes (the "I'm not convinced" modal)
 

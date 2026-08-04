@@ -787,7 +787,10 @@ function Dossier() {
             <>
               Press <b className="text-ink">Start research</b>. The button is
               unavailable until city, state/province, country and client are
-              recorded — the search results are worthless without them.
+              recorded — the search results are worthless without them. Once a
+              round has run, a second button appears offering to{" "}
+              <b className="text-ink">retry only the areas that never
+              completed</b>; the full re-run stays available beside it.
             </>
           }
           runs={
@@ -797,7 +800,9 @@ function Dossier() {
               <b className="text-ink">authority-having-jurisdiction
               requirements</b>, <b className="text-ink">owner/client and insurer
               standards</b>, and{" "}
-              <b className="text-ink">site and environmental factors</b>. Each is
+              <b className="text-ink">site and environmental factors</b> — or
+              only the subset you asked to retry, in which case the others are
+              not researched again at all. Each is
               a separate conversation with server-side web search and fetch
               enabled and your project’s own location attached to the search
               tool, so results are local rather than generic. Each must finish by
@@ -810,7 +815,13 @@ function Dossier() {
           sent={
             <>
               Today’s date, then the dimension’s instruction with your project
-              profile substituted in, plus the discipline. Your draft section is{" "}
+              profile substituted in, plus the discipline. On a second or later
+              round each agent is also sent{" "}
+              <b className="text-ink">the findings earlier rounds already
+              established for its own dimension</b> — requirement, authority,
+              code reference, date, and whether it was ever grounded — with an
+              instruction to report only what is new, changed or corrected
+              rather than derive it all again. Your draft section is{" "}
               <b className="text-ink">not</b> sent — research looks outward, at
               the jurisdiction, not at your text.
             </>

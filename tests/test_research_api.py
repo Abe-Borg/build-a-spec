@@ -717,3 +717,132 @@ def test_a_legacy_profile_with_no_rounds_still_reads_as_complete():
         }
     )
     assert _readiness_research(client)["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# Round scope over HTTP: retry the areas that never completed
+# ---------------------------------------------------------------------------
+
+
+def test_the_status_payload_names_the_areas_that_never_completed(monkeypatch):
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+
+    # Before any round: every declared area is a gap, none completed.
+    coverage = client.get("/api/research/status").json()["coverage"]
+    assert coverage["total"] == 4
+    assert coverage["completed"] == []
+    assert [g["dimension_id"] for g in coverage["gaps"]] == [
+        d.dimension_id
+        for d in sessions.get_workspace().session.module.research_dimensions
+    ]
+    assert all(g["required"] is True for g in coverage["gaps"])
+
+    boom = RuntimeError("kaput")
+    _patch_research_client(
+        monkeypatch,
+        SequencedFakeClient(
+            _scripts(ahj_requirements=[boom], client_standards=[boom])
+        ),
+    )
+    assert client.post("/api/research/start").json()["ok"] is True
+    assert _wait_terminal(client)["status"] == "complete"
+
+    coverage = client.get("/api/research/status").json()["coverage"]
+    assert sorted(coverage["completed"]) == [
+        "governing_codes",
+        "site_environment",
+    ]
+    # Named, not counted — that is what makes a retry button possible.
+    assert [g["dimension_id"] for g in coverage["gaps"]] == [
+        "ahj_requirements",
+        "client_standards",
+    ]
+    assert [g["title"] for g in coverage["gaps"]] == [
+        "Authority-having-jurisdiction requirements",
+        "Owner / client and insurer standards",
+    ]
+
+
+def test_a_gaps_round_researches_only_the_incomplete_areas(monkeypatch):
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+
+    boom = RuntimeError("kaput")
+    _patch_research_client(
+        monkeypatch,
+        SequencedFakeClient(
+            _scripts(ahj_requirements=[boom], client_standards=[boom])
+        ),
+    )
+    assert client.post("/api/research/start").json()["ok"] is True
+    assert _wait_terminal(client)["status"] == "complete"
+
+    # Only the two failed dimensions are scripted: a client that asked about
+    # the settled ones would raise "no script matches the request", so the
+    # scoping is proved by the run completing at all.
+    retry = SequencedFakeClient(
+        {
+            DIM_KEYS["ahj_requirements"]: [
+                research_response(items=[], searched_urls=["https://ahj.gov"])
+            ],
+            DIM_KEYS["client_standards"]: [
+                research_response(items=[], searched_urls=["https://c.gov"])
+            ],
+        }
+    )
+    _patch_research_client(monkeypatch, retry)
+    resp = client.post("/api/research/start", json={"scope": "gaps"})
+    assert resp.json()["ok"] is True
+    snapshot = _wait_terminal(client)
+    assert snapshot["status"] == "complete"
+
+    roster = next(
+        e for e in snapshot["events"] if e["type"] == "research_started"
+    )
+    assert roster["dimensions"] == ["ahj_requirements", "client_standards"]
+    assert roster["declared_dimension_count"] == 4
+    assert len(retry.requests) == 2
+
+    # The gaps closed, and the settled areas were never re-asked.
+    assert client.get("/api/research/status").json()["coverage"]["gaps"] == []
+    assert _readiness_research(client)["ok"] is True
+
+
+def test_a_gaps_round_with_nothing_to_retry_is_refused_with_the_reason(
+    monkeypatch,
+):
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+    _patch_research_client(monkeypatch, SequencedFakeClient(_scripts()))
+    assert client.post("/api/research/start").json()["ok"] is True
+    assert _wait_terminal(client)["status"] == "complete"
+
+    resp = client.post("/api/research/start", json={"scope": "gaps"})
+    assert resp.status_code == 400
+    # Refused with the reason, not silently downgraded to a full round — a
+    # full round is the more expensive action and must stay a deliberate one.
+    assert "nothing to retry" in resp.json()["error"]
+    assert "4 of 4" in resp.json()["error"]
+
+
+def test_an_unknown_scope_is_refused_and_an_absent_body_runs_everything(
+    monkeypatch,
+):
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+
+    resp = client.post("/api/research/start", json={"scope": "some_areas"})
+    assert resp.status_code == 400
+    assert "Unknown research scope" in resp.json()["error"]
+
+    # The historical contract: no body at all is a full round.
+    full = SequencedFakeClient(_scripts())
+    _patch_research_client(monkeypatch, full)
+    assert client.post("/api/research/start").json()["ok"] is True
+    assert _wait_terminal(client)["status"] == "complete"
+    assert len(full.requests) == 4

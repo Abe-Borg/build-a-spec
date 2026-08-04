@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -41,6 +42,7 @@ from .engine import (
     append_research_round,
     incomplete_dimension_facts,
     run_requirements_research,
+    select_research_dimensions,
 )
 
 STATUS_IDLE = "idle"
@@ -199,10 +201,19 @@ class ResearchRunner:
         model: str,
         max_tokens: int,
         discipline: str = "",
+        dimension_ids: Sequence[str] | None = None,
         on_settled: Callable[[], None] | None = None,
         usage_sink: Callable[[dict], None] | None = None,
     ) -> bool:
         """Kick off the fan-out on a daemon thread. False if already running.
+
+        ``dimension_ids`` scopes the round to a subset of the module's
+        declared dimensions (``None`` runs them all). The accumulated
+        profile is passed to the engine as the round's ESTABLISHED facts,
+        so a later round is briefed on what the session already knows
+        rather than re-deriving it — captured here, under the same lock
+        that numbers the round, so the brief and the round number describe
+        the same moment.
 
         ``on_settled`` (optional) runs after the terminal state is set —
         the app layer uses it for nothing today but tests can synchronize
@@ -234,6 +245,12 @@ class ResearchRunner:
                 else 1
             )
             self._round_number = round_number
+            # The round's brief is written against the profile as it stands
+            # right now. Captured under the lock beside the round number,
+            # rather than read from `_work` later: only this run can write
+            # `profile_result` while it is running, but a snapshot taken
+            # here cannot disagree with the round it is numbering.
+            established = self.profile_result
             cancel_event = threading.Event()
             self._cancel_event = cancel_event
             run_token = object()
@@ -241,7 +258,10 @@ class ResearchRunner:
 
         trace_handle = _trace.research_start(
             project=project_profile.display_line(),
-            dimensions=len(getattr(module, "research_dimensions", ()) or ()),
+            # The count this round will actually run, not what the module
+            # declares — a span that claimed four on a two-dimension retry
+            # would read as two silently missing workers.
+            dimensions=len(select_research_dimensions(module, dimension_ids)),
         )
         # Opened AFTER the compare-and-set, so a losing double-start never
         # fabricates a run span — which leaves a narrow window in which a
@@ -294,6 +314,8 @@ class ResearchRunner:
                     model=model,
                     max_tokens=max_tokens,
                     discipline=discipline,
+                    dimension_ids=dimension_ids,
+                    established=established,
                     event_sink=_sink,
                     should_stop=cancel_event.is_set,
                 )

@@ -36,7 +36,9 @@ Endpoints (all JSON unless noted):
 - ``GET  /api/references``    → attached reference documents (metadata only).
 - ``DELETE /api/reference/{rid}`` → detach one (404 when unknown).
 - ``POST /api/research/start``  → launch the requirements-research fan-out
-  (requires a complete project profile; 409 while one runs).
+  (requires a complete project profile; 409 while one runs). Optional
+  ``scope``: ``all`` (default) runs every declared dimension, ``gaps`` runs
+  only the ones that have never completed.
 - ``GET  /api/usage``         → this session's billed usage + est. cost.
 - ``GET  /api/research/status`` → research state + event log + profile view.
 - ``GET  /api/research/stream`` → SSE follow of the active/last run.
@@ -379,6 +381,28 @@ class EditDocRequest(BaseModel):
 class WorkspaceMutationRequest(BaseModel):
     workspace_id: int | None = None
     generation: int | None = None
+
+
+class ResearchStartRequest(WorkspaceMutationRequest):
+    """Optional body for ``POST /api/research/start``.
+
+    ``scope`` picks which declared dimensions the round runs. ``all`` — the
+    default, and what an absent body means — is the historical contract:
+    every dimension, every time. ``gaps`` runs only the dimensions that have
+    never completed, which is what "retry the areas that failed" means and
+    what most later rounds actually want; running the settled ones again
+    asks a question already answered and pays a full search budget to
+    re-answer it.
+
+    The gap set is resolved HERE, from :func:`research_coverage`, and is
+    never sent up by the client. Readiness already derives coverage from
+    that one function, and a second derivation in the frontend would be
+    free to offer a retry the server is about to refuse — the same
+    one-derivation rule ``profile_complete`` and the draft prerequisites
+    follow.
+    """
+
+    scope: str = "all"
 
 
 class SessionResetRequest(BaseModel):
@@ -1522,6 +1546,40 @@ def _research_readiness(session: SessionState) -> tuple[bool, str]:
             f"{coverage.total} dimensions. Absent optional coverage: {named}.",
         )
     return True, "Requirements research complete."
+
+
+RESEARCH_SCOPE_ALL = "all"
+RESEARCH_SCOPE_GAPS = "gaps"
+RESEARCH_SCOPES: tuple[str, ...] = (RESEARCH_SCOPE_ALL, RESEARCH_SCOPE_GAPS)
+
+
+def _research_coverage_payload(session: SessionState) -> dict:
+    """Which declared research areas are done, and which never completed.
+
+    The same :func:`research_coverage` join readiness uses — ONE
+    derivation, so the drawer's "retry N areas" button and the round the
+    start endpoint actually runs can never disagree about what N is.
+
+    Read as plain runner attributes (the readiness / ``_doc_payload``
+    posture), never under the runner's own lock: this is a display
+    projection on a hot poll path, and taking that lock here would nest it
+    under the session guard.
+    """
+    coverage = research_coverage(
+        session.module, session.research.profile_result
+    )
+    return {
+        "total": coverage.total,
+        "completed": list(coverage.completed),
+        "gaps": [
+            {
+                "dimension_id": gap.dimension_id,
+                "title": gap.title,
+                "required": gap.required,
+            }
+            for gap in coverage.gaps
+        ],
+    }
 
 
 def _readiness_payload(
@@ -4238,7 +4296,7 @@ def create_app(
 
     @app.post("/api/research/start")
     def research_start(
-        body: WorkspaceMutationRequest | None = None,
+        body: ResearchStartRequest | None = None,
     ) -> JSONResponse:
         lease = sessions.get_workspace()
         if not _mutation_lease_matches(lease, body):
@@ -4291,6 +4349,35 @@ def create_app(
                 },
                 status_code=400,
             )
+        scope = (body.scope if body is not None else "").strip().lower()
+        scope = scope or RESEARCH_SCOPE_ALL
+        if scope not in RESEARCH_SCOPES:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": f"Unknown research scope {scope!r} — expected "
+                    f"one of: {', '.join(RESEARCH_SCOPES)}.",
+                },
+                status_code=400,
+            )
+        dimension_ids: list[str] | None = None
+        if scope == RESEARCH_SCOPE_GAPS:
+            # Resolved server-side from the one coverage join (see
+            # ResearchStartRequest). With no profile yet every dimension is
+            # a gap, so "gaps" degrades to a full first round rather than
+            # refusing — which is the honest answer, not a special case.
+            coverage = research_coverage(module, runner.profile_result)
+            dimension_ids = [gap.dimension_id for gap in coverage.gaps]
+            if not dimension_ids:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Every research area has already completed "
+                        f"({coverage.total} of {coverage.total}) — there is "
+                        "nothing to retry. Run a full round to refresh them.",
+                    },
+                    status_code=400,
+                )
         try:
             client = get_client()
         except MissingApiKeyError as exc:
@@ -4316,6 +4403,7 @@ def create_app(
                 model=settings.RESEARCH_MODEL,
                 max_tokens=settings.RESEARCH_MAX_TOKENS,
                 discipline=discipline,
+                dimension_ids=dimension_ids,
                 usage_sink=lambda u, g=run_generation: (
                     session.add_usage_if_current(g, "research", u)
                 ),
@@ -4329,7 +4417,12 @@ def create_app(
 
     @app.get("/api/research/status")
     def research_status() -> dict:
-        return sessions.get_session().research.snapshot()
+        session = sessions.get_session()
+        payload = session.research.snapshot()
+        # Joined here rather than inside the runner: coverage is a module
+        # question, and the runner deliberately knows nothing about modules.
+        payload["coverage"] = _research_coverage_payload(session)
+        return payload
 
     @app.post("/api/research/stop")
     def research_stop(

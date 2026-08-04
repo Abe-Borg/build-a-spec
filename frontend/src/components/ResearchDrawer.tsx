@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   EditOp,
   ResearchRunStatus,
+  ResearchScope,
   ResearchSnapshot,
   SpecDoc,
 } from "../types";
@@ -38,7 +39,7 @@ interface Props {
   profileComplete: boolean;
   research: ResearchSnapshot | null;
   busy: boolean;
-  onStart: () => void;
+  onStart: (scope?: ResearchScope) => void;
   onStop: () => void;
   onEditDoc: (ops: EditOp[]) => void;
   /** Guided-tour "ensure open" (Batch 6): a bump expands the drawer. */
@@ -316,6 +317,14 @@ export default function ResearchDrawer({
   const rounds = research?.profile
     ? (research.profile.rounds ?? []).length || 1
     : 0;
+  // Server-derived (the same coverage join readiness uses) — never
+  // recomputed here from dimension_statuses, or this control could offer a
+  // retry the start endpoint is about to refuse.
+  const gaps = research?.coverage?.gaps ?? [];
+  // A retry is only a distinct action once something has completed: on a
+  // fresh session every area is a "gap" and "retry" would just be the first
+  // round wearing a different label.
+  const retryable = rounds > 0 && gaps.length > 0;
 
   const startDisabled = !profileComplete || running || busy;
   const startTip = !profileComplete
@@ -325,20 +334,34 @@ export default function ResearchDrawer({
       : busy
         ? "Finish the current turn first."
         : rounds > 0
-          ? `Run another round of research (uses your API key). It ADDS to the ${items.length} finding(s) you already have — nothing is replaced, and a requirement found again is confirmed in place.`
+          ? `Run a full round over all ${research?.coverage?.total ?? 0} research areas (uses your API key). It ADDS to the ${items.length} finding(s) you already have — nothing is replaced, a requirement found again is confirmed in place, and each agent is told what this session already established so it looks for what is new, changed, or wrong.`
           : "Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).";
   const startLabel = running
     ? board.total > 0
       ? `Researching… (${board.doneCount}/${board.total})`
       : "Research in progress…"
-    : rounds > 0
-      ? `Research again (round ${rounds + 1})`
-      : "Research requirements";
+    : retryable
+      ? "Re-run all areas"
+      : rounds > 0
+        ? `Research again (round ${rounds + 1})`
+        : "Research requirements";
+  // The full round is the quiet option whenever a targeted retry exists —
+  // it is the more expensive of the two and rarely the one that is wanted.
   const startButtonClass = running
     ? "border-accent/40 bg-raised text-ink-dim"
     : rounds > 0 || startDisabled
       ? "border-edge bg-raised text-ink-dim hover:border-accent hover:text-accent disabled:opacity-40"
       : "border-accent/70 bg-accent/15 text-accent hover:bg-accent/25";
+  const retryLabel = `Retry ${gaps.length} incomplete area${
+    gaps.length === 1 ? "" : "s"
+  }`;
+  const retryTip = startDisabled
+    ? startTip
+    : `Run round ${rounds + 1} over only the area(s) that never completed: ${gaps
+        .map((g) => g.title)
+        .join(", ")}. The ${
+        research?.coverage?.completed.length ?? 0
+      } area(s) already done are not researched again, so this costs a fraction of a full round.`;
 
   return (
     <div
@@ -380,10 +403,25 @@ export default function ResearchDrawer({
             View report
           </button>
         )}
+        {retryable && !running && (
+          <Tip tip={retryTip} className="shrink-0">
+            <button
+              className="rounded-md border border-accent/70 bg-accent/15 px-2 py-0.5 text-[11px] text-accent transition-colors hover:bg-accent/25 disabled:pointer-events-none disabled:opacity-40"
+              onClick={() => onStart("gaps")}
+              disabled={startDisabled}
+              /* Shares research.run: one capability — "run requirements
+                 research" — offered at two scopes, the updates.manage
+                 precedent. No new id, no tour step, no TOUR_VERSION bump. */
+              data-capability="research.run"
+            >
+              {retryLabel}
+            </button>
+          </Tip>
+        )}
         <Tip tip={startTip} className="shrink-0">
           <button
             className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none ${startButtonClass}`}
-            onClick={onStart}
+            onClick={() => onStart("all")}
             disabled={startDisabled}
             data-tour="research-start"
             data-capability="research.run"

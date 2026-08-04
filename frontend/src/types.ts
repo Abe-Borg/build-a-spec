@@ -561,9 +561,13 @@ export interface ResearchEvent {
   new_item_count?: number;
   repeat_item_count?: number;
   /** On `research_started`: the dimension id roster, plus id → human title
-   *  so the live board seeds real names before any worker has emitted. */
+   *  so the live board seeds real names before any worker has emitted. A
+   *  scoped round rosters only the dimensions it runs. */
   dimensions?: string[];
   dimension_titles?: Record<string, string>;
+  /** On `research_started`: how many dimensions the module declares, so a
+   *  scoped round can say "2 of 4 areas" without a second fetch. */
+  declared_dimension_count?: number;
   /** On `dimension_started`: the dimension's web-tool budgets. */
   max_searches?: number;
   max_fetches?: number;
@@ -640,12 +644,39 @@ export interface ResearchProfileView {
   rounds?: ResearchRoundView[];
 }
 
+/** One declared research area that has never completed in any round. */
+export interface ResearchCoverageGap {
+  dimension_id: string;
+  title: string;
+  /** False only for a dimension the module declares optional, with a stated
+   *  rationale — those never block issue readiness. */
+  required: boolean;
+}
+
+/** How the module's declared research areas line up with what ran.
+ *
+ *  Derived server-side by the same `research_coverage` join readiness uses.
+ *  The drawer must never recompute it from `dimension_statuses`: a second
+ *  derivation is free to offer a retry the start endpoint would refuse. */
+export interface ResearchCoverageView {
+  total: number;
+  completed: string[];
+  gaps: ResearchCoverageGap[];
+}
+
+/** Which declared dimensions a round runs. `gaps` is resolved server-side
+ *  to the areas that never completed; `all` is every declared dimension. */
+export type ResearchScope = "all" | "gaps";
+
 export interface ResearchSnapshot {
   status: ResearchRunStatus;
   error: string;
   error_kind?: "auth_error" | "";
   events: ResearchEvent[];
   profile?: ResearchProfileView;
+  /** Absent on a snapshot built locally from SSE frames alone (the merge
+   *  carries the last fetched value forward); refreshed at every milestone. */
+  coverage?: ResearchCoverageView;
 }
 
 /* --- Master import + compliance audit + updates (Phase 5) --- */

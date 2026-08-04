@@ -127,19 +127,24 @@ function RoundsSection({ rounds }: { rounds: ResearchRoundView[] }) {
       <h3 className="text-[13px] font-semibold text-ink">Research rounds</h3>
       <p className="mt-0.5 text-[11px] text-ink-faint">
         Each round adds to the findings below; a requirement found again is
-        confirmed in place rather than duplicated.
+        confirmed in place rather than duplicated. A round may be scoped to
+        the areas that never completed, so its area count can be smaller than
+        the module declares.
       </p>
       <ul className="mt-1.5 space-y-1">
         {rounds.map((round) => {
+          const ran = round.dimension_statuses.length;
           const failed = round.dimension_statuses.filter(
             (d) => d.status !== "completed",
           ).length;
+          // Stated as "N run, M completed" rather than "M/N completed": a
+          // scoped retry that ran 2 of 4 declared areas and completed both
+          // would otherwise read "2/2 completed", which is true of the round
+          // and false of the project.
           const parts = [
             `${round.new_items} new`,
             `${round.repeat_items} re-confirmed`,
-            `${round.dimension_statuses.length - failed}/${
-              round.dimension_statuses.length
-            } dimensions completed`,
+            `${ran} area${ran === 1 ? "" : "s"} run, ${ran - failed} completed`,
           ];
           return (
             <li

@@ -2850,6 +2850,34 @@ project-format bump.
   items for this dimension, or no threading at all → `""`, and
   `build_dimension_user_message` appends nothing. Same posture as
   `today=""`. Pinned directly.
+- **A brief only ever describes the project being researched NOW**
+  (`established_facts_for`; caught in review on PR #122, Codex). The
+  project profile is editable at any time, so a user may correct the city,
+  jurisdiction or client after a round has run — and briefing the old
+  project's findings would be actively HARMFUL rather than merely
+  wasteful, because the block asserts them as established and forbids
+  re-deriving them: a full re-run commissioned precisely BECAUSE the
+  project changed would skip the requirements it exists to find. The
+  recorded `RequirementsProfile.project` is compared field-for-field
+  (client included — it is what the client/insurer dimension researches;
+  `jurisdiction_fingerprint` covers only country/state/city and is
+  therefore the wrong key here), resolved ONCE before the fan-out so every
+  dimension of a round agrees. Fail closed: a profile that records no
+  project (legacy or hand-edited) is not briefed either, and the cost of
+  being wrong is one full round — exactly what every round cost before
+  this work. Whether the accumulated profile should itself be invalidated
+  when project identity changes is a PRE-EXISTING question about the round
+  merge; it would discard paid grounded findings and is the owner's call.
+- **The first fact lands truncated, not whole** (same review, P2).
+  `requirement` is unbounded at deserialization and a `.baspec` is a file
+  people share, so the deliberate "the first line always lands" rule —
+  which exists so a block cannot consist solely of an omission count —
+  would let one oversized item carry the brief past the model's context
+  limit and fail the dimension outright. That trades a reliability
+  regression for a cost saving, which is the wrong direction. It is cut to
+  the remaining budget and marked `[truncated for length]`, because a
+  requirement stopping mid-sentence would otherwise read as the whole of
+  it.
 - **The runner captures the profile under the lock that numbers the
   round**, beside `round_number`, rather than reading it from `_work`
   later: only this run can write `profile_result` while it is running, but
@@ -2869,11 +2897,13 @@ project-format bump.
 - **Copy resynced**: `TrustDeepDiveModal`'s Research runtime card, whose
   "four independent agents" and "what is sent" lines were both made
   incomplete by this work — the dossier is a contract, not a brochure.
-- **Tests**: 14. `test_research_engine.py` (scope filters the roster and
+- **Tests**: 17. `test_research_engine.py` (scope filters the roster and
   the requests, module order wins over caller order, an unknown id is
   ignored and an empty scope refuses, an unscoped round still runs
   everything, round-1 byte identity, per-dimension isolation, the
-  `[UNVERIFIED]` mark and the directive, the disclosed trim);
+  `[UNVERIFIED]` mark and the directive, the disclosed trim, a corrected
+  profile withholding the brief in the unit and end to end, and the
+  oversized-first-item truncation);
   `test_research_rounds.py` (a scoped retry leaves settled dimensions and
   their items exactly as they were and records only the areas that ran; the
   runner briefs round 2 and not round 1); `test_research_api.py` (the
@@ -2882,7 +2912,8 @@ project-format bump.
   still runs four). Every mechanism was reverted in place to prove it
   load-bearing: the engine filter → 5 red, the block → 4 red, each runner
   pass-through → 1–2 red, the server-side gap resolution → 1 red, the
-  status payload's coverage → 2 red.
+  status payload's coverage → 2 red, the project-identity guard → 2 red,
+  the first-line truncation → 1 red.
 
 ## Trust dossier — implemented notes (the "I'm not convinced" modal)
 

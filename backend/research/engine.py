@@ -1265,6 +1265,50 @@ def _established_fact_line(item: ResearchItem) -> str:
     return f"- {item.requirement}{suffix}"
 
 
+_TRUNCATION_MARK = " … [truncated for length]"
+
+
+def _truncate_to_tokens(line: str, budget_tokens: int) -> str:
+    """Cut one rendered line down to an estimated token budget, and say so.
+
+    Silent truncation would hand the researcher a requirement that stops
+    mid-sentence and read as the whole of it.
+    """
+    budget_chars = max(0, budget_tokens * 4 - len(_TRUNCATION_MARK))
+    if len(line) <= budget_chars:
+        return line
+    return line[:budget_chars].rstrip() + _TRUNCATION_MARK
+
+
+def established_facts_for(
+    established: "RequirementsProfile | None", project: ProjectProfile
+) -> "RequirementsProfile | None":
+    """The accumulated profile, but only if it researched THIS project.
+
+    The project profile is editable at any time, so a user may correct the
+    city, jurisdiction or client after a round has run. Briefing the next
+    round with the old project's findings would be actively harmful rather
+    than merely wasteful: the block asserts them as established and tells
+    the worker not to re-derive them, so a full re-run commissioned
+    precisely BECAUSE the project changed could skip the requirements it
+    exists to find. Fail closed — a profile that does not record which
+    project it researched (a legacy or hand-edited file) is not briefed
+    either. The cost of being wrong here is one full round, which is
+    exactly what every round cost before this work.
+
+    Note this governs only the BRIEF. Whether the accumulated profile
+    should itself be invalidated when the project identity changes is a
+    pre-existing question about the round merge — it predates the brief,
+    it would discard paid grounded findings, and it is the owner's call.
+    """
+    if established is None:
+        return None
+    recorded = ProjectProfile.from_dict(established.project)
+    if recorded is None or recorded.to_dict() != project.to_dict():
+        return None
+    return established
+
+
 def established_facts_block(
     profile: "RequirementsProfile | None", dimension_id: str
 ) -> str:
@@ -1300,11 +1344,20 @@ def established_facts_block(
     for item in owned:
         line = _established_fact_line(item)
         cost = _estimate_tokens(line)
-        # The first line always lands: a block that disclosed only an
-        # omission count would spend tokens saying nothing.
-        if lines and used + cost > ESTABLISHED_FACTS_MAX_TOKENS:
-            omitted += 1
-            continue
+        remaining = ESTABLISHED_FACTS_MAX_TOKENS - used
+        if cost > remaining:
+            if lines:
+                omitted += 1
+                continue
+            # The first line always lands — a block that disclosed only an
+            # omission count would spend tokens saying nothing — but it
+            # lands TRUNCATED. `requirement` is unbounded at
+            # deserialization and a `.baspec` is a file people share, so a
+            # single oversized item would otherwise carry the whole block
+            # past the model's context limit and fail the dimension
+            # outright: a reliability regression traded for a cost saving.
+            line = _truncate_to_tokens(line, remaining)
+            cost = _estimate_tokens(line)
         lines.append(line)
         used += cost
     if omitted:
@@ -2010,7 +2063,8 @@ def run_requirements_research(
     changed or corrected — so a re-run spends its budget on the frontier
     rather than re-deriving what the session already paid for. ``None`` (a
     first round, or a caller that does not thread it) briefs exactly as
-    before.
+    before, and so does a profile that researched a DIFFERENT project
+    (:func:`established_facts_for`).
 
     ``event_sink`` receives progress dicts: ``research_started`` (with the
     id→title roster), then live per-worker activity as it happens
@@ -2065,6 +2119,11 @@ def run_requirements_research(
         }
     )
 
+    # Only brief on findings that belong to the project being researched
+    # now — see `established_facts_for`. Resolved once, before the fan-out,
+    # so every dimension of a round agrees about it.
+    briefed = established_facts_for(established, profile)
+
     outcomes: dict[str, _DimensionOutcome] = {}
     with ThreadPoolExecutor(
         max_workers=min(_RESEARCH_MAX_WORKERS, len(dimensions))
@@ -2081,7 +2140,7 @@ def run_requirements_research(
                 discipline=discipline,
                 today=today_block,
                 established_facts=established_facts_block(
-                    established, dimension.dimension_id
+                    briefed, dimension.dimension_id
                 ),
                 event_sink=event_sink,
                 should_stop=should_stop,

@@ -18,8 +18,10 @@ from backend.research.engine import (
     ESTABLISHED_FACTS_MAX_TOKENS,
     DimensionStatus,
     ResearchItem,
+    _estimate_tokens,
     build_dimension_user_message,
     established_facts_block,
+    established_facts_for,
     incomplete_dimension_facts,
     sanitized_error_kind,
 )
@@ -1462,6 +1464,9 @@ def _established_profile() -> RequirementsProfile:
             DimensionStatus("site_environment", "completed", title="Site"),
         ],
         research_date="2026-07-01",
+        # Which project these findings belong to. Without it the brief is
+        # withheld — see established_facts_for.
+        project=PROFILE.to_dict(),
     )
 
 
@@ -1526,7 +1531,9 @@ def test_the_established_block_marks_unverified_and_asks_for_corrections():
 
 
 def test_established_facts_are_trimmed_under_the_cap_and_say_so():
-    filler = "x" * (ESTABLISHED_FACTS_MAX_TOKENS * 4)
+    # Half the cap each, so the first lands whole and the rest cannot —
+    # exercising the trim path rather than the oversized-first-item one.
+    filler = "x" * (ESTABLISHED_FACTS_MAX_TOKENS * 2)
     profile = RequirementsProfile(
         items=[
             ResearchItem(
@@ -1555,3 +1562,88 @@ def test_established_facts_are_trimmed_under_the_cap_and_say_so():
     # re-derive, which is the thing the block exists to prevent.
     assert "2 further established item(s) omitted" in block
     assert "partial, not exhaustive" in block
+
+
+def test_a_corrected_project_profile_is_never_briefed_on_the_old_project():
+    """Editing the profile must not have the next round told to skip work.
+
+    The block asserts its facts as established and tells the worker not to
+    re-derive them — so briefing the old project's findings would make a
+    full re-run commissioned BECAUSE the project changed skip the very
+    requirements it exists to find.
+    """
+    established = _established_profile()
+    established.project = PROFILE.to_dict()
+
+    # Same project: briefed, as usual.
+    assert established_facts_for(established, PROFILE) is established
+
+    # Any field differing is a different project — including the client,
+    # which is what the client/insurer-standards dimension researches.
+    for changed in (
+        ProjectProfile("Reno", "NV", "USA", "ExampleCo"),
+        ProjectProfile("Ashburn", "VA", "USA", "OtherCo"),
+        ProjectProfile("Ashburn", "ON", "CA", "ExampleCo"),
+    ):
+        assert established_facts_for(established, changed) is None
+
+    # Fail closed: a profile that does not record what it researched (a
+    # legacy or hand-edited file) is not briefed either. The cost of being
+    # wrong is one full round — exactly what every round used to cost.
+    established.project = None
+    assert established_facts_for(established, PROFILE) is None
+    established.project = {"city": "Ashburn"}
+    assert established_facts_for(established, PROFILE) is None
+    assert established_facts_for(None, PROFILE) is None
+
+
+def test_a_changed_project_sends_a_brief_with_no_established_facts():
+    established = _established_profile()
+    established.project = ProjectProfile("Reno", "NV", "USA", "OtherCo").to_dict()
+
+    client = SequencedFakeClient(_scripts())
+    run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        established=established,
+    )
+    for dim_id in DIM_KEYS:
+        assert "<already_established>" not in _dimension_message(client, dim_id)
+
+
+def test_one_oversized_fact_is_truncated_rather_than_blowing_the_cap():
+    """A `.baspec` is a shared file and `requirement` is unbounded on load.
+
+    The first fact always lands, but it lands truncated — otherwise a single
+    hand-edited item carries the block past the model's context limit and
+    fails the dimension outright, trading a reliability regression for a
+    cost saving.
+    """
+    huge = "y" * (ESTABLISHED_FACTS_MAX_TOKENS * 40)
+    profile = RequirementsProfile(
+        items=[
+            ResearchItem(
+                item_id="r-huge",
+                dimension_id="governing_codes",
+                topic="t",
+                category="governing_code",
+                requirement=huge,
+                grounded=True,
+                confidence=0.9,
+            )
+        ],
+        dimension_statuses=[
+            DimensionStatus("governing_codes", "completed", title="Codes")
+        ],
+        research_date="2026-07-01",
+    )
+    block = established_facts_block(profile, "governing_codes")
+
+    assert len(block) < len(huge)
+    assert _estimate_tokens(block) < ESTABLISHED_FACTS_MAX_TOKENS * 2
+    # Truncation is disclosed: a requirement that stops mid-sentence would
+    # otherwise read as the whole of it.
+    assert "[truncated for length]" in block

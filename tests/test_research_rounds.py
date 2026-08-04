@@ -33,6 +33,7 @@ from backend.research.engine import (
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
 from tests.fakes import FakeClient, SequencedFakeClient, research_response, text_turn, tool_turn
 from tests.test_research_api import _PROFILE_EDITS, _parse_sse
+from tests.fakes import _user_text
 from tests.test_research_engine import DIM_KEYS, _item
 
 PROFILE = ProjectProfile("Ashburn", "VA", "USA", "ExampleCo")
@@ -1387,3 +1388,138 @@ def test_rounds_survive_save_and_resume_and_keep_counting(monkeypatch):
         "Rule B.",
         "Rule C.",
     }
+
+
+# ---------------------------------------------------------------------------
+# A scoped round (A) + the established-facts brief (B), through the runner
+# ---------------------------------------------------------------------------
+
+
+def test_a_scoped_retry_leaves_the_settled_dimensions_exactly_as_they_were():
+    """Round 2 retries only the gaps; round 1's completed areas are untouched.
+
+    The cumulative view is what readiness and the drafting context read, so
+    a scoped round must not make a dimension it never ran look like it
+    regressed — nor recount the items it is not re-reporting.
+    """
+    boom = RuntimeError("kaput")  # non-retryable (UNKNOWN class)
+    round_one = SequencedFakeClient(
+        _scripts_for_rounds(
+            {
+                "governing_codes": research_response(
+                    items=[_item("Rule A.", ["https://a.gov"])],
+                    searched_urls=["https://a.gov"],
+                ),
+                "ahj_requirements": boom,
+                "client_standards": boom,
+            }
+        )
+    )
+    runner = ResearchRunner()
+    _run_round(runner, round_one, None)
+
+    first = runner.profile_result
+    assert first is not None
+    assert first.completed_dimensions == 2
+    gap_ids = [s.dimension_id for s in first.dimension_statuses if s.status != "completed"]
+    assert gap_ids == ["ahj_requirements", "client_standards"]
+
+    # Round 2 runs ONLY the two that never completed.
+    round_two = SequencedFakeClient(
+        {
+            DIM_KEYS["ahj_requirements"]: [
+                research_response(
+                    items=[
+                        _item(
+                            "Permit before rough-in.",
+                            ["https://ahj.gov"],
+                            category="ahj_requirement",
+                        )
+                    ],
+                    searched_urls=["https://ahj.gov"],
+                )
+            ],
+            DIM_KEYS["client_standards"]: [
+                research_response(items=[], searched_urls=["https://c.gov"])
+            ],
+        }
+    )
+    settled = threading.Event()
+    assert runner.start(
+        module=HYPERSCALE_FIRE,
+        project_profile=PROFILE,
+        client=round_two,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        dimension_ids=gap_ids,
+        on_settled=settled.set,
+    )
+    assert settled.wait(timeout=10)
+
+    merged = runner.profile_result
+    assert merged is not None
+    statuses = {s.dimension_id: s for s in merged.dimension_statuses}
+    # Still every declared dimension, still in module order — a dimension
+    # this round did not touch keeps exactly the record it had.
+    assert [s.dimension_id for s in merged.dimension_statuses] == [
+        "governing_codes",
+        "ahj_requirements",
+        "client_standards",
+        "site_environment",
+    ]
+    assert statuses["governing_codes"].status == "completed"
+    assert statuses["governing_codes"].item_count == 1
+    assert statuses["ahj_requirements"].status == "completed"
+    assert merged.completed_dimensions == 4
+
+    # Round 1's finding survived a round that never asked about it.
+    assert {i.requirement for i in merged.items} == {
+        "Rule A.",
+        "Permit before rough-in.",
+    }
+    # The round record is the two areas that ran, not four.
+    assert merged.round_count == 2
+    assert [s.dimension_id for s in merged.rounds[1].dimension_statuses] == gap_ids
+
+
+def test_the_runner_briefs_a_later_round_on_what_the_session_established():
+    """Round 2's request carries round 1's findings for that dimension."""
+    round_one = SequencedFakeClient(
+        _scripts_for_rounds(
+            {
+                "governing_codes": research_response(
+                    items=[_item("VCC 2021 governs.", ["https://a.gov"])],
+                    searched_urls=["https://a.gov"],
+                )
+            }
+        )
+    )
+    runner = ResearchRunner()
+    _run_round(runner, round_one, None)
+
+    # Round 1 asked blind — there was nothing established to be told about.
+    first_brief = next(
+        _user_text(r["messages"])
+        for r in round_one.requests
+        if DIM_KEYS["governing_codes"] in _user_text(r["messages"])
+    )
+    assert "<already_established>" not in first_brief
+
+    round_two = SequencedFakeClient(_scripts_for_rounds({}))
+    _run_round(runner, round_two, None)
+
+    second_brief = next(
+        _user_text(r["messages"])
+        for r in round_two.requests
+        if DIM_KEYS["governing_codes"] in _user_text(r["messages"])
+    )
+    assert "<already_established>" in second_brief
+    assert "VCC 2021 governs." in second_brief
+    assert "NEW, CHANGED, or CORRECTED" in second_brief
+    # A dimension that found nothing in round 1 has nothing to be briefed on.
+    ahj_brief = next(
+        _user_text(r["messages"])
+        for r in round_two.requests
+        if DIM_KEYS["ahj_requirements"] in _user_text(r["messages"])
+    )
+    assert "<already_established>" not in ahj_brief

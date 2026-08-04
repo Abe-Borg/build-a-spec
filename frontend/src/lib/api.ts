@@ -20,6 +20,7 @@ import type {
   ReadinessPayload,
   ReferenceDocMeta,
   ResearchEvent,
+  ResearchScope,
   ResearchSnapshot,
   SessionBundle,
   SectionDiffPayload,
@@ -651,8 +652,15 @@ export async function stopChat(): Promise<void> {
 
 /* --- Research (Phase 4) --- */
 
+/**
+ * Start a research round. `scope` is `"all"` (every declared dimension) or
+ * `"gaps"` — the areas that never completed, resolved SERVER-side from the
+ * same coverage join readiness uses, so the client never sends a dimension
+ * list of its own.
+ */
 export async function startResearch(
   lease: WorkspaceLeaseInput = {},
+  scope: ResearchScope = "all",
 ): Promise<void> {
   const resp = await fetch("/api/research/start", {
     method: "POST",
@@ -660,6 +668,7 @@ export async function startResearch(
     body: JSON.stringify({
       workspace_id: lease.workspaceId,
       generation: lease.generation,
+      scope,
     }),
   });
   const data = await resp.json();

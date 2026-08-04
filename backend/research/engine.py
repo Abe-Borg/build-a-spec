@@ -1206,6 +1206,192 @@ def build_research_system_prompt(module: SpecModule) -> str:
     return f"{module.research_persona}\n\n{_RESEARCH_PROTOCOL_BLOCK}"
 
 
+# ---------------------------------------------------------------------------
+# Established facts (what a later round must not pay to re-derive)
+# ---------------------------------------------------------------------------
+
+# Ceiling on the established-facts block spliced into ONE dimension's brief.
+# A runaway guard, not a budget: a dimension has to accumulate hundreds of
+# items across many rounds to approach it. Trimming is DISCLOSED rather than
+# silent — an omitted fact is one this round may go and re-derive, which is
+# the whole thing the block exists to prevent, so the researcher is told the
+# list it is reading is partial.
+ESTABLISHED_FACTS_MAX_TOKENS = 20_000
+
+_ESTABLISHED_FACTS_DIRECTIVE = """<already_established>
+Earlier research rounds this session already established the facts below for
+THIS dimension. They are in the project's requirements profile and the
+specification writer can already see them. This round exists to ADD to what
+is known, not to reproduce it.
+
+- Do not re-derive them. Do not spend searches re-confirming a fact listed
+  here unless you encounter evidence that it is wrong, superseded, or no
+  longer in force.
+- DO re-verify anything marked [UNVERIFIED]. It was reported but never
+  grounded in a retrieved source, so confirming or correcting it is the
+  cheapest high-value work available to you.
+- DO report a contradiction, a superseded edition, or a correction the
+  moment you find one. That is the most valuable thing this round can
+  produce: state the corrected fact as its own item, and say in notes what
+  it supersedes and on what evidence.
+- Report only what is NEW, CHANGED, or CORRECTED. Do not restate an
+  established fact merely to acknowledge it.
+
+ESTABLISHED:
+{items}
+</already_established>"""
+
+
+def _established_fact_line(item: ResearchItem) -> str:
+    """One established fact, compact — this block is context, not a record.
+
+    Deliberately omits the item id, confidence and source list that
+    :func:`_render_item_line` carries: the researcher can act on none of
+    them, and every character here is re-billed on a request whose entire
+    purpose is to cost less than the round before it. Grounding is stated
+    only when it is ABSENT, because ``[UNVERIFIED]`` is the one flag the
+    directive above asks the researcher to do something about.
+    """
+    details = []
+    if item.authority:
+        details.append(f"Authority: {item.authority}")
+    if item.code_reference:
+        details.append(f"Ref: {item.code_reference}")
+    if not item.grounded:
+        details.append("[UNVERIFIED]")
+    if item.research_date:
+        details.append(f"as of {item.research_date}")
+    suffix = f" ({'; '.join(details)})" if details else ""
+    return f"- {item.requirement}{suffix}"
+
+
+_TRUNCATION_MARK = " … [truncated for length]"
+
+
+def _truncate_to_tokens(line: str, budget_tokens: int) -> str:
+    """Cut one rendered line down to an estimated token budget, and say so.
+
+    Silent truncation would hand the researcher a requirement that stops
+    mid-sentence and read as the whole of it.
+    """
+    budget_chars = max(0, budget_tokens * 4 - len(_TRUNCATION_MARK))
+    if len(line) <= budget_chars:
+        return line
+    return line[:budget_chars].rstrip() + _TRUNCATION_MARK
+
+
+def established_facts_for(
+    established: "RequirementsProfile | None", project: ProjectProfile
+) -> "RequirementsProfile | None":
+    """The accumulated profile, but only if it researched THIS project.
+
+    The project profile is editable at any time, so a user may correct the
+    city, jurisdiction or client after a round has run. Briefing the next
+    round with the old project's findings would be actively harmful rather
+    than merely wasteful: the block asserts them as established and tells
+    the worker not to re-derive them, so a full re-run commissioned
+    precisely BECAUSE the project changed could skip the requirements it
+    exists to find. Fail closed — a profile that does not record which
+    project it researched (a legacy or hand-edited file) is not briefed
+    either. The cost of being wrong here is one full round, which is
+    exactly what every round cost before this work.
+
+    Note this governs only the BRIEF. Whether the accumulated profile
+    should itself be invalidated when the project identity changes is a
+    pre-existing question about the round merge — it predates the brief,
+    it would discard paid grounded findings, and it is the owner's call.
+    """
+    if established is None:
+        return None
+    recorded = ProjectProfile.from_dict(established.project)
+    if recorded is None or recorded.to_dict() != project.to_dict():
+        return None
+    return established
+
+
+def established_facts_block(
+    profile: "RequirementsProfile | None", dimension_id: str
+) -> str:
+    """What earlier rounds already settled for ONE dimension, or ``""``.
+
+    Scoped to the dimension deliberately. Another dimension's findings are
+    noise in a brief this narrow, and a dimension independently
+    corroborating one of them is a FEATURE — the merge confirms such an
+    item in place (:func:`_confirm_item`) rather than duplicating it, so
+    suppressing the corroboration would cost evidence and save nothing.
+
+    Empty for a first round, for a dimension no round has completed, and
+    for a caller that passes no profile — so a round-1 brief stays
+    byte-identical to what this engine has always sent. Same posture as
+    ``today=""``.
+
+    Ordering is deterministic (grounded first, then confidence descending,
+    then id) so the same profile always renders the same brief. That order
+    is also the trim order: under the cap the tail goes, which keeps the
+    established, well-evidenced facts — the ones re-deriving would waste
+    the most money on — in the block.
+    """
+    if profile is None:
+        return ""
+    owned = [i for i in profile.items if i.dimension_id == dimension_id]
+    if not owned:
+        return ""
+    owned.sort(key=lambda i: (not i.grounded, -i.confidence, i.item_id))
+
+    lines: list[str] = []
+    used = 0
+    omitted = 0
+    for item in owned:
+        line = _established_fact_line(item)
+        cost = _estimate_tokens(line)
+        remaining = ESTABLISHED_FACTS_MAX_TOKENS - used
+        if cost > remaining:
+            if lines:
+                omitted += 1
+                continue
+            # The first line always lands — a block that disclosed only an
+            # omission count would spend tokens saying nothing — but it
+            # lands TRUNCATED. `requirement` is unbounded at
+            # deserialization and a `.baspec` is a file people share, so a
+            # single oversized item would otherwise carry the whole block
+            # past the model's context limit and fail the dimension
+            # outright: a reliability regression traded for a cost saving.
+            line = _truncate_to_tokens(line, remaining)
+            cost = _estimate_tokens(line)
+        lines.append(line)
+        used += cost
+    if omitted:
+        lines.append(
+            f"- ({omitted} further established item(s) omitted here for "
+            "length. They are already in the profile — treat this list as "
+            "partial, not exhaustive.)"
+        )
+    return _ESTABLISHED_FACTS_DIRECTIVE.format(items="\n".join(lines))
+
+
+def select_research_dimensions(
+    module: SpecModule, dimension_ids: Iterable[str] | None = None
+) -> list[ResearchDimension]:
+    """The dimensions one round will run, in module declaration order.
+
+    ``None`` selects every declared dimension — the historical contract,
+    and what a caller that does not care still gets. An explicit selection
+    is FILTERED against what the module declares, so an id the module does
+    not define is ignored rather than fabricating a dimension with no
+    brief.
+
+    Order always comes from the module, never from the caller's list: the
+    profile's rendering, the merge's cumulative statuses and the roster
+    event all read declaration order, and letting a caller permute it would
+    make the same round render differently for no reason.
+    """
+    declared = list(getattr(module, "research_dimensions", ()) or ())
+    if dimension_ids is None:
+        return declared
+    wanted = {str(d) for d in dimension_ids}
+    return [d for d in declared if d.dimension_id in wanted]
+
+
 def build_dimension_user_message(
     module: SpecModule,
     profile: ProjectProfile,
@@ -1213,6 +1399,7 @@ def build_dimension_user_message(
     discipline: str = "",
     *,
     today: str = "",
+    established_facts: str = "",
 ) -> str:
     """Date + project header + the dimension's formatted brief.
 
@@ -1229,6 +1416,13 @@ def build_dimension_user_message(
     against its training data. Passed in rather than read here so all four
     dimensions of a round agree, including one that crosses midnight; an
     empty value renders nothing, keeping direct callers unchanged.
+
+    ``established_facts`` is :func:`established_facts_block` for this
+    dimension — what earlier rounds already settled, so a later round does
+    not pay to find it again. It renders AFTER the brief: the researcher
+    reads its task first and what is already known second, which is the
+    order in which it has to weigh them. Empty for a first round, so the
+    message is byte-identical to what this engine has always sent.
     """
     kwargs = module.basis.format_kwargs()
     kwargs.update(profile.prompt_format_kwargs())
@@ -1242,7 +1436,10 @@ def build_dimension_user_message(
     if today:
         header = f"{today}\n\n{header}"
     body = dimension.prompt_template.format(**kwargs)
-    return f"{header}\n\n{body}"
+    message = f"{header}\n\n{body}"
+    if established_facts:
+        message = f"{message}\n\n{established_facts}"
+    return message
 
 
 # ---------------------------------------------------------------------------
@@ -1505,6 +1702,7 @@ def _run_dimension(
     max_tokens: int,
     discipline: str = "",
     today: str = "",
+    established_facts: str = "",
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> _DimensionOutcome:
@@ -1545,7 +1743,12 @@ def _run_dimension(
 
     system_prompt = build_research_system_prompt(module)
     user_message = build_dimension_user_message(
-        module, profile, dimension, discipline, today=today
+        module,
+        profile,
+        dimension,
+        discipline,
+        today=today,
+        established_facts=established_facts,
     )
 
     def _failed(
@@ -1839,10 +2042,29 @@ def run_requirements_research(
     model: str,
     max_tokens: int,
     discipline: str = "",
+    dimension_ids: Iterable[str] | None = None,
+    established: "RequirementsProfile | None" = None,
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> RequirementsProfile:
-    """Run every module research dimension in parallel; merge the results.
+    """Run the selected module research dimensions in parallel; merge them.
+
+    ``dimension_ids`` scopes the round to a subset of the module's declared
+    dimensions (``None`` runs them all — the historical contract). A later
+    round most often wants only the areas that never completed: running the
+    settled ones again asks a question already answered and pays a full
+    search budget to re-answer it. Scoping is safe for the merge because
+    the cumulative per-dimension view keeps a dimension this round did not
+    touch exactly as it was (:func:`_accumulate_statuses`).
+
+    ``established`` is the profile the session has ALREADY accumulated. Each
+    dimension is briefed with its own settled facts
+    (:func:`established_facts_block`) and told to report only what is new,
+    changed or corrected — so a re-run spends its budget on the frontier
+    rather than re-deriving what the session already paid for. ``None`` (a
+    first round, or a caller that does not thread it) briefs exactly as
+    before, and so does a profile that researched a DIFFERENT project
+    (:func:`established_facts_for`).
 
     ``event_sink`` receives progress dicts: ``research_started`` (with the
     id→title roster), then live per-worker activity as it happens
@@ -1859,10 +2081,14 @@ def run_requirements_research(
     ``should_stop`` takes this same path — every dimension reports
     "Cancelled by user.").
     """
-    dimensions = module.research_dimensions
-    if not dimensions:
+    if not (getattr(module, "research_dimensions", ()) or ()):
         raise ResearchFanoutError(
             f"Module {module.module_id!r} defines no research dimensions."
+        )
+    dimensions = select_research_dimensions(module, dimension_ids)
+    if not dimensions:
+        raise ResearchFanoutError(
+            "No declared research dimension matched the requested scope."
         )
 
     # One clock reading for the whole round, so every dimension is told the
@@ -1886,8 +2112,17 @@ def run_requirements_research(
             "dimension_titles": {
                 d.dimension_id: d.title for d in dimensions
             },
+            # What the module declares, so a scoped round can say "2 of 4
+            # areas" without the board having to fetch coverage separately.
+            # `dimensions` above is what this round actually runs.
+            "declared_dimension_count": len(module.research_dimensions),
         }
     )
+
+    # Only brief on findings that belong to the project being researched
+    # now — see `established_facts_for`. Resolved once, before the fan-out,
+    # so every dimension of a round agrees about it.
+    briefed = established_facts_for(established, profile)
 
     outcomes: dict[str, _DimensionOutcome] = {}
     with ThreadPoolExecutor(
@@ -1904,6 +2139,9 @@ def run_requirements_research(
                 max_tokens=max_tokens,
                 discipline=discipline,
                 today=today_block,
+                established_facts=established_facts_block(
+                    briefed, dimension.dimension_id
+                ),
                 event_sink=event_sink,
                 should_stop=should_stop,
             ): dimension

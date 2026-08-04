@@ -15,6 +15,7 @@ import type {
   QcApplyPreviewResult,
   QcSnapshot,
   ReadinessPayload,
+  ResearchScope,
   ResearchSnapshot,
   SessionBundle,
   SourceCapabilitiesState,
@@ -1060,9 +1061,9 @@ export default function App() {
     replaceResearchSnapshot,
   ]);
 
-  const onStartResearch = useCallback(async () => {
+  const onStartResearch = useCallback(async (scope: ResearchScope = "all") => {
     try {
-      await startResearch(currentWorkspaceLease());
+      await startResearch(currentWorkspaceLease(), scope);
       // Clear the auth-modal dedup ref for this fresh attempt — see
       // researchAuthHandledRef's declaration comment: refreshResearch (not
       // an effect) is what actually reopens the modal.
@@ -1075,13 +1076,21 @@ export default function App() {
       researchRefreshGenerationRef.current += 1;
       // Open the drawer onto the live agent board — the run is the show.
       bumpDrawer("research");
-      addNote("Started requirements research — progress in the Research panel.");
+      addNote(
+        scope === "gaps"
+          ? "Retrying the incomplete research areas — progress in the Research panel."
+          : "Started requirements research — progress in the Research panel.",
+      );
       void followResearch();
     } catch (e) {
       replaceResearchSnapshot({
         status: "failed",
         error: e instanceof Error ? e.message : String(e),
         events: researchSnapshotRef.current?.events ?? [],
+        // Coverage is what the drawer's retry control is built from; a
+        // refused start has not changed it, so carry it rather than
+        // dropping the control until the next successful poll.
+        coverage: researchSnapshotRef.current?.coverage,
       });
     }
   }, [

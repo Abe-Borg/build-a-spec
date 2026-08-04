@@ -15,8 +15,13 @@ from backend.research import (
 )
 from backend.research.engine import (
     DIMENSION_ERROR_KINDS,
+    ESTABLISHED_FACTS_MAX_TOKENS,
     DimensionStatus,
     ResearchItem,
+    _estimate_tokens,
+    build_dimension_user_message,
+    established_facts_block,
+    established_facts_for,
     incomplete_dimension_facts,
     sanitized_error_kind,
 )
@@ -34,6 +39,7 @@ from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE as DEFAULT_MODU
 from tests.fakes import (
     SequencedFakeClient,
     _synthesize_events,
+    _user_text,
     block_start_event,
     block_stop_event,
     code_execution_tool_events,
@@ -1303,3 +1309,341 @@ def test_sanitizing_a_kind_keeps_every_real_one_and_rejects_the_rest():
     assert sanitized_error_kind(None) == ""
     assert sanitized_error_kind(["rate_limit"]) == ""
     assert sanitized_error_kind("RATE_LIMIT") == "unrecognized"
+
+
+# ---------------------------------------------------------------------------
+# Scoped rounds (A) — a later round need not re-run the areas that are done
+# ---------------------------------------------------------------------------
+
+
+def _dimension_message(client, dimension_id: str) -> str:
+    """The user brief one dimension was actually sent, or "" if it never ran."""
+    key = DIM_KEYS[dimension_id]
+    for request in client.requests:
+        text = _user_text(request.get("messages", []))
+        if key in text:
+            return text
+    return ""
+
+
+def _ran_dimensions(client) -> set[str]:
+    return {
+        dim_id
+        for dim_id in DIM_KEYS
+        if _dimension_message(client, dim_id)
+    }
+
+
+def test_a_scoped_round_runs_only_the_named_dimensions():
+    client = SequencedFakeClient(_scripts())
+    events: list[dict] = []
+    profile = run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        dimension_ids=["ahj_requirements", "site_environment"],
+        event_sink=events.append,
+    )
+
+    # The settled areas were never asked again — which is the entire point:
+    # a full round pays four search budgets to re-answer two.
+    assert _ran_dimensions(client) == {"ahj_requirements", "site_environment"}
+    assert [s.dimension_id for s in profile.dimension_statuses] == [
+        "ahj_requirements",
+        "site_environment",
+    ]
+    roster = next(e for e in events if e["type"] == "research_started")
+    assert roster["dimensions"] == ["ahj_requirements", "site_environment"]
+    assert set(roster["dimension_titles"]) == {
+        "ahj_requirements",
+        "site_environment",
+    }
+    # The live board seeds from the roster, so it must show two agents and
+    # say what it is two OF — never four cards, half of which never start.
+    assert roster["declared_dimension_count"] == 4
+
+
+def test_scope_order_comes_from_the_module_not_the_caller():
+    client = SequencedFakeClient(_scripts())
+    profile = run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        # Caller order reversed, and one id repeated.
+        dimension_ids=["site_environment", "governing_codes", "site_environment"],
+    )
+    assert [s.dimension_id for s in profile.dimension_statuses] == [
+        "governing_codes",
+        "site_environment",
+    ]
+
+
+def test_an_unknown_scope_id_is_ignored_and_an_empty_scope_refuses():
+    client = SequencedFakeClient(_scripts())
+    profile = run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        dimension_ids=["governing_codes", "not_a_dimension"],
+    )
+    # Filtered against what the module declares — never fabricated, because a
+    # dimension with no brief has nothing to research.
+    assert [s.dimension_id for s in profile.dimension_statuses] == [
+        "governing_codes"
+    ]
+
+    with pytest.raises(ResearchFanoutError) as excinfo:
+        run_requirements_research(
+            DEFAULT_MODULE,
+            PROFILE,
+            SequencedFakeClient(_scripts()),
+            model="claude-sonnet-5",
+            max_tokens=4096,
+            dimension_ids=["not_a_dimension"],
+        )
+    assert "matched the requested scope" in str(excinfo.value)
+
+
+def test_an_unscoped_round_still_runs_every_declared_dimension():
+    client = SequencedFakeClient(_scripts())
+    profile = _run(client)
+    assert _ran_dimensions(client) == set(DIM_KEYS)
+    assert len(profile.dimension_statuses) == 4
+
+
+# ---------------------------------------------------------------------------
+# Established facts (B) — a later round is told what it need not re-derive
+# ---------------------------------------------------------------------------
+
+
+def _established_profile() -> RequirementsProfile:
+    return RequirementsProfile(
+        items=[
+            ResearchItem(
+                item_id="r-aaa",
+                dimension_id="governing_codes",
+                topic="code",
+                category="governing_code",
+                requirement="VCC 2021 governs the work.",
+                authority="Virginia DHCD",
+                code_reference="VCC 101",
+                accepted_sources=["https://dhcd.virginia.gov/vcc"],
+                grounded=True,
+                confidence=0.9,
+                research_date="2026-07-01",
+            ),
+            ResearchItem(
+                item_id="r-bbb",
+                dimension_id="governing_codes",
+                topic="code",
+                category="governing_code",
+                requirement="A local amendment may apply.",
+                grounded=False,
+                confidence=0.3,
+                research_date="2026-07-01",
+            ),
+            ResearchItem(
+                item_id="r-ccc",
+                dimension_id="site_environment",
+                topic="site",
+                category="site_environment",
+                requirement="Seismic design category B.",
+                grounded=True,
+                confidence=0.8,
+                research_date="2026-07-01",
+            ),
+        ],
+        dimension_statuses=[
+            DimensionStatus("governing_codes", "completed", title="Codes"),
+            DimensionStatus("site_environment", "completed", title="Site"),
+        ],
+        research_date="2026-07-01",
+        # Which project these findings belong to. Without it the brief is
+        # withheld — see established_facts_for.
+        project=PROFILE.to_dict(),
+    )
+
+
+def test_a_first_round_brief_is_byte_identical_to_what_it_always_was():
+    # No profile threaded, and no items for the dimension: both render "",
+    # so the message the engine sends is unchanged from before this work.
+    assert established_facts_block(None, "governing_codes") == ""
+    assert (
+        established_facts_block(_established_profile(), "client_standards") == ""
+    )
+
+    dimension = DEFAULT_MODULE.research_dimensions[0]
+    assert build_dimension_user_message(
+        DEFAULT_MODULE, PROFILE, dimension, established_facts=""
+    ) == build_dimension_user_message(DEFAULT_MODULE, PROFILE, dimension)
+
+
+def test_established_facts_reach_only_their_own_dimension():
+    client = SequencedFakeClient(_scripts())
+    run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        established=_established_profile(),
+    )
+
+    codes = _dimension_message(client, "governing_codes")
+    assert "VCC 2021 governs the work." in codes
+    # Another dimension's finding is noise in a brief this narrow — and a
+    # dimension independently corroborating it is a feature, since the merge
+    # confirms such an item in place rather than duplicating it.
+    assert "Seismic design category B." not in codes
+
+    site = _dimension_message(client, "site_environment")
+    assert "Seismic design category B." in site
+    assert "VCC 2021 governs the work." not in site
+
+    # A dimension with nothing established is briefed exactly as a first
+    # round would brief it.
+    assert "<already_established>" not in _dimension_message(
+        client, "client_standards"
+    )
+
+
+def test_the_established_block_marks_unverified_and_asks_for_corrections():
+    block = established_facts_block(_established_profile(), "governing_codes")
+
+    # Grounded facts are stated plainly; the ungrounded one is flagged,
+    # because re-verifying it is the one thing the directive asks for.
+    assert "- VCC 2021 governs the work." in block
+    assert "Authority: Virginia DHCD" in block and "Ref: VCC 101" in block
+    assert "[UNVERIFIED]" in block
+    assert block.index("VCC 2021") < block.index("A local amendment")
+
+    # The instruction is the load-bearing half: without it the block is just
+    # more context to confidently re-derive.
+    assert "Do not re-derive them." in block
+    assert "NEW, CHANGED, or CORRECTED" in block
+    assert "superseded" in block
+
+
+def test_established_facts_are_trimmed_under_the_cap_and_say_so():
+    # Half the cap each, so the first lands whole and the rest cannot —
+    # exercising the trim path rather than the oversized-first-item one.
+    filler = "x" * (ESTABLISHED_FACTS_MAX_TOKENS * 2)
+    profile = RequirementsProfile(
+        items=[
+            ResearchItem(
+                item_id=f"r-{n}",
+                dimension_id="governing_codes",
+                topic="t",
+                category="governing_code",
+                requirement=f"{filler} {n}",
+                grounded=True,
+                confidence=0.9 - n / 100,
+            )
+            for n in range(3)
+        ],
+        dimension_statuses=[
+            DimensionStatus("governing_codes", "completed", title="Codes")
+        ],
+        research_date="2026-07-01",
+    )
+    block = established_facts_block(profile, "governing_codes")
+
+    # Highest-confidence first, so the tail is what goes — the established,
+    # well-evidenced facts re-deriving would waste the most money on stay.
+    assert f"{filler} 0" in block
+    assert f"{filler} 2" not in block
+    # Disclosed, never silent: an omitted fact is one this round may go and
+    # re-derive, which is the thing the block exists to prevent.
+    assert "2 further established item(s) omitted" in block
+    assert "partial, not exhaustive" in block
+
+
+def test_a_corrected_project_profile_is_never_briefed_on_the_old_project():
+    """Editing the profile must not have the next round told to skip work.
+
+    The block asserts its facts as established and tells the worker not to
+    re-derive them — so briefing the old project's findings would make a
+    full re-run commissioned BECAUSE the project changed skip the very
+    requirements it exists to find.
+    """
+    established = _established_profile()
+    established.project = PROFILE.to_dict()
+
+    # Same project: briefed, as usual.
+    assert established_facts_for(established, PROFILE) is established
+
+    # Any field differing is a different project — including the client,
+    # which is what the client/insurer-standards dimension researches.
+    for changed in (
+        ProjectProfile("Reno", "NV", "USA", "ExampleCo"),
+        ProjectProfile("Ashburn", "VA", "USA", "OtherCo"),
+        ProjectProfile("Ashburn", "ON", "CA", "ExampleCo"),
+    ):
+        assert established_facts_for(established, changed) is None
+
+    # Fail closed: a profile that does not record what it researched (a
+    # legacy or hand-edited file) is not briefed either. The cost of being
+    # wrong is one full round — exactly what every round used to cost.
+    established.project = None
+    assert established_facts_for(established, PROFILE) is None
+    established.project = {"city": "Ashburn"}
+    assert established_facts_for(established, PROFILE) is None
+    assert established_facts_for(None, PROFILE) is None
+
+
+def test_a_changed_project_sends_a_brief_with_no_established_facts():
+    established = _established_profile()
+    established.project = ProjectProfile("Reno", "NV", "USA", "OtherCo").to_dict()
+
+    client = SequencedFakeClient(_scripts())
+    run_requirements_research(
+        DEFAULT_MODULE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        established=established,
+    )
+    for dim_id in DIM_KEYS:
+        assert "<already_established>" not in _dimension_message(client, dim_id)
+
+
+def test_one_oversized_fact_is_truncated_rather_than_blowing_the_cap():
+    """A `.baspec` is a shared file and `requirement` is unbounded on load.
+
+    The first fact always lands, but it lands truncated — otherwise a single
+    hand-edited item carries the block past the model's context limit and
+    fails the dimension outright, trading a reliability regression for a
+    cost saving.
+    """
+    huge = "y" * (ESTABLISHED_FACTS_MAX_TOKENS * 40)
+    profile = RequirementsProfile(
+        items=[
+            ResearchItem(
+                item_id="r-huge",
+                dimension_id="governing_codes",
+                topic="t",
+                category="governing_code",
+                requirement=huge,
+                grounded=True,
+                confidence=0.9,
+            )
+        ],
+        dimension_statuses=[
+            DimensionStatus("governing_codes", "completed", title="Codes")
+        ],
+        research_date="2026-07-01",
+    )
+    block = established_facts_block(profile, "governing_codes")
+
+    assert len(block) < len(huge)
+    assert _estimate_tokens(block) < ESTABLISHED_FACTS_MAX_TOKENS * 2
+    # Truncation is disclosed: a requirement that stops mid-sentence would
+    # otherwise read as the whole of it.
+    assert "[truncated for length]" in block

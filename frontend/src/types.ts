@@ -494,6 +494,17 @@ export interface DocPayload {
   import_report: ImportReport | null;
   /** True when this active session has an exact attached source DOCX. */
   source_available: boolean;
+  /**
+   * The document gave up source preservation ("Edit freely").
+   *
+   * Explicit because it is not inferable: detaching KEEPS the source bytes
+   * and the imported baseline — that is what leaves the exact original
+   * downloadable and redline vs master working — while `source_capabilities`
+   * goes null. That combination is byte-identical to a source-backed
+   * document whose report has not arrived, so a client that infers scope
+   * from the retained artifacts locks a document the user just unlocked.
+   */
+  source_detached: boolean;
   /** True when edits can be exported by cloning and narrowly patching the source. */
   preservation_ready: boolean;
   /** Detailed imported-source capability state; null for from-scratch documents. */

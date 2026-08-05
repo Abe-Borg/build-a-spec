@@ -54,6 +54,9 @@ interface Props {
   baselineIndex: number | null;
   importReport: ImportReport | null;
   sourceAvailable: boolean;
+  /** The document gave up source preservation ("Edit freely"). Server-owned:
+   *  it cannot be inferred from the retained artifacts, which detaching keeps. */
+  sourceDetached: boolean;
   preservationReady: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
   templateOrigin: TemplateOrigin | null;
@@ -264,6 +267,7 @@ export default function ArtifactPanel({
   baselineIndex,
   importReport,
   sourceAvailable,
+  sourceDetached,
   preservationReady,
   sourceCapabilities,
   templateOrigin,
@@ -365,6 +369,7 @@ export default function ArtifactPanel({
     sourceAvailable,
     baselineIndex,
     version.index,
+    sourceDetached,
   );
   const bodyEditingDisabled =
     activeSourceExpected && sourceCapabilities?.status !== "ready";

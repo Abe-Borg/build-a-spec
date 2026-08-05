@@ -158,6 +158,10 @@ export default function App() {
   const [referenceDocs, setReferenceDocs] = useState<ReferenceDocMeta[]>([]);
   const [referenceBusy, setReferenceBusy] = useState(false);
   const [sourceAvailable, setSourceAvailable] = useState(false);
+  // Server-owned, never inferred: detaching KEEPS the source bytes and the
+  // baseline, so the retained artifacts look identical to an attached
+  // document whose capability report has not arrived.
+  const [sourceDetached, setSourceDetached] = useState(false);
   const [preservationReady, setPreservationReady] = useState(false);
   const [sourceCapabilities, setSourceCapabilities] =
     useState<SourceCapabilitiesState | null>(null);
@@ -417,6 +421,7 @@ export default function App() {
         setBaselineIndex(payload.baseline_index ?? null);
         setImportReport(payload.import_report ?? null);
         setSourceAvailable(payload.source_available ?? false);
+        setSourceDetached(payload.source_detached ?? false);
         setPreservationReady(payload.preservation_ready ?? false);
         setSourceCapabilities(payload.source_capabilities ?? null);
         setTemplateOrigin(payload.template_origin ?? null);
@@ -1445,6 +1450,7 @@ export default function App() {
     // document being discarded — same reasoning as the project-open path.
     setImportNotice(null);
     setSourceAvailable(false);
+    setSourceDetached(false);
     setPreservationReady(false);
     setSourceCapabilities(null);
     setTemplateOrigin(null);
@@ -1496,6 +1502,7 @@ export default function App() {
     reference_docs?: ReferenceDocMeta[];
     import_report?: ImportReport | null;
     source_available?: boolean;
+    source_detached?: boolean;
     preservation_ready?: boolean;
     source_capabilities?: SourceCapabilitiesState | null;
     template_origin?: TemplateOrigin | null;
@@ -1510,6 +1517,7 @@ export default function App() {
     setBaselineIndex(payload.baseline_index ?? null);
     setImportReport(payload.import_report ?? null);
     setSourceAvailable(payload.source_available ?? false);
+    setSourceDetached(payload.source_detached ?? false);
     setPreservationReady(payload.preservation_ready ?? false);
     setSourceCapabilities(payload.source_capabilities ?? null);
     setTemplateOrigin(payload.template_origin ?? null);
@@ -2189,6 +2197,7 @@ export default function App() {
           onRemoveReference={onRemoveReference}
           referenceBusy={referenceBusy}
           sourceAvailable={sourceAvailable}
+          sourceDetached={sourceDetached}
           preservationReady={preservationReady}
           sourceCapabilities={sourceCapabilities}
           templateOrigin={templateOrigin}

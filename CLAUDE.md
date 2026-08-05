@@ -5430,6 +5430,36 @@ sweep's cost is deliberately untouched — see the note at the end.
   being empty, so undoing back to version 0 makes a second import legal with
   the flag still set (pinned by its own test — the reset-based test passes
   either way and hid this).
+- **The project LOADER must skip the per-version preservation check, and
+  that is the whole feature working or not** (caught in review on PR #128,
+  Codex P1). `_stage_project_load` re-validates every retained version from
+  the baseline forward with `source_patch_readiness` — right for an attached
+  project, since a forged redo version must not enter the session and become
+  active later. For a detached one it asks the wrong question entirely:
+  exceeding that boundary is precisely what the user asked for, so
+  re-imposing it turned "detach → edit → save → reopen" into a project that
+  **cannot be opened at all** (`ProjectPackageError`, the user's work sealed
+  in a file that will not load). What is still checked, and still matters, is
+  the integrity of the retained artifacts — the source re-parses, its map
+  matches a fresh parse, the baseline is present — because that is what the
+  exact original and redline vs master rest on. The preservation boundary is
+  a claim about EXPORT, and a detached project no longer makes it. The
+  original test missed this by saving immediately after detaching, before
+  making any edit, so the document still equalled the baseline and readiness
+  passed trivially; the replacement edits a HEADING first, which
+  `heading_change` refuses on every imported document.
+- **The detached state must be IN THE PAYLOAD, because it cannot be
+  inferred** (same review, P2). Detaching keeps `source_available` true and
+  `baseline_index` set while `source_capabilities` goes null — and that
+  triple is byte-identical to a source-backed document whose report has not
+  arrived, which is exactly what `sourceCapabilitiesExpected()` infers scope
+  from. So the backend allowed every edit (the API tests proved it) while the
+  panel greyed out all of them: the user confirmed "Edit freely" and nothing
+  changed on screen. `_doc_payload` now carries `source_detached` and the
+  helper takes it as a **required** parameter — not defaulted, because the
+  wrong answer is silent and a new call site must decide. It short-circuits
+  ahead of the `report !== null` branch too, so a stale report cannot re-lock
+  a document whose scope the server has already dropped.
 - **Four surfaces honor it, and each is separately load-bearing**:
   `_active_source_scope` (unlocks editing, 3 red), `_source_readiness` →
   `preservation_ready` (stops advertising an export the endpoint now refuses,
@@ -5479,14 +5509,18 @@ sweep's cost is deliberately untouched — see the note at the end.
   bump. Resynced with it: `docs/DOCX_FIDELITY.md` (a new "Detaching a document
   from its source" section plus the `causes` contract), `TrustDeepDiveModal`'s
   import runtime card, and the 1.8.0 release notes.
-- **Tests**: `tests/test_source_detach.py` (26). The frozen-package causes and
+- **Tests**: `tests/test_source_detach.py` (29). The frozen-package causes and
   remedies, the headline unlock on a permanently-frozen tracked-changes
   master, the original staying byte-identical, normalized-by-default export
   and the honest `mode=source` 409, redline surviving, the save/reload round
   trip, the mid-turn and no-source 409s, `preservation_ready` going false, the
   fail-closed load matrix, undo/redo not flipping it, and both re-arm paths.
+  Plus the two review findings: a detached project reopening after edits the
+  source gate would refuse (with an attached project still refusing a forged
+  out-of-boundary version beside it), and the payload stating detachment.
+  Frontend: `sourceCapabilities.test.ts` gains the detached-scope case.
   Every mechanism was reverted in place to prove it load-bearing (3/3/2/1/1/1/1
-  red).
+  red, plus 1/1/1 for the three review fixes).
 
 ## The empty page has no by-hand article form — implemented notes
 

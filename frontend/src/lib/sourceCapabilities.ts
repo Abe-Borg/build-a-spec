@@ -43,13 +43,25 @@ export function sourceCapabilitiesPending(
   return report?.status === "pending";
 }
 
-/** Match the server's active imported-history boundary without freezing legacy JSON. */
+/**
+ * Match the server's active imported-history boundary without freezing legacy JSON.
+ *
+ * `detached` is required rather than defaulted because it cannot be inferred
+ * and getting it wrong is silent: "Edit freely" keeps the source bytes and the
+ * baseline (so the exact original and redline vs master keep working) while the
+ * capability report goes null — which is indistinguishable from a source-backed
+ * document whose report simply has not arrived. Inferring from the retained
+ * artifacts therefore reads a freely-editable document as locked, and greys out
+ * exactly the controls the user just turned on. A new call site must decide.
+ */
 export function sourceCapabilitiesExpected(
   report: SourceCapabilitiesState | null,
   sourceAvailable: boolean,
   baselineIndex: number | null,
   versionIndex: number,
+  detached: boolean,
 ): boolean {
+  if (detached) return false;
   if (report !== null) return true;
   return (
     sourceAvailable &&

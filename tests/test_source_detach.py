@@ -315,6 +315,114 @@ def test_detaching_survives_save_and_reload(client, tmp_path):
     assert edit.status_code == 200, edit.text
 
 
+def test_a_detached_project_reopens_after_edits_the_source_gate_would_refuse(
+    client, tmp_path
+):
+    """The point of detaching is to make edits source mode would reject.
+
+    The loader re-validates every retained version from the baseline forward
+    against the preservation boundary, which is right for an attached project
+    — a forged redo version must not enter the session and become active
+    later. For a detached one it is the wrong question entirely: exceeding
+    that boundary is exactly what the user asked for, so re-imposing it at
+    load turns "edit freely, save, reopen" into a project that cannot be
+    opened at all.
+
+    Deliberately edits a HEADING, which `heading_change` refuses on every
+    imported document however clean the package is.
+    """
+    source = add_tracked_change(make_fidelity_master(tmp_path))
+    payload = _import(client, source)
+    assert client.post("/api/doc/detach-source").status_code == 200
+
+    uid = _first_paragraph_id(payload)
+    for ops in (
+        [{"action": "replace", "target_id": "sec", "text": "RETITLED SECTION",
+          "numbering": "23 05 48"}],
+        [{"action": "replace", "target_id": uid,
+          "text": "Wholly rewritten provision text."}],
+        [{"action": "add_article", "target_id": "pt2", "text": "NEW ARTICLE"}],
+    ):
+        assert client.post("/api/doc/edit", json={"ops": ops}).status_code == 200
+
+    package = client.get("/api/project/save")
+    assert package.status_code == 200, package.text
+    assert client.post("/api/session/reset").status_code == 200
+
+    loaded = _load(client, package.content)
+    assert loaded.status_code == 200, loaded.text
+    settle_capability_sweep()
+
+    reopened = client.get("/api/doc").json()
+    assert reopened["source_capabilities"] is None
+    assert reopened["doc"]["section"]["title"] == "RETITLED SECTION"
+    assert client.get("/api/import/original").content == source
+
+
+def test_an_attached_project_still_validates_every_retained_version(
+    client, tmp_path
+):
+    """The detached skip must not weaken the attached path it sits beside.
+
+    A forged version past the baseline that exceeds the preservation boundary
+    is still refused, because an attached project promises every retained
+    state can be exported through source mode.
+    """
+    import json
+    import zipfile
+    import io as _io
+
+    _import(client, make_fidelity_master(tmp_path))
+    package = client.get("/api/project/save").content
+
+    # Forge a retained version with a rewritten heading -- something the
+    # source gate refuses -- while leaving the project ATTACHED.
+    with zipfile.ZipFile(_io.BytesIO(package), "r") as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    project = json.loads(members["project.json"])
+    assert project["doc"].get("source_detached") is False
+    forged = json.loads(json.dumps(project["doc"]["versions"][-1]))
+    forged["title"] = "FORGED HEADING"
+    project["doc"]["versions"].append(forged)
+    project["doc"]["index"] = len(project["doc"]["versions"]) - 1
+    members["project.json"] = json.dumps(project).encode()
+
+    output = _io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        for name, data in members.items():
+            archive.writestr(name, data)
+
+    assert client.post("/api/session/reset").status_code == 200
+    rejected = _load(client, output.getvalue())
+    assert rejected.status_code >= 400, rejected.text
+
+
+def test_the_payload_states_detachment_because_it_cannot_be_inferred(
+    client, tmp_path
+):
+    """A client must not have to guess, and cannot.
+
+    Detaching keeps `source_available` true and `baseline_index` set (that is
+    what leaves the exact original downloadable and redline vs master
+    working) while `source_capabilities` goes null. That triple is
+    byte-identical to a source-backed document whose report has not been
+    delivered — so a client inferring scope from the retained artifacts reads
+    a freely-editable document as locked and disables the very controls the
+    user just enabled.
+    """
+    payload = _import(client, make_fidelity_master(tmp_path))
+    assert payload["source_detached"] is False
+
+    detached = client.post("/api/doc/detach-source").json()
+    assert detached["source_detached"] is True
+    # The artifacts that make the flag necessary are all still present.
+    assert detached["source_available"] is True
+    assert detached["baseline_index"] is not None
+    assert detached["source_capabilities"] is None
+
+    assert client.get("/api/doc").json()["source_detached"] is True
+
+
 def test_detaching_twice_is_a_harmless_no_op(client, tmp_path):
     _import(client, make_fidelity_master(tmp_path))
     assert client.post("/api/doc/detach-source").status_code == 200

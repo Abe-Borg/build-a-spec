@@ -108,6 +108,18 @@ the system depends on:
   otherwise report missing is in fact still there.
 - `source_preservation` reports no readiness and `source_capabilities` is
   `null`.
+- `_doc_payload` carries an explicit `source_detached` boolean. Clients must
+  **not** infer source scope from the retained artifacts: a detached document
+  presents `source_available: true`, a set `baseline_index`, and a null
+  capability report, which is indistinguishable from a source-backed document
+  whose report has not been delivered.
+- Project **loading** validates the retained source, its map, and the imported
+  baseline exactly as before, but does not re-impose the per-version
+  preservation boundary on a detached project. Exceeding that boundary is what
+  detaching is for, so requiring it at load would make every project the
+  feature exists for fail to reopen. An attached project is unchanged: every
+  retained version from the baseline forward must still fit the boundary, so a
+  forged redo version cannot enter the session and become active later.
 
 The decision persists as `source_detached` on the document store, beside
 `baseline_index`. It is deliberately not a version snapshot field: it

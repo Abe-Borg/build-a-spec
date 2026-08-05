@@ -699,8 +699,26 @@ def _stage_project_load(
         # the preservation boundary. Checking only the active index would let
         # an unsafe forged redo/undo version enter the session and become
         # active later without another package validation pass.
+        #
+        # A DETACHED project is exempt, and has to be: "Edit freely" exists so
+        # the document can leave that boundary, so re-imposing it here would
+        # make every project the feature is for refuse to reopen — the user's
+        # work saved into a file that cannot be loaded. What is still checked
+        # above, and still matters, is the integrity of the retained
+        # artifacts themselves: the source re-parses, its map matches a fresh
+        # parse, and the imported baseline is present. Those are what the
+        # exact-original download and redline vs master rest on. The
+        # preservation boundary is a claim about EXPORT, and a detached
+        # project no longer makes it (`_source_readiness` returns None, and
+        # `mode=source` 409s), so nothing downstream can act on a retained
+        # version as though it were source-exportable.
         baseline_index = staged.doc.baseline_index
-        for version_index in range(baseline_index, len(staged.doc.versions)):
+        version_range = (
+            range(0, 0)
+            if staged.doc.source_detached
+            else range(baseline_index, len(staged.doc.versions))
+        )
+        for version_index in version_range:
             retained = SpecSection.from_dict(staged.doc.versions[version_index])
             preservation = source_patch_readiness(
                 source_bytes=staged.source_docx_bytes,
@@ -1482,6 +1500,14 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         "import_report": session.import_report,
         "template_origin": session.template_origin,
         "source_available": session.source_docx_bytes is not None,
+        # Explicit, because it cannot be inferred: a detached document keeps
+        # its bytes and baseline (so the exact original and redline vs master
+        # keep working) while carrying a null capability report — which is
+        # byte-identical to "source-backed, report not delivered". A client
+        # inferring scope from the retained artifacts reads that as an active
+        # source document and greys out the very editing the user just turned
+        # on. See sourceCapabilitiesExpected.
+        "source_detached": bool(getattr(session.doc, "source_detached", False)),
         "preservation_ready": bool(preservation and preservation.ready),
         "source_preservation": _source_preservation_payload(
             session, preservation

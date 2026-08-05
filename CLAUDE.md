@@ -5814,12 +5814,32 @@ No new endpoint, no new SSE event, no new dep, no project-format bump.
   dismiss rationale, the project-profile form, the unsent composer message.
   Enumerating those from `clearSessionState` would be a list that silently
   goes stale with the next feature; discarding the subtree stays true on its
-  own. Two consequences had to be handled with it: the drawer-open nonces are
-  reset to zero (each drawer's `if (openNonce) setExpanded(true)` effect runs
-  on a FRESH MOUNT too, so every drawer the old session opened would spring
-  open on the new one), and `prefill.nonce` goes back to 0 (the same reason —
-  `Composer`'s prefill effect guards on it, so 0 is what makes the remounted
-  composer ignore a stale prefill instead of re-applying it).
+  own. Two consequences ride in `discardPaneState` with it: the drawer-open
+  nonces are reset to zero (each drawer's `if (openNonce) setExpanded(true)`
+  effect runs on a FRESH MOUNT too, so every drawer the old session opened
+  would spring open on the new one), and `prefill.nonce` goes back to 0 (the
+  same reason — `Composer`'s prefill effect guards on it, so 0 is what makes
+  the remounted composer ignore a stale prefill instead of re-applying it).
+- **Each pane prefixes the nonce into its OWN key.** The two are static JSX
+  siblings, which React compiles to an implicit children array and reconciles
+  through `reconcileChildrenArray` — and React stringifies a numeric key
+  (`key = '' + config.key`), so one shared `key={sessionNonce}` clears that
+  function's `typeof key === 'string'` guard and trips the duplicate-key
+  check. Mostly console noise, except `lib/clientLog.ts` wraps
+  `console.error` and ships it to `/api/diagnostics/client-event` (caught in
+  review on PR #125, Codex).
+- **`discardPaneState` runs on all THREE replacements the save gate protects**
+  — New session, Open project, Start from template — and deliberately NOT on
+  tutorial transitions. That line is not arbitrary, and it is already drawn
+  elsewhere in the file: a scenario-scope template start bypasses the save
+  gate for the same reason (`requestStartTemplate`), because a practice copy
+  is disposable and the tour is still driving the drawer nonces a remount
+  would reset. `doLoadProject` needs no scope test at all (`onLoadProject`
+  ends the tour first); `doInstantiateTemplate` does, and reads the extracted
+  `inProtectedWorkspace`, which is also what `ArtifactPanel`'s `tutorialActive`
+  now derives from, so the two cannot disagree. Unknown health reads as NOT
+  protected, matching `requestStartTemplate`: for a failed health fetch the
+  conservative answer is to treat the session as the user's real work.
 - **`consumeTutorialUpdateInvitation` moved up to `App`** for the same
   reason in reverse: it is consumed once per app LAUNCH, so reading it below
   a remount boundary meant starting a new session quietly retired a notice
@@ -5836,12 +5856,11 @@ No new endpoint, no new SSE event, no new dep, no project-format bump.
   too). The remount covers the new-session path structurally; this is the
   component being right about its own input, and it is what covers the other
   two.
-- **Deliberately unchanged**: `advanceWorkspaceEpoch`'s documented contract
-  (its research clear is about reconcile identity, not display, and the other
-  transitions that call it — project load, template instantiate, tutorial
-  swaps — hydrate through `applySessionBundle`/`applyDocPayload` rather than
-  through the wipe). Widening the remount to every epoch bump would perturb
-  the tour's drawer plumbing for no ask.
+- **Deliberately unchanged**: `advanceWorkspaceEpoch`'s documented contract.
+  Its research clear is about reconcile identity, not display, and hanging
+  the pane wipe off it would fire on tutorial swaps too — which is exactly
+  the case that must not remount. The three replacement paths call
+  `discardPaneState` themselves instead.
 
 ## Commands
 

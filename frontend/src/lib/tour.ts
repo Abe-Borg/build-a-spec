@@ -224,7 +224,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "right",
         title: "Four ways into the same document",
         body:
-          "An empty chat offers these starter prompts: the two-minute pitch, immediate drafting, a guided interview, or an office master — above them sits the tutorial chip that opened this tour. Each one sends an ordinary chat message and locks you into nothing, and typing your own opening does exactly the same job. They are on screen right now because this practice page is empty; they clear the moment a conversation starts and return on every fresh session.",
+          "An empty chat offers these starter prompts: the two-minute pitch, immediate drafting, a guided interview, or an office master — above them sits the tutorial chip that opened this tour. Each one sends an ordinary chat message and locks you into nothing, and typing your own opening does exactly the same job. They are on screen right now because this practice page is empty; they clear the moment a conversation starts and return on every fresh session. While this tour is running all five are held inert, so nothing here sends a message or spends anything on your behalf.",
       },
       {
         id: "section-header",

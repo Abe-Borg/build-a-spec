@@ -65,6 +65,11 @@ interface Props {
   /** What to say about the last import; null for a clean one. */
   importNotice?: ImportNotice;
   onDismissImportNotice?: () => void;
+  /** Give up source-preserving export so this document can be edited. Absent
+   *  when the host does not offer it (the tutorial's practice copies). */
+  onDetachSource?: () => void;
+  /** The detach request is in flight. */
+  detaching?: boolean;
   onUndo: () => void;
   onRedo: () => void;
   onSaveAsTemplate: () => void;
@@ -267,6 +272,8 @@ export default function ArtifactPanel({
   fileLoading = null,
   importNotice = null,
   onDismissImportNotice,
+  onDetachSource,
+  detaching = false,
   onUndo,
   onRedo,
   onSaveAsTemplate,
@@ -371,6 +378,15 @@ export default function ArtifactPanel({
   const pendingReason =
     sourceCapabilities?.elements.sec?.replace_text?.message ??
     "Imported-source permissions for this document state are still being checked.";
+  // A package-wide blocker freezes the WHOLE document, permanently — quite
+  // unlike a per-paragraph one. Before this the two were indistinguishable on
+  // screen: the panel simply went read-only with no reason anywhere, and for
+  // tracked changes the imported text even looks clean (the importer shows the
+  // Accept-All view). Both strings are the server's own.
+  const frozenCause =
+    activeSourceExpected && sourceCapabilities?.status === "pass_through_only"
+      ? sourceCapabilities.causes?.[0] ?? null
+      : null;
 
   // Full-draft affordance (WI1): offered while the document is empty-or-sparse
   // (fewer than 3 articles) — past that, a wholesale draft is the wrong tool.
@@ -908,6 +924,39 @@ export default function ArtifactPanel({
             <span />
           </span>
           <span>{pendingReason}</span>
+        </div>
+      )}
+
+      {/* A package-wide blocker: this document can never be patched in
+          source-preserving mode, so say so plainly, name the cause, and offer
+          both ways out — fix the file in Word, or stop preserving it. */}
+      {frozenCause && (
+        <div
+          className="border-b border-edge bg-warn/5 px-5 py-2.5 text-[11px]"
+          role="status"
+          aria-live="polite"
+          data-tour="source-frozen"
+        >
+          <p className="font-medium text-warn">
+            Read-only: {frozenCause.message}
+          </p>
+          <p className="mt-1 text-ink-dim">{frozenCause.remedy}</p>
+          {onDetachSource && (
+            <button
+              type="button"
+              className={`mt-2 ${actionButton}`}
+              data-capability="document.detach-source"
+              disabled={busy || detaching}
+              onClick={onDetachSource}
+              title={
+                "Edit this document freely. Export becomes a normalized " +
+                "Word file instead of a copy of your upload; your original " +
+                "stays downloadable. This cannot be undone for this document."
+              }
+            >
+              {detaching ? "Detaching…" : "Edit freely"}
+            </button>
+          )}
         </div>
       )}
 

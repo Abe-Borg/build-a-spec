@@ -81,6 +81,47 @@ because they do not alter the retained Word body. A normalized export remains
 an explicit, separate reconstruction choice and must not be described as
 preserving the source.
 
+## Detaching a document from its source
+
+Every restriction above exists to serve one promise: the source-preserving
+export is a byte-exact clone of the upload. A user who does not need that
+promise for a given document can give it up explicitly through `POST
+/api/doc/detach-source` ("Edit freely"), after which the document is an
+ordinary semantic document and the whole source-backed edit surface is
+inactive. This is the supported answer to a package that cannot be patched at
+all — `tracked_changes`, `active_content`, `document_protection`,
+`signed_package`, or any `unsafe_*` scan failure — and to the ordinary case of
+a manually-labelled master, where no provable numbered island exists and every
+structural edit therefore fails closed.
+
+Detaching drops the claim and none of the evidence, which is what the rest of
+the system depends on:
+
+- The retained bytes, the source map, and the imported baseline are all
+  **kept**. A `.baspec` validates source, map, and baseline against each other
+  on load, so removing a member would produce a file that rejects itself.
+- `GET /api/import/original` keeps returning the byte-exact upload.
+- `?redline=master` keeps working, because the imported baseline version is
+  still present and immutable.
+- `GET /api/export/docx` defaults to normalized. An explicit `mode=source`
+  returns 409 naming detachment as the reason, because every artifact it would
+  otherwise report missing is in fact still there.
+- `source_preservation` reports no readiness and `source_capabilities` is
+  `null`.
+
+The decision persists as `source_detached` on the document store, beside
+`baseline_index`. It is deliberately not a version snapshot field: it
+describes the document's relationship to its source, not its content, so undo
+and redo must not flip it. On load, anything but an explicit `true` reads as
+attached — a malformed flag must never hand out edit permissions the source
+gate would refuse. `adopt_imported` clears it, so importing again is the
+supported way back to source preservation.
+
+Detachment is a change of contract, never a change of authority.
+`apply_doc_edits` still routes every proposed final state through
+`validate_source_transition` whenever the scope is active; detaching removes
+the scope rather than bypassing the gate.
+
 ## Source-backed edit surface
 
 Source-preserving text replacement is allowed only when one semantic provision
@@ -180,9 +221,10 @@ canonical server `message`.
 
 ### Per-operation capabilities
 
-`source_capabilities` is `null` outside an active imported-source scope.
-Otherwise its `status` is independent of `source_preservation.status` and has
-four values:
+`source_capabilities` is `null` outside an active imported-source scope —
+including a document detached through "Edit freely", which is not source-backed
+however many source artifacts it still retains. Otherwise its `status` is
+independent of `source_preservation.status` and has four values:
 
 | Status | Meaning |
 |---|---|
@@ -190,6 +232,18 @@ four values:
 | `pass_through_only` | Exact source no-op can remain available, but a package-wide or runtime blocker denies source-body mutations. |
 | `blocked` | Required source identity, mapping, baseline, or capability analysis is unavailable or invalid. Body operations fail closed. |
 | `pending` | Capability analysis for this exact document state is still running. Body operations fail closed with the `capabilities_pending` blocker; workspace-only metadata operations remain allowed. |
+
+`causes` lists the package-wide reasons the whole document is frozen, in the
+closed blocker vocabulary and first-seen order, each with the canonical server
+`message` and a user-actionable `remedy`. It is empty on `ready`, and
+deliberately empty on `pending` — a sweep still running is not a fault in the
+user's file. Every element already carries the same blocker on each denied
+operation, but a client cannot otherwise distinguish "this paragraph has
+markup we cannot patch" from "the entire package is locked" without scanning
+every element and inferring. Naming the cause once is what lets an interface
+explain a read-only import, and for the user-fixable causes state what to do
+about it. `remedy` is server-authored for the same reason `message` is:
+clients must not restate a denial in their own prose.
 
 `pending` is a transient state, not a defect. Capability analysis probes every
 element against the authoritative final gate, so it is derived once per

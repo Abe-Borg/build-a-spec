@@ -32,6 +32,7 @@ export const END_USER_CAPABILITIES = [
   "document.edit",
   "document.rearrange",
   "document.source-permissions",
+  "document.detach-source",
   "document.open-items",
   "document.lint",
   "standards.basis",

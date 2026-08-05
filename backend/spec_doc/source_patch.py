@@ -44,6 +44,7 @@ from .source_mapping import (
     semantic_body_projection,
     semantic_body_projection_sha256,
     source_blocker_message,
+    source_blocker_remedy,
     source_replacement_text_blocker,
 )
 from .source_audit import (
@@ -392,6 +393,16 @@ class SourceCapabilityReport:
 
     status: str
     elements: Mapping[str, SourceElementCapabilities]
+    #: Package-wide reasons the whole document is frozen, in the closed
+    #: blocker vocabulary and first-seen order. Empty on a ``ready`` report.
+    #:
+    #: Every element already carries the same blocker on each denied
+    #: operation, but a UI cannot tell "this one paragraph has markup we
+    #: cannot patch" from "the entire package is locked" without scanning all
+    #: of them and guessing. Naming the cause once, at the top, is what lets
+    #: the panel say WHY an imported master is read-only — and, for the
+    #: user-fixable ones, what to do about it.
+    causes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -399,6 +410,7 @@ class SourceCapabilityReport:
             "elements",
             MappingProxyType(dict(self.elements)),
         )
+        object.__setattr__(self, "causes", tuple(self.causes))
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -407,6 +419,14 @@ class SourceCapabilityReport:
                 uid: self.elements[uid].to_dict()
                 for uid in sorted(self.elements)
             },
+            "causes": [
+                {
+                    "blocker": blocker,
+                    "message": source_blocker_message(blocker),
+                    "remedy": source_blocker_remedy(blocker),
+                }
+                for blocker in self.causes
+            ],
         }
 
 
@@ -2317,6 +2337,9 @@ def blocked_source_edit_capabilities(
             )
             for uid, kind in _semantic_elements(current)
         },
+        # A pending sweep is not a package fault, so it names no cause: the
+        # panel says "still working" there, not "your file is locked".
+        causes=() if status == CAPABILITY_STATUS_PENDING else (blocker,),
     )
 
 
@@ -2611,6 +2634,20 @@ def source_edit_capabilities(
         or bound_context.runtime_mutation_issues
         else "ready"
     )
+    # Both package-wide channels, deduplicated, first-seen order preserved —
+    # the same two the per-element fallback below picks its blocker from, so
+    # the headline cause can never disagree with what the elements report.
+    causes = tuple(
+        dict.fromkeys(
+            (
+                *bound_context.global_blockers,
+                *(
+                    issue.blocker
+                    for issue in bound_context.runtime_mutation_issues
+                ),
+            )
+        )
+    )
 
     current_paragraphs, current_children, _current_headings = (
         _projection_paragraphs(current)
@@ -2813,7 +2850,7 @@ def source_edit_capabilities(
             }
         )
 
-    return SourceCapabilityReport(status, elements)
+    return SourceCapabilityReport(status, elements, causes=causes)
 
 
 def source_capability_summary(

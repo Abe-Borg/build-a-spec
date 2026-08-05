@@ -361,6 +361,48 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                 ),
             ),
             ReleaseSection(
+                title="Imported Word specs",
+                items=(
+                    ReleaseItem(
+                        title="A read-only import now tells you why",
+                        body=(
+                            "Some Word files cannot be edited in place at "
+                            "all: ones carrying tracked changes, macros, an "
+                            "embedded Excel sheet or drawing, a digital "
+                            "signature, or Restrict Editing turned on. The "
+                            "app knew this and said nothing, so the section "
+                            "simply arrived read-only with no explanation. "
+                            "It now names the reason in the document panel "
+                            "and tells you what to do about it. Tracked "
+                            "changes are the one to watch for — the import "
+                            "shows you the accepted text, so the file looks "
+                            "perfectly clean while still being locked."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Edit freely: import a spec and actually edit it",
+                        body=(
+                            "Until now an imported section was kept "
+                            "deliberately restrictive so the file you "
+                            "exported could be a byte-exact copy of the one "
+                            "you uploaded, with only the wording changed. "
+                            "That is the right default when you are handing "
+                            "a marked-up master back to an office, and the "
+                            "wrong one when you just want to work. Edit "
+                            "freely drops that guarantee for a document and "
+                            "gives you the ordinary editor back — headings, "
+                            "structure, new articles, everything — and "
+                            "exports a normal Word file in Build-a-Spec's "
+                            "formatting instead. Your original upload stays "
+                            "downloadable exactly as you sent it, and "
+                            "Redline vs master still shows what you changed. "
+                            "It applies to one document and cannot be "
+                            "undone; importing the file again starts over."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
                 title="The window stops freezing",
                 items=(
                     ReleaseItem(

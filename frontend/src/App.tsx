@@ -37,6 +37,7 @@ import {
   dismissQc,
   downloadProjectFile,
   draftFull,
+  detachSource,
   editDoc,
   getDoc,
   getDocCapabilities,
@@ -120,6 +121,10 @@ export default function App() {
   // button on. The ref closes the same-tick double-submit gap before React can
   // render the state change (especially important for rapid drag/drop moves).
   const [manualEditBusy, setManualEditBusy] = useState(false);
+  // "Edit freely": the confirm gate and the in-flight request.
+  const [detachConfirmOpen, setDetachConfirmOpen] = useState(false);
+  const [detaching, setDetaching] = useState(false);
+  const detachingRef = useRef(false);
   const [doc, setDoc] = useState<SpecDoc | null>(null);
   const [openItems, setOpenItems] = useState<OpenItem[]>([]);
   const [lintIssues, setLintIssues] = useState<LintIssue[]>([]);
@@ -1630,6 +1635,46 @@ export default function App() {
     }
   };
 
+  /**
+   * Give up source-preserving export so this imported document can be edited.
+   *
+   * Gated behind a confirm because it is one-way for this document: the
+   * export contract changes from "a byte-exact patched copy of your upload"
+   * to "a normalized Word file". Nothing is lost — the exact original stays
+   * downloadable and redline vs master keeps working — but that is a promise
+   * the user should make deliberately, not discover afterwards.
+   */
+  const doDetachSource = async () => {
+    setDetachConfirmOpen(false);
+    if (detachingRef.current || busyRef.current || fileLoadingRef.current) return;
+    detachingRef.current = true;
+    setDetaching(true);
+    const epoch = workspaceEpochRef.current;
+    try {
+      const payload = await detachSource(currentWorkspaceLease());
+      if (workspaceEpochRef.current !== epoch) return;
+      if (!applyDocPayload(payload)) return;
+      refreshReadiness();
+      refreshQc();
+    } catch (e) {
+      refreshDoc();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          role: "assistant",
+          text: `Could not switch to free editing: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+          error: true,
+        },
+      ]);
+    } finally {
+      detachingRef.current = false;
+      setDetaching(false);
+    }
+  };
+
   const onUndo = async () => {
     const epoch = workspaceEpochRef.current;
     const payload = await undoDoc(currentWorkspaceLease()).catch(() => null);
@@ -1997,6 +2042,33 @@ export default function App() {
         onCancel={onboarding.cancelEnd}
       />
       <ConfirmDialog
+        open={detachConfirmOpen}
+        title="Edit this document freely?"
+        body={
+          <>
+            Right now Build-a-Spec exports this section as a byte-exact copy
+            of your upload, changing only the words it is allowed to patch.
+            That promise is why most of the document is read-only.
+            <p className="mt-2">
+              Switching to free editing lets you change anything — headings,
+              structure, articles — and exports a{" "}
+              <b className="text-ink">normalized</b> Word file in
+              Build-a-Spec's formatting instead of your original's.
+            </p>
+            <p className="mt-2">
+              Your original upload stays downloadable, and “Redline vs master”
+              still shows what changed. This applies to this document only and{" "}
+              <b className="text-ink">cannot be undone</b> — to go back, import
+              the file again.
+            </p>
+          </>
+        }
+        confirmLabel="Edit freely"
+        cancelLabel="Keep original formatting"
+        onConfirm={doDetachSource}
+        onCancel={() => setDetachConfirmOpen(false)}
+      />
+      <ConfirmDialog
         open={apiKeyErrorOpen}
         title="Your API key needs attention"
         body={
@@ -2125,6 +2197,8 @@ export default function App() {
           fileLoading={fileLoading}
           importNotice={importNotice}
           onDismissImportNotice={() => setImportNotice(null)}
+          onDetachSource={() => setDetachConfirmOpen(true)}
+          detaching={detaching}
           onUndo={onUndo}
           onRedo={onRedo}
           onSaveAsTemplate={openTemplateStudio}

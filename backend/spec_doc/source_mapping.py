@@ -1355,6 +1355,51 @@ def source_blocker_message(blocker: str) -> str:
     return _BLOCKER_MESSAGES.get(blocker, blocker.replace("_", " "))
 
 
+#: What the user can actually DO about a package-wide blocker, in their own
+#: terms. ``_BLOCKER_MESSAGES`` says what is wrong; this says what to try
+#: next, which is the half that was missing entirely — an imported master
+#: simply appeared read-only with no explanation anywhere in the UI.
+#:
+#: Only package-wide (``pass_through_only``) causes belong here. A per-element
+#: blocker is not something the user can fix by editing their Word file, and
+#: offering a remedy for one would be misleading.
+_BLOCKER_REMEDIES = {
+    "tracked_changes": (
+        "Accept or reject the tracked changes in Word, save, and import "
+        "again — or choose Edit freely to keep working here."
+    ),
+    "document_protection": (
+        "Turn off Restrict Editing in Word (Review → Restrict Editing "
+        "→ Stop Protection), save, and import again — or choose Edit "
+        "freely to keep working here."
+    ),
+    "active_content": (
+        "Remove the macros, ActiveX, or embedded objects (an embedded Excel "
+        "sheet is enough) and save as .docx, then import again — or choose "
+        "Edit freely to keep working here."
+    ),
+    "signed_package": (
+        "Remove the digital signature in Word, save, and import again — "
+        "editing would invalidate it. Or choose Edit freely to keep working "
+        "here."
+    ),
+}
+
+#: The fallback for every other package-wide cause: the app could not read
+#: the package confidently enough to promise it can patch it. There is no
+#: specific Word action to recommend, so do not invent one.
+_BLOCKER_REMEDY_FALLBACK = (
+    "Build-a-Spec cannot patch this package safely, so source-preserving "
+    "editing is unavailable. Choose Edit freely to edit the content here — "
+    "your original upload stays downloadable."
+)
+
+
+def source_blocker_remedy(blocker: str) -> str:
+    """The user-actionable next step for a package-wide blocker."""
+    return _BLOCKER_REMEDIES.get(blocker, _BLOCKER_REMEDY_FALLBACK)
+
+
 def source_replacement_text_blocker(text: str) -> str | None:
     """Return the blocker for text that cannot live in one ordinary ``w:t``."""
     if any(character in text for character in "\t\r\n"):
@@ -1384,5 +1429,6 @@ __all__ = [
     "semantic_body_projection",
     "semantic_body_projection_sha256",
     "source_blocker_message",
+    "source_blocker_remedy",
     "source_replacement_text_blocker",
 ]

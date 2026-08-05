@@ -408,7 +408,11 @@ backend/
                            set_standard_suppressed excludes/restores a standard,
                            reason optional); DocumentStore (per-turn
                            versions, undo/redo, adopt_imported; Batch 5 baseline_index
-                           = redline master version, cleared on truncation, persisted);
+                           = redline master version, cleared on truncation, persisted;
+                           source_detached = the "Edit freely" decision, beside
+                           baseline_index rather than in a version so undo/redo
+                           can't flip it, cleared by adopt_imported, fail-closed
+                           on load — see "Import and actually edit it");
                            open_questions; outline; APPLY_SPEC_EDITS_TOOL schema
   spec_doc/diffing.py      [Batch 5] pure diff_sections(base, cur) -> SectionDiff:
                            uid join (unchanged/changed/inserted/deleted, deleted at
@@ -5380,6 +5384,109 @@ nothing. No new endpoint, no new SSE event, no new dep, no format bump.
   reset-during-context-capture sibling; removing the ownership re-check →
   only this one red. Both seam-driven tests run on the turn's own thread,
   so neither depends on thread scheduling.
+
+## Import and actually edit it — implemented notes ("Edit freely")
+
+Reported symptom (Abraham): "why is everything on imported specs read only?"
+Three independent causes, measured rather than reasoned about. (1) The
+**design**: on a clean master with the sweep settled, **3 of 27 body
+operations** are allowed, all three `replace_text` on leaf paragraphs —
+headings are categorically `heading_change`, and every structural op needs a
+provable Word-numbered island, which a conventionally hand-labelled `1.1`/`A.`
+master does not have. (2) **Package traits**, each verified to give **0/27**
+permanently: `document_protection`, `active_content` (macros, ActiveX, or any
+`word/embeddings/…` member — one embedded Excel schedule is enough), and
+`tracked_changes` (any pending revision in document/headers/footers/styles/
+numbering). (3) The **pending sweep**, still quadratic (~n^2.2: 382 blocks =
+60s measured, so ~1,500 ≈ 16 min and a 5,854-paragraph master ≈ hours), during
+which everything is fail-closed. Items 1 and 2 below fix the first two; the
+sweep's cost is deliberately untouched — see the note at the end.
+
+- **The restrictions all serve ONE promise**, and that is the whole design
+  insight: source mode guarantees the exported `.docx` is a byte-exact clone
+  of the upload with only approved text slices changed. Drop the promise and
+  every restriction goes with it — `_active_source_scope()` returns False,
+  `source_edit_capabilities()` returns `None`, and the frontend falls through
+  to `ALLOWED_WITHOUT_SOURCE`. The path already existed and the tutorial
+  already used it (`detached_practice_copy`); there was simply no user-facing
+  way to reach it.
+- **Detach keeps every artifact — it drops the claim, not the evidence.** The
+  first attempt cleared the bytes/map/report the way the tutorial fixture
+  does, and that is wrong for a real project: `_portable_source_attachment`
+  drops the source when `baseline_index` is gone, and `_assert_source_binding`
+  **rejects** a package whose source has no map and baseline. So detaching by
+  removal loses the original on save, or writes a file that rejects itself on
+  load. Keeping all three and persisting one flag is what makes the exact
+  original still downloadable, the `.baspec` still loadable, and — the bonus
+  that justifies the shape — **redline vs master still working**, which is
+  exactly what someone who imports an office master and edits it wants next.
+- **`DocumentStore.source_detached` rides the store beside `baseline_index`,
+  never a version snapshot.** It describes the document's relationship to its
+  source, not its content, so undo/redo must not flip it (pinned). On load,
+  **anything but an explicit `True` reads as attached** — a malformed flag
+  must never hand out permissions the gate would refuse, and this one decides
+  whether the gate runs at all. `adopt_imported` clears it, which is not
+  redundant with a session reset: import is gated on the CURRENT document
+  being empty, so undoing back to version 0 makes a second import legal with
+  the flag still set (pinned by its own test — the reset-based test passes
+  either way and hid this).
+- **Four surfaces honor it, and each is separately load-bearing**:
+  `_active_source_scope` (unlocks editing, 3 red), `_source_readiness` →
+  `preservation_ready` (stops advertising an export the endpoint now refuses,
+  1 red), the export's `imported_scope` (a detached document defaults to
+  normalized like any other, 1 red), and an explicit `mode=source` 409 naming
+  detachment (1 red) — the generic "no validated source DOCX, map, and
+  baseline" message would be a lie, since all three are still there.
+  `_source_editing_boundary_block` needed no change: it already returns None
+  on a None report, so the model stops being told about a boundary for free.
+- **One-way, by owner decision.** Re-attaching would have to re-validate that
+  the body still matches the baseline, and importing again is the honest way
+  back. The confirm dialog says so, and says what is kept.
+- **Authority never moved.** Detaching removes the scope; it does not bypass
+  the gate. `apply_doc_edits` still routes every proposed final state through
+  `validate_source_transition` whenever the scope is active.
+- **`SourceCapabilityReport.causes` is the "why", and it is server-authored.**
+  Every element already carried the same blocker on each denied op, but
+  nothing could tell "this paragraph has markup we cannot patch" from "the
+  package is locked" without scanning everything and inferring — so an
+  imported master just went read-only with no reason anywhere in the UI. The
+  report now names the package-wide causes once, deduplicated across
+  `global_blockers` + `runtime_mutation_issues` (the same two the per-element
+  fallback picks from, so the headline can never disagree with the elements).
+  `source_blocker_remedy()` joins `source_blocker_message()` in
+  `source_mapping.py` — the remedy is prose the SERVER owns, same rule as the
+  denial message ("never add client prose to a denial"), and every cause
+  including the unknown-blocker fallback names Edit freely so no cause is a
+  dead end. **`pending` deliberately names no cause**: a sweep still running
+  is not a fault in the user's file.
+- **`tracked_changes` is the one to watch.** The importer shows the Accept-All
+  view plus a warning, so the text on screen looks clean while the package is
+  still revision-bearing and permanently unpatchable. It is also the most
+  user-fixable, which is why the remedy names the exact Word action.
+- **Deliberately NOT done: the quadratic sweep.** It is the third cause and
+  the only one that heals on its own, and CLAUDE.md already flags making the
+  derivation cheap as "a deliberate design decision, not a tuning pass" in the
+  most safety-critical subsystem in the repo. Note "no longer on any critical
+  path" means the app stays RESPONSIVE, not that permissions arrive — until
+  the sweep lands the document still reads read-only. Fixing it (probe what
+  the UI needs rather than sweeping every element; reuse plan state across
+  probes instead of re-composing and reparsing `word/document.xml` ~5× per
+  paragraph) remains its own future change.
+- **Capability contract**: `document.detach-source` is the three-place edit
+  (registry, the control's `data-capability`, and the existing
+  `source-permissions` tour step — one step, three controls, the
+  `updates.manage` precedent), so no new step, no anchor, no `TOUR_VERSION`
+  bump. Resynced with it: `docs/DOCX_FIDELITY.md` (a new "Detaching a document
+  from its source" section plus the `causes` contract), `TrustDeepDiveModal`'s
+  import runtime card, and the 1.8.0 release notes.
+- **Tests**: `tests/test_source_detach.py` (26). The frozen-package causes and
+  remedies, the headline unlock on a permanently-frozen tracked-changes
+  master, the original staying byte-identical, normalized-by-default export
+  and the honest `mode=source` 409, redline surviving, the save/reload round
+  trip, the mid-turn and no-source 409s, `preservation_ready` going false, the
+  fail-closed load matrix, undo/redo not flipping it, and both re-arm paths.
+  Every mechanism was reverted in place to prove it load-bearing (3/3/2/1/1/1/1
+  red).
 
 ## The empty page has no by-hand article form — implemented notes
 

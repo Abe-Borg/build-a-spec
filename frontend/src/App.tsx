@@ -187,6 +187,10 @@ export default function App() {
   // (see clearSessionState), and it holds real content: a fetched compare
   // diff, the review walk's draft text, a half-entered standard, the QC
   // accept-set, the project-profile form, the composer's unsent message.
+  // Each pane prefixes it into its own key: the two are static JSX siblings,
+  // which React reconciles as an implicit children array, so a bare shared
+  // value is a duplicate key in that array — and `clientLog` forwards the
+  // resulting console warning to the diagnostics endpoint.
   const [sessionNonce, setSessionNonce] = useState(0);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [templatesOnly, setTemplatesOnly] = useState(false);
@@ -2054,7 +2058,7 @@ export default function App() {
       />
       <main className="flex min-h-0 flex-1">
         <Chat
-          key={sessionNonce}
+          key={`chat-${sessionNonce}`}
           messages={messages}
           busy={busy}
           onSend={send}
@@ -2070,7 +2074,7 @@ export default function App() {
           onDeleteFigure={onDeleteFigure}
         />
         <ArtifactPanel
-          key={sessionNonce}
+          key={`panel-${sessionNonce}`}
           doc={doc}
           openItems={openItems}
           lintIssues={lintIssues}

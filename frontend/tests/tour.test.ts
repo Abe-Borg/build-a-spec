@@ -165,6 +165,24 @@ test("the tour launcher cannot restart the tour from inside the tour", () => {
   assert.match(chat, /tourActive \|\| \(toured && !tutorialUpdated\)/);
 });
 
+test("the starter chips send nothing while the tutorial is running", () => {
+  // The blank-start chapter spotlights all five chips on an empty practice
+  // page, and the four chat ones each send a real billed turn — into the
+  // fixture the very next step teaches the user to fill in themselves. The
+  // tour is a fixed track the user only watches, so recognizing the on-ramps
+  // is the lesson and spending money on one is not.
+  const chatChip =
+    /onClick=\{\(\) => onSend\(p\.label\)\}([\s\S]{0,200}?)className=/.exec(chat)?.[1];
+  assert.ok(chatChip, "the chat starter chip must send its own label");
+  assert.match(chatChip, /disabled=\{busy \|\| tourActive\}/);
+  // And it says why, rather than reading as a dead control.
+  assert.match(chat, /tourActive \? "Available once the tutorial ends"/);
+  // The step's copy must not promise a click the tour withholds.
+  const step = /id:\s*"starter-paths"[\s\S]*?\n\s{6}\}/.exec(tour)?.[0];
+  assert.ok(step, "the starter-prompts step must exist");
+  assert.match(step, /held inert/);
+});
+
 test("a step with no anchor supplies a document resolver instead", () => {
   const steps = [...tour.matchAll(/\{\s*\n\s*id:\s*"[^"]+",[\s\S]*?\n\s{6}\}/g)].map(
     (m) => m[0],

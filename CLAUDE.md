@@ -5456,11 +5456,23 @@ no dep, no backend change.
   the anchor does not resolve and the step degrades to the standard
   "control is not available" card — the honest path the manifest already
   relies on everywhere else.
-- **The step stays `explanatory`, deliberately.** The chips are live and
-  clickable (the spotlight leaves real controls interactive), and each one
-  sends a real billed chat turn. Recognizing the on-ramps is the lesson;
-  spending money on one is not, and drafting into the blank fixture would
-  undercut the very next step.
+- **The step is `explanatory`, and all five chips are inert while the tour
+  runs** (owner ask, 2026-08-05). Each chat chip sends a real billed turn,
+  and it would land in the practice fixture the very next step teaches the
+  user to fill in themselves — so recognizing the on-ramps is the lesson and
+  spending money on one is not. `Chat`'s existing `tourActive` prop (App
+  passes `onboarding.phase.kind !== "idle"`) now gates the four chat chips as
+  well as the launcher, and each disabled chip swaps its `sub` line for
+  "Available once the tutorial ends" rather than reading as a dead control —
+  the same posture the launcher's "You are taking it right now" already took.
+  The step body says so too: copy promising a click the tour withholds is the
+  failure mode this manifest exists to avoid.
+- **This is the one deliberate exception to "the spotlight leaves real
+  controls interactive".** The overlay root is still `pointer-events-none`
+  and every other control under a spotlight stays live; what is withheld is
+  the one surface a chapter puts on screen whose controls would spend money
+  inside the tour and destroy the fixture the next step needs. Anything else
+  the user clicks underneath is their own session to explore.
 - **`start()` is now inert while a protected workspace is held, and that is
   a bug fix, not a guard for the new step** (Codex review, PR #117). One of
   the five chips is the tutorial launcher, so the step spotlights a control
@@ -5808,7 +5820,10 @@ bundled and deterministic, and the `/api/tutorial/*` routes are lifecycle only.
   template studio from the real control under the spotlight, so
   `anotherDialogOwnsEscape` and the `defaultPrevented` check must both stay
   (see "The tutorial cannot be paused" above; removing the action button did
-  not remove the dialog that raced it).
+  not remove the dialog that raced it). The one exception is the empty chat's
+  five starter chips, disabled for the tour's duration — see "The starter
+  chips are taught where they render" above for why that surface, and only
+  that surface, is held inert.
 - **Continue is gated by `busy` alone**, and that guard is not cosmetic:
   `advance` can swap in the next chapter's scenario, which needs the session
   idle. Nothing about a *step* may gate it — pinned by a `doesNotMatch` on

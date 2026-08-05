@@ -18,8 +18,12 @@ interface Props {
   onStartOnboarding: () => void;
   /**
    * A guided tutorial is already running. The tutorial's own blank-page
-   * chapter puts these chips on screen, so the launcher among them would
-   * otherwise invite a click that restarts the tour the user is taking.
+   * chapter puts these chips on screen, so every one of them is held inert
+   * for its duration: the launcher would restart the tour the user is
+   * taking, and each of the four chat chips would send a real billed turn
+   * into the practice fixture the very next step teaches them to fill in.
+   * The tour is a fixed track the user only watches — recognizing the
+   * on-ramps is the lesson, spending money on one is not.
    */
   tourActive?: boolean;
   /** Stop the in-flight turn, forwarded to the composer. */
@@ -145,15 +149,15 @@ export default function Chat({
                   <button
                     key={p.label}
                     onClick={() => onSend(p.label)}
-                    disabled={busy}
+                    disabled={busy || tourActive}
                     className="rounded-xl border border-edge bg-surface px-4 py-2.5 transition-colors hover:border-accent/70 hover:bg-raised disabled:pointer-events-none disabled:opacity-40"
                   >
                     <span className="block text-sm leading-snug text-ink-dim">
                       {p.label}
                     </span>
-                    {p.sub && (
+                    {(tourActive || p.sub) && (
                       <span className="mt-0.5 block text-[11px] text-ink-faint">
-                        {p.sub}
+                        {tourActive ? "Available once the tutorial ends" : p.sub}
                       </span>
                     )}
                   </button>

@@ -1814,15 +1814,8 @@ export default function App() {
       doc.parts.some((p) => p.articles.length > 0));
 
   const onboarding = useOnboarding({
-    editDoc: onEditDoc,
-    startResearch: () => void onStartResearch(),
-    startQc: () => void onStartQc(),
-    prefillComposer: onAskModel,
-    openTemplates: openTemplateStudio,
     applySession: applySessionBundle,
     health,
-    doc,
-    hasContent,
   });
   onboardingRef.current = onboarding;
   const activeDiscipline = projectDiscipline(doc, health?.legacy_discipline);
@@ -1875,8 +1868,6 @@ export default function App() {
         ob={onboarding}
         doc={doc}
         busy={busy || manualEditBusy}
-        hasContent={hasContent}
-        profileComplete={profileComplete}
         researchStatus={research?.status ?? "idle"}
         qcStatus={qc?.status ?? "idle"}
         sourceAvailable={sourceAvailable}

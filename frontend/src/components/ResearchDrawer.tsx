@@ -193,8 +193,27 @@ function ProjectProfileForm({
   busy: boolean;
   onEditDoc: (ops: EditOp[]) => void;
 }) {
-  const [form, setForm] = useState<ProfileFormState>(() => profileFormFromDoc(doc));
+  const recorded = useMemo(() => profileFormFromDoc(doc), [doc]);
+  const [form, setForm] = useState<ProfileFormState>(recorded);
   const [saving, setSaving] = useState(false);
+  // Re-seed when the RECORDED profile changes — never merely when `doc`
+  // does. The distinction is what keeps this from fighting the user: typing
+  // moves the form away from the recorded values without changing them, so
+  // no re-seed fires. What does fire is a new document underneath the form
+  // (a new session, an opened project) and the model recording a field
+  // during the interview. Seeding once in a useState initializer, as this
+  // did, meant the form kept the PREVIOUS project's city/state/country/
+  // client after a session change — and saving then wrote them into the new
+  // document. (App also remounts this pane on a new session, which covers
+  // that path structurally; this is the component being right about its own
+  // input, and it is what covers the other two.)
+  const recordedKey = JSON.stringify(recorded);
+  const seededKeyRef = useRef(recordedKey);
+  useEffect(() => {
+    if (seededKeyRef.current === recordedKey) return;
+    seededKeyRef.current = recordedKey;
+    setForm(recorded);
+  }, [recordedKey, recorded]);
   const allBlank =
     !form.city.trim() && !form.state.trim() && !form.country.trim() && !form.client.trim();
 

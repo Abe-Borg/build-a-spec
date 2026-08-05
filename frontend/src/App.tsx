@@ -77,6 +77,7 @@ import OnboardingOverlay from "./components/OnboardingOverlay";
 import NewSessionDialog from "./components/NewSessionDialog";
 import { sourceCapabilitiesPending } from "./lib/sourceCapabilities";
 import { installExternalLinkHandler } from "./lib/externalLinks";
+import { consumeTutorialUpdateInvitation } from "./lib/onboardingStorage";
 import {
   useOnboarding,
   type DrawerName,
@@ -176,6 +177,21 @@ export default function App() {
     qc: 0,
     openItems: 0,
   });
+  // Consumed once per app launch, and owned here rather than in Chat because
+  // the chat pane remounts on a new session (see sessionNonce below) — read
+  // there, starting a session would quietly retire the notice.
+  const [tutorialUpdated] = useState(consumeTutorialUpdateInvitation);
+  // Bumped when the session is replaced wholesale, and used as the React key
+  // of both panes so their whole subtree is discarded rather than reused.
+  // Component-local state below App is otherwise unreachable from the wipe
+  // (see clearSessionState), and it holds real content: a fetched compare
+  // diff, the review walk's draft text, a half-entered standard, the QC
+  // accept-set, the project-profile form, the composer's unsent message.
+  // Each pane prefixes it into its own key: the two are static JSX siblings,
+  // which React reconciles as an implicit children array, so a bare shared
+  // value is a duplicate key in that array — and `clientLog` forwards the
+  // resulting console warning to the diagnostics endpoint.
+  const [sessionNonce, setSessionNonce] = useState(0);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [templatesOnly, setTemplatesOnly] = useState(false);
   const [templateStarting, setTemplateStarting] = useState(false);
@@ -1353,25 +1369,87 @@ export default function App() {
     [refreshDoc, currentWorkspaceLease],
   );
 
-  /** Shared post-reset clear+refresh — every session-start path runs this. */
+  /** The active workspace is a tutorial one, so the session on screen is a
+   *  protected practice copy rather than the user's own project. Unknown
+   *  health reads as "not protected", matching requestStartTemplate: the
+   *  conservative answer for a failed health fetch is to treat the session
+   *  as the user's real work. */
+  const inProtectedWorkspace =
+    health?.workspace_scope !== undefined &&
+    health.workspace_scope !== "original";
+
+  /** Discard everything the panes own, for a whole-session replacement.
+   *
+   *  App can clear its own state, but the panel, the drawers and the composer
+   *  own plenty of theirs — a half-typed standards edit, the review walk's
+   *  cursor and draft text, the compare view's fetched diff, the QC accept-set
+   *  and dismiss rationale, the project-profile form, the unsent composer
+   *  message. None of it is reachable from here, and the list grows with every
+   *  feature, so remounting the subtree is the only form of this that stays
+   *  true on its own.
+   *
+   *  Called by the three replacements the save gate protects — New session,
+   *  Open project, Start from template — and deliberately NOT by tutorial
+   *  transitions, which swap a disposable practice copy the tour is still
+   *  driving. That line is not arbitrary: a scenario template start bypasses
+   *  the save gate for exactly the same reason (see requestStartTemplate).
+   */
+  const discardPaneState = () => {
+    setSessionNonce((n) => n + 1);
+    // Drawer-open nonces travel as props, and each drawer opens itself when
+    // its nonce is non-zero — which a fresh mount evaluates too. Left as they
+    // were, every drawer the old session opened would spring open on the new
+    // one. Zero is the "nobody has asked" value the effects already guard on.
+    setDrawerNonces({ review: 0, research: 0, qc: 0, openItems: 0 });
+    // A composer prefill staged by the old session's review queue. Nonce 0 is
+    // what makes the remounted Composer ignore it instead of re-prefilling.
+    setPrefill({ text: "", nonce: 0 });
+  };
+
+  /** Shared post-reset clear+refresh — every session-start path runs this.
+   *
+   *  The server has already wiped its half (``SessionState.reset``); this is
+   *  the client's, and it clears SYNCHRONOUSLY rather than waiting for the
+   *  refetches below. Two reasons, and the second is the one that matters:
+   *  a refetch lands a frame or more later, so anything left set keeps the
+   *  previous project on screen in the meantime — and `refreshResearch` /
+   *  `refreshQc` deliberately do NOTHING on a failed fetch (a dropped poll
+   *  must not erase a live run's board), so one failed request would leave
+   *  the old project's findings sitting there indefinitely.
+   */
   const clearSessionState = () => {
+    // Cuts loose the research stream and snapshot bound to the old workspace.
     advanceWorkspaceEpoch();
+    discardPaneState();
     setMessages([]);
+    setDoc(null);
     setOpenItems([]);
     setLintIssues([]);
     setStandards([]);
+    setProfileComplete(false);
     // The old session's identity is gone; the refreshDoc below re-derives the
     // gate. Until it lands, null reads as "not yet known", never as "ready".
     setDraftPrereqs(null);
     setChangedIds(new Set());
+    setBaselineIndex(null);
     setFigures([]);
     setSuggestions([]);
     setReferenceDocs([]);
     setImportReport(null);
+    // The notice describes the import (or reference/template failure) of the
+    // document being discarded — same reasoning as the project-open path.
+    setImportNotice(null);
     setSourceAvailable(false);
     setPreservationReady(false);
     setSourceCapabilities(null);
     setTemplateOrigin(null);
+    // Findings, quoted provision text and spend from the previous project.
+    // Research is already cleared by advanceWorkspaceEpoch (its reconcile
+    // identity is the round number, so clearing IS the identity reset); QC
+    // is not, because run ids are UUIDs and it needs no identity reset — but
+    // it still has a report on screen that belongs to the old document.
+    replaceQcSnapshot(null);
+    setReadiness(null);
     // The previous session's meter (spend pill + context gauge) must not
     // linger over a fresh session; clear immediately, then refetch the
     // server's zeroed snapshot.
@@ -1616,6 +1694,12 @@ export default function App() {
     try {
       const session = await instantiateTemplate(templateId);
       if (!applySessionBundle(session)) return;
+      // A template started from the ordinary app replaces the user's whole
+      // session, so the panes go with it. One started inside the tutorial is
+      // a disposable practice copy, and the tour is still driving the drawer
+      // nonces this would reset — the same distinction requestStartTemplate
+      // draws when it skips the save gate for a scenario.
+      if (!inProtectedWorkspace) discardPaneState();
       onboardingRef.current?.syncSessionIdentity(session);
       if (session.template_warning) {
         setImportNotice({
@@ -1714,6 +1798,11 @@ export default function App() {
       const result = await loadProjectFile(file);
       if (!adoptWorkspaceLease(result)) return;
       advanceWorkspaceEpoch();
+      // Opening a project replaces the whole session, so the panes must not
+      // carry the outgoing one's compare diff, review draft, QC accept-set or
+      // half-typed forms into it. Never reached inside the tutorial —
+      // onLoadProject ends the tour first.
+      discardPaneState();
       if (!applyDocPayload(result)) return;
       // The .baspec carries the original import's content-loss warnings, and
       // with the imported-DOCX banner gone this is the only place they can
@@ -1993,6 +2082,7 @@ export default function App() {
       />
       <main className="flex min-h-0 flex-1">
         <Chat
+          key={`chat-${sessionNonce}`}
           messages={messages}
           busy={busy}
           onSend={send}
@@ -2000,6 +2090,7 @@ export default function App() {
           discipline={activeDiscipline}
           onStartOnboarding={onboarding.start}
           tourActive={onboarding.phase.kind !== "idle"}
+          tutorialUpdated={tutorialUpdated}
           onStop={onStop}
           uploading={fileLoading !== null}
           prefill={prefill}
@@ -2007,6 +2098,7 @@ export default function App() {
           onDeleteFigure={onDeleteFigure}
         />
         <ArtifactPanel
+          key={`panel-${sessionNonce}`}
           doc={doc}
           openItems={openItems}
           lintIssues={lintIssues}
@@ -2028,7 +2120,7 @@ export default function App() {
           preservationReady={preservationReady}
           sourceCapabilities={sourceCapabilities}
           templateOrigin={templateOrigin}
-          tutorialActive={health?.workspace_scope !== undefined && health.workspace_scope !== "original"}
+          tutorialActive={inProtectedWorkspace}
           busy={busy || manualEditBusy || referenceBusy}
           fileLoading={fileLoading}
           importNotice={importNotice}

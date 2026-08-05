@@ -1,10 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { ChatMessage, Figure } from "../types";
 import { starterPrompts } from "../lib/tour";
-import {
-  consumeTutorialUpdateInvitation,
-  hasCompletedOnboarding,
-} from "../lib/onboardingStorage";
+import { hasCompletedOnboarding } from "../lib/onboardingStorage";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SuggestedPrompts from "./SuggestedPrompts";
@@ -35,6 +32,11 @@ interface Props {
   figuresById?: Map<string, Figure>;
   /** Remove a figure (forwarded to each figure card). */
   onDeleteFigure?: (fid: string) => void;
+  /** One-shot "the tutorial has been updated since you took it" invitation.
+   *  Owned by App because it is consumed once per app launch and this pane
+   *  remounts on a new session — consuming it here would mean starting a
+   *  session silently retired a notice the user may not have acted on. */
+  tutorialUpdated?: boolean;
 }
 
 export default function Chat({
@@ -50,6 +52,7 @@ export default function Chat({
   prefill,
   figuresById,
   onDeleteFigure,
+  tutorialUpdated = false,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
@@ -85,7 +88,6 @@ export default function Chat({
   };
 
   const toured = hasCompletedOnboarding();
-  const [tutorialUpdated] = useState(consumeTutorialUpdateInvitation);
 
   return (
     <section

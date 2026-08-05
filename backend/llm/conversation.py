@@ -1332,6 +1332,12 @@ class SessionState:
         self.last_context_tokens = None
         self._active_turn_token = None
         self.turn_active = False
+        # A stop aimed at the turn being discarded must not survive into the
+        # fresh session. ``claim_model_turn`` also clears this before it
+        # publishes a token, so a stale flag was already harmless in practice
+        # — but "reset leaves no session state behind" should hold here, not
+        # depend on a distant clear (and it is what the sweep below pins).
+        self.stop_requested.clear()
         self.generation += 1
 
     def start_from_template(

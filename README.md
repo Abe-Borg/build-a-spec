@@ -258,8 +258,8 @@ however you end it, it comes back exactly as it was.
   *explanatory*; optional marks the ones whose subject spends money — a live
   research run, a Final QC pass — so you know before you go looking for the
   button. The spotlight still leaves every real control clickable, so you are
-  free to inspect the document or ask a question as you go; the tour simply
-  never requires it. **Nothing is ever fabricated:** if there is no completed
+  free to read the document as you go; the tour simply never requires it.
+  **Nothing is ever fabricated:** if there is no completed
   research or QC result, the step says exactly that rather than inventing
   findings or a readiness state.
 - **Every feature is covered, and that is enforced by a test.** UI controls
@@ -277,8 +277,8 @@ however you end it, it comes back exactly as it was.
 - **A guided run, start to finish.** The tour cannot be parked half-done
   holding your project aside — it either runs or ends and gives your session
   back, and every card and checkpoint carries an End. Step cards never block
-  the app, so you can read the document or ask a question in the chat as you
-  go, and reloading picks the tour back up where you left it — but only when
+  the app, so you can read the document as you go, and reloading picks the
+  tour back up where you left it — but only when
   the server agrees the same protected workspace is still live. Help restarts
   it or jumps straight to any named chapter. Reduced motion is honored.
 

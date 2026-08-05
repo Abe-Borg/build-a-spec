@@ -511,9 +511,8 @@ export default function OnboardingOverlay({
         </div>
         <p className="mt-3 text-sm leading-relaxed text-ink-dim">
           Next: <b className="text-ink">{next.title}</b>. This checkpoint is the only
-          part of the tour that covers the app — step cards leave every control
-          live, so you can inspect the document or ask a question in the chat as
-          you go.
+          part of the tour that covers the app — step cards sit beside the real
+          thing, so you can read the document as you go.
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <button onClick={ob.continueChunk} className={primaryBtn}>Continue</button>

@@ -5758,8 +5758,14 @@ no project-format bump.
   surface — its backdrop covers the composer, so prefilling without
   suspending would have focused a control the user could not reach. Every
   step card leaves the chat live, so the affordance survives where it always
-  actually worked; the checkpoint copy now says so instead of offering a
-  button that would do nothing.
+  actually worked; the checkpoint copy said so instead of offering a button
+  that would do nothing. **That copy is gone too** (owner ask, 2026-08-05):
+  the composer is still live under the card, but a tour whose whole posture
+  is "nothing is asked of you" must not turn around and suggest something.
+  Pinned by the fourth mechanism in `tour.test.ts`'s fixed-track test, over
+  both the manifest and the overlay — the invitation lived in two places
+  (the opening `workspace-source` step and the checkpoint), so a pin over
+  one file would have caught half of it.
 - **Every reachable tutorial surface carries a labelled End**, which is the
   second half of the ask. The step card already had one (plus its header ✕);
   the checkpoint had only a ✕, and the preparing card had only a ✕ while it
@@ -5814,8 +5820,10 @@ bundled and deterministic, and the `/api/tutorial/*` routes are lifecycle only.
 - **Passive means the tour asks nothing, NOT that the app is locked** (decided
   with Abraham). The overlay root stays `pointer-events-none` and only the
   card takes pointer events, so every real control is still clickable
-  underneath — deliberately, since that is what lets a curious reader inspect
-  the document or ask a question without leaving. **This is why the
+  underneath — deliberately, since that is what lets a curious reader look
+  around without leaving. The tour no longer *points* at the chat (see the
+  copy removal noted above), which is a separate question from whether the
+  app is locked: it is not. **This is why the
   stacked-modal Escape guard is still load-bearing**: the user can open the
   template studio from the real control under the spotlight, so
   `anotherDialogOwnsEscape` and the `defaultPrevented` check must both stay

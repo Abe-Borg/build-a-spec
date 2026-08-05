@@ -741,7 +741,7 @@ export default function OnboardingOverlay({
                 : undefined
             }
           >
-            {step.continueLabel ?? (step.mode === "optional" ? "Continue / skip" : "Continue")}
+            {step.continueLabel ?? "Continue"}
           </button>
           <span className="flex-1" />
           <button

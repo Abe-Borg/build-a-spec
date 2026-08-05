@@ -252,12 +252,16 @@ however you end it, it comes back exactly as it was.
   by **production code paths**: the import chapter really imports a DOCX, the
   save chapter really round-trips a `.baspec`, the references chapter really
   attaches five files through the real extractors.
-- **It is interactive where that is honest, and explicit where it is not.**
-  Steps are marked *interactive*, *optional*, or *explanatory*. Optional
-  steps are the ones that spend money — a live research run, a Final QC pass
-  — and they say so before you click. **Nothing is ever fabricated:** if
-  there is no completed research or QC result, the step says exactly that
-  rather than inventing findings or a readiness state.
+- **It is a fixed track, and you are a passive observer.** The tour hands out
+  no controls of its own and waits on nothing — it walks the app in order, and
+  Continue moves on whenever you are ready. Steps are marked *optional* or
+  *explanatory*; optional marks the ones whose subject spends money — a live
+  research run, a Final QC pass — so you know before you go looking for the
+  button. The spotlight still leaves every real control clickable, so you are
+  free to inspect the document or ask a question as you go; the tour simply
+  never requires it. **Nothing is ever fabricated:** if there is no completed
+  research or QC result, the step says exactly that rather than inventing
+  findings or a readiness state.
 - **Every feature is covered, and that is enforced by a test.** UI controls
   carry a capability id, tutorial steps reference the same ids, and the test
   suite asserts the two sets are equal in both directions — so a feature

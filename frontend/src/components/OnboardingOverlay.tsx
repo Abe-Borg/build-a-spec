@@ -6,12 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type {
-  DocParagraph,
-  QcRunStatus,
-  ResearchRunStatus,
-  SpecDoc,
-} from "../types";
+import type { QcRunStatus, ResearchRunStatus, SpecDoc } from "../types";
 import { usePrefersReducedMotion } from "../lib/useSmoothText";
 import { anchorSelector, TOUR, type TourStep } from "../lib/tour";
 import type { DrawerName, OnboardingApi } from "../lib/useOnboarding";
@@ -21,8 +16,6 @@ interface Props {
   ob: OnboardingApi;
   doc: SpecDoc | null;
   busy: boolean;
-  hasContent: boolean;
-  profileComplete: boolean;
   researchStatus: ResearchRunStatus;
   qcStatus: QcRunStatus;
   sourceAvailable: boolean;
@@ -61,25 +54,6 @@ function anotherDialogOwnsEscape(): boolean {
   return Array.from(
     document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
   ).some((dialog) => dialog.getAttribute("data-dialog") !== TOUR_DIALOG);
-}
-
-/**
- * Stable structural fingerprint used by the rearrangement exercise. Text and
- * numbering are deliberately excluded: completion means that a real sibling
- * order changed, not merely that the document received some other edit.
- */
-export function documentOrderSignature(doc: SpecDoc | null): string {
-  if (!doc) return "";
-  const paragraphOrders: string[] = [];
-  const visit = (parentId: string, paragraphs: DocParagraph[]) => {
-    paragraphOrders.push(`${parentId}>${paragraphs.map((item) => item.id).join(",")}`);
-    for (const paragraph of paragraphs) visit(paragraph.id, paragraph.children);
-  };
-  const articleOrders = doc.parts.map((part) => {
-    for (const article of part.articles) visit(article.id, article.paragraphs);
-    return `${part.id}>${part.articles.map((article) => article.id).join(",")}`;
-  });
-  return [...articleOrders, ...paragraphOrders].join("|");
 }
 
 function useAnchorRect(
@@ -388,78 +362,16 @@ function readinessMet(
   }
 }
 
-function StepActions({
-  step,
-  ob,
-  busy,
-  profileComplete,
-  researchStatus,
-  qcStatus,
-  hasContent,
-}: {
-  step: TourStep;
-  ob: OnboardingApi;
-  busy: boolean;
-  profileComplete: boolean;
-  researchStatus: ResearchRunStatus;
-  qcStatus: QcRunStatus;
-  hasContent: boolean;
-}) {
-  if (!step.actions?.length) return null;
-  if (step.actions.some((action) => action.kind === "profile-fill") && profileComplete) {
-    return <p className="mt-3 text-xs text-ok">✓ Project profile is complete.</p>;
-  }
-  return (
-    <div className="mt-3 space-y-2 border-t border-edge pt-3">
-      {step.actions.map((action) => {
-        const researchDone = action.kind === "run-research" && researchStatus === "complete";
-        const qcDone = action.kind === "run-qc" && qcStatus === "complete";
-        if (researchDone || qcDone) {
-          return (
-            <p key={action.kind} className="text-xs text-ok">
-              ✓ {researchDone ? "Research is complete." : "Final QC is complete."}
-            </p>
-          );
-        }
-        const disabled =
-          busy ||
-          (action.kind === "run-research" && !profileComplete) ||
-          (action.kind === "run-qc" && !hasContent);
-        return (
-          <div key={action.kind}>
-            <button
-              onClick={() => ob.runStepAction(action)}
-              disabled={disabled}
-              className={action.kind === "prefill-composer" ? quietBtn : primaryBtn}
-            >
-              {action.label}
-            </button>
-            {action.note && (
-              <p className="mt-1 text-[11px] leading-snug text-ink-faint">{action.note}</p>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 export default function OnboardingOverlay({
   ob,
   doc,
   busy,
-  hasContent,
-  profileComplete,
   researchStatus,
   qcStatus,
   sourceAvailable,
   bumpDrawer,
 }: Props) {
   const { phase } = ob;
-  const [rearrangeBaseline, setRearrangeBaseline] = useState<{
-    key: string;
-    signature: string;
-  } | null>(null);
   const reducedMotion = usePrefersReducedMotion();
   const rawStep = phase.kind === "touring" ? TOUR[phase.chunk].steps[phase.step] : null;
   const ready = rawStep
@@ -475,27 +387,6 @@ export default function OnboardingOverlay({
     [rawStep, ready],
   );
   const { rect, missing } = useAnchorRect(anchorStep, doc, reducedMotion);
-  const orderSignature = useMemo(() => documentOrderSignature(doc), [doc]);
-  const rearrangeKey =
-    phase.kind === "touring" && rawStep?.id === "rearrange"
-      ? `${phase.chunk}:${phase.step}`
-      : null;
-  const rearrangeComplete =
-    !!rearrangeKey &&
-    rearrangeBaseline?.key === rearrangeKey &&
-    rearrangeBaseline.signature !== orderSignature;
-
-  useEffect(() => {
-    if (!rearrangeKey) {
-      setRearrangeBaseline(null);
-      return;
-    }
-    setRearrangeBaseline((current) =>
-      current?.key === rearrangeKey
-        ? current
-        : { key: rearrangeKey, signature: orderSignature },
-    );
-  }, [rearrangeKey, orderSignature]);
 
   useEffect(() => {
     if (rawStep?.drawer) bumpDrawer(rawStep.drawer);
@@ -699,48 +590,12 @@ export default function OnboardingOverlay({
             ))}
           </dl>
         )}
-        {ready && !missing && step.id === "rearrange" && (
-          <div
-            className={`mt-3 rounded-lg border p-3 ${
-              rearrangeComplete
-                ? "border-ok/40 bg-ok/10"
-                : "border-accent/40 bg-accent/10"
-            }`}
-          >
-            <p className="text-xs font-medium text-ink">
-              {rearrangeComplete
-                ? "✓ Sibling order changed — numbering recomputed on the paper."
-                : "Move one article or paragraph now."}
-            </p>
-            <p className="mt-1 text-[11px] leading-snug text-ink-dim">
-              Drag it, use Space plus Up/Down, or click an arrow. Its stable ID and complete
-              subtree move together; Continue unlocks only after the order changes.
-            </p>
-          </div>
-        )}
-        {ready && !missing && (
-          <StepActions
-            step={step}
-            ob={ob}
-            busy={busy}
-            profileComplete={profileComplete}
-            researchStatus={researchStatus}
-            qcStatus={qcStatus}
-            hasContent={hasContent}
-          />
-        )}
         <div className="mt-4 flex flex-wrap items-center gap-2">
           {!atFirst && <button onClick={ob.back} className={quietBtn}>‹ Back</button>}
-          <button
-            onClick={ob.advance}
-            disabled={busy || (step.id === "rearrange" && !rearrangeComplete)}
-            className={primaryBtn}
-            title={
-              step.id === "rearrange" && !rearrangeComplete
-                ? "Move one sibling article or paragraph to continue."
-                : undefined
-            }
-          >
+          {/* The tour is a fixed track: nothing but an in-flight turn can hold
+              Continue, and that guard stays because `advance` may swap in the
+              next chapter's scenario, which needs the session idle. */}
+          <button onClick={ob.advance} disabled={busy} className={primaryBtn}>
             {step.continueLabel ?? "Continue"}
           </button>
           <span className="flex-1" />

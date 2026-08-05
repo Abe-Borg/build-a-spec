@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { EditOp, Health, SessionBundle, SpecDoc } from "../types";
+import type { Health, SessionBundle } from "../types";
 import {
   finishTutorialScenario,
   getSessionBundle,
@@ -14,7 +14,7 @@ import {
   markOnboardingCompleted,
   saveOnboardingProgress,
 } from "./onboardingStorage";
-import { TOUR, TOUR_VERSION, type TourAction } from "./tour";
+import { TOUR, TOUR_VERSION } from "./tour";
 
 export type DrawerName = "review" | "research" | "qc" | "openItems";
 
@@ -31,17 +31,19 @@ export type OnboardingPhase =
   | { kind: "touring"; chunk: number; step: number }
   | { kind: "chunk-break"; nextChunk: number };
 
+/**
+ * What the tour needs from the host, and nothing more.
+ *
+ * The tutorial is a fixed track the user only watches, so it drives no app
+ * action of its own: the edit/research/QC/composer/template hooks this used to
+ * carry existed solely for step-card action buttons and went with them. What
+ * remains is workspace lifecycle — swapping the session the panel renders, and
+ * reading the lease that says whether this tour still owns it.
+ */
 export interface OnboardingCaps {
-  editDoc: (ops: EditOp[]) => Promise<void>;
-  startResearch: () => void;
-  startQc: () => void;
-  prefillComposer: (text: string) => void;
-  openTemplates: () => void;
   /** Apply only if its workspace lease is not superseded. */
   applySession: (session: SessionBundle) => boolean;
   health: Health | null;
-  doc: SpecDoc | null;
-  hasContent: boolean;
 }
 
 export interface OnboardingApi {
@@ -58,7 +60,6 @@ export interface OnboardingApi {
   end: () => void;
   /** Retry a restore that failed, or step back from one, without a prompt. */
   stayInTutorial: () => void;
-  runStepAction: (action: TourAction) => void;
   /** Reconcile a session replacement initiated by another tutorial surface
    * (currently starting a template inside the disposable template scenario). */
   syncSessionIdentity: (session: SessionBundle) => void;
@@ -624,43 +625,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     setPhase({ kind: "touring", chunk, step });
   }, []);
 
-  const runStepAction = useCallback(
-    (action: TourAction) => {
-      const current = capsRef.current;
-      switch (action.kind) {
-        case "profile-fill":
-          void current.editDoc([
-            {
-              action: "set_project_profile",
-              target_id: "sec",
-              city: "Phoenix",
-              state: "Arizona",
-              country: "USA",
-              client: "Tutorial Client",
-            },
-          ]);
-          break;
-        case "run-research":
-          current.startResearch();
-          break;
-        case "run-qc":
-          current.startQc();
-          break;
-        // Neither of these suspends the tour. The step card is non-blocking
-        // (the overlay root is pointer-events-none), so the composer stays
-        // usable underneath it, and the template studio simply renders over
-        // it until it is closed.
-        case "prefill-composer":
-          current.prefillComposer(action.prefillText ?? "");
-          break;
-        case "open-templates":
-          current.openTemplates();
-          break;
-      }
-    },
-    [],
-  );
-
   const syncSessionIdentity = useCallback(
     (session: SessionBundle) => {
       const workspace = workspaceRef.current;
@@ -707,7 +671,6 @@ export function useOnboarding(caps: OnboardingCaps): OnboardingApi {
     cancelEnd,
     end,
     stayInTutorial,
-    runStepAction,
     syncSessionIdentity,
     acceptNativeRestore,
     abort,

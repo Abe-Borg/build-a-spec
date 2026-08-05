@@ -77,6 +77,7 @@ import OnboardingOverlay from "./components/OnboardingOverlay";
 import NewSessionDialog from "./components/NewSessionDialog";
 import { sourceCapabilitiesPending } from "./lib/sourceCapabilities";
 import { installExternalLinkHandler } from "./lib/externalLinks";
+import { consumeTutorialUpdateInvitation } from "./lib/onboardingStorage";
 import {
   useOnboarding,
   type DrawerName,
@@ -176,6 +177,17 @@ export default function App() {
     qc: 0,
     openItems: 0,
   });
+  // Consumed once per app launch, and owned here rather than in Chat because
+  // the chat pane remounts on a new session (see sessionNonce below) — read
+  // there, starting a session would quietly retire the notice.
+  const [tutorialUpdated] = useState(consumeTutorialUpdateInvitation);
+  // Bumped when the session is replaced wholesale, and used as the React key
+  // of both panes so their whole subtree is discarded rather than reused.
+  // Component-local state below App is otherwise unreachable from the wipe
+  // (see clearSessionState), and it holds real content: a fetched compare
+  // diff, the review walk's draft text, a half-entered standard, the QC
+  // accept-set, the project-profile form, the composer's unsent message.
+  const [sessionNonce, setSessionNonce] = useState(0);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [templatesOnly, setTemplatesOnly] = useState(false);
   const [templateStarting, setTemplateStarting] = useState(false);
@@ -1353,25 +1365,65 @@ export default function App() {
     [refreshDoc, currentWorkspaceLease],
   );
 
-  /** Shared post-reset clear+refresh — every session-start path runs this. */
+  /** Shared post-reset clear+refresh — every session-start path runs this.
+   *
+   *  The server has already wiped its half (``SessionState.reset``); this is
+   *  the client's, and it clears SYNCHRONOUSLY rather than waiting for the
+   *  refetches below. Two reasons, and the second is the one that matters:
+   *  a refetch lands a frame or more later, so anything left set keeps the
+   *  previous project on screen in the meantime — and `refreshResearch` /
+   *  `refreshQc` deliberately do NOTHING on a failed fetch (a dropped poll
+   *  must not erase a live run's board), so one failed request would leave
+   *  the old project's findings sitting there indefinitely.
+   */
   const clearSessionState = () => {
+    // Cuts loose the research stream and snapshot bound to the old workspace.
     advanceWorkspaceEpoch();
+    // Remount both panes. Everything above is App-owned state, but the panel,
+    // the drawers and the composer own plenty of their own — a half-typed
+    // standards edit, the review walk's cursor and draft text, the compare
+    // view's fetched diff, the QC accept-set and dismiss rationale, the
+    // project-profile form, the unsent composer message. None of it is
+    // reachable from here, and the list grows with every feature; discarding
+    // the subtree is the only form of this that stays true on its own.
+    setSessionNonce((n) => n + 1);
+    // Drawer-open nonces travel as props, and each drawer opens itself when
+    // its nonce is non-zero — which a fresh mount evaluates too. Left as they
+    // were, every drawer the old session opened would spring open on the new
+    // one. Zero is the "nobody has asked" value the effects already guard on.
+    setDrawerNonces({ review: 0, research: 0, qc: 0, openItems: 0 });
     setMessages([]);
+    setDoc(null);
     setOpenItems([]);
     setLintIssues([]);
     setStandards([]);
+    setProfileComplete(false);
     // The old session's identity is gone; the refreshDoc below re-derives the
     // gate. Until it lands, null reads as "not yet known", never as "ready".
     setDraftPrereqs(null);
     setChangedIds(new Set());
+    setBaselineIndex(null);
     setFigures([]);
     setSuggestions([]);
     setReferenceDocs([]);
     setImportReport(null);
+    // The notice describes the import (or reference/template failure) of the
+    // document being discarded — same reasoning as the project-open path.
+    setImportNotice(null);
+    // A composer prefill staged by the old session's review queue. Nonce 0 is
+    // what makes the remounted Composer ignore it instead of re-prefilling.
+    setPrefill({ text: "", nonce: 0 });
     setSourceAvailable(false);
     setPreservationReady(false);
     setSourceCapabilities(null);
     setTemplateOrigin(null);
+    // Findings, quoted provision text and spend from the previous project.
+    // Research is already cleared by advanceWorkspaceEpoch (its reconcile
+    // identity is the round number, so clearing IS the identity reset); QC
+    // is not, because run ids are UUIDs and it needs no identity reset — but
+    // it still has a report on screen that belongs to the old document.
+    replaceQcSnapshot(null);
+    setReadiness(null);
     // The previous session's meter (spend pill + context gauge) must not
     // linger over a fresh session; clear immediately, then refetch the
     // server's zeroed snapshot.
@@ -2002,6 +2054,7 @@ export default function App() {
       />
       <main className="flex min-h-0 flex-1">
         <Chat
+          key={sessionNonce}
           messages={messages}
           busy={busy}
           onSend={send}
@@ -2009,6 +2062,7 @@ export default function App() {
           discipline={activeDiscipline}
           onStartOnboarding={onboarding.start}
           tourActive={onboarding.phase.kind !== "idle"}
+          tutorialUpdated={tutorialUpdated}
           onStop={onStop}
           uploading={fileLoading !== null}
           prefill={prefill}
@@ -2016,6 +2070,7 @@ export default function App() {
           onDeleteFigure={onDeleteFigure}
         />
         <ArtifactPanel
+          key={sessionNonce}
           doc={doc}
           openItems={openItems}
           lintIssues={lintIssues}

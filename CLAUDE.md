@@ -724,6 +724,13 @@ tests/
                            own research_date stamp) and one per QC run (both
                            cached prefixes), plus the deliberate
                            not-in-the-input-manifest decision
+  test_session_wipe.py     "New session" leaves nothing of the old one: the
+                           FIELD SWEEP (every SessionState field is declared
+                           wiped or deliberately kept — a new store fails
+                           here until someone decides which), fresh-vs-reset
+                           equality by state projection, the same with a
+                           module/discipline switch, the stop flag, the
+                           endpoint end to end, and has_unsaved_progress
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -5763,6 +5770,78 @@ no project-format bump.
   so a future phase added without an exit fails the suite. "a modal stacked
   over the tour owns Escape" pins both guards, the marker on both of the
   tour's own modals, and the guard sitting ahead of the phase check.
+
+## A new session keeps nothing — implemented notes
+
+Owner ask (Abraham): starting a new session from scratch must wipe all of the
+session's data. The blank-slate choice in `NewSessionDialog` posts
+`/api/session/reset` and then runs `App.clearSessionState()`, and the backend
+half was already thorough — what was missing was the guarantee that it STAYS
+thorough, plus a handful of client-side leaks the server wipe cannot reach.
+No new endpoint, no new SSE event, no new dep, no project-format bump.
+
+- **The backend contract is now a field sweep, not a list of clears.**
+  `tests/test_session_wipe.py` requires every `SessionState` dataclass field
+  to be named either in `_STATE_PROBES` (state the reset restores, read
+  through a projection because reset installs NEW store/runner instances by
+  design) or in `_RESET_KEEPS` (with the reason it is not a leak: `generation`
+  must advance — it is the zombie-turn invalidation signal; `module` and
+  `discipline` are documented app semantics, and the blank-slate path passes
+  `generic`/`""` explicitly anyway; the two locks carry no session data). A
+  field added for a future store fails the sweep until someone decides which
+  it is. That is the durable part — the individual assertions only ever cover
+  the state that existed when they were written, and this feature's whole
+  failure mode is a store added later and forgotten.
+- **`stop_requested` was the one field surviving the wipe**, and it is
+  hygiene rather than a live bug: `claim_model_turn` clears the flag before
+  publishing a turn token, so a stale one was already unreachable. It is
+  cleared at the reset because "a reset leaves no session state behind"
+  should hold there, not one hop away. Reverting it turns 4 tests red.
+- **The client clears SYNCHRONOUSLY, and that is the substantive half.**
+  `clearSessionState` used to leave `doc`, `profileComplete`, `baselineIndex`,
+  `importNotice`, `prefill`, the QC snapshot and readiness to the refetches
+  that follow. A refetch lands a frame or more later — but the real problem is
+  that `refreshResearch`/`refreshQc` deliberately do NOTHING on a failed fetch
+  (a dropped poll must not erase a live run's board), so a single failed
+  request left the previous project's Final QC findings, quoted provision text
+  and cost on screen indefinitely. Research was already handled inside
+  `advanceWorkspaceEpoch`; QC is not (its run ids are UUIDs, so it needs no
+  identity reset) and had to be cleared here.
+- **The panes remount on a `sessionNonce` key, because App cannot reach what
+  it does not own.** The panel, drawers and composer hold real content of
+  their own: a fetched compare `diff`, the review walk's cursor and draft
+  text, a half-entered standard edition and its reason, the QC accept-set and
+  dismiss rationale, the project-profile form, the unsent composer message.
+  Enumerating those from `clearSessionState` would be a list that silently
+  goes stale with the next feature; discarding the subtree stays true on its
+  own. Two consequences had to be handled with it: the drawer-open nonces are
+  reset to zero (each drawer's `if (openNonce) setExpanded(true)` effect runs
+  on a FRESH MOUNT too, so every drawer the old session opened would spring
+  open on the new one), and `prefill.nonce` goes back to 0 (the same reason —
+  `Composer`'s prefill effect guards on it, so 0 is what makes the remounted
+  composer ignore a stale prefill instead of re-applying it).
+- **`consumeTutorialUpdateInvitation` moved up to `App`** for the same
+  reason in reverse: it is consumed once per app LAUNCH, so reading it below
+  a remount boundary meant starting a new session quietly retired a notice
+  the user might not have acted on. `Chat` takes it as a prop now.
+- **`ProjectProfileForm` re-seeds from the RECORDED profile**, which is the
+  one leak that wrote rather than merely displayed. It seeded `form` in a
+  `useState` initializer and never re-read `doc`, so after a session change
+  it still held the previous project's city/state/country/client — and
+  pressing Save posted them into the new document. The effect keys on the
+  serialized recorded profile, not on `doc`: typing moves the form away from
+  the recorded values without changing them, so it never fights the user;
+  what does fire is a new document underneath the form and the model
+  recording a field mid-interview (the form used to sit stale through that
+  too). The remount covers the new-session path structurally; this is the
+  component being right about its own input, and it is what covers the other
+  two.
+- **Deliberately unchanged**: `advanceWorkspaceEpoch`'s documented contract
+  (its research clear is about reconcile identity, not display, and the other
+  transitions that call it — project load, template instantiate, tutorial
+  swaps — hydrate through `applySessionBundle`/`applyDocPayload` rather than
+  through the wipe). Widening the remount to every epoch bump would perturb
+  the tour's drawer plumbing for no ask.
 
 ## Commands
 

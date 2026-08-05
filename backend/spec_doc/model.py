@@ -1043,6 +1043,16 @@ class DocumentStore:
         # projects (they can still redline against any prior version, or
         # against the empty version 0). Set by :meth:`adopt_imported`.
         self.baseline_index: int | None = None
+        # The user gave up source-preserving export for this document so they
+        # could edit it freely (see ``SessionState.detach_source``). Every
+        # source artifact is deliberately RETAINED — the exact original stays
+        # downloadable, the package still validates on load, and "redline vs
+        # master" still works — so this flag, not the absence of a baseline,
+        # is what releases the edit restrictions. It rides the store beside
+        # ``baseline_index`` rather than a version snapshot: it is a decision
+        # about the document's relationship to its source, not document
+        # content, so undo/redo must not flip it.
+        self.source_detached: bool = False
 
     # -- snapshots ----------------------------------------------------------
 
@@ -1122,6 +1132,9 @@ class DocumentStore:
         self._dirty = False
         # This version is the baseline for "redline vs master" (Batch 5).
         self.baseline_index = self.index
+        # A fresh import re-arms source preservation: the new package has not
+        # been detached from, whatever the previous document chose.
+        self.source_detached = False
 
     def seed_template(self, section: SpecSection) -> None:
         """Start a new native document from a semantic template.
@@ -1138,6 +1151,7 @@ class DocumentStore:
         self.versions = [snapshot]
         self.index = 0
         self.baseline_index = None
+        self.source_detached = False
         self._turn_backup = None
         self._dirty = False
 
@@ -1176,6 +1190,7 @@ class DocumentStore:
             "versions": self.versions,
             "index": self.index,
             "baseline_index": self.baseline_index,
+            "source_detached": self.source_detached,
         }
 
     def load(self, data: dict[str, Any]) -> None:
@@ -1200,6 +1215,11 @@ class DocumentStore:
         self.index = index
         self.doc = parsed[index]
         self.baseline_index = baseline
+        # Files saved before "Edit freely" existed carry no flag and are
+        # attached, which is what they were. Anything but an explicit ``True``
+        # reads as attached: a malformed value must never silently hand out
+        # edit permissions the source gate would refuse.
+        self.source_detached = data.get("source_detached") is True
         self._turn_backup = None
         self._dirty = False
 

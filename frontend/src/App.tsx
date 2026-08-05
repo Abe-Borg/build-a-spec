@@ -37,6 +37,7 @@ import {
   dismissQc,
   downloadProjectFile,
   draftFull,
+  detachSource,
   editDoc,
   getDoc,
   getDocCapabilities,
@@ -120,6 +121,10 @@ export default function App() {
   // button on. The ref closes the same-tick double-submit gap before React can
   // render the state change (especially important for rapid drag/drop moves).
   const [manualEditBusy, setManualEditBusy] = useState(false);
+  // "Edit freely": the confirm gate and the in-flight request.
+  const [detachConfirmOpen, setDetachConfirmOpen] = useState(false);
+  const [detaching, setDetaching] = useState(false);
+  const detachingRef = useRef(false);
   const [doc, setDoc] = useState<SpecDoc | null>(null);
   const [openItems, setOpenItems] = useState<OpenItem[]>([]);
   const [lintIssues, setLintIssues] = useState<LintIssue[]>([]);
@@ -153,6 +158,10 @@ export default function App() {
   const [referenceDocs, setReferenceDocs] = useState<ReferenceDocMeta[]>([]);
   const [referenceBusy, setReferenceBusy] = useState(false);
   const [sourceAvailable, setSourceAvailable] = useState(false);
+  // Server-owned, never inferred: detaching KEEPS the source bytes and the
+  // baseline, so the retained artifacts look identical to an attached
+  // document whose capability report has not arrived.
+  const [sourceDetached, setSourceDetached] = useState(false);
   const [preservationReady, setPreservationReady] = useState(false);
   const [sourceCapabilities, setSourceCapabilities] =
     useState<SourceCapabilitiesState | null>(null);
@@ -412,6 +421,7 @@ export default function App() {
         setBaselineIndex(payload.baseline_index ?? null);
         setImportReport(payload.import_report ?? null);
         setSourceAvailable(payload.source_available ?? false);
+        setSourceDetached(payload.source_detached ?? false);
         setPreservationReady(payload.preservation_ready ?? false);
         setSourceCapabilities(payload.source_capabilities ?? null);
         setTemplateOrigin(payload.template_origin ?? null);
@@ -1440,6 +1450,7 @@ export default function App() {
     // document being discarded — same reasoning as the project-open path.
     setImportNotice(null);
     setSourceAvailable(false);
+    setSourceDetached(false);
     setPreservationReady(false);
     setSourceCapabilities(null);
     setTemplateOrigin(null);
@@ -1491,6 +1502,7 @@ export default function App() {
     reference_docs?: ReferenceDocMeta[];
     import_report?: ImportReport | null;
     source_available?: boolean;
+    source_detached?: boolean;
     preservation_ready?: boolean;
     source_capabilities?: SourceCapabilitiesState | null;
     template_origin?: TemplateOrigin | null;
@@ -1505,6 +1517,7 @@ export default function App() {
     setBaselineIndex(payload.baseline_index ?? null);
     setImportReport(payload.import_report ?? null);
     setSourceAvailable(payload.source_available ?? false);
+    setSourceDetached(payload.source_detached ?? false);
     setPreservationReady(payload.preservation_ready ?? false);
     setSourceCapabilities(payload.source_capabilities ?? null);
     setTemplateOrigin(payload.template_origin ?? null);
@@ -1627,6 +1640,46 @@ export default function App() {
     } finally {
       manualEditBusyRef.current = false;
       setManualEditBusy(false);
+    }
+  };
+
+  /**
+   * Give up source-preserving export so this imported document can be edited.
+   *
+   * Gated behind a confirm because it is one-way for this document: the
+   * export contract changes from "a byte-exact patched copy of your upload"
+   * to "a normalized Word file". Nothing is lost — the exact original stays
+   * downloadable and redline vs master keeps working — but that is a promise
+   * the user should make deliberately, not discover afterwards.
+   */
+  const doDetachSource = async () => {
+    setDetachConfirmOpen(false);
+    if (detachingRef.current || busyRef.current || fileLoadingRef.current) return;
+    detachingRef.current = true;
+    setDetaching(true);
+    const epoch = workspaceEpochRef.current;
+    try {
+      const payload = await detachSource(currentWorkspaceLease());
+      if (workspaceEpochRef.current !== epoch) return;
+      if (!applyDocPayload(payload)) return;
+      refreshReadiness();
+      refreshQc();
+    } catch (e) {
+      refreshDoc();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          role: "assistant",
+          text: `Could not switch to free editing: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+          error: true,
+        },
+      ]);
+    } finally {
+      detachingRef.current = false;
+      setDetaching(false);
     }
   };
 
@@ -1997,6 +2050,33 @@ export default function App() {
         onCancel={onboarding.cancelEnd}
       />
       <ConfirmDialog
+        open={detachConfirmOpen}
+        title="Edit this document freely?"
+        body={
+          <>
+            Right now Build-a-Spec exports this section as a byte-exact copy
+            of your upload, changing only the words it is allowed to patch.
+            That promise is why most of the document is read-only.
+            <p className="mt-2">
+              Switching to free editing lets you change anything — headings,
+              structure, articles — and exports a{" "}
+              <b className="text-ink">normalized</b> Word file in
+              Build-a-Spec's formatting instead of your original's.
+            </p>
+            <p className="mt-2">
+              Your original upload stays downloadable, and “Redline vs master”
+              still shows what changed. This applies to this document only and{" "}
+              <b className="text-ink">cannot be undone</b> — to go back, import
+              the file again.
+            </p>
+          </>
+        }
+        confirmLabel="Edit freely"
+        cancelLabel="Keep original formatting"
+        onConfirm={doDetachSource}
+        onCancel={() => setDetachConfirmOpen(false)}
+      />
+      <ConfirmDialog
         open={apiKeyErrorOpen}
         title="Your API key needs attention"
         body={
@@ -2117,6 +2197,7 @@ export default function App() {
           onRemoveReference={onRemoveReference}
           referenceBusy={referenceBusy}
           sourceAvailable={sourceAvailable}
+          sourceDetached={sourceDetached}
           preservationReady={preservationReady}
           sourceCapabilities={sourceCapabilities}
           templateOrigin={templateOrigin}
@@ -2125,6 +2206,8 @@ export default function App() {
           fileLoading={fileLoading}
           importNotice={importNotice}
           onDismissImportNotice={() => setImportNotice(null)}
+          onDetachSource={() => setDetachConfirmOpen(true)}
+          detaching={detaching}
           onUndo={onUndo}
           onRedo={onRedo}
           onSaveAsTemplate={openTemplateStudio}

@@ -438,7 +438,11 @@ export const TOUR: readonly TourChunk[] = [
       },
       {
         id: "source-permissions",
-        capabilities: ["document.source-permissions", "import.source-output"],
+        capabilities: [
+          "document.source-permissions",
+          "import.source-output",
+          "document.detach-source",
+        ],
         mode: "explanatory",
         anchor: "",
         resolve: "first-imported",
@@ -446,7 +450,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "left",
         title: "Source preservation is proven per operation",
         body:
-          `Imported controls use server-derived edit, delete, insert, and move permissions and fail closed while analysis is pending. Disabled controls state the exact reason. ${SOURCE_CAPABILITY_GUIDANCE} The exact original remains separately downloadable.`,
+          `Imported controls use server-derived edit, delete, insert, and move permissions and fail closed while analysis is pending. Disabled controls state the exact reason. ${SOURCE_CAPABILITY_GUIDANCE} The exact original remains separately downloadable. When a package cannot be patched at all — tracked changes, macros, an embedded object, or enforced protection — the panel names that cause and offers Edit freely, which trades the byte-exact export for unrestricted editing while keeping the original downloadable.`,
         details: SOURCE_OUTPUT_GUIDANCE,
       },
     ],

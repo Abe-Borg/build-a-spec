@@ -972,6 +972,17 @@ function Dossier() {
               per element and per operation, which source-preserving edits it can
               prove safe; that analysis runs in the background and everything
               stays denied until it finishes.
+              <p className="mt-2">
+                Some packages cannot be patched at all — ones carrying tracked
+                changes, macros, an embedded object, a signature, or enforced
+                protection. The panel names that cause and what to do about it,
+                and offers{" "}
+                <b className="text-ink">Edit freely</b>: a one-way choice, for
+                that document, to give up the byte-exact export in return for
+                unrestricted editing. It drops the promise, not the evidence —
+                your original upload stays downloadable exactly as you sent it,
+                and the redline against it still works.
+              </p>
             </>
           }
           sent={

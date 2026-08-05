@@ -284,6 +284,32 @@ export async function editDoc(
   return data;
 }
 
+/**
+ * Give up source-preserving export so the imported document can be edited.
+ *
+ * One-way for this document: source mode promises a byte-exact patched clone
+ * of the upload, and that promise is what restricts editing. Nothing is
+ * deleted — the exact original stays downloadable and redline vs master keeps
+ * working. 409 while a model turn streams, or with no imported original.
+ */
+export async function detachSource(
+  lease: WorkspaceLeaseInput = {},
+): Promise<DocPayload> {
+  const resp = await fetch("/api/doc/detach-source", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `detach failed (${resp.status})`);
+  }
+  return data;
+}
+
 /** Restore a session from a native .baspec package or legacy JSON project. */
 export async function loadProjectFile(file: File): Promise<ProjectLoadResult> {
   const body = new FormData();

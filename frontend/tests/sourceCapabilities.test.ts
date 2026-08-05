@@ -138,11 +138,24 @@ test("non-source documents retain normal editing when the report is null", () =>
 });
 
 test("active-source detection distinguishes pre-import and legacy source-less history", () => {
-  assert.equal(sourceCapabilitiesExpected(null, false, 1, 1), false);
-  assert.equal(sourceCapabilitiesExpected(null, true, 1, 0), false);
-  assert.equal(sourceCapabilitiesExpected(null, true, 1, 1), true);
-  assert.equal(sourceCapabilitiesExpected(null, true, null, 1), false);
-  assert.equal(sourceCapabilitiesExpected(report, false, 99, 0), true);
+  assert.equal(sourceCapabilitiesExpected(null, false, 1, 1, false), false);
+  assert.equal(sourceCapabilitiesExpected(null, true, 1, 0, false), false);
+  assert.equal(sourceCapabilitiesExpected(null, true, 1, 1, false), true);
+  assert.equal(sourceCapabilitiesExpected(null, true, null, 1, false), false);
+  assert.equal(sourceCapabilitiesExpected(report, false, 99, 0, false), true);
+});
+
+test("a detached document is not source-backed however much it retained", () => {
+  // "Edit freely" keeps the source bytes AND the baseline so the exact
+  // original stays downloadable and redline vs master keeps working. That is
+  // exactly the shape the inference reads as an active source document, so
+  // without the explicit flag the panel disables every editing control the
+  // user just turned on -- the feature confirms and then does nothing.
+  assert.equal(sourceCapabilitiesExpected(null, true, 1, 1, true), false);
+  assert.equal(sourceCapabilitiesExpected(null, true, 0, 5, true), false);
+  // It wins over a delivered report too: a stale report must not re-lock a
+  // document whose scope the server has already dropped.
+  assert.equal(sourceCapabilitiesExpected(report, true, 1, 1, true), false);
 });
 
 test("project identity metadata remains editable for source-backed documents", () => {

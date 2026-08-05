@@ -699,8 +699,26 @@ def _stage_project_load(
         # the preservation boundary. Checking only the active index would let
         # an unsafe forged redo/undo version enter the session and become
         # active later without another package validation pass.
+        #
+        # A DETACHED project is exempt, and has to be: "Edit freely" exists so
+        # the document can leave that boundary, so re-imposing it here would
+        # make every project the feature is for refuse to reopen — the user's
+        # work saved into a file that cannot be loaded. What is still checked
+        # above, and still matters, is the integrity of the retained
+        # artifacts themselves: the source re-parses, its map matches a fresh
+        # parse, and the imported baseline is present. Those are what the
+        # exact-original download and redline vs master rest on. The
+        # preservation boundary is a claim about EXPORT, and a detached
+        # project no longer makes it (`_source_readiness` returns None, and
+        # `mode=source` 409s), so nothing downstream can act on a retained
+        # version as though it were source-exportable.
         baseline_index = staged.doc.baseline_index
-        for version_index in range(baseline_index, len(staged.doc.versions)):
+        version_range = (
+            range(0, 0)
+            if staged.doc.source_detached
+            else range(baseline_index, len(staged.doc.versions))
+        )
+        for version_index in version_range:
             retained = SpecSection.from_dict(staged.doc.versions[version_index])
             preservation = source_patch_readiness(
                 source_bytes=staged.source_docx_bytes,
@@ -770,6 +788,11 @@ def _source_baseline(session) -> SpecSection | None:
 
 
 def _source_readiness(session):
+    # "Edit freely" gave up the preservation claim. The baseline itself is
+    # deliberately still readable — redline vs master keeps working — but a
+    # source-preserving export must no longer be offered or attempted.
+    if getattr(session.doc, "source_detached", False):
+        return None
     baseline = _source_baseline(session)
     if baseline is None:
         return None
@@ -1477,6 +1500,14 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         "import_report": session.import_report,
         "template_origin": session.template_origin,
         "source_available": session.source_docx_bytes is not None,
+        # Explicit, because it cannot be inferred: a detached document keeps
+        # its bytes and baseline (so the exact original and redline vs master
+        # keep working) while carrying a null capability report — which is
+        # byte-identical to "source-backed, report not delivered". A client
+        # inferring scope from the retained artifacts reads that as an active
+        # source document and greys out the very editing the user just turned
+        # on. See sourceCapabilitiesExpected.
+        "source_detached": bool(getattr(session.doc, "source_detached", False)),
         "preservation_ready": bool(preservation and preservation.ready),
         "source_preservation": _source_preservation_payload(
             session, preservation
@@ -3530,6 +3561,55 @@ def create_app(
         )
         return JSONResponse({"ok": True, "applied": applied, **payload})
 
+    @app.post("/api/doc/detach-source")
+    def detach_source(body: WorkspaceMutationRequest | None = None) -> JSONResponse:
+        """Give up source-preserving export so the document can be edited.
+
+        The one-way door behind "Edit freely". An imported master is heavily
+        restricted because source mode promises a byte-exact patched clone of
+        the upload; a package carrying tracked changes, macros, an embedded
+        OLE object, or enforced protection cannot be patched at all and is
+        frozen outright. This drops the promise and nothing else — the exact
+        original stays downloadable, a saved project still loads, and redline
+        vs master still works.
+
+        Refused while a model turn streams, for the same reason a manual edit
+        is: the turn's edits were validated under source scope and would be
+        committing into a document whose rules changed underneath them.
+        """
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        try:
+            with sessions.active_write(lease.workspace_id):
+                with session.session_state_guard():
+                    sessions.workspace_manager().assert_fresh(lease)
+                    if session.turn_active:
+                        return JSONResponse(
+                            {
+                                "ok": False,
+                                "error": "A model turn is streaming — try "
+                                "again once it finishes.",
+                            },
+                            status_code=409,
+                        )
+                    if session.source_docx_bytes is None:
+                        return JSONResponse(
+                            {
+                                "ok": False,
+                                "error": "This document has no imported Word "
+                                "original to detach from.",
+                            },
+                            status_code=409,
+                        )
+                    changed = session.detach_source()
+                    payload = _doc_payload(session, workspace=lease)
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+        _trace_capture.app_event("source_detach", ok=True, changed=changed)
+        return JSONResponse({"ok": True, "detached": True, **payload})
+
     def _redline_base_for_export(
         store, redline: str | None, base: int | None
     ) -> tuple[SpecSection | None, JSONResponse | None]:
@@ -3607,8 +3687,16 @@ def create_app(
         # Redlines are always generated from the semantic tree. Otherwise an
         # imported project defaults to the preservation path and never
         # silently falls back to a normalized reconstruction.
+        # A detached document is an ordinary semantic document that happens to
+        # remember where it came from, so it defaults to normalized like any
+        # other. Asking for ``mode=source`` explicitly still gets the honest
+        # 409 below, because the preservation claim is what was given up.
         imported_scope = (
-            session.import_report is not None or store.baseline_index is not None
+            not getattr(store, "source_detached", False)
+            and (
+                session.import_report is not None
+                or store.baseline_index is not None
+            )
         )
         selected_mode = (
             "normalized"
@@ -3619,6 +3707,21 @@ def create_app(
         # is gone, and a committing turn replaces ``store.doc`` outright.
         current = SpecSection.from_dict(store.doc.to_dict())
         if selected_mode == "source":
+            if getattr(store, "source_detached", False):
+                # Every artifact is still here, so the generic message below
+                # would be untrue. Name the actual reason: the claim was
+                # given up on purpose, and the document has been free to
+                # diverge from the package ever since.
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Source-preserving export is unavailable: "
+                        "this document was detached from its Word original "
+                        "so it could be edited freely. Export it normalized, "
+                        "or download the exact original upload.",
+                    },
+                    status_code=409,
+                )
             baseline = _source_baseline(session)
             source_map = getattr(session, "source_docx_map", None)
             if (

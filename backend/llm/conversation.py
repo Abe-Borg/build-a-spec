@@ -742,7 +742,15 @@ class SessionState:
         and remains an ordinary semantic document. Undoing before a valid
         imported baseline also leaves the retained source only in the redo
         tail, where it does not constrain a fresh branch.
+
+        ``source_detached`` is the user's explicit decision to stop claiming
+        source preservation for this document so they can edit it freely
+        (:meth:`detach_source`). It is checked FIRST and is deliberately the
+        only release that keeps every source artifact: the point is to drop
+        the promise, not the evidence.
         """
+        if getattr(self.doc, "source_detached", False):
+            return False
         if self.source_docx_bytes is None and self.source_docx_map is None:
             return False
         baseline_index = self.doc.baseline_index
@@ -1289,6 +1297,42 @@ class SessionState:
             self.module = next_module
             self.discipline = next_discipline
             self.project_context = next_project_context
+
+    def detach_source(self) -> bool:
+        """Give up source-preserving export so the document can be edited.
+
+        Returns whether anything changed, so a repeat call is a harmless
+        no-op rather than an error.
+
+        This is the one-way door behind "Edit freely". Source-preserving mode
+        exists to promise that the exported ``.docx`` is a byte-exact clone of
+        the upload with only approved text slices changed, and every editing
+        restriction on an imported document serves that promise: headings are
+        never patched, structural edits need a provable Word-numbered island,
+        and a package carrying tracked changes, macros, an embedded OLE
+        object, or enforced protection is frozen outright. A user who does not
+        need that promise for this document should not pay for it.
+
+        Nothing is deleted. The retained bytes, the source map and the
+        imported baseline all stay, which is what keeps the exact original
+        downloadable, keeps a saved project loading (the package validates
+        source/map/baseline against each other, so removing one member would
+        make the file reject itself), and keeps "redline vs master" working.
+        Only the CLAIM goes away.
+
+        The capability memo is dropped because the answer it holds — a report
+        derived under source scope — is exactly what stops being true here.
+        """
+        if getattr(self.doc, "source_detached", False):
+            return False
+        self.doc.source_detached = True
+        self._capability_cache = None
+        self._pending_capability_cache = None
+        # A sweep still running for the attached state settles into a memo
+        # nobody will read; dropping the queued state stops a successor.
+        self._capability_warm = None
+        self._capability_warm_next = None
+        return True
 
     def _reset_while_locked(self) -> None:
         self.history.clear()

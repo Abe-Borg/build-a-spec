@@ -174,9 +174,8 @@ test("a step with no anchor supplies a document resolver instead", () => {
   for (const step of anchorless) assert.match(step, /resolve:\s*"/);
 });
 
-test("tutorial is versioned, resumable, interactive, and document-aware", () => {
+test("tutorial is versioned, resumable, and document-aware", () => {
   assert.match(tour, /TOUR_VERSION\s*=\s*\d+/);
-  assert.match(tour, /mode:\s*"interactive"/);
   assert.match(tour, /mode:\s*"optional"/);
   assert.match(tour, /mode:\s*"explanatory"/);
   assert.match(tour, /resolve:\s*"reorderable-paragraph"/);
@@ -319,15 +318,6 @@ test("the tutorial runs start to finish and cannot be suspended", () => {
     /event\.key !== "Escape"[\s\S]{0,220}ob\.requestEnd\(\)/,
   );
 
-  // Step actions hand the user a control and stay put. The card is
-  // non-blocking, so suspending the tour to reach the composer is not the
-  // trade it once was.
-  assert.match(
-    hook,
-    /prefillComposer\(action\.prefillText \?\? ""\);\s*\n\s*break;/,
-  );
-  assert.match(hook, /openTemplates\(\);\s*\n\s*break;/);
-
   // And the manifest may not promise an affordance that is gone.
   assert.doesNotMatch(tour, /\bpause\b/i);
 });
@@ -404,17 +394,45 @@ test("a modal stacked over the tour owns Escape", () => {
   assert.match(overlay, /aria-modal="false"/);
 });
 
-test("rearrangement is a required real-document exercise", () => {
-  assert.match(overlay, /documentOrderSignature/);
-  assert.match(overlay, /paragraphs\.map\(\(item\) => item\.id\)/);
-  assert.match(overlay, /Move one article or paragraph now/);
-  assert.match(overlay, /stable ID and complete/);
-  assert.match(
-    overlay,
-    /disabled=\{busy \|\| \(step\.id === "rearrange" && !rearrangeComplete\)\}/,
-  );
+test("the tutorial is a fixed track the user only watches", () => {
+  // The tour holds the user's real session aside in a protected workspace and
+  // walks the whole app in order. It hands out no controls of its own and
+  // waits on nothing: a reader who only ever presses Continue sees every
+  // chapter. Three mechanisms used to break that, and each is pinned gone.
+
+  // 1. Step action buttons ("Try a guided answer" prefilled the composer,
+  //    "Fill the showcase profile" wrote a profile edit into the tutorial
+  //    document, "Open template studio" opened a real modal).
+  assert.doesNotMatch(tour, /\n\s*actions:/);
+  assert.doesNotMatch(tour, /TourAction/);
+  assert.doesNotMatch(tour, /prefillText/);
+  assert.doesNotMatch(hook, /runStepAction|prefillComposer|openTemplates/);
+  assert.doesNotMatch(overlay, /runStepAction|StepActions/);
+  // The hook asks the host for workspace lifecycle only — an action cap is
+  // how a tour-driven mutation would get back in.
+  assert.doesNotMatch(hook, /editDoc|startResearch|startQc/);
+
+  // 2. The rearrange step disabled Continue until the user physically moved a
+  //    block on the paper, so the tour could not be completed by watching.
+  assert.doesNotMatch(overlay, /documentOrderSignature|rearrangeComplete/);
+  assert.doesNotMatch(overlay, /Move one article or paragraph now/);
+  // Only an in-flight turn may hold Continue, because `advance` can swap in
+  // the next chapter's scenario. Nothing about the step may gate it.
+  assert.match(overlay, /onClick=\{ob\.advance\} disabled=\{busy\}/);
+  assert.doesNotMatch(overlay, /disabled=\{busy \|\| /);
+
+  // 3. The mode badge may not advertise interactivity the tour no longer has.
+  //    "optional" survives — it marks a step whose SUBJECT costs money to run.
+  assert.doesNotMatch(tour, /mode:\s*"interactive"/);
+
+  // The structural chapter still exists; it is now shown, not assigned.
   assert.match(tour, /scenario:\s*"structural"/);
   assert.match(tour, /disposable practice state/);
+
+  // The spotlight still leaves the real app clickable — passive means the tour
+  // asks nothing, not that the app is locked. That is what keeps the stacked
+  // -modal Escape guard load-bearing (see the test below).
+  assert.match(overlay, /pointer-events-none fixed inset-0/);
 });
 
 test("spotlight leaves real controls interactive and missing fixtures degrade honestly", () => {

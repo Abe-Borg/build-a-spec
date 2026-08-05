@@ -260,11 +260,12 @@ function HowToUse({
         className="rounded-xl border border-edge bg-raised/50 p-4"
         data-capability="help.topics tour.controls"
       >
-        <h3 className="text-sm font-medium text-ink">Full interactive tutorial</h3>
+        <h3 className="text-sm font-medium text-ink">Full guided tutorial</h3>
         <p className="mt-1 text-xs leading-relaxed text-ink-dim">
-          Practice every feature against the complete bundled showcase spec in a protected
-          workspace — your own project is set aside untouched and comes back when you finish.
-          Start at the beginning or jump to a named chapter.
+          A fixed track through every feature, shown against the complete bundled showcase
+          spec in a protected workspace — nothing is asked of you, and your own project is
+          set aside untouched and comes back when you finish. Start at the beginning or
+          jump to a named chapter.
         </p>
         <button
           onClick={() => onStartTutorialAtChapter(TOUR[0].id)}

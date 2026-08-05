@@ -1691,14 +1691,15 @@ events, no new env vars, no new Python deps (`difflib` is stdlib).
 
 ## Batch 6 — implemented notes (v1.1.0: guided onboarding + starter prompts)
 
-> **SUPERSEDED.** Batch 6 shipped a *passive* tour: frontend-only, four
-> chunks, no backend route, no project mutation. That is no longer what
-> ships. The tutorial now runs on a real, server-owned **tutorial
-> workspace** with per-chapter **scenarios**, and it does start runs, apply
-> edits, and prefill the composer when you ask it to. See "Guided tutorial —
-> implemented notes" below for the current architecture. The starter chips
-> and the `openNonce` drawer idiom described here are the parts that
-> survived unchanged.
+> **SUPERSEDED.** Batch 6 shipped a frontend-only tour: four chunks, no
+> backend route, no project mutation. The tutorial now runs on a real,
+> server-owned **tutorial workspace** with per-chapter **scenarios**. It is
+> once again *passive* — see "The tutorial is a fixed track" below — but for a
+> different reason than Batch 6's: the workspace and its scenarios are real,
+> and what was removed is the tour's own ability to act inside them. See
+> "Guided tutorial — implemented notes" below for the current architecture.
+> The starter chips and the `openNonce` drawer idiom described here are the
+> parts that survived unchanged.
 
 - **Starter chips.** Five prompts in the empty chat (`starterPrompts()` in
   `lib/tour.ts`, rendered by `Chat.tsx`); the first is the frozen onboarding
@@ -1722,8 +1723,8 @@ Abraham, 2026-08-03 — the three-way source chooser and both enrichment
 paths are gone) in a protected server-owned workspace, and each chapter can
 swap in a purpose-built practice copy. Every tutorial fixture is bundled
 and deterministic — no model call builds tutorial content, so the whole
-tour works without an API key; the optional research/Final-QC exercises
-remain real, per-click-confirmed paid runs. The original session is
+tour works without an API key, and since "The tutorial is a fixed track"
+(below) the tour itself triggers nothing at all. The original session is
 retained throughout and is **always** restored on exit — there is no other
 ending.
 
@@ -1781,7 +1782,7 @@ ending.
   `idle`, `preparing`, `touring`, `chunk-break` — Start goes
   straight to `beginShowcase()`, no chooser or enrichment modal);
   `OnboardingOverlay.tsx` renders the
-  spotlight, per-step actions, honest degraded-readiness cards, and the
+  spotlight, honest degraded-readiness cards, and the
   restore progress/error card; `lib/onboardingStorage.ts` holds the resume
   record keyed on `TOUR_VERSION` + the workspace lease (the server is
   authoritative — only an exact three-way match restores progress).
@@ -5710,7 +5711,10 @@ no project-format bump.
   overlay root is `pointer-events-none`, only the card takes pointer events),
   so the composer was always usable underneath it; the template studio is a
   `ModalShell` at `z-[70]` and simply renders over the card at `z-[65]` until
-  it is closed. Neither needed the tour to stand down.
+  it is closed. Neither needed the tour to stand down. **Both actions were
+  since deleted outright** — see "The tutorial is a fixed track" below — but
+  the non-blocking card that made them safe is what still lets a user open
+  the studio from the real control, so the Escape guard below stands.
 - **Escape now asks to END, not to park.** Same as every ✕ and backdrop click
   in the tour, and still gated by the "End the guided tour?" confirmation, so
   a stray keypress cannot throw the tour away. It keeps yielding while that
@@ -5762,14 +5766,85 @@ no project-format bump.
 - **Tests**: 3 new in `frontend/tests/tour.test.ts`, each reverted in place to
   prove it load-bearing. "the tutorial runs start to finish and
   cannot be suspended" pins the absent phase/API/pill/stored flag, the
-  `enterChunk` reload path, Escape routing to `requestEnd`, the two
-  non-suspending step actions, and the manifest not promising pausing
+  `enterChunk` reload path, Escape routing to `requestEnd`, and the manifest
+  not promising pausing
   anywhere. "every tutorial surface offers a way back to the user's project"
   slices the overlay into its phase branches and requires an end control in
   each, plus exactly one `tour.finish` declaration per reachable surface —
   so a future phase added without an exit fails the suite. "a modal stacked
   over the tour owns Escape" pins both guards, the marker on both of the
   tour's own modals, and the guard sitting ahead of the phase check.
+
+## The tutorial is a fixed track — implemented notes
+
+Owner ask (Abraham): get rid of "Try a guided answer", and make the tutorial a
+fixed track where the user is a **passive observer**. Frontend plus
+documentation only — no route, no SSE event, no dep, no project-format bump,
+and no backend change at all: `backend/tutorial.py`'s fixtures were already
+bundled and deterministic, and the `/api/tutorial/*` routes are lifecycle only.
+
+- **Three mechanisms asked something of the user, and all three are gone.**
+  (1) Step-card action buttons: `prefill-composer` ("Try a guided answer",
+  which put a sentence in the composer), `profile-fill` ("Fill the showcase
+  profile", which wrote a `set_project_profile` edit into the tutorial
+  document), and `open-templates` ("Open template studio"). (2) The
+  `rearrange` step **disabled Continue** until `documentOrderSignature(doc)`
+  changed — so the tour could not be completed by watching, which is the
+  clearest statement of the thing the ask reverses. (3) The `mode` badge read
+  `interactive` on 23 of 37 steps.
+- **`TourCoverageMode` keeps `optional`, and the distinction it draws moved.**
+  `interactive` is gone from the union; the 5 `optional` steps stay. The badge
+  no longer describes what the TOUR asks of you (nothing) — it marks a step
+  whose **subject** costs money or consent to run (`api-key`, `quick-verify`,
+  `research-run`, `qc-run`, `export`), so a reader knows before going looking
+  for the button afterwards. `optionalReason` rides along unchanged except on
+  `export`, whose wording implied the tour offered a download.
+- **Passive means the tour asks nothing, NOT that the app is locked** (decided
+  with Abraham). The overlay root stays `pointer-events-none` and only the
+  card takes pointer events, so every real control is still clickable
+  underneath — deliberately, since that is what lets a curious reader inspect
+  the document or ask a question without leaving. **This is why the
+  stacked-modal Escape guard is still load-bearing**: the user can open the
+  template studio from the real control under the spotlight, so
+  `anotherDialogOwnsEscape` and the `defaultPrevented` check must both stay
+  (see "The tutorial cannot be paused" above; removing the action button did
+  not remove the dialog that raced it).
+- **Continue is gated by `busy` alone**, and that guard is not cosmetic:
+  `advance` can swap in the next chapter's scenario, which needs the session
+  idle. Nothing about a *step* may gate it — pinned by a `doesNotMatch` on
+  `disabled={busy || `, so a future step-specific exercise cannot slip back
+  in without failing the suite.
+- **`OnboardingCaps` shrank to workspace lifecycle.** `editDoc`,
+  `startResearch`, `startQc`, `prefillComposer` and `openTemplates` existed
+  solely to serve `runStepAction` and went with it, leaving `applySession` +
+  `health` (`doc` and `hasContent` were already dead fields and went too).
+  `App.tsx`'s `onAskModel` and `openTemplateStudio` are untouched — both are
+  shared with `ReviewDrawer`, `QCDrawer`, the Header and the panel's "Save as
+  Template", so nothing was orphaned. `noUnusedLocals`/`noUnusedParameters`
+  makes a partial removal unbuildable, same as the Batch 4 audit-UI
+  retirement: `tsc` is the mechanical check here.
+- **Imperative step copy became descriptive** in ~18 steps ("Hover the header
+  and edit it" → "Hovering the header reveals an inline edit that sets the
+  number and title"). A tour that narrates while assigning tasks is the same
+  half-truth as a badge advertising interactivity it no longer offers.
+- **`TOUR_VERSION` is deliberately NOT bumped.** Its doc comment scopes bumps
+  to chapter/step ORDER changes; no step was added or removed, so in-flight
+  resume records still point where they say. (Contrast the starter-chip move,
+  which shifted step indexes and did bump.)
+- **Copy that would otherwise have drifted was resynced**: `HelpModal`'s
+  "Full **interactive** tutorial" heading, and the README bullet that
+  enumerated the three modes. `Chat.tsx` is deliberately untouched —
+  `tour.test.ts` asserts the tutorial chip copy contains no "passive"
+  (an older chip over-promised a "passive, 3-minute" tour), and the chip is
+  not where this posture belongs.
+- **Tests**: the three that pinned the old behavior were updated in place —
+  the `mode: "interactive"` assertion, the two step-action dispatch
+  assertions, and `rearrangement is a required real-document exercise`, whose
+  contract this deliberately reverses. It is replaced by "the tutorial is a
+  fixed track the user only watches", which pins all three mechanisms absent
+  plus the still-clickable spotlight, and was reverted in place to prove it
+  load-bearing. The capability set-equality and anchor contracts needed no
+  change — capabilities live on *steps*, never on actions.
 
 ## A new session keeps nothing — implemented notes
 

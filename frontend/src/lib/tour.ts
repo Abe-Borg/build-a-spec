@@ -61,7 +61,16 @@ export function starterPrompts(discipline?: string): StarterPrompt[] {
   ];
 }
 
-export type TourCoverageMode = "interactive" | "optional" | "explanatory";
+/**
+ * How a step's subject relates to spending, not to what the tour asks of you.
+ *
+ * The tour is a fixed track the user only watches, so `interactive` is gone:
+ * no step hands out a control or waits on one. `optional` survives because the
+ * distinction it draws is still real — the feature that step describes costs
+ * money or consent to actually run, and the badge says so before the reader
+ * goes looking for the button afterwards.
+ */
+export type TourCoverageMode = "optional" | "explanatory";
 export type TourReadiness =
   | "content"
   | "rich-structure"
@@ -81,20 +90,6 @@ export type TourResolver =
   | "reorderable-paragraph"
   | "first-imported";
 
-export type TourActionKind =
-  | "profile-fill"
-  | "run-research"
-  | "run-qc"
-  | "prefill-composer"
-  | "open-templates";
-
-export interface TourAction {
-  kind: TourActionKind;
-  label: string;
-  note?: string;
-  prefillText?: string;
-}
-
 export interface TourStep {
   id: string;
   capabilities: readonly EndUserCapabilityId[];
@@ -110,7 +105,6 @@ export interface TourStep {
   placement?: "top" | "bottom" | "left" | "right";
   continueLabel?: string;
   optionalReason?: string;
-  actions?: readonly TourAction[];
 }
 
 export interface TourChunk {
@@ -129,13 +123,13 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "workspace-source",
         capabilities: ["tour.workspace", "tour.controls"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "doc-panel",
         readiness: "content",
         placement: "left",
         title: "This is an actual specification",
         body:
-          "The tutorial runs on the bundled showcase spec — a complete, pre-generated example section — in a protected practice workspace. Every block you see is real document state the app can edit, lint, and export. This card never blocks the app, so you can inspect the document or ask a question in the chat as you go. Your own project was set aside untouched when the tour began: step back or end at any time, and it comes straight back exactly as it was.",
+          "The tutorial runs on the bundled showcase spec — a complete, pre-generated example section — in a protected practice workspace. Every block you see is real document state the app can edit, lint, and export. This is a fixed track: it walks the whole app in order, nothing is asked of you, and Continue moves on whenever you are ready. The card never blocks the app either, so you are free to inspect the document or ask a question in the chat as you go. Your own project was set aside untouched when the tour began: step back or end at any time, and it comes straight back exactly as it was.",
       },
       {
         id: "identity",
@@ -167,35 +161,27 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "interview",
         capabilities: ["chat.interview"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "composer",
         placement: "top",
         title: "A practical interview",
         body:
-          "Questions include a recommended default. “I don't know” is valid: the model can use a defensible default and mark the resulting content assumed. Ask it to guide you, type a correction, or answer normally.",
-        actions: [
-          {
-            kind: "prefill-composer",
-            label: "Try a guided answer",
-            prefillText: "I don't know — use your recommended default and show me what you assumed.",
-            note: "Puts the sentence in the composer; edit or send it normally. The tour stays on this step.",
-          },
-        ],
+          "Questions include a recommended default. “I don't know” is a valid answer: the model applies a defensible default and marks the resulting content assumed. Asking it to guide you turns an open question into concrete options with tradeoffs, and a typed correction is recorded the same way a direct answer is.",
       },
       {
         id: "suggestions",
         capabilities: ["chat.suggestions"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "suggested-prompts",
         placement: "top",
         title: "Suggested replies are shortcuts",
         body:
-          "Contextual chips are complete replies in your voice. Click one to send, ignore them, or type your own response. They disappear when there is nothing useful to suggest.",
+          "Contextual chips are complete replies in your voice. Clicking one sends it as an ordinary message; ignoring them and typing something else does the same job. They disappear when there is nothing useful left to suggest.",
       },
       {
         id: "streaming",
         capabilities: ["chat.streaming", "chat.stop", "chat.thinking"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "doc-panel",
         placement: "left",
         title: "The document is generated in front of you",
@@ -205,7 +191,7 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "full-draft",
         capabilities: ["chat.full-draft"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "draft-full",
         placement: "bottom",
         title: "Draft the whole section once",
@@ -220,7 +206,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "top",
         title: "Verify one fact without a full research run",
         body:
-          "Ask the assistant to verify a current code, product, or jurisdiction fact and it can search and fetch during the normal turn. This is separate from the systematic four-dimension Research workflow.",
+          "Asked to verify a current code, product, or jurisdiction fact, the assistant can search and fetch during the normal turn. This is separate from the systematic four-dimension Research workflow.",
         optionalReason: "A live check uses the user's API key and web tools.",
       },
     ],
@@ -243,13 +229,13 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "section-header",
         capabilities: ["document.section-header"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "",
         resolve: "section-header",
         placement: "bottom",
         title: "Name the section",
         body:
-          "An unnamed section reads SECTION [TBD]. Hover the header and edit it to set the number and title yourself, or state them in chat and the assistant records the same change. Either way it is one undoable version, and the number is what the export filename, the module scope check, and Final QC all read.",
+          "An unnamed section reads SECTION [TBD]. Hovering the header reveals an inline edit that sets the number and title by hand; stating them in chat has the assistant record the same change. Either way it is one undoable version, and the number is what the export filename, the module scope check, and Final QC all read.",
       },
     ],
   },
@@ -273,47 +259,47 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "insert-edit",
         capabilities: ["document.insert", "document.edit"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "",
         resolve: "first-paragraph",
         readiness: "rich-structure",
         placement: "left",
         title: "Insert, edit, confirm, and delete",
         body:
-          "Add the first article or insert an article, provision, or subparagraph at a permitted position. Hover real content to edit or confirm it. Delete is two-step, and deleting an article warns that its complete subtree goes with it. A fifth paragraph level is intentionally unavailable.",
+          "Between-block inserters add an article, provision, or subparagraph at any permitted position. Hovering real content reveals its edit and confirm affordances. Delete is two-step, and deleting an article warns that its complete subtree goes with it. A fifth paragraph level is intentionally unavailable.",
       },
       {
         id: "rearrange",
         capabilities: ["document.rearrange"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "",
         resolve: "reorderable-paragraph",
         readiness: "rich-structure",
         placement: "left",
         title: "Rearrange without rebuilding",
         body:
-          "Drag articles within a PART or move paragraphs among their siblings. Keyboard: Space picks up, Up/Down moves, Space or Enter drops, Escape cancels. Arrow buttons are the fallback. IDs and subtrees stay intact and numbering recomputes; cross-PART moves and reparenting are deliberately blocked.",
+          "Articles drag within a PART and paragraphs move among their siblings. The keyboard path is Space to pick up, Up/Down to move, Space or Enter to drop, Escape to cancel; arrow buttons are the fallback. IDs and subtrees stay intact and numbering recomputes; cross-PART moves and reparenting are deliberately blocked.",
       },
       {
         id: "open-items",
         capabilities: ["document.open-items"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "open-items",
         drawer: "openItems",
         placement: "top",
         title: "Open decisions stay counted",
         body:
-          "TBD markers and needs-input blocks collect in a jumpable inventory, remain scheduled in exports, and are one of the readiness checklist's gating conditions. Click any entry to jump to the block that raised it.",
+          "TBD markers and needs-input blocks collect in a jumpable inventory, remain scheduled in exports, and are one of the readiness checklist's gating conditions. Each entry links to the block that raised it.",
       },
       {
         id: "lint",
         capabilities: ["document.lint"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "lint-issues",
         placement: "top",
         title: "Deterministic lint, running on every change",
         body:
-          "This practice state contains real findings on purpose. Lint runs with no model call and no network: stale or unrecorded editions, unresolved placeholders, template markers, empty articles, duplicate article titles, and an unset section header. Click one to jump to it. Lint is advisory — it never blocks an edit or a turn — but a clean report is required for issue readiness.",
+          "This practice state contains real findings on purpose. Lint runs with no model call and no network: stale or unrecorded editions, unresolved placeholders, template markers, empty articles, duplicate article titles, and an unset section header. Each finding links to the block it came from. Lint is advisory — it never blocks an edit or a turn — but a clean report is required for issue readiness.",
       },
     ],
   },
@@ -324,30 +310,23 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "profile",
         capabilities: ["research.profile"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "research-drawer",
         drawer: "research",
         placement: "top",
         title: "Four explicit project facts",
         body:
-          "City, state/province, country, and client can be entered in chat or here and corrected later. Research remains locked until the profile is complete.",
-        actions: [
-          {
-            kind: "profile-fill",
-            label: "Fill the showcase profile",
-            note: "One undoable edit in the protected tutorial workspace.",
-          },
-        ],
+          "City, state/province, country, and client are recorded either in chat or on this form, and can be corrected later — each change is one undoable version. Research stays locked until all four are present.",
       },
       {
         id: "standards",
         capabilities: ["standards.basis", "standards.manage"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "standards-strip",
         placement: "top",
         title: "Standards are editable project decisions",
         body:
-          "See the active edition basis and jurisdiction overrides. Add a standard, change edition with a stated basis, exclude or restore one, revert an override, or remove one you added. Every change is versioned, undoable, and feeds research, drafting, and QC.",
+          "The strip shows the active edition basis and any jurisdiction overrides. Its per-row controls add a standard, change an edition against a stated basis, exclude or restore one, revert an override, or remove an added standard. Every change is versioned, undoable, and feeds research, drafting, and QC.",
       },
       {
         id: "research-run",
@@ -383,35 +362,35 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "history",
         capabilities: ["history.undo-redo"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "version-stepper",
         readiness: "versioned",
         placement: "bottom",
         title: "Every meaningful change is a version",
         body:
-          "Model turns, manual edits, profile changes, and identity corrections each make one undoable version. Step backward and forward; the complete history survives save and reopen.",
+          "Model turns, manual edits, profile changes, and identity corrections each make one undoable version. The stepper walks backward and forward through them, and the complete history survives save and reopen.",
       },
       {
         id: "review-queue",
         capabilities: ["review.queue", "review.actions"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "review-drawer",
         drawer: "review",
         placement: "top",
         title: "Clear assumptions and imports at speed",
         body:
-          "Filter All, Assumed, or Imported; jump to the source block and see research context. Keep, Edit, Delete, Ask, Skip, or Back by button or keyboard. Hold the article action to confirm its remaining review blocks as one undo.",
+          "The queue filters to All, Assumed, or Imported, jumps to each source block, and shows its research context. Keep, Edit, Delete, Ask, Skip, and Back are available by button or keyboard, and holding the article action confirms that article's remaining review blocks as one undo.",
       },
       {
         id: "compare",
         capabilities: ["history.compare"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "compare",
         readiness: "versioned",
         placement: "bottom",
         title: "Compare any two versions",
         body:
-          "Compare a prior version or normalized import baseline with word-level insertions/deletions, statistics, and provenance-status changes. The same semantic diff powers the Word redline.",
+          "Compare mode sets any prior version or the normalized import baseline against the current one, with word-level insertions and deletions, statistics, and provenance-status changes. The same semantic diff powers the Word redline.",
       },
     ],
   },
@@ -423,22 +402,22 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "figures",
         capabilities: ["figure.create", "figure.manage"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "chat-pane",
         placement: "right",
         title: "Figures live with the conversation",
         body:
-          "This chapter attaches one bundled example of each figure kind to the conversation: in normal work the assistant creates Mermaid diagrams, SVG schematics, and data tables inline as it drafts. Expand or minimize them, confirm removal, and download SVG/PNG or table CSV. Figures persist in the project and return to the assistant message that created them.",
+          "This chapter attaches one bundled example of each figure kind to the conversation: in normal work the assistant creates Mermaid diagrams, SVG schematics, and data tables inline as it drafts. Each card expands and minimizes, removes behind a confirmation, and downloads as SVG/PNG or, for a table, CSV. Figures persist in the project and return to the assistant message that created them.",
       },
       {
         id: "references",
         capabilities: ["reference.attach", "reference.use"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "attach-reference",
         placement: "bottom",
         title: "Attach background without polluting the spec",
         body:
-          "Attach or remove up to 20 DOCX, PDF, TXT, XML, or CSV files, within a shared 100,000-token budget the panel meters as you add them. See kind, extracted blocks, truncation, tracked-change Accept-All, PDF page markers, and tabular/XML structure. The assistant sees a one-line summary every turn and opens the full text only when it needs it, so a long standard does not inflate the cost of every later message. They save with the project but stay out of the spec, lint, diff, QC, readiness, and document export.",
+          "Up to 20 DOCX, PDF, TXT, XML, or CSV files attach here, within a shared 100,000-token budget the panel meters as they accumulate. Each row reports kind, extracted blocks, truncation, tracked-change Accept-All, PDF page markers, and tabular/XML structure. The assistant sees a one-line summary every turn and opens the full text only when it needs it, so a long standard does not inflate the cost of every later message. They save with the project but stay out of the spec, lint, diff, QC, readiness, and document export.",
       },
     ],
   },
@@ -450,12 +429,12 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "master-import",
         capabilities: ["import.master"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "import-master",
         placement: "bottom",
         title: "An office master is another real on-ramp",
         body:
-          "Import a DOCX only into a blank spec. Its supported body content becomes imported provenance while the exact package is retained. Loading, extraction warnings, tracked-changes Accept-All, dismissible notes, and honest non-spec presentation make limitations visible.",
+          "A DOCX imports only into a blank spec. Its supported body content becomes imported provenance while the exact package is retained. Loading, extraction warnings, tracked-changes Accept-All, dismissible notes, and honest non-spec presentation make the limitations visible.",
       },
       {
         id: "source-permissions",
@@ -492,14 +471,14 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "qc-findings",
         capabilities: ["qc.findings", "qc.actions", "qc.remediation"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "qc-drawer",
         drawer: "qc",
         readiness: "qc",
         placement: "top",
         title: "Findings become a guided remediation plan",
         body:
-          "Open findings are separated into verified fixes ready to apply, project facts that need your decision, and items for professional review. Select safe fixes, preview deduplication and conflicts, then confirm one undoable batch; or apply and dismiss individually. TBD and assumption items can prefill a focused chat request while the complete rationale, evidence, inconclusive candidates, and refutations remain available.",
+          "Open findings are separated into verified fixes ready to apply, project facts that need your decision, and items for professional review. Selected safe fixes preview their deduplication and conflicts before one undoable batch is confirmed; findings can also be applied and dismissed individually. TBD and assumption items prefill a focused chat request, while the complete rationale, evidence, inconclusive candidates, and refutations stay available.",
       },
       {
         id: "qc-report",
@@ -530,12 +509,12 @@ export const TOUR: readonly TourChunk[] = [
         body:
           "Clean DOCX uses automatic Word numbering and includes assumption/open-item schedules. Redline compares committed semantic versions. Imported projects distinguish normalized, proven source-preserving, and exact-original downloads; one is never silently substituted for another.",
         details: SOURCE_OUTPUT_GUIDANCE,
-        optionalReason: "The tour shows the real menu; downloading a file is optional.",
+        optionalReason: "The tour points at the real menu but never downloads anything.",
       },
       {
         id: "save-open",
         capabilities: ["project.save-open", "session.unsaved-gates"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "save",
         placement: "bottom",
         title: "One project file restores the whole workspace",
@@ -582,33 +561,32 @@ export const TOUR: readonly TourChunk[] = [
       {
         id: "template-create",
         capabilities: ["template.create"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "save-template",
         placement: "bottom",
         title: "Turn this actual spec into a starter",
         body:
-          "Create a named reusable template from the current tutorial spec. Preview an exact copy before committing, or request an AI-generalized version when available. The preview is server-produced document content, not tour decoration.",
-        actions: [{ kind: "open-templates", label: "Open template studio" }],
+          "This control creates a named reusable template from the current tutorial spec. An exact copy previews before anything commits, and an AI-generalized version can be requested where available. The preview is server-produced document content, not tour decoration.",
       },
       {
         id: "template-use",
         capabilities: ["template.start", "template.import", "template.manage"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "templates",
         placement: "bottom",
         title: "Built-in and personal reusable starters",
         body:
-          "Start an independent spec from a built-in or personal template, import/export a personal template, rename or describe it, and delete it with confirmation. Missing curated modules are shown rather than silently substituted.",
+          "A built-in or personal template starts an independent spec; personal templates import and export as files, rename, take a description, and delete behind a confirmation. Missing curated modules are shown rather than silently substituted.",
       },
       {
         id: "finish",
         capabilities: ["tour.finish"],
-        mode: "interactive",
+        mode: "explanatory",
         anchor: "new-session",
         placement: "bottom",
         title: "Ending the tour returns you to your project",
         body:
-          "There is one ending, and this is it. Your project comes back exactly as it was before the tour started — the same document, history, and version list — and this practice copy is discarded. Continue now, press End on any step, or start a new session or open a project from the header; every one of those puts your project back first. If you began blank, you get that blank session back. Model usage you spent during the tour still counts toward your totals. To take tutorial work with you, use Save in the panel before you finish.",
+          "There is one ending, and this is it. Your project comes back exactly as it was before the tour started — the same document, history, and version list — and this practice copy is discarded. Continue now, press End on any step, or start a new session or open a project from the header; every one of those puts your project back first. If you began blank, you get that blank session back. The tour itself spends nothing, but any model usage from work you did in the practice copy still counts toward your totals — and anything you made there can be saved from the panel before you finish.",
         continueLabel: "Finish and return to my project",
       },
     ],

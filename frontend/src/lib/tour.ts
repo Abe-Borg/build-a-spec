@@ -129,7 +129,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "left",
         title: "This is an actual specification",
         body:
-          "The tutorial runs on the bundled showcase spec — a complete, pre-generated example section — in a protected practice workspace. Every block you see is real document state the app can edit, lint, and export. This is a fixed track: it walks the whole app in order, nothing is asked of you, and Continue moves on whenever you are ready. The card never blocks the app either, so you are free to inspect the document or ask a question in the chat as you go. Your own project was set aside untouched when the tour began: step back or end at any time, and it comes straight back exactly as it was.",
+          "The tutorial runs on the bundled showcase spec — a complete, pre-generated example section — in a protected practice workspace. Every block you see is real document state the app can edit, lint, and export. This is a fixed track: it walks the whole app in order, nothing is asked of you, and Continue moves on whenever you are ready. The card never blocks the app either, so you are free to read the document as you go. Your own project was set aside untouched when the tour began: step back or end at any time, and it comes straight back exactly as it was.",
       },
       {
         id: "identity",

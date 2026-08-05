@@ -429,6 +429,13 @@ test("the tutorial is a fixed track the user only watches", () => {
   assert.match(tour, /scenario:\s*"structural"/);
   assert.match(tour, /disposable practice state/);
 
+  // 4. The tour does not point the reader at the chat. "Ask a question" was a
+  //    checkpoint button that went with pause, and the copy that replaced it
+  //    kept issuing the same invitation — which is asking something of a
+  //    reader who is only meant to watch.
+  assert.doesNotMatch(tour, /\bask\s+(a|another|the)\s+question/i);
+  assert.doesNotMatch(overlay, /\bask\s+(a|another|the)\s+question/i);
+
   // The spotlight still leaves the real app clickable — passive means the tour
   // asks nothing, not that the app is locked. That is what keeps the stacked
   // -modal Escape guard load-bearing (see the test below).

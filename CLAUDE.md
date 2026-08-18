@@ -3344,11 +3344,16 @@ no new dep, no project-format bump.
   Declaring `runUpdateCheck` ahead of the mount effect that consumes it is
   load-bearing: a `const` referenced from an earlier effect is a
   first-render TDZ crash (the `bumpDrawer` lesson, recorded above).
-- **Release notes are deliberately NOT edited.** `v1.9.0` is already
-  tagged, so adding an item to its entry would describe something that
-  release did not contain, and inventing a `1.10.0` entry would be a
-  version bump — a release decision with its own runbook and version-
-  consistency gate. Whoever cuts the next release writes the item.
+- **It shipped as `1.9.1`, the repo's first PATCH release.** The fix
+  landed after `v1.9.0` was already tagged, so back-dating an item into
+  that entry would have described something the release did not contain.
+  Every earlier release bumped the minor because every earlier release was
+  a feature batch; this one is a bug fix and nothing else — the only other
+  unreleased commits were `docs/RELEASE_WINDOWS.md` edits, which are not
+  user-visible — so `1.9.1` is what semver is for. Nothing in the app
+  assumes an `x.y.0` shape: `parse_version` orders patch versions
+  correctly, and `EARLIEST_KNOWN_VERSION` is only consulted for a state
+  file predating `last_seen_version`.
 - **Tests**: 6 in `tests/test_updates.py` (the re-judge, a failed check not
   erasing the record, the malformed-record matrix, the throttled relaunch
   end to end — first launch remembers, second offers it as `cached` without

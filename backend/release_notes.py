@@ -89,6 +89,59 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.9.1",
+        date="2026-08-18",
+        headline="The update button installs the update",
+        summary=(
+            "A fix for the one button whose whole job is to keep the app "
+            "current. Checking for updates would find a new version and "
+            "then send you to a control that was not there, and on the "
+            "second launch of any day the offer went missing on its own. "
+            "You can now install straight from where you checked."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Keeping the app current",
+                items=(
+                    ReleaseItem(
+                        title="Install from where you checked",
+                        body=(
+                            "Help \u2192 About \u2192 Check for updates used to "
+                            "tell you a new version existed and send you to "
+                            "the header to install it \u2014 which often showed "
+                            "nothing at all, leaving no way to actually get "
+                            "the update. It now shows the new version, what "
+                            "is in it, and an Install button, right where "
+                            "you asked."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The offer stops disappearing after a restart",
+                        body=(
+                            "The app asks GitHub about new versions at most "
+                            "once a day. It used to forget the answer in "
+                            "between, so the second time you opened the app "
+                            "on the same day the update notice vanished "
+                            "until tomorrow. It now remembers what it found, "
+                            "without asking again."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Installing says it is working, and says why if it is not",
+                        body=(
+                            "Downloading an installer takes as long as it "
+                            "takes, and the button used to sit there looking "
+                            "dead the whole time. It now shows progress and "
+                            "cannot be double-clicked. A download that fails "
+                            "partway reports the actual reason instead of an "
+                            "unhelpful internal error."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.9.0",
         date="2026-08-18",
         headline="Edit what you import, and a tour that just shows you",

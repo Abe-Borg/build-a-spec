@@ -1377,6 +1377,8 @@ export interface UpdateCheckPayload {
   version?: string;
   notes?: string;
   error?: string;
+  /** True when the answer came from the last check rather than the network. */
+  cached?: boolean;
 }
 
 export interface ReleaseItem {

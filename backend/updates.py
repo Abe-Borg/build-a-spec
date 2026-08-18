@@ -68,6 +68,8 @@ STATUS_ERROR = "ERROR"
 
 STATE_FILENAME = "update_check.json"
 DEFAULT_MIN_INTERVAL_DAYS = 1
+LAST_KNOWN_VERSION_KEY = "last_known_version"
+LAST_KNOWN_NOTES_KEY = "last_known_notes"
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:rc(\d+))?$")
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -101,6 +103,22 @@ class UpdateCheckResult:
     @property
     def update_available(self) -> bool:
         return self.status == STATUS_UPDATE_AVAILABLE and self.info is not None
+
+
+@dataclass(frozen=True)
+class RememberedUpdate:
+    """A release the app learned about on an earlier, non-throttled check.
+
+    Deliberately NOT an :class:`UpdateInfo`: it carries no ``url`` and no
+    ``sha256``, because the local state file is not a root of trust. An
+    install always re-fetches the manifest over https and re-verifies the
+    download against the hash it carries; this record only answers "is
+    there something newer", so the header can keep offering the update
+    through the throttle window without another network request.
+    """
+
+    version: str
+    notes: str = ""
 
 
 # --------------------------------------------------------------------------
@@ -453,6 +471,51 @@ def should_auto_check(
 def record_check(state: dict, *, now: datetime) -> dict:
     state["last_check"] = now.isoformat()
     return state
+
+
+def remember_check_result(state: dict, result: UpdateCheckResult) -> dict:
+    """Record the release a completed check resolved, for the throttle window.
+
+    The throttle exists to spare GitHub one request per launch, not to make
+    the app forget an update it has already found. Without this the second
+    launch of any day answers ``THROTTLED`` with no version at all, the
+    install affordance disappears from the header, and the only remaining
+    way to learn about the update — the forced check in Help — could then
+    only point back at the control that is missing.
+
+    Only a check that actually parsed a manifest records anything: a failed
+    or disabled check leaves the previous answer standing rather than
+    erasing it, because "we could not ask today" is not evidence that
+    yesterday's answer stopped being true.
+    """
+    if result.info is None:
+        return state
+    state[LAST_KNOWN_VERSION_KEY] = result.info.version
+    state[LAST_KNOWN_NOTES_KEY] = result.info.notes
+    return state
+
+
+def remembered_update(state: dict, current: str) -> RememberedUpdate | None:
+    """The last-known release, re-judged against ``current``. Never raises.
+
+    Re-judging is the whole point: a remembered version that ``current`` has
+    since caught up to is not an update any more, and replaying it would
+    offer to install the version already running. A malformed or missing
+    record simply reports nothing.
+    """
+    version = state.get(LAST_KNOWN_VERSION_KEY)
+    if not isinstance(version, str) or not version.strip():
+        return None
+    try:
+        if not is_newer(version.strip(), current):
+            return None
+    except ValueError:
+        return None
+    notes = state.get(LAST_KNOWN_NOTES_KEY)
+    return RememberedUpdate(
+        version=version.strip(),
+        notes=notes if isinstance(notes, str) else "",
+    )
 
 
 def version_is_skipped(state: dict, version: str) -> bool:

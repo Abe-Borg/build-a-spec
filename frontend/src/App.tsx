@@ -139,6 +139,11 @@ export default function App() {
   const [qc, setQc] = useState<QcSnapshot | null>(null);
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [update, setUpdate] = useState<UpdateCheckPayload | null>(null);
+  // The install request outlives the download; the ref is the double-submit
+  // guard (a state update may not commit before a second click lands).
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
+  const installingRef = useRef(false);
   // Release notes for a version the user has not been shown yet. Non-empty
   // opens the What's-new modal — on mount that means "the app just updated",
   // and from Settings it is an explicit request.
@@ -973,7 +978,21 @@ export default function App() {
     }
   }, [currentWorkspaceLease]);
 
+  /**
+   * Download + verify + launch the installer.
+   *
+   * The request runs for as long as the download takes, so the pending
+   * state is not decoration: without it a click on a slow connection looks
+   * like a control that does nothing, which is exactly how a working
+   * installer gets reported as broken. The failure is surfaced twice on
+   * purpose — inline wherever it was pressed, and in the chat, which is
+   * what remains visible after a dialog closes.
+   */
   const onInstallUpdate = useCallback(async () => {
+    if (installingRef.current) return;
+    installingRef.current = true;
+    setInstalling(true);
+    setInstallError(null);
     try {
       await installUpdate();
       setMessages((prev) => [
@@ -985,15 +1004,20 @@ export default function App() {
         },
       ]);
     } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setInstallError(message);
       setMessages((prev) => [
         ...prev,
         {
           id: newId(),
           role: "assistant",
-          text: `Update failed: ${e instanceof Error ? e.message : String(e)}`,
+          text: `Update failed: ${message}`,
           error: true,
         },
       ]);
+    } finally {
+      installingRef.current = false;
+      setInstalling(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1970,6 +1994,7 @@ export default function App() {
         projectHeading={projectHeading}
         busy={busy}
         update={update}
+        installingUpdate={installing}
         usage={usage}
         onNewSession={() => void requestNewSession()}
         onOpenTemplates={openTemplateStudio}
@@ -2005,6 +2030,11 @@ export default function App() {
           onboarding.startAtChapter(chapterId);
         }}
         health={health}
+        update={update}
+        installing={installing}
+        installError={installError}
+        onUpdateChecked={setUpdate}
+        onInstallUpdate={onInstallUpdate}
       />
       <OnboardingOverlay
         ob={onboarding}

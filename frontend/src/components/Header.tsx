@@ -6,6 +6,7 @@ interface Props {
   projectHeading: string;
   busy: boolean;
   update: UpdateCheckPayload | null;
+  installingUpdate: boolean;
   usage: UsageSummary | null;
   onNewSession: () => void;
   onOpenTemplates: () => void;
@@ -31,6 +32,7 @@ export default function Header({
   projectHeading,
   busy,
   update,
+  installingUpdate,
   usage,
   onNewSession,
   onOpenTemplates,
@@ -90,11 +92,14 @@ export default function Header({
           (update?.platform_supported ? (
             <button
               onClick={onInstallUpdate}
+              disabled={installingUpdate}
               data-capability="updates.manage"
-              className="rounded-full border border-accent/60 bg-accent/15 px-3 py-1 text-xs text-accent transition-colors hover:bg-accent/25"
+              className="rounded-full border border-accent/60 bg-accent/15 px-3 py-1 text-xs text-accent transition-colors hover:bg-accent/25 disabled:pointer-events-none disabled:opacity-60"
               title={update?.notes || "Download and install the update"}
             >
-              v{update?.version} available — install
+              {installingUpdate
+                ? "Downloading the update…"
+                : `v${update?.version} available — install`}
             </button>
           ) : (
             <a

@@ -3252,6 +3252,114 @@ zipfile stdlib), no new npm deps; three new env knobs; six new REST routes
   files and the activity log" (+ the data-flow diagram label) — keep those
   in sync with this section.
 
+## The update button installs the update — implemented notes
+
+Reported symptom (Abraham): the Check for updates button does not let you
+install an update when one is available. Two independent causes, and the
+second is why the first was unreachable. No new endpoint, no new SSE event,
+no new dep, no project-format bump.
+
+- **The button threw away the answer it had just paid for.** Help → About
+  ran a FORCED check, kept the result in its own component state, and told
+  the user "see the header to install". The header renders `App`'s `update`
+  state, which is written exactly once — by the throttled check on mount.
+  So whenever that launch check was throttled, errored, or simply ran
+  before the release existed, the header showed nothing, and the one
+  control that had just confirmed an update pointed at an empty corner of
+  the screen with no way forward. `About` now hands its result up
+  (`onUpdateChecked`) AND renders its own install control, because the user
+  pressed a button about updates: making them hunt for a different control
+  in a different part of the UI is the defect, not the remedy.
+- **`THROTTLED` meant "we did not ask", and was being read as "nothing to
+  install".** The throttle exists to spare GitHub one request per launch,
+  and it returned a bare `{status, current}` — no version — so the *second*
+  launch of any day lost the header pill entirely, which is the state that
+  made the Help button the only discovery path. `remember_check_result` /
+  `remembered_update` (updates.py) persist the last completed check's
+  version and notes in the existing state file, and the throttled branch
+  answers from them. Still no network request; `cached: true` discloses
+  that the answer is not fresh.
+- **The remembered version is RE-JUDGED, never replayed.** The record
+  outlives the build that wrote it, so `remembered_update` compares it
+  against the running version and reports nothing once `current` has caught
+  up — otherwise the app would offer to install the version it is already
+  running. A skipped version stays skipped through the window too (the same
+  rule the live auto-check applies), and a malformed record reports nothing
+  rather than raising.
+- **`RememberedUpdate` is deliberately NOT an `UpdateInfo`.** It carries no
+  `url` and no `sha256`, because the local state file is not a root of
+  trust: an install always re-fetches the manifest over https and
+  re-verifies the download against the hash that manifest carries. The
+  record answers one question only — is there something newer — so the
+  offer can survive the throttle window without weakening the integrity
+  gate. Pinned by a test asserting both attributes are absent.
+- **Only a completed check writes.** A failed or disabled check leaves the
+  previous answer standing: "we could not ask today" is not evidence that
+  yesterday's answer stopped being true, and erasing it would recreate the
+  disappearing-pill bug on every offline launch.
+- **A dropped download reported a 500, not the reason.** `update_install`
+  caught only `updates.UpdateError`, and `urllib.error.URLError` and socket
+  timeouts are `OSError` subclasses — so an ordinary connection failure
+  escaped into the catch-all handler and surfaced as an opaque
+  `internal_error`. The except is now `(UpdateError, OSError)`, which is
+  the honest 502 the frontend already knows how to render.
+- **A click that looks inert reads as a broken button**, which is half of
+  how a working installer gets reported as broken. The install request runs
+  for as long as the download takes (it is a plain `def`, so it is already
+  off the event loop), and now drives a pending state: `App` owns
+  `installing` + `installError` behind a ref double-submit guard, the
+  header pill says "Downloading the update…", and About shows the failure
+  inline. The chat message on success/failure is unchanged — a dialog
+  closes, the transcript stays.
+- **No new capability id, no `TOUR_VERSION` bump.** Both new controls
+  declare the existing `updates.manage` (the precedent this file already
+  records: one capability, several controls), so the three-place contract
+  is untouched. The `help-updates` step's body was resynced — it described
+  the header as the only place an update installs, which is no longer true.
+- **A remembered answer must still honour the disable switch** (caught in
+  review on PR #131, Codex). `check_for_update` is the one place
+  `BUILD_A_SPEC_DISABLE_UPDATE_CHECK` is enforced, and the throttled branch
+  skips it by construction — so a machine whose owner switched updates off,
+  but which had a remembered result from before, was offered an Install
+  button that `/api/update/install` would then refuse. The branch checks
+  `update_check_disabled()` first and answers `DISABLED`, the same answer
+  the live path gives for the same setting, rather than inventing a second
+  one. The record itself is left intact, so switching updates back on
+  restores the offer without waiting for the throttle window to reopen.
+- **The launch check and a forced one race, and the launch check could
+  win late** (same review). Both write `App`'s `update` state. A launch
+  fetch waiting out its 8s manifest timeout can resolve AFTER a forced
+  check the user ran meanwhile, and its stale `THROTTLED`/`ERROR` answer
+  erased the install control that check had just produced — the very
+  disappearance this work exists to stop. `lib/latestAnswer.ts` orders
+  them by REQUEST, not arrival, which is what makes it correct in both
+  directions: the forced check is issued second, so it outranks the launch
+  check whichever returns first. It is a ref, because the loser can resolve
+  before React commits the winner. Extracted rather than inlined for the
+  `eventSeqIndex.ts` reason — the race is timing-dependent and nothing else
+  in the suite would notice it regressing.
+- **`About` no longer fetches for itself.** It calls `onCheckUpdate()` and
+  reads the payload back for its own message, so there is one answer with
+  one owner — a second copy in component state is what started this.
+  Declaring `runUpdateCheck` ahead of the mount effect that consumes it is
+  load-bearing: a `const` referenced from an earlier effect is a
+  first-render TDZ crash (the `bumpDrawer` lesson, recorded above).
+- **Release notes are deliberately NOT edited.** `v1.9.0` is already
+  tagged, so adding an item to its entry would describe something that
+  release did not contain, and inventing a `1.10.0` entry would be a
+  version bump — a release decision with its own runbook and version-
+  consistency gate. Whoever cuts the next release writes the item.
+- **Tests**: 6 in `tests/test_updates.py` (the re-judge, a failed check not
+  erasing the record, the malformed-record matrix, the throttled relaunch
+  end to end — first launch remembers, second offers it as `cached` without
+  touching the network, a skip still suppresses it, and nothing remembered
+  is still an honest `THROTTLED` — and the dropped download reporting its
+  reason). The existing `test_update_endpoints` throttle assertion was
+  updated in place: it is the contract this bug lived in, and it now also
+  pins that no network call happens. Each mechanism was reverted in place
+  to prove it load-bearing: the throttled-answer branch → 2 red, the
+  re-judge guard → 2 red, the `OSError` catch → 1 red.
+
 ## In-app release notes — implemented notes (v1.7.0)
 
 Reported ask (Abraham): publish a release, and let the user read what

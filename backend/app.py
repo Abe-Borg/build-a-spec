@@ -5873,9 +5873,12 @@ def create_app(
     def update_check(force: bool = False) -> dict:
         """Check for a newer release. Throttled unless ``force``.
 
-        The throttle state also carries "skip this version"; a skipped
-        version reports as up-to-date on auto-checks but still surfaces on
-        a forced (user-clicked) check.
+        A throttled call makes no network request but still answers from
+        the last check's remembered result, so an update already found
+        stays installable for the rest of the day (``cached: true`` says
+        the answer is not fresh). The throttle state also carries "skip
+        this version"; a skipped version reports as up-to-date on
+        auto-checks but still surfaces on a forced (user-clicked) check.
         """
         from datetime import datetime
 
@@ -5883,19 +5886,58 @@ def create_app(
 
         state_path = updates.default_state_path()
         state = updates.load_state(state_path)
-        if not force and not updates.should_auto_check(
-            state, now=datetime.now()
-        ):
-            return {"status": "THROTTLED", "current": settings.VERSION}
-        result = updates.check_for_update(settings.VERSION)
-        updates.record_check(state, now=datetime.now())
-        updates.save_state(state_path, state)
+        # Both branches answer in the same shape — a throttled reply used to
+        # omit the releases URL and the platform flag, so a client that had
+        # only ever seen one could not even offer the manual download.
         payload: dict[str, Any] = {
-            "status": result.status,
-            "current": result.current,
+            "current": settings.VERSION,
             "releases_url": updates.releases_page_url(),
             "platform_supported": updates.installer_platform_supported(),
         }
+        if not force and not updates.should_auto_check(
+            state, now=datetime.now()
+        ):
+            if updates.update_check_disabled():
+                # The disable switch is enforced inside check_for_update(),
+                # which this branch skips — so replaying here would offer an
+                # install that /api/update/install is then guaranteed to
+                # refuse, on a machine whose owner has switched updates off.
+                # The live path answers DISABLED for the same setting; so
+                # does this one, rather than inventing a second answer.
+                payload["status"] = updates.STATUS_DISABLED
+                _trace_capture.app_event(
+                    "update", action="check", status=payload["status"], forced=force
+                )
+                return payload
+            # Throttled means "we did not ask GitHub again today", never
+            # "there is nothing to install". Answering from the remembered
+            # result is what keeps the header's install control on screen
+            # across a same-day relaunch; ``cached`` discloses that no
+            # request was made, and the version is re-judged against the
+            # running build so a completed update stops being offered.
+            payload["status"] = "THROTTLED"
+            payload["cached"] = True
+            known = updates.remembered_update(state, settings.VERSION)
+            if known is not None and not updates.version_is_skipped(
+                state, known.version
+            ):
+                payload["status"] = updates.STATUS_UPDATE_AVAILABLE
+                payload["version"] = known.version
+                payload["notes"] = known.notes
+            _trace_capture.app_event(
+                "update",
+                action="check",
+                status=payload["status"],
+                forced=force,
+                cached=True,
+            )
+            return payload
+        result = updates.check_for_update(settings.VERSION)
+        updates.record_check(state, now=datetime.now())
+        updates.remember_check_result(state, result)
+        updates.save_state(state_path, state)
+        payload["status"] = result.status
+        payload["current"] = result.current
         if result.error:
             payload["error"] = result.error
         if result.info is not None:
@@ -5939,7 +5981,11 @@ def create_app(
                 result.info, updates.default_download_dir()
             )
             updates.spawn_installer(installer)
-        except updates.UpdateError as exc:
+        except (updates.UpdateError, OSError) as exc:
+            # OSError covers the download itself: ``urllib.error.URLError``
+            # and socket timeouts are OSError subclasses, and letting one
+            # escape turned an ordinary dropped connection into an opaque
+            # 500 from the catch-all handler instead of the real reason.
             _trace_capture.app_event(
                 "update", action="install", ok=False, error=str(exc)
             )

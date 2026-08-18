@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { Health } from "../types";
-import { checkUpdate } from "../lib/api";
+import type { Health, UpdateCheckPayload } from "../types";
 import { TOUR } from "../lib/tour";
 import {
   SOURCE_CAPABILITY_GUIDANCE,
@@ -39,6 +38,13 @@ interface Props {
   onNavigate: (topic: HelpTopic) => void;
   onStartTutorialAtChapter: (chapterId: string) => void;
   health: Health | null;
+  /** The app's current answer, so About offers the same install the header does. */
+  update: UpdateCheckPayload | null;
+  installing: boolean;
+  installError: string | null;
+  /** Runs a forced check. The app owns the answer; this dialog only reads it. */
+  onCheckUpdate: () => Promise<UpdateCheckPayload>;
+  onInstallUpdate: () => void;
 }
 
 /* --- small presentational helpers, all on the existing palette --- */
@@ -510,17 +516,44 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
   );
 }
 
-function About({ health }: { health: Health | null }) {
+function About({
+  health,
+  update,
+  installing,
+  installError,
+  onCheckUpdate,
+  onInstallUpdate,
+}: {
+  health: Health | null;
+  update: UpdateCheckPayload | null;
+  installing: boolean;
+  installError: string | null;
+  onCheckUpdate: () => Promise<UpdateCheckPayload>;
+  onInstallUpdate: () => void;
+}) {
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
 
+  /**
+   * A forced check, run through the app rather than fetched here.
+   *
+   * That hand-off is the whole point. This panel used to hold the result in
+   * its own state and tell the user to "see the header to install" — but the
+   * header renders the app's copy, which comes from the throttled check at
+   * launch. Whenever that one was throttled, errored, or simply ran before
+   * the release existed, the header showed nothing, and the one control that
+   * had just confirmed an update pointed at an empty corner of the screen.
+   * The app also sequences the two callers, so a slow launch check cannot
+   * land on top of this answer afterwards.
+   */
   const runUpdateCheck = async () => {
     setChecking(true);
     setUpdateMsg("Checking…");
     try {
-      const r = await checkUpdate(true);
+      const r = await onCheckUpdate();
       if (r.status === "UPDATE_AVAILABLE" && r.version) {
-        setUpdateMsg(`v${r.version} available — see the header to install.`);
+        // The install row below renders it — a message would be redundant.
+        setUpdateMsg(null);
       } else if (r.error) {
         setUpdateMsg(`Check failed: ${r.error}`);
       } else {
@@ -531,6 +564,8 @@ function About({ health }: { health: Health | null }) {
     }
     setChecking(false);
   };
+
+  const available = update?.status === "UPDATE_AVAILABLE" && !!update.version;
 
   return (
     <div className="space-y-4">
@@ -569,16 +604,73 @@ function About({ health }: { health: Health | null }) {
         <span className="text-ink">Spec Critic</span>: Build-a-Spec writes specs
         through dialogue; Spec Critic reviews finished specs.
       </Lead>
-      <div className="flex flex-wrap items-center gap-3 pt-1">
-        <button
-          onClick={runUpdateCheck}
-          disabled={checking}
-          data-capability="updates.manage"
-          className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm text-ink transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
-        >
-          Check for updates
-        </button>
-        {updateMsg && <span className="text-xs text-ink-faint">{updateMsg}</span>}
+      <div className="space-y-3 pt-1">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={runUpdateCheck}
+            disabled={checking}
+            data-capability="updates.manage"
+            className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm text-ink transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
+          >
+            Check for updates
+          </button>
+          {updateMsg && (
+            <span className="text-xs text-ink-faint">{updateMsg}</span>
+          )}
+        </div>
+        {available && (
+          <div className="rounded-xl border border-accent/50 bg-accent/10 p-4">
+            <p className="text-sm font-medium text-ink">
+              Version {update?.version} is available.
+            </p>
+            {update?.notes && (
+              <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-ink-dim">
+                {update.notes}
+              </p>
+            )}
+            {update?.platform_supported ? (
+              <>
+                <button
+                  onClick={onInstallUpdate}
+                  disabled={installing}
+                  data-capability="updates.manage"
+                  className="mt-3 rounded-lg border border-accent/60 bg-accent/15 px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent/25 disabled:pointer-events-none disabled:opacity-60"
+                >
+                  {installing
+                    ? "Downloading the installer…"
+                    : `Install v${update?.version}`}
+                </button>
+                <p className="mt-2 text-xs text-ink-faint">
+                  Downloads the installer over https, checks it against the
+                  SHA-256 in the release manifest, and only then runs it. The
+                  app closes so the installer can replace it. Large downloads
+                  take a while — the button stays busy until it is verified.
+                </p>
+              </>
+            ) : (
+              <>
+                <a
+                  href={update?.releases_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-capability="updates.manage"
+                  className="mt-3 inline-block rounded-lg border border-accent/60 bg-accent/15 px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent/25"
+                >
+                  Open the releases page
+                </a>
+                <p className="mt-2 text-xs text-ink-faint">
+                  The installer is a Windows build, so it cannot be launched
+                  from here on this platform.
+                </p>
+              </>
+            )}
+            {installError && (
+              <p className="mt-2 text-xs text-danger">
+                Update failed: {installError}
+              </p>
+            )}
+          </div>
+        )}
       </div>
       <div className="space-y-1.5 border-t border-edge pt-4 text-xs text-ink-faint">
         <p>© 2026 Abraham Borg. Released under the MIT License.</p>
@@ -605,16 +697,26 @@ function About({ health }: { health: Health | null }) {
   );
 }
 
+type UpdateControls = {
+  update: UpdateCheckPayload | null;
+  installing: boolean;
+  installError: string | null;
+  onCheckUpdate: () => Promise<UpdateCheckPayload>;
+  onInstallUpdate: () => void;
+};
+
 function Body({
   topic,
   health,
   onStartTutorialAtChapter,
   onDeepDive,
+  updates,
 }: {
   topic: HelpTopic;
   health: Health | null;
   onStartTutorialAtChapter: (chapterId: string) => void;
   onDeepDive: () => void;
+  updates: UpdateControls;
 }) {
   switch (topic) {
     case "how-to-use":
@@ -626,7 +728,7 @@ function Body({
     case "why-trust-it":
       return <WhyTrustIt onDeepDive={onDeepDive} />;
     case "about":
-      return <About health={health} />;
+      return <About health={health} {...updates} />;
   }
 }
 
@@ -636,6 +738,11 @@ export default function HelpModal({
   onNavigate,
   onStartTutorialAtChapter,
   health,
+  update,
+  installing,
+  installError,
+  onCheckUpdate,
+  onInstallUpdate,
 }: Props) {
   // The "I'm not convinced" dossier stacks above this dialog. Kept as local
   // state so leaving the topic (or closing help entirely) drops it too.
@@ -724,6 +831,13 @@ export default function HelpModal({
             health={health}
             onStartTutorialAtChapter={onStartTutorialAtChapter}
             onDeepDive={() => setDeepDive(true)}
+            updates={{
+              update,
+              installing,
+              installError,
+              onCheckUpdate,
+              onInstallUpdate,
+            }}
           />
         </div>
       </div>

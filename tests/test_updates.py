@@ -273,12 +273,258 @@ def test_update_endpoints(monkeypatch, tmp_path):
     assert payload["version"] == "9.9.9"
     assert "releases_url" in payload
 
-    # Second unforced check inside the throttle window short-circuits.
+    # A second unforced check inside the throttle window makes no network
+    # request — but still answers with what the first one found, so the
+    # install control does not vanish for the rest of the day.
+    calls: list[str] = []
+
+    def refuse(current, **_kwargs):
+        calls.append(current)
+        raise AssertionError("the throttle window must not hit the network")
+
+    monkeypatch.setattr(updates, "check_for_update", refuse)
     payload = client.get("/api/update/check").json()
-    assert payload["status"] == "THROTTLED"
+    assert calls == []
+    assert payload["status"] == updates.STATUS_UPDATE_AVAILABLE
+    assert payload["version"] == "9.9.9"
+    assert payload["cached"] is True
+    assert payload["platform_supported"] == updates.installer_platform_supported()
+    assert "releases_url" in payload
+
+    monkeypatch.setattr(updates, "check_for_update", fake_check)
 
     # Install on a non-Windows container is refused cleanly.
     if not updates.installer_platform_supported():
         resp = client.post("/api/update/install")
         assert resp.status_code == 400
         assert "Windows-only" in resp.json()["error"]
+
+
+# ---------------------------------------------------------------------------
+# The throttle window remembers the answer (a same-day relaunch still installs)
+# ---------------------------------------------------------------------------
+
+
+def test_remembered_update_is_rejudged_against_the_running_version():
+    """A remembered version is not a standing claim — it is re-decided.
+
+    The record outlives the build that wrote it, so replaying it blindly
+    would offer to install the version already running.
+    """
+    state: dict = {}
+    updates.remember_check_result(
+        state,
+        updates.UpdateCheckResult(
+            status=updates.STATUS_UPDATE_AVAILABLE,
+            current="1.0.0",
+            info=updates.parse_manifest(dict(_GOOD_MANIFEST)),
+        ),
+    )
+    assert state[updates.LAST_KNOWN_VERSION_KEY] == "9.9.9"
+
+    known = updates.remembered_update(state, "1.0.0")
+    assert known is not None and known.version == "9.9.9"
+
+    # Same version, and a newer one: neither is an update any more.
+    assert updates.remembered_update(state, "9.9.9") is None
+    assert updates.remembered_update(state, "10.0.0") is None
+
+    # It carries no url and no sha256: the state file is not a root of
+    # trust, and an install must re-fetch and re-verify the manifest.
+    assert not hasattr(known, "url")
+    assert not hasattr(known, "sha256")
+
+
+def test_a_failed_check_does_not_erase_what_the_last_one_found():
+    """"We could not ask today" is not evidence the answer changed."""
+    state: dict = {}
+    updates.remember_check_result(
+        state,
+        updates.UpdateCheckResult(
+            status=updates.STATUS_UPDATE_AVAILABLE,
+            current="1.0.0",
+            info=updates.parse_manifest(dict(_GOOD_MANIFEST)),
+        ),
+    )
+    for dead in (
+        updates.UpdateCheckResult(
+            status=updates.STATUS_ERROR, current="1.0.0", error="offline"
+        ),
+        updates.UpdateCheckResult(status=updates.STATUS_DISABLED, current="1.0.0"),
+    ):
+        updates.remember_check_result(state, dead)
+        known = updates.remembered_update(state, "1.0.0")
+        assert known is not None and known.version == "9.9.9"
+
+
+def test_a_malformed_remembered_version_reports_nothing():
+    for value in ("", "   ", "v9.9.9", "banana", 9, None, ["9.9.9"]):
+        assert (
+            updates.remembered_update({updates.LAST_KNOWN_VERSION_KEY: value}, "1.0.0")
+            is None
+        )
+    assert updates.remembered_update({}, "1.0.0") is None
+
+    # Notes that are not a string degrade to empty rather than raising.
+    known = updates.remembered_update(
+        {
+            updates.LAST_KNOWN_VERSION_KEY: "9.9.9",
+            updates.LAST_KNOWN_NOTES_KEY: {"oops": True},
+        },
+        "1.0.0",
+    )
+    assert known is not None and known.notes == ""
+
+
+def test_a_throttled_check_still_offers_an_update_after_a_relaunch(
+    monkeypatch, tmp_path
+):
+    """The bug this fixes: the header's install control went missing.
+
+    The launch check is throttled to once a day, so the second launch of any
+    day used to answer ``THROTTLED`` with no version — the header pill
+    disappeared, and the forced check in Help could only point back at it.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend import settings
+    from backend.app import create_app
+
+    state_file = tmp_path / "state.json"
+    monkeypatch.setenv(updates.ENV_STATE_PATH, str(state_file))
+    monkeypatch.delenv(updates.ENV_DISABLE, raising=False)
+
+    manifest = dict(_GOOD_MANIFEST)
+    manifest["notes"] = "Fixes the update button."
+
+    def fake_check(current, **_kwargs):
+        info = updates.parse_manifest(manifest)
+        return updates.UpdateCheckResult(
+            status=(
+                updates.STATUS_UPDATE_AVAILABLE
+                if updates.is_newer(info.version, current)
+                else updates.STATUS_UP_TO_DATE
+            ),
+            current=current,
+            info=info,
+        )
+
+    monkeypatch.setattr(updates, "check_for_update", fake_check)
+    client = TestClient(create_app())
+
+    # First launch of the day: a real check, and it is remembered.
+    first = client.get("/api/update/check").json()
+    assert first["status"] == updates.STATUS_UPDATE_AVAILABLE
+    assert first.get("cached") is None
+    assert json.loads(state_file.read_text(encoding="utf-8"))[
+        updates.LAST_KNOWN_VERSION_KEY
+    ] == "9.9.9"
+
+    # Second launch, same day: throttled, and still installable.
+    again = client.get("/api/update/check").json()
+    assert again["status"] == updates.STATUS_UPDATE_AVAILABLE
+    assert again["version"] == "9.9.9"
+    assert again["notes"] == "Fixes the update button."
+    assert again["cached"] is True
+
+    # A skipped version stays skipped through the throttle window too.
+    state = updates.load_state(state_file)
+    updates.mark_skipped(state, "9.9.9")
+    updates.save_state(state_file, state)
+    skipped = client.get("/api/update/check").json()
+    assert skipped["status"] == "THROTTLED"
+    assert "version" not in skipped
+
+    # Nothing remembered at all is still an honest throttled answer.
+    updates.save_state(state_file, {"last_check": datetime.now().isoformat()})
+    bare = client.get("/api/update/check").json()
+    assert bare["status"] == "THROTTLED"
+    assert bare["cached"] is True
+    assert bare["current"] == settings.VERSION
+    assert "version" not in bare
+
+
+def test_a_dropped_download_reports_the_reason_not_a_500(monkeypatch, tmp_path):
+    """``urllib`` failures are OSError subclasses, and used to escape.
+
+    A dropped connection mid-download became an opaque ``internal_error``
+    from the catch-all handler instead of the reason the install failed.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+
+    monkeypatch.setenv(updates.ENV_STATE_PATH, str(tmp_path / "state.json"))
+    monkeypatch.delenv(updates.ENV_DISABLE, raising=False)
+    monkeypatch.setattr(updates, "installer_platform_supported", lambda: True)
+    monkeypatch.setattr(
+        updates,
+        "check_for_update",
+        lambda current, **_k: updates.UpdateCheckResult(
+            status=updates.STATUS_UPDATE_AVAILABLE,
+            current=current,
+            info=updates.parse_manifest(dict(_GOOD_MANIFEST)),
+        ),
+    )
+
+    def dropped(*_args, **_kwargs):
+        raise ConnectionResetError("connection reset by peer")
+
+    monkeypatch.setattr(updates, "download_installer", dropped)
+
+    client = TestClient(create_app())
+    resp = client.post("/api/update/install")
+    assert resp.status_code == 502
+    body = resp.json()
+    assert body["ok"] is False
+    assert "connection reset by peer" in body["error"]
+
+
+def test_updates_switched_off_are_not_offered_from_the_remembered_result(
+    monkeypatch, tmp_path
+):
+    """The throttle skips the one place the disable switch is enforced.
+
+    ``check_for_update`` is what honours BUILD_A_SPEC_DISABLE_UPDATE_CHECK,
+    and the throttled branch does not call it — so replaying a remembered
+    update there would put an Install button in front of someone who has
+    switched updates off, and ``/api/update/install`` would then refuse it.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+
+    state_file = tmp_path / "state.json"
+    monkeypatch.setenv(updates.ENV_STATE_PATH, str(state_file))
+    monkeypatch.delenv(updates.ENV_DISABLE, raising=False)
+    monkeypatch.setattr(
+        updates,
+        "check_for_update",
+        lambda current, **_k: updates.UpdateCheckResult(
+            status=updates.STATUS_UPDATE_AVAILABLE,
+            current=current,
+            info=updates.parse_manifest(dict(_GOOD_MANIFEST)),
+        ),
+    )
+    client = TestClient(create_app())
+
+    # Found and remembered while updates were still switched on.
+    assert (
+        client.get("/api/update/check").json()["status"]
+        == updates.STATUS_UPDATE_AVAILABLE
+    )
+
+    # Switched off afterwards: the throttled reply must not replay it.
+    monkeypatch.setenv(updates.ENV_DISABLE, "1")
+    payload = client.get("/api/update/check").json()
+    assert payload["status"] == updates.STATUS_DISABLED
+    assert "version" not in payload
+    # The record itself is untouched — switching updates back on restores
+    # the offer without waiting for the throttle window to reopen.
+    assert updates.load_state(state_file)[updates.LAST_KNOWN_VERSION_KEY] == "9.9.9"
+
+    monkeypatch.delenv(updates.ENV_DISABLE, raising=False)
+    assert (
+        client.get("/api/update/check").json()["status"]
+        == updates.STATUS_UPDATE_AVAILABLE
+    )

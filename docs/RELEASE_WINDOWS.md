@@ -77,11 +77,22 @@ The workflow needs no secrets — the built-in `GITHUB_TOKEN` (with
 
 ### Test the build without releasing
 
-**Actions → Release (Windows) → Run workflow** (`workflow_dispatch`). With
-`dry_run` left on, it runs the whole pipeline and uploads
+**Actions → Release (Windows) → Run workflow** (`workflow_dispatch`), with a
+**branch** selected. There is no `dry_run` input — the ref is the switch:
+the publish step is `if: startsWith(github.ref, 'refs/tags/')`, so a branch
+dispatch runs the whole pipeline (version gate, backend suite, frontend
+build, PyInstaller freeze, `--version`/`--selfcheck` smoke test, WebView2
+bootstrapper, Inno installer, `latest.json`) and uploads
 `BuildASpecSetup.exe` + `latest.json` as a downloadable **run artifact**,
-but does **not** create a Release. Download the artifact and install it to
-verify a clean-machine experience before tagging.
+but creates no Release. Download the artifact and install it to verify a
+clean-machine experience before tagging.
+
+Two differences from a tag build, both deliberate: the version gate runs
+without `--tag` (there is no tag to agree with, so it only checks
+`settings.py` against `package.json`), and `latest.json`'s `url` points at
+the release asset path for the version being built, which does not exist
+until you actually tag. That manifest is for inspection, not for pointing a
+real updater at.
 
 ### Verify the update path
 

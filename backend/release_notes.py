@@ -89,6 +89,311 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.9.0",
+        date="2026-08-18",
+        headline="Edit what you import, and a tour that just shows you",
+        summary=(
+            "An imported Word section is no longer something you can only "
+            "look at. Edit freely hands you the ordinary editor back, a "
+            "locked import finally says why it is locked, and outlines that "
+            "used to arrive folded into themselves now come in the shape "
+            "they were written in. Drafting a whole section asks what it "
+            "needs to know before it writes a hundred provisions, a second "
+            "research round stops paying for the first one over again, and "
+            "the guided tour asks nothing of you at all. Starting a new "
+            "session now genuinely leaves nothing of the old one behind."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Imported Word specs",
+                items=(
+                    ReleaseItem(
+                        title="Edit freely: import a spec and actually edit it",
+                        body=(
+                            "Until now an imported section was kept "
+                            "deliberately restrictive so the file you "
+                            "exported could be a byte-exact copy of the one "
+                            "you uploaded, with only the wording changed. "
+                            "That is the right default when you are handing "
+                            "a marked-up master back to an office, and the "
+                            "wrong one when you just want to work. Edit "
+                            "freely drops that guarantee for a document and "
+                            "gives you the ordinary editor back — headings, "
+                            "structure, new articles, everything — and "
+                            "exports a normal Word file in Build-a-Spec's "
+                            "formatting instead. Your original upload stays "
+                            "downloadable exactly as you sent it, and "
+                            "Redline vs master still shows what you changed. "
+                            "It applies to one document and cannot be "
+                            "undone; importing the file again starts over."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A read-only import now tells you why",
+                        body=(
+                            "Some Word files cannot be edited in place at "
+                            "all: ones carrying tracked changes, macros, an "
+                            "embedded Excel sheet or drawing, a digital "
+                            "signature, or Restrict Editing turned on. The "
+                            "app knew this and said nothing, so the section "
+                            "simply arrived read-only with no explanation. "
+                            "It now names the reason in the document panel "
+                            "and tells you what to do about it. Tracked "
+                            "changes are the one to watch for — the import "
+                            "shows you the accepted text, so the file looks "
+                            "perfectly clean while still being locked."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Numbered outlines keep their shape",
+                        body=(
+                            "A master whose numbering starts one level in — "
+                            "ordinary in an office template — came through "
+                            "folded into itself: the first article swallowed "
+                            "every article below it, and stray blocks piled "
+                            "up under an invented \"IMPORTED CONTENT\" "
+                            "heading. Articles that are siblings in your file "
+                            "now arrive as siblings. Documents that already "
+                            "imported correctly are parsed exactly as before."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Drafting",
+                items=(
+                    ReleaseItem(
+                        title="A full draft asks before it writes",
+                        body=(
+                            "\"Draft full section\" would happily write a "
+                            "whole section on a blank project, confidently "
+                            "inventing what it did not know. It now needs "
+                            "three things first — the section number and "
+                            "title, what kind of facility this is, and the "
+                            "country — because those decide what the "
+                            "document is, what every defaulted provision is "
+                            "defended by, and which code family and units "
+                            "apply. Press the button anyway and the turn "
+                            "collects exactly what is missing, with a "
+                            "recommended answer for each; it will not draft "
+                            "that turn. Nothing else about drafting changed."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The blank page points you at the ways in",
+                        body=(
+                            "The empty document panel used to offer a small "
+                            "form for typing your own first article. It is "
+                            "gone. Start by talking to the assistant, "
+                            "pressing \"Draft full section\", importing a "
+                            "master, or starting from a template; adding an "
+                            "article by hand still works everywhere else, "
+                            "once the page has something on it."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Research",
+                items=(
+                    ReleaseItem(
+                        title="A second round stops paying for the first",
+                        body=(
+                            "Pressing Research again re-ran every area from "
+                            "scratch, asking questions the session had "
+                            "already answered and costing about what the "
+                            "first round cost. Each area that runs is now "
+                            "briefed on what is already established for it "
+                            "and told to report only what is new, changed or "
+                            "corrected — and to spend its searches "
+                            "re-checking anything still marked unverified."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Fill only the gaps",
+                        body=(
+                            "When some areas finished and others failed, you "
+                            "can now retry just the ones that never "
+                            "completed instead of paying for a full round. "
+                            "Everything already found is kept, and closing "
+                            "the last gap restores issue readiness."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A corrected project is researched from scratch",
+                        body=(
+                            "If you change the city, jurisdiction or client "
+                            "after a round has run, the next round is not "
+                            "briefed on the old project's findings — a "
+                            "re-run you asked for precisely because the "
+                            "project moved must not skip the requirements it "
+                            "exists to find."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Final QC",
+                items=(
+                    ReleaseItem(
+                        title="The report downloads work again",
+                        body=(
+                            "After applying a fix — the most ordinary thing "
+                            "to do with a review — downloading the Word or "
+                            "JSON report went quiet and did nothing for "
+                            "minutes on a large imported master. It was "
+                            "waiting out a permission check it never needed. "
+                            "Both downloads now answer immediately, show a "
+                            "preparing state, and tell you what went wrong "
+                            "if it does. When that check is still running, "
+                            "the export says so on its front page rather "
+                            "than recording a guess as fact."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The report lives with the report",
+                        body=(
+                            "The Final QC downloads were also sitting in the "
+                            "document panel's Export menu, which exports "
+                            "your specification. They are now only where the "
+                            "review is — the Final QC drawer and the full "
+                            "report window."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="What things cost",
+                items=(
+                    ReleaseItem(
+                        title="A failed audit files its receipt",
+                        body=(
+                            "The older compliance audit could pay for a "
+                            "response, fail to make sense of it, and say "
+                            "nothing to the meter. It now bills what it "
+                            "spent however the response was unusable — the "
+                            "same rule research and Final QC already "
+                            "followed. A full pass over every rate in the "
+                            "meter found nothing else owing."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The cache line says what it is",
+                        body=(
+                            "The savings figure in Settings counts the "
+                            "discount on re-used prompt material. Writing "
+                            "that material is itself billed, and is already "
+                            "in the estimate above it, so the line now calls "
+                            "itself the read discount instead of quietly "
+                            "taking credit for a net saving."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="The guided tour",
+                items=(
+                    ReleaseItem(
+                        title="It asks nothing of you",
+                        body=(
+                            "The tour set homework: try a guided answer, "
+                            "fill in this profile, rearrange two blocks "
+                            "before Continue will light up. It is now a "
+                            "fixed track you watch from start to finish. "
+                            "Every control it points at is still live if you "
+                            "want to try one, and Continue is always "
+                            "available."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="No pausing, and no way to get stuck",
+                        body=(
+                            "Pausing left your real project parked behind a "
+                            "protected workspace indefinitely, so it is "
+                            "gone: the tour either runs or ends and hands "
+                            "your project straight back. Every screen it can "
+                            "show now carries a labelled way out, Escape "
+                            "asks whether to end rather than closing "
+                            "something out from under you, and closing a "
+                            "window opened on top of the tour no longer ends "
+                            "the tour as well."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="It costs nothing to take",
+                        body=(
+                            "Everything the tour shows is bundled with the "
+                            "app: no part of it calls the model, so it works "
+                            "with no API key and cannot spend anything. The "
+                            "starter prompts are now taught on the empty "
+                            "screen where they actually appear, and are held "
+                            "inert while the tour runs so a click cannot "
+                            "spend money or disturb the practice document."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Your work, and the machine it runs on",
+                items=(
+                    ReleaseItem(
+                        title="\"New session\" actually means new",
+                        body=(
+                            "Starting a new session, opening a project, or "
+                            "starting from a template left odds and ends of "
+                            "the previous one on screen — a half-typed "
+                            "standard, an unsent message, the review walk's "
+                            "position, and, if a background request "
+                            "happened to fail, the previous project's Final "
+                            "QC findings. Everything is cleared at once now. "
+                            "The project profile form no longer re-offers "
+                            "the last project's city and client either, "
+                            "which it could previously save into the new one."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The local server only answers this app",
+                        body=(
+                            "Build-a-Spec runs a small server on your own "
+                            "machine. Each launch now takes a private port "
+                            "of its own and a fresh credential the window is "
+                            "given at startup, so nothing else on your "
+                            "computer — another program, a page in a "
+                            "browser — can reach your session, and two "
+                            "copies running at once cannot tread on each "
+                            "other."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Logs and traces clean up after themselves",
+                        body=(
+                            "The local activity log and trace files grew "
+                            "without limit. Each launch now writes its own "
+                            "folder, and old ones are pruned by age, count "
+                            "and total size — never the run you are in, "
+                            "another copy that is running, or recent "
+                            "evidence from a crash. The diagnostics bundle "
+                            "says exactly what it included and what it "
+                            "truncated."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Exports survive stray characters",
+                        body=(
+                            "A stray control character pasted in from "
+                            "another document — invisible on screen, illegal "
+                            "in a Word file — could produce an export that "
+                            "would not open. Those characters are now shown "
+                            "as a visible escape in the exported document "
+                            "rather than silently deleted, so nothing is "
+                            "lost and the file always opens."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.8.0",
         date="2026-07-31",
         headline="Cheaper, faster, and a good deal more honest",
@@ -356,48 +661,6 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "now priced as billed. Saved review reports keep "
                             "the rate card they were actually priced under "
                             "rather than being quietly re-costed."
-                        ),
-                    ),
-                ),
-            ),
-            ReleaseSection(
-                title="Imported Word specs",
-                items=(
-                    ReleaseItem(
-                        title="A read-only import now tells you why",
-                        body=(
-                            "Some Word files cannot be edited in place at "
-                            "all: ones carrying tracked changes, macros, an "
-                            "embedded Excel sheet or drawing, a digital "
-                            "signature, or Restrict Editing turned on. The "
-                            "app knew this and said nothing, so the section "
-                            "simply arrived read-only with no explanation. "
-                            "It now names the reason in the document panel "
-                            "and tells you what to do about it. Tracked "
-                            "changes are the one to watch for — the import "
-                            "shows you the accepted text, so the file looks "
-                            "perfectly clean while still being locked."
-                        ),
-                    ),
-                    ReleaseItem(
-                        title="Edit freely: import a spec and actually edit it",
-                        body=(
-                            "Until now an imported section was kept "
-                            "deliberately restrictive so the file you "
-                            "exported could be a byte-exact copy of the one "
-                            "you uploaded, with only the wording changed. "
-                            "That is the right default when you are handing "
-                            "a marked-up master back to an office, and the "
-                            "wrong one when you just want to work. Edit "
-                            "freely drops that guarantee for a document and "
-                            "gives you the ordinary editor back — headings, "
-                            "structure, new articles, everything — and "
-                            "exports a normal Word file in Build-a-Spec's "
-                            "formatting instead. Your original upload stays "
-                            "downloadable exactly as you sent it, and "
-                            "Redline vs master still shows what you changed. "
-                            "It applies to one document and cannot be "
-                            "undone; importing the file again starts over."
                         ),
                     ),
                 ),

@@ -186,11 +186,14 @@ well as the server state; and the local API has a front door — see below.
 OS-assigned ephemeral port and mints a boot nonce plus an API token. The
 window receives the nonce in a URL fragment (never sent to the server, never
 logged), exchanges it once at `/api/bootstrap` for an in-memory header token
-and an HttpOnly/Strict cookie, and every other `/api/*` call must present
-one. Host and Origin are allowlisted, cookie-only mutations must prove
-same-origin, and defensive headers plus a restrictive CSP ride every
-response. Trace and log storage is now bounded by age, count and bytes —
-never pruning the current run, a live process's run, or recent
+and an HttpOnly/Strict cookie. Three paths stay token-free — `/api/bootstrap`
+itself (guarded by the boot nonce instead), `/api/health` (the identity probe
+the frontend needs *before* it holds a token; it returns a hash of the nonce,
+never the nonce) and the static `/api/trace/viewer` — and every other `/api/*`
+call must present a credential. Host and Origin are allowlisted, cookie-only
+mutations must prove same-origin, and defensive headers plus a restrictive
+CSP ride every response. Trace and log storage is now bounded by age, count
+and bytes — never pruning the current run, a live process's run, or recent
 unclean-shutdown evidence.
 
 ## Shipped in v1.7.0 (Release notes in the app)

@@ -141,58 +141,185 @@ form exception details.
 ## Pre-release manual QA
 
 These checks cannot be made hermetic — they need a real Word install, a real
-packaged build, real eyes on motion, or a paid live model run. They were
-recorded as **still owed** in the v0.7.0–v1.0.0 batch plans; when those plans
-were retired on 2026-07-29 the obligations moved here rather than lapsing. No
-evidence exists that any of them was ever performed, so treat the whole list as
-outstanding until a release records otherwise. Note in the release which ones
-you ran and on what (Word version, packaged vs. dev build).
+packaged build, real eyes on motion, or a paid live model run. Everything a
+test *can* cover is already covered by `pytest` and `npm test`, which CI runs
+on every PR; nothing below duplicates them.
 
-**Streaming and chat feel** (v0.7.0)
+**Status, stated honestly:** no evidence exists that any item here has ever
+been performed, through v1.9.0. The list was frozen at v1.0.0 for eight
+releases and had drifted out of agreement with the app (one item asserted a
+readiness rule that Chunk 5.4 reversed), which is a good part of why it never
+got run. It was resynced against the shipped behaviour on 2026-08-18. Note in
+each release which items you ran and on what — Word version, packaged vs. dev
+build — and treat an unrecorded item as not done.
+
+### Minimum before any release
+
+Four items, all performable from the dry-run artifact before you tag. If you
+do nothing else, do these — they are the paths where a regression is both
+invisible to CI and expensive to the user.
+
+- [ ] **The manifest describes the installer beside it.** From the dry-run
+      artifact, hash `BuildASpecSetup.exe` and compare it to `latest.json`'s
+      `sha256` (`make_manifest.py` computes it from the file it was handed,
+      so a mismatch means the manifest step got the wrong input):
+
+      ```powershell
+      (Get-FileHash .\BuildASpecSetup.exe -Algorithm SHA256).Hash.ToLower()
+      (Get-Content .\latest.json | ConvertFrom-Json).sha256
+      ```
+
+      The updater SHA-256-verifies before it launches anything, so a
+      mismatch here means every user is offered an update that downloads and
+      then refuses to install. Its `url` will point at an asset that does not
+      exist until you tag — expected on a branch build, see "Test the build
+      without releasing" above.
+- [ ] **Launch the packaged build and do one of each.** A chat turn, an
+      import, an export. `--selfcheck` proves the modules import; it does not
+      prove the window works.
+- [ ] **Open an exported `.docx` in real Word.** Both a clean export and a
+      redline. python-docx will happily write a package Word then declines to
+      open.
+- [ ] **Two copies at once** (v1.9.0). Launch the packaged app twice: both
+      windows work, and a download from each lands. Each launch takes its own
+      port and credential, and the download cookie's name is derived per
+      launch precisely so the second instance cannot clobber the first's.
+
+### Immediately after publishing
+
+- [ ] **The live update path.** On a machine with the *previous* version
+      installed: the header offers the new version, the install closes the
+      app and relaunches on it, and the What's-new modal opens **once** and
+      not again. See "Verify the update path" above.
+
+      This one **cannot** be done before the tag, which is why it is not in
+      the minimum above: `updates.py` resolves
+      `releases/latest/download/latest.json`, and until the Release is
+      published that path still serves the *previous* version — so an old
+      install rehearsing against a branch build is simply told it is up to
+      date. The run artifact is not a substitute either; it is a zip behind
+      GitHub auth, not a URL the updater can fetch.
+
+      To rehearse it earlier, serve the built `latest.json` and `.exe` from
+      any reachable HTTPS location and launch the old app with
+      `BUILD_A_SPEC_UPDATE_URL` pointing at that manifest. `http://` will not
+      do — the updater is https-only and guards against a redirect
+      downgrade. Failing that, publish and check immediately: the manifest
+      hash check in the minimum above is what stands between you and the
+      expensive version of this going wrong.
+
+### Streaming and chat feel (v0.7.0)
 
 - [ ] A long drafting turn, a thinking-heavy turn, and a search turn — text
-      arrives smoothly, the status strip never goes dead, chips appear live.
-- [ ] Reduced-motion enabled: no typewriter, no shimmer, no pulse.
+      arrives smoothly, the status strip never goes dead, chips appear live
+      and name the actual query (v1.9.0 fixed the unlabelled "Searching the
+      web…").
+- [ ] Reduced-motion enabled: no typewriter, no shimmer, no pulse, no
+      breathing agent dot, no chip rise-in.
 - [ ] Scrolling up mid-stream hands off follow; returning to the bottom
       re-pins.
 - [ ] The header spend ticker and the Settings usage table show believable
-      dollar figures for the turns just run.
+      dollar figures for the turns just run. Stop a long reply mid-stream and
+      confirm the estimated-output disclosure appears rather than being
+      folded into the reported number.
 
-**Keys and manual editing** (v0.7.0)
+### Keys and manual editing (v0.7.0)
 
 - [ ] Test / replace / remove key flows, including an env-supplied key
       rendering read-only.
 - [ ] A `.docx` round-trip after a manual inline edit.
 
-**Review queue** (v0.8.0)
+### Review queue (v0.8.0)
 
 - [ ] Keyboard walk end-to-end on a **real office master**: keep / edit /
       delete / ask / skip, hold-to-confirm an article, busy lockout while a
       turn streams, undo after a delete.
 - [ ] "Ask model" round-trips and the queue recomputes on turn completion.
 
-**Final QC** (v0.9.0; model updated v1.8.0)
+### Final QC (v0.9.0; model updated v1.8.0, adjudication v1.9.0)
 
 - [ ] A live run on the configured QC model (`settings.QC_MODEL`, currently
-      Opus 5 — the plan text said Fable 5, superseded): lens → verify progress
-      reads honestly, findings are real, a refusal fails the lens clean.
+      Opus 5). The Review Room's three stages read honestly — specialists,
+      then candidate panels, then local fix validation — findings are real,
+      and a refusal fails its lens clean without taking the others down.
+      `tools/qc_verifier_canary.py --run` is the cheap standing check that the
+      provider still accepts the strict verifier schema; it is one low-token
+      request and is **not** a substitute for a full run.
 - [ ] Accept-fix `.docx` round-trip; the base QC `.docx` opens in Word.
-- [ ] Hold-to-apply-criticals, and readiness going green.
+- [ ] Hold-to-apply-criticals applies them as **one** undo step. Note that
+      readiness does **not** go green here: since v1.9.0 `no_open_qc_findings`
+      requires *every* surviving finding applied or dismissed-with-reason and
+      every dispute adjudicated, not just the criticals. Green needs the whole
+      queue dispositioned. (The old wording of this item asserted the
+      opposite and would have read as a bug.)
+- [ ] A **disputed** candidate (v1.9.0): a complete panel that split. It
+      appears in its own warn-toned group, is never auto-applied, blocks
+      readiness, and can be cleared by dismissing it with a reason.
 - [ ] A large report in `QCReportModal`: no truncation, unsafe source strings
       inert rather than clickable.
-- [ ] Word **and** JSON downloads from the **packaged** app.
+- [ ] Word **and** JSON downloads from the **packaged** app, **after applying
+      a fix** — that is the exact state where they used to hang for minutes
+      (fixed in v1.9.0), and an `<a download>` failing in the shell looks
+      identical to nothing happening.
 - [ ] Legacy-result limitations and stale input identity render correctly.
 - [ ] Partial runs from one failed lens and, independently, one failed
-      verifier seat: each must block `qc_audit_complete`; a failed latest
+      verifier seat: each must block `qc_execution_complete`; a failed latest
       attempt must also block `qc_current`; all three report surfaces must
       identify the same run.
 
-**Redline export** (v1.0.0)
+### Redline export (v1.0.0)
 
 - [ ] Open a redline in **real Word**: the reviewing pane shows
       "Build-a-Spec" as author; **Accept All** yields the current document;
       **Reject All** yields the master; word-level edits read cleanly; deleted
       paragraphs collapse on accept.
+
+### Imported specs and Edit freely (v1.9.0)
+
+- [ ] **Edit freely** on a real office master: import, confirm the one-way
+      dialog, then edit a heading and add an article — the things source mode
+      refuses. Export is a normal Build-a-Spec `.docx`; *Download original
+      upload* still returns the upload **byte-identical**; *Redline vs master*
+      still works. Save, reopen the `.baspec`, and confirm it loads with the
+      decision intact.
+- [ ] A **frozen** package — tracked changes, macros, an embedded object, or
+      Restrict Editing — names its cause and remedy in the panel rather than
+      going silently read-only. Tracked changes is the one to try: the import
+      shows the accepted text, so it looks clean while still being locked.
+- [ ] A master whose numbering **starts one level in**: sibling articles
+      arrive as siblings, with no invented `IMPORTED CONTENT` article.
+- [ ] A large master (1,000+ paragraphs): the app stays responsive while the
+      permission sweep runs, and the panel says "pending" rather than
+      "read-only". The sweep is still quadratic by design decision — this
+      confirms nothing *waits* on it.
+
+### Attachments, figures and templates (v1.1.0–v1.4.0)
+
+- [ ] Attach one of each reference type — `.docx`, `.pdf`, `.txt`, `.xml`,
+      `.csv` — and have the model read one. A PDF with no text layer must be
+      refused with the reason, not attached empty.
+- [ ] A mermaid figure, a hand-authored SVG, and a table render in chat; the
+      SVG/PNG/CSV downloads work from the **packaged** app. Rendering is
+      sandboxed at three layers, so this is the one place a rendering
+      regression would be invisible to the suite.
+- [ ] Create a template both ways (Exact and AI-Generalize), approve the
+      generalize diff, then instantiate it into a blank session.
+
+### The guided tour (v1.1.0, reworked v1.9.0)
+
+- [ ] Run it start to finish with **no API key configured** — it is bundled
+      and must cost nothing and require nothing. Spotlights land on the right
+      controls, every screen offers a way out, and ending returns your real
+      project untouched.
+- [ ] Open a modal on top of the tour (help, or the template studio) and press
+      Escape once: the modal closes and the tour does **not** end.
+
+### Diagnostics (v1.6.0, bounded v1.9.0)
+
+- [ ] Download a diagnostics bundle from the packaged app and open it: it
+      contains the snapshot, this launch's logs and the current trace, states
+      what it truncated, and contains **no** key material.
+- [ ] The trace viewer opens from Developer tools and renders with no network.
 
 ---
 

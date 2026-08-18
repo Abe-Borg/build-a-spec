@@ -155,15 +155,25 @@ build — and treat an unrecorded item as not done.
 
 ### Minimum before any release
 
-Four items. If you do nothing else, do these — they are the paths where a
-regression is both invisible to CI and expensive to the user.
+Four items, all performable from the dry-run artifact before you tag. If you
+do nothing else, do these — they are the paths where a regression is both
+invisible to CI and expensive to the user.
 
-- [ ] **The update path.** On a machine with the *previous* version
-      installed: the header offers the new version, the install closes the
-      app and relaunches on it, and the What's-new modal opens **once** and
-      not again. See "Verify the update path" above. Nothing automated
-      exercises this, and a bad `latest.json` means every user sees an update
-      that refuses to install.
+- [ ] **The manifest describes the installer beside it.** From the dry-run
+      artifact, hash `BuildASpecSetup.exe` and compare it to `latest.json`'s
+      `sha256` (`make_manifest.py` computes it from the file it was handed,
+      so a mismatch means the manifest step got the wrong input):
+
+      ```powershell
+      (Get-FileHash .\BuildASpecSetup.exe -Algorithm SHA256).Hash.ToLower()
+      (Get-Content .\latest.json | ConvertFrom-Json).sha256
+      ```
+
+      The updater SHA-256-verifies before it launches anything, so a
+      mismatch here means every user is offered an update that downloads and
+      then refuses to install. Its `url` will point at an asset that does not
+      exist until you tag — expected on a branch build, see "Test the build
+      without releasing" above.
 - [ ] **Launch the packaged build and do one of each.** A chat turn, an
       import, an export. `--selfcheck` proves the modules import; it does not
       prove the window works.
@@ -174,6 +184,29 @@ regression is both invisible to CI and expensive to the user.
       windows work, and a download from each lands. Each launch takes its own
       port and credential, and the download cookie's name is derived per
       launch precisely so the second instance cannot clobber the first's.
+
+### Immediately after publishing
+
+- [ ] **The live update path.** On a machine with the *previous* version
+      installed: the header offers the new version, the install closes the
+      app and relaunches on it, and the What's-new modal opens **once** and
+      not again. See "Verify the update path" above.
+
+      This one **cannot** be done before the tag, which is why it is not in
+      the minimum above: `updates.py` resolves
+      `releases/latest/download/latest.json`, and until the Release is
+      published that path still serves the *previous* version — so an old
+      install rehearsing against a branch build is simply told it is up to
+      date. The run artifact is not a substitute either; it is a zip behind
+      GitHub auth, not a URL the updater can fetch.
+
+      To rehearse it earlier, serve the built `latest.json` and `.exe` from
+      any reachable HTTPS location and launch the old app with
+      `BUILD_A_SPEC_UPDATE_URL` pointing at that manifest. `http://` will not
+      do — the updater is https-only and guards against a redirect
+      downgrade. Failing that, publish and check immediately: the manifest
+      hash check in the minimum above is what stands between you and the
+      expensive version of this going wrong.
 
 ### Streaming and chat feel (v0.7.0)
 

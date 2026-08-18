@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Health, UpdateCheckPayload } from "../types";
-import { checkUpdate } from "../lib/api";
 import { TOUR } from "../lib/tour";
 import {
   SOURCE_CAPABILITY_GUIDANCE,
@@ -43,8 +42,8 @@ interface Props {
   update: UpdateCheckPayload | null;
   installing: boolean;
   installError: string | null;
-  /** Lifts a forced check's result — the app, not this dialog, owns the answer. */
-  onUpdateChecked: (payload: UpdateCheckPayload) => void;
+  /** Runs a forced check. The app owns the answer; this dialog only reads it. */
+  onCheckUpdate: () => Promise<UpdateCheckPayload>;
   onInstallUpdate: () => void;
 }
 
@@ -522,35 +521,36 @@ function About({
   update,
   installing,
   installError,
-  onUpdateChecked,
+  onCheckUpdate,
   onInstallUpdate,
 }: {
   health: Health | null;
   update: UpdateCheckPayload | null;
   installing: boolean;
   installError: string | null;
-  onUpdateChecked: (payload: UpdateCheckPayload) => void;
+  onCheckUpdate: () => Promise<UpdateCheckPayload>;
   onInstallUpdate: () => void;
 }) {
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
 
   /**
-   * A forced check, whose answer is handed to the app rather than kept here.
+   * A forced check, run through the app rather than fetched here.
    *
-   * That hand-off is the whole point. This panel used to keep the result to
-   * itself and tell the user to "see the header to install" — but the header
-   * renders the app's copy, which comes from the throttled check at launch.
-   * Whenever that one was throttled, errored, or simply ran before the
-   * release existed, the header showed nothing, and the one control that had
-   * just confirmed an update pointed at an empty corner of the screen.
+   * That hand-off is the whole point. This panel used to hold the result in
+   * its own state and tell the user to "see the header to install" — but the
+   * header renders the app's copy, which comes from the throttled check at
+   * launch. Whenever that one was throttled, errored, or simply ran before
+   * the release existed, the header showed nothing, and the one control that
+   * had just confirmed an update pointed at an empty corner of the screen.
+   * The app also sequences the two callers, so a slow launch check cannot
+   * land on top of this answer afterwards.
    */
   const runUpdateCheck = async () => {
     setChecking(true);
     setUpdateMsg("Checking…");
     try {
-      const r = await checkUpdate(true);
-      onUpdateChecked(r);
+      const r = await onCheckUpdate();
       if (r.status === "UPDATE_AVAILABLE" && r.version) {
         // The install row below renders it — a message would be redundant.
         setUpdateMsg(null);
@@ -701,7 +701,7 @@ type UpdateControls = {
   update: UpdateCheckPayload | null;
   installing: boolean;
   installError: string | null;
-  onUpdateChecked: (payload: UpdateCheckPayload) => void;
+  onCheckUpdate: () => Promise<UpdateCheckPayload>;
   onInstallUpdate: () => void;
 };
 
@@ -741,7 +741,7 @@ export default function HelpModal({
   update,
   installing,
   installError,
-  onUpdateChecked,
+  onCheckUpdate,
   onInstallUpdate,
 }: Props) {
   // The "I'm not convinced" dossier stacks above this dialog. Kept as local
@@ -835,7 +835,7 @@ export default function HelpModal({
               update,
               installing,
               installError,
-              onUpdateChecked,
+              onCheckUpdate,
               onInstallUpdate,
             }}
           />

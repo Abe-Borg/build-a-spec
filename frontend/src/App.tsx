@@ -67,6 +67,7 @@ import {
   streamResearch,
   undoDoc,
 } from "./lib/api";
+import { createLatestAnswer } from "./lib/latestAnswer";
 import Header from "./components/Header";
 import ApiKeyBanner from "./components/ApiKeyBanner";
 import Chat from "./components/Chat";
@@ -139,6 +140,14 @@ export default function App() {
   const [qc, setQc] = useState<QcSnapshot | null>(null);
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [update, setUpdate] = useState<UpdateCheckPayload | null>(null);
+  // Two callers write this: the throttled check at launch, and a forced one
+  // from Help. They race — the launch fetch can still be in flight (a slow
+  // manifest request waits out an 8s timeout) when the user runs a forced
+  // check, and its late THROTTLED/ERROR answer would erase the install
+  // control the forced one just produced. The latch orders them by REQUEST,
+  // and lives in a ref because the loser can resolve before React commits
+  // the winner. Its rule is pinned in tests/latestAnswer.test.ts.
+  const updateAnswers = useRef(createLatestAnswer<UpdateCheckPayload | null>());
   // The install request outlives the download; the ref is the double-submit
   // guard (a state update may not commit before a second click lands).
   const [installing, setInstalling] = useState(false);
@@ -513,6 +522,29 @@ export default function App() {
     ]);
   }, []);
 
+  /**
+   * Ask the server about updates and keep only the newest answer.
+   *
+   * Returns the payload so a caller (Help → About) can phrase its own
+   * message, while the app owns the state the header renders from — one
+   * answer, one owner, no second copy to fall out of step.
+   */
+  const runUpdateCheck = useCallback(
+    async (force: boolean): Promise<UpdateCheckPayload> => {
+      const gate = updateAnswers.current;
+      const rank = gate.next();
+      try {
+        const payload = await checkUpdate(force);
+        gate.accept(rank, payload, setUpdate);
+        return payload;
+      } catch (e) {
+        gate.accept(rank, null, setUpdate);
+        throw e;
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     refreshHealth();
     refreshDoc();
@@ -521,7 +553,9 @@ export default function App() {
     refreshReadiness();
     refreshUsage();
     // Throttled auto-check (server enforces once a day); failures ignored.
-    checkUpdate().then(setUpdate).catch(() => setUpdate(null));
+    // Sequenced, so a slow response cannot land on top of a forced check
+    // the user ran from Help while this one was still outstanding.
+    void runUpdateCheck(false).catch(() => {});
     // Did this launch follow an update? The server decides (a fresh install
     // gets nothing); anything pending opens the What's-new modal once.
     getReleaseNotes()
@@ -536,6 +570,7 @@ export default function App() {
     refreshQc,
     refreshReadiness,
     refreshUsage,
+    runUpdateCheck,
   ]);
 
   // Every external link (chat citations, report sources, the trust dossier,
@@ -2033,7 +2068,7 @@ export default function App() {
         update={update}
         installing={installing}
         installError={installError}
-        onUpdateChecked={setUpdate}
+        onCheckUpdate={() => runUpdateCheck(true)}
         onInstallUpdate={onInstallUpdate}
       />
       <OnboardingOverlay

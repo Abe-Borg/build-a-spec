@@ -3316,12 +3316,40 @@ no new dep, no project-format bump.
   records: one capability, several controls), so the three-place contract
   is untouched. The `help-updates` step's body was resynced — it described
   the header as the only place an update installs, which is no longer true.
+- **A remembered answer must still honour the disable switch** (caught in
+  review on PR #131, Codex). `check_for_update` is the one place
+  `BUILD_A_SPEC_DISABLE_UPDATE_CHECK` is enforced, and the throttled branch
+  skips it by construction — so a machine whose owner switched updates off,
+  but which had a remembered result from before, was offered an Install
+  button that `/api/update/install` would then refuse. The branch checks
+  `update_check_disabled()` first and answers `DISABLED`, the same answer
+  the live path gives for the same setting, rather than inventing a second
+  one. The record itself is left intact, so switching updates back on
+  restores the offer without waiting for the throttle window to reopen.
+- **The launch check and a forced one race, and the launch check could
+  win late** (same review). Both write `App`'s `update` state. A launch
+  fetch waiting out its 8s manifest timeout can resolve AFTER a forced
+  check the user ran meanwhile, and its stale `THROTTLED`/`ERROR` answer
+  erased the install control that check had just produced — the very
+  disappearance this work exists to stop. `lib/latestAnswer.ts` orders
+  them by REQUEST, not arrival, which is what makes it correct in both
+  directions: the forced check is issued second, so it outranks the launch
+  check whichever returns first. It is a ref, because the loser can resolve
+  before React commits the winner. Extracted rather than inlined for the
+  `eventSeqIndex.ts` reason — the race is timing-dependent and nothing else
+  in the suite would notice it regressing.
+- **`About` no longer fetches for itself.** It calls `onCheckUpdate()` and
+  reads the payload back for its own message, so there is one answer with
+  one owner — a second copy in component state is what started this.
+  Declaring `runUpdateCheck` ahead of the mount effect that consumes it is
+  load-bearing: a `const` referenced from an earlier effect is a
+  first-render TDZ crash (the `bumpDrawer` lesson, recorded above).
 - **Release notes are deliberately NOT edited.** `v1.9.0` is already
   tagged, so adding an item to its entry would describe something that
   release did not contain, and inventing a `1.10.0` entry would be a
   version bump — a release decision with its own runbook and version-
   consistency gate. Whoever cuts the next release writes the item.
-- **Tests**: 5 in `tests/test_updates.py` (the re-judge, a failed check not
+- **Tests**: 6 in `tests/test_updates.py` (the re-judge, a failed check not
   erasing the record, the malformed-record matrix, the throttled relaunch
   end to end — first launch remembers, second offers it as `cached` without
   touching the network, a skip still suppresses it, and nothing remembered

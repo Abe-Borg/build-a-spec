@@ -478,3 +478,53 @@ def test_a_dropped_download_reports_the_reason_not_a_500(monkeypatch, tmp_path):
     body = resp.json()
     assert body["ok"] is False
     assert "connection reset by peer" in body["error"]
+
+
+def test_updates_switched_off_are_not_offered_from_the_remembered_result(
+    monkeypatch, tmp_path
+):
+    """The throttle skips the one place the disable switch is enforced.
+
+    ``check_for_update`` is what honours BUILD_A_SPEC_DISABLE_UPDATE_CHECK,
+    and the throttled branch does not call it — so replaying a remembered
+    update there would put an Install button in front of someone who has
+    switched updates off, and ``/api/update/install`` would then refuse it.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+
+    state_file = tmp_path / "state.json"
+    monkeypatch.setenv(updates.ENV_STATE_PATH, str(state_file))
+    monkeypatch.delenv(updates.ENV_DISABLE, raising=False)
+    monkeypatch.setattr(
+        updates,
+        "check_for_update",
+        lambda current, **_k: updates.UpdateCheckResult(
+            status=updates.STATUS_UPDATE_AVAILABLE,
+            current=current,
+            info=updates.parse_manifest(dict(_GOOD_MANIFEST)),
+        ),
+    )
+    client = TestClient(create_app())
+
+    # Found and remembered while updates were still switched on.
+    assert (
+        client.get("/api/update/check").json()["status"]
+        == updates.STATUS_UPDATE_AVAILABLE
+    )
+
+    # Switched off afterwards: the throttled reply must not replay it.
+    monkeypatch.setenv(updates.ENV_DISABLE, "1")
+    payload = client.get("/api/update/check").json()
+    assert payload["status"] == updates.STATUS_DISABLED
+    assert "version" not in payload
+    # The record itself is untouched — switching updates back on restores
+    # the offer without waiting for the throttle window to reopen.
+    assert updates.load_state(state_file)[updates.LAST_KNOWN_VERSION_KEY] == "9.9.9"
+
+    monkeypatch.delenv(updates.ENV_DISABLE, raising=False)
+    assert (
+        client.get("/api/update/check").json()["status"]
+        == updates.STATUS_UPDATE_AVAILABLE
+    )

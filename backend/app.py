@@ -5897,6 +5897,18 @@ def create_app(
         if not force and not updates.should_auto_check(
             state, now=datetime.now()
         ):
+            if updates.update_check_disabled():
+                # The disable switch is enforced inside check_for_update(),
+                # which this branch skips — so replaying here would offer an
+                # install that /api/update/install is then guaranteed to
+                # refuse, on a machine whose owner has switched updates off.
+                # The live path answers DISABLED for the same setting; so
+                # does this one, rather than inventing a second answer.
+                payload["status"] = updates.STATUS_DISABLED
+                _trace_capture.app_event(
+                    "update", action="check", status=payload["status"], forced=force
+                )
+                return payload
             # Throttled means "we did not ask GitHub again today", never
             # "there is nothing to install". Answering from the remembered
             # result is what keeps the header's install control on screen

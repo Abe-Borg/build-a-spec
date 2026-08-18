@@ -267,7 +267,11 @@ backend/
                            swallowed TypeError meant NO research/QC progress
                            event ever reached a trace until the
                            live-visibility batch); viewer/trace_viewer.html
-                           is a native self-contained rewrite (no CDN)
+                           is a native self-contained rewrite (no CDN);
+                           retention.py bounds local trace storage by age /
+                           count / bytes (run.json self-naming required, the
+                           active run and any live PID's run protected,
+                           symlinks never followed)
   diagnostics.py           always-on activity log (RotatingFileHandler in
                            <state dir>/logs beside traces/, BUILD_A_SPEC_LOG*
                            knobs, third-party loggers tamed) + crash capture
@@ -445,6 +449,15 @@ backend/
                            only, ≥25 chars, numeric tokens must match before any
                            similarity ratio — a dimension or article number
                            differing is decisive evidence AGAINST duplication)
+  spec_doc/xml_text.py     XML 1.0-safe artifact text: the handful of code points
+                           XML cannot carry (C0 controls, lone surrogates)
+                           render as VISIBLE \uXXXX escapes rather than being
+                           silently deleted — an audit artifact must not lose
+                           what its source contained; xml_safe_upper/_title
+                           keep the escape tokens intact through display case
+                           transforms, xml_safe_clone walks a value graph.
+                           Consumed by docx_export (body, redline attributes,
+                           QC memo, core properties) + filename scrubbing
   spec_doc/docx_export.py  python-docx rendering + assumptions/open-items schedules;
                            Batch 4 adds build_qc_memo (full standalone Final QC
                            Word report) + a QC
@@ -735,6 +748,28 @@ tests/
                            equality by state projection, the same with a
                            module/discipline switch, the stop flag, the
                            endpoint end to end, and has_unsaved_progress
+  test_desktop_security.py [v1.9.0] the per-launch loopback boundary: bootstrap
+                           exchange + cookie/host/origin/headers, non-ASCII
+                           credentials refused, a rejection taking no workspace
+                           write, parallel instances' distinct cookie names,
+                           the CORS preflight, fixed-vite vs ephemeral-packaged
+                           port choice, exclusive prebind, and the boot
+                           fragment never becoming a query string
+  test_docx_xml_safety.py  [v1.9.0] illegal code points survive as visible
+                           escapes through the clean body, the audit closing,
+                           redline revision attributes, the QC memo and core
+                           properties — inputs never mutated
+  test_source_detach.py    [v1.9.0] "Edit freely": frozen-package causes and
+                           remedies, the unlock, the exact original still
+                           byte-identical, normalized-by-default export + the
+                           honest mode=source 409, redline surviving, the
+                           save/reload round trip, fail-closed load matrix,
+                           undo/redo not flipping it
+  test_trace_instrumentation.py
+                           [v1.9.0] every record carries run/process identity
+                           and a monotonic sequence; requests carry a
+                           correlation id, outcome code and workspace
+                           generation before/after
 ```
 
 ## Event protocol (SSE, `POST /api/chat`)
@@ -6100,6 +6135,101 @@ No new endpoint, no new SSE event, no new dep, no project-format bump.
   the pane wipe off it would fire on tutorial swaps too — which is exactly
   the case that must not remount. The three replacement paths call
   `discardPaneState` themselves instead.
+
+## The loopback server has a front door — implemented notes
+
+Landed as PR #121 (`codex/improvements-investigation`, commit "new branch
+yo") and documented here after the fact: it was the one change since v1.8.0
+that updated `README.md` but never this file, so a whole security subsystem
+plus two new modules were invisible to the working reference. ~7,500 lines
+across desktop security, bounded local forensics, and XML-safe artifacts.
+No new dep.
+
+- **The server was open to anything on the machine, and the port was
+  predictable.** `BUILD_A_SPEC_PORT` (8756) bound 127.0.0.1 with no
+  authentication at all, so any other process — or any page in a browser —
+  could drive the whole API: read the draft, spend the user's key, download
+  the project. Loopback is not a trust boundary on a shared desktop. Now
+  `main.py` pre-binds an **exclusive OS-assigned ephemeral** socket
+  (`_reserve_backend_socket`, `SO_EXCLUSIVEADDRUSE` on Windows) and hands
+  the listener to uvicorn, and every launch mints a fresh `boot_nonce`
+  (32 bytes) + `api_token` (48 bytes).
+- **The fixed port survives in dev only, and that is deliberate**:
+  Vite's proxy needs a configured target. Packaged and browser production
+  take the ephemeral one, so two copies of the app cannot collide.
+- **`create_app()` stays open, on purpose.** `DesktopSecurityConfig` is
+  supplied only by `main.py`; the global `backend.app:app` and ordinary
+  `create_app()` calls remain unsecured so the hermetic `TestClient` suite
+  and explicit ASGI embedding keep working unchanged. That is why the
+  security tests build their own configured app — pinned by
+  `test_direct_testclient_security_remains_explicitly_inactive`.
+- **The nonce travels in a URL fragment, never a request.** A fragment is
+  not sent to the server and does not reach an access log or a proxy, so
+  `_url_with_boot_fragment` is how the window receives its one-time
+  identity. `lib/desktopSecurity.ts` exchanges it once at
+  `POST /api/bootstrap` for an in-memory header token, strips the fragment
+  from the URL (`history.replaceState`), and keeps the token in a closure
+  that is never exported, logged, persisted, or put back in a URL.
+- **Two credentials because downloads cannot carry a header.** The header
+  token proves bootstrap; an HttpOnly/Strict **cookie** mirrors it so a
+  plain `<a download>` still works. The cookie's NAME is derived from the
+  boot nonce (`sha256[:16]`) rather than fixed, because cookies are scoped
+  by host and path but **not by port** — a fixed name would let a second
+  instance overwrite the first's download cookie. Only the name is derived;
+  the token itself never appears in it.
+- **Cookie-only mutations must prove same-origin.** A cookie rides
+  cross-origin requests automatically, so `POST`/`PUT`/`PATCH`/`DELETE`
+  authenticated by cookie alone additionally require an allowed `Origin`
+  (`csrf_required`); the custom token header independently proves bootstrap
+  AND forces a cross-origin browser into a preflight. Host and Origin are
+  allowlisted ahead of any of it (`421 invalid_host` / `403 invalid_origin`),
+  and `_apply_defensive_headers` puts nosniff / DENY / no-referrer / a
+  restrictive CSP on every response.
+- **Three paths stay unauthenticated** (`_UNAUTHENTICATED_API_PATHS`):
+  `/api/health` (the identity probe the frontend needs BEFORE it holds a
+  token — it returns a `boot_nonce_fingerprint`, a hash, never the
+  capability), `/api/bootstrap` (guarded by the boot nonce instead), and
+  `/api/trace/viewer`. Everything else is 401 without a credential.
+- **`compare_digest` raises on non-ASCII `str`**, and Starlette decodes raw
+  HTTP obs-text bytes as Latin-1 — so a header of high bytes turned an
+  UNAUTHENTICATED request into a 500. `_desktop_token_matches` checks
+  `isascii()` on both sides first. A rejection must also cost nothing:
+  `test_security_rejection_does_not_acquire_workspace_write` pins that a
+  refused request never takes a workspace lease.
+- **Local forensics are now bounded, and the bounds protect the living.**
+  `tracing/retention.py` + per-launch log directories
+  (`<log-root>/process-<uuid>/`) prune by age / count / bytes
+  (`BUILD_A_SPEC_TRACE_MAX_*`, `BUILD_A_SPEC_LOG_MAX_*`; `0` disables one
+  ceiling). Never pruned: the current run, a run whose recorded PID is still
+  alive, and recent unclean-shutdown evidence — the exact records an
+  incident needs. Only a direct child of the trace root whose `run.json`
+  names that same directory counts as a run, and symlinks are never
+  followed, so a stray directory cannot be deleted by this. An unfinished
+  run from a hard kill becomes eligible only after a week AND only once its
+  PID is gone. The byte ceiling also caps a single ACTIVE run's JSONL, so
+  one runaway session cannot fill the disk.
+- **The diagnostic system reports its own gaps.** Run metadata checkpoints
+  carry counts by event/span/request outcome, token totals, queue
+  count/byte high-water marks, categorized drops, write failures and open
+  spans — a bundle that silently lost records would be worse than no bundle.
+  The bundle states its own inclusion/truncation manifest, and identifies
+  live sibling runs without copying them.
+- **XML 1.0 cannot carry every string a document can** (C0 controls, lone
+  surrogates), and python-docx will happily write one into a package Word
+  then refuses to open. `spec_doc/xml_text.py` renders them as VISIBLE
+  `\uXXXX` escapes instead of stripping them: an audit artifact that
+  silently deleted what its source contained would be lying about the
+  source. Applied across the clean body, the audit closing, redline
+  revision attributes, the QC memo, core properties and filename scrubbing
+  — inputs are never mutated (`xml_safe_clone` copies).
+- **Credential redaction moved earlier.** Log records are scrubbed at
+  SUBSTRING level — message and exception text both — before file
+  formatting, so a pasted key cannot reach the log even through a traceback.
+- **Privacy posture is unchanged but stated harder**: key material never
+  enters logs, traces, the snapshot or the bundle; document text, prompts,
+  titles, file paths and error context DO ride traces and bundles by design,
+  and every surface offering them says so. Treat both folders and every
+  exported bundle as sensitive project data.
 
 ## Commands
 

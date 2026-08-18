@@ -71,11 +71,14 @@ deletion warns before removing its full provision subtree.
   up/down controls remain as a fallback. A move keeps stable IDs and carries
   the whole descendant subtree while positional numbering updates.
 - **The safety boundary stays visible.** There is no PART reordering,
-  cross-PART move, reparenting, promotion, or demotion. Imported DOCX files do
-  not permit article or nested structural edits; only flat Word-numbered edits
-  and exact sibling positions explicitly authorized by the server are offered.
-  A disabled control shows the server's reason, and no structural action
-  silently switches the project to normalized-only output.
+  cross-PART move, reparenting, promotion, or demotion. An imported DOCX still
+  bound to its source does not permit article or nested structural edits; only
+  flat Word-numbered edits and exact sibling positions explicitly authorized by
+  the server are offered. A disabled control shows the server's reason, and no
+  structural action silently switches the project to normalized-only output.
+  **Edit freely** (v1.9.0) is the deliberate way past that boundary — it drops
+  the byte-exact export promise for one document and restores the ordinary
+  editor; see below.
 
 ## Current Status — non-spec uploads: honest framing + reference documents
 
@@ -121,6 +124,74 @@ sheet, a previous project's section, or meeting notes.
   standard still offers to save before you start over.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
+
+## Shipped in v1.9.0 (Edit freely, and a tour that just shows you)
+
+**An imported Word section is no longer something you can only look at.**
+Source mode's restrictions all serve one promise — that the `.docx` you
+export is a byte-exact clone of the one you uploaded with only approved text
+slices changed. **Edit freely** drops that promise for a document and gives
+the ordinary editor back.
+
+- **Edit freely.** One confirmed, one-way decision per document. Headings,
+  structure, new articles — everything the editor normally offers. The
+  retained upload, source map and baseline are all **kept**, so *Download
+  original upload* still returns the exact bytes you sent and *Redline vs
+  master* still works; only the byte-exact export claim goes, and the
+  document exports normalized like any native one. Re-importing the file
+  starts over.
+- **A locked import says why.** Some packages can never be patched in place
+  — tracked changes, macros or an embedded object, a digital signature,
+  Restrict Editing. The report now names the package-wide cause once, with
+  the remedy, instead of leaving every control greyed out unexplained.
+  Tracked changes is the one to watch: the import shows the Accept-All view,
+  so the file looks clean while still being frozen.
+- **Numbered outlines keep their shape.** `w:numPr`'s `ilvl` was read as an
+  absolute outline depth. It is an indent level *within a numbering
+  definition*, so a master whose list starts at level 1 — ordinary in an
+  office template — came through with every sibling article nested under the
+  first one, plus synthetic `IMPORTED CONTENT` articles. The clamp is now
+  remembered for the rest of the article, scoped per article, so documents
+  that already parsed correctly parse byte-identically.
+
+**A full draft asks before it writes.** `POST /api/draft/full` used to hand
+back the drafting directive unconditionally, so a click on a blank session
+produced a confident whole document built on nothing. Three prerequisites —
+section number and title, project type, country — now gate it: they decide
+what the document *is*, what every defaulted provision is defended by, and
+which code family and units apply. A missing one returns **200 with
+`ready: false`** and a directive that *collects* the gaps (defaults-first,
+"I don't know" a real answer) and is forbidden from drafting that turn. The
+click is always honored; city, state and client remain research
+prerequisites, not drafting ones.
+
+**A second research round stops paying for the first.** Rounds appended
+their findings but the *request* was unchanged, so round 2 cost about what
+round 1 cost and mostly re-derived it. Each dimension is now briefed on what
+is already established for it and told to report only what is NEW, CHANGED
+or CORRECTED — and to re-verify anything still `[UNVERIFIED]`. `POST
+/api/research/start` also takes `scope: "gaps"`, which runs only the
+dimensions that never completed. A brief only ever describes the project
+being researched *now*: correct the city, jurisdiction or client and the
+next round is not briefed at all.
+
+**Everything else.** The Final QC report downloads no longer wait out the
+imported-source permission sweep (minutes, silently, right after applying a
+fix) and live only on the Final QC surfaces; a failed compliance audit bills
+what it spent; the guided tour is a fixed passive track with no pausing, no
+homework and no model call anywhere in it; "New session" clears the panes as
+well as the server state; and the local API has a front door — see below.
+
+**The loopback server is authenticated.** Each launch pre-binds an exclusive
+OS-assigned ephemeral port and mints a boot nonce plus an API token. The
+window receives the nonce in a URL fragment (never sent to the server, never
+logged), exchanges it once at `/api/bootstrap` for an in-memory header token
+and an HttpOnly/Strict cookie, and every other `/api/*` call must present
+one. Host and Origin are allowlisted, cookie-only mutations must prove
+same-origin, and defensive headers plus a restrictive CSP ride every
+response. Trace and log storage is now bounded by age, count and bytes —
+never pruning the current run, a live process's run, or recent
+unclean-shutdown evidence.
 
 ## Shipped in v1.7.0 (Release notes in the app)
 

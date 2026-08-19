@@ -209,16 +209,25 @@ def test_every_origin_claim_reaches_the_serialized_and_rendered_report():
         assert claim in serialized
 
     memo = build_qc_memo(payload, store.doc, stale=False)
-    rendered = "\n".join(
-        p.text for p in Document(io.BytesIO(memo)).paragraphs
+    document = Document(io.BytesIO(memo))
+    paragraphs = "\n".join(p.text for p in document.paragraphs)
+    rendered = paragraphs + "\n".join(
+        cell.text
+        for table in document.tables
+        for row in table.rows
+        for cell in row.cells
     )
-    assert "Original Lens Claims" in rendered
+    assert "Original Lens Claims" in paragraphs
     for claim in ("Access omitted from execution", "No clearance provision"):
-        assert claim in rendered
+        assert claim in paragraphs
+    # The origin's evidence is cited by register number inline and resolved
+    # to the full URL exactly once, in the Appendix B evidence table.
     assert "https://example.org/access" in rendered
+    assert "https://example.org/access" not in paragraphs
+    assert "evidence E-" in paragraphs
     # The consolidation section states what it bought.
-    assert "Cross-Lens Candidate Consolidation" in rendered
-    assert "Verifier panels avoided" in rendered
+    assert "Cross-Lens Candidate Consolidation" in paragraphs
+    assert "Verifier panels avoided" in paragraphs
 
 
 def test_maximum_original_severity_sizes_the_shared_panel():

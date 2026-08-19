@@ -14,6 +14,7 @@ import io
 import itertools
 import re
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
@@ -1263,67 +1264,52 @@ _QC_OPS_SOURCE_LABELS: dict[str, str] = {
 
 
 def _qc_render_candidate_origins(document, origins: list[dict]) -> None:
-    """The 'Original lens claims' subsection for a multi-origin candidate."""
+    """The 'Original lens claims' subsection for a multi-origin candidate.
+
+    One line per origin. The canonical claim above already restates the
+    shared defect, so each origin contributes its identity, severity, title
+    and evidence references; the full submitted claim text, source lists and
+    per-origin operation payloads are retained verbatim in the JSON export.
+    """
     if len(origins) < 2:
         return
     _qc_heading(document, "Original Lens Claims", 3)
     document.add_paragraph(
         f"{len(origins)} independent lens claims were consolidated into this "
         "single candidate and adjudicated by one verifier panel, because one "
-        "fix would dispose of all of them. Each original claim is reproduced "
-        "below exactly as its lens submitted it — nothing was rewritten or "
-        "dropped, and each retains its own severity, citations and proposed "
-        "operations."
+        "fix would dispose of all of them. Every original claim is retained "
+        "verbatim in the run record (JSON export); each is identified below "
+        "with its own severity and evidence."
     )
     for index, origin in enumerate(origins, start=1):
-        _qc_heading(
-            document,
-            f"Origin {index}: {origin.get('lens_id') or 'Unknown lens'} | "
-            f"{xml_safe_upper(str(origin.get('severity') or 'not recorded'))}",
-            4,
-        )
-        _qc_add_label(
-            document, "Origin ID", origin.get("origin_id") or "Not recorded"
-        )
-        _qc_add_label(
-            document, "Title", origin.get("title") or "Not recorded"
-        )
-        _qc_add_label(
-            document, "Issue", origin.get("issue") or "Not recorded"
-        )
-        _qc_add_label(
-            document, "Rationale", origin.get("rationale") or "Not recorded"
-        )
-        _qc_add_label(
-            document,
-            "Element reference",
-            origin.get("element_id") or "Section-level claim",
-        )
-        _qc_add_label(
-            document, "Grounded", "Yes" if origin.get("grounded") else "No"
-        )
-        _qc_add_source_list(
-            document,
-            "Model-cited sources",
-            origin.get("source_urls"),
-            empty="No model-cited source URL was persisted for this claim.",
-        )
-        _qc_add_source_list(
-            document,
-            "Accepted sources",
-            origin.get("accepted_sources"),
-            empty="No source was recorded as accepted for this claim.",
-        )
+        severity = xml_safe_upper(str(origin.get("severity") or "not recorded"))
+        parts = [
+            f"{origin.get('lens_id') or 'Unknown lens'} ({severity}) — "
+            f"{origin.get('title') or 'Untitled claim'}"
+        ]
+        detail: list[str] = []
+        evidence = [
+            _qc_source_ref_text(document, value)
+            for value in _qc_list(
+                origin.get("accepted_sources") or origin.get("source_urls")
+            )
+        ]
+        deduped = list(dict.fromkeys(text for text in evidence if text))
+        if deduped:
+            detail.append(f"evidence {', '.join(deduped)}")
         ops = [
             item
             for item in _qc_list(origin.get("proposed_ops"))
             if isinstance(item, dict)
         ]
-        _qc_add_label(
-            document,
-            "Operations this lens proposed",
-            _qc_json(ops) if ops else "None proposed.",
-        )
+        if ops:
+            detail.append(f"proposed its own {len(ops)}-operation fix")
+        origin_id = str(origin.get("origin_id") or "").strip()
+        if origin_id:
+            detail.append(origin_id)
+        if detail:
+            parts.append(f" [{'; '.join(detail)}]")
+        _qc_add_label(document, f"Origin {index}", "".join(parts))
 
 
 def _qc_legacy_schema(document) -> bool:
@@ -1503,56 +1489,117 @@ def _qc_add_numbered_steps(document, items: list[tuple[str, str]]) -> None:
         p.add_run(xml_safe_text(detail))
 
 
-def _qc_add_source_list(
+def _qc_source_url(value: object) -> str:
+    """The URL string a source record carries, whatever its recorded shape."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        return str(
+            value.get("url")
+            or value.get("source_url")
+            or value.get("uri")
+            or ""
+        ).strip()
+    return ""
+
+
+def _qc_source_host(url: str) -> str:
+    try:
+        return urlsplit(url).netloc
+    except ValueError:
+        return ""
+
+
+def _qc_evidence_ids(document) -> dict[str, str]:
+    ids = getattr(document, "_qc_evidence_ids", None)
+    return ids if isinstance(ids, dict) else {}
+
+
+def _qc_source_ref_text(document, value: object) -> str:
+    """One source rendered as its Appendix B reference: ``E-004 (host)``.
+
+    Inline sections cite the evidence register instead of reprinting full
+    URLs — the reviewed production report printed each unique URL 5.2 times
+    on average (one 51 times) because every mention rendered the whole
+    string. A source the register somehow did not sweep falls back to the
+    raw URL so nothing is ever silently dropped.
+    """
+    url = _qc_source_url(value)
+    if not url:
+        return _qc_json(value) if isinstance(value, (dict, list)) else _qc_text(value)
+    evidence_id = _qc_evidence_ids(document).get(url)
+    if not evidence_id:
+        return url
+    host = _qc_source_host(url)
+    return f"{evidence_id} ({host})" if host else evidence_id
+
+
+def _qc_source_refs_line(
     document,
     label: str,
     sources: object,
     *,
-    empty: str = "No source record was persisted.",
+    empty: str | None = None,
 ) -> None:
+    """One label paragraph of Appendix B references; silent when empty.
+
+    An empty optional telemetry list is not a disclosure — the production
+    report carried 302 lines of "No X record was persisted" boilerplate.
+    Callers pass ``empty`` text only where absence is itself the fact worth
+    stating (e.g. a grounded finding with no accepted source).
+    """
     values = _qc_list(sources)
     if not values:
-        _qc_add_label(document, label, empty)
+        if empty:
+            _qc_add_label(document, label, empty)
         return
-    heading = document.add_paragraph()
-    heading.paragraph_format.space_after = Pt(2)
-    run = heading.add_run(f"{label}:")
-    _qc_set_run_font(run, color=_QC_DARK_BLUE, bold=True)
-    num_id = _qc_new_list_numbering(document, "bullet")
+    seen: set[str] = set()
+    parts: list[str] = []
     for value in values:
-        p = document.add_paragraph()
-        _qc_apply_numbering(p, num_id)
-        if isinstance(value, str):
-            source = value.strip()
-            _qc_add_hyperlink(p, source, source)
-            if source and not _qc_is_safe_http_url(source):
-                note = p.add_run(" (not linked: target failed HTTP(S) safety checks)")
-                _qc_set_run_font(note, color=_QC_MUTED, italic=True)
-        elif isinstance(value, dict):
-            url = str(
-                value.get("url")
-                or value.get("source_url")
-                or value.get("uri")
-                or ""
-            ).strip()
-            title = str(value.get("title") or "").strip()
-            if url:
-                if title:
-                    title_run = p.add_run(f"{title} - ")
-                    _qc_set_run_font(title_run, bold=True)
-                _qc_add_hyperlink(p, url, url)
-                remainder = {
-                    key: item
-                    for key, item in value.items()
-                    if key not in {"url", "source_url", "uri", "title"}
-                }
-                if remainder:
-                    detail = p.add_run(f" | {_qc_json(remainder)}")
-                    _qc_set_run_font(detail, color=_QC_MUTED)
-            else:
-                p.add_run(_qc_json(value))
-        else:
-            p.add_run(_qc_text(value))
+        text = _qc_source_ref_text(document, value)
+        if text and text not in seen:
+            seen.add(text)
+            parts.append(text)
+    _qc_add_label(document, label, "; ".join(parts))
+
+
+def _qc_extra_queries(primary: object, attempted: object) -> list[str]:
+    """Billed-attempt queries not already in the final accepted record."""
+    final = {str(value) for value in _qc_list(primary)}
+    extras: list[str] = []
+    for value in _qc_list(attempted):
+        text = str(value)
+        if text and text not in final and text not in extras:
+            extras.append(text)
+    return extras
+
+
+def _qc_extra_sources(primary: object, attempted: object) -> list[object]:
+    """Billed-attempt sources whose URL is absent from the final record."""
+    final = {_qc_source_url(value) for value in _qc_list(primary)}
+    extras: list[object] = []
+    seen: set[str] = set()
+    for value in _qc_list(attempted):
+        url = _qc_source_url(value)
+        if url and url not in final and url not in seen:
+            seen.add(url)
+            extras.append(value)
+    return extras
+
+
+def _qc_query_line(
+    document, label: str, queries: object, *, empty: str | None = None
+) -> None:
+    values = [str(value) for value in _qc_list(queries) if str(value)]
+    if not values:
+        if empty:
+            _qc_add_label(document, label, empty)
+        return
+    _qc_add_label(
+        document,
+        f"{label} ({len(values)})",
+        " · ".join(f'"{value}"' for value in values),
+    )
 
 
 def _qc_add_text_list(
@@ -1750,6 +1797,88 @@ def _render_qc_closing(document, qc_result: dict, *, compact: bool) -> None:
         "infrastructure-inconclusive; those candidates are not shown in this "
         "compact closing but remain in the full audit report."
     )
+
+
+def _qc_ordered_survivors(qc_result: dict) -> list[dict]:
+    """Surviving findings in body order: severity bands, then unranked."""
+    findings = [
+        item
+        for item in _qc_list(qc_result.get("findings"))
+        if isinstance(item, dict)
+    ]
+    ordered: list[dict] = []
+    for severity in _SEVERITY_ORDER:
+        ordered.extend(
+            item
+            for item in findings
+            if str(item.get("severity") or "").lower() == severity
+        )
+    ordered.extend(
+        item
+        for item in findings
+        if str(item.get("severity") or "").lower() not in _SEVERITY_ORDER
+    )
+    return ordered
+
+
+def _qc_substantively_refuted(qc_result: dict) -> list[dict]:
+    """Appendix A's population: refuted minus legacy incomplete-panel records."""
+    return [
+        item
+        for item in _qc_list(qc_result.get("refuted"))
+        if isinstance(item, dict)
+        and str(item.get("verification_outcome") or "").lower()
+        not in {"default_refuted", "inconclusive"}
+    ]
+
+
+def _qc_disputed_candidates(qc_result: dict) -> list[dict]:
+    return [
+        item
+        for item in _qc_list(qc_result.get("disputed"))
+        if isinstance(item, dict)
+    ]
+
+
+def _qc_inconclusive_candidates(qc_result: dict) -> list[dict]:
+    """Appendix A2's population, legacy default-refuted records included."""
+    candidates = [
+        item
+        for item in _qc_list(qc_result.get("inconclusive"))
+        if isinstance(item, dict)
+    ]
+    candidates.extend(
+        item
+        for item in _qc_list(qc_result.get("refuted"))
+        if isinstance(item, dict)
+        and str(item.get("verification_outcome") or "").lower()
+        in {"default_refuted", "inconclusive"}
+    )
+    return candidates
+
+
+def _qc_candidate_ordinals(qc_result: dict) -> dict[int, str]:
+    """id(finding dict) → the body ordinal (SF-001 / RF-001 / DP-001 / IC-001).
+
+    Keyed by object identity: ``build_qc_memo`` clones the whole result once
+    and every renderer reads that clone, so the same dicts flow everywhere.
+    Computed from the SAME partition helpers the register renderers use, so
+    the evidence register's "Referenced by" column can never disagree with
+    the ordinal printed in a candidate's own heading — the previous
+    positional labels numbered the raw collection order while the body
+    numbered severity-sorted, and the two drifted apart on any run whose
+    collections were not already severity-ordered.
+    """
+    ordinals: dict[int, str] = {}
+    for prefix, candidates in (
+        ("SF", _qc_ordered_survivors(qc_result)),
+        ("RF", _sorted_by_severity(_qc_substantively_refuted(qc_result))),
+        ("DP", _sorted_by_severity(_qc_disputed_candidates(qc_result))),
+        ("IC", _sorted_by_severity(_qc_inconclusive_candidates(qc_result))),
+    ):
+        for index, finding in enumerate(candidates, start=1):
+            ordinals[id(finding)] = f"{prefix}-{index:03d}"
+    return ordinals
 
 
 def _sorted_by_severity(findings: list[dict]) -> list[dict]:
@@ -2722,7 +2851,11 @@ def _qc_render_methodology(document, qc_result: dict) -> None:
         "Final QC. It does not expose hidden model reasoning. It records which "
         "reviewers ran, the checks and searches they reported, which evidence "
         "was retrieved or accepted, how candidate findings were challenged, "
-        "and what disposition was saved."
+        "and what disposition was saved. Dense execution telemetry — per-seat "
+        "billing counters, repeated verifier notes, raw operation JSON, and "
+        "full URL lists — is summarized here and cited by evidence number; "
+        "the machine-readable JSON export preserves every persisted record "
+        "in full and is the lossless companion to this document."
     )
     _qc_add_numbered_steps(
         document,
@@ -2799,27 +2932,6 @@ def _qc_render_usage_values(document, usage: object, *, label: str) -> None:
     )
 
 
-def _qc_render_record(
-    document,
-    record: dict,
-    *,
-    ignored_keys: set[str] | None = None,
-) -> None:
-    ignored = ignored_keys or set()
-    for key, value in record.items():
-        if key in ignored:
-            continue
-        label = xml_safe_title(str(key).replace("_", " ").strip())
-        if isinstance(value, list) and any(
-            token in key.lower() for token in ("source", "url")
-        ):
-            _qc_add_source_list(document, label, value)
-        elif isinstance(value, (dict, list)):
-            _qc_add_label(document, label, _qc_json(value))
-        else:
-            _qc_add_label(document, label, value)
-
-
 def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> None:
     lens_id = str(lens.get("lens_id") or f"lens-{index}")
     title = str(
@@ -2854,18 +2966,10 @@ def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> N
     contract_complete = status == "completed" and (legacy or bool(checks))
     _qc_add_label(
         document,
-        "Candidate findings reported by lens",
-        reported_count if reported_count is not None else "Not recorded",
-    )
-    _qc_add_label(
-        document,
-        "Grounded candidate count",
-        grounded_count if grounded_count is not None else "Not recorded",
-    )
-    _qc_add_label(
-        document,
-        "Candidate records retained in this report",
-        len(lens_findings),
+        "Candidates",
+        f"{_qc_text(reported_count, 'not recorded')} reported by lens · "
+        f"{_qc_text(grounded_count, 'not recorded')} grounded · "
+        f"{len(lens_findings)} record(s) retained in this report",
     )
     if contract_complete and int(reported_count or 0) == 0:
         _qc_add_callout(
@@ -2887,29 +2991,23 @@ def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> N
 
     _qc_add_label(document, "Review brief", lens.get("brief") or "Not recorded")
     _qc_add_label(document, "Lens summary", lens.get("summary") or "Not recorded")
-    _qc_add_text_list(
-        document,
-        "Search queries",
-        lens.get("search_queries"),
-        empty="No search-query record was persisted.",
+    _qc_query_line(document, "Search queries", lens.get("search_queries"))
+    _qc_source_refs_line(
+        document, "Retrieved sources", lens.get("retrieved_sources")
     )
-    _qc_add_source_list(
+    _qc_query_line(
         document,
-        "Retrieved sources",
-        lens.get("retrieved_sources"),
-        empty="No retrieved-source record was persisted.",
+        "Additional billed-attempt queries (not in the final record)",
+        _qc_extra_queries(
+            lens.get("search_queries"), lens.get("attempted_search_queries")
+        ),
     )
-    _qc_add_text_list(
+    _qc_source_refs_line(
         document,
-        "All billed-attempt search queries",
-        lens.get("attempted_search_queries"),
-        empty="No separate billed-attempt query record was persisted.",
-    )
-    _qc_add_source_list(
-        document,
-        "All billed-attempt sources",
-        lens.get("attempted_sources"),
-        empty="No separate billed-attempt source record was persisted.",
+        "Additional billed-attempt sources (not in the final record)",
+        _qc_extra_sources(
+            lens.get("retrieved_sources"), lens.get("attempted_sources")
+        ),
     )
     _qc_render_usage_values(document, lens.get("usage_totals"), label="Lens usage")
     _qc_add_label(
@@ -2955,37 +3053,44 @@ def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> N
                 "lens. This lens is incomplete even if its status says completed.",
                 accent=_QC_RISK,
             )
-    for check_index, check in enumerate(checks, start=1):
-        outcome = xml_safe_upper(str(check.get("outcome") or "not_recorded"))
-        check_name = str(check.get("check") or "Unnamed check")
-        p = document.add_paragraph()
-        p.paragraph_format.space_before = Pt(5)
-        p.paragraph_format.space_after = Pt(2)
-        p.paragraph_format.keep_with_next = True
-        run = p.add_run(f"Check {check_index} | {outcome} | {check_name}")
-        _qc_set_run_font(run, color=_QC_DARK_BLUE, bold=True)
-        _qc_add_label(document, "Notes", check.get("notes") or "No note recorded")
-        _qc_add_label(
-            document,
-            "Element IDs",
-            ", ".join(
+    if checks:
+        rows: list[list[object]] = []
+        for check_index, check in enumerate(checks, start=1):
+            outcome = xml_safe_upper(str(check.get("outcome") or "not_recorded"))
+            check_name = str(check.get("check") or "Unnamed check")
+            elements = ", ".join(
                 str(value) for value in _qc_list(check.get("element_ids"))
             )
-            or "None recorded",
+            if elements:
+                check_name = f"{check_name} — {elements}"
+            rows.append([check_index, outcome, check_name])
+        _qc_add_table(
+            document, ["#", "Outcome", "Reviewed check"], rows, [720, 1440, 7200]
         )
-        _qc_add_source_list(
-            document,
-            "Check source URLs",
-            check.get("source_urls"),
-            empty="No source URL recorded for this check.",
-        )
-        source_checks = [
-            entry
-            for entry in _qc_list(check.get("source_checks"))
-            if isinstance(entry, dict)
-        ]
-        if source_checks:
-            _qc_render_source_checks(document, source_checks)
+        for check_index, check in enumerate(checks, start=1):
+            notes = str(check.get("notes") or "").strip()
+            refs = [
+                _qc_source_ref_text(document, value)
+                for value in _qc_list(check.get("source_urls"))
+            ]
+            deduped = list(dict.fromkeys(text for text in refs if text))
+            if notes or deduped:
+                value = notes or "No note recorded"
+                if deduped:
+                    value = f"{value} [sources: {', '.join(deduped)}]"
+                _qc_add_label(document, f"Check {check_index}", value)
+            for record in _qc_list(check.get("source_checks")):
+                if not isinstance(record, dict) or "accepted" not in record:
+                    continue
+                if record.get("accepted"):
+                    continue
+                _qc_add_label(
+                    document,
+                    f"Check {check_index} source not accepted",
+                    f"{_qc_source_ref_text(document, record)} — "
+                    f"{record.get('reason') or 'no reason recorded'}",
+                    color=_QC_RISK,
+                )
 
 
 def _qc_render_lenses(document, qc_result: dict) -> None:
@@ -3060,135 +3165,224 @@ def _qc_vote_counts(verdicts: list[dict]) -> tuple[int, int, int, int]:
     return uphold, refute, failed, len(verdicts)
 
 
-def _qc_render_verdict(document, verdict: dict, index: int) -> None:
+def _qc_seat_label(verdict: dict, index: int) -> object:
     reviewer_index = verdict.get("reviewer_index")
-    label = reviewer_index if reviewer_index not in (None, "", 0) else index
-    status = xml_safe_upper(str(verdict.get("status") or "completed"))
-    _qc_heading(document, f"Verifier {label}: {status}", 3)
-    if "upholds" in verdict:
-        _qc_add_label(
-            document,
-            "Vote",
-            "UPHOLD" if verdict.get("upholds") is True else "REFUTE",
-        )
-    else:
-        _qc_add_label(document, "Vote", "Not recorded")
-    _qc_add_label(
-        document,
-        "Revised severity",
-        verdict.get("revised_severity") or "No revision recorded",
-    )
-    _qc_add_label(document, "Verdict note", verdict.get("note") or "Not recorded")
-    if "ops_adequate" in verdict:
-        adequate = verdict.get("ops_adequate") is True
-        _qc_add_label(
-            document,
-            "Proposed fix adequate",
-            "APPROVED" if adequate else "NOT APPROVED",
-            color=_QC_POSITIVE if adequate else _QC_RISK,
-        )
-    else:
-        _qc_add_label(
-            document,
-            "Proposed fix adequate",
-            "Not recorded by this historical report",
-            color=_QC_MUTED,
-        )
-    _qc_add_label(
-        document,
-        "Proposed-fix note",
-        verdict.get("ops_note") or "Not recorded",
-    )
-    if verdict.get("error"):
-        _qc_add_callout(
-            document,
-            "Verifier error",
-            str(verdict.get("error")),
-            accent=_QC_RISK,
-        )
-    _qc_add_text_list(
-        document,
-        "Verifier search queries",
-        verdict.get("search_queries"),
-        empty="No verifier search-query record was persisted.",
-    )
-    _qc_add_source_list(
-        document,
-        "Verifier retrieved sources",
-        verdict.get("retrieved_sources"),
-        empty="No verifier retrieved-source record was persisted.",
-    )
-    _qc_add_text_list(
-        document,
-        "All billed-attempt verifier queries",
-        verdict.get("attempted_search_queries"),
-        empty="No separate billed-attempt verifier-query record was persisted.",
-    )
-    _qc_add_source_list(
-        document,
-        "All billed-attempt verifier sources",
-        verdict.get("attempted_sources"),
-        empty="No separate billed-attempt verifier-source record was persisted.",
-    )
-    _qc_render_usage_values(
-        document, verdict.get("usage_totals"), label="Verifier usage"
-    )
-    _qc_add_label(
-        document,
-        "Estimated verifier cost (USD)",
-        verdict.get("estimated_cost_usd", "Not recorded"),
-    )
-    legacy = _qc_legacy_schema(document)
-    request_value = (
-        "Not recorded"
-        if legacy
-        else
-        verdict.get("api_request_count")
-        if "api_request_count" in verdict
-        else verdict.get("request_count", "Not recorded")
-    )
-    response_value = (
-        "Not recorded"
-        if legacy
-        else
-        verdict.get("model_response_count")
-        if "model_response_count" in verdict
-        else verdict.get("response_count", "Not recorded")
-    )
-    _qc_add_label(document, "Client API requests (streaming calls, including retries and pause_turn continuations)", request_value)
-    _qc_add_label(document, "Final model responses received", response_value)
+    return reviewer_index if reviewer_index not in (None, "", 0) else index
 
 
-def _qc_render_source_checks(document, checks: object) -> None:
-    records = [
-        item for item in _qc_list(checks) if isinstance(item, dict)
+def _qc_render_panel(
+    document, verdicts: list[dict], *, candidate_kind: str
+) -> None:
+    """One seat table plus per-side representative notes.
+
+    A unanimous panel's three verdict notes are near-verbatim restatements
+    of one another, so the table carries every seat's vote/severity/fix
+    verdict while prose is printed once per vote side — the first completed
+    seat of each side speaks for it. A disputed candidate is the exception:
+    the disagreement IS the content, so every completed seat's note prints.
+    Failed or cancelled seats always surface loudly with their error, and a
+    refuting seat's citation evidence always prints with its validation
+    result. Per-seat billing, telemetry lists, and the remaining notes live
+    in the JSON export.
+    """
+    rows: list[list[object]] = []
+    for index, verdict in enumerate(verdicts, start=1):
+        status = xml_safe_upper(str(verdict.get("status") or "completed"))
+        if "upholds" in verdict:
+            vote = "UPHOLD" if verdict.get("upholds") is True else "REFUTE"
+        else:
+            vote = "—"
+        severity = verdict.get("revised_severity") or "—"
+        if "ops_adequate" in verdict:
+            fix = (
+                "APPROVED"
+                if verdict.get("ops_adequate") is True
+                else "NOT APPROVED"
+            )
+        else:
+            fix = "—"
+        rows.append(
+            [f"Seat {_qc_seat_label(verdict, index)}", status, vote, severity, fix]
+        )
+    _qc_add_table(
+        document,
+        ["Seat", "Status", "Vote", "Revised severity", "Fix adequate"],
+        rows,
+        [1440, 1800, 1440, 2340, 2340],
+    )
+
+    completed = [
+        (index, verdict)
+        for index, verdict in enumerate(verdicts, start=1)
+        if str(verdict.get("status") or "completed").lower() == "completed"
     ]
-    if not records:
-        _qc_add_label(document, "Source-check records", "None persisted")
-        return
-    for index, record in enumerate(records, start=1):
-        url = str(
-            record.get("url") or record.get("source_url") or ""
-        ).strip()
-        p = document.add_paragraph()
-        p.paragraph_format.space_before = Pt(4)
-        p.paragraph_format.space_after = Pt(2)
-        run = p.add_run(f"Source check {index}")
-        _qc_set_run_font(run, color=_QC_DARK_BLUE, bold=True)
-        if url:
-            p.add_run(" | ")
-            _qc_add_hyperlink(p, url, url)
-        _qc_render_record(
+    upholding = [item for item in completed if item[1].get("upholds") is True]
+    refuting = [item for item in completed if item[1].get("upholds") is False]
+
+    def note_line(label: str, index: int, verdict: dict, key: str) -> None:
+        text = str(verdict.get(key) or "").strip()
+        if text:
+            _qc_add_label(
+                document,
+                f"{label} (seat {_qc_seat_label(verdict, index)})",
+                text,
+            )
+
+    if candidate_kind == "disputed":
+        for index, verdict in completed:
+            side = "upholding" if verdict.get("upholds") is True else "refuting"
+            note_line(f"Verdict note, {side}", index, verdict, "note")
+    else:
+        for side_label, side in (("upholding", upholding), ("refuting", refuting)):
+            if not side:
+                continue
+            index, verdict = side[0]
+            label = (
+                f"Verdict note, {side_label}"
+                if len(side) == 1
+                else f"Representative verdict note for {len(side)} "
+                f"{side_label} seats"
+            )
+            note_line(label, index, verdict, "note")
+    for side in (upholding, refuting):
+        with_fix_note = [
+            item for item in side if str(item[1].get("ops_note") or "").strip()
+        ]
+        if with_fix_note:
+            index, verdict = with_fix_note[0]
+            note_line("Fix review note", index, verdict, "ops_note")
+
+    for index, verdict in refuting:
+        evidence = [
+            item
+            for item in _qc_list(verdict.get("refutation_evidence"))
+            if isinstance(item, dict)
+        ]
+        if not evidence:
+            continue
+        parts: list[str] = []
+        for item in evidence:
+            if str(item.get("kind") or "") == "document_ref":
+                claim = f"document ref {item.get('reference') or '?'}"
+            else:
+                claim = _qc_source_ref_text(document, item.get("url"))
+            if item.get("validated") is True:
+                parts.append(f"{claim} — validated")
+            else:
+                reason = str(item.get("reason") or "").strip()
+                parts.append(
+                    f"{claim} — NOT validated"
+                    + (f" ({reason})" if reason else "")
+                )
+        _qc_add_label(
             document,
-            record,
-            ignored_keys={"url", "source_url"},
+            f"Refutation evidence (seat {_qc_seat_label(verdict, index)})",
+            "; ".join(parts),
         )
+
+    for index, verdict in enumerate(verdicts, start=1):
+        status = str(verdict.get("status") or "completed").lower()
+        if status != "completed":
+            _qc_add_callout(
+                document,
+                f"Verifier seat {_qc_seat_label(verdict, index)} "
+                f"{xml_safe_upper(status)}",
+                str(verdict.get("error") or "No error text was persisted."),
+                accent=_QC_RISK,
+            )
+
+    queries: list[str] = []
+    sources: list[object] = []
+    extra_queries: list[str] = []
+    extra_sources: list[object] = []
+    for _, verdict in completed:
+        queries.extend(
+            str(value) for value in _qc_list(verdict.get("search_queries"))
+        )
+        sources.extend(_qc_list(verdict.get("retrieved_sources")))
+        extra_queries.extend(
+            _qc_extra_queries(
+                verdict.get("search_queries"),
+                verdict.get("attempted_search_queries"),
+            )
+        )
+        extra_sources.extend(
+            _qc_extra_sources(
+                verdict.get("retrieved_sources"),
+                verdict.get("attempted_sources"),
+            )
+        )
+    _qc_query_line(
+        document, "Panel search queries", list(dict.fromkeys(queries))
+    )
+    _qc_source_refs_line(document, "Panel retrieved sources", sources)
+    _qc_query_line(
+        document,
+        "Additional billed-attempt panel queries",
+        list(dict.fromkeys(extra_queries)),
+    )
+    _qc_source_refs_line(
+        document, "Additional billed-attempt panel sources", extra_sources
+    )
+
+
+def _qc_operation_lines(operation: dict) -> tuple[str, str]:
+    """One operation as a faithful header plus its text payload.
+
+    Every persisted key renders — action and target on the header, the
+    ``text`` payload verbatim on its own line, everything else as
+    ``key: value`` pairs — so the content is exact without the JSON
+    envelope's braces and escaping. The raw operation dict itself stays in
+    the JSON export, which Apply revalidates against the live document.
+    """
+    action = str(operation.get("action") or "operation")
+    target = str(operation.get("target_id") or "").strip()
+    header = f"{action} on {target}" if target else action
+    details: list[str] = []
+    for key in sorted(operation):
+        if key in {"action", "target_id", "text"}:
+            continue
+        value = operation[key]
+        rendered = (
+            _qc_json(value) if isinstance(value, (dict, list)) else _qc_text(value)
+        )
+        details.append(f"{key}: {rendered}")
+    if details:
+        header = f"{header} ({'; '.join(details)})"
+    return header, str(operation.get("text") or "")
 
 
 def _qc_render_ops(
     document, finding: dict, *, candidate_kind: str = "surviving"
 ) -> None:
     _qc_heading(document, "Proposed Operations and Validation", 3)
+    has_operations = any(
+        isinstance(item, dict)
+        for item in _qc_list(finding.get("proposed_ops"))
+    )
+    adequacy_votes = [
+        verdict
+        for verdict in _qc_list(finding.get("verdicts"))
+        if isinstance(verdict, dict)
+        and str(verdict.get("status") or "completed").lower() == "completed"
+        and "ops_adequate" in verdict
+    ]
+    if candidate_kind == "surviving" and adequacy_votes and has_operations:
+        approved = sum(
+            1 for verdict in adequacy_votes if verdict.get("ops_adequate") is True
+        )
+        unanimous = approved == len(adequacy_votes)
+        _qc_add_label(
+            document,
+            "Proposed fix adequate",
+            (
+                f"APPROVED ({approved} of {len(adequacy_votes)} completed seats)"
+                if unanimous
+                else f"NOT APPROVED ({approved} of {len(adequacy_votes)} "
+                "completed seats approved)"
+            ),
+            color=_QC_POSITIVE if unanimous else _QC_RISK,
+        )
     ops_source = str(finding.get("ops_source") or "").strip().lower()
     if ops_source and ops_source != "original":
         # Only says something a single-lens candidate does not already say.
@@ -3261,13 +3455,26 @@ def _qc_render_ops(
             validation = "Not applicable - no operation proposed"
         _qc_add_label(document, "Operation validation", validation)
         return
-    for index, operation in enumerate(operations, start=1):
-        p = document.add_paragraph()
-        p.paragraph_format.keep_with_next = True
-        run = p.add_run(f"Operation {index} of {len(operations)}")
-        _qc_set_run_font(run, color=_QC_DARK_BLUE, bold=True)
-        op = document.add_paragraph(style="QC Operation")
-        op.add_run(_qc_json(operation))
+    if candidate_kind in {"refuted", "inconclusive"}:
+        _qc_add_label(
+            document,
+            "Proposed operations",
+            f"{len(operations)} operation(s) recorded. The candidate is not "
+            "actionable, so the payload is not itemized here; the exact "
+            "operations are preserved in the JSON export.",
+        )
+    else:
+        for index, operation in enumerate(operations, start=1):
+            header, text = _qc_operation_lines(operation)
+            p = document.add_paragraph()
+            p.paragraph_format.keep_with_next = True
+            run = p.add_run(
+                f"Operation {index} of {len(operations)} — {header}"
+            )
+            _qc_set_run_font(run, color=_QC_DARK_BLUE, bold=True)
+            if text:
+                op = document.add_paragraph(style="QC Operation")
+                op.add_run(text)
     valid = finding.get("ops_valid")
     if candidate_kind != "surviving":
         kind_label = {
@@ -3359,24 +3566,26 @@ def _qc_render_disposition(
             "Current disposition",
             xml_safe_upper(str(finding.get("status") or "open")),
         )
-    _qc_add_label(
-        document,
-        "Dismissal reason",
-        finding.get("dismiss_reason") or "None recorded",
-    )
+    if finding.get("dismiss_reason"):
+        _qc_add_label(
+            document, "Dismissal reason", finding.get("dismiss_reason")
+        )
     events = [
         item
         for item in _qc_list(finding.get("disposition_events"))
         if isinstance(item, dict)
     ]
-    if not events:
-        document.add_paragraph(
-            "No disposition-event history was persisted. The current status above is "
-            "the only saved disposition state for this finding."
-        )
-        return
     for index, event in enumerate(events, start=1):
-        _qc_add_label(document, f"Disposition event {index}", _qc_json(event))
+        parts = [
+            f"{key}: {_qc_json(value) if isinstance(value, (dict, list)) else _qc_text(value)}"
+            for key, value in event.items()
+            if value not in (None, "", [], {})
+        ]
+        _qc_add_label(
+            document,
+            f"Disposition event {index}",
+            "; ".join(parts) or "Empty event record",
+        )
 
 
 def _render_memo_finding(
@@ -3418,39 +3627,53 @@ def _render_memo_finding(
             "Originating lens",
             finding.get("lens_id") or "Not recorded",
         )
-    _qc_add_label(
-        document,
-        "Element reference",
-        finding.get("element_id") or "Section-level finding",
-    )
-    _qc_add_label(
-        document,
-        "Reviewed reference",
-        (
-            "Not recorded"
-            if legacy
-            else finding.get("reviewed_ref") or "Not recorded"
-        ),
-    )
-    if not legacy and "element_resolved" in finding:
-        resolved = bool(finding.get("element_resolved"))
-        _qc_add_label(
-            document,
-            "Reviewed anchor resolved",
-            "Yes" if resolved else "No",
-            color=_QC_POSITIVE if resolved else _QC_RISK,
-        )
-        if not resolved:
-            _qc_add_callout(
-                document,
-                "Unresolved reviewed anchor",
-                "The model-supplied element reference did not resolve against the "
-                "reviewed input. Treat the finding as section-level unless a human "
-                "reviewer identifies the intended provision from the issue text.",
-                accent=_QC_RISK,
-            )
+    location_parts = [finding.get("element_id") or "Section-level finding"]
+    if legacy:
+        location_parts.append("legacy record; reviewed reference not recorded")
     else:
-        _qc_add_label(document, "Reviewed anchor resolved", "Not recorded")
+        if finding.get("reviewed_ref"):
+            location_parts.append(f"reviewed ref {finding.get('reviewed_ref')}")
+        if "element_resolved" in finding:
+            location_parts.append(
+                "anchor resolved"
+                if bool(finding.get("element_resolved"))
+                else "ANCHOR NOT RESOLVED"
+            )
+        else:
+            location_parts.append("anchor resolution not recorded")
+    unresolved = (
+        not legacy
+        and "element_resolved" in finding
+        and not bool(finding.get("element_resolved"))
+    )
+    _qc_add_label(
+        document,
+        "Location",
+        " · ".join(str(part) for part in location_parts),
+        color=_QC_RISK if unresolved else None,
+    )
+    if unresolved:
+        _qc_add_callout(
+            document,
+            "Unresolved reviewed anchor",
+            "The model-supplied element reference did not resolve against the "
+            "reviewed input. Treat the finding as section-level unless a human "
+            "reviewer identifies the intended provision from the issue text.",
+            accent=_QC_RISK,
+        )
+    final_severity = str(finding.get("severity") or "not recorded")
+    if legacy:
+        severity_value = f"{final_severity} (original not separately recorded)"
+    else:
+        original = str(
+            finding.get("original_severity") or finding.get("severity") or ""
+        )
+        severity_value = (
+            final_severity
+            if not original or original == final_severity
+            else f"{final_severity} (submitted as {original})"
+        )
+    _qc_add_label(document, "Severity", severity_value)
     _qc_add_label(
         document,
         "Exact reviewed text",
@@ -3460,45 +3683,69 @@ def _render_memo_finding(
             else finding.get("reviewed_text") or "Not recorded"
         ),
     )
-    _qc_add_label(
-        document,
-        "Original severity",
-        (
-            f"Not separately recorded (current: {finding.get('severity') or 'unknown'})"
-            if legacy
-            else finding.get("original_severity")
-            or finding.get("severity")
-            or "Not recorded"
-        ),
-    )
-    _qc_add_label(
-        document, "Final severity", finding.get("severity") or "Not recorded"
-    )
     _qc_add_label(document, "Issue", finding.get("issue") or "Not recorded")
     _qc_add_label(
         document, "Rationale", finding.get("rationale") or "Not recorded"
     )
+    if candidate_kind == "disputed":
+        reason = str(finding.get("dispute_reason") or "")
+        if reason == "insufficient_refutation_evidence":
+            _qc_add_label(
+                document,
+                "Why disputed",
+                "A critical or high finding was refuted by the panel majority, "
+                "but no refuting reviewer cited evidence that could be "
+                "validated against what it actually retrieved or against the "
+                "reviewed document. Under-evidenced refutations of severe "
+                "findings are escalated, not accepted.",
+            )
+        elif reason:
+            _qc_add_label(
+                document,
+                "Why disputed",
+                "The verifier panel completed but split; no unanimous uphold "
+                "and no majority refutation.",
+            )
     _qc_render_candidate_origins(document, origins)
 
     _qc_heading(document, "Evidence and Grounding", 3)
-    _qc_add_label(
-        document,
-        "Grounded",
-        "Yes" if finding.get("grounded") else "No",
-    )
-    _qc_add_source_list(
+    grounded = bool(finding.get("grounded"))
+    _qc_add_label(document, "Grounded", "Yes" if grounded else "No")
+    _qc_source_refs_line(
         document,
         "Accepted sources",
         finding.get("accepted_sources"),
-        empty="No source was recorded as accepted for this finding.",
+        empty=(
+            "No source was recorded as accepted for this finding."
+            if grounded
+            else None
+        ),
     )
-    _qc_add_source_list(
+    accepted_urls = {
+        _qc_source_url(value)
+        for value in _qc_list(finding.get("accepted_sources"))
+    }
+    _qc_source_refs_line(
         document,
-        "Model-cited sources",
-        finding.get("source_urls"),
-        empty="No model-cited source URL was persisted.",
+        "Cited but not accepted",
+        [
+            value
+            for value in _qc_list(finding.get("source_urls"))
+            if _qc_source_url(value) not in accepted_urls
+        ],
     )
-    _qc_render_source_checks(document, finding.get("source_checks"))
+    for record in _qc_list(finding.get("source_checks")):
+        if not isinstance(record, dict) or "accepted" not in record:
+            continue
+        if record.get("accepted"):
+            continue
+        _qc_add_label(
+            document,
+            "Source not accepted",
+            f"{_qc_source_ref_text(document, record)} — "
+            f"{record.get('reason') or 'no reason recorded'}",
+            color=_QC_RISK,
+        )
 
     _qc_heading(document, "Verification Record", 3)
     persisted_outcome = str(finding.get("verification_outcome") or "").strip()
@@ -3525,13 +3772,10 @@ def _render_memo_finding(
     panel_size = finding.get("verification_panel_size")
     _qc_add_label(
         document,
-        "Required panel size",
-        panel_size if panel_size not in (None, "", 0) else "Not recorded",
-    )
-    _qc_add_label(
-        document,
-        "Required uphold threshold",
-        threshold if threshold not in (None, "", 0) else "Not recorded",
+        "Required panel",
+        f"{panel_size if panel_size not in (None, '', 0) else 'Not recorded'} "
+        "seat(s) · uphold threshold "
+        f"{threshold if threshold not in (None, '', 0) else 'not recorded'}",
     )
     verdicts = [
         item
@@ -3550,8 +3794,8 @@ def _render_memo_finding(
             "No individual verifier records were persisted. This is a legacy audit "
             "limitation; collection membership records the outcome but not each vote."
         )
-    for index, verdict in enumerate(verdicts, start=1):
-        _qc_render_verdict(document, verdict, index)
+    else:
+        _qc_render_panel(document, verdicts, candidate_kind=candidate_kind)
 
     _qc_render_ops(document, finding, candidate_kind=candidate_kind)
     _qc_render_disposition(document, finding, candidate_kind=candidate_kind)
@@ -3716,33 +3960,14 @@ def _qc_render_surviving_findings(document, qc_result: dict) -> None:
         )
         return
     document.add_paragraph(
-        "Each surviving finding is reproduced with its identity, full issue and "
-        "rationale, evidence status, source checks, verifier records, proposed "
-        "operations, validation result, and complete saved disposition history."
+        "Each surviving finding appears with its identity, full issue and "
+        "rationale, evidence references (resolved in Appendix B), every "
+        "verifier seat's vote with representative notes, the proposed fix, "
+        "validation result, and saved disposition. The complete seat-by-seat "
+        "record — every note, telemetry list, and per-seat billing counter — "
+        "is preserved in the JSON export."
     )
-    counter = 0
-    for severity in _SEVERITY_ORDER:
-        band = [
-            item
-            for item in findings
-            if str(item.get("severity") or "").lower() == severity
-        ]
-        for finding in band:
-            counter += 1
-            _render_memo_finding(
-                document,
-                finding,
-                ordinal=f"SF-{counter:03d}",
-                candidate_kind="surviving",
-                origins=qc_origins_for(qc_result, finding),
-            )
-    unranked = [
-        item
-        for item in findings
-        if str(item.get("severity") or "").lower() not in _SEVERITY_ORDER
-    ]
-    for finding in unranked:
-        counter += 1
+    for counter, finding in enumerate(_qc_ordered_survivors(qc_result), start=1):
         _render_memo_finding(
             document,
             finding,
@@ -3755,13 +3980,7 @@ def _qc_render_surviving_findings(document, qc_result: dict) -> None:
 def _qc_render_refuted_appendix(document, qc_result: dict) -> None:
     document.add_page_break()
     _qc_heading(document, "Appendix A: Complete Refuted Candidate Register", 1)
-    refuted = [
-        item
-        for item in _qc_list(qc_result.get("refuted"))
-        if isinstance(item, dict)
-        and str(item.get("verification_outcome") or "").lower()
-        not in {"default_refuted", "inconclusive"}
-    ]
+    refuted = _qc_substantively_refuted(qc_result)
     if not refuted:
         document.add_paragraph(
             "No refuted candidate finding was persisted for this run."
@@ -3769,9 +3988,10 @@ def _qc_render_refuted_appendix(document, qc_result: dict) -> None:
         return
     document.add_paragraph(
         "These candidates were raised during lens review but did not meet the saved "
-        "verification outcome. They are retained in full for transparency and are "
-        "not surviving QC findings. Proposed operations shown here must not be "
-        "applied solely because they appear in this appendix."
+        "verification outcome. Each is retained for transparency — claim, "
+        "evidence, panel votes, and refutation basis — and is not a surviving "
+        "QC finding. Their proposed operations are not actionable and are "
+        "preserved in the JSON export rather than itemized here."
     )
     for index, finding in enumerate(_sorted_by_severity(refuted), start=1):
         _render_memo_finding(
@@ -3788,11 +4008,7 @@ def _qc_render_disputed_appendix(document, qc_result: dict) -> None:
     _qc_heading(
         document, "Appendix A1: Disputed Candidate Register (Human Review)", 1
     )
-    disputed = [
-        item
-        for item in _qc_list(qc_result.get("disputed"))
-        if isinstance(item, dict)
-    ]
+    disputed = _qc_disputed_candidates(qc_result)
     if not disputed:
         document.add_paragraph(
             "No disputed candidate was persisted for this run."
@@ -3807,24 +4023,6 @@ def _qc_render_disputed_appendix(document, qc_result: dict) -> None:
         "not validated and must not be applied from this record."
     )
     for index, finding in enumerate(_sorted_by_severity(disputed), start=1):
-        reason = str(finding.get("dispute_reason") or "")
-        if reason == "insufficient_refutation_evidence":
-            _qc_add_label(
-                document,
-                "Why disputed",
-                "A critical or high finding was refuted by the panel majority, "
-                "but no refuting reviewer cited evidence that could be "
-                "validated against what it actually retrieved or against the "
-                "reviewed document. Under-evidenced refutations of severe "
-                "findings are escalated, not accepted.",
-            )
-        elif reason:
-            _qc_add_label(
-                document,
-                "Why disputed",
-                "The verifier panel completed but split; no unanimous uphold "
-                "and no majority refutation.",
-            )
         _render_memo_finding(
             document,
             finding,
@@ -3841,21 +4039,9 @@ def _qc_render_inconclusive_appendix(document, qc_result: dict) -> None:
         "Appendix A2: Infrastructure-Inconclusive Candidate Register",
         1,
     )
-    candidates = [
-        item
-        for item in _qc_list(qc_result.get("inconclusive"))
-        if isinstance(item, dict)
-    ]
     # Legacy v2 records placed incomplete panels in ``refuted`` with a
-    # default_refuted outcome. Surface those honestly even before a rerun.
-    legacy_candidates = [
-        item
-        for item in _qc_list(qc_result.get("refuted"))
-        if isinstance(item, dict)
-        and str(item.get("verification_outcome") or "").lower()
-        in {"default_refuted", "inconclusive"}
-    ]
-    candidates.extend(legacy_candidates)
+    # default_refuted outcome; the shared partition surfaces those honestly.
+    candidates = _qc_inconclusive_candidates(qc_result)
     if not candidates:
         document.add_paragraph(
             "No infrastructure-inconclusive candidate was persisted for this run."
@@ -3863,10 +4049,11 @@ def _qc_render_inconclusive_appendix(document, qc_result: dict) -> None:
         return
     document.add_paragraph(
         "These candidates did not receive every required completed verifier seat. "
-        "They are neither surviving findings nor substantive refutations. Failed "
-        "and cancelled seat records, evidence, and proposed operations are retained "
-        "below so a reviewer can trace paid work and decide whether to rerun. Their "
-        "operations were not validated and must not be applied from this record."
+        "They are neither surviving findings nor substantive refutations. Each "
+        "seat's outcome and error is shown below so a reviewer can trace paid "
+        "work and decide whether to rerun; full seat records and proposed "
+        "operations ride the JSON export. Their operations were not validated "
+        "and must not be applied from this record."
     )
     for index, finding in enumerate(_sorted_by_severity(candidates), start=1):
         _render_memo_finding(
@@ -3905,8 +4092,11 @@ def _qc_source_strings(value: object) -> list[str]:
     return []
 
 
-def _qc_evidence_register(qc_result: dict) -> list[dict[str, object]]:
+def _qc_evidence_register(
+    qc_result: dict, ordinals: dict[int, str] | None = None
+) -> list[dict[str, object]]:
     entries: dict[str, dict[str, object]] = {}
+    ordinal_map = ordinals or {}
 
     def add(value: object, classification: str, reference: str) -> None:
         for source in _qc_source_strings(value):
@@ -3952,6 +4142,7 @@ def _qc_evidence_register(qc_result: dict) -> list[dict[str, object]]:
     for collection, prefix in (
         ("findings", "SF"),
         ("refuted", "RF"),
+        ("disputed", "DP"),
         ("inconclusive", "IC"),
     ):
         for index, finding in enumerate(
@@ -3959,8 +4150,9 @@ def _qc_evidence_register(qc_result: dict) -> list[dict[str, object]]:
         ):
             if not isinstance(finding, dict):
                 continue
+            ordinal = ordinal_map.get(id(finding)) or f"{prefix}-{index:03d}"
             reference = (
-                f"{prefix}-{index:03d} {finding.get('finding_id') or ''}".strip()
+                f"{ordinal} {finding.get('finding_id') or ''}".strip()
             )
             add(finding.get("accepted_sources"), "accepted", reference)
             add(finding.get("source_urls"), "model cited", reference)
@@ -3979,8 +4171,38 @@ def _qc_evidence_register(qc_result: dict) -> list[dict[str, object]]:
                         "verifier billed attempt",
                         f"{reference} verifier {verdict_index}",
                     )
+                    # A refuting seat may cite a URL it never retrieved —
+                    # the retained-and-marked case the v4 evidence gate
+                    # exists for. Sweep those citations too, so the inline
+                    # "Refutation evidence" line resolves to an E-number
+                    # and the invalid citation is auditable from Appendix B
+                    # instead of existing only as a raw inline string.
+                    add(
+                        verdict.get("refutation_evidence"),
+                        "refutation citation",
+                        f"{reference} verifier {verdict_index}",
+                    )
     add(qc_result.get("input_manifest"), "input manifest", "Run input")
     return list(entries.values())
+
+
+def _qc_memo_evidence_entries(document, qc_result: dict) -> list[dict[str, object]]:
+    """The one evidence sweep per memo build, memoized on the document."""
+    entries = getattr(document, "_qc_evidence_entries", None)
+    if entries is None:
+        entries = _qc_evidence_register(
+            qc_result, getattr(document, "_qc_ordinals", None)
+        )
+        setattr(document, "_qc_evidence_entries", entries)
+        setattr(
+            document,
+            "_qc_evidence_ids",
+            {
+                str(entry["source"]): f"E-{index:03d}"
+                for index, entry in enumerate(entries, start=1)
+            },
+        )
+    return entries
 
 
 def _qc_render_evidence_register(document, qc_result: dict) -> None:
@@ -3988,11 +4210,14 @@ def _qc_render_evidence_register(document, qc_result: dict) -> None:
     _qc_heading(document, "Appendix B: Evidence Register", 1)
     document.add_paragraph(
         "This register deduplicates URLs from the input manifest, lens retrievals, "
-        "reviewed checks, findings, source checks, and verifier retrievals. The class "
-        "column preserves the narrowest recorded claim: retrieved or cited is not the "
-        "same as accepted. Safe HTTP(S) targets are clickable."
+        "reviewed checks, every candidate collection (disputed included), source "
+        "checks, verifier retrievals, and refutation citations. Sections above "
+        "cite these E-numbers instead of reprinting URLs at every mention. The "
+        "class column preserves the narrowest recorded claim: retrieved or cited "
+        "is not the same as accepted, and a refutation citation is a seat's "
+        "claim, not proof of retrieval. Safe HTTP(S) targets are clickable."
     )
-    entries = _qc_evidence_register(qc_result)
+    entries = _qc_memo_evidence_entries(document, qc_result)
     if not entries:
         document.add_paragraph(
             "No external source URL was persisted. Findings may be based on internal "
@@ -4109,7 +4334,7 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
             ],
             [
                 "Unique evidence records",
-                len(_qc_evidence_register(qc_result)),
+                len(_qc_memo_evidence_entries(document, qc_result)),
                 "Deduplicated structured source fields",
             ],
         ]
@@ -4129,8 +4354,9 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
     p = document.add_paragraph(style="QC Table Citation")
     p.add_run(
         "Cost is an application estimate based on persisted usage and configured "
-        "pricing. The provider invoice is authoritative. Per-lens and per-verifier "
-        "counters remain in their detailed records above."
+        "pricing. The provider invoice is authoritative. Per-lens counters remain "
+        "in the lens records above; per-verifier-seat counters are preserved in "
+        "the JSON export."
     )
     note = document.add_paragraph(style="QC Table Citation")
     note.add_run(QC_REQUEST_METHODOLOGY_NOTE)
@@ -4397,6 +4623,12 @@ def build_qc_memo(qc_result: dict, section: SpecSection, *, stale: bool) -> byte
     except (TypeError, ValueError):
         schema_version = 1
     setattr(document, "_qc_schema_version", schema_version)
+    # One ordinal assignment and one evidence sweep feed the whole build:
+    # candidate headings, the register's "Referenced by" column, and every
+    # inline E-number citation come from the same two maps, so they cannot
+    # disagree with each other.
+    setattr(document, "_qc_ordinals", _qc_candidate_ordinals(qc_result))
+    _qc_memo_evidence_entries(document, qc_result)
     _style_base(document)
     _qc_configure_styles(document)
     _qc_setup_page(document, section)

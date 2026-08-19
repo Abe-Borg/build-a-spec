@@ -939,3 +939,24 @@ def test_part_four_text_heading_lands_under_part_three_loudly(tmp_path):
     part3 = result.section.parts[2]
     assert part3.articles, "PART 4 content must land under PART 3"
     assert any("PART 4" in w and "PART 3" in w for w in result.warnings)
+
+
+def test_warnings_cite_a_findable_reference_not_just_a_line_ordinal(tmp_path):
+    """"Line N" counts body children — blank paragraphs and table rows
+    included — which corresponds to nothing a user can locate in Word or in
+    the panel. Element-specific warnings now also carry the display ref the
+    panel and export schedules use, plus the stable id."""
+    lines = [
+        "PART 1 - GENERAL",
+        "Orphan text before any article.",
+        "1.1 SUMMARY",
+        "A. Labeled provision.",
+        "1. Nested provision.",
+        "a. Deeper provision.",
+        "1) Deepest provision.",
+    ]
+    result = parse_master_docx(_write_docx(tmp_path, lines, name="refs.docx"))
+
+    orphan = next(w for w in result.warnings if "before any article" in w)
+    # The synthetic article's display number and id are both named.
+    assert "(at 1.1, id pt1.a1)" in orphan

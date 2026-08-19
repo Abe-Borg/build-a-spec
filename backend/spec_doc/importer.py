@@ -61,6 +61,7 @@ from .model import (
     Article,
     Paragraph,
     SpecSection,
+    iter_paragraphs,
 )
 from .source_mapping import (
     SourceBodyMap,
@@ -482,6 +483,12 @@ class _TreeBuilder:
         # see numbered_paragraph. Resets with the stack it is relative to.
         self.numbering_offset = 0
         self.warnings: list[str] = []
+        # warning index -> the uid of the element the warning is about, so
+        # the parse can append a FINDABLE reference once the tree is built.
+        # "Line N" alone counts body children (blank paragraphs and table
+        # rows included) — a number the user can locate nowhere in Word or
+        # in the panel.
+        self.warning_uids: dict[int, str] = {}
         self.imported_count = 0
 
     def part(self, number: int):
@@ -506,12 +513,14 @@ class _TreeBuilder:
             return
         if self.current_part is None:
             self.part(1)
+        part_title = self.current_part.title
+        self.article(self.current_part.number, "IMPORTED CONTENT")
         self.warnings.append(
             f"Line {line_no}: content arrived before any article heading — "
             "kept under a synthetic 'IMPORTED CONTENT' article in "
-            f"{self.current_part.title}."
+            f"{part_title}."
         )
-        self.article(self.current_part.number, "IMPORTED CONTENT")
+        self.warning_uids[len(self.warnings) - 1] = self.current_article.uid
 
     def numbered_paragraph(self, ilvl: int, text: str, line_no: int) -> Paragraph:
         """A Word-auto-numbered paragraph, placed relative to its own list.
@@ -553,12 +562,14 @@ class _TreeBuilder:
 
     def paragraph(self, depth: int, text: str, line_no: int) -> Paragraph:
         self.ensure_article(line_no)
+        pending_warning_indexes: list[int] = []
         if depth >= MAX_PARAGRAPH_DEPTH:
             self.warnings.append(
                 f"Line {line_no}: nesting deeper than "
                 f"{MAX_PARAGRAPH_DEPTH} levels — clamped to level "
                 f"{MAX_PARAGRAPH_DEPTH}."
             )
+            pending_warning_indexes.append(len(self.warnings) - 1)
             depth = MAX_PARAGRAPH_DEPTH - 1
         # A deeper level than the stack supports attaches at the deepest
         # available parent + 1 (a master can open with "1." under nothing).
@@ -567,6 +578,7 @@ class _TreeBuilder:
                 f"Line {line_no}: paragraph level jumped deeper than its "
                 f"context — attached at level {len(self.stack)}."
             )
+            pending_warning_indexes.append(len(self.warnings) - 1)
             depth = len(self.stack)
         if depth == 0:
             owner = self.current_article
@@ -583,6 +595,8 @@ class _TreeBuilder:
         siblings.append(paragraph)
         self.stack = self.stack[:depth] + [paragraph]
         self.imported_count += 1
+        for warning_index in pending_warning_indexes:
+            self.warning_uids[warning_index] = paragraph.uid
         return paragraph
 
 
@@ -866,6 +880,28 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                     f"not imported (beginning '{_clip(trailing[0])}'). "
                     "Build-a-Spec authors one section at a time."
                 )
+
+    # Append a FINDABLE reference to every warning that is about a specific
+    # element: the display ref the panel and export schedules use plus the
+    # stable id. Runs before UNSTRUCTURED_IMPORT_WARNING's insert(0), which
+    # would shift the recorded indexes. Refs derive from final positions, so
+    # this must be a post-pass — mid-build numbering is not settled yet.
+    if builder.warning_uids:
+        refs = {
+            p.uid: ref
+            for _part, _article, p, _depth, ref in iter_paragraphs(
+                builder.section
+            )
+        }
+        for part in builder.section.parts:
+            for article_index, article in enumerate(part.articles, start=1):
+                refs.setdefault(
+                    article.uid, f"{part.number}.{article_index}"
+                )
+        for warning_index, uid in builder.warning_uids.items():
+            ref = refs.get(uid)
+            where = f" (at {ref}, id {uid})" if ref else f" (id {uid})"
+            builder.warnings[warning_index] += where
 
     if builder.imported_count == 0 and builder.section.is_empty():
         raise MasterImportError(

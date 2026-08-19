@@ -26,6 +26,20 @@ labels win; otherwise the paragraph's numbering indent level (``ilvl``)
 drives the depth — placed *relative to its own list*, because ``ilvl`` is
 an indent level inside a numbering definition and not an absolute outline
 depth (see :meth:`_TreeBuilder.numbered_paragraph`).
+
+Auto-numbered PART and ARTICLE **headings** are recognized through the
+numbering definitions themselves: a ``w:numPr`` paragraph whose level's
+``lvlText`` renders the literal word ``PART`` is a part heading, and one
+whose ``lvlText`` is two decimal placeholders joined by a dot (``%1.%2`` —
+the auto-numbered form of the ``2.01 TITLE`` label) is an article heading.
+That is the structural signal the visible text cannot carry — an
+auto-numbered article's text is just ``SUMMARY`` — and it is provably safe
+for the export/re-import round trip: the app's own numbering definitions
+use only single-token ``lvlText``s (see ``word_numbering._LEVELS``), so
+neither grammar can match a normalized export. ``w:pStyle`` is deliberately
+NOT consulted: style names are localized and free-form, so they are weak
+evidence beside the label grammar the reader actually sees; revisit only
+with corpus evidence that real masters need it.
 """
 from __future__ import annotations
 
@@ -35,6 +49,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from docx import Document
+from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.opc.exceptions import PackageNotFoundError
 from docx.oxml.ns import qn
 from docx.table import Table as DocxTable
@@ -146,10 +161,18 @@ _SECTION_RE = re.compile(
     r"^SECTION\s+(\d{2})\s*(\d{2})\s*(\d{2})(?:\.(\d{2}))?\b\s*[-–—]?\s*(.*)$",
     re.IGNORECASE,
 )
-_PART_RE = re.compile(r"^PART\s*([123])\b", re.IGNORECASE)
+# PART 1-3 are SectionFormat's parts; 4/5 are accepted as spec structure and
+# mapped (loudly) onto PART 3 rather than demoting the file to unstructured.
+_PART_RE = re.compile(r"^PART\s*([1-5])\b", re.IGNORECASE)
 _END_RE = re.compile(r"^END\s+OF\s+SECTION\b", re.IGNORECASE)
 # "1.1 SUMMARY" / "1.01 SUMMARY" / "2.3 - PIPING" (part digit + article no.)
 _ARTICLE_RE = re.compile(r"^([123])\.(\d{1,2})\.?\s+[-–—]?\s*(\S.*)$")
+# A header line without the SECTION keyword ("23 05 48 — TITLE"). Consulted
+# for the FIRST content line only — anywhere else six digits and a dash are
+# far more likely to be a provision than a header.
+_BARE_SECTION_RE = re.compile(
+    r"^(\d{2})\s?(\d{2})\s?(\d{2})(?:\.(\d{2}))?\s*[-–—]\s*(\S.*)$"
+)
 # Manual paragraph labels by depth.
 _LEVEL_RES = (
     re.compile(r"^([A-Z]{1,2})\.\s+(\S.*)$"),  # A.  (depth 0)
@@ -157,6 +180,18 @@ _LEVEL_RES = (
     re.compile(r"^([a-z]{1,2})\.\s+(\S.*)$"),  # a.  (depth 2)
     re.compile(r"^(\d{1,2})\)\s+(\S.*)$"),  # 1)  (depth 3)
 )
+
+# The label grammars that promote a ``w:numPr`` paragraph to a HEADING. A
+# level whose rendered label carries the literal word PART is a part heading
+# whatever its number format ("PART %1" under decimal or upperRoman alike);
+# one that renders two decimal placeholders joined by a dot is the
+# auto-numbered form of the "2.01 TITLE" article label. Everything else —
+# including every ``lvlText`` the app's own normalized exports write
+# ("%1.", "%2.", "%3.", "%4)") — stays a provision, which is what keeps the
+# export/re-import round trip untouched by construction.
+_PART_LVLTEXT_RE = re.compile(r"\bPART\b", re.IGNORECASE)
+_ARTICLE_LVLTEXT_RE = re.compile(r"^%\d+\.%\d+\.?\s*$")
+_ARTICLE_NUM_FMTS = frozenset({"", "decimal", "decimalZero"})
 
 
 # Said once, at the top of the warning list, when a file carries none of the
@@ -211,6 +246,115 @@ def _numbering_level(paragraph: DocxParagraph) -> int | None:
         return None
     ilvl = p_pr.numPr.ilvl.val
     return int(ilvl) if ilvl is not None else None
+
+
+def _numbering_num_id(paragraph: DocxParagraph) -> int | None:
+    """The paragraph's numbering definition id (``numId``) or ``None``.
+
+    ``numId`` 0 is OOXML for "no numbering" (it cancels an inherited
+    definition), so it reads as ``None`` here — a cancelled definition has
+    no label grammar to consult.
+    """
+    p_pr = paragraph._p.pPr
+    if p_pr is None or p_pr.numPr is None or p_pr.numPr.numId is None:
+        return None
+    val = p_pr.numPr.numId.val
+    if val is None:
+        return None
+    num_id = int(val)
+    return num_id if num_id > 0 else None
+
+
+def _lvl_entry(lvl_el) -> tuple[int, tuple[str, str]] | None:
+    """One ``w:lvl`` element as ``(ilvl, (numFmt, lvlText))``, or ``None``."""
+    raw_ilvl = lvl_el.get(qn("w:ilvl"))
+    if raw_ilvl is None:
+        return None
+    try:
+        ilvl = int(raw_ilvl)
+    except ValueError:
+        return None
+    fmt_el = lvl_el.find(qn("w:numFmt"))
+    text_el = lvl_el.find(qn("w:lvlText"))
+    num_fmt = fmt_el.get(qn("w:val")) if fmt_el is not None else ""
+    lvl_text = text_el.get(qn("w:val")) if text_el is not None else ""
+    return ilvl, (num_fmt or "", lvl_text or "")
+
+
+def _load_numbering_catalog(document) -> dict[tuple[int, int], tuple[str, str]]:
+    """``(numId, ilvl) -> (numFmt, lvlText)`` from the package's numbering part.
+
+    Read via the relationship directly — python-docx's ``numbering_part``
+    property CREATES an empty part when none exists, and an importer must
+    never mutate the package it is inspecting. A per-``num`` ``lvlOverride``
+    that redefines a level replaces the abstract's grammar for it, so the
+    label the reader actually sees is the one that decides. Any absence or
+    malformation degrades to an empty catalog, i.e. exactly the
+    no-promotion behavior every pre-catalog import had.
+    """
+    try:
+        part = document.part.part_related_by(RELATIONSHIP_TYPE.NUMBERING)
+        root = part.element
+    except (KeyError, AttributeError, ValueError):
+        return {}
+    try:
+        abstract: dict[str, dict[int, tuple[str, str]]] = {}
+        for abstract_el in root.findall(qn("w:abstractNum")):
+            abstract_id = abstract_el.get(qn("w:abstractNumId"))
+            if abstract_id is None:
+                continue
+            levels: dict[int, tuple[str, str]] = {}
+            for lvl_el in abstract_el.findall(qn("w:lvl")):
+                entry = _lvl_entry(lvl_el)
+                if entry is not None:
+                    levels[entry[0]] = entry[1]
+            abstract[abstract_id] = levels
+        catalog: dict[tuple[int, int], tuple[str, str]] = {}
+        for num_el in root.findall(qn("w:num")):
+            raw_num_id = num_el.get(qn("w:numId"))
+            abstract_ref = num_el.find(qn("w:abstractNumId"))
+            if raw_num_id is None or abstract_ref is None:
+                continue
+            try:
+                num_id = int(raw_num_id)
+            except ValueError:
+                continue
+            for ilvl, entry in abstract.get(
+                abstract_ref.get(qn("w:val")), {}
+            ).items():
+                catalog[(num_id, ilvl)] = entry
+            for override in num_el.findall(qn("w:lvlOverride")):
+                lvl_el = override.find(qn("w:lvl"))
+                if lvl_el is None:
+                    continue
+                entry = _lvl_entry(lvl_el)
+                if entry is not None:
+                    catalog[(num_id, entry[0])] = entry[1]
+        return catalog
+    except Exception:  # noqa: BLE001 - a malformed numbering part is no catalog
+        return {}
+
+
+def _promoted_heading_kind(
+    catalog: dict[tuple[int, int], tuple[str, str]],
+    paragraph: DocxParagraph,
+    ilvl: int,
+) -> str:
+    """``"part"`` / ``"article"`` when the numbering label says so, else ``""``."""
+    if not catalog:
+        return ""
+    num_id = _numbering_num_id(paragraph)
+    if num_id is None:
+        return ""
+    entry = catalog.get((num_id, ilvl))
+    if entry is None:
+        return ""
+    num_fmt, lvl_text = entry
+    if _PART_LVLTEXT_RE.search(lvl_text):
+        return "part"
+    if _ARTICLE_LVLTEXT_RE.match(lvl_text) and num_fmt in _ARTICLE_NUM_FMTS:
+        return "article"
+    return ""
 
 
 @dataclass(frozen=True)
@@ -487,10 +631,21 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     # Any one of these means the file carried real SectionFormat structure.
     # Deliberately the same three signals the parse itself acts on, so the
     # verdict can never disagree with the tree that was built: a paragraph
-    # consumed by the direct-numbering branch below never reaches the heading
-    # patterns, and therefore never counts as a marker.
+    # consumed by the direct-numbering branch below counts only when its
+    # numbering label PROMOTED it to real structure (a part or article the
+    # tree actually holds), never merely for being numbered.
     saw_spec_marker = False
     source_bindings: list[SourceParagraphBinding] = []
+    # The numbering-definition label grammars, for heading promotion.
+    numbering_catalog = _load_numbering_catalog(document)
+    # Promoted PART headings are numbered by order of appearance — the
+    # rendered "PART 1/2/3" is a counter this parse never runs.
+    promoted_part_count = 0
+    # The bare-section header is consulted for the first content line only.
+    saw_any_content = False
+    # Where END OF SECTION stopped the parse (1-based), for the trailing-
+    # content accounting below. None = the file never said it ended.
+    end_of_section_index: int | None = None
 
     entries = _iter_body_texts(document)
     for line_no, entry in enumerate(entries, start=1):
@@ -500,6 +655,8 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
         if not text:
             skipped_empty += 1
             continue
+        first_content = not saw_any_content
+        saw_any_content = True
         if docx_paragraph is None and not saw_table:
             saw_table = True
             builder.warnings.append(
@@ -547,6 +704,40 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             ilvl = _numbering_level(docx_paragraph)
             if ilvl is not None:
                 pending_title = False
+                # An auto-numbered heading's visible text is just its title
+                # ("SUMMARY") — no text pattern can ever reach it. The
+                # numbering definition's own label grammar is the structural
+                # signal: promote what it says is a PART or an article, and
+                # leave everything else on the provision path. A promoted
+                # heading gets no source binding, exactly like a
+                # text-matched heading (headings live in the fixed
+                # projection, not the editable body surface).
+                kind = _promoted_heading_kind(
+                    numbering_catalog, docx_paragraph, ilvl
+                )
+                if kind == "part":
+                    saw_spec_marker = True
+                    promoted_part_count += 1
+                    part_number = promoted_part_count
+                    if part_number > 3:
+                        builder.warnings.append(
+                            f"Line {line_no}: SectionFormat carries three "
+                            f"parts; this file's PART heading number "
+                            f"{part_number} was kept under PART 3 — review "
+                            "placement."
+                        )
+                        part_number = 3
+                    builder.part(part_number)
+                    continue
+                if kind == "article":
+                    saw_spec_marker = True
+                    builder.article(
+                        builder.current_part.number
+                        if builder.current_part is not None
+                        else 1,
+                        text,
+                    )
+                    continue
                 # The raw indent level: numbered_paragraph places it against
                 # its own list, never as an absolute depth.
                 add_mapped_paragraph(max(0, ilvl), text, numbered=True)
@@ -564,6 +755,7 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             continue
 
         if _END_RE.match(text):
+            end_of_section_index = line_no
             break
 
         section_match = _SECTION_RE.match(text)
@@ -578,6 +770,25 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             else:
                 pending_title = True
             continue
+        if first_content:
+            # Only the FIRST content line may be a keyword-less header —
+            # "23 05 48 — COMMON WORK RESULTS FOR HVAC". Later in a document
+            # the same shape is far more likely a provision citing a sibling
+            # section, so it never re-arms.
+            bare_match = _BARE_SECTION_RE.match(text)
+            if bare_match:
+                saw_spec_marker = True
+                b1, b2, b3, b4, bare_title = bare_match.groups()
+                builder.section.number = f"{b1} {b2} {b3}" + (
+                    f".{b4}" if b4 else ""
+                )
+                builder.section.title = bare_title.strip()
+                pending_title = False
+                builder.warnings.append(
+                    "Line 1: no 'SECTION' keyword — the section number and "
+                    "title were read from the first line."
+                )
+                continue
         if pending_title:
             pending_title = False
             if not (_PART_RE.match(text) or _ARTICLE_RE.match(text)):
@@ -587,7 +798,15 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
         part_match = _PART_RE.match(text)
         if part_match:
             saw_spec_marker = True
-            builder.part(int(part_match.group(1)))
+            part_number = int(part_match.group(1))
+            if part_number > 3:
+                builder.warnings.append(
+                    f"Line {line_no}: SectionFormat carries three parts; "
+                    f"'PART {part_number}' content was kept under PART 3 — "
+                    "review placement."
+                )
+                part_number = 3
+            builder.part(part_number)
             continue
 
         article_match = _ARTICLE_RE.match(text)
@@ -611,6 +830,42 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
 
         # Unlabeled content: keep as a level-0 paragraph (never drop).
         add_mapped_paragraph(0, text)
+
+    # END OF SECTION still stops the parse — the app's own normalized export
+    # puts its assumptions/open-items schedules after that line, and
+    # re-importing them as content would corrupt the round trip — but
+    # stopping must never be SILENT: dropped content with no warning
+    # violates this module's whole philosophy, and for a combined
+    # multi-section master it quietly discarded every section but the
+    # first. The one suppression is the app's own trailing schedules,
+    # recognized by the exact heading the exporter writes first.
+    if end_of_section_index is not None:
+        trailing = [
+            " ".join(item.text.split())
+            for item in entries[end_of_section_index:]
+        ]
+        trailing = [item for item in trailing if item]
+        if trailing and trailing[0] != "ASSUMPTIONS SCHEDULE":
+            next_section = next(
+                (item for item in trailing if _SECTION_RE.match(item)), None
+            )
+
+            def _clip(value: str) -> str:
+                return value if len(value) <= 60 else value[:60] + "…"
+
+            if next_section is not None:
+                builder.warnings.append(
+                    "This file contains more than one SECTION (next: "
+                    f"'{_clip(next_section)}'); only the first was imported "
+                    f"— split the file to import another. {len(trailing)} "
+                    "block(s) after 'END OF SECTION' were not imported."
+                )
+            else:
+                builder.warnings.append(
+                    f"{len(trailing)} block(s) after 'END OF SECTION' were "
+                    f"not imported (beginning '{_clip(trailing[0])}'). "
+                    "Build-a-Spec authors one section at a time."
+                )
 
     if builder.imported_count == 0 and builder.section.is_empty():
         raise MasterImportError(

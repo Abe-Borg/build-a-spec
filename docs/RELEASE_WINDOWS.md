@@ -288,6 +288,18 @@ invisible to CI and expensive to the user.
       shows the accepted text, so it looks clean while still being locked.
 - [ ] A master whose numbering **starts one level in**: sibling articles
       arrive as siblings, with no invented `IMPORTED CONTENT` article.
+      An **auto-numbered** master (Word multilevel list — the article
+      headings' visible text is just the title) arrives with its PARTs and
+      articles recognized as real structure, `spec_shape_detected` true,
+      and no "not a spec section" banner.
+- [ ] The **import intent dialog**: "Use as a starting point" lands a fully
+      editable document immediately (header edit + add article work, no
+      permission sweep), while "Preserve original formatting" behaves as
+      the frozen/pending rows above describe. Both keep *Download original
+      upload* byte-identical and *Redline vs master* working.
+- [ ] A **combined multi-section** file: only the first SECTION imports,
+      and the import notes name the next section and the dropped block
+      count instead of discarding them silently.
 - [ ] A large master (1,000+ paragraphs): the app stays responsive while the
       permission sweep runs, and the panel says "pending" rather than
       "read-only". The sweep is still quadratic by design decision — this

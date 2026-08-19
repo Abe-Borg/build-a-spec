@@ -86,7 +86,19 @@ def test_import_builds_the_tree_with_imported_status(tmp_path):
             collect(article.paragraphs)
     assert statuses == {"imported"}
     assert result.imported_block_count == 8
-    assert not any("trailing" in w for w in result.warnings)
+    # The break at END OF SECTION stands (nothing after it entered the
+    # tree), but the drop is no longer SILENT: keep-everything-warn-loudly
+    # owes the reviewer a count and a first line for what stayed behind.
+    assert not any(
+        "trailing" in p.text.lower()
+        for part in section.parts
+        for article in part.articles
+        for p in article.paragraphs
+    )
+    dropped = [w for w in result.warnings if "END OF SECTION" in w]
+    assert len(dropped) == 1
+    assert "1 block(s)" in dropped[0]
+    assert "This trailing text is after END OF SECTION" in dropped[0]
 
 
 def test_import_round_trip_through_store_and_export(tmp_path):
@@ -607,3 +619,323 @@ def test_import_allowed_over_project_setup_and_preserves_it(tmp_path):
             },
         )
     assert blocked.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Auto-numbered heading promotion (the numbering-definition label grammar)
+# ---------------------------------------------------------------------------
+
+
+def _define_numbering(
+    document,
+    num_id: int,
+    levels: dict[int, tuple[str, str]],
+    overrides: dict[int, tuple[str, str]] | None = None,
+):
+    """Add a REAL numbering definition (abstractNum + num) to the package.
+
+    ``levels``/``overrides`` map ``ilvl -> (numFmt, lvlText)``. Fixture
+    num_ids should stay clear of 1-9 (the python-docx template's own).
+    """
+    root = document.part.numbering_part.element
+    abstract_id = str(900 + num_id)
+    abstract = OxmlElement("w:abstractNum")
+    abstract.set(qn("w:abstractNumId"), abstract_id)
+    for ilvl, (fmt, lvl_text) in levels.items():
+        lvl = OxmlElement("w:lvl")
+        lvl.set(qn("w:ilvl"), str(ilvl))
+        fmt_el = OxmlElement("w:numFmt")
+        fmt_el.set(qn("w:val"), fmt)
+        text_el = OxmlElement("w:lvlText")
+        text_el.set(qn("w:val"), lvl_text)
+        lvl.append(fmt_el)
+        lvl.append(text_el)
+        abstract.append(lvl)
+    num = OxmlElement("w:num")
+    num.set(qn("w:numId"), str(num_id))
+    ref = OxmlElement("w:abstractNumId")
+    ref.set(qn("w:val"), abstract_id)
+    num.append(ref)
+    for ilvl, (fmt, lvl_text) in (overrides or {}).items():
+        override = OxmlElement("w:lvlOverride")
+        override.set(qn("w:ilvl"), str(ilvl))
+        lvl = OxmlElement("w:lvl")
+        lvl.set(qn("w:ilvl"), str(ilvl))
+        fmt_el = OxmlElement("w:numFmt")
+        fmt_el.set(qn("w:val"), fmt)
+        text_el = OxmlElement("w:lvlText")
+        text_el.set(qn("w:val"), lvl_text)
+        lvl.append(fmt_el)
+        lvl.append(text_el)
+        override.append(lvl)
+        num.append(override)
+    first_num = root.find(qn("w:num"))
+    if first_num is not None:
+        first_num.addprevious(abstract)
+    else:
+        root.append(abstract)
+    root.append(num)
+
+
+def test_auto_numbered_article_headings_become_real_articles(tmp_path):
+    """The reported 23 05 48 symptom, fixed at its root.
+
+    A Word-auto-numbered ARTICLE heading's visible text is just its title
+    ("SECTION INCLUDES") — the "1.1" is generated — so no text pattern can
+    ever recognize it, and every heading used to land as a provision inside
+    one synthetic IMPORTED CONTENT article with the "not a spec section"
+    banner on a real spec. The numbering definition's own label grammar
+    ("%1.%2") is the structural signal the text cannot carry.
+    """
+    document = Document()
+    document.add_paragraph("SECTION 23 05 48")
+    document.add_paragraph("VIBRATION AND SEISMIC CONTROLS FOR HVAC")
+    document.add_paragraph("PART 1 - GENERAL")
+    _define_numbering(
+        document,
+        50,
+        {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3.")},
+    )
+    _numbered(document, "SECTION INCLUDES", 1, num_id="50")
+    _numbered(document, "Vibration isolation for HVAC equipment.", 2, "50")
+    _numbered(document, "REFERENCE STANDARDS", 1, num_id="50")
+    _numbered(document, "ASHRAE Handbook - HVAC Applications.", 2, "50")
+    _numbered(document, "QUALITY ASSURANCE", 1, num_id="50")
+    _numbered(document, "Minimum three years documented experience.", 2, "50")
+    path = tmp_path / "auto-articles.docx"
+    document.save(str(path))
+
+    result = parse_master_docx(path)
+    part = result.section.parts[0]
+    assert [a.title for a in part.articles] == [
+        "SECTION INCLUDES",
+        "REFERENCE STANDARDS",
+        "QUALITY ASSURANCE",
+    ]
+    assert [[p.text for p in a.paragraphs] for a in part.articles] == [
+        ["Vibration isolation for HVAC equipment."],
+        ["ASHRAE Handbook - HVAC Applications."],
+        ["Minimum three years documented experience."],
+    ]
+    # The RELEASE_WINDOWS claim, now executable: no invented article, no
+    # unstructured banner, the shape verdict agrees with the real tree.
+    assert not any("IMPORTED CONTENT" in a.title for a in part.articles)
+    assert result.spec_shape_detected is True
+    assert not any("before any article" in w for w in result.warnings)
+
+
+def test_auto_numbered_part_headings_map_by_order_of_appearance(tmp_path):
+    document = Document()
+    document.add_paragraph("SECTION 23 05 48")
+    document.add_paragraph("VIBRATION AND SEISMIC CONTROLS FOR HVAC")
+    _define_numbering(
+        document,
+        51,
+        {
+            0: ("decimal", "PART %1"),
+            1: ("decimal", "%1.%2"),
+            2: ("upperLetter", "%3."),
+        },
+    )
+    for part_title, article_title, provision in (
+        ("GENERAL", "SUMMARY", "Section includes seismic restraint."),
+        ("PRODUCTS", "PIPE AND FITTINGS", "Steel pipe: ASTM A53."),
+        ("EXECUTION", "INSTALLATION", "Install per the working plans."),
+    ):
+        _numbered(document, part_title, 0, num_id="51")
+        _numbered(document, article_title, 1, num_id="51")
+        _numbered(document, provision, 2, num_id="51")
+    path = tmp_path / "auto-parts.docx"
+    document.save(str(path))
+
+    result = parse_master_docx(path)
+    for index, article_title in enumerate(
+        ("SUMMARY", "PIPE AND FITTINGS", "INSTALLATION")
+    ):
+        articles = result.section.parts[index].articles
+        assert [a.title for a in articles] == [article_title]
+        assert len(articles[0].paragraphs) == 1
+    assert result.spec_shape_detected is True
+
+
+def test_a_fourth_auto_numbered_part_lands_under_part_three_loudly(tmp_path):
+    document = Document()
+    _define_numbering(
+        document, 52, {0: ("decimal", "PART %1"), 1: ("decimal", "%1.%2")}
+    )
+    for part_title in ("GENERAL", "PRODUCTS", "EXECUTION", "COMMISSIONING"):
+        _numbered(document, part_title, 0, num_id="52")
+        _numbered(document, f"{part_title} ARTICLE", 1, num_id="52")
+    path = tmp_path / "four-parts.docx"
+    document.save(str(path))
+
+    result = parse_master_docx(path)
+    assert [a.title for a in result.section.parts[2].articles] == [
+        "EXECUTION ARTICLE",
+        "COMMISSIONING ARTICLE",
+    ]
+    assert any("kept under PART 3" in w for w in result.warnings)
+
+
+def test_a_dangling_num_id_stays_on_the_provision_path(tmp_path):
+    """No definition = no label grammar = exactly the pre-catalog tree."""
+    document = Document()
+    document.add_paragraph("PART 1 - GENERAL")
+    document.add_paragraph("1.1 SUMMARY")
+    _numbered(document, "Section includes seismic restraint.", 0, "77")
+    _numbered(document, "Related: Section 23 05 29.", 0, num_id="77")
+    path = tmp_path / "dangling.docx"
+    document.save(str(path))
+
+    article = parse_master_docx(path).section.parts[0].articles[0]
+    assert article.title == "SUMMARY"
+    assert [p.text for p in article.paragraphs] == [
+        "Section includes seismic restraint.",
+        "Related: Section 23 05 29.",
+    ]
+
+
+def test_a_num_level_override_decides_the_label_grammar(tmp_path):
+    """The label the reader actually SEES is the one that promotes."""
+    document = Document()
+    document.add_paragraph("PART 1 - GENERAL")
+    _define_numbering(
+        document,
+        53,
+        {1: ("decimal", "%2.")},
+        overrides={1: ("decimal", "%1.%2")},
+    )
+    _numbered(document, "SECTION INCLUDES", 1, num_id="53")
+    path = tmp_path / "override.docx"
+    document.save(str(path))
+
+    part = parse_master_docx(path).section.parts[0]
+    assert [a.title for a in part.articles] == ["SECTION INCLUDES"]
+
+
+def test_the_apps_own_label_grammar_never_promotes(tmp_path):
+    """word_numbering's single-token lvlTexts are provision labels.
+
+    This is the round-trip safety property stated directly: a normalized
+    export's numbering can never match the PART or article grammar, so
+    export -> re-import is untouched by promotion by construction.
+    """
+    document = Document()
+    document.add_paragraph("PART 3 - EXECUTION")
+    document.add_paragraph("3.1 INSTALLATION")
+    _define_numbering(
+        document,
+        54,
+        {
+            0: ("upperLetter", "%1."),
+            1: ("decimal", "%2."),
+            2: ("lowerLetter", "%3."),
+            3: ("decimal", "%4)"),
+        },
+    )
+    _numbered(document, "Install per the working plans.", 0, num_id="54")
+    _numbered(document, "Support piping per NFPA 13.", 1, num_id="54")
+    path = tmp_path / "own-grammar.docx"
+    document.save(str(path))
+
+    article = parse_master_docx(path).section.parts[2].articles[0]
+    assert article.title == "INSTALLATION"
+    top = article.paragraphs[0]
+    assert top.text == "Install per the working plans."
+    assert top.children[0].text == "Support piping per NFPA 13."
+
+
+# ---------------------------------------------------------------------------
+# END OF SECTION is loud; header tolerance
+# ---------------------------------------------------------------------------
+
+
+def test_a_second_section_is_named_not_silently_discarded(tmp_path):
+    path = _write_docx(
+        tmp_path,
+        [
+            *_MASTER_LINES[:-1],
+            "SECTION 23 05 93",
+            "TESTING, ADJUSTING, AND BALANCING FOR HVAC",
+            "PART 1 - GENERAL",
+            "1.1 SUMMARY",
+            "A. TAB of hydronic and air systems.",
+        ],
+        name="combined.docx",
+    )
+    result = parse_master_docx(path)
+    assert result.section.number == "21 13 13"
+    dropped = [w for w in result.warnings if "more than one SECTION" in w]
+    assert len(dropped) == 1
+    assert "SECTION 23 05 93" in dropped[0]
+    assert "split the file" in dropped[0]
+
+
+def test_reimporting_the_apps_own_export_stays_end_of_section_quiet(tmp_path):
+    """The exporter's own schedules follow END OF SECTION by design.
+
+    Warning about them on every export -> re-import round trip would train
+    users to ignore the warning that matters; the exporter's first schedule
+    heading is the recognized suppression.
+    """
+    first = parse_master_docx(_write_docx(tmp_path, _MASTER_LINES))
+    exported = tmp_path / "own-export.docx"
+    exported.write_bytes(build_docx(first.section))
+    second = parse_master_docx(exported)
+    assert not any("END OF SECTION" in w for w in second.warnings)
+
+
+def test_a_bare_first_line_header_sets_the_section(tmp_path):
+    path = _write_docx(
+        tmp_path,
+        [
+            "23 05 48 — VIBRATION AND SEISMIC CONTROLS FOR HVAC",
+            "PART 1 - GENERAL",
+            "1.1 SUMMARY",
+            "A. Section includes seismic restraint.",
+        ],
+        name="bare-header.docx",
+    )
+    result = parse_master_docx(path)
+    assert result.section.number == "23 05 48"
+    assert result.section.title == "VIBRATION AND SEISMIC CONTROLS FOR HVAC"
+    assert result.spec_shape_detected is True
+    assert any("no 'SECTION' keyword" in w for w in result.warnings)
+
+
+def test_a_bare_header_shape_later_in_the_document_is_a_provision(tmp_path):
+    """Six digits and a dash mid-document cite a sibling section; only the
+    FIRST content line may be a keyword-less header."""
+    path = _write_docx(
+        tmp_path,
+        [
+            "PART 1 - GENERAL",
+            "1.1 RELATED WORK",
+            "23 05 29 — HANGERS AND SUPPORTS FOR HVAC",
+        ],
+        name="citation.docx",
+    )
+    result = parse_master_docx(path)
+    assert result.section.number == ""
+    article = result.section.parts[0].articles[0]
+    assert [p.text for p in article.paragraphs] == [
+        "23 05 29 — HANGERS AND SUPPORTS FOR HVAC"
+    ]
+
+
+def test_part_four_text_heading_lands_under_part_three_loudly(tmp_path):
+    path = _write_docx(
+        tmp_path,
+        [
+            "PART 1 - GENERAL",
+            "1.1 SUMMARY",
+            "A. Section includes commissioning of HVAC systems.",
+            "PART 4 - COMMISSIONING",
+            "A. Verify installation per the checklists.",
+        ],
+        name="part-four.docx",
+    )
+    result = parse_master_docx(path)
+    part3 = result.section.parts[2]
+    assert part3.articles, "PART 4 content must land under PART 3"
+    assert any("PART 4" in w and "PART 3" in w for w in result.warnings)

@@ -506,14 +506,22 @@ function Dossier() {
             </>,
             <>
               <b className="text-ink">
-                No model runs that you did not start.
+                No model runs that you did not start — with one disclosed
+                follow-up.
               </b>{" "}
               No auto-research, no silent re-draft, no scheduled job: every
               model call — and therefore every cent of spend — traces back to a
-              message you sent or a button you pressed. The one thing the app
-              does on its own is check for a new version at startup, at most
-              once a day; that request goes to GitHub, carries nothing about
-              your project, and can be switched off.
+              message you sent or a button you pressed. The one automatic
+              model turn is the <b className="text-ink">completion debrief</b>:
+              when a research round or Final QC pass <em>you started</em>{" "}
+              finishes, the chat sends itself one ordinary, visible turn that
+              summarizes how the findings affect the draft and asks whether to
+              proceed — it appears in the transcript like any message, can be
+              stopped like any turn, never applies changes by itself, and can
+              be switched off (BUILD_A_SPEC_AUTO_DEBRIEF=0). Beyond that, the
+              only thing the app does on its own is check for a new version at
+              startup, at most once a day; that request goes to GitHub, carries
+              nothing about your project, and can be switched off.
             </>,
             <>
               <b className="text-ink">Every automated judgment is re-derivable.</b>{" "}
@@ -730,7 +738,10 @@ function Dossier() {
               project-profile fields are still missing, the imported-source
               boundary if any, the grounded research profile if any, the full
               text of every provision with its id and status, the deterministic
-              lint report, the open-items list, and one-line stubs for figures
+              lint report, the open-items list, a compact digest of the
+              retained Final QC findings if a review has run (ids, severity,
+              one-line issues, and whether each fix is verified — never the
+              full report), and one-line stubs for figures
               and reference documents — never their contents.
             </>
           }
@@ -839,7 +850,12 @@ function Dossier() {
               code page cannot swamp the run. One dimension failing never cancels
               the others — you get a profile flagged as partial; all four failing
               fails cleanly with nothing corrupted. Stopping discards the run,
-              and the confirmation says so before you click.
+              and the confirmation says so before you click. When a round
+              completes, the chat automatically sends itself{" "}
+              <b className="text-ink">one ordinary debrief turn</b> — visible
+              in the transcript, billed like any turn, switchable off — that
+              summarizes how the findings affect the draft, proposes changes
+              without applying any, and asks whether to proceed.
             </>
           }
         />
@@ -873,14 +889,13 @@ function Dossier() {
               <b className="text-ink">2 · Adversarial verification.</b> Every
               candidate finding is handed to a fresh panel of independent
               reviewers instructed to <em>refute</em> it — three for critical and
-              high, two for medium and low. A finding survives only when the
-              panel is <b className="text-ink">unanimous</b>; a majority
-              refutation refutes it; anything in between is recorded as{" "}
-              <b className="text-ink">disputed</b> and escalates to you rather
-              than being decided by a vote that did not agree. A critical or
-              high refutation additionally needs a citation the seat actually
-              retrieved — a seat cannot refute a life-safety finding on
-              assertion alone. Survivors
+              high, two for medium and low. A finding survives only when{" "}
+              <b className="text-ink">every seat upholds it</b>; a majority
+              refuting kills it, and anything in between is recorded as{" "}
+              <b className="text-ink">disputed</b> — a real disagreement that
+              blocks issue readiness until you adjudicate it yourself
+              (critical/high refutations additionally need at least one
+              validated citation to count). Survivors
               take the median of the original and the upheld revised severities.
               This stage is submitted as one <em>batch</em> of independent
               requests, which the API prices at half. Nothing about the review
@@ -940,7 +955,13 @@ function Dossier() {
               of every material input, each lens’s exact search queries and
               retrieved sources, every verifier seat and vote, token usage,
               estimated cost, and a limitations list derived from recorded facts —
-              downloads as a Word report and as JSON.
+              downloads as a Word report and as JSON. When the run finishes,
+              the chat automatically sends itself{" "}
+              <b className="text-ink">one ordinary debrief turn</b> — visible,
+              billed like any turn, switchable off — that summarizes the
+              findings by severity, separates verified safe fixes from
+              advisory and disputed ones, applies nothing, and asks whether
+              you want to proceed.
             </>
           }
         />
@@ -948,25 +969,46 @@ function Dossier() {
         <Runtime
           n={5}
           title="Applying a QC fix"
-          trigger="Tick findings in the QC drawer and press Apply."
+          trigger={
+            <>
+              Tick findings in the QC drawer and press Apply — or approve them
+              in chat after the debrief (“Yes — apply the verified safe
+              fixes”), in which case the model passes the finding ids to the
+              same local machinery inside an ordinary chat turn.
+            </>
+          }
           runs={
             <>
-              Entirely local arithmetic. The accepted fixes are re-validated
+              Entirely local arithmetic either way. The accepted fixes are
+              re-validated
               against the <b className="text-ink">current</b> document — not the
               snapshot they were written against — on an accumulating working
               copy, so the combined batch is guaranteed to replay. A fix whose
               target has since moved is reported <em>stale</em> and skipped,
               never half-applied. Two fixes claiming the same write location are
-              rejected as a conflict <em>before</em> anything is mutated.
+              rejected as a conflict <em>before</em> anything is mutated. The
+              model never authors the fix content: chat approval applies the
+              exact panel-verified operations, or nothing.
             </>
           }
-          sent="Nothing. No network call is made."
-          model="None."
+          sent={
+            <>
+              From the panel: nothing — no network call is made. Through chat
+              approval: the ordinary chat turn that carries your “yes” (the
+              apply itself is still local).
+            </>
+          }
+          model="None for the apply itself (the chat path spends its ordinary turn)."
           bounds={
             <>
               The whole accepted set commits as{" "}
-              <b className="text-ink">one undo step</b>. Dismissing a finding
-              requires a written reason, which is recorded in the audit report.
+              <b className="text-ink">one undo step</b> (with the rest of the
+              turn, when applied through chat), and the audit report records
+              the disposition either way. Chat can only apply after your
+              explicit approval in that conversation, and only while the
+              review still matches the document. Dismissing a finding
+              requires a written reason, which is recorded in the audit
+              report, and stays a panel action.
             </>
           }
         />
@@ -1404,9 +1446,11 @@ function Dossier() {
             <>
               <b className="text-ink">There is no subscription and no spend you
               did not start.</b> You are billed by Anthropic for your own API
-              usage, under your own key. No model call is ever made in the
-              background — the automatic update check is the app’s only
-              unprompted request, and it costs nothing.
+              usage, under your own key. The one automatic model turn is the
+              completion debrief after a research or Final QC run you launched
+              (an ordinary chat turn, disclosed above, switchable off); beyond
+              it the update check is the app’s only unprompted request, and it
+              costs nothing.
             </>,
             <>
               <b className="text-ink">The fixed instruction block is cached.</b>{" "}
@@ -1559,9 +1603,12 @@ function Dossier() {
             </>,
             <>
               <b className="text-ink">Watch a firewall or proxy log.</b> The only
-              routine destination is Anthropic’s API. You will also see one
+              routine destination is Anthropic’s API — including the one
+              automatic completion-debrief turn after a research or Final QC
+              run you launched. You will also see one
               GitHub request at startup — that is the version check described
-              above, and it is the only unprompted connection the app makes.
+              above, and it is the only connection the app makes that no
+              action of yours set in motion.
             </>,
           ]}
         />

@@ -39,6 +39,10 @@ export interface DebriefQueueState {
 export interface DebriefGates {
   epoch: number;
   busy: boolean;
+  /** A manual document edit is awaiting /api/doc/edit — send() declines
+   *  while it does, so a debrief popped now would be lost. Holds, exactly
+   *  like busy. */
+  manualEditBusy: boolean;
   fileLoading: boolean;
   tourActive: boolean;
   protectedWorkspace: boolean;
@@ -110,7 +114,7 @@ export function takeNextDebrief(
       next: null,
     };
   }
-  if (gates.busy || gates.fileLoading) {
+  if (gates.busy || gates.manualEditBusy || gates.fileLoading) {
     return {
       state: pending === state.pending ? state : { ...state, pending },
       next: null,
@@ -125,5 +129,22 @@ export function takeNextDebrief(
       fired: [...state.fired, key(next)].slice(-FIRED_CAP),
     },
     next,
+  };
+}
+
+/**
+ * Put a taken entry back — the fire-time guards raced the render-time gates
+ * (send() would have declined and silently eaten the debrief). Un-fires the
+ * token and restores the pending slot; the blocking condition's own falling
+ * edge (busy / manual edit / file load are all flush-effect dependencies)
+ * retries it, so requeueing never spins.
+ */
+export function requeueDebrief(
+  state: DebriefQueueState,
+  entry: PendingDebrief,
+): DebriefQueueState {
+  return {
+    pending: [...state.pending.filter((p) => p.kind !== entry.kind), entry],
+    fired: state.fired.filter((k) => k !== key(entry)),
   };
 }

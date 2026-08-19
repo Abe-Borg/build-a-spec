@@ -145,7 +145,30 @@ def test_a_nothing_new_round_buys_the_short_confirmation_variant() -> None:
     message = client.post("/api/research/debrief").json()["message"]
     assert "Nothing new was found" in message
     assert "Do not re-enumerate the profile" in message
+    assert "strengthened" in message  # something WAS re-confirmed
     # The full proposal obligations do not ride the short variant.
+    assert "Yes — apply the proposed changes" not in message
+
+
+def test_a_round_that_found_nothing_at_all_takes_the_short_variant() -> None:
+    """new == repeats == 0 (every dimension returned empty) must not buy the
+    full directive asking the model to propose changes from a round that
+    found nothing (PR #135 review)."""
+    from backend.llm.prompts import ResearchDebriefFacts as Facts
+
+    message = research_debrief_directive(
+        Facts(
+            round_index=1,
+            new_items=0,
+            repeat_items=0,
+            cumulative_items=0,
+            grounded_items=0,
+            areas_run=("Governing codes",),
+        )
+    )
+    assert "Nothing new was found" in message
+    # No re-confirmations → no strengthening ask.
+    assert "strengthened" not in message
     assert "Yes — apply the proposed changes" not in message
 
 

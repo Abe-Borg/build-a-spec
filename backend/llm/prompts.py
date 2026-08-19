@@ -158,6 +158,7 @@ When a Final QC review has run, your context carries a FINAL QC REVIEW block: th
 - NEVER apply QC fixes unprompted. Applying requires the user's explicit approval IN THIS CONVERSATION ("yes, apply them", an approval chip, a named subset). An earlier general instruction, or your own confidence, is not approval.
 - When the user approves, apply the verified safe fixes with ONE apply_qc_fixes call carrying every approved finding id, and make it the FIRST action of that turn — any document edit earlier in the turn makes the review stale and the tool will refuse. Other edits the user asked for come after it.
 - apply_qc_fixes executes each finding's exact panel-verified operations and records the audit disposition — never re-type a safe fix through apply_spec_edits; that would leave the finding open in the audit trail.
+- Never edit a provision you just fixed later in the SAME turn: the applied record is verified against the committed document, so a later same-turn change to a fixed provision voids that finding's disposition (it stays open). If the user also wants wording changes to a fixed provision, apply the fixes this turn and make their edit the next turn.
 - Findings marked advisory have no panel-approved operations. Summarize what they need; draft a remedy through ordinary apply_spec_edits only when the user asks, and say plainly that the finding itself stays open until Final QC is re-run or the user dismisses it in the panel.
 - Disputed, refuted, and inconclusive candidates are NEVER applyable. A disputed candidate needs the user's own adjudication in the Final QC panel; present both sides when asked, recommend if you have a view, and leave the disposition to them.
 - Dismissing a finding happens in the Final QC panel with a written reason — offer that path when the user wants to set one aside; you cannot dismiss for them.
@@ -503,7 +504,19 @@ def research_debrief_directive(facts: ResearchDebriefFacts) -> str:
         "brief me on it now."
     )
     facts_lines = _research_facts_lines(facts)
-    if facts.new_items == 0 and facts.repeat_items > 0:
+    if facts.new_items == 0:
+        # ANY zero-new round takes the short variant — including one whose
+        # dimensions all returned empty item lists (new == repeats == 0),
+        # where the full directive's "propose the concrete changes" would
+        # ask the model to invent work from a round that found nothing
+        # (caught in review on PR #135). The strengthening ask only makes
+        # sense when something WAS re-confirmed.
+        strengthened = (
+            " Note anything this round strengthened (an [UNVERIFIED] item "
+            "now grounded counts — say so)."
+            if facts.repeat_items > 0
+            else ""
+        )
         return "\n".join(
             [
                 header,
@@ -511,9 +524,9 @@ def research_debrief_directive(facts: ResearchDebriefFacts) -> str:
                 *facts_lines,
                 "",
                 "Nothing new was found. In a few sentences, confirm that "
-                "nothing about the current draft changes, and note anything "
-                "this round strengthened (an [UNVERIFIED] item now grounded "
-                "counts — say so). Do not re-enumerate the profile and do "
+                "nothing about the current draft changes."
+                + strengthened
+                + " Do not re-enumerate the profile and do "
                 "not propose edits unless something genuinely changed; if "
                 "something did, give me the full brief instead: how it "
                 "affects the draft, the concrete changes you would make "

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   emptyDebriefQueue,
   rememberDebrief,
+  requeueDebrief,
   takeNextDebrief,
 } from "../src/lib/debriefQueue.ts";
 import type {
@@ -22,6 +23,7 @@ const entry = (over: Partial<PendingDebrief> = {}): PendingDebrief => ({
 const gates = (over: Partial<DebriefGates> = {}): DebriefGates => ({
   epoch: 1,
   busy: false,
+  manualEditBusy: false,
   fileLoading: false,
   tourActive: false,
   protectedWorkspace: false,
@@ -54,15 +56,38 @@ test("remembering an identical pending entry returns the same state", () => {
   assert.equal(rememberDebrief(state, entry()), state);
 });
 
-test("a streaming turn or file load HOLDS the debrief for later", () => {
+test("a streaming turn, manual edit, or file load HOLDS the debrief", () => {
   const state = rememberDebrief(emptyDebriefQueue(), entry());
-  for (const hold of [{ busy: true }, { fileLoading: true }]) {
+  for (const hold of [
+    { busy: true },
+    { manualEditBusy: true },
+    { fileLoading: true },
+  ]) {
     const take = takeNextDebrief(state, gates(hold));
     assert.equal(take.next, null);
     assert.equal(take.state, state); // identity: nothing changed
   }
   // Once the hold lifts, it fires.
   assert.equal(takeNextDebrief(state, gates()).next?.token, "round-1");
+});
+
+test("a requeued entry un-fires its token and fires again later", () => {
+  let state = rememberDebrief(emptyDebriefQueue(), entry());
+  const take = takeNextDebrief(state, gates());
+  assert.equal(take.next?.token, "round-1");
+  // The fire-time guards raced the gates: put it back.
+  state = requeueDebrief(take.state, take.next!);
+  assert.equal(state.pending.length, 1);
+  assert.equal(state.fired.includes("research:round-1"), false);
+  // Held while the guard persists, delivered on its falling edge.
+  assert.equal(takeNextDebrief(state, gates({ manualEditBusy: true })).next, null);
+  const retry = takeNextDebrief(state, gates());
+  assert.equal(retry.next?.token, "round-1");
+  // And once genuinely fired, the token is spent again.
+  assert.equal(
+    rememberDebrief(retry.state, entry()),
+    retry.state,
+  );
 });
 
 test("tutorial, protected workspace, and the off switch DROP silently", () => {

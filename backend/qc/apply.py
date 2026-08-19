@@ -431,8 +431,173 @@ def stage_chat_apply(session, raw_input: Any) -> dict[str, Any]:
         "skipped_events": skipped_events,
         "applied_ids": applied_ids,
         "combined_ops": combined_ops,
+        # Per-finding (finding_id, proposed_ops) for the applied set — the
+        # dispatcher maps each finding's canonical op identities onto the
+        # live apply's echoes to capture its fix-survival evidence.
+        "eligible": eligible,
         "result_ref": result,
     }
+
+
+def finding_evidence_keys(
+    eligible: list[tuple[str, list[dict[str, Any]]]],
+    applied_ids: list[str],
+    combined_ops: list[dict[str, Any]],
+    echoes: list[dict[str, Any]],
+) -> dict[str, list[tuple[str, str]]]:
+    """Map each applied finding to the evidence keys its own ops establish.
+
+    ``echoes`` are the live apply's returned records, 1:1 with
+    ``combined_ops`` — the deduped canonical batch. A duplicate-only finding
+    (all its ops were another finding's identical ops) maps onto the SAME
+    echoes through the shared operation identity, so its applied record is
+    voided by exactly the later edits that void the finding it duplicated.
+    """
+    echo_by_identity = {
+        qc_operation_identity(op): echo
+        for op, echo in zip(combined_ops, echoes)
+    }
+    applied = set(applied_ids)
+    keys: dict[str, list[tuple[str, str]]] = {}
+    for finding_id, proposed_ops in eligible:
+        if finding_id not in applied:
+            continue
+        finding_keys: list[tuple[str, str]] = []
+        for op in proposed_ops:
+            identity = qc_operation_identity(canonical_qc_operation(op))
+            echo = echo_by_identity.get(identity)
+            if echo is not None:
+                finding_keys.extend(evidence_keys_for_echo(echo))
+        keys[finding_id] = list(dict.fromkeys(finding_keys))
+    return keys
+
+
+def _element_own_state(section: Any, uid: str) -> Any:
+    """The node's OWN audited fields (never its children), or None if absent.
+
+    A tiny local walker rather than an import of ``spec_doc.model._find``
+    (private, and the copy-don't-import posture): the shape it reads is the
+    stable serialized vocabulary. Children are deliberately excluded — a
+    later edit adding a sub-paragraph under a fixed provision has not
+    changed what the fix wrote.
+    """
+    if uid == "sec":
+        return {"kind": "sec", "number": section.number, "title": section.title}
+    for part in section.parts:
+        if part.uid == uid:
+            return {"kind": "pt", "title": part.title}
+        for article in part.articles:
+            if article.uid == uid:
+                return {"kind": "a", "title": article.title}
+            stack = list(article.paragraphs)
+            while stack:
+                p = stack.pop()
+                if p.uid == uid:
+                    return {
+                        "kind": "p",
+                        "text": p.text,
+                        "status": p.status,
+                        "source_item_id": p.source_item_id,
+                    }
+                stack.extend(p.children)
+    return None
+
+
+def _element_position(section: Any, uid: str) -> Any:
+    """(parent uid, index among siblings) for a body node, or None."""
+    for part in section.parts:
+        for index, article in enumerate(part.articles):
+            if article.uid == uid:
+                return (part.uid, index)
+            stack = [(article.uid, i, p) for i, p in enumerate(article.paragraphs)]
+            while stack:
+                parent_uid, index_in_parent, p = stack.pop()
+                if p.uid == uid:
+                    return (parent_uid, index_in_parent)
+                stack.extend(
+                    (p.uid, i, child) for i, child in enumerate(p.children)
+                )
+    return None
+
+
+def evidence_keys_for_echo(echo: dict[str, Any]) -> list[tuple[str, str]]:
+    """The fix-survival evidence keys one applied-op echo establishes.
+
+    Applied echoes carry ``action`` + the affected ``id`` (server-assigned
+    for adds). Content ops watch the element's own fields; a ``move``
+    additionally watches its position; section-metadata ops watch exactly
+    the map entry they wrote. A ``delete``'s evidence is the element's
+    absence — the same ``field`` key, whose captured value is None.
+    """
+    action = str(echo.get("action", "") or "")
+    uid = str(echo.get("id", "") or "")
+    if action == "set_standard_edition":
+        return [("std", str(echo.get("standard", "") or ""))]
+    if action == "set_standard_suppressed":
+        return [("sup", str(echo.get("standard", "") or ""))]
+    if action == "set_project_identity":
+        return [("identity", "sec")]
+    if action == "set_project_profile":
+        return [("profile", "sec")]
+    if not uid:
+        return []
+    if action == "move":
+        return [("field", uid), ("pos", uid)]
+    return [("field", uid)]
+
+
+# Distinguishes "suppression entry absent" from "present with empty reason".
+_ABSENT = "\x00absent"
+
+
+def evidence_value(section: Any, key: tuple[str, str]) -> Any:
+    """Current value of one evidence key against ``section``."""
+    kind, ref = key
+    if kind == "std":
+        entry = section.edition_overrides.get(ref)
+        return dict(entry) if isinstance(entry, dict) else entry
+    if kind == "sup":
+        return (
+            section.suppressed_standards[ref]
+            if ref in section.suppressed_standards
+            else _ABSENT
+        )
+    if kind == "identity":
+        return dict(section.project_identity)
+    if kind == "profile":
+        return dict(section.project_profile)
+    if kind == "pos":
+        return _element_position(section, ref)
+    return _element_own_state(section, ref)
+
+
+
+def capture_fix_evidence(
+    section: Any, echoes: list[dict[str, Any]]
+) -> dict[tuple[str, str], Any]:
+    """Snapshot what a batch of applied fixes wrote, keyed for later replay.
+
+    Taken from the tree IMMEDIATELY after the fixes applied; the commit
+    block re-reads the same keys from the final tree and marks a finding
+    applied only when every key it owns still matches — a later edit in the
+    same turn that changed a fixed provision voids that finding's applied
+    record rather than minting an audited success for a remedy the
+    committed document does not contain.
+    """
+    evidence: dict[tuple[str, str], Any] = {}
+    for echo in echoes:
+        for key in evidence_keys_for_echo(echo):
+            evidence[key] = evidence_value(section, key)
+    return evidence
+
+
+def fix_survives(
+    section: Any,
+    evidence: dict[tuple[str, str], Any],
+    keys: list[tuple[str, str]],
+) -> bool:
+    """Whether every evidence key a finding owns still reads as captured."""
+    return all(evidence_value(section, key) == evidence.get(key) for key in keys)
 
 
 def dry_run_apply_findings(

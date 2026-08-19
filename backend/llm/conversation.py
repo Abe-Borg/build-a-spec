@@ -122,6 +122,9 @@ from ..qc import QCRunner, qc_version_fingerprint
 from ..qc.apply import (
     APPLY_QC_FIXES_TOOL,
     QCChatApplyError,
+    capture_fix_evidence,
+    finding_evidence_keys,
+    fix_survives,
     stage_chat_apply,
 )
 from ..qc.context import qc_review_context_block
@@ -2656,6 +2659,17 @@ class _QcApplyStaging:
     applied_ids: list[str] = field(default_factory=list)
     skipped_events: list[tuple[str, str, str]] = field(default_factory=list)
     outcomes: dict[str, str] = field(default_factory=dict)
+    # Fix-survival evidence, captured from the tree the moment the fixes
+    # applied: what each finding's operations wrote, keyed for replay. The
+    # commit block marks a finding applied only while every key it owns
+    # still reads the same in the FINAL tree — a later edit in the same
+    # turn that changed a fixed provision voids that finding's applied
+    # record instead of minting an audited success for a remedy the
+    # committed document does not contain (caught in review on PR #135).
+    evidence: dict[tuple[str, str], Any] = field(default_factory=dict)
+    evidence_keys: dict[str, list[tuple[str, str]]] = field(
+        default_factory=dict
+    )
 
     def has_records(self) -> bool:
         return bool(self.applied_ids or self.skipped_events)
@@ -2716,11 +2730,24 @@ def _run_apply_qc_fixes(
                 [],
             )
     # Only now — the batch is on the provisional tree — stage dispositions
-    # for the commit block.
+    # for the commit block, with the fix-survival evidence captured from
+    # the tree exactly as the fixes left it.
     staging.result_ref = staged["result_ref"]
     staging.applied_ids.extend(staged["applied_ids"])
     staging.skipped_events.extend(staged["skipped_events"])
     staging.outcomes.update(staged["outcomes"])
+    if combined_ops:
+        staging.evidence.update(
+            capture_fix_evidence(session.doc.doc, applied)
+        )
+        staging.evidence_keys.update(
+            finding_evidence_keys(
+                staged["eligible"],
+                staged["applied_ids"],
+                combined_ops,
+                applied,
+            )
+        )
     _trace.tool_dispatch(trace_handle, ops=len(combined_ops), ok=True)
     result = {
         "type": "tool_result",
@@ -3320,13 +3347,48 @@ def stream_user_turn(
                     disposition_fingerprint = qc_version_fingerprint(
                         session.doc.doc
                     )
-                    if staged_qc_apply.applied_ids:
+                    # "Applied" is a claim about the COMMITTED document, so
+                    # each staged finding is re-checked against the final
+                    # tree via its fix-survival evidence: a later edit in
+                    # this same turn that changed a fixed provision voids
+                    # that finding's applied record (it stays open, with an
+                    # apply_stale outcome saying why) rather than recording
+                    # an audited success for a remedy the committed version
+                    # does not contain. Unrelated later edits change none of
+                    # a finding's evidence keys and leave it applied.
+                    committed_outcomes = dict(staged_qc_apply.outcomes)
+                    surviving_ids: list[str] = []
+                    voided_events: list[tuple[str, str, str]] = []
+                    for fid in staged_qc_apply.applied_ids:
+                        if fix_survives(
+                            session.doc.doc,
+                            staged_qc_apply.evidence,
+                            staged_qc_apply.evidence_keys.get(fid, []),
+                        ):
+                            surviving_ids.append(fid)
+                        else:
+                            committed_outcomes[fid] = "stale"
+                            voided_events.append(
+                                (
+                                    fid,
+                                    "apply_stale",
+                                    "The fix was applied and then changed "
+                                    "by a later edit in the same turn; the "
+                                    "committed document does not contain "
+                                    "the verified remedy, so the finding "
+                                    "stays open — re-run Final QC to "
+                                    "re-verify.",
+                                )
+                            )
+                    if surviving_ids:
                         session.qc.mark_applied(
-                            staged_qc_apply.applied_ids,
+                            surviving_ids,
                             document_version=disposition_version,
                             document_fingerprint=disposition_fingerprint,
                         )
-                    for fid, action, reason in staged_qc_apply.skipped_events:
+                    for fid, action, reason in (
+                        staged_qc_apply.skipped_events + voided_events
+                    ):
                         session.qc.record_disposition_outcome(
                             fid,
                             action=action,
@@ -3336,7 +3398,7 @@ def stream_user_turn(
                         )
                     qc_dispositions_event = {
                         "type": "qc_dispositions",
-                        "outcomes": dict(staged_qc_apply.outcomes),
+                        "outcomes": committed_outcomes,
                     }
                 if last_round_context is not None:
                     # The context gauge: prompt size of this turn's final

@@ -217,10 +217,71 @@ def test_qc_fixes_and_ordinary_edits_share_one_undo_step(monkeypatch) -> None:
     committed = json.dumps(sessions.get_session().doc.doc.to_dict())
     assert _FIXED_TEXT in committed
     assert "Coordinate all trade interfaces." in committed
+    # An UNRELATED later edit changes none of the fix's evidence keys — the
+    # applied record stands (only an edit to the fixed content voids it).
+    assert (
+        sessions.get_session().qc.result.finding("qc-safe000fix1").status
+        == "applied"
+    )
     assert client.post("/api/doc/undo").json()["ok"] is True
     reverted = json.dumps(sessions.get_session().doc.doc.to_dict())
     assert _FIXED_TEXT not in reverted
     assert "Coordinate all trade interfaces." not in reverted
+
+
+def test_a_later_edit_overwriting_a_fix_voids_its_applied_record(
+    monkeypatch,
+) -> None:
+    """"Applied" is a claim about the COMMITTED document (PR #135 review).
+
+    A later apply_spec_edits in the SAME turn that rewrites the fixed
+    provision means the committed version does not contain the verified
+    remedy — the finding must stay open with an apply_stale outcome, never
+    be recorded as an audited success.
+    """
+    client = _client()
+    _seed_and_install(client, [_safe_fix_finding()])
+    fake = FakeClient(
+        [
+            tool_turn(
+                ["Applying… "],
+                {"finding_ids": ["qc-safe000fix1"]},
+                tool_id="toolu_qc1",
+                name="apply_qc_fixes",
+            ),
+            tool_turn(
+                ["And your rewording… "],
+                {
+                    "edits": [
+                        {
+                            "action": "replace",
+                            "target_id": "pt1.a1.p1",
+                            "text": "A completely different provision.",
+                            "status": "confirmed",
+                        }
+                    ]
+                },
+                tool_id="toolu_ed1",
+            ),
+            text_turn(["Done."]),
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+    events = _parse_sse(client.post("/api/chat", json={"message": "go"}).text)
+    assert events[-1]["type"] == "turn_complete"
+    outcomes = next(
+        e for e in events if e["type"] == "qc_dispositions"
+    )["outcomes"]
+    assert outcomes == {"qc-safe000fix1": "stale"}
+    session = sessions.get_session()
+    committed = json.dumps(session.doc.doc.to_dict())
+    assert "A completely different provision." in committed
+    assert _FIXED_TEXT not in committed
+    finding = session.qc.result.finding("qc-safe000fix1")
+    assert finding.status == "open"
+    event = finding.disposition_events[-1]
+    assert event.action == "apply_stale"
+    assert "later edit in the same turn" in event.reason
 
 
 def test_a_failed_turn_rolls_back_and_records_no_disposition(

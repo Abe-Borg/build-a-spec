@@ -73,6 +73,7 @@ import { createLatestAnswer } from "./lib/latestAnswer";
 import {
   emptyDebriefQueue,
   rememberDebrief,
+  requeueDebrief,
   takeNextDebrief,
 } from "./lib/debriefQueue";
 import type { DebriefKind, DebriefQueueState } from "./lib/debriefQueue";
@@ -2097,6 +2098,7 @@ export default function App() {
     const { state, next } = takeNextDebrief(debriefQueueRef.current, {
       epoch: workspaceEpochRef.current,
       busy,
+      manualEditBusy,
       fileLoading: fileLoading !== null,
       tourActive: onboarding.phase.kind !== "idle",
       protectedWorkspace: inProtectedWorkspace,
@@ -2104,6 +2106,16 @@ export default function App() {
     });
     if (state !== debriefQueueRef.current) debriefQueueRef.current = state;
     if (!next) return;
+    // The render-time gates can lag the synchronous guards send() lives by
+    // (state commits a render behind the refs). A popped entry that send()
+    // would decline must be REQUEUED, never eaten — the blocking state's own
+    // falling edge is a dependency, so it retries without spinning.
+    const guardsBusy = () =>
+      busyRef.current || manualEditBusyRef.current || fileLoadingRef.current;
+    if (guardsBusy()) {
+      debriefQueueRef.current = requeueDebrief(debriefQueueRef.current, next);
+      return;
+    }
     debriefInFlightRef.current = true;
     void (async () => {
       try {
@@ -2112,6 +2124,14 @@ export default function App() {
             ? await fetchResearchDebrief()
             : await fetchQcDebrief();
         if (workspaceEpochRef.current !== next.epoch) return;
+        if (guardsBusy()) {
+          // A guard engaged while the directive was being fetched.
+          debriefQueueRef.current = requeueDebrief(
+            debriefQueueRef.current,
+            next,
+          );
+          return;
+        }
         await send(message);
       } catch (err) {
         // eslint-disable-next-line no-console
@@ -2123,7 +2143,7 @@ export default function App() {
     })();
     // send() is deliberately not a dependency: it is redefined every render
     // and the effect only needs whichever instance is current when it fires.
-  }, [busy, fileLoading, debriefNonce, health, inProtectedWorkspace, onboarding.phase.kind]);
+  }, [busy, manualEditBusy, fileLoading, debriefNonce, health, inProtectedWorkspace, onboarding.phase.kind]);
   const activeDiscipline = projectDiscipline(doc, health?.legacy_discipline);
   const projectHeading = formatProjectHeading(doc, health?.legacy_discipline);
 

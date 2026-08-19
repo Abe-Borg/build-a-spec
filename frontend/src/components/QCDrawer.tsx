@@ -383,6 +383,44 @@ function QcCandidateCard({
   );
 }
 
+/** What a batched phase 2 can honestly show.
+ *
+ *  A batched seat is not streamed, so there is no activity to shimmer and
+ *  no per-seat query to slide in — the seat cards below stay accurate but
+ *  go quiet until their results land together. Rather than let that read as
+ *  a stall, this states the transport and reports the provider's own
+ *  request counts. It renders nothing on the streaming path.
+ */
+function QcBatchLine({ live }: { live: QcLiveState }) {
+  const batch = live.batch;
+  if (live.transport !== "batch" || !batch) return null;
+  const settled = batch.succeeded + batch.errored;
+  const done = batch.status === "ended";
+  const failed =
+    batch.status === "failed" ||
+    batch.status === "timeout" ||
+    batch.status === "cancelled";
+  return (
+    <p
+      className={`flex items-center gap-1.5 rounded border px-2 py-1.5 text-[10px] ${
+        failed
+          ? "border-warn/30 bg-warn/5 text-warn"
+          : "border-line bg-paper-2 text-ink-dim"
+      }`}
+    >
+      {!done && !failed && <span className="agent-dot" aria-hidden="true" />}
+      <span>
+        {failed
+          ? `Batched review ${batch.status}${batch.error ? ` — ${batch.error}` : ""}`
+          : done
+            ? `Batched review complete — ${settled} of ${batch.submitted} seats returned`
+            : `Batched review in progress — ${settled} of ${batch.submitted} seats returned` +
+              (batch.round > 1 ? ` (round ${batch.round})` : "")}
+      </span>
+    </p>
+  );
+}
+
 function QcCandidateGroup({
   title,
   candidates,
@@ -570,6 +608,7 @@ function QcReviewRoom({ live }: { live: QcLiveState }) {
               </p>
             ) : (
               <div className="space-y-2.5">
+                <QcBatchLine live={live} />
                 <QcCandidateGroup title="In review" candidates={live.inReview} live={live} />
                 <QcCandidateGroup title="Waiting" candidates={live.waiting} live={live} />
                 <QcCandidateGroup title="Resolved" candidates={live.resolved} live={live} />

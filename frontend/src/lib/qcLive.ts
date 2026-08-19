@@ -147,6 +147,46 @@ export interface QcStageLiveState {
   total: number;
 }
 
+/** Live view of a batched phase 2.
+
+ *  Present only when verification is running on the Message Batches API.
+ *  Every number here is the provider's own request_counts — the board must
+ *  not invent per-seat motion for a transport that does not stream. */
+export interface QcBatchLiveState {
+  status: "submitted" | "polling" | "ended" | "cancelled" | "timeout" | "failed";
+  round: number;
+  submitted: number;
+  succeeded: number;
+  errored: number;
+  processing: number;
+  total: number;
+  error: string;
+}
+
+type QcBatchEvent = Extract<QcEvent, { type: "verification_batch" }>;
+
+/** Fold one batch frame onto the previous one.
+
+ *  A "polling" frame carries live request_counts but no `submitted`/`total`,
+ *  so those are carried forward rather than reset to zero — a progress line
+ *  that flickered back to "0 of 0" between ticks would read as a stall on
+ *  the one transport that cannot show per-seat motion. */
+function mergeBatchProgress(
+  previous: QcBatchLiveState | null,
+  event: QcBatchEvent,
+): QcBatchLiveState {
+  return {
+    status: event.status,
+    round: event.round ?? previous?.round ?? 1,
+    submitted: event.submitted ?? previous?.submitted ?? 0,
+    succeeded: event.succeeded ?? previous?.succeeded ?? 0,
+    errored: event.errored ?? previous?.errored ?? 0,
+    processing: event.processing ?? previous?.processing ?? 0,
+    total: event.total ?? previous?.total ?? 0,
+    error: event.error ?? "",
+  };
+}
+
 export interface QcLiveState {
   runId: string;
   phase: QcLivePhase;
@@ -162,6 +202,10 @@ export interface QcLiveState {
   lenses: QcLensLiveState[];
   consolidation: QcConsolidationLiveState;
   candidates: QcCandidateLiveState[];
+  /** "batch" once a roster event says so; "stream" otherwise, which is also
+   *  what every pre-batch run replays as. */
+  transport: "batch" | "stream";
+  batch: QcBatchLiveState | null;
   inReview: QcCandidateLiveState[];
   waiting: QcCandidateLiveState[];
   resolved: QcCandidateLiveState[];
@@ -637,6 +681,8 @@ export function foldQcLiveState(
   const validation = new Map<string, QcValidationLiveState>();
   let runId = "";
   let phase: QcLivePhase = events.length ? "lenses" : "idle";
+  let transport: "batch" | "stream" = "stream";
+  let batch: QcBatchLiveState | null = null;
   let runState: QcLiveState["runState"] = events.length ? "running" : "idle";
   let error = snapshot?.error ?? "";
   let validationStarted = false;
@@ -813,6 +859,7 @@ export function foldQcLiveState(
         break;
       case "verification_started":
         phase = "verification";
+        transport = event.transport === "batch" ? "batch" : "stream";
         for (const entry of event.candidates ?? []) {
           candidates.set(entry.candidate_id, blankCandidate(entry));
         }
@@ -821,6 +868,10 @@ export function foldQcLiveState(
         verificationTotals.seats =
           event.total_seats ??
           event.candidates.reduce((total, item) => total + item.panel_size, 0);
+        break;
+      case "verification_batch":
+        transport = "batch";
+        batch = mergeBatchProgress(batch, event);
         break;
       case "verifier_started": {
         const seat = ensureSeat(
@@ -1128,6 +1179,8 @@ export function foldQcLiveState(
     lenses: lensList,
     consolidation,
     candidates: candidateList,
+    transport,
+    batch,
     inReview,
     waiting,
     resolved,

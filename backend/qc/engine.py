@@ -1485,6 +1485,11 @@ class QCResult:
     input_manifest: dict[str, Any] = field(default_factory=dict)
     model: str = ""
     effort: str = ""
+    # The verifier seats' effort. Separate from ``effort`` (the lens/headline
+    # depth) because the two phases run at different depths: a lens generates
+    # findings, a seat adjudicates one. Empty on a record written before the
+    # split, which renders as "Not recorded" rather than claiming a value.
+    verifier_effort: str = ""
     # The calendar date the run put in front of every lens and verifier
     # seat, which now materially affects their edition-currency judgements.
     # Recorded but NOT fingerprinted — hashing it would flip every retained
@@ -1863,6 +1868,10 @@ class QCResult:
         manifest_fingerprint = document.get("fingerprint")
         manifest_model = configuration.get("model")
         manifest_effort = configuration.get("effort")
+        # Absent on a report written before effort was split per phase; that
+        # record's own ``verifier_effort`` is empty too, so the pair still
+        # reconciles. Present-and-different is still tampering.
+        manifest_verifier_effort = configuration.get("verifier_effort", "")
         manifest_max_tokens = configuration.get("max_tokens")
         manifest_research_present = research.get("present")
         if (
@@ -1874,6 +1883,7 @@ class QCResult:
             or not manifest_model
             or not isinstance(manifest_effort, str)
             or not manifest_effort
+            or not isinstance(manifest_verifier_effort, str)
             or not isinstance(manifest_max_tokens, int)
             or isinstance(manifest_max_tokens, bool)
             or manifest_max_tokens < 1
@@ -1887,6 +1897,7 @@ class QCResult:
             == self.version_fingerprint
             and manifest_model == self.model
             and manifest_effort == self.effort
+            and manifest_verifier_effort == self.verifier_effort
             and manifest_max_tokens == self.max_tokens
             and manifest_research_present == self.research_profile_present
         )
@@ -2025,6 +2036,12 @@ class QCResult:
             # review from one where they shared it, so flipping the knob has
             # to read as stale rather than as comparable.
             consolidation_enabled=settings.QC_CONSOLIDATION,
+            # Same CURRENT-regime posture. Transport does not change what the
+            # panel concluded, but it does change what evidence the record
+            # carries (a batched seat has no live activity frames), so a
+            # retained report from the other transport reads stale rather
+            # than being silently treated as like-for-like.
+            batch_verification=settings.QC_BATCH_VERIFICATION,
         )
         return self.input_fingerprint == qc_input_fingerprint(manifest)
 
@@ -2053,6 +2070,7 @@ class QCResult:
             "input_manifest": dict(self.input_manifest),
             "model": self.model,
             "effort": self.effort,
+            "verifier_effort": self.verifier_effort,
             "context_date": self.context_date,
             "max_tokens": self.max_tokens,
             "duration_ms": self.duration_ms,
@@ -2220,6 +2238,7 @@ class QCResult:
                 ),
                 model=str(data.get("model", "") or ""),
                 effort=str(data.get("effort", "") or ""),
+                verifier_effort=str(data.get("verifier_effort", "") or ""),
                 # Absent from every pre-1.8.0 record, so "" (rendered "Not
                 # recorded") is the honest read, not a defaulted-to-today lie.
                 context_date=str(data.get("context_date", "") or ""),
@@ -3110,6 +3129,46 @@ def _relay_stream_activity(
 # document prefix is cached regardless, which is the bulk of the payload.
 
 
+def _qc_request_kwargs(
+    *,
+    system_prompt: str,
+    tools: list[dict],
+    model: str,
+    max_tokens: int,
+    effort: str,
+    cache_ttl: str,
+) -> dict[str, Any]:
+    """The request shape every QC call sends, whatever the transport.
+
+    ONE definition on purpose. The cache is a strict prefix match over
+    tools -> system -> messages, so a streamed seat and a batched seat that
+    built these blocks separately would drift into two cache lineages the
+    moment one of them was edited — and the drift would present as a quietly
+    doubled bill, not as a failure. Both paths call this.
+
+    ``tools`` is copied before the breakpoint is stamped: callers build a
+    list per seat but may share the dicts inside it.
+    """
+    tools = [dict(tool) for tool in tools]
+    tools[-1]["cache_control"] = _cache_control(cache_ttl)
+    return {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": _cache_control(cache_ttl),
+            }
+        ],
+        "tools": tools,
+        # Opus 5 runs adaptive thinking by default; state it + the effort
+        # level explicitly. A manual thinking budget would 400.
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": effort},
+    }
+
+
 def _run_streaming_call(
     client: Any,
     *,
@@ -3149,24 +3208,14 @@ def _run_streaming_call(
     # for 1h produces a request the provider rejects. Do not "optimise" the
     # small blocks back down to the default: mixed TTLs here are not a
     # cheaper cache, they are a 400 on every call in the phase.
-    tools = [dict(tool) for tool in tools]
-    tools[-1]["cache_control"] = _cache_control(cache_ttl)
-    request_kwargs: dict[str, Any] = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "system": [
-            {
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": _cache_control(cache_ttl),
-            }
-        ],
-        "tools": tools,
-        # Opus 5 runs adaptive thinking by default; state it + the effort
-        # level explicitly. A manual thinking budget would 400.
-        "thinking": {"type": "adaptive"},
-        "output_config": {"effort": effort},
-    }
+    request_kwargs = _qc_request_kwargs(
+        system_prompt=system_prompt,
+        tools=tools,
+        model=model,
+        max_tokens=max_tokens,
+        effort=effort,
+        cache_ttl=cache_ttl,
+    )
 
     search_ceiling = max(1, max_searches * 2)
     policy = DEFAULT_REALTIME_RETRY_POLICY
@@ -4322,6 +4371,11 @@ def _run_consolidation_call(
 # ---------------------------------------------------------------------------
 
 
+def _seat_key(finding_index: int, reviewer_slot: int) -> str:
+    """Stable batch custom_id for one seat. Run-local, never persisted."""
+    return f"seat-{finding_index}-{reviewer_slot}"
+
+
 def _panel_size(severity: str) -> int:
     if severity in ("critical", "high"):
         return max(1, settings.QC_VERIFIERS_CRITICAL)
@@ -4333,6 +4387,70 @@ class _VerifierOutcome:
     verdict: QCVerdict
     billed: list[Any] = field(default_factory=list)
     shared_request_failure: bool = False
+
+
+@dataclass(frozen=True)
+class _CallSpec:
+    """One QC call's request shape, independent of how it is sent.
+
+    Extracted so a verifier seat can be executed by either transport from
+    the SAME description. ``_run_streaming_call`` takes these as keyword
+    arguments; the batch executor turns them into batch request params.
+    """
+
+    system_prompt: str
+    shared_prefix: str
+    request_suffix: str
+    tools: tuple[dict, ...]
+    tool_name: str
+    json_tag: Any
+    model: str
+    max_tokens: int
+    effort: str
+    max_searches: int
+    cache_ttl: str = ""
+
+
+def _verifier_tools(lens: QCLens, model: str) -> list[dict]:
+    tools: list[dict] = []
+    # Verifiers on compliance-class findings get a small web allowance to
+    # check facts; the rest reason from the document alone.
+    if lens.web:
+        tools.append(build_web_search_tool(max_uses=settings.QC_MAX_SEARCHES_LENS))
+        tools.append(build_web_fetch_tool(max_uses=settings.QC_MAX_FETCHES_LENS))
+    tools.append(submit_qc_verdict_tool(model=model))
+    return tools
+
+
+def _verifier_call_spec(
+    *,
+    finding: dict,
+    lens: QCLens,
+    section_render: str,
+    module: SpecModule,
+    model: str,
+    max_tokens: int,
+    effort: str,
+    today: str = "",
+) -> _CallSpec:
+    """One verifier seat's request, built once for either transport."""
+    return _CallSpec(
+        system_prompt=_verifier_system_prompt(module),
+        shared_prefix=_verifier_shared_prefix(section_render, today),
+        request_suffix=_verifier_request_suffix(finding, lens),
+        tools=tuple(_verifier_tools(lens, model)),
+        tool_name=QC_VERDICT_TOOL_NAME,
+        json_tag=_VERDICT_JSON_TAG,
+        model=model,
+        max_tokens=max_tokens,
+        effort=effort,
+        max_searches=settings.QC_MAX_SEARCHES_LENS if lens.web else 0,
+        # The verification phase runs longer than the 5-minute default cache
+        # entry survives, so the shared document would lapse and be rewritten
+        # mid-phase. A 1h entry costs 2x to write and breaks even after three
+        # reads; a panel run has dozens.
+        cache_ttl="1h",
+    )
 
 
 def _verify_one(
@@ -4376,35 +4494,59 @@ def _verify_one(
                 reviewer_index=reviewer_index,
             ),
         )
-    tools: list[dict] = []
-    # Verifiers on compliance-class findings get a small web allowance to
-    # check facts; the rest reason from the document alone.
-    if lens.web:
-        tools.append(build_web_search_tool(max_uses=settings.QC_MAX_SEARCHES_LENS))
-        tools.append(build_web_fetch_tool(max_uses=settings.QC_MAX_FETCHES_LENS))
-    tools.append(submit_qc_verdict_tool(model=model))
-    result = _run_streaming_call(
-        client,
-        system_prompt=_verifier_system_prompt(module),
-        shared_prefix=_verifier_shared_prefix(section_render, today),
-        request_suffix=_verifier_request_suffix(finding, lens),
-        # The verification phase runs longer than the 5-minute default cache
-        # entry survives, so the shared document would lapse and be rewritten
-        # mid-phase. A 1h entry costs 2x to write and breaks even after three
-        # reads; a panel run has dozens.
-        cache_ttl="1h",
-        tools=tools,
-        tool_name=QC_VERDICT_TOOL_NAME,
-        json_tag=_VERDICT_JSON_TAG,
+    spec = _verifier_call_spec(
+        finding=finding,
+        lens=lens,
+        section_render=section_render,
+        module=module,
         model=model,
         max_tokens=max_tokens,
         effort=effort,
-        max_searches=settings.QC_MAX_SEARCHES_LENS if lens.web else 0,
+        today=today,
+    )
+    result = _run_streaming_call(
+        client,
+        system_prompt=spec.system_prompt,
+        shared_prefix=spec.shared_prefix,
+        request_suffix=spec.request_suffix,
+        cache_ttl=spec.cache_ttl,
+        tools=list(spec.tools),
+        tool_name=spec.tool_name,
+        json_tag=spec.json_tag,
+        model=spec.model,
+        max_tokens=spec.max_tokens,
+        effort=spec.effort,
+        max_searches=spec.max_searches,
         event_prefix="verifier",
         event_fields=worker_fields,
         event_sink=event_sink,
         should_stop=lambda: should_stop() or shared_should_stop(),
     )
+    return _verifier_outcome(
+        result,
+        finding=finding,
+        model=model,
+        reviewer_index=reviewer_index,
+        element_ids=element_ids,
+        shared_stop_active=shared_should_stop(),
+    )
+
+
+def _verifier_outcome(
+    result: _CallResult,
+    *,
+    finding: dict,
+    model: str,
+    reviewer_index: int,
+    element_ids: frozenset[str] = frozenset(),
+    shared_stop_active: bool = False,
+) -> _VerifierOutcome:
+    """Map one seat's call result onto its verdict record.
+
+    Shared by both transports so a batched seat and a streamed seat produce
+    byte-identical audit records for the same response — the whole basis of
+    the claim that batching changes transport and nothing else.
+    """
     usage = _sum_billed(result.billed)
     queries, retrieved_sources = _collect_call_activity(result.responses)
     attempted_queries, attempted_sources = _collect_call_activity(
@@ -4422,13 +4564,13 @@ def _verify_one(
                 status=(
                     "cancelled"
                     if result.error == "Cancelled by user."
-                    and not shared_should_stop()
+                    and not shared_stop_active
                     else "failed"
                 ),
                 error=(
                     "Verifier phase stopped after a shared request failure."
                     if result.error == "Cancelled by user."
-                    and shared_should_stop()
+                    and shared_stop_active
                     else result.error or "QC verifier failed."
                 ),
                 reviewer_index=reviewer_index,
@@ -4498,6 +4640,442 @@ def _verify_one(
 
 
 # ---------------------------------------------------------------------------
+# Batched execution — phase 2 on the Message Batches API
+# ---------------------------------------------------------------------------
+
+# Batch results report a failure as an error OBJECT, not a raised exception,
+# so the exception classifier cannot see them. This is the same taxonomy by
+# the other door: the retry decision (`is_retryable_failure_class`) and the
+# shared-failure circuit both key off FailureClass, and a batched seat must
+# reach the same verdict a streamed seat would for the same failure.
+_BATCH_ERROR_CLASSES: dict[str, FailureClass] = {
+    "rate_limit_error": FailureClass.RATE_LIMIT,
+    "overloaded_error": FailureClass.SERVER_ERROR,
+    "api_error": FailureClass.SERVER_ERROR,
+    "timeout_error": FailureClass.CONNECTION,
+    "invalid_request_error": FailureClass.INVALID_REQUEST,
+    "authentication_error": FailureClass.INVALID_REQUEST,
+    "permission_error": FailureClass.INVALID_REQUEST,
+    "not_found_error": FailureClass.INVALID_REQUEST,
+    "request_too_large": FailureClass.INVALID_REQUEST,
+    "billing_error": FailureClass.INVALID_REQUEST,
+}
+
+
+def _batch_error_facts(error: Any) -> tuple[FailureClass, str]:
+    """Classify one batch result's error object -> (class, message).
+
+    Duck-typed over the nested ``{type: "error", error: {type, message}}``
+    envelope and a flat ``{type, message}``, because only the envelope is
+    guaranteed and an unrecognized shape must degrade to a retryable-unknown
+    rather than crash a phase.
+    """
+    inner = _item_attr(error, "error")
+    if inner is None:
+        inner = error
+    raw_type = str(_item_attr(inner, "type") or "")
+    message = str(_item_attr(inner, "message") or "").strip()
+    failure_class = _BATCH_ERROR_CLASSES.get(raw_type, FailureClass.UNKNOWN)
+    if raw_type == "authentication_error":
+        return failure_class, AUTH_ERROR_MESSAGE
+    return failure_class, message or f"Batch request failed ({raw_type or 'unknown'})."
+
+
+@dataclass
+class _BatchSeatState:
+    """One call's conversation as it moves through successive batch rounds."""
+
+    spec: _CallSpec
+    messages: list[dict]
+    all_responses: list[Any] = field(default_factory=list)
+    billed: list[Any] = field(default_factory=list)
+    api_request_count: int = 0
+    attempt: int = 0
+    continuations: int = 0
+    container_id: str = ""
+    settled: _CallResult | None = None
+
+    def initial_messages(self) -> list[dict]:
+        return [
+            {
+                "role": "user",
+                "content": _qc_user_content(
+                    self.spec.shared_prefix,
+                    self.spec.request_suffix,
+                    self.spec.cache_ttl,
+                ),
+            }
+        ]
+
+    def restart_attempt(self) -> None:
+        """Begin a fresh attempt: a retry is a NEW conversation.
+
+        Same rule as the streaming path — the failed attempt's responses stay
+        billed (the spend was real) but its conversation and its provider
+        container are abandoned rather than inherited.
+        """
+        self.billed.extend(self.all_responses)
+        self.all_responses = []
+        self.messages = self.initial_messages()
+        self.container_id = ""
+        self.attempt += 1
+        self.continuations = 0
+
+    def settle(self, error: str, failure_class: str = "") -> None:
+        self.settled = _CallResult(
+            None,
+            self.all_responses,
+            [*self.billed, *self.all_responses],
+            error,
+            self.api_request_count,
+            failure_class,
+        )
+
+    def settle_parsed(self) -> None:
+        payload = _parse(
+            self.all_responses, self.spec.tool_name, self.spec.json_tag
+        )
+        self.settled = _CallResult(
+            payload,
+            self.all_responses,
+            [*self.billed, *self.all_responses],
+            "" if payload is not None else "QC produced no parseable payload.",
+            self.api_request_count,
+        )
+
+
+def _batch_request_counts(snapshot: Any) -> dict[str, int]:
+    counts = _item_attr(snapshot, "request_counts")
+    fields = ("processing", "succeeded", "errored", "canceled", "expired")
+    return {
+        name: int(_item_attr(counts, name) or 0) if counts is not None else 0
+        for name in fields
+    }
+
+
+def _cancel_batch(client: Any, batch_id: str) -> None:
+    """Best effort. A batch we can no longer cancel is not a run failure."""
+    if not batch_id:
+        return
+    try:
+        client.messages.batches.cancel(batch_id)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:  # noqa: BLE001 — cancellation is advisory
+        pass
+
+
+def _run_batch_calls(
+    client: Any,
+    *,
+    specs: dict[str, _CallSpec],
+    seat_event_prefix: str = "verifier",
+    seat_event_fields: dict[str, dict[str, Any]] | None = None,
+    batch_event_type: str = "verification_batch",
+    event_sink: EventSink = _noop_sink,
+    should_stop: Callable[[], bool] = lambda: False,
+) -> dict[str, _CallResult]:
+    """Run many independent QC calls through the Message Batches API.
+
+    The transposition of :func:`_run_streaming_call`: the same pause_turn
+    continuation loop, the same retry policy and attempt ceiling, the same
+    2x web-search runaway ceiling, the same billed-usage accumulation across
+    attempts and the same ``_CallResult`` shape — except the loop's inner
+    step is one batch ROUND rather than one request. Every seat still
+    unsettled at the top of a round goes into that round's batch, and each
+    result either settles its seat, queues a pause_turn continuation, or
+    queues a retry on a fresh conversation.
+
+    What is deliberately NOT carried over is the live relay: a batch request
+    does not stream, so no per-seat activity/search/fetch frames exist to
+    emit. Progress is reported from the batch's own ``request_counts``,
+    which is real provider state rather than an animation.
+
+    Never raises for a per-seat failure. A failure that takes the whole
+    round (submission refused, results unreadable) settles every unsettled
+    seat with that error, so the run degrades to partial — which blocks
+    readiness — rather than losing seat records.
+    """
+    states = {
+        key: _BatchSeatState(spec=spec, messages=[]) for key, spec in specs.items()
+    }
+    for state in states.values():
+        state.messages = state.initial_messages()
+    if not states:
+        return {}
+
+    fields_for = seat_event_fields or {}
+    policy = DEFAULT_REALTIME_RETRY_POLICY
+    attempts = max(1, policy.max_attempts)
+    poll_seconds = max(1, settings.QC_BATCH_POLL_SECONDS)
+    deadline = time.monotonic() + max(60, settings.QC_BATCH_MAX_WAIT_SECONDS)
+    max_rounds = max(1, settings.QC_BATCH_MAX_ROUNDS)
+
+    def unsettled() -> list[str]:
+        return [key for key, state in states.items() if state.settled is None]
+
+    def settle_all(keys: list[str], error: str, failure_class: str = "") -> None:
+        for key in keys:
+            states[key].settle(error, failure_class)
+
+    def emit(status: str, **extra: Any) -> None:
+        event_sink(
+            {
+                "type": batch_event_type,
+                "status": status,
+                "total": len(states),
+                "settled": len(states) - len(unsettled()),
+                **extra,
+            }
+        )
+
+    def results() -> dict[str, _CallResult]:
+        return {
+            key: state.settled
+            for key, state in states.items()
+            if state.settled is not None
+        }
+
+    for round_index in range(max_rounds):
+        pending = unsettled()
+        if not pending:
+            break
+        if should_stop():
+            settle_all(pending, "Cancelled by user.")
+            emit("cancelled", round=round_index + 1)
+            return results()
+
+        requests: list[dict[str, Any]] = []
+        for key in pending:
+            state = states[key]
+            params: dict[str, Any] = {
+                **_qc_request_kwargs(
+                    system_prompt=state.spec.system_prompt,
+                    tools=list(state.spec.tools),
+                    model=state.spec.model,
+                    max_tokens=state.spec.max_tokens,
+                    effort=state.spec.effort,
+                    cache_ttl=state.spec.cache_ttl,
+                ),
+                "messages": state.messages,
+            }
+            if state.container_id:
+                params["container"] = state.container_id
+            requests.append({"custom_id": key, "params": params})
+
+        try:
+            batch = client.messages.batches.create(requests=requests)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:  # noqa: BLE001 — classified, never raised on
+            failure_class = classify_exception(exc)
+            message = (
+                AUTH_ERROR_MESSAGE
+                if is_authentication_error(exc)
+                else f"{type(exc).__name__}: {exc}"
+            )
+            # A refused submission failed every seat in the round at once.
+            retryable = is_retryable_failure_class(failure_class)
+            exhausted = [
+                key for key in pending if states[key].attempt >= attempts - 1
+            ]
+            if not retryable or len(exhausted) == len(pending):
+                settle_all(pending, message, failure_class.value)
+                emit("failed", round=round_index + 1, error=message)
+                return results()
+            settle_all(exhausted, message, failure_class.value)
+            backoff = compute_backoff_seconds(
+                policy, attempt=round_index, failure_class=failure_class
+            )
+            for key in pending:
+                if states[key].settled is not None:
+                    continue
+                states[key].restart_attempt()
+                event_sink(
+                    {
+                        "type": f"{seat_event_prefix}_retry",
+                        **fields_for.get(key, {}),
+                        "attempt": states[key].attempt,
+                        "max_attempts": attempts,
+                        "reason": failure_class.value,
+                        "backoff_s": round(backoff, 1),
+                    }
+                )
+            time.sleep(backoff)
+            continue
+
+        batch_id = str(_item_attr(batch, "id") or "")
+        emit("submitted", round=round_index + 1, batch_id=batch_id, submitted=len(requests))
+
+        last_counts: dict[str, int] | None = None
+        while True:
+            if should_stop():
+                _cancel_batch(client, batch_id)
+                settle_all(unsettled(), "Cancelled by user.")
+                emit("cancelled", round=round_index + 1, batch_id=batch_id)
+                return results()
+            try:
+                snapshot = client.messages.batches.retrieve(batch_id)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception:  # noqa: BLE001 — a dropped poll is not a failure
+                snapshot = None
+            if snapshot is not None:
+                counts = _batch_request_counts(snapshot)
+                if counts != last_counts:
+                    last_counts = counts
+                    emit(
+                        "polling",
+                        round=round_index + 1,
+                        batch_id=batch_id,
+                        **counts,
+                    )
+                if str(_item_attr(snapshot, "processing_status") or "") == "ended":
+                    break
+            if time.monotonic() > deadline:
+                _cancel_batch(client, batch_id)
+                message = (
+                    "Batched verification exceeded its wall-clock ceiling "
+                    f"({max(60, settings.QC_BATCH_MAX_WAIT_SECONDS)}s)."
+                )
+                settle_all(unsettled(), message, FailureClass.CONNECTION.value)
+                emit("timeout", round=round_index + 1, batch_id=batch_id)
+                return results()
+            time.sleep(poll_seconds)
+
+        try:
+            items = list(client.messages.batches.results(batch_id))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:  # noqa: BLE001 — whole round unreadable
+            message = f"{type(exc).__name__}: {exc}"
+            settle_all(unsettled(), message, classify_exception(exc).value)
+            emit("failed", round=round_index + 1, batch_id=batch_id, error=message)
+            return results()
+
+        answered: set[str] = set()
+        for item in items:
+            key = str(_item_attr(item, "custom_id") or "")
+            state = states.get(key)
+            if state is None or state.settled is not None:
+                continue
+            answered.add(key)
+            _apply_batch_item(
+                state,
+                item,
+                attempts=attempts,
+                retry_event=f"{seat_event_prefix}_retry",
+                retry_fields=fields_for.get(key, {}),
+                event_sink=event_sink,
+            )
+
+        # A submitted seat with no result line is a hole in the batch, not a
+        # verdict. Recorded as a failed seat (which makes the run partial)
+        # rather than silently dropped from the panel.
+        for key in pending:
+            if key in answered or states[key].settled is not None:
+                continue
+            states[key].settle(
+                "Batched verification returned no result for this seat.",
+                FailureClass.UNKNOWN.value,
+            )
+
+    for key in unsettled():
+        states[key].settle(
+            "Batched verification did not settle within the round ceiling.",
+            FailureClass.UNKNOWN.value,
+        )
+    emit("ended")
+    return results()
+
+
+def _apply_batch_item(
+    state: _BatchSeatState,
+    item: Any,
+    *,
+    attempts: int,
+    retry_event: str,
+    retry_fields: dict[str, Any],
+    event_sink: EventSink,
+) -> None:
+    """Fold one batch result into its seat: settle, continue, or retry."""
+    outcome = _item_attr(item, "result")
+    outcome_type = str(_item_attr(outcome, "type") or "")
+
+    if outcome_type in {"canceled", "cancelled"}:
+        state.settle("Cancelled by user.")
+        return
+    if outcome_type == "expired":
+        state.settle(
+            "Batched verification request expired before it ran.",
+            FailureClass.CONNECTION.value,
+        )
+        return
+    if outcome_type != "succeeded":
+        failure_class, message = _batch_error_facts(_item_attr(outcome, "error"))
+        is_last = state.attempt >= attempts - 1
+        if not is_retryable_failure_class(failure_class) or is_last:
+            state.settle(message, failure_class.value)
+            return
+        backoff = compute_backoff_seconds(
+            DEFAULT_REALTIME_RETRY_POLICY,
+            attempt=state.attempt,
+            failure_class=failure_class,
+        )
+        state.restart_attempt()
+        event_sink(
+            {
+                "type": retry_event,
+                **retry_fields,
+                "attempt": state.attempt,
+                "max_attempts": attempts,
+                "reason": failure_class.value,
+                # The next round's queue wait is the real backoff here; the
+                # number is reported for parity with the streamed retry line.
+                "backoff_s": round(backoff, 1),
+            }
+        )
+        return
+
+    response = _item_attr(outcome, "message")
+    if response is None:
+        state.settle(
+            "Batched verification returned a result with no message.",
+            FailureClass.UNKNOWN.value,
+        )
+        return
+    state.api_request_count += 1
+    state.all_responses.append(response)
+    state.container_id = response_container_id(response) or state.container_id
+
+    stop_class = classify_stop_reason(getattr(response, "stop_reason", None))
+    if stop_class == STOP_CLASS_COMPLETE:
+        state.settle_parsed()
+        return
+    if stop_class == STOP_CLASS_PAUSE:
+        search_ceiling = max(1, state.spec.max_searches * 2)
+        total_search = sum(_web_search_count(r) for r in state.all_responses)
+        if total_search > search_ceiling:
+            state.settle(
+                "QC call exceeded the web_search budget ceiling "
+                f"({total_search} > {search_ceiling})."
+            )
+            return
+        if state.continuations >= QC_MAX_CONTINUATIONS:
+            state.settle("QC call did not complete after maximum continuations.")
+            return
+        state.messages = sanitize_messages_for_resend(
+            [*state.messages, {"role": "assistant", "content": response.content}]
+        )
+        state.continuations += 1
+        return
+    state.settle(
+        "QC response incomplete (stop_reason: "
+        f"{getattr(response, 'stop_reason', None)})."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Phase 3 — ops validation (deterministic, no model)
 # ---------------------------------------------------------------------------
 
@@ -4543,7 +5121,9 @@ def build_qc_input_manifest(
     model: str,
     max_tokens: int,
     effort: str = "",
+    verifier_effort: str = "",
     consolidation_enabled: bool = False,
+    batch_verification: bool | None = None,
 ) -> dict[str, Any]:
     """Canonical manifest of every material input and review rule.
 
@@ -4647,7 +5227,21 @@ def build_qc_input_manifest(
         },
         "configuration": {
             "model": model,
-            "effort": effort or settings.QC_EFFORT,
+            "effort": effort or settings.QC_LENS_EFFORT,
+            # Hashed like every other configuration field: a review whose
+            # seats adjudicated at a different depth is not the same review,
+            # so a retained report from the other depth reads stale.
+            "verifier_effort": verifier_effort or settings.QC_VERIFIER_EFFORT,
+            # Transport, recorded because it is a fact about how the review
+            # was executed — not because it changes the review. Same model,
+            # same effort, same panel sizes, same prompts either way; what
+            # differs is that a batched seat produced no live activity
+            # frames, which a reader of the evidence trail should be told.
+            "batch_verification": (
+                settings.QC_BATCH_VERIFICATION
+                if batch_verification is None
+                else bool(batch_verification)
+            ),
             "max_tokens": int(max_tokens),
             "verifiers_standard": max(1, settings.QC_VERIFIERS_STANDARD),
             "verifiers_critical": max(1, settings.QC_VERIFIERS_CRITICAL),
@@ -4865,6 +5459,9 @@ def run_final_qc(
     model: str,
     max_tokens: int,
     effort: str = "",
+    lens_effort: str = "",
+    verifier_effort: str = "",
+    batch_verification: bool | None = None,
     version_index: int,
     started_at: str,
     finished_at: str,
@@ -4891,7 +5488,22 @@ def run_final_qc(
     pipeline_started = time.monotonic()
     # Pinned once per run rather than re-read at each call site, so the audit
     # record provably describes what was sent even if the env changes mid-run.
-    effort = effort or settings.QC_EFFORT
+    # Effort is pinned per PHASE, once per run, for the reason the single
+    # value was pinned once before: the audit record must provably describe
+    # what was sent even if the environment changes mid-run. ``effort`` stays
+    # as the one-value fallback so a direct caller (and every pre-split test)
+    # keeps working; when it is given it sets both phases, which is exactly
+    # what a caller passing one effort meant.
+    lens_effort = lens_effort or effort or settings.QC_LENS_EFFORT
+    verifier_effort = verifier_effort or effort or settings.QC_VERIFIER_EFFORT
+    # Pinned per run for the same reason as the efforts: the audit record has
+    # to describe the transport this run actually used, not whatever the
+    # environment says when a later line reads it.
+    batch_verification = (
+        settings.QC_BATCH_VERIFICATION
+        if batch_verification is None
+        else bool(batch_verification)
+    )
     # Same discipline, load-bearing for a different reason: this string leads
     # both cached shared prefixes, so re-reading the clock per call would
     # fork the lens and verifier cache lineages the moment a run crossed
@@ -4924,8 +5536,10 @@ def run_final_qc(
         source_guard=source_guard,
         model=model,
         max_tokens=max_tokens,
-        effort=effort,
+        effort=lens_effort,
+        verifier_effort=verifier_effort,
         consolidation_enabled=consolidation_enabled,
+        batch_verification=batch_verification,
     )
 
     event_sink(
@@ -4953,7 +5567,7 @@ def run_final_qc(
                 profile=profile,
                 model=model,
                 max_tokens=max_tokens,
-                effort=effort,
+                effort=lens_effort,
                 discipline=discipline,
                 source_capability_summary=source_capability_summary,
                 today=today,
@@ -5053,7 +5667,8 @@ def run_final_qc(
             input_fingerprint=qc_input_fingerprint(input_manifest),
             input_manifest=input_manifest,
             model=model,
-            effort=effort,
+            effort=lens_effort,
+            verifier_effort=verifier_effort,
             max_tokens=max_tokens,
             duration_ms=max(
                 0, int((time.monotonic() - pipeline_started) * 1000)
@@ -5095,7 +5710,9 @@ def run_final_qc(
         module=module,
         model=model,
         max_tokens=max_tokens,
-        effort=effort,
+        # Grouping is phase-1 judgement (and one call per bucket), so it runs
+        # at the lens depth, not the seat depth.
+        effort=lens_effort,
         today=today,
         enabled=consolidation_enabled,
         event_sink=event_sink,
@@ -5146,6 +5763,7 @@ def run_final_qc(
             "total_candidates": len(candidate_roster),
             "total_seats": total_seats,
             "max_workers": max_workers,
+            "transport": "batch" if batch_verification else "stream",
         }
     )
     verdicts: dict[int, list[QCVerdict]] = {
@@ -5229,60 +5847,131 @@ def run_final_qc(
                     {"type": "verify_progress", "done": done, "total": total}
                 )
 
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures: dict[Any, tuple[int, int]] = {}
-
-            def fill_available_slots() -> None:
-                while (
-                    pending_tasks
-                    and len(futures) < max_workers
-                    and not shared_failure.is_set()
-                ):
-                    i, j = pending_tasks.popleft()
-                    future = pool.submit(
-                        _verify_one,
-                        client,
-                        finding=raw_findings[i][1],
-                        lens=raw_findings[i][0],
-                        section_render=section_render,
-                        module=module,
-                        model=model,
-                        max_tokens=max_tokens,
-                        effort=effort,
-                        candidate_id=candidate_ids[i],
-                        reviewer_index=j + 1,
-                        element_ids=element_ids,
-                        today=today,
-                        event_sink=event_sink,
-                        should_stop=should_stop,
-                        shared_should_stop=shared_failure.is_set,
-                    )
-                    futures[future] = (i, j)
-
-            fill_available_slots()
-            while futures:
-                completed_futures, _ = wait(
-                    tuple(futures), return_when=FIRST_COMPLETED
+        if batch_verification:
+            # One batch for every seat, rather than a bounded pool of
+            # streamed calls. Seats are independent by construction — that
+            # is what makes the panel adversarial — so nothing here needs
+            # ordering, and the provider prices the whole phase at half.
+            # `pending_tasks` is drained up front: every seat is submitted,
+            # so the shared-failure drain below has nothing left to mark.
+            for i, j in tasks:
+                event_sink(
+                    {
+                        "type": "verifier_started",
+                        "candidate_id": candidate_ids[i],
+                        "reviewer_index": j + 1,
+                    }
                 )
-                for future in completed_futures:
-                    i, j = futures.pop(future)
-                    try:
-                        outcome = future.result()
-                    except Exception as exc:  # noqa: BLE001 — failed seat retained
-                        outcome = _VerifierOutcome(
-                            verdict=QCVerdict(
-                                upholds=False,
-                                status="failed",
-                                error=f"{type(exc).__name__}: {exc}",
-                                reviewer_index=j + 1,
-                            )
+            seat_specs = {
+                _seat_key(i, j): _verifier_call_spec(
+                    finding=raw_findings[i][1],
+                    lens=raw_findings[i][0],
+                    section_render=section_render,
+                    module=module,
+                    model=model,
+                    max_tokens=max_tokens,
+                    effort=verifier_effort,
+                    today=today,
+                )
+                for i, j in tasks
+            }
+            seat_fields = {
+                _seat_key(i, j): {
+                    "candidate_id": candidate_ids[i],
+                    "reviewer_index": j + 1,
+                }
+                for i, j in tasks
+            }
+            pending_tasks.clear()
+            call_results = _run_batch_calls(
+                client,
+                specs=seat_specs,
+                seat_event_prefix="verifier",
+                seat_event_fields=seat_fields,
+                batch_event_type="verification_batch",
+                event_sink=event_sink,
+                should_stop=should_stop,
+            )
+            # Recorded in submission order so a candidate's panel is folded
+            # in reviewer_index order, exactly as the streamed path's
+            # per-candidate accounting expects.
+            for i, j in tasks:
+                call_result = call_results.get(_seat_key(i, j))
+                if call_result is None:
+                    call_result = _CallResult(
+                        None,
+                        [],
+                        [],
+                        "Batched verification produced no record for this seat.",
+                        0,
+                        FailureClass.UNKNOWN.value,
+                    )
+                outcome = _verifier_outcome(
+                    call_result,
+                    finding=raw_findings[i][1],
+                    model=model,
+                    reviewer_index=j + 1,
+                    element_ids=element_ids,
+                )
+                record_verifier_outcome(i, outcome)
+                if outcome.shared_request_failure and not shared_failure.is_set():
+                    shared_failure_error = outcome.verdict.error
+                    shared_failure.set()
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures: dict[Any, tuple[int, int]] = {}
+
+                def fill_available_slots() -> None:
+                    while (
+                        pending_tasks
+                        and len(futures) < max_workers
+                        and not shared_failure.is_set()
+                    ):
+                        i, j = pending_tasks.popleft()
+                        future = pool.submit(
+                            _verify_one,
+                            client,
+                            finding=raw_findings[i][1],
+                            lens=raw_findings[i][0],
+                            section_render=section_render,
+                            module=module,
+                            model=model,
+                            max_tokens=max_tokens,
+                            effort=verifier_effort,
+                            candidate_id=candidate_ids[i],
+                            reviewer_index=j + 1,
+                            element_ids=element_ids,
+                            today=today,
+                            event_sink=event_sink,
+                            should_stop=should_stop,
+                            shared_should_stop=shared_failure.is_set,
                         )
-                    record_verifier_outcome(i, outcome)
-                    if outcome.shared_request_failure and not shared_failure.is_set():
-                        shared_failure_error = outcome.verdict.error
-                        shared_failure.set()
+                        futures[future] = (i, j)
 
                 fill_available_slots()
+                while futures:
+                    completed_futures, _ = wait(
+                        tuple(futures), return_when=FIRST_COMPLETED
+                    )
+                    for future in completed_futures:
+                        i, j = futures.pop(future)
+                        try:
+                            outcome = future.result()
+                        except Exception as exc:  # noqa: BLE001 — failed seat retained
+                            outcome = _VerifierOutcome(
+                                verdict=QCVerdict(
+                                    upholds=False,
+                                    status="failed",
+                                    error=f"{type(exc).__name__}: {exc}",
+                                    reviewer_index=j + 1,
+                                )
+                            )
+                        record_verifier_outcome(i, outcome)
+                        if outcome.shared_request_failure and not shared_failure.is_set():
+                            shared_failure_error = outcome.verdict.error
+                            shared_failure.set()
+
+                    fill_available_slots()
 
         if shared_failure.is_set():
             root_error = shared_failure_error or "Unknown invalid request."
@@ -5532,7 +6221,8 @@ def run_final_qc(
         input_fingerprint=qc_input_fingerprint(input_manifest),
         input_manifest=input_manifest,
         model=model,
-        effort=effort,
+        effort=lens_effort,
+        verifier_effort=verifier_effort,
         context_date=context_date,
         max_tokens=max_tokens,
         duration_ms=max(0, int((time.monotonic() - pipeline_started) * 1000)),

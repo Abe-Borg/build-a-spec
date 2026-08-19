@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Build-a-Spec"
-VERSION = "1.9.1"
+VERSION = "1.10.0"
 
 # --- Models -----------------------------------------------------------------
 
@@ -145,6 +145,32 @@ QC_MODEL = os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip() or MODEL_OPUS_5
 QC_MAX_TOKENS = _int_env("BUILD_A_SPEC_QC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS)
 QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "high")
 
+# Effort is now set PER PHASE, because the two phases are not the same kind of
+# work and thinking bills as output at the QC model's output rate.
+#
+# A lens GENERATES: it reads the whole specification cold and has to decide
+# what is wrong with it, so its depth is the review's depth — it stays at
+# QC_EFFORT.
+#
+# A verifier seat ADJUDICATES: it is handed one finding, its rationale, its
+# proposed operations and the same document, and answers a bounded question
+# about that one claim. Phase 2 is ~90% of a run's calls, so this is where
+# reasoning depth compounds hardest and buys least. Default "medium".
+#
+# BUILD_A_SPEC_QC_EFFORT still moves BOTH (it is each one's fallback), so the
+# existing global override keeps working; the two specific knobs override it
+# per phase. Both are recorded in the hashed input manifest, so a report
+# always states the depth each phase actually ran at.
+# Resolution order for the verifier seat, and the order matters: an operator
+# who explicitly set BUILD_A_SPEC_QC_EFFORT asked for a depth and must get it,
+# including when that depth is BELOW this default. Falling back to a literal
+# "medium" would silently raise the verifier above a global "low".
+QC_LENS_EFFORT = _effort_env("BUILD_A_SPEC_QC_LENS_EFFORT", QC_EFFORT)
+QC_VERIFIER_EFFORT = _effort_env(
+    "BUILD_A_SPEC_QC_VERIFIER_EFFORT",
+    QC_EFFORT if _effort_env("BUILD_A_SPEC_QC_EFFORT", "") else "medium",
+)
+
 # Concurrent streaming calls in flight across a QC fan-out (lenses share the
 # pool with verifiers). Phase 2 is ~35 of a run's ~40 calls, so this is what
 # sets its wall clock. Opus 5 draws on its own rate-limit bucket rather than
@@ -161,6 +187,50 @@ QC_MAX_WORKERS = max(1, _int_env("BUILD_A_SPEC_QC_MAX_WORKERS", 8))
 # 2-seat panel needed 2-of-2).
 QC_VERIFIERS_STANDARD = _int_env("BUILD_A_SPEC_QC_VERIFIERS_STANDARD", 2)
 QC_VERIFIERS_CRITICAL = _int_env("BUILD_A_SPEC_QC_VERIFIERS_CRITICAL", 3)
+
+# --- Batched verification (phase 2 on the Message Batches API) ---------------
+
+# Phase 2 is ~90% of a run's calls and every seat is independent, which is
+# exactly the shape the Message Batches API exists for: the same requests at
+# 50% of standard token prices. Nothing about the REVIEW changes — same model,
+# same per-phase effort, same panel sizes, same prompts, same grounding, same
+# v4 adjudication. What changes is transport, and it costs two things:
+#
+#   1. No streaming, so a seat emits no live activity/search/fetch frames. The
+#      Review Room keeps candidate- and seat-level state (queued -> running ->
+#      outcome); it loses the per-seat shimmer. Phase 1 still streams.
+#   2. Latency is the provider's queue, not ours. Most batches end well inside
+#      the window a streamed phase 2 already takes, but the ceiling is higher.
+#      QC_BATCH_MAX_WAIT_SECONDS is the runaway guard, not a target: on breach
+#      the batch is cancelled and the unfinished seats are recorded as failed
+#      (which makes the run partial and blocks readiness — never a silent pass).
+#
+# Off falls back to the streaming ThreadPoolExecutor path, which is retained
+# verbatim and is still what phase 1 uses. The flag is recorded in the hashed
+# input manifest, so a report always states which transport produced it.
+QC_BATCH_VERIFICATION = _bool_env("BUILD_A_SPEC_QC_BATCH_VERIFICATION", True)
+# Poll interval while a verification batch is in flight. Also the granularity
+# at which a user Stop is noticed, so it is seconds, not minutes.
+QC_BATCH_POLL_SECONDS = max(
+    1, _int_env("BUILD_A_SPEC_QC_BATCH_POLL_SECONDS", 5)
+)
+# Total wall-clock ceiling across every round of one verification phase.
+# Two hours: the provider targets an hour for a whole batch, and a phase can
+# need a second round for pause_turn continuations and retries.
+QC_BATCH_MAX_WAIT_SECONDS = max(
+    60, _int_env("BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS", 7200)
+)
+# Rounds of batch submission within one verification phase. A round exists to
+# carry pause_turn continuations and retryable failures forward, and rounds
+# are SHARED — round N carries every seat that still needs work — so the
+# count needed is the worst single seat's, not the sum. This is a runaway
+# breaker on that loop, not a quality limit; the wall-clock ceiling above is
+# the guard that normally binds first. A seat cut off here is recorded as a
+# FAILED seat (so the run goes partial and readiness stays blocked), never
+# dropped from its panel. Note it can bite before a pathological seat has
+# spent its full per-seat QC_MAX_CONTINUATIONS x retry budget; that is
+# deliberate, and 20 is far above anything a real verifier seat reaches.
+QC_BATCH_MAX_ROUNDS = max(1, _int_env("BUILD_A_SPEC_QC_BATCH_MAX_ROUNDS", 20))
 
 # Cross-lens candidate consolidation (Chunk 5.2): near-duplicate findings
 # raised by different lenses about the SAME defect at the same element share

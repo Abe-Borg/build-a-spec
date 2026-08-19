@@ -1115,7 +1115,12 @@ export default function QCReportModal({
               <DataField label="Retained action-queue run ID" mono>{recorded(retainedRunId)}</DataField>
               <DataField label="Execution status">{executionStatus}</DataField>
               <DataField label="Model">{recorded(report.model)}</DataField>
-              <DataField label="Effort">{recorded(report.effort)}</DataField>
+              <DataField label="Effort (lens review)">
+                {recorded(report.effort)}
+              </DataField>
+              <DataField label="Effort (verifier seats)">
+                {recorded(report.verifier_effort)}
+              </DataField>
               <DataField label="Current date supplied to reviewers">{recorded(report.context_date)}</DataField>
               <DataField label="Maximum output tokens">{formatInteger(report.max_tokens)}</DataField>
               <DataField label="Recorded duration">{formatDuration(duration)}</DataField>

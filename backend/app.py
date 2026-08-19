@@ -15,6 +15,10 @@ Endpoints (all JSON unless noted):
 - ``POST /api/draft/full``    → the canned full-section draft directive for
   the frontend to send through the normal chat path (409 while a turn or
   research runs).
+- ``POST /api/research/debrief`` / ``POST /api/qc/debrief`` → the
+  completion-debrief directives the frontend auto-sends through the normal
+  chat path when a run finishes (409 while a turn streams, the runner is
+  busy, or there is nothing to debrief).
 - ``GET  /api/doc``           → current document snapshot + open questions.
 - ``GET  /api/doc/capabilities`` → just the imported-source permission
   report, for polling while the background sweep derives it.

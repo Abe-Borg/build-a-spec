@@ -293,8 +293,10 @@ function HowToUse({
         </div>
       </section>
       <p className="text-xs text-ink-faint">
-        Every phase — research, QC, export — is something you trigger. No model
-        runs on its own.
+        Every phase — research, QC, export — is something you trigger. The one
+        automatic model turn is the debrief the chat sends itself when a
+        research or Final QC run you started finishes — visible, stoppable,
+        and switchable off.
       </p>
     </div>
   );
@@ -489,8 +491,8 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
             d: "Every pinned edition has documented provenance; jurisdiction overrides always state their adoption basis, and a module that pins nothing records every edition with the basis it came from.",
           },
           {
-            t: "No model runs on its own",
-            d: "Research, Final QC, drafting, and export all start with a click of yours — there is no background model work, and so no spend you did not initiate. The app's only unprompted request is the daily version check to GitHub, which carries nothing about your project and can be switched off.",
+            t: "No model runs you did not set in motion",
+            d: "Research, Final QC, drafting, and export all start with a click of yours. The one automatic follow-up is the completion debrief: when a run you started finishes, the chat sends itself a single visible turn that summarizes the findings and asks whether to proceed — it never applies changes by itself and can be switched off. Beyond that, the app's only unprompted request is the daily version check to GitHub, which carries nothing about your project and can also be switched off.",
           },
           {
             t: "Your key and spend stay in view",

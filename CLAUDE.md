@@ -78,6 +78,10 @@ backend/
                            + /api/qc/stop (409 when nothing is running/streaming);
                            Batch 9 adds suggested_prompts to _doc_payload (no new
                            endpoint — the suggest_prompts SSE event rides /api/chat);
+                           v1.10.0 adds POST /api/research/debrief + /api/qc/debrief
+                           (the draft_full pattern: server-owned completion-debrief
+                           directives the frontend sends through /api/chat) +
+                           health.auto_debrief;
                            Batch 10 adds an optional reset body {module_id,
                            discipline} + GET /api/modules + health.discipline +
                            a 400 research backstop (generic module, no discipline);
@@ -251,6 +255,24 @@ backend/
                            the status race) and NEVER in stop() — a stopped
                            attempt is still assembling the paid partial report
                            the span's counts describe
+  qc/apply.py              [v1.10.0] the ONE apply implementation shared by
+                           POST /api/qc/apply and the apply_qc_fixes chat tool
+                           (extracted from app.py — conversation.py could never
+                           import app without a cycle): eligibility
+                           (select_apply_candidates + finding_fix_class, the
+                           one safe-fix/advisory vocabulary), freshness
+                           (matches_current_inputs incl. the source guard),
+                           accumulating dry-run, and the tool's stage_chat_apply
+                           + APPLY_QC_FIXES_TOOL. app.py keeps same-name
+                           assignment aliases so route globals and every
+                           monkeypatching test still hit the single seam
+  qc/context.py            [v1.10.0] qc_review_context_block: the FINAL QC
+                           REVIEW block in every turn's PROJECT CONTEXT —
+                           compact open findings (ids, severity, fix class),
+                           open disputed, matches_version staleness, 20k-token
+                           cap with disclosed trim (disputed trims LAST — it
+                           blocks readiness); pure, lock-free, the
+                           research_context_block posture
   tracing/                 [PORT: Spec Critic src/tracing/ core, since diverged]
                            recorder (JSONL spans/events/prompts + run.json,
                            writer thread, per-line flush, ContextVar parent
@@ -785,6 +807,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `web_fetch` | `url` | the model fetched a page/document server-side this round — emitted live on the block's completion |
 | `figure` | `figure` | the model created a figure (diagram/schematic/table) via `create_figure` this round — the full serialized `Figure` for inline chat rendering + downloads (Batch 8). Emitted live on the tool dispatch. Source is client-sanitized before render; it lives only in the figure store, never in history/traces/the re-billed doc context |
 | `suggested_prompts` | `prompts` | the model staged up to 5 one-tap reply chips via `suggest_prompts` this round (Batch 8→9), shown above the composer; emitted live on the tool dispatch. Latest-only, committed turn-atomically: a committed turn REPLACES the session's set with what it staged (not calling the tool = clear, which is the wind-down; a failed turn keeps the prior set). Tiny payload — rides committed history verbatim (no elision, no PROJECT CONTEXT stub) |
+| `qc_dispositions` | `outcomes` | apply_qc_fixes committed audit dispositions with this turn (v1.10.0): `{finding_id: applied\|stale\|no_ops\|already_applied\|not_open\|unknown}`. Emitted from the frozen post-commit payload ONLY when the turn commits with staged dispositions — a rolled-back turn never emits it; the frontend refreshes QC state + readiness on it |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
 | `open_questions` | `items` | open-item list (TBD markers + needs_input blocks); emitted when a turn changed the doc |
@@ -6343,6 +6366,144 @@ No new dep.
   titles, file paths and error context DO ride traces and bundles by design,
   and every surface offering them says so. Treat both folders and every
   exported bundle as sensitive project data.
+
+## The chat sees the reviews, and completions debrief themselves — implemented notes (v1.10.0)
+
+Reported ask (Abraham): does the chat see the Final QC report? (It did not —
+QC was its own channel and `backend/llm/*` rendered zero QC data.) And: the
+chat must automatically see research AND Final QC results the moment they
+land, tell the user how the findings affect the current spec (summarizing
+the proposed changes/edits/deletions/additions), then ask whether to
+proceed. Two decisions made with the owner: a chat "yes" applies QC fixes
+through the AUDITED machinery (never model-retyped edits), and every
+completed research round debriefs — a nothing-new round included. One new
+chat tool, one new SSE event, two thin endpoints, one env knob
+(`BUILD_A_SPEC_AUTO_DEBRIEF`), no new deps, no project-format bump.
+
+- **The extraction came first, because the layering forced it.** The QC
+  apply machinery lived in app.py, and app.py imports conversation — so the
+  chat tool could never reach it without a cycle. `backend/qc/apply.py` now
+  owns eligibility, freshness, and the accumulating dry-run; app.py keeps
+  assignment aliases under the historical private names
+  (`_qc_source_guard = qc_apply_module.build_source_guard`, …) because route
+  bodies resolve them as module globals and tests import/monkeypatch them
+  from `backend.app`. `select_apply_candidates` (the route's per-finding
+  loop, lifted verbatim) and `finding_fix_class` (the one safe-fix vs
+  advisory vocabulary — exactly the apply gate's condition) are the two new
+  shared pieces; the one-implementation identity is pinned by test.
+- **The FINAL QC REVIEW context block** (`qc/context.py`) renders the
+  RETAINED result into every turn's PROJECT CONTEXT, after OPEN ITEMS:
+  run identity, CURRENT/STALE via the cheap `matches_version` fingerprint
+  (never `matches_inputs` — that rebuilds the whole manifest and can wait
+  on the capability sweep), open findings with their ids (they are the
+  tool's input), fix class per finding, open disputed candidates
+  separately, a one-line applied/dismissed/refuted/inconclusive rollup, and
+  a 20k-est-token cap trimming whole findings lowest-severity-first with a
+  disclosed count — disputed trims LAST because it blocks readiness. The
+  stable prompt gains `_QC_FINDINGS_POLICY` (after `_RESEARCH_POLICY`):
+  never apply unprompted; approval must be explicit in this conversation;
+  ONE `apply_qc_fixes` call, FIRST action of the turn; disputed/refuted/
+  inconclusive never applyable; dismissals live in the panel; a stale
+  review is described, not acted on. `_SUGGESTED_PROMPTS_POLICY`'s
+  panel-buttons line gained the carve-out: STARTING runs is a panel action,
+  but approving/declining proposed changes after a debrief IS
+  chat-actionable, and those chips are exactly right.
+- **The debrief endpoints are draft_full clones.** `POST
+  /api/research/debrief` and `POST /api/qc/debrief` return `{ok, message}`
+  (409 turn_active / runner running-or-settling / nothing to debrief);
+  the frontend sends `message` through the ordinary chat path, so the
+  debrief is a visible, honest user turn on the one pipeline. Directives
+  live in prompts.py (`ResearchDebriefFacts`/`QcDebriefFacts` +
+  `research_debrief_directive`/`qc_debrief_directive`) and stay SHORT —
+  the heavy content already rides PROJECT CONTEXT; the facts anchor carries
+  what the model must not re-derive (round telemetry from
+  `profile.rounds[-1]`, coverage gaps required-labeled, finding counts by
+  class via `finding_fix_class`). Honest variants: a nothing-new round
+  (new_items == 0, repeats > 0) buys a short confirm-nothing-changes brief;
+  a PARTIAL QC attempt gets the constrained variant (names failed lenses,
+  says NOTHING from it is applyable, never pretends to summarize findings
+  the context block does not carry — the block describes the RETAINED
+  result, which on a partial run is an older review); stale says fixes
+  need a re-run; a clean pass takes the win in three sentences. QC facts
+  come from ONE `audit_record_snapshot()` and describe
+  `report_for_export_model` — the attempt that just finished.
+- **`apply_qc_fixes` is the fourth chat tool**, appended LAST in
+  `_chat_tools()` (cache-prefix rule). Dispatch (`_run_apply_qc_fixes`)
+  runs `stage_chat_apply` under the turn's guard: the same eligibility,
+  conflict planning (`plan_qc_operation_batch`), and accumulating dry-run
+  as the route, then applies the canonical batch through
+  `session.apply_doc_edits` — the turn's ONE transactional edit path, so a
+  QC fix rides the turn's undo step, source gate, and rollback like any
+  model edit, emitting the normal `doc_patch`. **Freshness is
+  self-enforcing**: `matches_current_inputs(block=False)` fingerprints
+  `session.doc.doc`, which mid-turn is the PROVISIONAL tree — any edit
+  earlier in the turn reads as a mismatch and the call is refused, which is
+  the apply-first policy as physics. Non-blocking on purpose: a pending
+  capability sweep must read conservatively as stale rather than park the
+  turn (the chat-freeze class of bug); the refusal points at the panel's
+  Apply, which settles the sweep. Refusals are `is_error` results the model
+  relays or corrects — never a turn failure — and a refused call never
+  blocks a corrected retry (staging accumulates).
+- **Dispositions land ONLY at commit.** `_QcApplyStaging` is turn-local;
+  the commit block (beside the doc/figure/suggestion commits, inside
+  `owned_model_turn_guard`) calls `mark_applied` +
+  `record_disposition_outcome` stamped with the COMMITTED version index and
+  `qc_version_fingerprint` — after re-checking `session.qc.result is
+  staging.result_ref` by IDENTITY, so a result installed mid-turn by a
+  finishing QC run can never receive another review's dispositions. A
+  rolled-back turn records nothing; a user stop (which commits) records
+  exactly what it kept — the same commit block test_stop.py already pins.
+  The frozen post-commit payload gains the `qc_dispositions` SSE event; the
+  frontend refreshes QC + readiness on it.
+- **The auto-fire is frontend-driven and live-only by construction.** The
+  follower loops (which project-load restores never enter) remember a
+  debrief on `research_complete` (token `round-N`) / `qc_complete` (token
+  run_id; the runner emits it for partial too — the debrief is then the
+  constrained variant). `lib/debriefQueue.ts` is the pure state:
+  latest-wins per kind, SSE-replay dedupe by fired token, HOLD while a turn
+  streams or a file loads, silent DROP in tutorials/protected workspaces
+  and when `health.auto_debrief === false`, research before qc, and the
+  whole queue (fired ledger included) dies at every `advanceWorkspaceEpoch`
+  — a loaded project's own round numbers must never collide with tokens the
+  previous session spent. The flush effect (after the onboarding hook —
+  it reads `onboarding.phase.kind`) holds while health is unknown, fetches
+  the directive, and `await send(message)`; every fetch failure or 409 is a
+  silent `console.debug` skip — a debrief must never surface an error over
+  a run that completed fine. `research_failed` (including stops) and
+  `qc_failed` never debrief.
+- **The trust dossier's "no model runs on its own" claim moved, and every
+  echo moved with it** (the modal is a contract): the boundary bullet, the
+  Money section, the firewall-log invitation, the research and Final QC
+  runtime cards (completion-debrief lines), the chat card's "what is sent"
+  (the QC digest), and "Applying a QC fix" (panel Apply vs chat approval —
+  same local machinery, model never authors fix content). The stale v3
+  adjudication copy at the Final QC card ("majority uphold, tie to
+  refuters") was fixed to final-qc/4 in the same pass — pre-existing drift,
+  adjacent file. HelpModal's two "no model runs on its own" spots rescoped
+  the same way.
+- **Deliberately NOT done**: a dismiss action on the chat tool (dismissals
+  keep their written-reason workflow in the panel; the model says so), a
+  turn_active guard on `/api/qc/dismiss` (pre-existing gap — the dismiss/
+  chat-apply race resolves record-both: the ops ARE in the committed doc,
+  so the final status is applied and the trail keeps both events, pinned
+  by test), and any UI toggle for the debrief (the env knob is the
+  operator switch; the owner asked for automatic).
+- **Tests**: tests/test_qc_context.py (8 — the block in context and never
+  the stable prompt, absent-result, stale flip, never-fossilizes, trim
+  order + disclosure + disputed-last, dispositioned rollup),
+  tests/test_debrief.py (13 — guard matrices, round facts + coverage
+  naming, nothing-new variant, QC counts/chips, retained-review line,
+  stale, partial, clean pass, pure directive units),
+  tests/test_qc_chat_apply.py (13 — the one-implementation pins, happy
+  path with committed-identity dispositions and one undo step, mixed-turn
+  undo, failed-turn rollback records nothing, per-finding stale beside an
+  applied one, in-turn-edit refusal that still commits, pre-staled
+  refusal, qc-running refusal, conflict refusal, malformed-then-corrected
+  retry, disputed/refuted eligibility, the dismiss-race record-both),
+  frontend/tests/debriefQueue.test.ts (8 — fire-once/replay-dedupe,
+  latest-wins, identity on no-change, hold vs drop, epoch death, research
+  before qc, bounded fired ledger). Existing pins updated in place: the
+  tool-order assertion in test_app.py gained the new last entry.
 
 ## Commands
 

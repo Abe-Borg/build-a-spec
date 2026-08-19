@@ -38,6 +38,7 @@ import {
   sourceCapabilitiesExpected,
   sourceCapabilitiesPending,
 } from "../lib/sourceCapabilities";
+import { reviewCounts } from "../lib/reviewQueue";
 import Tip from "./Tip";
 import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
 import type { ImportIntent } from "../lib/api";
@@ -112,6 +113,9 @@ interface Props {
   ) => Promise<void>;
   onDismissQc: (findingId: string, reason: string) => Promise<void>;
   onDraftFull: () => void;
+  /** One-click gap-and-adapt pass over an imported starter (the full-draft
+   *  slot's other tenant — see the button swap below). */
+  onDraftAdapt: () => void;
   onAskModel: (text: string) => void;
   onFetchDiff: (base: number, cur?: number) => Promise<SectionDiffPayload>;
   /** Guided-tour "ensure open" nonces (Batch 6), one per drawer. */
@@ -311,6 +315,7 @@ export default function ArtifactPanel({
   onApplyQc,
   onDismissQc,
   onDraftFull,
+  onDraftAdapt,
   onAskModel,
   onFetchDiff,
   drawerNonces,
@@ -471,6 +476,22 @@ export default function ArtifactPanel({
           ? `Needs ${draftNeedsPhrase} first — every provision a full draft lays down inherits ${draftNeedsPronoun}. Clicking asks you about ${draftNeedsPronoun}; then draft.`
           : "Draft the complete section in one pass — every PART and article, stamped from what's known so far. One click to undo.";
 
+  // The full-draft slot's other tenant: a document seeded with imported
+  // starter content (an office master, or a template start). A wholesale
+  // draft over real content is the wrong tool there — the whole-document
+  // pass that fits is gap-and-adapt, and until this button it had no
+  // one-click form at all: the model walked the starter only as fast as the
+  // user thought to ask.
+  const importedOutstanding = useMemo(
+    () => reviewCounts(doc).imported,
+    [doc],
+  );
+  const adaptTip = busy
+    ? "Finish the current turn first."
+    : draftNeeds.length > 0
+      ? `Needs ${draftNeedsPhrase} first — adapting ${importedOutstanding} imported block(s) to this project inherits ${draftNeedsPronoun}. Clicking asks you about ${draftNeedsPronoun}; then the pass runs.`
+      : `Walk all ${importedOutstanding} imported block(s) against this project in one pass — keep, adapt, or delete, article by article, with honest statuses. One click to undo.`;
+
   // --- Compare (diff) mode (Batch 5) ---
   const curIndex = version.index;
   const versionCount = version.count;
@@ -628,19 +649,33 @@ export default function ArtifactPanel({
               ⚠ {lintIssues.length}
             </span>
           )}
-          <Tip tip={draftTip} className="shrink-0">
-            <button
-              className={`rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${
-                draftPulse ? "draft-pulse" : ""
-              }`}
-              onClick={onDraftFull}
-              disabled={draftDisabled}
-              data-tour="draft-full"
-              data-capability="chat.full-draft"
-            >
-              ✨ Draft full section
-            </button>
-          </Tip>
+          {importedOutstanding > 0 ? (
+            <Tip tip={adaptTip} className="shrink-0">
+              <button
+                className="rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
+                onClick={onDraftAdapt}
+                disabled={busy}
+                data-tour="draft-full"
+                data-capability="chat.adapt-imported"
+              >
+                ✨ Adapt imported draft
+              </button>
+            </Tip>
+          ) : (
+            <Tip tip={draftTip} className="shrink-0">
+              <button
+                className={`rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${
+                  draftPulse ? "draft-pulse" : ""
+                }`}
+                onClick={onDraftFull}
+                disabled={draftDisabled}
+                data-tour="draft-full"
+                data-capability="chat.full-draft"
+              >
+                ✨ Draft full section
+              </button>
+            </Tip>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           <span

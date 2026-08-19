@@ -2857,7 +2857,18 @@ def source_capability_summary(
     report: SourceCapabilityReport,
     current: SpecSection,
 ) -> str:
-    """Render compact model/QC guidance without OOXML or package internals."""
+    """Render compact model/QC guidance without OOXML or package internals.
+
+    This is the ONE description of source-preserving mode the model ever
+    reads (the chat boundary block and the QC lens prefix both render it),
+    so it must carry three things the per-element data alone cannot: the
+    CATEGORICAL rules (headings and structure are off-limits by design, not
+    per-element bad luck), the batching consequence (edit batches are
+    all-or-nothing), and the way OUT (the panel's "Edit freely" action) —
+    without them the model's honest reading of a mostly-denied report is
+    "this document is read-only", which it then tells the user as a dead
+    end.
+    """
     if report.status == CAPABILITY_STATUS_PENDING:
         # Every operation is denied while the sweep runs, so the normal
         # rendering below would read as "this document is permanently
@@ -2872,7 +2883,13 @@ def source_capability_summary(
             "be changed.\n"
             "- Every proposed final state is validated server-side, so a body "
             "edit attempted now is refused with its exact reason rather than "
-            "applied unsafely."
+            "applied unsafely.\n"
+            "- On a large document this analysis can take minutes. If the "
+            "user wants to edit now — or does not need a byte-exact copy of "
+            "their upload at all — tell them about the panel's \"Edit "
+            "freely\" action, which makes the whole document ordinarily "
+            "editable (their original stays downloadable and the redline "
+            "against it keeps working)."
         )
     paragraph_order = [
         row[1]
@@ -2899,6 +2916,20 @@ def source_capability_summary(
                     members.append(uid)
 
     lines = ["Source-preserving body permissions:"]
+    # The categorical rules first: these are the mode's DESIGN, not this
+    # document's misfortune, and the model must not rediscover them one
+    # is_error at a time — its default playbook opens with exactly these ops.
+    lines.append(
+        "- Categorical limits of this mode: the section header, PART "
+        "headings, and article titles are never text-editable; add_article "
+        "and moving content between parents are never available. Do not "
+        "attempt or promise these."
+    )
+    lines.append(
+        "- add_paragraph, move, and delete work ONLY inside the proven "
+        "structural islands listed below (none listed = none exist in this "
+        "document)."
+    )
     lines.append(
         "- Text-editable IDs: "
         + (", ".join(text_editable) if text_editable else "none")
@@ -2920,10 +2951,26 @@ def source_capability_summary(
             )
     if report.status == "pass_through_only":
         lines.append("- Imported body mutation is pass-through-only.")
+        # The package-wide cause and its remedy: the model should be able to
+        # tell the user WHY the whole document is frozen and what would fix
+        # the file itself, not just that it is.
+        for blocker in report.causes:
+            lines.append(f"- Cause: {source_blocker_message(blocker)}")
+            lines.append(f"  Remedy: {source_blocker_remedy(blocker)}")
     lines.extend(
         [
             "- All other imported body IDs are read-only.",
             "- Status, research provenance, and project metadata may still be changed.",
+            "- apply_spec_edits batches are all-or-nothing: on this document "
+            "batch only IDs listed as editable above, and when unsure send "
+            "ONE operation per call so a single denial cannot discard good "
+            "edits alongside it.",
+            "- The way out: if the user wants to restructure, retitle "
+            "headings, or edit read-only blocks, tell them about the "
+            "panel's \"Edit freely\" action. It removes these limits for "
+            "this document, keeps the original upload downloadable and the "
+            "redline against it working, and gives up only the byte-exact "
+            "preserved export. Never present read-only as a dead end.",
             "- Every proposed final state is validated server-side.",
         ]
     )

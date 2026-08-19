@@ -442,6 +442,7 @@ export const TOUR: readonly TourChunk[] = [
           "document.source-permissions",
           "import.source-output",
           "document.detach-source",
+          "chat.adapt-imported",
         ],
         mode: "explanatory",
         anchor: "",
@@ -450,7 +451,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "left",
         title: "Source preservation is proven per operation",
         body:
-          `Imported controls use server-derived edit, delete, insert, and move permissions and fail closed while analysis is pending. Disabled controls state the exact reason. ${SOURCE_CAPABILITY_GUIDANCE} The exact original remains separately downloadable. When a package cannot be patched at all — tracked changes, macros, an embedded object, or enforced protection — the panel names that cause and offers Edit freely, which trades the byte-exact export for unrestricted editing while keeping the original downloadable.`,
+          `Imported controls use server-derived edit, delete, insert, and move permissions and fail closed while analysis is pending. Disabled controls state the exact reason. ${SOURCE_CAPABILITY_GUIDANCE} The exact original remains separately downloadable. Edit freely is offered on every source-attached state — a frozen package (tracked changes, macros, an embedded object, enforced protection), the pending analysis, and the ordinary settled master alike — trading the byte-exact export for unrestricted editing while the original stays downloadable. An "Adapt imported draft" action asks the assistant to walk the whole starter against this project in one pass.`,
         details: SOURCE_OUTPUT_GUIDANCE,
       },
     ],

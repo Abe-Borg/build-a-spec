@@ -38,6 +38,7 @@ import {
   deleteFigure,
   dismissQc,
   downloadProjectFile,
+  draftAdapt,
   draftFull,
   detachSource,
   editDoc,
@@ -1491,6 +1492,29 @@ export default function App() {
     }
   };
 
+  /** The import counterpart of onDraftFull: one click walks the whole
+   *  imported starter against this project (gap-and-adapt), riding the same
+   *  ordinary chat path. */
+  const onDraftAdapt = async () => {
+    if (busyRef.current || manualEditBusyRef.current) return;
+    try {
+      const { message } = await draftAdapt();
+      await send(message);
+    } catch (e) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          role: "assistant",
+          text: `Could not start the adapt pass: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+          error: true,
+        },
+      ]);
+    }
+  };
+
   /** Prefill the composer from a review-queue "Ask model" and focus it. */
   const onAskModel = (text: string) => {
     setPrefill((p) => ({ text, nonce: p.nonce + 1 }));
@@ -2491,6 +2515,7 @@ export default function App() {
           onApplyQc={onApplyQc}
           onDismissQc={onDismissQc}
           onDraftFull={onDraftFull}
+          onDraftAdapt={onDraftAdapt}
           onAskModel={onAskModel}
           onFetchDiff={getDocDiff}
           drawerNonces={drawerNonces}

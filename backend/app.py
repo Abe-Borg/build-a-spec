@@ -123,6 +123,8 @@ from .llm.prompts import (
     DraftPrerequisites,
     QcDebriefFacts,
     ResearchDebriefFacts,
+    adapt_imported_directive,
+    adapt_prerequisites_directive,
     draft_prerequisites,
     draft_prerequisites_directive,
     full_draft_directive,
@@ -3216,6 +3218,75 @@ def create_app(
                     full_draft_directive(prereqs)
                     if prereqs.ready
                     else draft_prerequisites_directive(prereqs)
+                ),
+            }
+        )
+
+    @app.post("/api/draft/adapt")
+    def draft_adapt() -> JSONResponse:
+        """Hand the frontend the gap-and-adapt message for an imported starter.
+
+        The draft_full posture applied to the other on-ramp: a document that
+        arrived FULL of content instead of empty. The full-draft button is
+        rightly the wrong tool there (a wholesale draft over real content),
+        which left the import path with no one-click whole-document pass at
+        all. Deliberately thin — the message rides ``POST /api/chat`` as an
+        ordinary, visible user turn on the one streaming path.
+
+        Same 409s as the full draft (a streaming turn, running research),
+        plus one of its own: a document with no imported-status blocks has
+        nothing to adapt, and honoring the click anyway would buy a turn
+        whose entire instruction is inapplicable. The prerequisite gate is
+        shared with the full draft — walking hundreds of blocks against an
+        unknown project type or country is the same confident-wrong-document
+        failure, so an unready gate buys the collect-first turn instead.
+        """
+        session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is already streaming — wait for it "
+                    "to finish before adapting the imported document.",
+                },
+                status_code=409,
+            )
+        if session.research.status == "running":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Requirements research is running — let it finish "
+                    "so the adapt pass can use the grounded results.",
+                },
+                status_code=409,
+            )
+        imported = sum(
+            1
+            for _part, _article, p, _depth, _ref in iter_paragraphs(
+                session.doc.doc
+            )
+            if p.status == "imported"
+        )
+        if imported == 0:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "No imported-status blocks remain — there is "
+                    "nothing left to adapt. Draft or edit normally instead.",
+                },
+                status_code=409,
+            )
+        prereqs = _draft_prerequisites(session)
+        return JSONResponse(
+            {
+                "ok": True,
+                "ready": prereqs.ready,
+                "missing": list(prereqs.missing),
+                "imported_count": imported,
+                "message": (
+                    adapt_imported_directive(prereqs)
+                    if prereqs.ready
+                    else adapt_prerequisites_directive(prereqs)
                 ),
             }
         )

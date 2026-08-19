@@ -99,7 +99,7 @@ from ..spec_doc import (
     open_questions,
     outline,
 )
-from ..spec_doc.model import apply_edits
+from ..spec_doc.model import apply_edits, iter_paragraphs
 from ..spec_doc.project import chat_transcript
 from ..spec_doc.source_mapping import (
     SourceBodyMap,
@@ -1657,6 +1657,25 @@ def _turn_context_text(session: SessionState) -> str:
                 f"{item.get('label')} (element {item.get('element_id')})"
             )
         parts.append("\n".join(lines))
+    # Imported blocks are deliberately NOT open items (open_questions counts
+    # needs_input and [TBD] only), so on a fresh import the list above is
+    # empty while hundreds of blocks still need review — the model had no
+    # work-list driver at all for the gap-and-adapt pass. One line names the
+    # standing debt; the per-block detail is already in the outline's
+    # (imported) chips. Dynamic context only, never the stable prompt.
+    imported_count = sum(
+        1
+        for _part, _article, p, _depth, _ref in iter_paragraphs(doc)
+        if p.status == "imported"
+    )
+    if imported_count:
+        parts.append(
+            f"IMPORTED-STARTER REVIEW: {imported_count} provision(s) still "
+            "carry status 'imported' (see the (imported) chips in the "
+            "outline above). Issue readiness blocks until each is confirmed, "
+            "adapted, or deleted — the gap-and-adapt pass. This is the "
+            "standing work list whenever the user has no other priority."
+        )
     # The retained Final QC result, compactly — QC lives on its own channel,
     # so without this the model could not answer "what did the review find?"
     # about a report one panel away. Lock-free plain-attribute read (the

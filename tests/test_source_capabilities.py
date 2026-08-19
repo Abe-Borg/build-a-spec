@@ -645,7 +645,16 @@ def test_compact_summary_contains_ids_and_islands_without_package_details(tmp_pa
     assert "word/document.xml" not in summary
     assert "heading_change" not in summary
     assert "ZIP" not in summary
-    assert len(summary) < 1_000
+    # The summary now also states the mode's categorical limits, the
+    # all-or-nothing batching consequence, and the "Edit freely" way out —
+    # the three things whose absence made the model read a mostly-denied
+    # report as "this document is read-only" and stop drafting. The budget
+    # grew accordingly; the cap still pins that per-element DATA stays
+    # compact ids/positions, never prose per element or package internals.
+    assert "never text-editable" in summary
+    assert "all-or-nothing" in summary
+    assert "Edit freely" in summary
+    assert len(summary) < 2_600
 
 
 def test_api_capabilities_refresh_across_history_project_load_and_qc_apply(

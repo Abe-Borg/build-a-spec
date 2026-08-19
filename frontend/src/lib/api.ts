@@ -443,6 +443,26 @@ export async function draftFull(): Promise<DraftFullPlan> {
 }
 
 /**
+ * The import counterpart of {@link draftFull}: the server-owned
+ * gap-and-adapt directive for a document seeded with imported starter
+ * content. Same contract — the returned message is sent through the
+ * ordinary chat path, and `ready: false` means it collects the missing
+ * anchor facts instead of adapting blind.
+ */
+export async function draftAdapt(): Promise<DraftFullPlan> {
+  const resp = await fetch("/api/draft/adapt", { method: "POST" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `adapt pass failed (${resp.status})`);
+  }
+  return {
+    ready: data.ready !== false,
+    missing: (data.missing ?? []) as DraftPrerequisiteId[],
+    message: data.message as string,
+  };
+}
+
+/**
  * Fetch the debrief message a just-completed research round should send
  * through {@link streamChat}. Throws on any refusal (409 while a turn
  * streams / research runs / nothing to debrief) — the auto-fire caller

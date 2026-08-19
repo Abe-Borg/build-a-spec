@@ -874,6 +874,12 @@ What worked before (Phase 2) and still does:
   full document version history, import report, and exact source DOCX when one
   exists—undo and source-preserving export still work after resume. Legacy JSON
   projects remain load-compatible but do not contain source bytes.
+- Save behaves like a save button: the first save of a session asks for a name
+  and a folder, and every save after that overwrites that file in place with no
+  dialog (**Save as…** appears under a caret beside Save once there is a file to
+  say "as" against, and re-points where Save writes). The target belongs to the
+  session — starting a new session or opening another project clears it, so the
+  next Save asks again rather than silently overwriting the project you left.
 - API key management: `ANTHROPIC_API_KEY` env var → OS credential manager (via `keyring`) → key file fallback, same posture as Spec Critic. A banner in the UI stores your key if none is found.
 - Session reset, prompt-cached system prompt, hermetic test suite (no network, no key).
 

@@ -523,7 +523,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "One project file restores the whole workspace",
         body:
-          "The workspace visible in this chapter was serialized to a real temporary .baspec package and restored through the production project loader. .baspec stores conversation, versions, identity, figures, suggestions, references, standards, import warnings and source, research, and QC. New, Open, and window close all offer Save / continue without saving / Cancel before discarding work.",
+          "The workspace visible in this chapter was serialized to a real temporary .baspec package and restored through the production project loader. .baspec stores conversation, versions, identity, figures, suggestions, references, standards, import warnings and source, research, and QC. Save asks where the file goes the first time in a session and overwrites it every time after; Save as…, under the caret, writes a new one and re-points where Save writes. New, Open, and window close all offer Save / continue without saving / Cancel before discarding work.",
       },
       {
         id: "usage",

@@ -6392,7 +6392,6 @@ No new dep.
   and every surface offering them says so. Treat both folders and every
   exported bundle as sensitive project data.
 
-<<<<<<< HEAD
 ## The chat sees the reviews, and completions debrief themselves — implemented notes (v1.11.0)
 
 Reported ask (Abraham): does the chat see the Final QC report? (It did not —
@@ -6550,7 +6549,7 @@ chat tool, one new SSE event, two thin endpoints, one env knob
   latest-wins, identity on no-change, hold vs drop, epoch death, research
   before qc, bounded fired ledger). Existing pins updated in place: the
   tool-order assertion in test_app.py gained the new last entry.
-=======
+
 ## Save asks once, then overwrites — implemented notes
 
 Reported symptom (Abraham): the Save button asks where to put the file every
@@ -6751,7 +6750,6 @@ operation payloads to counted pointers ("handle it", 2026-08-19).
   refuted ops count line); both fail against the pre-change renderer.
   `test_qc_consolidation.py`'s origin-evidence test now reads tables too
   and additionally pins that the origin URL appears ONLY in the register.
->>>>>>> origin/master
 
 ## Commands
 

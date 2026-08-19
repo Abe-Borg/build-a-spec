@@ -93,13 +93,18 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
         date="2026-08-19",
         headline="Final QC costs about half as much",
         summary=(
-            "The pre-issue review is the most expensive thing the app "
-            "does, and most of that went on the stage that checks "
-            "findings rather than the stage that finds them. Two changes "
-            "cut a typical pass by roughly half. Nothing about the review "
-            "itself was traded away: the same five specialists, the same "
-            "panel of reviewers arguing against every finding, the same "
-            "evidence rules and the same readiness gate."
+            "This is the first release since 1.9.1, so it also brings the "
+            "two builds in between: a Final QC report that leads with what "
+            "you need to act on, and a chat that reads your research and "
+            "review results and tells you what they mean for the section. "
+            "The headline change here is cost. The pre-issue review is the "
+            "most expensive thing the app does, and most of that went on "
+            "the stage that checks findings rather than the stage that "
+            "finds them. Two changes cut a typical pass by roughly half. "
+            "Nothing about the review itself was traded away: the same "
+            "five specialists, the same panel of reviewers arguing against "
+            "every finding, the same evidence rules and the same readiness "
+            "gate."
         ),
         sections=(
             ReleaseSection(

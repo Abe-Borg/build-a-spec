@@ -469,6 +469,41 @@ export interface DraftPrerequisites {
   requirements: DraftRequirement[];
 }
 
+/** Where a session saves itself: an absolute local path plus its basename
+ *  (the part a toolbar button can actually show). */
+export interface SaveTarget {
+  path: string;
+  name: string;
+}
+
+/**
+ * What the native shell reports back from a save.
+ *
+ * `cancelled` is separate from `error` on purpose: backing out of a Save
+ * dialog is a decision and the UI stays quiet about it, while a write that
+ * failed has to say so. Collapsed into one falsy value they are the same
+ * event, and one of them deserves a red line and the other does not.
+ */
+export interface SaveProjectResult {
+  ok: boolean;
+  cancelled: boolean;
+  error: string;
+  target: string;
+  name: string;
+}
+
+/**
+ * A save attempt as the app sees it, whichever path performed it — the
+ * native shell's overwrite/dialog, a tutorial copy download, or the dev
+ * browser's download. `ok` is the only thing the save gate acts on: nothing
+ * that replaces a session proceeds without a file actually written.
+ */
+export interface SaveOutcome {
+  ok: boolean;
+  cancelled: boolean;
+  error: string;
+}
+
 export interface DocPayload {
   /** Authoritative active-workspace lease after this snapshot/mutation. */
   workspace_id: number;
@@ -482,6 +517,15 @@ export interface DocPayload {
   /** Full-draft gate: section, project type, and country. */
   draft_prerequisites: DraftPrerequisites;
   research_status: ResearchRunStatus;
+  /**
+   * The file this session already saved itself to, or null when it never
+   * has. Server-owned, and the panel's Save button is drawn off it: null
+   * means Save asks where; a target means Save overwrites that file and the
+   * dialog moves behind "Save as…". Never inferred locally — a reset clears
+   * it server-side, and a button that had kept its own copy would silently
+   * overwrite the project that was just discarded.
+   */
+  project_save_target: SaveTarget | null;
   /** Imported-master version index (Batch 5); null for from-scratch. */
   baseline_index: number | null;
   /** Chat-authored figures (diagrams/schematics/tables); [] when none. */
@@ -1844,10 +1888,15 @@ declare global {
       api?: {
         save_and_close?: () => Promise<void>;
         discard_and_close?: () => Promise<void>;
-        /** In-app save without closing (the New-session / Open-project save
-         *  gate); resolves true when a file was written, false if the native
-         *  Save dialog was cancelled. */
-        save_project?: () => Promise<boolean>;
+        /** Save without closing: the panel's Save button and the
+         *  New-session / Open-project save gate. Asks where to save the
+         *  first time this session is saved, then overwrites that file
+         *  silently on every later save. */
+        save_project?: () => Promise<SaveProjectResult>;
+        /** "Save as…": always ask where, and make that the file later saves
+         *  overwrite. Only offered once a target exists — before the first
+         *  save, plain Save already asks. */
+        save_project_as?: () => Promise<SaveProjectResult>;
         /** Native Open dialog (the panel's Open / Import buttons). HTML file
          *  inputs don't reliably deliver bytes to JS in the webview, so the
          *  shell reads the picked file and returns it for the normal upload

@@ -356,6 +356,22 @@ class SessionState:
     # between rounds; stopping commits whatever was produced so far (like
     # Claude.ai's stop button) rather than rolling back like a failure.
     stop_requested: threading.Event = field(default_factory=threading.Event)
+    # Where THIS session last saved itself, as an absolute path on the
+    # user's machine. Empty until the first save, which is what makes the
+    # panel's Save button ask once and overwrite silently after that.
+    #
+    # It lives here — rather than in the native shell that performs the
+    # write, or in the frontend that draws the button — because "the same
+    # session" is exactly the lifetime this state may have. Reset and project
+    # load clear it below, so the shell can never be holding a path whose
+    # session has already been replaced; a live target and a stale one are
+    # indistinguishable at the moment of a silent overwrite, and the cost of
+    # getting that wrong is another project's file.
+    #
+    # Never persisted: a .baspec is a file people copy and share, and the
+    # path it was written from says nothing about where its next reader
+    # should save it.
+    save_target: str = ""
 
     def import_is_unstructured(self) -> bool:
         """True when the ACTIVE document came from an import with no
@@ -1382,6 +1398,10 @@ class SessionState:
         # — but "reset leaves no session state behind" should hold here, not
         # depend on a distant clear (and it is what the sweep below pins).
         self.stop_requested.clear()
+        # Where the OUTGOING session saved itself. A fresh session has never
+        # been saved, so its first Save must ask again — and, more to the
+        # point, must not silently overwrite the project just discarded.
+        self.save_target = ""
         self.generation += 1
 
     def start_from_template(

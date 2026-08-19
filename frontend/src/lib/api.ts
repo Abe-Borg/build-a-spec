@@ -326,15 +326,25 @@ export async function loadProjectFile(file: File): Promise<ProjectLoadResult> {
 }
 
 /**
- * Browser/dev fallback for the in-app save gate: download the project file.
+ * Download the project file: the browser/dev fallback for saving, and the
+ * only save a tutorial workspace has.
+ *
  * The native pywebview Save dialog (`window.pywebview.api.save_project`) is
- * preferred when the bridge is present; this is only reached in a plain
- * browser (dev mode). The payload is fetched (awaited) BEFORE the caller
- * proceeds to reset/load, so a fast reset can't race the save and capture an
+ * preferred when the bridge is present; this is reached in a plain browser
+ * (dev mode), and in the tutorial, where the native save deliberately
+ * refuses — a disposable practice copy has no business becoming the file the
+ * Save button overwrites. A browser download can never overwrite in place,
+ * so this path never establishes a save target and the button stays plain
+ * Save. The payload is fetched (awaited) BEFORE the caller proceeds to
+ * reset/load, so a fast reset can't race the save and capture an
  * already-cleared session. The server names the file via Content-Disposition.
  */
-export async function downloadProjectFile(): Promise<void> {
-  const resp = await fetch("/api/project/save");
+export async function downloadProjectFile(
+  scope?: "tutorial",
+): Promise<void> {
+  const resp = await fetch(
+    scope ? `/api/project/save?scope=${scope}` : "/api/project/save",
+  );
   if (!resp.ok) throw new Error(`save failed (${resp.status})`);
   const blob = await resp.blob();
   const cd = resp.headers.get("Content-Disposition") ?? "";

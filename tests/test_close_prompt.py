@@ -189,7 +189,8 @@ def test_untrusted_page_cannot_use_any_public_native_bridge(monkeypatch):
 
     controller.save_and_close()
     controller.discard_and_close()
-    assert controller.save_project() is False
+    assert controller.save_project()["ok"] is False
+    assert controller.save_project_as()["ok"] is False
     assert controller.save_template("personal:" + "a" * 32) is False
     assert controller.open_file("project") is None
     assert controller.open_external_link("https://example.com/") is False
@@ -456,7 +457,10 @@ def test_save_project_writes_file_but_keeps_window_open(tmp_path, monkeypatch):
     window = _FakeWindow(dialog_path=str(target))
     controller = _controller_with(window)
 
-    assert controller.save_project() is True
+    result = controller.save_project()
+
+    assert result["ok"] is True
+    assert result["name"] == "buildaspec-draft.baspec"
 
     assert target.exists()
     parsed = parse_project_package(target.read_bytes())
@@ -467,13 +471,18 @@ def test_save_project_writes_file_but_keeps_window_open(tmp_path, monkeypatch):
 
 
 def test_save_project_cancelled_dialog_returns_false(monkeypatch):
-    # A cancelled Save-As returns False so the frontend keeps the session
-    # (a mis-click behind "Save" must never discard the work).
+    # A cancelled Save-As reports not-ok so the frontend keeps the session
+    # (a mis-click behind "Save" must never discard the work) — and reports
+    # it as a CANCELLATION, which the panel stays quiet about, rather than as
+    # a failure it would put a red line under.
     _fake_webview(monkeypatch)
     window = _FakeWindow(dialog_path=None)
     controller = _controller_with(window)
 
-    assert controller.save_project() is False
+    result = controller.save_project()
+
+    assert result["ok"] is False
+    assert result["cancelled"] is True
     assert window.dialog_calls, "the Save dialog should have been offered"
     assert window.destroyed is False
 

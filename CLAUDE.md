@@ -43,7 +43,13 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            close (closing-event veto → off-thread frontend
                            prompt → js_api save_and_close/discard_and_close,
                            native save via webview.FileDialog.SAVE; never traps
-                           the user); Developer tools reuses open_external_link
+                           the user); js_api save_project/save_project_as are
+                           the panel's Save: the first save of a session asks
+                           and is remembered on SessionState.save_target, later
+                           ones overwrite it silently, an unwritable target
+                           falls back to the dialog, and a reset mid-dialog
+                           refuses to bind the replacement session;
+                           Developer tools reuses open_external_link
                            for the trace viewer; the pywebview-fallback except
                            now logs
 backend/
@@ -383,7 +389,11 @@ backend/
                            project_default_filename (timestamped
                            buildaspec-<stem>-<YYYY-MM-DD-HHMMSS>.json, so
                            same-day re-saves never collide; shared by
-                           /api/project/save and the native save-on-close)
+                           /api/project/save and the native save-on-close) /
+                           project_save_target + remember_project_save_target
+                           (where this session already saved itself — reset and
+                           project load clear it, and nothing else establishes
+                           it)
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint
                            vocabulary, dormant research dimensions); import-time
@@ -594,7 +604,9 @@ frontend/src/
                            button for a stop-square while streaming, Claude.ai-style
                            — always clickable, no confirmation) / ArtifactPanel
                            (stepper, Batch 5 Compare toggle + base picker + stat line
-                           + export menu, save/open, ⚠ badge, "Draft full section"
+                           + export menu, Save (a split button once the session
+                           has a target: Save overwrites it, the caret holds
+                           Save as…) / open, ⚠ badge, "Draft full section"
                            button, open items) / ReviewDrawer (Batch 3 keyboard
                            review walk) / IssuesDrawer (lint + StandardsStrip —
                            editable: add a standard, edit an edition, or
@@ -6343,6 +6355,105 @@ No new dep.
   titles, file paths and error context DO ride traces and bundles by design,
   and every surface offering them says so. Treat both folders and every
   exported bundle as sensitive project data.
+
+## Save asks once, then overwrites — implemented notes
+
+Reported symptom (Abraham): the Save button asks where to put the file every
+single time. Every save went through the native Save dialog, and
+``project_default_filename`` stamps a fresh timestamp per call, so a session
+saved five times left five files and no way to say "the same one again". Now
+the FIRST save of a session establishes a target, later saves write it in
+place with no dialog, and the dialog moves behind a **Save as…** entry that
+only exists once there is something to say "as" against. No new endpoint, no
+new SSE event, no new dep, no project-format bump.
+
+- **The target is `SessionState.save_target`, and where it lives IS the
+  safety argument.** An overwrite is silent, so the one thing that must be
+  impossible is writing a file the current session never chose. Keeping the
+  path in the native shell (which performs the write) or in the frontend
+  (which draws the button) means something has to remember to forget it, and
+  a missed call site is another project's file. As session state it is
+  cleared by the same ``_reset_while_locked`` and ``load_project`` that clear
+  every other field — and the field sweep in ``test_session_wipe.py`` makes
+  that a decision the next person has to make rather than one they can miss.
+  It is never persisted: a `.baspec` is a file people copy and share, and the
+  path it was written from says nothing about where its next reader should
+  save it.
+- **Only a save establishes a target — opening a project does not.** Most
+  apps adopt the opened file, and the native Open dialog does know its path.
+  This follows the owner's wording instead ("the 1st time a user clicks save
+  in a session"), and it keeps the native shell and the dev browser telling
+  the same story: a browser upload has no path to adopt, so the alternative
+  would be two different behaviors for the same button. Opening a project
+  therefore clears the target, and the first Save afterwards asks.
+- **The shell owns the decision; the frontend only draws it.**
+  ``js_api.save_project()`` overwrites when the session has a target and asks
+  when it does not; ``save_project_as()`` always asks. Both return one
+  ``_save_result`` shape, and ``cancelled`` is deliberately kept apart from
+  ``error``: backing out of a dialog is a decision the UI stays quiet about,
+  while a write that failed has to say so — collapsed into one falsy value
+  they are the same event, and only one of them deserves a red line.
+  ``save_and_close`` reads the same result, so "Save & close" on an
+  established session closes without a dialog in the way.
+- **A target that can no longer be written falls back to the dialog rather
+  than failing.** Moved, deleted, read-only, a disconnected drive. The user
+  asked for a save; the honest response to "that file is gone" is to ask
+  where it goes now, not to leave a button that used to work doing nothing.
+  The rescue location becomes the new target.
+- **"Save as…" opens in the current target's folder but still proposes a
+  fresh timestamped name.** Defaulting to the current filename would make
+  confirming the dialog overwrite the very file plain Save already
+  overwrites, which is Save with extra steps. This is why
+  ``_save_project_file`` keeps ``current`` (the folder hint) separate from
+  ``remembered`` (permission to write without asking) — folding them into one
+  variable silently drops the hint on every Save as…, and a test pins it.
+- **The write is bound to the generation it was packaged from.** A reset or
+  project load while the native dialog is up replaces the session underneath
+  it. The named file is still written — the user asked for it, and it holds
+  the session they were looking at — but ``remember_project_save_target``
+  refuses to bind the REPLACEMENT session to it. Same posture, and the same
+  reason, as the zombie-turn generation guard.
+- **A reported target is a promise, so only a bound one is reported**
+  (caught in review on PR #133, Codex). Both write paths return through
+  ``_bind_save_target``, which reports the path only when the generation
+  guard above actually accepted it. Dropping that return value left the
+  result claiming a target the server had just refused — and the frontend
+  adopts a successful save's target directly, so the replacement session drew
+  a split Save button promising to overwrite the outgoing project's file
+  while the very next click would (correctly) re-open the dialog. The file is
+  still written and the save still succeeds; there is simply nothing to
+  report.
+- **The panel says what it is about to do.** Save's tooltip names the exact
+  path it will overwrite, the caret's menu repeats it under Save as…, and a
+  completed save flashes "Saved ✓" for two seconds — an overwrite produces no
+  dialog and no download, and a button that silently does nothing reads as
+  broken (the lesson already recorded in "The update button installs the
+  update"). The state always passes through "saving", so a second save
+  re-arms that timer instead of inheriting the first one's.
+- **A tutorial workspace can never become the file Save overwrites.** The
+  native save refuses any non-original scope, so the panel's Save downloads
+  the practice copy through ``downloadProjectFile("tutorial")`` — the same
+  blob idiom as ``downloadQcReport``, which is the shipped in-shell download
+  path. A download cannot overwrite in place, so that route establishes no
+  target and the button stays plain Save, which is right: the copy is not the
+  user's project. The dev browser takes the same route for the same reason.
+- **No new capability id, no `TOUR_VERSION` bump.** Save, the caret, and
+  Save as… all declare the existing ``project.save-open`` — the
+  ``updates.manage`` precedent (one capability, several controls) — and
+  ``data-tour="save"`` moved to the wrapper, so the tour's anchor still
+  resolves onto the whole split button.
+- **Tests**: 14 in `tests/test_save_overwrite.py` (the headline ask-then-
+  overwrite, an overwrite writing the session as it is NOW rather than the
+  first save's bytes, Save as… re-pointing the target while leaving the old
+  file alone, the folder hint, a New session forgetting the target end to
+  end with the old project provably untouched, project load forgetting it,
+  the tutorial refusal, the mid-dialog reset and the mid-overwrite reset,
+  the unwritable-target fallback, the doc payload, the path staying out of
+  the saved package, and Save & close). Every mechanism was reverted in place to prove it
+  load-bearing: the overwrite branch → 4 red, the reset's clear → 16 red (a
+  leaked target poisons every later test in the module, which is the point),
+  the load clear → 1, the generation guard → 1, the dialog fallback → 1,
+  reporting an unbound target → 2.
 
 ## Commands
 

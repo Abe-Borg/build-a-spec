@@ -351,7 +351,11 @@ export default function ArtifactPanel({
   useEffect(() => {
     if (openItemsNonce) setOpenItemsExpanded(true);
   }, [openItemsNonce]);
-  // item_id -> short tooltip text for the paper's source chips.
+  // item_id -> short tooltip text for the paper's source chips. Two kinds of
+  // origin share the map (and the chip): grounded research items, and the
+  // reference documents the user attached — a provision drafted from an
+  // owner's standard is as much a cited provenance as a researched one.
+  // `sourceChipTitle` decides the wording from the id prefix.
   const sourceLookup = useMemo(() => {
     const map = new Map<string, string>();
     for (const item of research?.profile?.items ?? []) {
@@ -360,8 +364,11 @@ export default function ArtifactPanel({
         : " — [UNVERIFIED]";
       map.set(item.item_id, `${item.requirement}${sources}`);
     }
+    for (const doc of referenceDocs) {
+      map.set(doc.rid, `${doc.title} (${doc.kind_label})`);
+    }
     return map;
-  }, [research]);
+  }, [research, referenceDocs]);
   const version = doc?.version ?? { index: 0, count: 1 };
   const hasContent =
     !!doc &&
@@ -1170,6 +1177,7 @@ export default function ArtifactPanel({
         doc={doc}
         profileComplete={profileComplete}
         research={research}
+        referenceDocCount={referenceDocs.length}
         busy={busy}
         onStart={onStartResearch}
         onStop={onStopResearch}
@@ -1182,6 +1190,7 @@ export default function ArtifactPanel({
         readiness={readiness}
         doc={doc}
         profileComplete={profileComplete}
+        referenceDocCount={referenceDocs.length}
         busy={busy}
         sourceExpected={activeSourceExpected}
         sourceCapabilities={sourceCapabilities}

@@ -4491,6 +4491,9 @@ def create_app(
                 max_tokens=settings.RESEARCH_MAX_TOKENS,
                 discipline=discipline,
                 dimension_ids=dimension_ids,
+                # Snapshot the list under the guard we already hold: the
+                # round is briefed on what was attached when it started.
+                reference_docs=list(session.references.docs),
                 usage_sink=lambda u, g=run_generation: (
                     session.add_usage_if_current(g, "research", u)
                 ),
@@ -4711,6 +4714,9 @@ def create_app(
                 version_index=session.doc.index,
                 discipline=effective_discipline(session),
                 source_guard=source_guard,
+                # Snapshot under the guard we already hold: the review is
+                # run against what was attached when it started.
+                reference_docs=list(session.references.docs),
                 remembered_dismissed=remembered,
                 usage_sink=lambda cat, u, g=run_generation: (
                     session.add_usage_if_current(g, cat, u)

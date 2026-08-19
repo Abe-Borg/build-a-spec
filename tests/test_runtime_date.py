@@ -214,11 +214,15 @@ def test_every_research_dimension_is_told_the_same_date_it_stamps(monkeypatch):
     assert len(calls) == 1, "the round must read the clock exactly once"
     assert profile.research_date == "2031-03-14"
 
-    messages = [
-        request["messages"][0]["content"] for request in fake.requests
+    # Block 0 is the cached shared half of the user turn (see
+    # ``engine._dimension_user_content``). The date has to lead THAT block,
+    # not merely appear somewhere in the message: it is part of the prefix
+    # every continuation re-reads from cache.
+    shared_blocks = [
+        request["messages"][0]["content"][0]["text"] for request in fake.requests
     ]
-    assert len(messages) == len(DIM_KEYS)
-    for message in messages:
+    assert len(shared_blocks) == len(DIM_KEYS)
+    for message in shared_blocks:
         assert message.startswith("CURRENT DATE: Friday, 14 March 2031")
         assert DATE_AWARENESS_DIRECTIVE in message
         # The project header still follows it, unchanged.

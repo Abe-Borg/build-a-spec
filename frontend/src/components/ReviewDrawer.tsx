@@ -30,6 +30,7 @@ import {
   sourceCapabilityTitle,
   sourceEditOpDecision,
 } from "../lib/sourceCapabilities";
+import { sourceChipTitle } from "../lib/sourceChip";
 import {
   buildQueue,
   reviewCounts,
@@ -533,11 +534,10 @@ export default function ReviewDrawer({
                 {current.sourceItemId && (
                   <span
                     className="shrink-0 cursor-help text-[11px] text-[#7a90b8]"
-                    title={
-                      sourceLookup.get(current.sourceItemId)
-                        ? `Research: ${sourceLookup.get(current.sourceItemId)}`
-                        : `Research item ${current.sourceItemId}`
-                    }
+                    title={sourceChipTitle(
+                      current.sourceItemId,
+                      sourceLookup,
+                    )}
                   >
                     ◆
                   </span>

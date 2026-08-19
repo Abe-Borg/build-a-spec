@@ -37,6 +37,8 @@ import Tip from "./Tip";
 interface Props {
   doc: SpecDoc | null;
   profileComplete: boolean;
+  /** Attached documents every dimension is briefed with. */
+  referenceDocCount: number;
   research: ResearchSnapshot | null;
   busy: boolean;
   onStart: (scope?: ResearchScope) => void;
@@ -293,6 +295,7 @@ function ProjectProfileForm({
 export default function ResearchDrawer({
   doc,
   profileComplete,
+  referenceDocCount,
   research,
   busy,
   onStart,
@@ -345,6 +348,16 @@ export default function ResearchDrawer({
   // round wearing a different label.
   const retryable = rounds > 0 && gaps.length > 0;
 
+  // Attached documents are sent to every dimension, so they are part of what
+  // a round costs and part of what it will look for. Said where the user is
+  // deciding to spend.
+  const referenceBrief =
+    referenceDocCount > 0
+      ? ` Each agent is also briefed with your ${referenceDocCount} attached reference document${
+          referenceDocCount === 1 ? "" : "s"
+        }, so it researches whether what they require holds here rather than re-deriving it.`
+      : "";
+
   const startDisabled = !profileComplete || running || busy;
   const startTip = !profileComplete
     ? "Complete the project profile first — city, state, country, and client — via the form below or in chat."
@@ -353,8 +366,8 @@ export default function ResearchDrawer({
       : busy
         ? "Finish the current turn first."
         : rounds > 0
-          ? `Run a full round over all ${research?.coverage?.total ?? 0} research areas (uses your API key). It ADDS to the ${items.length} finding(s) you already have — nothing is replaced, a requirement found again is confirmed in place, and each agent is told what this session already established so it looks for what is new, changed, or wrong.`
-          : "Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).";
+          ? `Run a full round over all ${research?.coverage?.total ?? 0} research areas (uses your API key). It ADDS to the ${items.length} finding(s) you already have — nothing is replaced, a requirement found again is confirmed in place, and each agent is told what this session already established so it looks for what is new, changed, or wrong.${referenceBrief}`
+          : `Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).${referenceBrief}`;
   const startLabel = running
     ? board.total > 0
       ? `Researching… (${board.doneCount}/${board.total})`

@@ -1338,6 +1338,13 @@ export interface QcResearchCoverage {
   limitation: string;
 }
 
+export interface QcReferenceCoverage {
+  state: "none" | "full" | "partial";
+  identity: string;
+  /** "" when there is nothing to disclose. */
+  limitation: string;
+}
+
 function manifestRecord(
   manifest: Record<string, unknown> | undefined,
   key: string,
@@ -1380,6 +1387,58 @@ function researchNames(
  * reassuring half-truth this replaces. Never reads live research state: a
  * report is an audit of the run's input snapshot.
  */
+/**
+ * The `qcResearchCoverage` mirror for attached reference documents — see
+ * `docx_export.qc_reference_coverage`, which this must agree with.
+ *
+ * Reads the CAPTURED manifest, never live session state: the user may have
+ * detached or replaced a document since the run, and the report describes
+ * what the reviewers actually read.
+ */
+export function qcReferenceCoverage(
+  rawResult: QcResultView | QcReportResult,
+): QcReferenceCoverage {
+  const result = resultFields(rawResult);
+  const record = manifestRecord(result.input_manifest, "reference_documents");
+  const count = Number(record.count ?? 0) || 0;
+  // A schema predating the key: such a run genuinely read no reference
+  // documents, because the engine did not thread them at all.
+  if (Object.keys(record).length === 0 || count === 0) {
+    return { state: "none", identity: "None", limitation: "" };
+  }
+  const documents = Array.isArray(record.documents)
+    ? (record.documents.filter(
+        (entry) => !!entry && typeof entry === "object" && !Array.isArray(entry),
+      ) as Record<string, unknown>[])
+    : [];
+  const names =
+    documents
+      .map((doc) => `${doc.rid ?? "?"} "${doc.title ?? "Untitled"}"`)
+      .join(", ") || `${count} document(s)`;
+  const trimmed = documents.filter((doc) => Boolean(doc.truncated_in_block));
+  if (trimmed.length === 0) {
+    return {
+      state: "full",
+      identity: `${count} attached, read in full (${names})`,
+      limitation: "",
+    };
+  }
+  const included = Number(record.included_tokens ?? 0) || 0;
+  const attached = Number(record.attached_tokens ?? 0) || 0;
+  const trimmedNames = trimmed.map((doc) => String(doc.rid ?? "?")).join(", ");
+  return {
+    state: "partial",
+    identity: `${count} attached, partially read (${names})`,
+    limitation:
+      `Attached reference documents exceeded the review prompt budget: ` +
+      `${included.toLocaleString()} of ${attached.toLocaleString()} tokens ` +
+      `were provided to the reviewers, and ${trimmedNames} were cut for ` +
+      `length. Requirements in the omitted portions were NOT reviewed ` +
+      `against, so coverage against those documents is partial rather than ` +
+      `verified-complete.`,
+  };
+}
+
 export function qcResearchCoverage(
   rawResult: QcResultView | QcReportResult,
 ): QcResearchCoverage {
@@ -1818,6 +1877,8 @@ export function qcReportLimitations(
   // no limitation at all, which is the reassuring half-truth this fixes.
   const research = qcResearchCoverage(rawResult);
   if (research.limitation) limitations.push(research.limitation);
+  const references = qcReferenceCoverage(rawResult);
+  if (references.limitation) limitations.push(references.limitation);
   const consolidation = qcConsolidationSummary(rawResult);
   if (consolidation.limitation) limitations.push(consolidation.limitation);
   const failedLenses = result.lens_statuses.filter(

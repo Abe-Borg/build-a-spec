@@ -39,7 +39,7 @@ from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE as DEFAULT_MODU
 from tests.fakes import (
     SequencedFakeClient,
     _synthesize_events,
-    _user_text,
+    user_text,
     block_start_event,
     block_stop_event,
     code_execution_tool_events,
@@ -247,7 +247,7 @@ def test_pause_turn_continuation_pools_grounding_across_responses():
     governing_requests = [
         req
         for req in client.requests
-        if DIM_KEYS["governing_codes"] in req["messages"][0]["content"]
+        if DIM_KEYS["governing_codes"] in user_text(req["messages"])
     ]
     assert len(governing_requests) == 2
     assert governing_requests[1]["messages"][1]["role"] == "assistant"
@@ -367,7 +367,7 @@ def test_pause_continuation_echoes_the_container_and_a_retry_drops_it(monkeypatc
     requests = [
         req
         for req in client.requests
-        if DIM_KEYS["governing_codes"] in req["messages"][0]["content"]
+        if DIM_KEYS["governing_codes"] in user_text(req["messages"])
     ]
     assert len(requests) == 4
     # 1: opening request, no container to know about yet.
@@ -416,7 +416,7 @@ def test_a_pending_search_is_resent_verbatim_on_a_research_pause():
     requests = [
         req
         for req in client.requests
-        if DIM_KEYS["governing_codes"] in req["messages"][0]["content"]
+        if DIM_KEYS["governing_codes"] in user_text(req["messages"])
     ]
     assert len(requests) == 2
     resumed = requests[1]["messages"][1]
@@ -1320,7 +1320,7 @@ def _dimension_message(client, dimension_id: str) -> str:
     """The user brief one dimension was actually sent, or "" if it never ran."""
     key = DIM_KEYS[dimension_id]
     for request in client.requests:
-        text = _user_text(request.get("messages", []))
+        text = user_text(request.get("messages", []))
         if key in text:
             return text
     return ""

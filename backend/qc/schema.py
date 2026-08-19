@@ -88,8 +88,10 @@ QC_LENSES: tuple[QCLens, ...] = (
             "execution provisions; execution references products that exist; "
             "cross-references resolve; no duplicated or mutually "
             "contradicting provisions; no terminology drift (the same thing "
-            "named two ways). Anchor each finding to the element ids "
-            "involved."
+            "named two ways). Where <attached_reference_documents> are "
+            "present, a provision that contradicts one is the same class of "
+            "defect — flag it and say which side says what. Anchor each "
+            "finding to the element ids involved."
         ),
     ),
     QCLens(
@@ -104,7 +106,12 @@ QC_LENSES: tuple[QCLens, ...] = (
             "represented in the draft or consciously absent), the module's "
             "conventional section scope, and the articles a reviewer would "
             "expect. Flag missing articles and unrepresented controlling "
-            "requirements. If no research profile is supplied, skip profile "
+            "requirements. Judge coverage against "
+            "<attached_reference_documents> the same way when they are "
+            "present: a requirement stated in an owner standard or "
+            "basis-of-design that the draft never addresses is a missing "
+            "requirement, and one the project consciously departs from "
+            "should say so. If no research profile is supplied, skip profile "
             "coverage and say so — judge scope from section conventions "
             "alone."
         ),
@@ -135,7 +142,9 @@ QC_LENSES: tuple[QCLens, ...] = (
             "blocks (defaults that would be wrong if the assumption is), "
             "surviving [TBD:...] markers, needs_input blocks, and imported "
             "blocks not yet reviewed; provisions whose source_item_id points "
-            "at an [UNVERIFIED] research item. Do NOT propose mass status "
+            "at an [UNVERIFIED] research item, at an attached document "
+            "(ref-...) whose text does not actually support the provision, "
+            "or at an id that exists in neither. Do NOT propose mass status "
             "upgrades — flag the specific blocks that need a human decision."
         ),
     ),
@@ -350,7 +359,8 @@ QC_REFUTATION_EVIDENCE_SCHEMA: dict[str, Any] = {
             "description": (
                 "'source' for a web page you actually retrieved in this "
                 "review, or 'document_ref' for a place in the specification "
-                "under review."
+                "under review or an attached reference document supplied "
+                "with it."
             ),
         },
         "url": {
@@ -365,7 +375,10 @@ QC_REFUTATION_EVIDENCE_SCHEMA: dict[str, Any] = {
             "description": (
                 "For type 'document_ref': the element id in the reviewed "
                 "specification (for example 'pt2.a1.p3', or 'sec') that "
-                "contradicts the finding."
+                "contradicts the finding — or, when the refutation rests on "
+                "a document the user attached, that document's id from "
+                "<attached_reference_documents> (for example 'ref-2'). Cite "
+                "the attachment id itself, not a page or clause inside it."
             ),
         },
     },
@@ -420,8 +433,9 @@ QC_VERDICT_SCHEMA: dict[str, Any] = {
             "items": QC_REFUTATION_EVIDENCE_SCHEMA,
             "description": (
                 "When you REFUTE a critical or high finding, cite what "
-                "supports the refutation: a source you retrieved, or a place "
-                "in the reviewed specification. Required in substance for "
+                "supports the refutation: a source you retrieved, a place "
+                "in the reviewed specification, or an attached reference "
+                "document supplied with this review. Required in substance for "
                 "those refutations — without at least one entry that checks "
                 "out, the finding is escalated to a human as disputed rather "
                 "than dismissed. Leave empty when you uphold, or when "

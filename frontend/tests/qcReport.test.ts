@@ -20,6 +20,7 @@ import {
   qcReportLimitations,
   qcRequestPopulation,
   qcRequestPopulationNote,
+  qcReferenceCoverage,
   qcResearchCoverage,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
@@ -1311,5 +1312,93 @@ test("a payload without the derived flag still lists its blockers", () => {
   assert.deepEqual(
     blocking.map((check) => check.id),
     ["lint_clean"],
+  );
+});
+
+
+// ---------------------------------------------------------------------------
+// Attached reference documents (mirrors docx_export.qc_reference_coverage)
+// ---------------------------------------------------------------------------
+
+function withReferences(record: Record<string, unknown> | null): QcReportResult {
+  return result({
+    input_manifest: record ? { reference_documents: record } : {},
+  });
+}
+
+test("a report from before references were review inputs reads as None", () => {
+  // A run on the old schema genuinely read no reference documents — the
+  // engine did not thread them at all — so this must not read as a gap.
+  const coverage = qcReferenceCoverage(withReferences(null));
+  assert.equal(coverage.state, "none");
+  assert.equal(coverage.identity, "None");
+  assert.equal(coverage.limitation, "");
+});
+
+test("nothing attached reads as None and discloses nothing", () => {
+  const coverage = qcReferenceCoverage(
+    withReferences({ count: 0, documents: [], trimmed: false }),
+  );
+  assert.equal(coverage.state, "none");
+  assert.equal(coverage.limitation, "");
+});
+
+test("documents read in full are named and manufacture no limitation", () => {
+  const coverage = qcReferenceCoverage(
+    withReferences({
+      count: 1,
+      attached_tokens: 400,
+      included_tokens: 400,
+      trimmed: false,
+      documents: [
+        { rid: "ref-1", title: "ACME Standard", truncated_in_block: false },
+      ],
+    }),
+  );
+  assert.equal(coverage.state, "full");
+  assert.match(coverage.identity, /1 attached, read in full/);
+  assert.match(coverage.identity, /ref-1 "ACME Standard"/);
+  assert.equal(coverage.limitation, "");
+});
+
+test("a trimmed document is named in the identity row AND disclosed", () => {
+  const coverage = qcReferenceCoverage(
+    withReferences({
+      count: 2,
+      attached_tokens: 90_000,
+      included_tokens: 25_000,
+      trimmed: true,
+      documents: [
+        { rid: "ref-1", title: "ACME Standard", truncated_in_block: true },
+        { rid: "ref-2", title: "Basis of Design", truncated_in_block: false },
+      ],
+    }),
+  );
+  assert.equal(coverage.state, "partial");
+  assert.match(coverage.identity, /partially read/);
+  // The pairing that matters: an identity row claiming documents were
+  // reviewed against must never stand beside silence about the cut.
+  assert.match(coverage.limitation, /ref-1 were cut for length/);
+  assert.match(coverage.limitation, /NOT reviewed against/);
+});
+
+test("a trim limitation reaches the report-wide limitations list verbatim", () => {
+  const report = withReferences({
+    count: 1,
+    attached_tokens: 90_000,
+    included_tokens: 25_000,
+    trimmed: true,
+    documents: [
+      { rid: "ref-1", title: "ACME Standard", truncated_in_block: true },
+    ],
+  });
+  const coverage = qcReferenceCoverage(report);
+  assert.ok(qcReportLimitations(report).includes(coverage.limitation));
+});
+
+test("a malformed reference record degrades instead of throwing", () => {
+  assert.doesNotThrow(() => qcReferenceCoverage(withReferences({ count: "x" })));
+  assert.doesNotThrow(() =>
+    qcReferenceCoverage(withReferences({ count: 2, documents: "nope" })),
   );
 });

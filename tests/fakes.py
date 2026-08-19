@@ -1023,7 +1023,7 @@ def singleton_consolidation_for(request_text: str) -> SimpleNamespace:
     )
 
 
-def _user_text(messages: list) -> str:
+def user_text(messages: list) -> str:
     """The first user turn's text, whether it is a string or content blocks.
 
     QC caches its shared document/standards/profile prefix by splitting the
@@ -1092,7 +1092,7 @@ class SequencedFakeClient:
             if isinstance(captured.get("messages"), list):
                 captured["messages"] = list(captured["messages"])
             self.requests.append(captured)
-            first_user = _user_text(request.get("messages", []))
+            first_user = user_text(request.get("messages", []))
             return self._match_locked(first_user)
 
     def stream(self, **request):
@@ -1101,7 +1101,7 @@ class SequencedFakeClient:
             if isinstance(captured.get("messages"), list):
                 captured["messages"] = list(captured["messages"])
             self.requests.append(captured)
-            first_user = _user_text(request.get("messages", []))
+            first_user = user_text(request.get("messages", []))
             turn = self._match_locked(first_user)
         if isinstance(turn, Exception):
             raise turn

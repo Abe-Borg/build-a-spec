@@ -76,6 +76,8 @@ interface Props {
   readiness: ReadinessPayload | null;
   doc: SpecDoc | null;
   profileComplete: boolean;
+  /** Attached documents every lens and verifier seat reads. */
+  referenceDocCount: number;
   busy: boolean;
   sourceExpected: boolean;
   sourceCapabilities: SourceCapabilitiesState | null;
@@ -756,6 +758,7 @@ export default function QCDrawer({
   readiness,
   doc,
   profileComplete,
+  referenceDocCount,
   busy,
   sourceExpected,
   sourceCapabilities,
@@ -973,9 +976,17 @@ export default function QCDrawer({
   // Cost-focused line for the confirmation dialog (the model name is already
   // stated there). A re-run folds the session's prior QC spend in.
   const costEstimate =
-    observedCost && observedCost > 0
+    (observedCost && observedCost > 0
       ? `This session's Final QC has cost ≈ $${observedCost.toFixed(2)} so far; expect a few dollars for another pass.`
-      : "Expect a few dollars per pass.";
+      : "Expect a few dollars per pass.") +
+    // Attached documents are read by every lens and every verifier seat, so
+    // they are a real (if cached) part of what this pass costs. Say so where
+    // the user is deciding to spend, not only in the report afterwards.
+    (referenceDocCount > 0
+      ? ` Your ${referenceDocCount} attached reference document${
+          referenceDocCount === 1 ? "" : "s"
+        } will be reviewed against, which adds to the pass.`
+      : "");
 
   const startLabel = settling
     ? "Preserving report…"

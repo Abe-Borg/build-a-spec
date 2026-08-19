@@ -166,8 +166,11 @@ _SECTION_RE = re.compile(
 # mapped (loudly) onto PART 3 rather than demoting the file to unstructured.
 _PART_RE = re.compile(r"^PART\s*([1-5])\b", re.IGNORECASE)
 _END_RE = re.compile(r"^END\s+OF\s+SECTION\b", re.IGNORECASE)
-# "1.1 SUMMARY" / "1.01 SUMMARY" / "2.3 - PIPING" (part digit + article no.)
-_ARTICLE_RE = re.compile(r"^([123])\.(\d{1,2})\.?\s+[-–—]?\s*(\S.*)$")
+# "1.1 SUMMARY" / "1.01 SUMMARY" / "2.3 - PIPING" (part digit + article no.).
+# Digits 4/5 are accepted alongside PART 4/5 above and remapped to PART 3 the
+# same way — an accepted "PART 4" whose "4.01" articles were NOT accepted
+# would shed its article titles into the synthetic IMPORTED CONTENT catch-all.
+_ARTICLE_RE = re.compile(r"^([1-5])\.(\d{1,2})\.?\s+[-–—]?\s*(\S.*)$")
 # A header line without the SECTION keyword ("23 05 48 — TITLE"). Consulted
 # for the FIRST content line only — anywhere else six digits and a dash are
 # far more likely to be a provision than a header.
@@ -657,6 +660,22 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     promoted_part_count = 0
     # The bare-section header is consulted for the first content line only.
     saw_any_content = False
+    # PART 4/5 remaps warn once per out-of-range number, however the content
+    # arrives — a heading line, an auto-numbered heading, or a bare "4.01"
+    # article — instead of once per line about the same remap.
+    warned_out_of_range_parts: set[int] = set()
+
+    def _remap_out_of_range_part(part_number: int, line_no: int) -> int:
+        if part_number <= 3:
+            return part_number
+        if part_number not in warned_out_of_range_parts:
+            warned_out_of_range_parts.add(part_number)
+            builder.warnings.append(
+                f"Line {line_no}: SectionFormat carries three parts; "
+                f"'PART {part_number}' content was kept under PART 3 — "
+                "review placement."
+            )
+        return 3
     # Where END OF SECTION stopped the parse (1-based), for the trailing-
     # content accounting below. None = the file never said it ended.
     end_of_section_index: int | None = None
@@ -732,16 +751,9 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                 if kind == "part":
                     saw_spec_marker = True
                     promoted_part_count += 1
-                    part_number = promoted_part_count
-                    if part_number > 3:
-                        builder.warnings.append(
-                            f"Line {line_no}: SectionFormat carries three "
-                            f"parts; this file's PART heading number "
-                            f"{part_number} was kept under PART 3 — review "
-                            "placement."
-                        )
-                        part_number = 3
-                    builder.part(part_number)
+                    builder.part(
+                        _remap_out_of_range_part(promoted_part_count, line_no)
+                    )
                     continue
                 if kind == "article":
                     saw_spec_marker = True
@@ -812,22 +824,19 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
         part_match = _PART_RE.match(text)
         if part_match:
             saw_spec_marker = True
-            part_number = int(part_match.group(1))
-            if part_number > 3:
-                builder.warnings.append(
-                    f"Line {line_no}: SectionFormat carries three parts; "
-                    f"'PART {part_number}' content was kept under PART 3 — "
-                    "review placement."
-                )
-                part_number = 3
-            builder.part(part_number)
+            builder.part(
+                _remap_out_of_range_part(int(part_match.group(1)), line_no)
+            )
             continue
 
         article_match = _ARTICLE_RE.match(text)
         if article_match:
             saw_spec_marker = True
             part_digit, _article_no, title = article_match.groups()
-            builder.article(int(part_digit), title.strip())
+            builder.article(
+                _remap_out_of_range_part(int(part_digit), line_no),
+                title.strip(),
+            )
             continue
 
         # Manual paragraph labels, most-specific first (uppercase before

@@ -924,6 +924,13 @@ def test_a_bare_header_shape_later_in_the_document_is_a_provision(tmp_path):
 
 
 def test_part_four_text_heading_lands_under_part_three_loudly(tmp_path):
+    """PART 4/5 content remaps to PART 3 — heading AND its own articles.
+
+    Accepting "PART 4" while _ARTICLE_RE still refused "4.01" would shed the
+    part's article titles into the synthetic IMPORTED CONTENT catch-all
+    (caught in review on PR #139, Codex). The remap warns once per
+    out-of-range number, not once per line.
+    """
     path = _write_docx(
         tmp_path,
         [
@@ -931,14 +938,27 @@ def test_part_four_text_heading_lands_under_part_three_loudly(tmp_path):
             "1.1 SUMMARY",
             "A. Section includes commissioning of HVAC systems.",
             "PART 4 - COMMISSIONING",
+            "4.1 COMMISSIONING TESTS",
             "A. Verify installation per the checklists.",
+            "4.2 DOCUMENTATION",
+            "A. Submit commissioning reports.",
         ],
         name="part-four.docx",
     )
     result = parse_master_docx(path)
     part3 = result.section.parts[2]
-    assert part3.articles, "PART 4 content must land under PART 3"
-    assert any("PART 4" in w and "PART 3" in w for w in result.warnings)
+    # The articles keep their titles as REAL articles — no catch-all.
+    assert [a.title for a in part3.articles] == [
+        "COMMISSIONING TESTS",
+        "DOCUMENTATION",
+    ]
+    assert part3.articles[0].paragraphs[0].text == (
+        "Verify installation per the checklists."
+    )
+    remap_warnings = [
+        w for w in result.warnings if "PART 4" in w and "PART 3" in w
+    ]
+    assert len(remap_warnings) == 1
 
 
 def test_warnings_cite_a_findable_reference_not_just_a_line_ordinal(tmp_path):

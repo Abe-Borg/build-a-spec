@@ -33,7 +33,7 @@ from backend.research.engine import (
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
 from tests.fakes import FakeClient, SequencedFakeClient, research_response, text_turn, tool_turn
 from tests.test_research_api import _PROFILE_EDITS, _parse_sse
-from tests.fakes import _user_text
+from tests.fakes import user_text
 from tests.test_research_engine import DIM_KEYS, _item
 
 PROFILE = ProjectProfile("Ashburn", "VA", "USA", "ExampleCo")
@@ -1499,9 +1499,9 @@ def test_the_runner_briefs_a_later_round_on_what_the_session_established():
 
     # Round 1 asked blind — there was nothing established to be told about.
     first_brief = next(
-        _user_text(r["messages"])
+        user_text(r["messages"])
         for r in round_one.requests
-        if DIM_KEYS["governing_codes"] in _user_text(r["messages"])
+        if DIM_KEYS["governing_codes"] in user_text(r["messages"])
     )
     assert "<already_established>" not in first_brief
 
@@ -1509,17 +1509,17 @@ def test_the_runner_briefs_a_later_round_on_what_the_session_established():
     _run_round(runner, round_two, None)
 
     second_brief = next(
-        _user_text(r["messages"])
+        user_text(r["messages"])
         for r in round_two.requests
-        if DIM_KEYS["governing_codes"] in _user_text(r["messages"])
+        if DIM_KEYS["governing_codes"] in user_text(r["messages"])
     )
     assert "<already_established>" in second_brief
     assert "VCC 2021 governs." in second_brief
     assert "NEW, CHANGED, or CORRECTED" in second_brief
     # A dimension that found nothing in round 1 has nothing to be briefed on.
     ahj_brief = next(
-        _user_text(r["messages"])
+        user_text(r["messages"])
         for r in round_two.requests
-        if DIM_KEYS["ahj_requirements"] in _user_text(r["messages"])
+        if DIM_KEYS["ahj_requirements"] in user_text(r["messages"])
     )
     assert "<already_established>" not in ahj_brief

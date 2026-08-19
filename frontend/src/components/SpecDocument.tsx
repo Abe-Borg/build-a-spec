@@ -40,6 +40,7 @@ import {
   sourceCapabilityTitle,
   sourceEditOpDecision,
 } from "../lib/sourceCapabilities";
+import { sourceChipTitle } from "../lib/sourceChip";
 import {
   adjacentAllowedPosition,
   canAddChildParagraph,
@@ -142,15 +143,10 @@ function SourceChip({
   lookup: ReadonlyMap<string, string>;
 }) {
   if (!itemId) return null;
-  const tooltip = lookup.get(itemId);
   return (
     <span
       className="ml-1.5 inline-block cursor-help align-middle text-[10px] text-[#7a90b8]"
-      title={
-        tooltip
-          ? `Research: ${tooltip}`
-          : `Research item ${itemId} (re-run research to see details)`
-      }
+      title={sourceChipTitle(itemId, lookup)}
     >
       ◆
     </span>

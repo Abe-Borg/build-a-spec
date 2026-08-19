@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from backend.app import create_app
 from backend import sessions
 from tests.fakes import (
+    user_text,
     FakeClient,
     SequencedFakeClient,
     request_context_text,
@@ -451,7 +452,7 @@ def test_generic_research_threads_discipline_into_every_dimension(monkeypatch):
     # dimension requests — never vacuous).
     assert len(fake.requests) == 4
     assert all(
-        "Discipline: Electrical." in req["messages"][0]["content"]
+        "Discipline: Electrical." in user_text(req["messages"])
         for req in fake.requests
     )
 
@@ -496,8 +497,8 @@ def test_generic_research_prefers_document_identity_over_legacy_discipline(
     assert _wait_terminal(client)["status"] == "complete"
     assert len(fake.requests) == 4
     assert all(
-        "Discipline: Plumbing." in req["messages"][0]["content"]
-        and "Discipline: Electrical." not in req["messages"][0]["content"]
+        "Discipline: Plumbing." in user_text(req["messages"])
+        and "Discipline: Electrical." not in user_text(req["messages"])
         for req in fake.requests
     )
 

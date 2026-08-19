@@ -88,8 +88,10 @@ QC_LENSES: tuple[QCLens, ...] = (
             "execution provisions; execution references products that exist; "
             "cross-references resolve; no duplicated or mutually "
             "contradicting provisions; no terminology drift (the same thing "
-            "named two ways). Anchor each finding to the element ids "
-            "involved."
+            "named two ways). Where <attached_reference_documents> are "
+            "present, a provision that contradicts one is the same class of "
+            "defect — flag it and say which side says what. Anchor each "
+            "finding to the element ids involved."
         ),
     ),
     QCLens(
@@ -104,7 +106,12 @@ QC_LENSES: tuple[QCLens, ...] = (
             "represented in the draft or consciously absent), the module's "
             "conventional section scope, and the articles a reviewer would "
             "expect. Flag missing articles and unrepresented controlling "
-            "requirements. If no research profile is supplied, skip profile "
+            "requirements. Judge coverage against "
+            "<attached_reference_documents> the same way when they are "
+            "present: a requirement stated in an owner standard or "
+            "basis-of-design that the draft never addresses is a missing "
+            "requirement, and one the project consciously departs from "
+            "should say so. If no research profile is supplied, skip profile "
             "coverage and say so — judge scope from section conventions "
             "alone."
         ),
@@ -135,7 +142,9 @@ QC_LENSES: tuple[QCLens, ...] = (
             "blocks (defaults that would be wrong if the assumption is), "
             "surviving [TBD:...] markers, needs_input blocks, and imported "
             "blocks not yet reviewed; provisions whose source_item_id points "
-            "at an [UNVERIFIED] research item. Do NOT propose mass status "
+            "at an [UNVERIFIED] research item, at an attached document "
+            "(ref-...) whose text does not actually support the provision, "
+            "or at an id that exists in neither. Do NOT propose mass status "
             "upgrades — flag the specific blocks that need a human decision."
         ),
     ),

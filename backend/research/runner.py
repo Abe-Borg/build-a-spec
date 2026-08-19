@@ -202,6 +202,7 @@ class ResearchRunner:
         max_tokens: int,
         discipline: str = "",
         dimension_ids: Sequence[str] | None = None,
+        reference_docs: Sequence[Any] | None = None,
         on_settled: Callable[[], None] | None = None,
         usage_sink: Callable[[dict], None] | None = None,
     ) -> bool:
@@ -214,6 +215,13 @@ class ResearchRunner:
         rather than re-deriving it — captured here, under the same lock
         that numbers the round, so the brief and the round number describe
         the same moment.
+
+        ``reference_docs`` are the documents the user attached to the
+        project. They are rendered into every dimension's brief verbatim (see
+        ``engine.reference_context_block``) so the round researches what the
+        owner actually requires rather than re-deriving it. Captured here
+        under the same lock as ``established``, so the round's brief and its
+        number describe one moment.
 
         ``on_settled`` (optional) runs after the terminal state is set —
         the app layer uses it for nothing today but tests can synchronize
@@ -251,6 +259,11 @@ class ResearchRunner:
             # `profile_result` while it is running, but a snapshot taken
             # here cannot disagree with the round it is numbering.
             established = self.profile_result
+            # Snapshotted with the round it briefs, for the same reason: a
+            # document attached while this round is in flight belongs to the
+            # next one, not to workers already briefed and already paying for
+            # a cached prefix built without it.
+            briefing_docs = list(reference_docs or [])
             cancel_event = threading.Event()
             self._cancel_event = cancel_event
             run_token = object()
@@ -316,6 +329,7 @@ class ResearchRunner:
                     discipline=discipline,
                     dimension_ids=dimension_ids,
                     established=established,
+                    reference_docs=briefing_docs,
                     event_sink=_sink,
                     should_stop=cancel_event.is_set,
                 )

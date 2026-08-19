@@ -479,7 +479,7 @@ def test_an_unresolvable_document_reference_does_not_satisfy_the_gate():
     assert result.disputed[0].dispute_reason == "insufficient_refutation_evidence"
     evidence = result.disputed[0].verdicts[0].refutation_evidence
     assert evidence[0].validated is False
-    assert "does not resolve" in evidence[0].reason
+    assert "resolves to neither" in evidence[0].reason
 
 
 def test_a_medium_refutation_is_not_evidence_gated():

@@ -20,6 +20,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from collections.abc import Sequence
 from typing import Any, Callable
 
 from ..tracing import capture as _trace
@@ -115,6 +116,7 @@ class QCRunner:
         version_index: int,
         discipline: str = "",
         source_guard: QCSourceGuard | None = None,
+        reference_docs: Sequence[Any] | None = None,
         remembered_dismissed: set[str] | dict[str, dict[str, Any]] | None = None,
         on_settled: Callable[[], None] | None = None,
         usage_sink: Callable[[str, dict], None] | None = None,
@@ -131,6 +133,11 @@ class QCRunner:
             # A costly failed re-run must not erase the user's prior audit
             # record; first runs still have ``result is None`` as before.
             self.events = []
+            # Snapshotted with the run, like ``section``: a document attached
+            # while the fan-out is in flight belongs to the next attempt, not
+            # to lenses already briefed against a cached prefix built without
+            # it.
+            briefing_docs = list(reference_docs or [])
             cancel_event = threading.Event()
             self._cancel_event = cancel_event
             run_token = object()
@@ -197,6 +204,7 @@ class QCRunner:
                     finished_at=_now_iso(),
                     discipline=discipline,
                     source_guard=source_guard,
+                    reference_docs=briefing_docs,
                     remembered_dismissed=remembered_dismissed,
                     run_id=run_id,
                     event_sink=_sink,

@@ -26,7 +26,7 @@ from backend.spec_doc.model import DocumentStore
 from backend.spec_modules import DEFAULT_MODULE
 from tests.fakes import (
     SequencedFakeClient,
-    _user_text,
+    user_text,
     qc_findings_response,
     qc_verdict_response,
 )
@@ -302,7 +302,7 @@ class _InvalidRequestVerifierClient(SequencedFakeClient):
         self.verifier_request_count = 0
 
     def stream(self, **request):
-        user_message = _user_text(request.get("messages") or [])
+        user_message = user_text(request.get("messages") or [])
         if "[[QC-VERIFY:" not in user_message:
             return super().stream(**request)
         with self._lock:
@@ -321,7 +321,7 @@ class _SynchronizedInvalidRequestVerifierClient(
         self._verifier_barrier = threading.Barrier(settings.QC_MAX_WORKERS)
 
     def stream(self, **request):
-        user_message = _user_text(request.get("messages") or [])
+        user_message = user_text(request.get("messages") or [])
         if "[[QC-VERIFY:" not in user_message:
             return SequencedFakeClient.stream(self, **request)
         with self._lock:
@@ -396,7 +396,7 @@ def test_output_and_ordinary_call_failures_do_not_trip_shared_breaker() -> None:
     verifier_requests = [
         request
         for request in client.requests
-        if "[[QC-VERIFY:" in _user_text(request["messages"])
+        if "[[QC-VERIFY:" in user_text(request["messages"])
     ]
     assert len(verifier_requests) == 9
     assert {finding.title for finding in result.inconclusive} == {

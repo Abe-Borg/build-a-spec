@@ -1045,6 +1045,51 @@ def qc_research_coverage(qc_result: dict) -> tuple[str, str]:
     return f"Yes - partial ({counted} areas completed)", " ".join(sentences)
 
 
+def qc_reference_coverage(qc_result: dict) -> tuple[str, str]:
+    """``(identity value, limitation)`` from the CAPTURED reference manifest.
+
+    The ``qc_research_coverage`` shape, and for the same reason: an identity
+    row saying documents were reviewed against, beside no disclosure that one
+    of them was cut to fit the prompt, is the half-truth this pairing exists
+    to prevent. One function, both surfaces.
+
+    Reads ``input_manifest.reference_documents`` and never the live session —
+    a report is an audit of the run's input snapshot, and the user may have
+    detached or replaced a document since. An empty limitation means there is
+    nothing to disclose.
+    """
+    manifest = _qc_dict(qc_result.get("input_manifest"))
+    record = _qc_dict(manifest.get("reference_documents"))
+    if not record:
+        # A schema predating the manifest key. Silent rather than guessing:
+        # such a run genuinely did not read reference documents, because the
+        # engine did not thread them at all.
+        return "None", ""
+    count = int(record.get("count") or 0)
+    if not count:
+        return "None", ""
+
+    documents = [d for d in _qc_list(record.get("documents")) if isinstance(d, dict)]
+    names = ", ".join(
+        f"{d.get('rid') or '?'} \"{d.get('title') or 'Untitled'}\"" for d in documents
+    ) or f"{count} document(s)"
+    trimmed = [d for d in documents if d.get("truncated_in_block")]
+    if not trimmed:
+        return f"{count} attached, read in full ({names})", ""
+
+    trimmed_names = ", ".join(str(d.get("rid") or "?") for d in trimmed)
+    included = int(record.get("included_tokens") or 0)
+    attached = int(record.get("attached_tokens") or 0)
+    return (
+        f"{count} attached, partially read ({names})",
+        f"Attached reference documents exceeded the review prompt budget: "
+        f"{included:,} of {attached:,} tokens were provided to the "
+        f"reviewers, and {trimmed_names} were cut for length. Requirements "
+        "in the omitted portions were NOT reviewed against, so coverage "
+        "against those documents is partial rather than verified-complete.",
+    )
+
+
 def qc_version_label(value: object) -> str:
     """``3`` → ``v4 (stored index 3)`` — the one document-version wording.
 
@@ -2707,6 +2752,13 @@ def _qc_render_identity(
             # Three-state, never a reassuring bare "Yes": a partial profile
             # says so here, with the same numbers the Limitations use.
             qc_research_coverage(qc_result)[0],
+        ),
+        (
+            "Reference documents reviewed against",
+            # What the user attached and every lens and seat read. Named,
+            # because "was the owner's standard actually in front of the
+            # reviewers?" is a question this report has to answer.
+            qc_reference_coverage(qc_result)[0],
         ),
     ]
     for label, value in identities:
@@ -4536,6 +4588,9 @@ def _qc_render_limitations_and_signoff(
     _research_limitation = qc_research_coverage(qc_result)[1]
     if _research_limitation:
         limitations.append(_research_limitation)
+    _reference_limitation = qc_reference_coverage(qc_result)[1]
+    if _reference_limitation:
+        limitations.append(_reference_limitation)
     if unresolved:
         limitations.append(
             f"{len(unresolved)} candidate finding(s) have unresolved reviewed anchors. "

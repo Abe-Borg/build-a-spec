@@ -2766,6 +2766,118 @@ No new SSE events, no new deps, no project-format bump.
   reference-upload case in `test_import_responsiveness.py`. Frontend pinned by
   `npm run build`.
 
+## Attached documents reach the research and QC teams — implemented notes
+
+Reported ask (Abraham): an attached owner standard must influence the research
+team and the Final QC team. It influenced neither — `session.references` had
+exactly ONE model-facing consumer (`llm/conversation.py`), and neither
+`research/engine.py` nor `qc/engine.py` imported `reference_docs` at all. So a
+requirement existing only in an owner standard was invisible to `completeness`,
+verifier seats refuted correct owner-directed provisions for want of anything
+supporting them, and research re-derived what the attached document already
+said. No new endpoint, no new SSE event, no new dep, no project-format bump.
+
+- **The rule: chat keeps stubs, the fan-outs get the text VERBATIM.** Chat is
+  an unbounded interactive loop that re-bills PROJECT CONTEXT every turn
+  forever, so a body there is billed without limit. A research round and a QC
+  run are bounded, user-triggered, one-shot passes whose prompts are CACHED —
+  written once per lineage, read a fixed number of times. Different economics,
+  different treatment. `llm/conversation.py` is untouched, and the two pins
+  that say so (`test_only_a_stub_reaches_the_per_turn_context`,
+  `test_the_body_is_elided_from_committed_history`) must stay green.
+- **Adding `read_reference_doc` to the fan-outs' tool lists would break them**,
+  which is why on-demand reading was rejected. Neither engine has a
+  client-tool dispatch loop: `classify_stop_reason` maps `tool_use` to
+  COMPLETE, so the loop exits and `_parse` finds no output payload, failing
+  the lens or dimension.
+- **`reference_context_block(docs, *, audience)`** lives in
+  `reference_docs.py` beside `context_stubs()` — a leaf module both engines
+  can import with no cycle. Modeled on `established_facts_block`: empty
+  renders `""` (a session with no attachments builds a byte-identical
+  request), deterministic order, capped, disclosed trim. It deliberately does
+  NOT import `research/engine`'s private `_estimate_tokens` —
+  every record carries a real Anthropic `token_count`, so allocation is in
+  true tokens and slicing uses the document's own chars-per-token.
+- **Allocation is WATER-FILLING, not first-come**, and that is the safety
+  property: equal share per document, documents under their share included
+  whole and donating the remainder, iterated to fixpoint. First-come would
+  spend the whole budget on document 1 and leave the agent silently blind to
+  document 3 — and **an agent cannot report a gap it was never shown**. A
+  document under its share is never truncated at all.
+  `REFERENCE_CONTEXT_MAX_TOKENS` is 25k (distinct from `MAX_REFERENCE_TOKENS`,
+  which bounds what a user may ATTACH); no env knob, matching
+  `ESTABLISHED_FACTS_MAX_TOKENS`.
+- **One framing, two directives.** The shared half — owner requirement, never
+  code authority, conflicts are FINDINGS never a silent choice — is identical
+  on both channels so it cannot drift into two subtly different rules. It is
+  also what makes it safe to put the block in the prefix `code_compliance`
+  reads.
+- **Research threads it like `today`: rendered ONCE per round.** A
+  per-dimension render would fork four cache lineages and re-bill the block.
+  `app.py` snapshots `list(session.references.docs)` under the guard it
+  already holds → `ResearchRunner.start` captures it under the lock that
+  numbers the round → `run_requirements_research` renders once → every
+  `_run_dimension`. A document attached mid-round belongs to the NEXT round.
+- **`build_dimension_user_message` now returns `(shared, task)`** and
+  `_dimension_user_content` splits the user turn into two blocks with a
+  **cache breakpoint on block 0** (copy-adapted from `_qc_user_content`).
+  This is load-bearing, not a tidy-up: research caches only system + tools,
+  and every `pause_turn` continuation re-sends the whole conversation, so
+  verbatim text without the breakpoint costs ~$4/round against ~$0.50 with
+  one. Third breakpoint (inside the limit of four), all at the 5-minute
+  default so the non-increasing-TTL rule is trivially satisfied. One-time
+  consequence: the changed request bytes invalidate existing research cache
+  lineages once.
+- **QC puts it in BOTH cached prefixes.** `_lens_shared_prefix` (after the
+  research profile, before `<specification>` — what governs, then what the
+  owner asked for, then the document under review) and
+  `_verifier_shared_prefix`. The verifier one is deliberate and not an
+  oversight: it is the most expensive place in the run to add bytes (~35
+  seats), and a seat that cannot see the standard refutes a correct
+  owner-directed finding — the exact failure this change removes. It rides the
+  1h cached prefix: one write, one read per seat. `_consolidation_shared_prefix`
+  is deliberately NOT given it — grouping asks "are these the same defect?",
+  which the owner standard does not inform.
+- **The v4 evidence gate learned reference ids.** `validate_refutation_evidence`
+  gains `reference_ids`; a `document_ref` naming an attached `rid` validates.
+  Without it a critical/high refutation grounded in the owner standard fails
+  the gate and is forced to `disputed` — the gate would punish exactly the
+  reasoning this change enables. The failure reason now names both targets
+  ("resolves to neither an element … nor an attached reference document").
+- **`build_qc_input_manifest` gains `reference_documents`** (count, attached
+  vs included tokens, a trimmed flag, and a per-document `content_fingerprint`
+  over the retained text). Hashed like every other material input, so
+  attaching, detaching, or editing-and-re-attaching a document makes a
+  retained report read stale — correct, since it changed what every lens and
+  seat read. `qc/apply.matches_current_inputs` passes the CURRENT attachments.
+- **Provenance: `source_item_id` now accepts `ref-…`.** No validation change
+  was needed (it accepts any string); what changed is the vocabulary — the
+  `APPLY_SPEC_EDITS_TOOL` description, the prompt guidance, and
+  `provenance_hygiene`'s brief (a provision pointing at a document that does
+  not support it, or at an id in neither set, is a finding).
+  `lib/sourceChip.ts` is the one tooltip definition for both renderers —
+  `SpecDocument` and `ReviewDrawer` each hardcoded "Research:", which would
+  have labelled an owner standard as a research finding. Kind comes from the
+  id prefix, and **the `ref-` test must run first** (`r-` is a prefix of it).
+- **Reports**: `docx_export.qc_reference_coverage` and
+  `qcReport.qcReferenceCoverage` are mirrors returning `(identity,
+  limitation)` together — the `qc_research_coverage` shape, for the same
+  reason: an identity row saying documents were reviewed against, beside no
+  disclosure that one was cut, is the half-truth the pairing prevents. Both
+  read the CAPTURED manifest, never live session state.
+- **`TrustDeepDiveModal` was a contract this broke**: its attach card said
+  references are "not in QC". Fixed, along with both fan-out "what is sent"
+  lines. The chat card's "never their contents" stays TRUE and must stay so.
+- **Tests**: `tests/test_reference_agent_visibility.py` (26). Every mechanism
+  was reverted in place to prove it load-bearing: the renderer → 10 red, the
+  research threading → 2, the cache breakpoint → 1, the lens prefix → 1, the
+  verifier prefix → 1, the manifest key → 5, the evidence gate → 1. Existing
+  assertions that read `messages[0]["content"]` as a string were updated in
+  place (the shape genuinely changed); `tests/fakes.py`'s `_user_text` was
+  promoted to a public `user_text` now that three suites share it, and
+  `test_runtime_date.py` now asserts the date leads **block 0**, which pins
+  the cache layout rather than merely the message.
+
 ## Research rounds — implemented notes (append, never overwrite)
 
 Reported ask (Abraham): the user may press Research more than once in a

@@ -832,9 +832,13 @@ function Dossier() {
               established for its own dimension</b> — requirement, authority,
               code reference, date, and whether it was ever grounded — with an
               instruction to report only what is new, changed or corrected
-              rather than derive it all again. Your draft section is{" "}
-              <b className="text-ink">not</b> sent — research looks outward, at
-              the jurisdiction, not at your text.
+              rather than derive it all again. Any{" "}
+              <b className="text-ink">reference documents you have attached</b>{" "}
+              are sent in full as well, so an agent researches whether what
+              your owner requires is actually permitted here rather than
+              re-deriving what the attached document already says. Your draft
+              section is <b className="text-ink">not</b> sent — research looks
+              outward, at the jurisdiction, not at your text.
             </>
           }
           model="Claude Sonnet 5, effort “high” — four concurrent long-running conversations."
@@ -917,10 +921,14 @@ function Dossier() {
           sent={
             <>
               Today’s date, the full document rendering, the standards editions
-              in effect, the grounded research profile, the discipline, and each
-              lens’s brief.
-              Then, per finding, the finding itself plus the document context the
-              verifier needs.
+              in effect, the grounded research profile, any{" "}
+              <b className="text-ink">reference documents you have attached</b>{" "}
+              in full, the discipline, and each lens’s brief. Then, per
+              finding, the finding itself plus the document context the
+              verifier needs — the verifier seats get the attached documents
+              too, so a reviewer asked to refute “this contradicts the owner’s
+              standard” can actually read the standard instead of dismissing it
+              for want of evidence.
             </>
           }
           model={
@@ -1076,19 +1084,30 @@ function Dossier() {
               <Mono>[page N]</Mono> markers so the model can cite where something
               came from) and nothing else is retained. It is{" "}
               <b className="text-ink">not</b> part of the specification: not in
-              the document tree, not in lint, not in Compare, not in QC, not in
-              any export. A PDF with no text layer is refused with the reason
+              the document tree, not in lint, not in Compare, not in any export.
+              It <b className="text-ink">is</b> read by the research agents and
+              by every Final QC reviewer, in full — so an owner standard shapes
+              what research goes looking for, and the review checks your draft
+              against it. A PDF with no text layer is refused with the reason
               rather than attached as an empty document you would then be told it
               holds.
             </>
           }
           sent={
             <>
-              Only a one-line stub per document in each turn’s context (id,
-              title, size). The body travels only when the model deliberately
-              opens one with a tool, and is then removed from stored history — so
-              a 40-page owner standard is not re-billed on every subsequent turn.
-              Re-reading it later is expected and cheap to ask for.
+              In <b className="text-ink">chat</b>, only a one-line stub per
+              document in each turn’s context (id, title, size). The body
+              travels only when the model deliberately opens one with a tool,
+              and is then removed from stored history — so a 40-page owner
+              standard is not re-billed on every subsequent turn. Re-reading it
+              later is expected and cheap to ask for. Research and Final QC are
+              different: those are single bounded runs rather than an
+              open-ended conversation, so they receive the text in full (capped
+              at about 25,000 tokens across everything attached — each document
+              gets an equal share, small ones are included whole and donate
+              what they do not use, so no attached document is ever silently
+              invisible, and any cut is disclosed in the report), written to the
+              prompt cache once and re-read from there by every agent in the run.
             </>
           }
           model="Claude Sonnet 5, only when it chooses to open one during a turn you started."

@@ -4171,6 +4171,17 @@ def _qc_evidence_register(
                         "verifier billed attempt",
                         f"{reference} verifier {verdict_index}",
                     )
+                    # A refuting seat may cite a URL it never retrieved —
+                    # the retained-and-marked case the v4 evidence gate
+                    # exists for. Sweep those citations too, so the inline
+                    # "Refutation evidence" line resolves to an E-number
+                    # and the invalid citation is auditable from Appendix B
+                    # instead of existing only as a raw inline string.
+                    add(
+                        verdict.get("refutation_evidence"),
+                        "refutation citation",
+                        f"{reference} verifier {verdict_index}",
+                    )
     add(qc_result.get("input_manifest"), "input manifest", "Run input")
     return list(entries.values())
 
@@ -4200,10 +4211,11 @@ def _qc_render_evidence_register(document, qc_result: dict) -> None:
     document.add_paragraph(
         "This register deduplicates URLs from the input manifest, lens retrievals, "
         "reviewed checks, every candidate collection (disputed included), source "
-        "checks, and verifier retrievals. Sections above cite these E-numbers "
-        "instead of reprinting URLs at every mention. The class column preserves "
-        "the narrowest recorded claim: retrieved or cited is not the same as "
-        "accepted. Safe HTTP(S) targets are clickable."
+        "checks, verifier retrievals, and refutation citations. Sections above "
+        "cite these E-numbers instead of reprinting URLs at every mention. The "
+        "class column preserves the narrowest recorded claim: retrieved or cited "
+        "is not the same as accepted, and a refutation citation is a seat's "
+        "claim, not proof of retrieval. Safe HTTP(S) targets are clickable."
     )
     entries = _qc_memo_evidence_entries(document, qc_result)
     if not entries:

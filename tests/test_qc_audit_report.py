@@ -853,6 +853,23 @@ def test_disputed_candidates_reach_the_register_and_their_own_heading() -> None:
             "ops_valid": False,
         }
     )
+    # The dissenting seat cites a URL it never retrieved — the retained-and-
+    # marked case the v4 evidence gate exists for. It must still resolve to
+    # an E-number, so the register has to sweep refutation citations too.
+    refutation_url = "https://example.test/refutation-citation"
+    survivor["verdicts"][-1].update(
+        {
+            "upholds": False,
+            "refutation_evidence": [
+                {
+                    "kind": "source",
+                    "url": refutation_url,
+                    "validated": False,
+                    "reason": "cited page was never retrieved",
+                }
+            ],
+        }
+    )
     payload["disputed"] = [survivor]
     refuted_with_ops = copy.deepcopy(payload["findings"][0])
     refuted_with_ops.update(
@@ -886,6 +903,20 @@ def test_disputed_candidates_reach_the_register_and_their_own_heading() -> None:
     dp_rows = [row for row in register_rows if disputed_url in row]
     assert dp_rows, "the disputed candidate's source must reach Appendix B"
     assert any("DP-001" in row for row in dp_rows)
+
+    # The refuting seat's unretrieved citation is swept as its own class,
+    # so the inline "Refutation evidence" line cites an E-number and the
+    # invalid citation is auditable from the register.
+    citation_rows = [row for row in register_rows if refutation_url in row]
+    assert citation_rows, "refutation citations must reach Appendix B"
+    assert any(
+        "refutation citation" in row and "DP-001" in row
+        for row in citation_rows
+    )
+    all_paragraph_text = "\n".join(paragraph_texts)
+    assert refutation_url not in all_paragraph_text
+    assert "Refutation evidence (seat" in all_paragraph_text
+    assert "NOT validated (cited page was never retrieved)" in all_paragraph_text
 
     heading_index = next(
         index

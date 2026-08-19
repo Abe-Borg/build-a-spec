@@ -6485,7 +6485,12 @@ operation payloads to counted pointers ("handle it", 2026-08-19).
   died with this: the register never swept the `disputed` collection
   (Chunk 5.1 added it after the sweep was written), and its "Referenced by"
   labels numbered raw collection order while body headings numbered
-  severity-sorted — same URL, two candidate numbers. Both pinned.
+  severity-sorted — same URL, two candidate numbers. Both pinned. The sweep
+  also covers each seat's `refutation_evidence` (class "refutation
+  citation" — a seat's claim, not proof of retrieval; caught in review on
+  PR #134, Codex): a refuting seat citing a URL it never retrieved is the
+  retained-and-marked case the v4 evidence gate exists for, and without the
+  sweep that citation printed raw inline while missing from Appendix B.
 - **Panels are a table plus per-side representative prose**
   (`_qc_render_panel`, replacing the per-seat `_qc_render_verdict`
   dossiers). Every seat keeps a row (seat/status/vote/revised severity/fix

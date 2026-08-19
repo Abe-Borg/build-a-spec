@@ -2868,10 +2868,36 @@ said. No new endpoint, no new SSE event, no new dep, no project-format bump.
 - **`TrustDeepDiveModal` was a contract this broke**: its attach card said
   references are "not in QC". Fixed, along with both fan-out "what is sent"
   lines. The chat card's "never their contents" stays TRUE and must stay so.
-- **Tests**: `tests/test_reference_agent_visibility.py` (26). Every mechanism
+- **Attached text is UNTRUSTED, and the defence has two halves that only work
+  together** (review findings on PR #138, Codex). A reference document is
+  third-party content — a vendor PDF, a standard from a client — and it now
+  reaches every research worker and verifier seat. (1) STRUCTURAL:
+  `_neutralize_block_delimiters` defuses the block's own tags wherever they
+  appear in document text OR in a title (which comes from a filename, so it
+  carries whatever was uploaded), because a document containing
+  `</attached_reference_documents>` would close the frame early and everything
+  after it would read as top-level instructions. Disclosed, never silently
+  deleted — the `xml_text` posture. The trim path builds its own string and
+  must escape too. (2) BEHAVIOURAL: the block classifies itself as data, and
+  `build_research_system_prompt`, `_lens_system_prompt` and
+  `_verifier_system_prompt` each name `<attached_reference_documents>` in
+  their data-classification sentence. Each fan-out ENUMERATES what it must
+  treat as data, so an omission there is silent — the verifier prompt named
+  the specification, the finding and web content but not attachments, and the
+  research prompt named only retrieved web content. Escaping alone does not
+  stop instruction-like prose inside an intact frame; classification alone
+  does not stop a frame escape.
+- **The verdict schema has to advertise what the validator accepts.**
+  `QC_REFUTATION_EVIDENCE_SCHEMA` told seats a `document_ref` was an element
+  id in the reviewed specification, so a schema-following seat had no
+  documented way to cite `ref-2` — and the v4 gate then converted an
+  otherwise-supported refutation to `disputed`. Extending
+  `validate_refutation_evidence` without the schema is half a change.
+- **Tests**: `tests/test_reference_agent_visibility.py` (36). Every mechanism
   was reverted in place to prove it load-bearing: the renderer → 10 red, the
   research threading → 2, the cache breakpoint → 1, the lens prefix → 1, the
-  verifier prefix → 1, the manifest key → 5, the evidence gate → 1. Existing
+  verifier prefix → 1, the manifest key → 5, the evidence gate → 1, the
+  delimiter escape → 4, the verdict-schema wording → 1. Existing
   assertions that read `messages[0]["content"]` as a string were updated in
   place (the shape genuinely changed); `tests/fakes.py`'s `_user_text` was
   promoted to a public `user_text` now that three suites share it, and

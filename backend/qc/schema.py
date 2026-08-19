@@ -359,7 +359,8 @@ QC_REFUTATION_EVIDENCE_SCHEMA: dict[str, Any] = {
             "description": (
                 "'source' for a web page you actually retrieved in this "
                 "review, or 'document_ref' for a place in the specification "
-                "under review."
+                "under review or an attached reference document supplied "
+                "with it."
             ),
         },
         "url": {
@@ -374,7 +375,10 @@ QC_REFUTATION_EVIDENCE_SCHEMA: dict[str, Any] = {
             "description": (
                 "For type 'document_ref': the element id in the reviewed "
                 "specification (for example 'pt2.a1.p3', or 'sec') that "
-                "contradicts the finding."
+                "contradicts the finding — or, when the refutation rests on "
+                "a document the user attached, that document's id from "
+                "<attached_reference_documents> (for example 'ref-2'). Cite "
+                "the attachment id itself, not a page or clause inside it."
             ),
         },
     },
@@ -429,8 +433,9 @@ QC_VERDICT_SCHEMA: dict[str, Any] = {
             "items": QC_REFUTATION_EVIDENCE_SCHEMA,
             "description": (
                 "When you REFUTE a critical or high finding, cite what "
-                "supports the refutation: a source you retrieved, or a place "
-                "in the reviewed specification. Required in substance for "
+                "supports the refutation: a source you retrieved, a place "
+                "in the reviewed specification, or an attached reference "
+                "document supplied with this review. Required in substance for "
                 "those refutations — without at least one entry that checks "
                 "out, the finding is escalated to a human as disputed rather "
                 "than dismissed. Leave empty when you uphold, or when "

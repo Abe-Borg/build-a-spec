@@ -102,7 +102,10 @@ backend/
                            quiet-path list), catch-all 500 + 422 handlers in the
                            {ok,error,code} idiom, ~25 app_event capture sites,
                            and GET/POST /api/diagnostics(+/log,/traces,/activity,
-                           /bundle,/client-event) behind Settings → Developer tools
+                           /bundle,/client-event) behind Settings → Developer tools;
+                           the import-intent batch adds detach=Form(False) on
+                           /api/import/master, POST /api/draft/adapt, and
+                           ?status_only=1 on GET /api/doc/capabilities
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides −
@@ -562,8 +565,9 @@ frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
                            baselineIndex, suggestions (Batch 9 reply chips),
-                           NewSessionDialog (blank slate active; template choices
-                           visible but disabled),
+                           NewSessionDialog (blank slate + LIVE template
+                           start/import — an earlier "visible but disabled"
+                           claim here was stale),
                            settings-open, closePromptOpen
                            (window.buildaspecRequestClose hook), send loop (SSE
                            switch incl. status/thinking_delta); QC follow-stream
@@ -2278,8 +2282,10 @@ new REST route (`GET /api/modules`) + an optional body on the reset route.
   parameterized and two-country aware. `DEFAULT_MODULE` is now `generic`.
 - **Frontend.** "New session" opens `NewSessionDialog`: Blank slate actively
   resets to `{module_id:"generic", discipline:"", project_context:""}`;
-  Start from a template and Load your own template are visible, disabled, and
-  labeled as in development. Cancel/Escape and the shared unsaved-work gate
+  Start from a template and Load your own template were disabled at the time
+  of this batch and have SINCE GONE LIVE (the template studio shipped —
+  this note is historical; do not read the "disabled" state as current).
+  Cancel/Escape and the shared unsaved-work gate
   keep existing content safe. The frontend no longer fetches modules or
   collects discipline/project description. `ModalShell` plus
   `primaryBtn`/`quietBtn` remain shared.
@@ -2491,6 +2497,13 @@ finished. Two independent causes, both fixed; no new endpoints, no new deps.
   probes) means changing the most safety-critical subsystem in the repo — a
   deliberate design decision, not a tuning pass, so it is still its own
   future change. What DID change is that nothing waits for it any more.
+  **SINCE ADDRESSED (the sanctioned own-future-change, 2026-08-19)** — see
+  "Import as a starting point" below: frozen packages and headings are
+  categorical (no probes), move probes cap to adjacent positions (the
+  super-quadratic term), the poll has a slim `status_only` projection, and
+  the pending strip shows real progress. The base O(n²) of per-element
+  probing stands; the measured n^2.2 curve and the full-map-per-poll cost
+  do not.
 - **Tests**: `tests/test_import_responsiveness.py`. The two responsiveness
   tests drive `TestClient` from two real threads (a blocked event loop cannot
   honour an `asyncio` timeout — the loop is the thing that is stuck, which is
@@ -5689,15 +5702,14 @@ sweep's cost is deliberately untouched — see the note at the end.
   view plus a warning, so the text on screen looks clean while the package is
   still revision-bearing and permanently unpatchable. It is also the most
   user-fixable, which is why the remedy names the exact Word action.
-- **Deliberately NOT done: the quadratic sweep.** It is the third cause and
-  the only one that heals on its own, and CLAUDE.md already flags making the
-  derivation cheap as "a deliberate design decision, not a tuning pass" in the
-  most safety-critical subsystem in the repo. Note "no longer on any critical
-  path" means the app stays RESPONSIVE, not that permissions arrive — until
-  the sweep lands the document still reads read-only. Fixing it (probe what
-  the UI needs rather than sweeping every element; reuse plan state across
-  probes instead of re-composing and reparsing `word/document.xml` ~5× per
-  paragraph) remains its own future change.
+- **Deliberately NOT done at the time: the quadratic sweep.** It is the third
+  cause and the only one that heals on its own, and CLAUDE.md already flagged
+  making the derivation cheap as "a deliberate design decision, not a tuning
+  pass" in the most safety-critical subsystem in the repo. **The safe half
+  landed 2026-08-19** ("Import as a starting point" below): categorical
+  short-circuits for frozen packages and headings, adjacent-only move probes,
+  the slim poll, and sweep progress. Reusing plan state across the remaining
+  per-element probes (the residual O(n²)) is still its own future change.
 - **Capability contract**: `document.detach-source` is the three-place edit
   (registry, the control's `data-capability`, and the existing
   `source-permissions` tour step — one step, three controls, the
@@ -5901,20 +5913,17 @@ project-format bump.
   clean body writer both emit `w:ilvl` 0). Nothing is ever pushed, so no
   offset accrues and the export/re-import round trip is untouched. Pinned
   by `test_a_document_that_uses_level_zero_is_parsed_exactly_as_before`.
-- **Still open, and deliberately not guessed at: an auto-numbered ARTICLE
-  heading is not recognized as an article.** The `w:numPr` branch
-  short-circuits ahead of `_SECTION_RE`/`_PART_RE`/`_ARTICLE_RE` — correct
-  and load-bearing for the round trip, since a normalized export's semantic
-  text may legitimately begin "PART 2" or "1.2" with the label living in
-  the numbering. But in an auto-numbered master the article heading's
-  visible text is the title alone ("SECTION INCLUDES"), so **no text
-  pattern can reach it either** and relaxing the short-circuit would fix
-  nothing. Recognizing them needs a structural signal (the numbering
-  definition's `lvlText`, or "normalized depth 0 directly under a PART in a
-  document where no `N.M` article was ever matched"), and it is a parse
-  *policy* change: promoting a paragraph to an article also makes it a
-  heading, which `source_patch` denies `replace_text` on — so it would trade
-  a wrong tree for a less editable one. Left as an owner decision.
+- **RESOLVED (owner decision, 2026-08-19): auto-numbered ARTICLE/PART
+  headings are now recognized — via the numbering definitions, exactly the
+  structural signal this note asked for.** The original analysis stands: an
+  auto-numbered heading's visible text is the title alone ("SECTION
+  INCLUDES"), so no text pattern could ever reach it and relaxing the
+  `w:numPr` short-circuit alone would have fixed nothing. The fix reads the
+  numbering part's `lvlText` grammar ("Import as a starting point" below);
+  the editability concern that had parked this ("promoting to an article
+  makes it a read-only heading in source mode") dissolved with the same
+  batch's import-intent default, where a starting-point import is detached
+  and headings are ordinarily editable.
 - **The diagnostics snapshot now says why an imported document is
   read-only.** `_source_capability_facts` adds `capabilities_status` and an
   `edit_blockers` histogram to the session's `source` block, so a bundle
@@ -7032,6 +7041,138 @@ schema or protocol bump; one new SSE event type.
   streaming fake, so an existing QC fixture proves parity rather than needing
   a parallel fixture set — which is why the whole pre-existing QC suite runs
   through the batched path by default.
+
+## Import as a starting point — implemented notes (why chat beat the upload button, and the fix)
+
+Reported (Abraham, 2026-08-19): the chat builds out a spec better when handed
+a template than the app's import feature does, and import still feels buggy.
+The investigation's one-paragraph answer: in the chat path the template is
+INPUT and the document is OUTPUT — the model owns the output with all ten
+ops, no gate, a self-correcting error loop. In the import path the template
+IS the document and the model owned almost none of it: headings/structure
+categorically denied, most paragraphs individually read-only, the permission
+sweep `pending` on nearly every turn (and re-armed by every accepted edit),
+the stable prompt's playbook opening with ops that are always refused there,
+and "Edit freely" unreachable in exactly the ordinary case DOCX_FIDELITY.md
+says it exists for. Separately, the parser mis-treed real auto-numbered
+masters into one IMPORTED CONTENT blob. Five decisions (all Abraham,
+2026-08-19): import-time intent choice defaulting to Edit freely; full parser
+fix via numbering definitions; per-PART bulk confirm; sweep safe-wins only
+(markup tolerance in `bind_source_paragraph`, `writeProtection` downgrade,
+and analytic island enumeration explicitly deferred); everything else below.
+
+- **The import asks which contract you want** (`POST /api/import/master`
+  gains `detach: bool = Form(False)`). `detach=true` — the panel's
+  recommended "Use as a starting point" — performs the import and the
+  Edit-freely detach in ONE `session_state_guard()` transaction (after
+  `adopt_imported`, which clears the flag by design) and never starts the
+  capability warm: the scope is already inactive, so the sweep would be
+  minutes of O(n²) producing a memo with no possible reader. The default is
+  byte-compatible with every pre-intent client (pinned). Detach-at-import is
+  indistinguishable from import-then-detach everywhere downstream — same
+  store flag, same loader posture, same re-arm on a later attached import
+  (all pinned in `tests/test_import_intent.py`, 8 tests). The frontend
+  intent modal lives in `ArtifactPanel` (ModalShell idiom); capability
+  `import.intent` rides the `master-import` tour step (three-place edit).
+- **"Edit freely" renders on EVERY source-attached state.** `frozenCause`
+  generalized to `blocked` (a silently bricked document — the catch-all
+  `output_validation_failed` included — now gets the same banner, server
+  cause + remedy, zero new client prose); a compact always-on strip appears
+  on the ordinary settled master (`sourcePreserveReady`); the pending strip
+  gains the button ("choosing it now skips the rest of the permission
+  analysis"). One `editFreelyButton` helper renders all three. The export
+  menu stops reciting the generic excuse: detached names the user's choice,
+  frozen renders `causes[0].message`.
+- **The model is finally told the house rules — and the way out.**
+  `source_capability_summary` (the ONE rendering both the chat boundary
+  block and the QC lens prefix consume) now states the categorical limits
+  up front, the all-or-nothing batching consequence, the frozen package's
+  cause AND remedy, and "Edit freely" — in the `pending` branch too, which
+  is the branch the model actually reads on most attached turns. NOTE: the
+  summary string rides the hashed QC input manifest, so a retained Final QC
+  result on a source-ATTACHED project flips stale once (disclosed in the
+  release notes; conservative direction). `_GAP_AND_ADAPT` gains
+  boundary-aware batching (one op per call when unsure; on refusal drop the
+  denied op and resubmit) and "never present read-only as a dead end";
+  `_HOW_YOU_WORK`/`_TOOL_GUIDE` defer to the boundary block when present.
+  PROJECT CONTEXT gains `IMPORTED-STARTER REVIEW: N provision(s)…` — the
+  work-list driver path B never had (imported blocks are deliberately not
+  open items, so the model saw an empty OPEN ITEMS list over hundreds of
+  unreviewed blocks). Dynamic context only, never the stable prompt.
+- **`POST /api/draft/adapt` is the full draft's counterpart for the other
+  on-ramp** (the draft_full pattern verbatim: thin endpoint, server-owned
+  directive, rides `/api/chat` as an honest user turn). Same 409s plus
+  "nothing imported"; the same three-fact prerequisite gate buys the
+  collect-first turn (`adapt_prerequisites_directive`, built by
+  parameterizing `draft_prerequisites_directive` with byte-identical
+  defaults — pinned). The panel's full-draft slot shows "✨ Adapt imported
+  draft" whenever imported blocks remain (`reviewCounts(doc).imported > 0`
+  — template starts included, deliberately: gap-and-adapt is the same
+  policy there). Capability `chat.adapt-imported` on the
+  `source-permissions` tour step. Tests: `tests/test_adapt_draft.py` (11).
+- **The parser reads Word's own numbering as structure** (importer.py). A
+  numbering catalog — `(numId, ilvl) -> (numFmt, lvlText)`, read via
+  `part_related_by(RT.NUMBERING)` because python-docx's `numbering_part`
+  property CREATES a part when absent and an importer must never mutate
+  what it inspects — promotes a `w:numPr` paragraph whose level renders the
+  literal word PART, or the two-decimal-token `%1.%2` article grammar, to
+  real structure. Round-trip safe BY CONSTRUCTION: the app's own exports
+  use only single-token lvlTexts (`word_numbering._LEVELS`) and write
+  article headings as literal text, so neither grammar can match a
+  normalized export (pinned directly by
+  `test_the_apps_own_label_grammar_never_promotes`). Per-`num`
+  `lvlOverride` wins (the label the reader sees decides); a dangling
+  `numId` degrades to exactly the old tree; promoted PARTs number by order
+  of appearance, 4+ mapping to PART 3 loudly. `spec_shape_detected`'s
+  contract narrowed KNOWINGLY: the numbering branch counts as a marker
+  exactly when it promoted real structure — verdict ≡ tree, both
+  directions pinned. `w:pStyle` deliberately deferred (localized, weak
+  evidence). Also: END OF SECTION still breaks (the app's own schedules
+  follow it; suppression = the exporter's ASSUMPTIONS SCHEDULE heading)
+  but the drop is LOUD — counted, first line quoted, sharper wording when
+  a second SECTION follows; `_PART_RE` accepts 1–5 (4/5 → PART 3,
+  warned); `_BARE_SECTION_RE` reads a keyword-less "23 05 48 — TITLE"
+  header from the FIRST content line only.
+- **The sweep stops paying full price for constants** (the sanctioned
+  own-future-change, safe half). Frozen packages return the fail-closed
+  report directly — proven byte-identical to the swept report on
+  tracked-changes and document-protection fixtures BEFORE landing, pinned
+  probe-free by a `_validate_source_and_plan`-counting test. Heading
+  `replace_text` is the categorical `heading_change` denial
+  (`_probe_heading_capability` retained as the equivalence canary a test
+  re-asserts). Move probes cap to ADJACENT positions — the up/down
+  buttons' set; advertised positions are now explicitly a SUBSET of the
+  safe set (DOCX_FIDELITY.md updated; the gate still validates any
+  requested position). A counting test pins the sweep to a linear number
+  of gate validations per element. `GET /api/doc/capabilities?status_only=1`
+  returns `{status, causes, progress}` without the multi-MB element map
+  (`SourceCapabilityReport.status_dict()`); the sweep reports
+  `progress(done, total)` per element through `_CapabilityWarm.progress`
+  (lock-free tuple writes) and the pending strip renders "N of M blocks
+  checked". The residual per-element O(n²) (plan-state reuse across
+  probes) remains future work.
+- **Per-PART bulk confirm** (`ReviewDrawer`): a second press-and-hold
+  beside the per-article one, shown only when it does more (≥2 outstanding
+  blocks across ≥2 articles in the current PART) — same mechanics, every
+  op deny-checked, one `/api/doc/edit` batch, one undo step. **Frozen-
+  decision disposition (2026-08-19, Abraham): Batch 3's "no document-wide
+  bulk confirm" stands; per-PART is the sanctioned narrower step.** The
+  Batch 3 record above is untouched, per the never-rewrite rule. Importer
+  warnings about a specific element now append `(at 1.1, id pt1.a1)` — the
+  display ref the schedules use plus the stable id — via
+  `_TreeBuilder.warning_uids` and a post-build rewrite pass ("Line N"
+  counts body children, blanks and table rows included, which is findable
+  nowhere).
+- **Tests across the batch**: `test_import_intent.py` (8, new),
+  `test_adapt_draft.py` (11, new), 11 new in `test_importer.py`, the
+  shape-detection pin extended both ways, 5 new in
+  `test_source_capabilities.py` (probe-free frozen path, heading canary,
+  linear-validation count, per-element progress, the slim poll), knowing
+  narrowings recorded in place (the END-OF-SECTION silence pin became a
+  loudness pin; move `allowed_positions` narrowed to adjacent with the
+  UI-consumption rationale; the summary length cap grew with its three new
+  obligations). Frontend pinned by `npm test` (capability contract:
+  `import.intent`, `chat.adapt-imported`) + `npm run build`.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

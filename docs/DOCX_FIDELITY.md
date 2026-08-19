@@ -92,7 +92,21 @@ inactive. This is the supported answer to a package that cannot be patched at
 all — `tracked_changes`, `active_content`, `document_protection`,
 `signed_package`, or any `unsafe_*` scan failure — and to the ordinary case of
 a manually-labelled master, where no provable numbered island exists and every
-structural edit therefore fails closed.
+structural edit therefore fails closed. The panel offers "Edit freely" on
+**every** source-attached state — frozen, pending, and the ordinary settled
+master alike — because the documented answer to "this document is read-only"
+must be reachable from every state that makes it true.
+
+The same one-way door can be taken **at import time**: `POST
+/api/import/master` accepts a `detach` form field, and `detach=true` ("use as
+a starting point", the panel's recommended default) performs the import and
+the detach in one transaction — no turn, edit, or poll ever observes an
+attached document, and the per-element permission sweep is never started
+(the scope it would describe is already inactive). The default without the
+field is byte-compatible with every pre-intent client: attached,
+source-preserving, sweep warming. A detach-at-import project is
+indistinguishable from import-then-detach everywhere downstream — same
+persisted flag, same loader posture, same re-arm on a later attached import.
 
 Detaching drops the claim and none of the evidence, which is what the rest of
 the system depends on:
@@ -263,7 +277,16 @@ document state on a background worker rather than inline on a request. An
 import response, and the first read after any body change, therefore report
 `pending` until that analysis lands. Clients poll `GET /api/doc/capabilities`
 — which returns only `{"source_capabilities": …}` — and refresh the full
-document payload once the status settles.
+document payload once the status settles. `?status_only=1` returns the slim
+polling projection — `status`, `causes`, and, while a sweep is running, a
+`progress` object (`done`/`total` elements) — without the per-element map,
+which is multi-MB on a large master and is never read by a poll tick.
+
+Two classes of answer are categorical and derived without probing, because
+the gate decides them as constants: a frozen package returns the fail-closed
+document-wide report directly (proven byte-identical to the swept one), and
+heading `replace_text` is reported as the unconditional `heading_change`
+denial. Both were previously rediscovered at full per-probe price.
 
 `pending` never widens the edit surface. It denies exactly what `blocked`
 denies; the distinction exists only so an interface can say the analysis is
@@ -292,7 +315,12 @@ Allowed structural operations may also carry `island_key`,
 A placement contains an `island_key` and exact sibling positions; contiguous
 positions additionally expose `minimum_position` and `maximum_position` for
 compatibility. Consumers must use the exact positions and must not infer safe
-gaps from a min/max range.
+gaps from a min/max range. The advertised positions may be a **subset** of
+the theoretically safe set: `move` advertises adjacent positions only (what
+the reorder buttons consume — probing every sibling slot was the sweep's
+super-quadratic term). This is contract-honest under the rule above:
+capability reports are guidance, never authorization, and the gate still
+validates any position a request actually carries.
 
 Capability operations include `replace_text`, `add_paragraph`, `delete`, and
 `move` for body elements where semantically relevant. Paragraph status and
@@ -306,7 +334,7 @@ allowed when body operations are blocked.
 | `POST /api/reference/upload` | Bounded text extraction attached as model context, from a `.docx`, `.pdf`, `.txt`, `.xml`, or `.csv`. Not an import: no tree, no retained source, no blank-document precondition, and no effect on any export. Rejects an unsupported extension, a file that is not what its extension claims (an unreadable package, a non-PDF, binary content behind a text extension), a password-protected PDF, a document with no readable text, and an attachment past the per-session cap. |
 | `GET /api/references` | Attached reference documents, metadata only — bodies are read by the model through its own tool, never shipped with a payload. |
 | `DELETE /api/reference/{rid}` | Detach one reference document; 404 when unknown. |
-| `POST /api/import/master` | Bounded, atomic DOCX import. On success, returns import counts/warnings plus the full document payload. A failed import leaves the live session unchanged. Parsing and indexing run on a worker thread, so a long master never blocks the chat stream or any other request; the session is still adopted on the event-loop thread under `session_state_guard()`, which re-checks that the document is still blank. |
+| `POST /api/import/master` | Bounded, atomic DOCX import. On success, returns import counts/warnings plus the full document payload. A failed import leaves the live session unchanged. Parsing and indexing run on a worker thread, so a long master never blocks the chat stream or any other request; the session is still adopted on the event-loop thread under `session_state_guard()`, which re-checks that the document is still blank. An optional `detach=true` form field performs the Edit-freely detach inside the same transaction ("use as a starting point") and skips the capability sweep entirely; omitted, the behavior is the historical source-preserving default. |
 | `GET /api/import/original` | Exact retained source with `Cache-Control: no-store`. Returns 409 for a source-less resumed legacy import and 404 when no import exists. |
 | `GET /api/export/docx` | Imported projects default to `mode=source`; fresh projects default to normalized. It never silently falls back from source mode. |
 | `GET /api/export/docx?mode=source` | Exact no-op or audited source patch. A blocked request returns 409. It cannot be combined with `redline`. |

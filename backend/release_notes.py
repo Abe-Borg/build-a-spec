@@ -89,7 +89,7 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
-        version="1.10.0",
+        version="1.11.0",
         date="2026-08-19",
         headline="The chat reads the research and the review — and briefs you",
         summary=(
@@ -140,6 +140,67 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "applied. The chat never rewrites a fix in its "
                             "own words, and disputed findings stay yours to "
                             "adjudicate in the panel."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
+        version="1.10.0",
+        date="2026-08-19",
+        headline="The Final QC report gets to the point",
+        summary=(
+            "The Final QC Word report was an audit transcript pretending to "
+            "be a memo — a five-lens review of one section ran past a "
+            "hundred pages, most of it repeated reviewer notes, per-seat "
+            "billing counters, and the same web addresses printed again at "
+            "every mention. The report now leads with what needs your "
+            "decision and condenses the rest, while the JSON download keeps "
+            "every persisted detail for the record."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Final QC reporting",
+                items=(
+                    ReleaseItem(
+                        title="Reviewer panels read as one table, not three essays",
+                        body=(
+                            "Every verifier seat still appears with its "
+                            "vote, severity, and fix verdict — now as one "
+                            "row in a table. When a panel agrees, one "
+                            "representative note speaks for it instead of "
+                            "three near-identical restatements; "
+                            "disagreements, failed seats, and refutation "
+                            "evidence still print in full, because those "
+                            "are the parts a human has to read."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Every source is listed once, in the Evidence Register",
+                        body=(
+                            "Web sources used to reprint their full address "
+                            "at every mention — the same link could appear "
+                            "fifty times. Findings, checks, and panels now "
+                            "cite short evidence numbers (E-001) that "
+                            "resolve in Appendix B, which also now covers "
+                            "disputed candidates and numbers entries the "
+                            "same way the report body does."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Less boilerplate, same audit trail",
+                        body=(
+                            "Empty telemetry no longer prints “No record "
+                            "was persisted” lines, per-seat token and cost "
+                            "accounting moved to the JSON export, refuted "
+                            "candidates keep their claim and refutation "
+                            "basis without an unusable operation dump, and "
+                            "proposed fixes render as the actual replacement "
+                            "text instead of raw JSON. Nothing left the "
+                            "audit record — the JSON export remains the "
+                            "lossless companion, and the Word report says "
+                            "so."
                         ),
                     ),
                 ),

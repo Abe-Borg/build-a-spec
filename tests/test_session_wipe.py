@@ -60,6 +60,7 @@ _STATE_PROBES = {
     "turn_active": lambda s: s.turn_active,
     "_active_turn_token": lambda s: s._active_turn_token,
     "stop_requested": lambda s: s.stop_requested.is_set(),
+    "save_target": lambda s: s.save_target,
 }
 
 # Fields a reset deliberately does NOT restore, each with the reason it is
@@ -151,6 +152,7 @@ def _dirty(session: SessionState) -> None:
     session.turn_active = True
     session._active_turn_token = object()
     session.stop_requested.set()
+    session.save_target = "/home/abe/projects/the-previous-project.baspec"
 
 
 def test_every_session_field_is_classified_as_wiped_or_kept():

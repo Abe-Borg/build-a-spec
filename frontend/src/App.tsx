@@ -17,6 +17,8 @@ import type {
   ReadinessPayload,
   ResearchScope,
   ResearchSnapshot,
+  SaveOutcome,
+  SaveTarget,
   SessionBundle,
   SourceCapabilitiesState,
   SpecDoc,
@@ -177,6 +179,12 @@ export default function App() {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [changedIds, setChangedIds] = useState<ReadonlySet<string>>(new Set());
   const [baselineIndex, setBaselineIndex] = useState<number | null>(null);
+  // The file this session already saved itself to, or null when it never has
+  // — which is the whole difference between Save asking where and Save just
+  // overwriting. Server-owned (it rides every doc payload): a reset clears it
+  // there, so a stale copy kept here could never offer to overwrite the
+  // project that was just discarded.
+  const [saveTarget, setSaveTarget] = useState<SaveTarget | null>(null);
   const [importReport, setImportReport] = useState<ImportReport | null>(null);
   const [referenceDocs, setReferenceDocs] = useState<ReferenceDocMeta[]>([]);
   const [referenceBusy, setReferenceBusy] = useState(false);
@@ -1563,6 +1571,9 @@ export default function App() {
     // gate. Until it lands, null reads as "not yet known", never as "ready".
     setDraftPrereqs(null);
     setChangedIds(new Set());
+    // The outgoing session's file. The refreshDoc below re-reads the server's
+    // (cleared) answer; until it lands, null is the safe reading — Save asks.
+    setSaveTarget(null);
     setBaselineIndex(null);
     setFigures([]);
     setSuggestions([]);
@@ -1618,6 +1629,7 @@ export default function App() {
     standards: StandardInfo[];
     profile_complete: boolean;
     draft_prerequisites?: DraftPrerequisites | null;
+    project_save_target?: SaveTarget | null;
     baseline_index?: number | null;
     figures?: Figure[];
     suggested_prompts?: string[];
@@ -1636,6 +1648,7 @@ export default function App() {
     setStandards(payload.standards);
     setProfileComplete(payload.profile_complete);
     setDraftPrereqs(payload.draft_prerequisites ?? null);
+    setSaveTarget(payload.project_save_target ?? null);
     setBaselineIndex(payload.baseline_index ?? null);
     setImportReport(payload.import_report ?? null);
     setSourceAvailable(payload.source_available ?? false);
@@ -1672,6 +1685,7 @@ export default function App() {
         standards: merged.standards ?? [],
         profile_complete: merged.profile_complete ?? false,
         draft_prerequisites: merged.draft_prerequisites ?? null,
+        project_save_target: merged.project_save_target ?? null,
         baseline_index: merged.baseline_index ?? null,
         figures: merged.figures ?? [],
         suggested_prompts: merged.suggested_prompts ?? [],
@@ -1831,15 +1845,68 @@ export default function App() {
   // work becomes explicitly declining the save — the user's rule. Mirrors the
   // native window-close prompt, reusing the same predicate + save machinery.
 
-  /** Native save (pywebview) or, in dev/browser, the download fallback.
-   *  Resolves true once a file is actually written (false = cancelled). */
-  const saveProjectFile = async (): Promise<boolean> => {
+  /** Save the session to a file: the panel's Save button, and the gate in
+   *  front of every action that replaces the session.
+   *
+   *  Native shell (pywebview): the FIRST save of a session asks where, and
+   *  every later one overwrites that file silently — `saveAs` is how the
+   *  dialog comes back. The shell owns which of the two happens, because the
+   *  target it acts on is session state the server clears on reset/load; this
+   *  side only reports the answer back into `saveTarget` so the button can
+   *  draw itself. Tutorial workspaces and the dev browser have no such target
+   *  and download instead (see `downloadProjectFile`).
+   *
+   *  Resolves `ok` only once a file was actually written — the save gate
+   *  proceeds to its reset/load on nothing less.
+   */
+  const saveProjectFile = async (
+    options?: { saveAs?: boolean },
+  ): Promise<SaveOutcome> => {
+    // A tutorial workspace is a disposable practice copy the native save
+    // deliberately refuses, and the panel's Save must still hand the user
+    // their copy. Downloading it establishes no target (a browser download
+    // cannot overwrite in place), so this never turns the button into the
+    // overwrite form — which is right: the copy is not the user's project.
+    if (inProtectedWorkspace) {
+      try {
+        await downloadProjectFile("tutorial");
+        return { ok: true, cancelled: false, error: "" };
+      } catch (e) {
+        return {
+          ok: false,
+          cancelled: false,
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+    }
     const api = window.pywebview?.api;
     if (api?.save_project) {
       try {
-        return !!(await api.save_project());
+        // Called through the api object rather than a detached reference —
+        // the bridge is the shell's, and how it binds its own methods is not
+        // this side's assumption to make.
+        const result =
+          options?.saveAs && api.save_project_as
+            ? await api.save_project_as()
+            : await api.save_project();
+        if (result?.ok) {
+          setSaveTarget(
+            result.target ? { path: result.target, name: result.name } : null,
+          );
+        }
+        return {
+          ok: !!result?.ok,
+          cancelled: !!result?.cancelled,
+          // The shell owns the wording of its own refusals — a second copy
+          // here would be free to describe a failure it never saw.
+          error: result?.error ?? "",
+        };
       } catch {
-        return false;
+        return {
+          ok: false,
+          cancelled: false,
+          error: "The save could not be completed.",
+        };
       }
     }
     // No native bridge (dev/browser): download the project file. We can't
@@ -1847,11 +1914,19 @@ export default function App() {
     // done (and it's awaited, so the reset can't race the save payload).
     try {
       await downloadProjectFile();
-      return true;
-    } catch {
-      return false;
+      return { ok: true, cancelled: false, error: "" };
+    } catch (e) {
+      return {
+        ok: false,
+        cancelled: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
     }
   };
+
+  /** The panel's Save / Save as… — the same machinery as the gate, minus the
+   *  session-replacing action behind it. */
+  const onSaveProject = (saveAs?: boolean) => saveProjectFile({ saveAs });
 
   /** Does the session hold work worth saving? Authoritative server check
    *  (same predicate as the close prompt), with a local fallback if it fails. */
@@ -1940,7 +2015,7 @@ export default function App() {
     setSaveGate(null);
     // Proceed only once a file was written — a cancelled Save dialog keeps the
     // session, so a mis-click behind "Save" can never lose the work.
-    if (saved) runGate(gate);
+    if (saved.ok) runGate(gate);
   };
 
   const onGateDiscard = () => {
@@ -2380,6 +2455,8 @@ export default function App() {
           readiness={readiness}
           usage={usage}
           changedIds={changedIds}
+          saveTarget={saveTarget}
+          onSaveProject={onSaveProject}
           baselineIndex={baselineIndex}
           importReport={importReport}
           referenceDocs={referenceDocs}

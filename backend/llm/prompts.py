@@ -429,6 +429,205 @@ def draft_prerequisites_directive(prereqs: DraftPrerequisites) -> str:
     return "\n".join(lines)
 
 
+# --- Completion debriefs (research + Final QC) -----------------------------
+#
+# The canned user messages the frontend sends through the normal chat path
+# the moment a research round or a Final QC run completes — the full-draft
+# pattern: server-owned so the obligations stay versioned with the engine,
+# visible in the transcript as an honest user turn, riding the one SSE
+# stream/tool loop/commit path. They stay SHORT on purpose: the heavy
+# content (the requirements profile, the FINAL QC REVIEW block) already
+# rides every turn's PROJECT CONTEXT, so a debrief carries only the
+# obligations plus the few server-derived facts the model must not have to
+# re-derive (round telemetry, coverage, finding counts by class).
+
+
+@dataclass(frozen=True)
+class ResearchDebriefFacts:
+    """Server-derived facts for one just-completed research round."""
+
+    round_index: int
+    new_items: int
+    repeat_items: int
+    cumulative_items: int
+    grounded_items: int
+    areas_run: tuple[str, ...] = ()
+    areas_failed: tuple[str, ...] = ()
+    #: Declared dimensions that have never completed in ANY round — their
+    #: findings are absent, not verified-empty. Required ones arrive
+    #: pre-labeled ("… (required)") by the endpoint.
+    coverage_gaps: tuple[str, ...] = ()
+
+
+RESEARCH_DEBRIEF_DIRECTIVE = """\
+- Using the PROJECT REQUIREMENTS PROFILE in your context, tell me how the latest findings affect the CURRENT draft: what they confirm, what they contradict, and what they show is missing.
+- Propose the concrete changes you would make — additions, edits, and deletions — each tied to the element it touches (or where a new provision would go) and the research item behind it. PROPOSE ONLY; do not apply anything in this turn.
+- Where a grounded item establishes a jurisdiction-adopted edition, include recording it (set_standard_edition, item id in the basis) among the proposals.
+- If any research area never completed, say plainly that its findings are absent, not verified-empty.
+- Close by asking whether I want you to proceed with the proposed changes, and stage suggested replies — "Yes — apply the proposed changes", "Not yet — walk me through them one by one", plus a narrower option when one fits."""
+
+
+def _research_facts_lines(facts: ResearchDebriefFacts) -> list[str]:
+    lines = [
+        f"This round recorded {facts.new_items} new item(s) and "
+        f"re-confirmed {facts.repeat_items}; the cumulative profile now "
+        f"holds {facts.cumulative_items} item(s), "
+        f"{facts.grounded_items} grounded.",
+    ]
+    if facts.areas_run:
+        lines.append("Areas run this round: " + ", ".join(facts.areas_run) + ".")
+    if facts.areas_failed:
+        lines.append(
+            "Areas that FAILED this round: "
+            + ", ".join(facts.areas_failed)
+            + "."
+        )
+    if facts.coverage_gaps:
+        lines.append(
+            "Areas never completed in any round (findings ABSENT, not "
+            "verified-empty): " + ", ".join(facts.coverage_gaps) + "."
+        )
+    return lines
+
+
+def research_debrief_directive(facts: ResearchDebriefFacts) -> str:
+    """The user message a completed research round auto-sends through chat.
+
+    Every completed round gets one (owner decision) — a round that added
+    nothing buys the short confirm-nothing-changes variant rather than a
+    full proposal pass, because a re-confirmation is still an answer worth
+    one honest paragraph and a wrong full brief would invent work.
+    """
+    header = (
+        f"Requirements research round {facts.round_index} just completed — "
+        "brief me on it now."
+    )
+    facts_lines = _research_facts_lines(facts)
+    if facts.new_items == 0 and facts.repeat_items > 0:
+        return "\n".join(
+            [
+                header,
+                "",
+                *facts_lines,
+                "",
+                "Nothing new was found. In a few sentences, confirm that "
+                "nothing about the current draft changes, and note anything "
+                "this round strengthened (an [UNVERIFIED] item now grounded "
+                "counts — say so). Do not re-enumerate the profile and do "
+                "not propose edits unless something genuinely changed; if "
+                "something did, give me the full brief instead: how it "
+                "affects the draft, the concrete changes you would make "
+                "(propose only — apply nothing this turn), and whether I "
+                "want to proceed. Close by asking what to work on next.",
+            ]
+        )
+    return "\n".join([header, "", *facts_lines, "", RESEARCH_DEBRIEF_DIRECTIVE])
+
+
+@dataclass(frozen=True)
+class QcDebriefFacts:
+    """Server-derived facts for the Final QC run being debriefed."""
+
+    execution_status: str  # complete | partial | failed | cancelled
+    open_criticals: int
+    open_findings: int
+    open_disputed: int
+    safe_fixes: int
+    advisory: int
+    applied: int
+    dismissed: int
+    refuted: int
+    inconclusive: int
+    failed_lenses: tuple[str, ...] = ()
+    stale: bool = False
+    #: True when no fresh attempt exists and the brief describes the
+    #: RETAINED review (e.g. the user asked after loading a project).
+    describes_retained_review: bool = False
+
+
+QC_DEBRIEF_DIRECTIVE = """\
+- Using the FINAL QC REVIEW block in your context, tell me how the findings bear on the current draft: group the open findings by severity, and for each say in one line what is wrong and what its remedy would change — additions, edits, deletions, in plain language, never operation JSON.
+- Separate the three classes plainly: verified safe fixes (panel-approved operations I can approve for automatic application via apply_qc_fixes), advisory findings (real issues whose remedy needs ordinary drafting), and disputed candidates (the panel disagreed — I adjudicate those in the Final QC panel; present, don't decide).
+- PROPOSE ONLY; do not apply anything in this turn.
+- Close by asking whether I want to proceed with the verified safe fixes, and stage suggested replies — "Yes — apply the verified safe fixes", "Not yet — walk me through them one by one", plus a narrower option when one fits."""
+
+
+def _qc_facts_lines(facts: QcDebriefFacts) -> list[str]:
+    lines = [
+        f"Open findings: {facts.open_findings} "
+        f"({facts.open_criticals} critical) — {facts.safe_fixes} with a "
+        f"verified safe fix, {facts.advisory} advisory. Open disputed "
+        f"candidates: {facts.open_disputed}. Also recorded: "
+        f"{facts.applied} applied, {facts.dismissed} dismissed, "
+        f"{facts.refuted} refuted, {facts.inconclusive} inconclusive.",
+    ]
+    if facts.describes_retained_review:
+        lines.append(
+            "You are briefing on the RETAINED review from an earlier run — "
+            "no fresh attempt just finished; say so in one line."
+        )
+    if facts.stale:
+        lines.append(
+            "The review is STALE against the current document: describe the "
+            "findings as the last review's record, and say fixes cannot be "
+            "applied until Final QC is re-run."
+        )
+    return lines
+
+
+def qc_debrief_directive(facts: QcDebriefFacts) -> str:
+    """The user message a finished Final QC run auto-sends through chat.
+
+    A run that completed PARTIALLY (failed lenses or verifier seats) gets
+    the constrained variant: the retained context block may describe an
+    older complete review, nothing from a partial run is applyable, and a
+    debrief that pretended otherwise would be the confident half-truth the
+    reporting contract exists to prevent.
+    """
+    if facts.execution_status != "complete":
+        lines = [
+            f"Final QC just finished, but the run is {facts.execution_status.upper()}"
+            " — brief me on that state now.",
+            "",
+        ]
+        if facts.failed_lenses:
+            lines.append(
+                "These review areas did not complete: "
+                + ", ".join(facts.failed_lenses)
+                + "."
+            )
+        lines += [
+            "Nothing from an incomplete run is applyable — a complete "
+            "re-run is required before any fix can be applied, and its "
+            "coverage cannot be called complete. The partial record is in "
+            "the Final QC panel.",
+            "In a short reply: say what this means for the draft's "
+            "readiness, note anything from your FINAL QC REVIEW context "
+            "block that still stands (it describes the retained complete "
+            "review, when one exists), and ask whether I want to re-run "
+            "Final QC or keep drafting first. Apply nothing this turn.",
+        ]
+        return "\n".join(lines)
+    header = "Final QC just finished — brief me on the review now."
+    if facts.open_findings == 0 and facts.open_disputed == 0:
+        return "\n".join(
+            [
+                header,
+                "",
+                *_qc_facts_lines(facts),
+                "",
+                "The review is clean — no open findings and no open "
+                "disputes. Say so in a few sentences (note anything "
+                "already applied or dismissed this run), and tell me what "
+                "that means for issue readiness. Apply nothing this turn; "
+                "close by asking what I want to do next.",
+            ]
+        )
+    return "\n".join(
+        [header, "", *_qc_facts_lines(facts), "", QC_DEBRIEF_DIRECTIVE]
+    )
+
+
 # Legacy session-discipline and session-primer bounds. New sessions learn
 # discipline through versioned project identity; older project files still
 # load their top-level discipline through these sanitizers.

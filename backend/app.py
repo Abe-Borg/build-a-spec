@@ -117,9 +117,13 @@ from .llm.conversation import (
 )
 from .llm.prompts import (
     DraftPrerequisites,
+    QcDebriefFacts,
+    ResearchDebriefFacts,
     draft_prerequisites,
     draft_prerequisites_directive,
     full_draft_directive,
+    qc_debrief_directive,
+    research_debrief_directive,
 )
 from .project_profile import ProjectProfile
 from .research.engine import (
@@ -3200,6 +3204,152 @@ def create_app(
                     else draft_prerequisites_directive(prereqs)
                 ),
             }
+        )
+
+    @app.post("/api/research/debrief")
+    def research_debrief() -> JSONResponse:
+        """Hand the frontend the debrief message a completed round sends.
+
+        The draft_full posture: deliberately thin, no model machinery of its
+        own — the message rides ``POST /api/chat`` as an ordinary, visible
+        user turn. The frontend calls this the moment a live run's
+        ``research_complete`` lands (queued behind any streaming turn), so
+        the chat briefs the user on how the round's findings affect the
+        current spec and asks whether to proceed with the proposed changes.
+        Refused while a turn streams or research runs; a caller treats any
+        refusal as "skip the debrief", never as an error to surface.
+        """
+        session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is already streaming — the "
+                    "debrief can only start between turns.",
+                },
+                status_code=409,
+            )
+        if session.research.status == "running":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Requirements research is running — there is "
+                    "no settled round to debrief yet.",
+                },
+                status_code=409,
+            )
+        profile = session.research.profile_result
+        rounds = list(getattr(profile, "rounds", []) or []) if profile else []
+        if profile is None or not rounds:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "No completed research round to debrief.",
+                },
+                status_code=409,
+            )
+        last = rounds[-1]
+        coverage = research_coverage(session.module, profile)
+        facts = ResearchDebriefFacts(
+            round_index=last.round_index,
+            new_items=last.new_items,
+            repeat_items=last.repeat_items,
+            cumulative_items=len(profile.items),
+            grounded_items=sum(1 for item in profile.items if item.grounded),
+            areas_run=tuple(
+                (status.title or status.dimension_id)
+                for status in last.dimension_statuses
+            ),
+            areas_failed=tuple(
+                (status.title or status.dimension_id)
+                for status in last.dimension_statuses
+                if status.status != "completed"
+            ),
+            coverage_gaps=tuple(
+                gap.title + (" (required)" if gap.required else "")
+                for gap in coverage.gaps
+            ),
+        )
+        _trace_capture.app_event("debrief", target="research")
+        return JSONResponse(
+            {"ok": True, "message": research_debrief_directive(facts)}
+        )
+
+    @app.post("/api/qc/debrief")
+    def qc_debrief() -> JSONResponse:
+        """Hand the frontend the debrief message a finished Final QC sends.
+
+        Same posture as the research debrief above. Facts come from ONE
+        ``audit_record_snapshot()`` (short endpoints answer from one state)
+        and describe the report the panel would export — the attempt that
+        just finished when it produced one, else the retained review. A
+        partial attempt gets the constrained directive: nothing from it is
+        applyable, and the brief must say so rather than summarize findings
+        the chat's context block does not carry.
+        """
+        session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is already streaming — the "
+                    "debrief can only start between turns.",
+                },
+                status_code=409,
+            )
+        if session.qc.status == "running" or session.qc.is_settling:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Final QC is still running or settling — there "
+                    "is no finished run to debrief yet.",
+                },
+                status_code=409,
+            )
+        record = session.qc.audit_record_snapshot()
+        report = record["report_for_export_model"]
+        if report is None:
+            return JSONResponse(
+                {"ok": False, "error": "No Final QC run to debrief."},
+                status_code=409,
+            )
+        latest = record["latest_attempt"]
+        open_findings = [f for f in report.findings if f.status == "open"]
+        safe_fixes = sum(
+            1
+            for f in open_findings
+            if qc_apply_module.finding_fix_class(f)
+            == qc_apply_module.FIX_CLASS_SAFE
+        )
+        dismissed = sum(
+            1
+            for f in [*report.findings, *report.disputed]
+            if f.status == "dismissed"
+        )
+        facts = QcDebriefFacts(
+            execution_status=report.execution_status,
+            open_criticals=report.open_critical_count(),
+            open_findings=len(open_findings),
+            open_disputed=report.open_disputed_count(),
+            safe_fixes=safe_fixes,
+            advisory=len(open_findings) - safe_fixes,
+            applied=sum(1 for f in report.findings if f.status == "applied"),
+            dismissed=dismissed,
+            refuted=len(report.refuted),
+            inconclusive=len(report.inconclusive),
+            failed_lenses=tuple(
+                status.title or status.lens_id
+                for status in report.lens_statuses
+                if status.status != "completed"
+            ),
+            stale=not _qc_matches_current_inputs(session, report),
+            describes_retained_review=(
+                latest is None or not latest.get("report_available")
+            ),
+        )
+        _trace_capture.app_event("debrief", target="qc")
+        return JSONResponse(
+            {"ok": True, "message": qc_debrief_directive(facts)}
         )
 
     # --- Document ----------------------------------------------------------

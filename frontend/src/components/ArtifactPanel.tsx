@@ -18,6 +18,8 @@ import type {
   ReadinessPayload,
   ReferenceDocMeta,
   ResearchSnapshot,
+  SaveOutcome,
+  SaveTarget,
   SectionDiff,
   SectionDiffPayload,
   SourceCapabilitiesState,
@@ -51,6 +53,14 @@ interface Props {
   readiness: ReadinessPayload | null;
   usage: UsageSummary | null;
   changedIds: ReadonlySet<string>;
+  /** The file this session already saved itself to, or null when it never
+   *  has. Null draws a plain Save that asks where; a target draws Save (which
+   *  overwrites it) beside the caret that holds Save as…. Server-owned — see
+   *  DocPayload.project_save_target for why it is never inferred here. */
+  saveTarget: SaveTarget | null;
+  /** Save now: overwrite the target, or ask when there is none. `saveAs`
+   *  always asks, and makes the answer the new target. */
+  onSaveProject: (saveAs?: boolean) => Promise<SaveOutcome>;
   baselineIndex: number | null;
   importReport: ImportReport | null;
   sourceAvailable: boolean;
@@ -264,6 +274,8 @@ export default function ArtifactPanel({
   readiness,
   usage,
   changedIds,
+  saveTarget,
+  onSaveProject,
   baselineIndex,
   importReport,
   sourceAvailable,
@@ -444,7 +456,41 @@ export default function ArtifactPanel({
   const [diff, setDiff] = useState<SectionDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [saveMenuOpen, setSaveMenuOpen] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">(
+    "idle",
+  );
+  const [saveError, setSaveError] = useState<string | null>(null);
   const diffSeq = useRef(0);
+
+  // An overwrite is silent by design, and a button that silently does nothing
+  // reads as broken — so say "Saved" for a moment. The state always passes
+  // through "saving", so a second save re-arms this rather than inheriting
+  // the first one's timer.
+  useEffect(() => {
+    if (saveState !== "saved") return;
+    const timer = setTimeout(() => setSaveState("idle"), 2200);
+    return () => clearTimeout(timer);
+  }, [saveState]);
+
+  const runSave = async (saveAs = false) => {
+    if (saveState === "saving") return;
+    setSaveMenuOpen(false);
+    setSaveError(null);
+    setSaveState("saving");
+    try {
+      const result = await onSaveProject(saveAs);
+      setSaveState(result.ok ? "saved" : "idle");
+      // Backing out of a Save dialog is a decision, not a failure: only a
+      // save that actually went wrong gets to say anything.
+      if (!result.ok && !result.cancelled) {
+        setSaveError(result.error || "The project could not be saved.");
+      }
+    } catch (error) {
+      setSaveState("idle");
+      setSaveError(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   // Compare is a transient view of (base → current). Any version change
   // (edit, undo/redo) OR a streaming turn invalidates the diff — leave
@@ -726,25 +772,71 @@ export default function ArtifactPanel({
               </div>
             )}
           </div>
-          <a
-            className={
-              actionButton + (busy ? " pointer-events-none opacity-40" : "")
-            }
-            href={
-              busy
-                ? undefined
-                : tutorialActive
-                  ? "/api/project/save?scope=tutorial"
-                  : "/api/project/save"
-            }
-            aria-disabled={busy}
-            download
-            title="Save the project, including its exact source DOCX when available, as .baspec"
-            data-tour="save"
-            data-capability="project.save-open"
-          >
-            Save
-          </a>
+          {/* Save asks where exactly once per session, then overwrites that
+              file the way a save button is expected to. The dialog does not
+              disappear with it — it moves behind the caret as Save as…, which
+              is also how the user re-points the target. The caret only exists
+              once there IS a target: before the first save, plain Save already
+              opens the dialog, so a menu offering the same thing twice would
+              be a choice with no second option. */}
+          <div className="relative flex" data-tour="save">
+            <button
+              className={
+                actionButton +
+                (saveTarget ? " rounded-r-none border-r-0" : "") +
+                (saveState === "saved" ? " border-accent text-accent" : "")
+              }
+              onClick={() => void runSave()}
+              disabled={busy || saveState === "saving"}
+              title={
+                saveTarget
+                  ? `Save over ${saveTarget.path} — no dialog. Use Save as… for a new file.`
+                  : "Save the project, including its exact source DOCX when available, as .baspec"
+              }
+              data-capability="project.save-open"
+            >
+              {saveState === "saving"
+                ? "Saving…"
+                : saveState === "saved"
+                  ? "Saved ✓"
+                  : "Save"}
+            </button>
+            {saveTarget && (
+              <button
+                className={actionButton + " rounded-l-none px-1"}
+                onClick={() => setSaveMenuOpen((open) => !open)}
+                disabled={busy || saveState === "saving"}
+                title={`Save is overwriting ${saveTarget.name}`}
+                aria-label="More save options"
+                aria-haspopup="true"
+                aria-expanded={saveMenuOpen}
+                data-capability="project.save-open"
+              >
+                ▾
+              </button>
+            )}
+            {saveMenuOpen && saveTarget && (
+              <div
+                className="absolute right-0 top-full z-20 mt-1 w-72 rounded-md border border-edge bg-raised py-1 text-[11px] shadow-lg"
+                onMouseLeave={() => setSaveMenuOpen(false)}
+              >
+                <button
+                  className="block w-full px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink"
+                  onClick={() => void runSave(true)}
+                  title="Choose a new file; later saves overwrite that one instead"
+                  data-capability="project.save-open"
+                >
+                  Save as…
+                </button>
+                <p className="border-t border-edge px-3 pb-0.5 pt-1.5 text-[10px] leading-relaxed text-ink-faint">
+                  Save writes over{" "}
+                  <span className="break-all text-ink-dim">
+                    {saveTarget.path}
+                  </span>
+                </p>
+              </div>
+            )}
+          </div>
           <button
             className={actionButton}
             onClick={onSaveAsTemplate}
@@ -865,6 +957,27 @@ export default function ArtifactPanel({
               working while this finishes.
             </p>
           </div>
+        </div>
+      )}
+
+      {/* A save that failed says so beside the button that failed, in the
+          server's own words. A cancelled dialog never lands here — see
+          runSave. Cleared by the next save attempt. */}
+      {saveError && (
+        <div
+          className="flex items-start gap-3 border-b border-err/30 bg-err/[0.06] px-5 py-2.5"
+          role="alert"
+        >
+          <p className="min-w-0 flex-1 text-[11px] leading-relaxed text-err">
+            {saveError}
+          </p>
+          <button
+            className="shrink-0 text-[11px] text-ink-faint hover:text-ink"
+            onClick={() => setSaveError(null)}
+            aria-label="Dismiss the save error"
+          >
+            ✕
+          </button>
         </div>
       )}
 

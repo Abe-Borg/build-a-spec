@@ -43,7 +43,13 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            close (closing-event veto → off-thread frontend
                            prompt → js_api save_and_close/discard_and_close,
                            native save via webview.FileDialog.SAVE; never traps
-                           the user); Developer tools reuses open_external_link
+                           the user); js_api save_project/save_project_as are
+                           the panel's Save: the first save of a session asks
+                           and is remembered on SessionState.save_target, later
+                           ones overwrite it silently, an unwritable target
+                           falls back to the dialog, and a reset mid-dialog
+                           refuses to bind the replacement session;
+                           Developer tools reuses open_external_link
                            for the trace viewer; the pywebview-fallback except
                            now logs
 backend/
@@ -396,7 +402,11 @@ backend/
                            project_default_filename (timestamped
                            buildaspec-<stem>-<YYYY-MM-DD-HHMMSS>.json, so
                            same-day re-saves never collide; shared by
-                           /api/project/save and the native save-on-close)
+                           /api/project/save and the native save-on-close) /
+                           project_save_target + remember_project_save_target
+                           (where this session already saved itself — reset and
+                           project load clear it, and nothing else establishes
+                           it)
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint
                            vocabulary, dormant research dimensions); import-time
@@ -607,7 +617,9 @@ frontend/src/
                            button for a stop-square while streaming, Claude.ai-style
                            — always clickable, no confirmation) / ArtifactPanel
                            (stepper, Batch 5 Compare toggle + base picker + stat line
-                           + export menu, save/open, ⚠ badge, "Draft full section"
+                           + export menu, Save (a split button once the session
+                           has a target: Save overwrites it, the caret holds
+                           Save as…) / open, ⚠ badge, "Draft full section"
                            button, open items) / ReviewDrawer (Batch 3 keyboard
                            review walk) / IssuesDrawer (lint + StandardsStrip —
                            editable: add a standard, edit an edition, or
@@ -6356,6 +6368,207 @@ No new dep.
   titles, file paths and error context DO ride traces and bundles by design,
   and every surface offering them says so. Treat both folders and every
   exported bundle as sensitive project data.
+
+## Save asks once, then overwrites — implemented notes
+
+Reported symptom (Abraham): the Save button asks where to put the file every
+single time. Every save went through the native Save dialog, and
+``project_default_filename`` stamps a fresh timestamp per call, so a session
+saved five times left five files and no way to say "the same one again". Now
+the FIRST save of a session establishes a target, later saves write it in
+place with no dialog, and the dialog moves behind a **Save as…** entry that
+only exists once there is something to say "as" against. No new endpoint, no
+new SSE event, no new dep, no project-format bump.
+
+- **The target is `SessionState.save_target`, and where it lives IS the
+  safety argument.** An overwrite is silent, so the one thing that must be
+  impossible is writing a file the current session never chose. Keeping the
+  path in the native shell (which performs the write) or in the frontend
+  (which draws the button) means something has to remember to forget it, and
+  a missed call site is another project's file. As session state it is
+  cleared by the same ``_reset_while_locked`` and ``load_project`` that clear
+  every other field — and the field sweep in ``test_session_wipe.py`` makes
+  that a decision the next person has to make rather than one they can miss.
+  It is never persisted: a `.baspec` is a file people copy and share, and the
+  path it was written from says nothing about where its next reader should
+  save it.
+- **Only a save establishes a target — opening a project does not.** Most
+  apps adopt the opened file, and the native Open dialog does know its path.
+  This follows the owner's wording instead ("the 1st time a user clicks save
+  in a session"), and it keeps the native shell and the dev browser telling
+  the same story: a browser upload has no path to adopt, so the alternative
+  would be two different behaviors for the same button. Opening a project
+  therefore clears the target, and the first Save afterwards asks.
+- **The shell owns the decision; the frontend only draws it.**
+  ``js_api.save_project()`` overwrites when the session has a target and asks
+  when it does not; ``save_project_as()`` always asks. Both return one
+  ``_save_result`` shape, and ``cancelled`` is deliberately kept apart from
+  ``error``: backing out of a dialog is a decision the UI stays quiet about,
+  while a write that failed has to say so — collapsed into one falsy value
+  they are the same event, and only one of them deserves a red line.
+  ``save_and_close`` reads the same result, so "Save & close" on an
+  established session closes without a dialog in the way.
+- **A target that can no longer be written falls back to the dialog rather
+  than failing.** Moved, deleted, read-only, a disconnected drive. The user
+  asked for a save; the honest response to "that file is gone" is to ask
+  where it goes now, not to leave a button that used to work doing nothing.
+  The rescue location becomes the new target.
+- **"Save as…" opens in the current target's folder but still proposes a
+  fresh timestamped name.** Defaulting to the current filename would make
+  confirming the dialog overwrite the very file plain Save already
+  overwrites, which is Save with extra steps. This is why
+  ``_save_project_file`` keeps ``current`` (the folder hint) separate from
+  ``remembered`` (permission to write without asking) — folding them into one
+  variable silently drops the hint on every Save as…, and a test pins it.
+- **The write is bound to the generation it was packaged from.** A reset or
+  project load while the native dialog is up replaces the session underneath
+  it. The named file is still written — the user asked for it, and it holds
+  the session they were looking at — but ``remember_project_save_target``
+  refuses to bind the REPLACEMENT session to it. Same posture, and the same
+  reason, as the zombie-turn generation guard.
+- **A reported target is a promise, so only a bound one is reported**
+  (caught in review on PR #133, Codex). Both write paths return through
+  ``_bind_save_target``, which reports the path only when the generation
+  guard above actually accepted it. Dropping that return value left the
+  result claiming a target the server had just refused — and the frontend
+  adopts a successful save's target directly, so the replacement session drew
+  a split Save button promising to overwrite the outgoing project's file
+  while the very next click would (correctly) re-open the dialog. The file is
+  still written and the save still succeeds; there is simply nothing to
+  report.
+- **The panel says what it is about to do.** Save's tooltip names the exact
+  path it will overwrite, the caret's menu repeats it under Save as…, and a
+  completed save flashes "Saved ✓" for two seconds — an overwrite produces no
+  dialog and no download, and a button that silently does nothing reads as
+  broken (the lesson already recorded in "The update button installs the
+  update"). The state always passes through "saving", so a second save
+  re-arms that timer instead of inheriting the first one's.
+- **A tutorial workspace can never become the file Save overwrites.** The
+  native save refuses any non-original scope, so the panel's Save downloads
+  the practice copy through ``downloadProjectFile("tutorial")`` — the same
+  blob idiom as ``downloadQcReport``, which is the shipped in-shell download
+  path. A download cannot overwrite in place, so that route establishes no
+  target and the button stays plain Save, which is right: the copy is not the
+  user's project. The dev browser takes the same route for the same reason.
+- **No new capability id, no `TOUR_VERSION` bump.** Save, the caret, and
+  Save as… all declare the existing ``project.save-open`` — the
+  ``updates.manage`` precedent (one capability, several controls) — and
+  ``data-tour="save"`` moved to the wrapper, so the tour's anchor still
+  resolves onto the whole split button.
+- **Tests**: 14 in `tests/test_save_overwrite.py` (the headline ask-then-
+  overwrite, an overwrite writing the session as it is NOW rather than the
+  first save's bytes, Save as… re-pointing the target while leaving the old
+  file alone, the folder hint, a New session forgetting the target end to
+  end with the old project provably untouched, project load forgetting it,
+  the tutorial refusal, the mid-dialog reset and the mid-overwrite reset,
+  the unwritable-target fallback, the doc payload, the path staying out of
+  the saved package, and Save & close). Every mechanism was reverted in place to prove it
+  load-bearing: the overwrite branch → 4 red, the reset's clear → 16 red (a
+  leaked target poisons every later test in the module, which is the point),
+  the load clear → 1, the generation guard → 1, the dialog fallback → 1,
+  reporting an unbound target → 2.
+## The Final QC Word report is a memo, not a transcript — implemented notes (v1.10.0)
+
+Reported symptom (Abraham): "the final qc report is stupid long… we need
+important shit, not bullshit." Measured on the reporting run: **67,981 words
+across 4,213 paragraphs (~150 pages)** for 33 candidates. Three mechanical
+drivers: 76 verifier-seat dossiers at ~15 paragraphs each (near-verbatim
+verdict notes three times over on unanimous panels, plus per-seat token
+usage, dollar cost, and request/response counters), 302 lines of
+"No X record was persisted" empty-list boilerplate, and every URL reprinted
+at every mention — 2,550 URL prints for 488 unique URLs (5.2× each; the
+worst printed 51 times) while Appendix B, the deduplicated register built
+for exactly this, was referenced by nothing. The fix condenses the WORD
+rendering only; `QCResult`, `/api/qc/export.json`, `QCReportModal` (the
+on-screen no-truncation surface, per its own contract) and the whole run
+pipeline are untouched. This is the reporting contract's own sentence doing
+the work: "Word can format or condense dense structures for readability" —
+nothing is omitted, and the owner ratified trimming refuted/inconclusive
+operation payloads to counted pointers ("handle it", 2026-08-19).
+
+- **One evidence sweep feeds the whole build.** `build_qc_memo` computes
+  `_qc_candidate_ordinals` (id(dict)→SF/RF/DP/IC ordinal, keyed by object
+  identity — safe because the memo clones the result once and every
+  renderer reads that clone) and primes `_qc_memo_evidence_entries` (the
+  register + a url→E-number map, memoized on the document like
+  `_qc_schema_version`) BEFORE any section renders. Inline sections cite
+  `E-004 (host)` via `_qc_source_refs_line`; only Appendix B prints full
+  URLs (hyperlinked). A URL the register somehow missed falls back to
+  printing verbatim — nothing is ever silently dropped. Two latent bugs
+  died with this: the register never swept the `disputed` collection
+  (Chunk 5.1 added it after the sweep was written), and its "Referenced by"
+  labels numbered raw collection order while body headings numbered
+  severity-sorted — same URL, two candidate numbers. Both pinned. The sweep
+  also covers each seat's `refutation_evidence` (class "refutation
+  citation" — a seat's claim, not proof of retrieval; caught in review on
+  PR #134, Codex): a refuting seat citing a URL it never retrieved is the
+  retained-and-marked case the v4 evidence gate exists for, and without the
+  sweep that citation printed raw inline while missing from Appendix B.
+- **Panels are a table plus per-side representative prose**
+  (`_qc_render_panel`, replacing the per-seat `_qc_render_verdict`
+  dossiers). Every seat keeps a row (seat/status/vote/revised severity/fix
+  adequate); the first completed seat of each VOTE SIDE speaks for it
+  ("Representative verdict note for 3 upholding seats"), so a dissenting
+  seat always prints. A **disputed** candidate prints every completed
+  seat's note — the disagreement IS the content. Refutation evidence
+  (v4's severity gate) now renders per refuting seat with its validation
+  result — the old memo never rendered `refutation_evidence` at all.
+  Failed/cancelled seats stay loud (risk callout with the error). Seat
+  telemetry aggregates to panel-level query/source lines; per-seat
+  usage/cost/request/response counters are JSON-only now, and the usage
+  section's citation says so instead of "remain in their detailed records
+  above". `Proposed fix adequate: APPROVED (N of M completed seats)` is
+  derived once per finding in `_qc_render_ops` (keeps the pinned literal).
+- **Empty telemetry renders nothing.** `_qc_source_refs_line` /
+  `_qc_query_line` take `empty=None` (skip) by default; explicit empty text
+  survives only where absence is itself the disclosure (a grounded finding
+  with no accepted source, the legacy no-verdicts paragraph, the
+  missing-lens/missing-checks callouts). Billed-attempt lists render as the
+  DELTA vs the final record ("Additional billed-attempt …"), not a second
+  full copy. Source-check blocks render exceptions only (`accepted=False`
+  with reason); accepted ones are the register's rows.
+- **Operations render as their content, not their envelope.**
+  `_qc_operation_lines` puts action/target/other-keys on a header line and
+  the `text` payload verbatim in the `QC Operation` style — every persisted
+  key still renders, just without JSON braces/escaping (the exact dict
+  stays in the JSON export, which Apply revalidates anyway). Refuted and
+  inconclusive candidates get a count + JSON pointer instead of an
+  operation dump (they are non-actionable by construction); disputed keeps
+  full rendered ops because a human adjudicates them from this document.
+- **Identity lines merged** (Location = element · reviewed ref · anchor
+  state, one Severity line carrying the submitted original), reviewed
+  text/issue/rationale kept in full for every candidate kind — that is the
+  important shit. Multi-origin candidates render one line per origin
+  (lens, severity, title, evidence E-refs, own-ops note, origin id); the
+  full origin claims stay verbatim in the JSON record, and the intro says
+  so instead of "reproduced below exactly". Reviewed checks render as a
+  `# | Outcome | Reviewed check` table with a note line per check that has
+  one. "Why disputed" moved INSIDE `_render_memo_finding` — it used to
+  render before the DP heading and visually attached to the previous
+  candidate.
+- **Shared partitions** (`_qc_ordered_survivors`, `_qc_substantively_refuted`,
+  `_qc_disputed_candidates`, `_qc_inconclusive_candidates`) are extracted so
+  the appendix renderers and the ordinal map cannot disagree about which
+  candidate is RF vs IC (legacy `default_refuted` records still file under
+  IC).
+- **Result**: a synthetic run shaped like the reported one (19 SF + 9 RF +
+  5 DP, 3-seat panels) renders 4,787 → 1,257 paragraphs and 34.2k → 20.4k
+  words; production reports shrink more (their telemetry share was larger).
+  What survives is severity-ordered findings at ~400 words each, and the
+  methodology section discloses the condensation and names the JSON export
+  as the lossless companion.
+- **Tests**: the fidelity pins survived unchanged by design ("Proposed fix
+  adequate: APPROVED", "N reviewer record(s)", seat-1 notes, refuted
+  claim/rationale, disputed/inconclusive labels). New:
+  `test_the_word_memo_condenses_panels_and_telemetry_without_omitting`
+  (representative-note rule incl. later seats' notes ABSENT, no empty-list
+  boilerplate, no per-seat billing, URL-once-in-register + E-ids inline,
+  ops without JSON braces) and
+  `test_disputed_candidates_reach_the_register_and_their_own_heading`
+  (DP sweep + ordinal agreement + the Why-disputed ordering fix + the
+  refuted ops count line); both fail against the pre-change renderer.
+  `test_qc_consolidation.py`'s origin-evidence test now reads tables too
+  and additionally pins that the origin URL appears ONLY in the register.
 
 ## Commands
 

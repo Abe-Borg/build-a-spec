@@ -91,19 +91,65 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
         version="1.10.0",
         date="2026-08-19",
-        headline="Final QC costs about half as much",
+        headline="A shorter Final QC report, at about half the cost",
         summary=(
-            "The pre-issue review is the most expensive thing the app does, "
-            "and most of that went on the stage that checks findings rather "
-            "than the stage that finds them. Two changes cut a typical pass "
-            "by roughly half. Nothing about the review itself was traded "
-            "away: the same five specialists, the same panel of reviewers "
-            "arguing against every finding, the same evidence rules and the "
-            "same readiness gate."
+            "Two changes to the pre-issue review, landing together. The "
+            "Word report was an audit transcript pretending to be a memo "
+            "— a five-lens review of one section ran past a hundred "
+            "pages — and now leads with what needs your decision. And "
+            "the review itself got cheaper: a typical pass costs about "
+            "half what it did, with the same five specialists, the same "
+            "panel arguing against every finding, and the same readiness "
+            "gate."
         ),
         sections=(
             ReleaseSection(
-                title="Final QC",
+                title="Final QC reporting",
+                items=(
+                    ReleaseItem(
+                        title="Reviewer panels read as one table, not three essays",
+                        body=(
+                            "Every verifier seat still appears with its "
+                            "vote, severity, and fix verdict — now as one "
+                            "row in a table. When a panel agrees, one "
+                            "representative note speaks for it instead of "
+                            "three near-identical restatements; "
+                            "disagreements, failed seats, and refutation "
+                            "evidence still print in full, because those "
+                            "are the parts a human has to read."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Every source is listed once, in the Evidence Register",
+                        body=(
+                            "Web sources used to reprint their full address "
+                            "at every mention — the same link could appear "
+                            "fifty times. Findings, checks, and panels now "
+                            "cite short evidence numbers (E-001) that "
+                            "resolve in Appendix B, which also now covers "
+                            "disputed candidates and numbers entries the "
+                            "same way the report body does."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Less boilerplate, same audit trail",
+                        body=(
+                            "Empty telemetry no longer prints “No record "
+                            "was persisted” lines, per-seat token and cost "
+                            "accounting moved to the JSON export, refuted "
+                            "candidates keep their claim and refutation "
+                            "basis without an unusable operation dump, and "
+                            "proposed fixes render as the actual replacement "
+                            "text instead of raw JSON. Nothing left the "
+                            "audit record — the JSON export remains the "
+                            "lossless companion, and the Word report says "
+                            "so."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="What Final QC costs",
                 items=(
                     ReleaseItem(
                         title="The checking stage runs at half price",

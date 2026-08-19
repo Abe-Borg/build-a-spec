@@ -98,6 +98,9 @@ interface Props {
     kind: "project" | "docx" | "reference",
   ) => Promise<File | null | undefined>;
   onImportMaster: (file: File, intent: ImportIntent) => void;
+  /** Permission-sweep progress while capabilities are pending (from the
+   *  status poll), or null. Display only. */
+  capabilityProgress?: { done: number; total: number } | null;
   referenceDocs: ReferenceDocMeta[];
   onAttachReference: (file: File) => void;
   onRemoveReference: (rid: string) => void;
@@ -303,6 +306,7 @@ export default function ArtifactPanel({
   onLoadProject,
   nativeOpenFile,
   onImportMaster,
+  capabilityProgress,
   referenceDocs,
   onAttachReference,
   onRemoveReference,
@@ -1192,7 +1196,16 @@ export default function ArtifactPanel({
             <span />
             <span />
           </span>
-          <span className="min-w-0 flex-1">{pendingReason}</span>
+          <span className="min-w-0 flex-1">
+            {pendingReason}
+            {capabilityProgress && (
+              <span className="text-ink-faint tabular-nums">
+                {" "}
+                — {capabilityProgress.done.toLocaleString()} of{" "}
+                {capabilityProgress.total.toLocaleString()} blocks checked
+              </span>
+            )}
+          </span>
           {editFreelyButton(
             " shrink-0",
             " Choosing it now skips the rest of the permission analysis.",

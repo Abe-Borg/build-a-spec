@@ -45,7 +45,7 @@ import {
   fetchQcDebrief,
   fetchResearchDebrief,
   getDoc,
-  getDocCapabilities,
+  getDocCapabilitiesStatus,
   getDocDiff,
   getHealth,
   getQcStatus,
@@ -254,6 +254,13 @@ export default function App() {
   // Import/Open buttons; the ref is the double-submit guard (state updates
   // are async, a fast second click would slip past it).
   const [fileLoading, setFileLoading] = useState<FileLoading>(null);
+  // Sweep progress from the capabilities poll, for the pending strip —
+  // "checking permissions: 412 of 1,500 blocks" instead of anonymous dots
+  // for minutes. Null outside a pending sweep.
+  const [capabilityProgress, setCapabilityProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   // What the panel says about the last import: a failure, or the content-loss
   // warnings of a lossy one. Both used to be announced in the chat, which put
   // machine-generated notices in the middle of the conversation; they now
@@ -656,10 +663,14 @@ export default function App() {
     // backoff keeps a long wait cheap without making a short one feel slow.
     let delay = 750;
     const tick = () => {
-      getDocCapabilities()
+      // status_only: the tick reads status + progress and nothing else, so
+      // it must not ship the multi-MB per-element map once per tick for the
+      // whole (possibly minutes-long) sweep.
+      getDocCapabilitiesStatus()
         .then((report) => {
           if (cancelled) return;
           if (report?.status === "pending") {
+            setCapabilityProgress(report.progress ?? null);
             delay = Math.min(delay * 1.5, 5000);
             timer = window.setTimeout(tick, delay);
             return;
@@ -667,6 +678,7 @@ export default function App() {
           // Settled. One writer for this state: refreshDoc re-reads the whole
           // payload (the document can have moved while the sweep ran) and
           // sets source_capabilities from the same response.
+          setCapabilityProgress(null);
           refreshDoc();
           // QC freshness and readiness both compare against the imported-
           // source permissions, so while those were pending they answered
@@ -2507,6 +2519,7 @@ export default function App() {
           onLoadProject={onLoadProject}
           nativeOpenFile={nativeOpenFile}
           onImportMaster={onImportMaster}
+          capabilityProgress={capabilityProgress}
           onStartResearch={onStartResearch}
           onStopResearch={onStopResearch}
           onStartQc={onStartQc}

@@ -3456,7 +3456,7 @@ def create_app(
             return _doc_payload(session, workspace=lease)
 
     @app.get("/api/doc/capabilities")
-    def get_doc_capabilities() -> dict:
+    def get_doc_capabilities(status_only: bool = False) -> dict:
         """Just the imported-source permission report, for polling.
 
         The per-element sweep runs in the background, so the panel needs a
@@ -3466,9 +3466,27 @@ def create_app(
         poller does not need. ``status`` is ``pending`` while the sweep is
         still running; anything else is settled and the client refreshes the
         document once.
+
+        ``status_only`` drops the per-element map — the poller only ever
+        reads the status, and the full map re-serialized once per tick is
+        multi-MB on a large master for a sweep that can run minutes. The
+        slim shape also carries ``progress`` (elements settled / total)
+        while a sweep is running, so the pending strip can say how far
+        along it is.
         """
         session = sessions.get_session()
         capabilities = session.source_edit_capabilities()
+        if status_only:
+            payload: dict | None = None
+            if capabilities is not None:
+                payload = capabilities.status_dict()
+                progress = session.capability_warm_progress()
+                if progress is not None:
+                    payload["progress"] = {
+                        "done": progress[0],
+                        "total": progress[1],
+                    }
+            return {"source_capabilities": payload}
         return {
             "source_capabilities": (
                 capabilities.to_dict() if capabilities is not None else None

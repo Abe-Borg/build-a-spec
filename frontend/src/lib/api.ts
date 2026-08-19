@@ -185,6 +185,22 @@ export async function getDocCapabilities(): Promise<SourceCapabilitiesState | nu
   return (await resp.json()).source_capabilities ?? null;
 }
 
+/** The slim polling projection of {@link getDocCapabilities}: status +
+ * causes + sweep progress, no per-element map. The poll only ever reads
+ * the status, and the full map is multi-MB on a large master — per tick,
+ * for a sweep that can run minutes. */
+export type SourceCapabilitiesStatus = {
+  status: string;
+  causes: { blocker: string; message: string; remedy: string }[];
+  progress?: { done: number; total: number };
+};
+
+export async function getDocCapabilitiesStatus(): Promise<SourceCapabilitiesStatus | null> {
+  const resp = await fetch("/api/doc/capabilities?status_only=1");
+  if (!resp.ok) throw new Error(`capabilities ${resp.status}`);
+  return (await resp.json()).source_capabilities ?? null;
+}
+
 /* --- Chat-authored figures (diagrams / schematics / tables) --- */
 
 /** Snapshot of the session's figures (also carried on every DocPayload). */

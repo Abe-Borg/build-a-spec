@@ -76,7 +76,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator
@@ -218,7 +218,7 @@ class _CapabilityWarm:
     on it — most importantly the first frame of a chat turn.
     """
 
-    __slots__ = ("key", "section", "done")
+    __slots__ = ("key", "section", "done", "progress")
 
     def __init__(self, key: tuple[Any, ...], section: SpecSection) -> None:
         self.key = key
@@ -227,6 +227,11 @@ class _CapabilityWarm:
         # then, if that turn rolled back, published under this key.
         self.section = section
         self.done = threading.Event()
+        # (elements settled, elements total) — a whole-tuple write per
+        # element from the sweep thread, read lock-free by the polling
+        # endpoint (atomic under the GIL, and a stale read costs one tick
+        # of display lag, nothing else).
+        self.progress: tuple[int, int] | None = None
 
 
 @dataclass
@@ -974,6 +979,7 @@ class SessionState:
         self,
         state_key: tuple[Any, ...],
         section: SpecSection | None = None,
+        progress: Callable[[int, int], None] | None = None,
     ) -> SourceCapabilityReport | None:
         """Run one full sweep of ``section`` and memoize it if it still fits.
 
@@ -983,7 +989,9 @@ class SessionState:
         still the live state, i.e. is it worth caching?
         """
         source_bytes, source_map, baseline_index, projection = state_key
-        report = self._compute_source_edit_capabilities(section)
+        report = self._compute_source_edit_capabilities(
+            section, progress=progress
+        )
 
         # Read paths are not serialized against a streaming turn (``GET
         # /api/doc`` takes no session guard), so a long sweep can be overtaken
@@ -1114,7 +1122,13 @@ class SessionState:
     def _run_capability_warm(self, warm: "_CapabilityWarm") -> None:
         """Body of the background sweep thread; never raises."""
         try:
-            self._sweep_and_publish(warm.key, warm.section)
+
+            def _note_progress(done: int, total: int) -> None:
+                warm.progress = (done, total)
+
+            self._sweep_and_publish(
+                warm.key, warm.section, progress=_note_progress
+            )
         except Exception:  # noqa: BLE001 - a warm failure must not kill the app
             # ``_compute_source_edit_capabilities`` already fails closed for
             # every analysis error; anything reaching here is unexpected and
@@ -1153,9 +1167,23 @@ class SessionState:
                 return True
         return warm.done.wait(timeout)
 
+    def capability_warm_progress(self) -> tuple[int, int] | None:
+        """(elements settled, total) for the in-flight sweep, or ``None``.
+
+        Display-only, read lock-free (the sweep thread writes whole tuples):
+        the pending strip renders "412 of 1,500 blocks" from it instead of
+        three anonymous dots for minutes. ``None`` means no sweep is
+        running, or the running one has not counted its elements yet.
+        """
+        warm = self._capability_warm
+        if warm is None or warm.done.is_set():
+            return None
+        return warm.progress
+
     def _compute_source_edit_capabilities(
         self,
         current: SpecSection | None = None,
+        progress: Callable[[int, int], None] | None = None,
     ) -> SourceCapabilityReport | None:
         """Derive the capability report from scratch (see the caller).
 
@@ -1228,6 +1256,7 @@ class SessionState:
                 source_map=self.source_docx_map,
                 baseline=baseline,
                 current=analyzed,
+                progress=progress,
             )
         except SourcePatchError as exc:
             return blocked_source_edit_capabilities(

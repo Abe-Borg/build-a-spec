@@ -22,7 +22,7 @@ import zipfile
 from dataclasses import dataclass, field
 from io import BytesIO
 from types import MappingProxyType
-from typing import Mapping
+from typing import Callable, Mapping
 
 from lxml import etree
 
@@ -412,13 +412,16 @@ class SourceCapabilityReport:
         )
         object.__setattr__(self, "causes", tuple(self.causes))
 
-    def to_dict(self) -> dict[str, object]:
+    def status_dict(self) -> dict[str, object]:
+        """The slim polling projection: status + causes, no element map.
+
+        The pending poll only ever reads these, and the full ``to_dict``
+        serializes every element's every operation — multi-MB on a large
+        master, re-built once per poll tick for the whole (possibly
+        hours-long) sweep.
+        """
         return {
             "status": self.status,
-            "elements": {
-                uid: self.elements[uid].to_dict()
-                for uid in sorted(self.elements)
-            },
             "causes": [
                 {
                     "blocker": blocker,
@@ -427,6 +430,15 @@ class SourceCapabilityReport:
                 }
                 for blocker in self.causes
             ],
+        }
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            **self.status_dict(),
+            "elements": {
+                uid: self.elements[uid].to_dict()
+                for uid in sorted(self.elements)
+            },
         }
 
 
@@ -2527,9 +2539,20 @@ def _probe_move_capability(
     allowed_positions: list[int] = []
     island_keys: set[str] = set()
     first_error: SourcePatchError | None = None
-    for position in range(sibling_count):
-        if position == current_position:
-            continue
+    # Probe only the ADJACENT positions — the ones the up/down buttons
+    # consume. Probing every sibling slot ran one full document-compose/
+    # reparse/ZIP-preflight validation per position, S×(S−1) per island —
+    # the super-quadratic term in the measured ~n^2.2 sweep — to advertise
+    # positions only drag-and-drop ever read. The advertised set is
+    # explicitly a SUBSET of the safe set (DOCX_FIDELITY.md: capability
+    # reports are UI guidance, never authorization); the real gate still
+    # validates any position a caller actually requests.
+    candidate_positions = [
+        position
+        for position in (current_position - 1, current_position + 1)
+        if 0 <= position < sibling_count
+    ]
+    for position in candidate_positions:
         candidate, _applied = apply_edits(
             current,
             [{"action": "move", "target_id": uid, "position": position}],
@@ -2583,6 +2606,7 @@ def source_edit_capabilities(
     source_map: SourceBodyMap,
     baseline: SpecSection,
     current: SpecSection,
+    progress: Callable[[int, int], None] | None = None,
 ) -> SourceCapabilityReport:
     """Derive per-element permissions by probing the authoritative final gate.
 
@@ -2590,6 +2614,27 @@ def source_edit_capabilities(
     an equivalent heading-only copy), and every body candidate completes the
     same lexical XML and raw-ZIP preflight as a real request. The supplied
     immutable context is identity-bound once and reused for every probe.
+
+    Two classes of answer are CATEGORICAL and skip probing entirely, because
+    the gate's verdict for them is a constant this function would otherwise
+    spend full document-compose/reparse/ZIP-preflight cycles rediscovering:
+
+    - A frozen package (any package-wide mutation blocker) denies every body
+      operation document-wide. The fast path builds that report directly —
+      byte-identical to the swept one (the gate raises the package blocker
+      before any per-candidate analysis, and metadata ops ride the no-op
+      path either way) — which turns minutes of O(n²) sweep on a frozen
+      master into milliseconds.
+    - Heading text is never patchable (``_validate_fixed_projection`` raises
+      ``heading_change`` unconditionally), so the section/part/article
+      ``replace_text`` probes always returned that constant at full price.
+      Same precedent as the hardcoded ``add_article`` denial below;
+      ``_probe_heading_capability`` is retained as the equivalence canary
+      the tests re-assert.
+
+    ``progress`` (done, total) is called as each element's permissions
+    settle, so a background sweep can say how far along it is instead of
+    showing three dots for minutes.
     """
     bound_context = _context_for_inputs(
         source_bytes=context.source_bytes,
@@ -2597,6 +2642,46 @@ def source_edit_capabilities(
         baseline=baseline,
         context=context,
     )
+    status = (
+        "pass_through_only"
+        if bound_context.global_blockers
+        or bound_context.runtime_mutation_issues
+        else "ready"
+    )
+    # Both package-wide channels, deduplicated, first-seen order preserved —
+    # the same two the per-element fallback below picks its blocker from, so
+    # the headline cause can never disagree with what the elements report.
+    causes = tuple(
+        dict.fromkeys(
+            (
+                *bound_context.global_blockers,
+                *(
+                    issue.blocker
+                    for issue in bound_context.runtime_mutation_issues
+                ),
+            )
+        )
+    )
+    if status == "pass_through_only":
+        if bound_context.global_blockers:
+            mutation_blocker = bound_context.global_blockers[0]
+            mutation_message = source_blocker_message(mutation_blocker)
+        else:
+            runtime_issue = bound_context.runtime_mutation_issues[0]
+            mutation_blocker = runtime_issue.blocker
+            mutation_message = runtime_issue.message
+        elements = {
+            uid: _blocked_element_operations(
+                kind,
+                blocker=mutation_blocker,
+                message=mutation_message,
+            )
+            for uid, kind in _semantic_elements(current)
+        }
+        return SourceCapabilityReport(
+            "pass_through_only", elements, causes=causes
+        )
+
     # Bind the fixed inputs once for the whole sweep. Every probe below runs
     # the same authoritative gate on the same source/map/baseline; only the
     # candidate differs. Re-deriving the baseline projection, its paragraph
@@ -2628,26 +2713,6 @@ def source_edit_capabilities(
         context=bound_context,
         bound_inputs=bound_inputs,
     )
-    status = (
-        "pass_through_only"
-        if bound_context.global_blockers
-        or bound_context.runtime_mutation_issues
-        else "ready"
-    )
-    # Both package-wide channels, deduplicated, first-seen order preserved —
-    # the same two the per-element fallback below picks its blocker from, so
-    # the headline cause can never disagree with what the elements report.
-    causes = tuple(
-        dict.fromkeys(
-            (
-                *bound_context.global_blockers,
-                *(
-                    issue.blocker
-                    for issue in bound_context.runtime_mutation_issues
-                ),
-            )
-        )
-    )
 
     current_paragraphs, current_children, _current_headings = (
         _projection_paragraphs(current)
@@ -2661,67 +2726,45 @@ def source_edit_capabilities(
         for item in patch.desired:
             current_island_by_uid[item.uid] = patch.island.key
 
-    mutation_blocker: str | None = None
-    mutation_message: str | None = None
-    if bound_context.global_blockers:
-        mutation_blocker = bound_context.global_blockers[0]
-        mutation_message = source_blocker_message(mutation_blocker)
-    elif bound_context.runtime_mutation_issues:
-        runtime_issue = bound_context.runtime_mutation_issues[0]
-        mutation_blocker = runtime_issue.blocker
-        mutation_message = runtime_issue.message
+    total_elements = len(_semantic_elements(current))
+    done_elements = 0
+
+    def _advance() -> None:
+        nonlocal done_elements
+        done_elements += 1
+        if progress is not None:
+            progress(done_elements, total_elements)
+
+    # Headings are categorically unpatchable — see the docstring.
+    heading_denied = _denied_capability("heading_change", None)
 
     elements: dict[str, SourceElementCapabilities] = {}
     elements["sec"] = SourceElementCapabilities(
         {
-            "replace_text": _probe_heading_capability(
-                uid="sec",
-                context=bound_context,
-                source_map=source_map,
-                baseline=baseline,
-                current=current,
-                bound_inputs=bound_inputs,
-            ),
+            "replace_text": heading_denied,
             "set_project_identity": _allowed_capability(),
             "set_project_profile": _allowed_capability(),
             "set_standard_edition": _allowed_capability(),
             "set_standard_suppressed": _allowed_capability(),
         }
     )
+    _advance()
 
     for part in current.parts:
-        article_structure_blocker = mutation_blocker or "structural_change"
-        article_structure_message = mutation_message
         elements[part.uid] = SourceElementCapabilities(
             {
-                "replace_text": _probe_heading_capability(
-                    uid=part.uid,
-                    context=bound_context,
-                    source_map=source_map,
-                    baseline=baseline,
-                    current=current,
-                    bound_inputs=bound_inputs,
-                ),
+                "replace_text": heading_denied,
                 # Imported heading structure is immutable.  Report that
                 # categorical restriction directly instead of performing a
                 # full source-package probe that can never succeed.
-                "add_article": _denied_capability(
-                    article_structure_blocker,
-                    article_structure_message,
-                ),
+                "add_article": _denied_capability("structural_change", None),
             }
         )
+        _advance()
         for article in part.articles:
             elements[article.uid] = SourceElementCapabilities(
                 {
-                    "replace_text": _probe_heading_capability(
-                        uid=article.uid,
-                        context=bound_context,
-                        source_map=source_map,
-                        baseline=baseline,
-                        current=current,
-                        bound_inputs=bound_inputs,
-                    ),
+                    "replace_text": heading_denied,
                     "add_paragraph": _probe_add_capability(
                         target_uid=article.uid,
                         position_count=len(article.paragraphs),
@@ -2739,20 +2782,15 @@ def source_edit_capabilities(
                         current=current,
                         bound_inputs=bound_inputs,
                     ),
-                    "move": _denied_capability(
-                        article_structure_blocker,
-                        article_structure_message,
-                    ),
+                    "move": _denied_capability("structural_change", None),
                 }
             )
+            _advance()
 
     for uid, paragraph in current_paragraphs.items():
         siblings = current_children.get(paragraph.parent_uid, ())
         current_position = siblings.index(uid)
-        if mutation_blocker is not None:
-            fallback_blocker = mutation_blocker
-            fallback_message = mutation_message
-        elif uid in baseline_paragraphs:
+        if uid in baseline_paragraphs:
             fallback_blocker = _structural_member_blocker(
                 uid,
                 baseline_paragraphs,
@@ -2849,6 +2887,7 @@ def source_edit_capabilities(
                 ),
             }
         )
+        _advance()
 
     return SourceCapabilityReport(status, elements, causes=causes)
 

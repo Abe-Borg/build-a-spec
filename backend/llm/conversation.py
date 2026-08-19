@@ -118,7 +118,12 @@ from ..spec_doc.source_patch import (
     validate_source_transition,
 )
 from ..compliance import AuditRunner
-from ..qc import QCRunner
+from ..qc import QCRunner, qc_version_fingerprint
+from ..qc.apply import (
+    APPLY_QC_FIXES_TOOL,
+    QCChatApplyError,
+    stage_chat_apply,
+)
 from ..qc.context import qc_review_context_block
 from ..research import ResearchRunner, research_context_block
 from ..research.grounding import response_container_id
@@ -164,9 +169,9 @@ def _chat_tools() -> list[dict[str, Any]]:
     the cached prefix, so anything per-turn here (e.g. a profile-derived
     ``user_location``) would bust the prompt cache for the whole session.
     The model steers search locale through its query text instead.
-    ``suggest_prompts`` and then ``read_reference_doc`` are appended LAST, in
-    that order, so each addition leaves the existing tool bytes intact as a
-    stable cached prefix.
+    ``suggest_prompts``, ``read_reference_doc``, and then
+    ``apply_qc_fixes`` are appended LAST, in that order, so each addition
+    leaves the existing tool bytes intact as a stable cached prefix.
 
     The two web tools come from the shared builders, which pin
     ``allowed_callers: ["direct"]`` (see
@@ -180,6 +185,7 @@ def _chat_tools() -> list[dict[str, Any]]:
         build_web_fetch_tool(max_uses=settings.CHAT_MAX_FETCHES),
         SUGGEST_PROMPTS_TOOL,
         READ_REFERENCE_DOC_TOOL,
+        APPLY_QC_FIXES_TOOL,
     ]
 
 
@@ -2630,6 +2636,114 @@ def _run_read_reference_doc(
     )
 
 
+@dataclass
+class _QcApplyStaging:
+    """Turn-local record of what apply_qc_fixes staged this turn.
+
+    Dispositions are NOT recorded when the tool runs — the document edits it
+    makes are provisional until the turn commits, and an audit event saying
+    "applied at version N" about a version that then rolled back would be a
+    false record. The dispatch accumulates here (so a refused first call
+    never blocks a corrected retry) and the commit block writes it to the
+    runner beside the doc/figure/suggestion commits; rollback and the
+    generation guard drop it with the turn. ``result_ref`` is the exact
+    result object the outcomes describe, re-checked by IDENTITY at commit so
+    a QC run that finished mid-turn and installed a fresh result can never
+    receive another review's dispositions.
+    """
+
+    result_ref: Any = None
+    applied_ids: list[str] = field(default_factory=list)
+    skipped_events: list[tuple[str, str, str]] = field(default_factory=list)
+    outcomes: dict[str, str] = field(default_factory=dict)
+
+    def has_records(self) -> bool:
+        return bool(self.applied_ids or self.skipped_events)
+
+
+def _run_apply_qc_fixes(
+    session: SessionState,
+    block: dict[str, Any],
+    staging: "_QcApplyStaging | None",
+    trace_handle: Any = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Dispatch one apply_qc_fixes call inside the streaming turn.
+
+    Shares the HTTP route's implementation (``qc.apply``): the same
+    eligibility policy, freshness check, conflict planning, and accumulating
+    dry-run — then applies the canonical batch through the session's ONE
+    transactional edit path, so a QC fix rides the turn's undo step, source
+    gate, and rollback exactly like any model edit. Refusals are ``is_error``
+    results the model relays or corrects; they never fail the turn.
+    """
+    if staging is None:  # pragma: no cover - dispatcher always threads one
+        staging = _QcApplyStaging()
+    try:
+        staged = stage_chat_apply(session, block.get("input") or {})
+    except QCChatApplyError as exc:
+        _trace.tool_dispatch(trace_handle, ops=0, ok=False, error=str(exc))
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": f"apply_qc_fixes refused (nothing applied): {exc}",
+                "is_error": True,
+            },
+            [],
+        )
+    combined_ops = staged["combined_ops"]
+    applied: list[dict[str, Any]] = []
+    if combined_ops:
+        try:
+            applied = session.apply_doc_edits(combined_ops)
+        except (SpecEditError, SourcePatchError) as exc:
+            # The dry-run validated the semantics; this is the live gate
+            # (most plausibly the imported-source preservation check)
+            # refusing the final state. Nothing was applied, nothing staged.
+            _trace.tool_dispatch(
+                trace_handle, ops=len(combined_ops), ok=False, error=str(exc)
+            )
+            return (
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.get("id"),
+                    "content": (
+                        "apply_qc_fixes refused by the document's edit gate "
+                        f"(nothing applied): {exc}"
+                    ),
+                    "is_error": True,
+                },
+                [],
+            )
+    # Only now — the batch is on the provisional tree — stage dispositions
+    # for the commit block.
+    staging.result_ref = staged["result_ref"]
+    staging.applied_ids.extend(staged["applied_ids"])
+    staging.skipped_events.extend(staged["skipped_events"])
+    staging.outcomes.update(staged["outcomes"])
+    _trace.tool_dispatch(trace_handle, ops=len(combined_ops), ok=True)
+    result = {
+        "type": "tool_result",
+        "tool_use_id": block.get("id"),
+        "content": json.dumps(
+            {
+                "outcomes": staged["outcomes"],
+                "applied_operations": len(combined_ops),
+                "outline": outline(session.doc.doc),
+            },
+            ensure_ascii=False,
+        ),
+    }
+    if not combined_ops:
+        return result, []
+    patch = {
+        "type": "doc_patch",
+        "ops": applied,
+        "doc": session.doc.snapshot(),
+    }
+    return result, [patch]
+
+
 def _run_tool(
     session: SessionState,
     block: dict[str, Any],
@@ -2637,6 +2751,7 @@ def _run_tool(
     *,
     message_index: int = 0,
     reference_budget: TurnReferenceBudget | None = None,
+    qc_apply_staging: "_QcApplyStaging | None" = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Execute one (serialized) tool_use block.
 
@@ -2654,6 +2769,10 @@ def _run_tool(
     if name == "read_reference_doc":
         return _run_read_reference_doc(
             session, block, trace_handle, budget=reference_budget
+        )
+    if name == "apply_qc_fixes":
+        return _run_apply_qc_fixes(
+            session, block, qc_apply_staging, trace_handle
         )
     if name != "apply_spec_edits":
         return (
@@ -2897,6 +3016,11 @@ def stream_user_turn(
     # generator. Initializes to [] so a turn that never calls the tool
     # commits an empty set — that "no call = clear" rule is the wind-down.
     staged_suggestions: list[str] = []
+    # Turn-local staging for apply_qc_fixes dispositions: recorded on the
+    # runner ONLY in the commit block, beside the doc/figure/suggestion
+    # commits, so a rolled-back turn leaves no "applied" audit event for an
+    # edit that never landed.
+    staged_qc_apply = _QcApplyStaging()
     # Bounds the reference text this turn can pull into its request across
     # every read_reference_doc call (commit-time elision does not help the
     # continuation rounds). Turn-local, discarded with the turn.
@@ -3117,6 +3241,7 @@ def stream_user_turn(
                         trace_handle,
                         message_index=message_index,
                         reference_budget=reference_budget,
+                        qc_apply_staging=staged_qc_apply,
                     )
                 tool_results.append(result)
                 for event in ui_events:
@@ -3179,6 +3304,40 @@ def stream_user_turn(
                 # []) becomes the current chip set. Failure paths never reach
                 # this commit block, so the previous list remains untouched.
                 session.suggested_prompts = staged_suggestions
+                qc_dispositions_event: dict[str, Any] | None = None
+                if (
+                    staged_qc_apply.has_records()
+                    and session.qc.result is staged_qc_apply.result_ref
+                ):
+                    # Audit dispositions land ONLY here — the commit — so a
+                    # rolled-back turn records nothing, and a user stop
+                    # (which commits) records exactly what it kept. Stamped
+                    # with the COMMITTED version identity, the HTTP route's
+                    # posture; the identity re-check keeps a result a
+                    # finishing QC run installed mid-turn from receiving
+                    # another review's dispositions.
+                    disposition_version = session.doc.index
+                    disposition_fingerprint = qc_version_fingerprint(
+                        session.doc.doc
+                    )
+                    if staged_qc_apply.applied_ids:
+                        session.qc.mark_applied(
+                            staged_qc_apply.applied_ids,
+                            document_version=disposition_version,
+                            document_fingerprint=disposition_fingerprint,
+                        )
+                    for fid, action, reason in staged_qc_apply.skipped_events:
+                        session.qc.record_disposition_outcome(
+                            fid,
+                            action=action,
+                            reason=reason,
+                            document_version=disposition_version,
+                            document_fingerprint=disposition_fingerprint,
+                        )
+                    qc_dispositions_event = {
+                        "type": "qc_dispositions",
+                        "outcomes": dict(staged_qc_apply.outcomes),
+                    }
                 if last_round_context is not None:
                     # The context gauge: prompt size of this turn's final
                     # request. A turn whose rounds carried no usage (many
@@ -3207,6 +3366,8 @@ def stream_user_turn(
                             "standards": standards_payload(session),
                         },
                     ]
+                if qc_dispositions_event is not None:
+                    post_commit_events.append(qc_dispositions_event)
         if commit_invalidated:
             # Reset/load won the race after the last round: leave the fresh
             # session untouched and discard this turn.

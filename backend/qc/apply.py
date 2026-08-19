@@ -30,7 +30,11 @@ from .engine import (
     QC_REPORT_SCHEMA_VERSION,
     QCSourceGuard,
 )
-from .op_conflicts import canonical_qc_operation, qc_operation_identity
+from .op_conflicts import (
+    canonical_qc_operation,
+    plan_qc_operation_batch,
+    qc_operation_identity,
+)
 
 # Sentinel distinguishing "the caller did not pre-sample" from a genuine
 # pre-sampled None (a session that is not source-backed).
@@ -268,6 +272,167 @@ def select_apply_candidates(
             continue
         eligible_findings.append((finding_id, finding.proposed_ops))
     return outcomes, skipped_events, eligible_findings
+
+
+class QCChatApplyError(ValueError):
+    """A whole-call refusal of the apply_qc_fixes chat tool.
+
+    Becomes an ``is_error`` tool result for the model to relay or correct —
+    never a turn failure (the apply_spec_edits posture).
+    """
+
+
+#: The chat tool through which the model applies verified Final QC fixes —
+#: static bytes on purpose: tools precede the system prompt in the cached
+#: prefix. The description restates the approval contract because the tool
+#: definition is what the model reads at the moment of use.
+APPLY_QC_FIXES_TOOL: dict[str, Any] = {
+    "name": "apply_qc_fixes",
+    "description": (
+        "Apply verified Final QC fixes by finding id — ONLY after the user "
+        "has explicitly approved applying them in this conversation. Pass "
+        "every approved finding id in ONE call, and make it the FIRST "
+        "action of the turn: any earlier document edit this turn makes the "
+        "review stale and this tool refuses. Each finding's exact "
+        "panel-approved operations are applied as part of this turn's one "
+        "undoable step and its audit disposition is recorded on commit. "
+        "Findings without a verified safe fix are skipped and reported in "
+        "the result — never re-type a QC fix through apply_spec_edits."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "finding_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "The approved Final QC finding ids (from the FINAL QC "
+                    "REVIEW context block), all in one call."
+                ),
+            }
+        },
+        "required": ["finding_ids"],
+    },
+}
+
+
+def _chat_finding_ids(raw_input: Any) -> list[str]:
+    if not isinstance(raw_input, dict):
+        raise QCChatApplyError(
+            "apply_qc_fixes expects an object with a finding_ids list."
+        )
+    raw_ids = raw_input.get("finding_ids")
+    if not isinstance(raw_ids, list):
+        raise QCChatApplyError("finding_ids must be a list of finding ids.")
+    ids = [i.strip() for i in raw_ids if isinstance(i, str) and i.strip()]
+    if not ids:
+        raise QCChatApplyError(
+            "Name at least one finding id from the FINAL QC REVIEW block."
+        )
+    return ids
+
+
+def stage_chat_apply(session, raw_input: Any) -> dict[str, Any]:
+    """Validate and dry-run an apply_qc_fixes call against the live turn.
+
+    Runs under the turn's ``owned_model_turn_guard`` (the dispatcher's
+    lock), against the turn's PROVISIONAL tree — which is exactly what makes
+    the apply-first contract self-enforcing: ``matches_current_inputs``
+    fingerprints ``session.doc.doc``, so any edit earlier in the turn reads
+    as a mismatch and the call is refused, the same answer the HTTP route
+    gives a stale result. The freshness read is non-blocking on purpose: a
+    pending capability sweep must read conservatively as stale rather than
+    park the whole turn behind a minutes-long derivation (the chat-freeze
+    class of bug), and the refusal says the panel's Apply — which settles
+    the sweep — is the way through.
+
+    Returns the staged batch: merged per-finding ``outcomes``, the
+    disposition ``skipped_events``, the ``applied_ids`` the caller may mark
+    applied at commit, the canonical ``combined_ops`` to run through the
+    session's transactional apply, and ``result_ref`` — the exact result
+    object the outcomes describe, re-checked by identity at commit.
+    """
+    finding_ids = _chat_finding_ids(raw_input)
+    result = getattr(session.qc, "result", None)
+    if result is None:
+        raise QCChatApplyError(
+            "No Final QC result is retained for this session — run Final QC "
+            "from the panel first."
+        )
+    if session.qc.status == "running" or session.qc.is_settling:
+        raise QCChatApplyError(
+            "A Final QC run is active or settling — fixes cannot be applied "
+            "until it finishes."
+        )
+    if not result_is_audit_complete(result):
+        raise QCChatApplyError(
+            "The retained Final QC result does not meet the current "
+            "audit-completeness contract, so its fixes are not actionable. "
+            "Re-run Final QC from the panel."
+        )
+    if not matches_current_inputs(session, result, block=False):
+        raise QCChatApplyError(
+            "The Final QC review no longer matches the document and inputs "
+            "as they stand — either the document changed after the review "
+            "(including an edit earlier in THIS turn: apply_qc_fixes must "
+            "be the turn's first action), another review input moved, or "
+            "the imported-source permission check has not settled yet. "
+            "Nothing was applied. Re-run Final QC to re-verify the "
+            "findings, or use the Final QC panel's Apply, which waits out "
+            "the permission check."
+        )
+    outcomes, skipped_events, eligible = select_apply_candidates(
+        result, finding_ids
+    )
+    working = SpecSection.from_dict(session.doc.doc.to_dict())
+    batch = plan_qc_operation_batch(working, eligible)
+    if batch.conflicts:
+        conflicting_ids = sorted(
+            {
+                finding_id
+                for conflict in batch.conflicts
+                for finding_id in conflict["finding_ids"]
+            }
+        )
+        write_keys = sorted(
+            {
+                write_key
+                for conflict in batch.conflicts
+                for write_key in conflict["write_keys"]
+            }
+        )
+        raise QCChatApplyError(
+            "The selected Final QC fixes contain conflicting operations; "
+            "nothing was applied. Conflicting finding ids: "
+            + ", ".join(conflicting_ids)
+            + " (write keys: "
+            + ", ".join(write_keys)
+            + "). Retry with a non-conflicting subset, or leave the "
+            "conflict to the user in the Final QC panel."
+        )
+    combined_ops, applied_ids, stale_errors, _counts, _validated = (
+        dry_run_apply_findings(working, eligible)
+    )
+    for finding_id in applied_ids:
+        outcomes[finding_id] = "applied"
+    for finding_id in stale_errors:
+        outcomes[finding_id] = "stale"
+        skipped_events.append(
+            (
+                finding_id,
+                "apply_stale",
+                "The proposed operations no longer applied cleanly in "
+                "the selected batch; nothing from this finding was "
+                "applied.",
+            )
+        )
+    return {
+        "outcomes": outcomes,
+        "skipped_events": skipped_events,
+        "applied_ids": applied_ids,
+        "combined_ops": combined_ops,
+        "result_ref": result,
+    }
 
 
 def dry_run_apply_findings(

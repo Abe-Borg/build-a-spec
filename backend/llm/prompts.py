@@ -68,7 +68,7 @@ You can stage up to five one-tap reply chips with the suggest_prompts tool — s
 - Write every chip in the USER'S voice as a complete, sendable reply: "Use your recommended default", "Draft PART 2 now", "Yes, ESFR at the ceiling only". Never a fill-in-the-blank template, never a question, never spec text.
 - Answers first: when you asked questions this turn, lead with direct answers to them — your recommended answer, a plausible alternative or two, and an "I don't know — use your default" option. Add momentum moves (continue drafting, move to the next topic) only in the remaining slots.
 - Offer a concrete value ("The ceiling height is 32 ft") only when that value is already established by the user, the profile, or grounded research — never invent a number for the user to rubber-stamp.
-- Suggest only things sayable in chat that you can act on next turn. Research runs, Final QC, export, undo, and saving are panel buttons — never chips. Don't re-suggest anything already done or answered.
+- Suggest only things sayable in chat that you can act on next turn. STARTING research runs or Final QC, exporting, undo, and saving are panel buttons — never chips. Approving or declining proposed changes after a research or Final QC debrief IS chat-actionable ("Yes — apply the proposed changes"), and those approval chips are exactly right. Don't re-suggest anything already done or answered.
 - Keep chips glanceable: aim under ~60 characters (120 is the hard cap), no numbering or "Option A:" prefixes.
 - Wind down honestly. As the section nears issue-ready — open items resolved, statuses reviewed, lint clean — drop to one or two genuinely useful chips, or none. A full bar on a finished section is noise, not help.
 - After a full-section draft pass, the chips ARE the clickable answers to the 2-3 follow-up questions you close with."""
@@ -149,6 +149,20 @@ _RESEARCH_POLICY = """\
 - When a profile item motivates a provision you draft, pass its item id as source_item_id on the edit so the panel can show the citation.
 - When a grounded item establishes the jurisdiction's adopted edition of a pinned standard, record it with set_standard_edition, citing the item id and adoption in the basis (e.g. "research r-1a2b3c4d5e6f: 2021 VCC, Loudoun County VA") — then draft to it.
 - Research supplements, never replaces, what the user tells you directly: on any conflict, ask."""
+
+_QC_FINDINGS_POLICY = """\
+# Final QC findings
+
+When a Final QC review has run, your context carries a FINAL QC REVIEW block: the retained result's open findings (with their ids), open disputed candidates, and whether the review is still CURRENT against the document. Treat it as the review's record, not your own judgement — you may agree or disagree in chat, but never restate a finding as your own discovery.
+
+- NEVER apply QC fixes unprompted. Applying requires the user's explicit approval IN THIS CONVERSATION ("yes, apply them", an approval chip, a named subset). An earlier general instruction, or your own confidence, is not approval.
+- When the user approves, apply the verified safe fixes with ONE apply_qc_fixes call carrying every approved finding id, and make it the FIRST action of that turn — any document edit earlier in the turn makes the review stale and the tool will refuse. Other edits the user asked for come after it.
+- apply_qc_fixes executes each finding's exact panel-verified operations and records the audit disposition — never re-type a safe fix through apply_spec_edits; that would leave the finding open in the audit trail.
+- Never edit a provision you just fixed later in the SAME turn: the applied record is verified against the committed document, so a later same-turn change to a fixed provision voids that finding's disposition (it stays open). If the user also wants wording changes to a fixed provision, apply the fixes this turn and make their edit the next turn.
+- Findings marked advisory have no panel-approved operations. Summarize what they need; draft a remedy through ordinary apply_spec_edits only when the user asks, and say plainly that the finding itself stays open until Final QC is re-run or the user dismisses it in the panel.
+- Disputed, refuted, and inconclusive candidates are NEVER applyable. A disputed candidate needs the user's own adjudication in the Final QC panel; present both sides when asked, recommend if you have a view, and leave the disposition to them.
+- Dismissing a finding happens in the Final QC panel with a written reason — offer that path when the user wants to set one aside; you cannot dismiss for them.
+- When the block says the review is STALE, describe findings as the last review's record, propose nothing for automatic application, and note that re-running Final QC is how they get re-verified."""
 
 _SPEC_CONVENTIONS_ENGINE = """\
 # Spec conventions
@@ -416,6 +430,217 @@ def draft_prerequisites_directive(prereqs: DraftPrerequisites) -> str:
     return "\n".join(lines)
 
 
+# --- Completion debriefs (research + Final QC) -----------------------------
+#
+# The canned user messages the frontend sends through the normal chat path
+# the moment a research round or a Final QC run completes — the full-draft
+# pattern: server-owned so the obligations stay versioned with the engine,
+# visible in the transcript as an honest user turn, riding the one SSE
+# stream/tool loop/commit path. They stay SHORT on purpose: the heavy
+# content (the requirements profile, the FINAL QC REVIEW block) already
+# rides every turn's PROJECT CONTEXT, so a debrief carries only the
+# obligations plus the few server-derived facts the model must not have to
+# re-derive (round telemetry, coverage, finding counts by class).
+
+
+@dataclass(frozen=True)
+class ResearchDebriefFacts:
+    """Server-derived facts for one just-completed research round."""
+
+    round_index: int
+    new_items: int
+    repeat_items: int
+    cumulative_items: int
+    grounded_items: int
+    areas_run: tuple[str, ...] = ()
+    areas_failed: tuple[str, ...] = ()
+    #: Declared dimensions that have never completed in ANY round — their
+    #: findings are absent, not verified-empty. Required ones arrive
+    #: pre-labeled ("… (required)") by the endpoint.
+    coverage_gaps: tuple[str, ...] = ()
+
+
+RESEARCH_DEBRIEF_DIRECTIVE = """\
+- Using the PROJECT REQUIREMENTS PROFILE in your context, tell me how the latest findings affect the CURRENT draft: what they confirm, what they contradict, and what they show is missing.
+- Propose the concrete changes you would make — additions, edits, and deletions — each tied to the element it touches (or where a new provision would go) and the research item behind it. PROPOSE ONLY; do not apply anything in this turn.
+- Where a grounded item establishes a jurisdiction-adopted edition, include recording it (set_standard_edition, item id in the basis) among the proposals.
+- If any research area never completed, say plainly that its findings are absent, not verified-empty.
+- Close by asking whether I want you to proceed with the proposed changes, and stage suggested replies — "Yes — apply the proposed changes", "Not yet — walk me through them one by one", plus a narrower option when one fits."""
+
+
+def _research_facts_lines(facts: ResearchDebriefFacts) -> list[str]:
+    lines = [
+        f"This round recorded {facts.new_items} new item(s) and "
+        f"re-confirmed {facts.repeat_items}; the cumulative profile now "
+        f"holds {facts.cumulative_items} item(s), "
+        f"{facts.grounded_items} grounded.",
+    ]
+    if facts.areas_run:
+        lines.append("Areas run this round: " + ", ".join(facts.areas_run) + ".")
+    if facts.areas_failed:
+        lines.append(
+            "Areas that FAILED this round: "
+            + ", ".join(facts.areas_failed)
+            + "."
+        )
+    if facts.coverage_gaps:
+        lines.append(
+            "Areas never completed in any round (findings ABSENT, not "
+            "verified-empty): " + ", ".join(facts.coverage_gaps) + "."
+        )
+    return lines
+
+
+def research_debrief_directive(facts: ResearchDebriefFacts) -> str:
+    """The user message a completed research round auto-sends through chat.
+
+    Every completed round gets one (owner decision) — a round that added
+    nothing buys the short confirm-nothing-changes variant rather than a
+    full proposal pass, because a re-confirmation is still an answer worth
+    one honest paragraph and a wrong full brief would invent work.
+    """
+    header = (
+        f"Requirements research round {facts.round_index} just completed — "
+        "brief me on it now."
+    )
+    facts_lines = _research_facts_lines(facts)
+    if facts.new_items == 0:
+        # ANY zero-new round takes the short variant — including one whose
+        # dimensions all returned empty item lists (new == repeats == 0),
+        # where the full directive's "propose the concrete changes" would
+        # ask the model to invent work from a round that found nothing
+        # (caught in review on PR #135). The strengthening ask only makes
+        # sense when something WAS re-confirmed.
+        strengthened = (
+            " Note anything this round strengthened (an [UNVERIFIED] item "
+            "now grounded counts — say so)."
+            if facts.repeat_items > 0
+            else ""
+        )
+        return "\n".join(
+            [
+                header,
+                "",
+                *facts_lines,
+                "",
+                "Nothing new was found. In a few sentences, confirm that "
+                "nothing about the current draft changes."
+                + strengthened
+                + " Do not re-enumerate the profile and do "
+                "not propose edits unless something genuinely changed; if "
+                "something did, give me the full brief instead: how it "
+                "affects the draft, the concrete changes you would make "
+                "(propose only — apply nothing this turn), and whether I "
+                "want to proceed. Close by asking what to work on next.",
+            ]
+        )
+    return "\n".join([header, "", *facts_lines, "", RESEARCH_DEBRIEF_DIRECTIVE])
+
+
+@dataclass(frozen=True)
+class QcDebriefFacts:
+    """Server-derived facts for the Final QC run being debriefed."""
+
+    execution_status: str  # complete | partial | failed | cancelled
+    open_criticals: int
+    open_findings: int
+    open_disputed: int
+    safe_fixes: int
+    advisory: int
+    applied: int
+    dismissed: int
+    refuted: int
+    inconclusive: int
+    failed_lenses: tuple[str, ...] = ()
+    stale: bool = False
+    #: True when no fresh attempt exists and the brief describes the
+    #: RETAINED review (e.g. the user asked after loading a project).
+    describes_retained_review: bool = False
+
+
+QC_DEBRIEF_DIRECTIVE = """\
+- Using the FINAL QC REVIEW block in your context, tell me how the findings bear on the current draft: group the open findings by severity, and for each say in one line what is wrong and what its remedy would change — additions, edits, deletions, in plain language, never operation JSON.
+- Separate the three classes plainly: verified safe fixes (panel-approved operations I can approve for automatic application via apply_qc_fixes), advisory findings (real issues whose remedy needs ordinary drafting), and disputed candidates (the panel disagreed — I adjudicate those in the Final QC panel; present, don't decide).
+- PROPOSE ONLY; do not apply anything in this turn.
+- Close by asking whether I want to proceed with the verified safe fixes, and stage suggested replies — "Yes — apply the verified safe fixes", "Not yet — walk me through them one by one", plus a narrower option when one fits."""
+
+
+def _qc_facts_lines(facts: QcDebriefFacts) -> list[str]:
+    lines = [
+        f"Open findings: {facts.open_findings} "
+        f"({facts.open_criticals} critical) — {facts.safe_fixes} with a "
+        f"verified safe fix, {facts.advisory} advisory. Open disputed "
+        f"candidates: {facts.open_disputed}. Also recorded: "
+        f"{facts.applied} applied, {facts.dismissed} dismissed, "
+        f"{facts.refuted} refuted, {facts.inconclusive} inconclusive.",
+    ]
+    if facts.describes_retained_review:
+        lines.append(
+            "You are briefing on the RETAINED review from an earlier run — "
+            "no fresh attempt just finished; say so in one line."
+        )
+    if facts.stale:
+        lines.append(
+            "The review is STALE against the current document: describe the "
+            "findings as the last review's record, and say fixes cannot be "
+            "applied until Final QC is re-run."
+        )
+    return lines
+
+
+def qc_debrief_directive(facts: QcDebriefFacts) -> str:
+    """The user message a finished Final QC run auto-sends through chat.
+
+    A run that completed PARTIALLY (failed lenses or verifier seats) gets
+    the constrained variant: the retained context block may describe an
+    older complete review, nothing from a partial run is applyable, and a
+    debrief that pretended otherwise would be the confident half-truth the
+    reporting contract exists to prevent.
+    """
+    if facts.execution_status != "complete":
+        lines = [
+            f"Final QC just finished, but the run is {facts.execution_status.upper()}"
+            " — brief me on that state now.",
+            "",
+        ]
+        if facts.failed_lenses:
+            lines.append(
+                "These review areas did not complete: "
+                + ", ".join(facts.failed_lenses)
+                + "."
+            )
+        lines += [
+            "Nothing from an incomplete run is applyable — a complete "
+            "re-run is required before any fix can be applied, and its "
+            "coverage cannot be called complete. The partial record is in "
+            "the Final QC panel.",
+            "In a short reply: say what this means for the draft's "
+            "readiness, note anything from your FINAL QC REVIEW context "
+            "block that still stands (it describes the retained complete "
+            "review, when one exists), and ask whether I want to re-run "
+            "Final QC or keep drafting first. Apply nothing this turn.",
+        ]
+        return "\n".join(lines)
+    header = "Final QC just finished — brief me on the review now."
+    if facts.open_findings == 0 and facts.open_disputed == 0:
+        return "\n".join(
+            [
+                header,
+                "",
+                *_qc_facts_lines(facts),
+                "",
+                "The review is clean — no open findings and no open "
+                "disputes. Say so in a few sentences (note anything "
+                "already applied or dismissed this run), and tell me what "
+                "that means for issue readiness. Apply nothing this turn; "
+                "close by asking what I want to do next.",
+            ]
+        )
+    return "\n".join(
+        [header, "", *_qc_facts_lines(facts), "", QC_DEBRIEF_DIRECTIVE]
+    )
+
+
 # Legacy session-discipline and session-primer bounds. New sessions learn
 # discipline through versioned project identity; older project files still
 # load their top-level discipline through these sanitizers.
@@ -528,6 +753,7 @@ def render_system_prompt(module: SpecModule) -> str:
             _REFERENCE_DOC_POLICY,
             _LINT_POLICY,
             _RESEARCH_POLICY,
+            _QC_FINDINGS_POLICY,
             _GAP_AND_ADAPT,
             _FULL_DRAFT_POLICY,
             _render_catalog(module),

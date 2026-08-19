@@ -89,6 +89,64 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.11.0",
+        date="2026-08-19",
+        headline="The chat reads the research and the review — and briefs you",
+        summary=(
+            "Research and Final QC used to finish into a panel and wait for "
+            "you to notice. Now the chat is briefed the moment either "
+            "completes: it tells you how the findings affect your draft, "
+            "lays out the changes it would make, and asks whether to "
+            "proceed — and Final QC's findings are finally part of the "
+            "conversation at all."
+        ),
+        sections=(
+            ReleaseSection(
+                title="The chat and your reviews",
+                items=(
+                    ReleaseItem(
+                        title="The chat can finally discuss Final QC findings",
+                        body=(
+                            "Ask “what did the review find?” and the "
+                            "chat now knows: every open finding, its "
+                            "severity, whether its fix is verified, and "
+                            "whether the review still matches the document. "
+                            "Before, the review lived only in the panel and "
+                            "the chat had never heard of it."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A brief the moment research or Final QC finishes",
+                        body=(
+                            "When a run completes, the chat sends itself one "
+                            "ordinary turn: how the findings bear on your "
+                            "current draft, the additions, edits and "
+                            "deletions it would make, and a question — "
+                            "do you want to proceed? Reply chips carry the "
+                            "yes and the not-yet. It proposes; it never "
+                            "applies anything until you say so. Switch it "
+                            "off with BUILD_A_SPEC_AUTO_DEBRIEF=0 if you "
+                            "prefer completions to land silently."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Approve QC fixes in chat, keep the audit trail",
+                        body=(
+                            "Say “yes, apply the verified safe fixes” "
+                            "and the exact panel-verified operations are "
+                            "applied — the same validated machinery as "
+                            "the panel's Apply button, one undo step, and "
+                            "the audit report records each finding as "
+                            "applied. The chat never rewrites a fix in its "
+                            "own words, and disputed findings stay yours to "
+                            "adjudicate in the panel."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.10.0",
         date="2026-08-19",
         headline="The Final QC report gets to the point",

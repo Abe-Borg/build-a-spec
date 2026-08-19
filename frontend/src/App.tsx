@@ -41,6 +41,8 @@ import {
   draftFull,
   detachSource,
   editDoc,
+  fetchQcDebrief,
+  fetchResearchDebrief,
   getDoc,
   getDocCapabilities,
   getDocDiff,
@@ -70,6 +72,13 @@ import {
   undoDoc,
 } from "./lib/api";
 import { createLatestAnswer } from "./lib/latestAnswer";
+import {
+  emptyDebriefQueue,
+  rememberDebrief,
+  requeueDebrief,
+  takeNextDebrief,
+} from "./lib/debriefQueue";
+import type { DebriefKind, DebriefQueueState } from "./lib/debriefQueue";
 import Header from "./components/Header";
 import ApiKeyBanner from "./components/ApiKeyBanner";
 import Chat from "./components/Chat";
@@ -320,10 +329,24 @@ export default function App() {
    *  Declared after `replaceResearchSnapshot` deliberately — a `useCallback`
    *  dependency array is evaluated at render time, in declaration order, so
    *  naming a later `const` here is a first-render TDZ crash. */
+  /** Completion-debrief queue (research/QC → one auto-sent chat turn).
+   *  A ref, not state: the follower loops and the flush effect read and
+   *  swap it between renders; `debriefNonce` is the render-visible tick
+   *  that re-runs the flush effect when the queue gains an entry or an
+   *  attempt settles. */
+  const debriefQueueRef = useRef<DebriefQueueState>(emptyDebriefQueue());
+  const debriefInFlightRef = useRef(false);
+  const [debriefNonce, setDebriefNonce] = useState(0);
+
   const advanceWorkspaceEpoch = useCallback(() => {
     workspaceEpochRef.current += 1;
     researchStreamRef.current?.abort();
     replaceResearchSnapshot(null);
+    // A debrief describes the outgoing workspace; none may survive into the
+    // next one — and the fired ledger resets with it, so a loaded project's
+    // own round numbers can never collide with tokens the previous session
+    // already spent.
+    debriefQueueRef.current = emptyDebriefQueue();
   }, [replaceResearchSnapshot]);
 
   const adoptWorkspaceLease = useCallback(
@@ -667,6 +690,25 @@ export default function App() {
   /** Follow the QC run's SSE stream. Chatty worker frames merge locally;
    * authoritative snapshots are fetched only at milestones/end. If transport
    * closes before an active run settles, reconnect to the replayable log. */
+  /** Remember a LIVE run completion for the auto-debrief. Only the follower
+   *  loops call this — a project-load restore never enters them, so a
+   *  restored result can never auto-spend a turn. Replays (an SSE reconnect
+   *  replays the terminal frame) dedupe inside the queue by token. */
+  const rememberCompletionDebrief = useCallback(
+    (kind: DebriefKind, token: string) => {
+      const next = rememberDebrief(debriefQueueRef.current, {
+        kind,
+        token,
+        epoch: workspaceEpochRef.current,
+      });
+      if (next !== debriefQueueRef.current) {
+        debriefQueueRef.current = next;
+        setDebriefNonce((n) => n + 1);
+      }
+    },
+    [],
+  );
+
   const followQc = useCallback(async () => {
     if (qcFollowRef.current) return;
     qcFollowRef.current = true;
@@ -693,6 +735,12 @@ export default function App() {
             if (QC_MILESTONE_TYPES.has(event.type)) {
               refreshQc();
               refreshUsage();
+            }
+            // A live run finishing (complete OR partial — the runner emits
+            // qc_complete for both) queues the auto-debrief chat turn.
+            // qc_failed and a stop never do.
+            if (event.type === "qc_complete") {
+              rememberCompletionDebrief("qc", event.run_id ?? "latest");
             }
           }
         } catch {
@@ -735,6 +783,7 @@ export default function App() {
     refreshQc,
     refreshReadiness,
     refreshUsage,
+    rememberCompletionDebrief,
     replaceQcSnapshot,
   ]);
 
@@ -1107,6 +1156,14 @@ export default function App() {
               mergeResearchEvent(researchSnapshotRef.current, evt),
             );
             if (RESEARCH_MILESTONE_TYPES.has(evt.type)) refreshResearch();
+            // Only a live round SUCCEEDING queues the auto-debrief —
+            // research_failed (which includes a stop) never does.
+            if (evt.type === "research_complete") {
+              rememberCompletionDebrief(
+                "research",
+                `round-${evt.round ?? 0}`,
+              );
+            }
           }
         } catch {
           // The status probe below decides whether this transport close
@@ -1151,6 +1208,7 @@ export default function App() {
     acceptResearchSnapshot,
     refreshResearch,
     refreshUsage,
+    rememberCompletionDebrief,
     replaceResearchSnapshot,
   ]);
 
@@ -1315,6 +1373,11 @@ export default function App() {
           // Live-staged reply chips; the commit-authoritative value re-syncs
           // via refreshDoc on turn_complete (same list) or error (pre-turn).
           setSuggestions(evt.prompts);
+        } else if (evt.type === "qc_dispositions") {
+          // apply_qc_fixes committed dispositions with this turn — pull the
+          // fresh finding statuses into the drawer/report immediately.
+          refreshQc();
+          refreshReadiness();
         } else if (evt.type === "doc_patch") {
           setDoc(evt.doc);
           const changed = evt.ops
@@ -2094,6 +2157,68 @@ export default function App() {
     health,
   });
   onboardingRef.current = onboarding;
+
+  /** Flush the completion-debrief queue: the auto-sent chat turn that briefs
+   *  the user the moment research / Final QC finishes. Gates live in the
+   *  pure queue helper (lib/debriefQueue.ts); this effect only samples them
+   *  at fire time and drives the ordinary send() — the debrief is a normal,
+   *  visible user turn on the one chat path. Every skip is silent: a
+   *  refused or failed debrief fetch must never surface as an error over a
+   *  run that just completed fine. Re-runs on busy's falling edge, so a
+   *  debrief held behind a streaming turn (or behind the debrief turn
+   *  itself) fires as soon as the composer unlocks. */
+  useEffect(() => {
+    if (debriefInFlightRef.current) return;
+    if (!health) return; // unknown health HOLDS (never drops) the queue
+    const { state, next } = takeNextDebrief(debriefQueueRef.current, {
+      epoch: workspaceEpochRef.current,
+      busy,
+      manualEditBusy,
+      fileLoading: fileLoading !== null,
+      tourActive: onboarding.phase.kind !== "idle",
+      protectedWorkspace: inProtectedWorkspace,
+      autoDebrief: health.auto_debrief !== false,
+    });
+    if (state !== debriefQueueRef.current) debriefQueueRef.current = state;
+    if (!next) return;
+    // The render-time gates can lag the synchronous guards send() lives by
+    // (state commits a render behind the refs). A popped entry that send()
+    // would decline must be REQUEUED, never eaten — the blocking state's own
+    // falling edge is a dependency, so it retries without spinning.
+    const guardsBusy = () =>
+      busyRef.current || manualEditBusyRef.current || fileLoadingRef.current;
+    if (guardsBusy()) {
+      debriefQueueRef.current = requeueDebrief(debriefQueueRef.current, next);
+      return;
+    }
+    debriefInFlightRef.current = true;
+    void (async () => {
+      try {
+        const message =
+          next.kind === "research"
+            ? await fetchResearchDebrief()
+            : await fetchQcDebrief();
+        if (workspaceEpochRef.current !== next.epoch) return;
+        if (guardsBusy()) {
+          // A guard engaged while the directive was being fetched.
+          debriefQueueRef.current = requeueDebrief(
+            debriefQueueRef.current,
+            next,
+          );
+          return;
+        }
+        await send(message);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.debug("completion debrief skipped:", err);
+      } finally {
+        debriefInFlightRef.current = false;
+        setDebriefNonce((n) => n + 1);
+      }
+    })();
+    // send() is deliberately not a dependency: it is redefined every render
+    // and the effect only needs whichever instance is current when it fires.
+  }, [busy, manualEditBusy, fileLoading, debriefNonce, health, inProtectedWorkspace, onboarding.phase.kind]);
   const activeDiscipline = projectDiscipline(doc, health?.legacy_discipline);
   const projectHeading = formatProjectHeading(doc, health?.legacy_discipline);
 

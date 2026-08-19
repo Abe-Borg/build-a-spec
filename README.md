@@ -892,6 +892,7 @@ main.py                  pywebview shell: starts the backend, opens the native w
 backend/                 FastAPI + the conversation engine (Python 3.11+)
   app.py                 /api/health, /api/key, /api/session/reset, /api/chat (SSE),
                          /api/draft/full,
+                         /api/research/debrief + /api/qc/debrief,
                          /api/doc (+ undo/redo/edit/diff/capabilities),
                          /api/export/docx (+ ?redline=master|version),
                          /api/import/master + /api/import/original,

@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Build-a-Spec"
-VERSION = "1.10.0"
+VERSION = "1.11.0"
 
 # --- Models -----------------------------------------------------------------
 
@@ -118,6 +118,13 @@ THINKING_DISPLAY = _display_env("BUILD_A_SPEC_THINKING_DISPLAY", "summarized")
 # guards, not a session budget.
 CHAT_MAX_SEARCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_SEARCHES", 8)
 CHAT_MAX_FETCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_FETCHES", 4)
+
+# Whether a completed research round / Final QC run auto-sends one debrief
+# chat turn (the model briefs the user on the findings and asks whether to
+# proceed). A real, billed model turn fires without a direct click, so the
+# switch exists for operators who want completions to land silently in the
+# panels instead; the debrief endpoints themselves stay callable either way.
+AUTO_DEBRIEF = _bool_env("BUILD_A_SPEC_AUTO_DEBRIEF", True)
 
 # --- Research (Phase 4) -----------------------------------------------------
 

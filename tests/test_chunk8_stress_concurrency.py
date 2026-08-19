@@ -557,7 +557,10 @@ def test_qc_apply_rejects_same_index_replacement_branch_aba(monkeypatch):
         assert release_validation.wait(timeout=5)
         return apply_spec_edits(section, edits)
 
-    monkeypatch.setattr("backend.app.apply_edits", blocking_validation)
+    # The dry-run (and the apply_edits it calls) moved to backend/qc/apply.py
+    # with the shared QC apply machinery (v1.10.0) — the blocking seam moves
+    # with the implementation it intercepts.
+    monkeypatch.setattr("backend.qc.apply.apply_edits", blocking_validation)
     with ThreadPoolExecutor(max_workers=2) as pool:
         apply_future = pool.submit(
             client.post,

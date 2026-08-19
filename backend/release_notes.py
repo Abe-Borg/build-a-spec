@@ -91,22 +91,92 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
         version="1.12.0",
         date="2026-08-19",
-        headline="Final QC costs about half as much",
+        headline="Importing a spec finally works the way you meant it",
         summary=(
             "This is the first release since 1.9.1, so it also brings the "
             "two builds in between: a Final QC report that leads with what "
             "you need to act on, and a chat that reads your research and "
             "review results and tells you what they mean for the section. "
-            "The headline change here is cost. The pre-issue review is the "
-            "most expensive thing the app does, and most of that went on "
-            "the stage that checks findings rather than the stage that "
-            "finds them. Two changes cut a typical pass by roughly half. "
-            "Nothing about the review itself was traded away: the same "
-            "five specialists, the same panel of reviewers arguing against "
-            "every finding, the same evidence rules and the same readiness "
-            "gate."
+            "The two headline changes here: importing an office master is "
+            "no longer a fight — the import asks whether you want a fully "
+            "editable starting point (now the default) or a byte-exact "
+            "preserved original, real Word auto-numbered masters come in "
+            "with their parts and articles recognized, and the assistant "
+            "finally knows the rules of an imported document instead of "
+            "telling you it is read-only. And Final QC costs about half "
+            "as much, with nothing about the review traded away."
         ),
         sections=(
+            ReleaseSection(
+                title="Importing an existing spec",
+                items=(
+                    ReleaseItem(
+                        title="The import asks what you mean by it",
+                        body=(
+                            "Use as a starting point — the recommended "
+                            "default — makes the imported content fully "
+                            "editable for you and the assistant, "
+                            "immediately. Preserve original formatting "
+                            "keeps the old contract: the exported file "
+                            "stays a byte-exact copy of your upload, with "
+                            "editing limited to what that promise allows. "
+                            "Either way your exact original stays "
+                            "downloadable and the redline against it keeps "
+                            "working."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Word's own numbering is finally read as structure",
+                        body=(
+                            "A master whose PART and article headings are "
+                            "auto-numbered by Word used to come in as one "
+                            "blob under a placeholder article, wearing a "
+                            "'not a spec section' banner. The import now "
+                            "reads the numbering definitions themselves, so "
+                            "those masters arrive with their real parts and "
+                            "articles."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Edit freely is offered wherever it applies",
+                        body=(
+                            "The way out of read-only used to appear only "
+                            "for a locked package. It now shows on every "
+                            "preserved import — while permissions are still "
+                            "being checked, when the package is frozen, and "
+                            "on the ordinary master where most edits are "
+                            "denied — and the assistant knows to suggest it "
+                            "instead of presenting a dead end."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="One click adapts the whole starter",
+                        body=(
+                            "Adapt imported draft walks every imported "
+                            "block against this project — keep, adapt, or "
+                            "delete, article by article, with honest "
+                            "statuses — the way Draft full section lays "
+                            "down an empty one. The review queue also gains "
+                            "a press-and-hold that confirms a whole PART at "
+                            "once."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Nothing is dropped silently any more",
+                        body=(
+                            "Content after END OF SECTION — a second "
+                            "section in a combined file, most often — is "
+                            "named and counted in the import notes instead "
+                            "of vanishing. Import warnings now point at the "
+                            "block they mean (its ref and id), not a line "
+                            "number you cannot find. And the permission "
+                            "check on a preserved import is much faster, "
+                            "shows how far along it is, and skips entirely "
+                            "for locked packages."
+                        ),
+                    ),
+                ),
+            ),
             ReleaseSection(
                 title="What Final QC costs",
                 items=(

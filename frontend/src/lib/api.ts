@@ -185,6 +185,22 @@ export async function getDocCapabilities(): Promise<SourceCapabilitiesState | nu
   return (await resp.json()).source_capabilities ?? null;
 }
 
+/** The slim polling projection of {@link getDocCapabilities}: status +
+ * causes + sweep progress, no per-element map. The poll only ever reads
+ * the status, and the full map is multi-MB on a large master — per tick,
+ * for a sweep that can run minutes. */
+export type SourceCapabilitiesStatus = {
+  status: string;
+  causes: { blocker: string; message: string; remedy: string }[];
+  progress?: { done: number; total: number };
+};
+
+export async function getDocCapabilitiesStatus(): Promise<SourceCapabilitiesStatus | null> {
+  const resp = await fetch("/api/doc/capabilities?status_only=1");
+  if (!resp.ok) throw new Error(`capabilities ${resp.status}`);
+  return (await resp.json()).source_capabilities ?? null;
+}
+
 /* --- Chat-authored figures (diagrams / schematics / tables) --- */
 
 /** Snapshot of the session's figures (also carried on every DocPayload). */
@@ -434,6 +450,26 @@ export async function draftFull(): Promise<DraftFullPlan> {
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
     throw new Error(data.error ?? `draft failed (${resp.status})`);
+  }
+  return {
+    ready: data.ready !== false,
+    missing: (data.missing ?? []) as DraftPrerequisiteId[],
+    message: data.message as string,
+  };
+}
+
+/**
+ * The import counterpart of {@link draftFull}: the server-owned
+ * gap-and-adapt directive for a document seeded with imported starter
+ * content. Same contract — the returned message is sent through the
+ * ordinary chat path, and `ready: false` means it collects the missing
+ * anchor facts instead of adapting blind.
+ */
+export async function draftAdapt(): Promise<DraftFullPlan> {
+  const resp = await fetch("/api/draft/adapt", { method: "POST" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `adapt pass failed (${resp.status})`);
   }
   return {
     ready: data.ready !== false,
@@ -780,9 +816,24 @@ export async function* streamResearch(
 
 /* --- Master import + updates (Phase 5) --- */
 
-export async function importMaster(file: File): Promise<ImportResultPayload> {
+/**
+ * The import-time intent choice. "start" imports the master as a starting
+ * point: the server detaches the source in the same transaction, so the
+ * document is fully editable from the first payload (the exact original
+ * stays downloadable and redline-vs-master keeps working). "preserve" is
+ * the historical behavior: source-preserving mode, permission sweep and all.
+ */
+export type ImportIntent = "start" | "preserve";
+
+export async function importMaster(
+  file: File,
+  intent: ImportIntent,
+): Promise<ImportResultPayload> {
   const form = new FormData();
   form.append("file", file);
+  if (intent === "start") {
+    form.append("detach", "true");
+  }
   const resp = await fetch("/api/import/master", {
     method: "POST",
     body: form,

@@ -100,9 +100,17 @@ def test_any_single_marker_is_enough_to_count_as_a_spec(tmp_path):
 
 
 def test_detection_agrees_with_the_tree_that_was_built(tmp_path):
-    """A numbered paragraph never reaches the heading patterns, so text that
-    merely *looks* like a PART inside a Word list must not count as a marker —
-    otherwise the verdict would claim structure the parse did not act on."""
+    """The verdict must match the tree, in BOTH directions.
+
+    The invariant was always "spec_shape_detected claims only structure the
+    parse acted on". The numbering branch used to be categorically markerless;
+    since heading promotion it counts exactly when the numbering definition's
+    label grammar promoted the paragraph to real structure. So: text that
+    merely LOOKS like a PART inside an ordinary Word list (whose definition
+    renders no PART label) still must not count — the parse filed it as a
+    provision — while the same paragraph under a definition whose level
+    renders "PART %1" builds a real part and counts.
+    """
     document = Document()
     paragraph = document.add_paragraph("PART 2 - PRODUCTS")
     p_pr = paragraph._p.get_or_add_pPr()
@@ -119,6 +127,46 @@ def test_detection_agrees_with_the_tree_that_was_built(tmp_path):
     assert result.spec_shape_detected is False
     # It landed as a provision, not as a part — the verdict matches the tree.
     assert not any(part.articles for part in result.section.parts[1:])
+
+    # The positive direction: a definition that RENDERS a PART label builds
+    # a real part, and the verdict says so — still never disagreeing with
+    # the tree, just agreeing with a better one.
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    promoted_doc = Document()
+    root = promoted_doc.part.numbering_part.element
+    abstract = OxmlElement("w:abstractNum")
+    abstract.set(qn("w:abstractNumId"), "950")
+    lvl = OxmlElement("w:lvl")
+    lvl.set(qn("w:ilvl"), "0")
+    fmt_el = OxmlElement("w:numFmt")
+    fmt_el.set(qn("w:val"), "decimal")
+    text_el = OxmlElement("w:lvlText")
+    text_el.set(qn("w:val"), "PART %1")
+    lvl.append(fmt_el)
+    lvl.append(text_el)
+    abstract.append(lvl)
+    num = OxmlElement("w:num")
+    num.set(qn("w:numId"), "60")
+    ref = OxmlElement("w:abstractNumId")
+    ref.set(qn("w:val"), "950")
+    num.append(ref)
+    first_num = root.find(qn("w:num"))
+    first_num.addprevious(abstract)
+    root.append(num)
+    promoted_paragraph = promoted_doc.add_paragraph("GENERAL")
+    promoted_pr = promoted_paragraph._p.get_or_add_pPr()
+    promoted_num = promoted_pr.get_or_add_numPr()
+    promoted_num.get_or_add_ilvl().val = 0
+    promoted_num.get_or_add_numId().val = 60
+    promoted_doc.add_paragraph("A. Provide listed devices.")
+    promoted_path = tmp_path / "promoted.docx"
+    promoted_doc.save(str(promoted_path))
+
+    promoted = parse_master_docx(promoted_path)
+    assert promoted.spec_shape_detected is True
+    assert promoted.section.parts[0].articles, "the promoted part has content"
 
 
 # ---------------------------------------------------------------------------

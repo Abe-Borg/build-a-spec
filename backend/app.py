@@ -86,7 +86,7 @@ from typing import Any, Callable, Iterator, Literal
 from urllib.parse import quote
 
 import anthropic
-from fastapi import Body, FastAPI, Request, UploadFile
+from fastapi import Body, FastAPI, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
@@ -123,6 +123,8 @@ from .llm.prompts import (
     DraftPrerequisites,
     QcDebriefFacts,
     ResearchDebriefFacts,
+    adapt_imported_directive,
+    adapt_prerequisites_directive,
     draft_prerequisites,
     draft_prerequisites_directive,
     full_draft_directive,
@@ -3220,6 +3222,75 @@ def create_app(
             }
         )
 
+    @app.post("/api/draft/adapt")
+    def draft_adapt() -> JSONResponse:
+        """Hand the frontend the gap-and-adapt message for an imported starter.
+
+        The draft_full posture applied to the other on-ramp: a document that
+        arrived FULL of content instead of empty. The full-draft button is
+        rightly the wrong tool there (a wholesale draft over real content),
+        which left the import path with no one-click whole-document pass at
+        all. Deliberately thin — the message rides ``POST /api/chat`` as an
+        ordinary, visible user turn on the one streaming path.
+
+        Same 409s as the full draft (a streaming turn, running research),
+        plus one of its own: a document with no imported-status blocks has
+        nothing to adapt, and honoring the click anyway would buy a turn
+        whose entire instruction is inapplicable. The prerequisite gate is
+        shared with the full draft — walking hundreds of blocks against an
+        unknown project type or country is the same confident-wrong-document
+        failure, so an unready gate buys the collect-first turn instead.
+        """
+        session = sessions.get_session()
+        if session.turn_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A model turn is already streaming — wait for it "
+                    "to finish before adapting the imported document.",
+                },
+                status_code=409,
+            )
+        if session.research.status == "running":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Requirements research is running — let it finish "
+                    "so the adapt pass can use the grounded results.",
+                },
+                status_code=409,
+            )
+        imported = sum(
+            1
+            for _part, _article, p, _depth, _ref in iter_paragraphs(
+                session.doc.doc
+            )
+            if p.status == "imported"
+        )
+        if imported == 0:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "No imported-status blocks remain — there is "
+                    "nothing left to adapt. Draft or edit normally instead.",
+                },
+                status_code=409,
+            )
+        prereqs = _draft_prerequisites(session)
+        return JSONResponse(
+            {
+                "ok": True,
+                "ready": prereqs.ready,
+                "missing": list(prereqs.missing),
+                "imported_count": imported,
+                "message": (
+                    adapt_imported_directive(prereqs)
+                    if prereqs.ready
+                    else adapt_prerequisites_directive(prereqs)
+                ),
+            }
+        )
+
     @app.post("/api/research/debrief")
     def research_debrief() -> JSONResponse:
         """Hand the frontend the debrief message a completed round sends.
@@ -3385,7 +3456,7 @@ def create_app(
             return _doc_payload(session, workspace=lease)
 
     @app.get("/api/doc/capabilities")
-    def get_doc_capabilities() -> dict:
+    def get_doc_capabilities(status_only: bool = False) -> dict:
         """Just the imported-source permission report, for polling.
 
         The per-element sweep runs in the background, so the panel needs a
@@ -3395,9 +3466,27 @@ def create_app(
         poller does not need. ``status`` is ``pending`` while the sweep is
         still running; anything else is settled and the client refreshes the
         document once.
+
+        ``status_only`` drops the per-element map — the poller only ever
+        reads the status, and the full map re-serialized once per tick is
+        multi-MB on a large master for a sweep that can run minutes. The
+        slim shape also carries ``progress`` (elements settled / total)
+        while a sweep is running, so the pending strip can say how far
+        along it is.
         """
         session = sessions.get_session()
         capabilities = session.source_edit_capabilities()
+        if status_only:
+            payload: dict | None = None
+            if capabilities is not None:
+                payload = capabilities.status_dict()
+                progress = session.capability_warm_progress()
+                if progress is not None:
+                    payload["progress"] = {
+                        "done": progress[0],
+                        "total": progress[1],
+                    }
+            return {"source_capabilities": payload}
         return {
             "source_capabilities": (
                 capabilities.to_dict() if capabilities is not None else None
@@ -4163,7 +4252,18 @@ def create_app(
     # --- Master-spec import (Phase 5) ---------------------------------------
 
     @app.post("/api/import/master")
-    async def import_master(request: Request, file: UploadFile) -> JSONResponse:
+    async def import_master(
+        request: Request,
+        file: UploadFile,
+        # The import-time intent choice. ``detach=true`` means "use this
+        # master as a starting point": the same one-way door as
+        # POST /api/doc/detach-source, taken atomically inside the adopt
+        # transaction so no turn, edit, or poll ever observes an attached
+        # document it would have to fail closed against. The default is
+        # byte-compatible with every pre-intent client: attached,
+        # source-preserving, sweep warming.
+        detach: bool = Form(False),
+    ) -> JSONResponse:
         entry_lease = sessions.get_workspace()
         session = entry_lease.session
         if entry_lease.scope == "tutorial":
@@ -4289,6 +4389,14 @@ def create_app(
                 session.source_docx_map = result.source_map
                 session.source_patch_context = source_context
                 session.import_report = report
+                if detach:
+                    # "Use as a starting point": drop the preservation claim
+                    # in the same transaction that made it, AFTER
+                    # adopt_imported (which deliberately clears the flag).
+                    # Everything is kept — bytes, map, baseline — so the
+                    # exact original stays downloadable and redline vs
+                    # master keeps working; only the source gate goes away.
+                    session.detach_source()
                 # The import counts as session-changing work: invalidate any
                 # turn that was streaming against the empty document.
                 session.invalidate_model_turn()
@@ -4301,6 +4409,7 @@ def create_app(
             blocks=result.imported_block_count,
             warnings=len(report["warnings"]),
             tracked_changes=result.tracked_changes_detected,
+            detached=detach,
             warning_messages=report["warnings"],
             skipped_empty=report["skipped_empty_count"],
             source_sha256=report["sha256"],
@@ -4319,7 +4428,11 @@ def create_app(
         # longer runs inline anywhere: start it here so it is already working
         # while this response is written, and report ``pending`` capabilities
         # until it lands. The panel polls ``GET /api/doc/capabilities``.
-        session.start_capability_warm()
+        # A detached import never starts one: the scope is inactive, so the
+        # sweep would be minutes of O(n²) work producing a memo no reader
+        # can ever ask for.
+        if not detach:
+            session.start_capability_warm()
         # ``_doc_payload`` still costs one source-readiness plan on a freshly
         # imported master. Every other endpoint reaches it through a plain
         # ``def`` handler, i.e. already on a worker thread — this async

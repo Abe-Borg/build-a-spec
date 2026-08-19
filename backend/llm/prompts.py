@@ -32,13 +32,13 @@ A live specification document sits beside this chat. You never write spec langua
 2. Call apply_spec_edits (one batched call where possible) to add or revise the affected articles and paragraphs.
 3. In chat, briefly say what changed in the document, then ask the next most important follow-up questions — at most 3 per turn, each with your recommended answer. Never restate drafted spec text in chat; the panel shows it.
 
-Work through the interview playbook below, drafting early and revising as answers arrive — the user should see a document taking shape from the first turns, not after a long interrogation. Set the section header (replace target "sec") as soon as the section is chosen."""
+Work through the interview playbook below, drafting early and revising as answers arrive — the user should see a document taking shape from the first turns, not after a long interrogation. Set the section header (replace target "sec") as soon as the section is chosen. (One exception: when PROJECT CONTEXT carries an IMPORTED DOCX EDITING BOUNDARY block, the header and structure are governed by that block — follow it instead of this default playbook.)"""
 
 _TOOL_GUIDE = """\
 # Using the document tool
 
 - The newest user message carries a PROJECT CONTEXT block with the FULL current document — every element's complete text, status, provenance, and id. Read it as the authoritative state each turn and target those ids. Tool results return the ids of anything you add plus a compact outline for mid-turn orientation.
-- Build structure top-down: add_article into pt1/pt2/pt3, add_paragraph into articles (A., B., ...) and into paragraphs for nested levels (1., a., 1)). Numbering is automatic from position. Use move only to reorder an article or paragraph among its current siblings; articles stay in their current part, paragraphs stay under their current semantic parent, and move never reparents content.
+- Build structure top-down: add_article into pt1/pt2/pt3, add_paragraph into articles (A., B., ...) and into paragraphs for nested levels (1., a., 1)). Numbering is automatic from position. Use move only to reorder an article or paragraph among its current siblings; articles stay in their current part, paragraphs stay under their current semantic parent, and move never reparents content. (When an IMPORTED DOCX EDITING BOUNDARY block is present, structural ops are limited to what it lists — do not open with add_article there.)
 - Revise with replace and delete rather than re-adding. Batch related edits into one call.
 - If a call is rejected, nothing was applied — read the error and the returned outline, fix the batch, and try again."""
 
@@ -111,7 +111,9 @@ _GAP_AND_ADAPT = """\
 When the document contains imported blocks, the user started from external starter content. PROJECT CONTEXT says when that starter was a reusable template; otherwise a retained imported-source boundary identifies an office master. Pivot from drafting-from-zero to walking the starter against THIS project:
 
 - Work article by article in document order. For each: keep-as-is (replace status to confirmed once the user confirms, or assumed when you judge it fits this project's profile and defaults), adapt (replace text + status), or delete what doesn't apply. Batch the edits per article.
-- Starter edition citations are data, not truth: check them against the standards editions in effect, and fix stale ones (the lint flags them).
+- When an IMPORTED DOCX EDITING BOUNDARY block is present, its categorical limits govern: batch only IDs it lists as editable, and when unsure send ONE operation per call — edit batches are all-or-nothing, so a single denied op discards every good edit beside it. On a refusal, read the bracketed blocker, drop that one op, and resubmit the rest; status/provenance changes always work.
+- Never present the boundary as a dead end. When the user's intent needs edits it forbids — restructuring, retitling headings, rewriting locked provisions — say plainly that the panel's "Edit freely" action removes the limits (their original stays downloadable and the redline against it keeps working), and continue with what IS allowed meanwhile.
+- Starter edition citations are data, not truth: check them against the standards editions in effect, and fix stale ones (the lint flags them). If the boundary refuses such a fix, say so in one line and record the correct edition via set_standard_edition instead of retrying the blocked text edit.
 - Starters can carry generic placeholders or another project's remnants — wrong-jurisdiction references and inapplicable scope. Hunt them; the lint helps.
 - Still run the interview: the playbook topics apply, but ask them against what the starter already says ("the starter specifies Schedule 10 roll-grooved for 2-1/2 in. and larger — keep that here?").
 - The export schedules every block still stamped imported, so a block you never visited stays visible to the reviewer. Do not mass-upgrade statuses without actually reviewing content."""
@@ -382,7 +384,14 @@ def full_draft_directive(prereqs: DraftPrerequisites) -> str:
     )
 
 
-def draft_prerequisites_directive(prereqs: DraftPrerequisites) -> str:
+def draft_prerequisites_directive(
+    prereqs: DraftPrerequisites,
+    *,
+    intro_action: str = "draft the full section",
+    pass_noun: str = "a whole-section draft",
+    forbidden_action: str = "draft the section",
+    ready_noun: str = "the full draft",
+) -> str:
     """The user message sent when a full draft is asked for too early.
 
     The click is honored rather than refused: instead of drafting blind (or
@@ -392,13 +401,17 @@ def draft_prerequisites_directive(prereqs: DraftPrerequisites) -> str:
     question carries a recommendation and "I don't know" is a real answer —
     and it names what is ALREADY known so the model cannot burn the turn
     re-asking settled questions.
+
+    The keyword phrases exist for the adapt-imported pass, which anchors on
+    the same three facts but buys a different turn; the defaults reproduce
+    the full-draft wording byte-for-byte.
     """
     one = len(prereqs.missing) == 1
     noun = "one more thing" if one else f"{len(prereqs.missing)} things"
     pronoun = "it" if one else "them"
     lines = [
-        f"Before you draft the full section, pin down {noun} with me — a "
-        f"whole-section draft anchors on {pronoun}, and every defaulted "
+        f"Before you {intro_action}, pin down {noun} with me — "
+        f"{pass_noun} anchors on {pronoun}, and every defaulted "
         "provision inherits whatever we get wrong here.",
         "",
         *(f"- {_DRAFT_PREREQUISITE_ASKS[key]}" for key in prereqs.missing),
@@ -423,12 +436,75 @@ def draft_prerequisites_directive(prereqs: DraftPrerequisites) -> str:
         "as the default and stamp whatever it drives assumed. Stage the "
         "likely answers as suggested replies so I can pick one.",
         "",
-        "Record each answer with its operation the moment I give it. Do NOT "
-        "draft the section in this turn — once "
+        f"Record each answer with its operation the moment I give it. Do NOT "
+        f"{forbidden_action} in this turn — once "
         + ("it is" if one else "these are")
-        + " recorded, tell me the full draft is ready and I will run it.",
+        + f" recorded, tell me {ready_noun} is ready and I will run it.",
     ]
     return "\n".join(lines)
+
+
+# --- The adapt-imported pass -----------------------------------------------
+#
+# The canned user message the "Adapt imported draft" action sends through
+# the normal chat path — FULL_DRAFT_DIRECTIVE's pattern applied to the other
+# on-ramp: a document that arrived FULL of imported starter content instead
+# of empty. The full-draft button is rightly disabled there (a wholesale
+# draft over real content is the wrong tool), which left the import path
+# with no one-click whole-document pass at all — the model walked the
+# starter only as fast as the user thought to ask. Server-owned so the
+# obligations stay versioned with the engine; the complementary
+# stable-prompt policy is ``_GAP_AND_ADAPT``.
+ADAPT_IMPORTED_DIRECTIVE = """\
+Walk the ENTIRE imported starter against THIS project now — the full gap-and-adapt pass, top to bottom.
+
+- Work PART by PART in document order. For every imported-status block decide: keep it (set_status to confirmed where I've established it, assumed where it fits this project's profile and defaults — say in one line why), adapt it (replace text + status), or delete what doesn't apply to this project.
+- Check the starter's edition citations against the standards editions in effect and fix the stale ones the lint flags. Where a text fix is refused by an imported-source boundary, record the correct edition with set_standard_edition and note the blocked citation in one line instead of retrying.
+- Hunt the starter's remnants: another project's names, wrong-jurisdiction references, template placeholders, scope that does not belong here. The lint report helps.
+- Use everything already established — my answers, the project profile, the standards editions in effect, and grounded research items (tag derived provisions with source_item_id).
+- If PROJECT CONTEXT carries an IMPORTED DOCX EDITING BOUNDARY block, obey it: batch only IDs it lists as editable (one operation per call when unsure), never attempt its categorical no-gos, and where it blocks an adaptation this project needs, tell me what the panel's "Edit freely" action would unlock rather than silently skipping it.
+- Keep each apply_spec_edits call to a sensible size (roughly an article at a time) so I can watch the pass move through the document.
+- When you're done, give me a short summary in chat — roughly how much was kept, adapted, and deleted, and what still needs my answer — plus the 2-3 highest-value follow-up questions, staged as suggested replies."""
+
+
+def adapt_imported_directive(prereqs: DraftPrerequisites) -> str:
+    """The adapt-pass user message, anchored on the established facts.
+
+    Same shape as :func:`full_draft_directive`, and for the same reason:
+    the constant carries the obligations and is appended to, never
+    rewritten, and the anchor leaves an honest record in the transcript of
+    exactly what the pass was told the project is.
+    """
+    return "\n\n".join(
+        [
+            ADAPT_IMPORTED_DIRECTIVE,
+            "\n".join(
+                [
+                    "Adapt to these established facts — they are settled, "
+                    "not open questions, so do not re-ask them:",
+                    *_established_lines(prereqs),
+                ]
+            ),
+        ]
+    )
+
+
+def adapt_prerequisites_directive(prereqs: DraftPrerequisites) -> str:
+    """The collect-first turn when the adapt pass is asked for too early.
+
+    An imported master usually satisfies the section prerequisite already
+    (its header came in with the file); project type and country are the
+    ones that decide what "adapt to THIS project" even means, and walking
+    hundreds of blocks against an unknown jurisdiction is the same
+    confident-wrong-document failure the full-draft gate exists to prevent.
+    """
+    return draft_prerequisites_directive(
+        prereqs,
+        intro_action="adapt the imported document",
+        pass_noun="a whole-document adaptation",
+        forbidden_action="start the adapt pass",
+        ready_noun="the adapt pass",
+    )
 
 
 # --- Completion debriefs (research + Final QC) -----------------------------

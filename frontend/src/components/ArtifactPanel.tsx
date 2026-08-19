@@ -38,7 +38,10 @@ import {
   sourceCapabilitiesExpected,
   sourceCapabilitiesPending,
 } from "../lib/sourceCapabilities";
+import { reviewCounts } from "../lib/reviewQueue";
 import Tip from "./Tip";
+import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
+import type { ImportIntent } from "../lib/api";
 
 interface Props {
   doc: SpecDoc | null;
@@ -94,7 +97,10 @@ interface Props {
   nativeOpenFile: (
     kind: "project" | "docx" | "reference",
   ) => Promise<File | null | undefined>;
-  onImportMaster: (file: File) => void;
+  onImportMaster: (file: File, intent: ImportIntent) => void;
+  /** Permission-sweep progress while capabilities are pending (from the
+   *  status poll), or null. Display only. */
+  capabilityProgress?: { done: number; total: number } | null;
   referenceDocs: ReferenceDocMeta[];
   onAttachReference: (file: File) => void;
   onRemoveReference: (rid: string) => void;
@@ -110,6 +116,9 @@ interface Props {
   ) => Promise<void>;
   onDismissQc: (findingId: string, reason: string) => Promise<void>;
   onDraftFull: () => void;
+  /** One-click gap-and-adapt pass over an imported starter (the full-draft
+   *  slot's other tenant — see the button swap below). */
+  onDraftAdapt: () => void;
   onAskModel: (text: string) => void;
   onFetchDiff: (base: number, cur?: number) => Promise<SectionDiffPayload>;
   /** Guided-tour "ensure open" nonces (Batch 6), one per drawer. */
@@ -297,6 +306,7 @@ export default function ArtifactPanel({
   onLoadProject,
   nativeOpenFile,
   onImportMaster,
+  capabilityProgress,
   referenceDocs,
   onAttachReference,
   onRemoveReference,
@@ -309,6 +319,7 @@ export default function ArtifactPanel({
   onApplyQc,
   onDismissQc,
   onDraftFull,
+  onDraftAdapt,
   onAskModel,
   onFetchDiff,
   drawerNonces,
@@ -319,19 +330,27 @@ export default function ArtifactPanel({
   // Open / Import: prefer the native pywebview dialog (the HTML file input
   // silently yields no bytes inside the webview); fall back to the hidden
   // <input type="file"> in a plain browser (undefined = no native bridge).
-  // Import goes straight to onImportMaster — the confirmation modal was
-  // removed on master, so both paths import directly.
   const handleOpenClick = async () => {
     if (fileLoading) return;
     const file = await nativeOpenFile("project");
     if (file === undefined) fileRef.current?.click();
     else if (file) onLoadProject(file);
   };
+  // A picked master waits here while the user chooses what the import should
+  // MEAN — a fully editable starting point (the default), or a byte-exact
+  // preserved original with the editing limits that promise costs. Both
+  // picker paths land in the same modal; Cancel/✕ abandons the import.
+  const [pendingImport, setPendingImport] = useState<File | null>(null);
   const handleImportClick = async () => {
     if (fileLoading) return;
     const file = await nativeOpenFile("docx");
     if (file === undefined) importRef.current?.click();
-    else if (file) onImportMaster(file);
+    else if (file) setPendingImport(file);
+  };
+  const chooseImportIntent = (intent: ImportIntent) => {
+    const file = pendingImport;
+    setPendingImport(null);
+    if (file) onImportMaster(file, intent);
   };
   // Attaching reference material takes the same native-first path, but has no
   // blank-document precondition: it never touches the spec. Its own dialog
@@ -406,11 +425,24 @@ export default function ArtifactPanel({
   // unlike a per-paragraph one. Before this the two were indistinguishable on
   // screen: the panel simply went read-only with no reason anywhere, and for
   // tracked changes the imported text even looks clean (the importer shows the
-  // Accept-All view). Both strings are the server's own.
+  // Accept-All view). Both strings are the server's own. ``blocked`` (a
+  // missing companion artifact, or the sweep's own catch-all failure) is the
+  // same user-facing situation — every body edit denied document-wide — and
+  // used to render NOTHING at all, a silently bricked document; it takes the
+  // same banner, with the server's cause and remedy.
   const frozenCause =
-    activeSourceExpected && sourceCapabilities?.status === "pass_through_only"
-      ? sourceCapabilities.causes?.[0] ?? null
+    activeSourceExpected &&
+    (sourceCapabilities?.status === "pass_through_only" ||
+      sourceCapabilities?.status === "blocked")
+      ? (sourceCapabilities.causes?.[0] ?? null)
       : null;
+  // Source-preserving mode with a settled report: the ordinary imported
+  // master. Editing works only where the sweep allowed it (often almost
+  // nowhere on a hand-labelled master), so the mode itself — and the way out
+  // of it — must be visible, not something discovered one grey tooltip at a
+  // time. DOCX_FIDELITY.md names this exact case as what detach is for.
+  const sourcePreserveReady =
+    activeSourceExpected && sourceCapabilities?.status === "ready";
 
   // Full-draft affordance (WI1): offered while the document is empty-or-sparse
   // (fewer than 3 articles) — past that, a wholesale draft is the wrong tool.
@@ -454,6 +486,22 @@ export default function ArtifactPanel({
         : draftNeeds.length > 0
           ? `Needs ${draftNeedsPhrase} first — every provision a full draft lays down inherits ${draftNeedsPronoun}. Clicking asks you about ${draftNeedsPronoun}; then draft.`
           : "Draft the complete section in one pass — every PART and article, stamped from what's known so far. One click to undo.";
+
+  // The full-draft slot's other tenant: a document seeded with imported
+  // starter content (an office master, or a template start). A wholesale
+  // draft over real content is the wrong tool there — the whole-document
+  // pass that fits is gap-and-adapt, and until this button it had no
+  // one-click form at all: the model walked the starter only as fast as the
+  // user thought to ask.
+  const importedOutstanding = useMemo(
+    () => reviewCounts(doc).imported,
+    [doc],
+  );
+  const adaptTip = busy
+    ? "Finish the current turn first."
+    : draftNeeds.length > 0
+      ? `Needs ${draftNeedsPhrase} first — adapting ${importedOutstanding} imported block(s) to this project inherits ${draftNeedsPronoun}. Clicking asks you about ${draftNeedsPronoun}; then the pass runs.`
+      : `Walk all ${importedOutstanding} imported block(s) against this project in one pass — keep, adapt, or delete, article by article, with honest statuses. One click to undo.`;
 
   // --- Compare (diff) mode (Batch 5) ---
   const curIndex = version.index;
@@ -570,6 +618,32 @@ export default function ArtifactPanel({
   const actionButton =
     "rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
 
+  // The ONE "Edit freely" affordance, rendered on every source-attached
+  // strip — frozen/blocked, pending, and the ordinary settled master. The
+  // documented answer to "this document is read-only" has to be reachable
+  // from every state that makes it true; it used to render only for a
+  // package-wide freeze, which left the common hand-labelled master (status
+  // "ready", nearly everything denied) with no way out at all.
+  const editFreelyButton = (extraClass = "", extraTitle = "") =>
+    onDetachSource ? (
+      <button
+        type="button"
+        className={actionButton + extraClass}
+        data-capability="document.detach-source"
+        disabled={busy || detaching}
+        onClick={onDetachSource}
+        title={
+          "Edit this document freely. Export becomes a normalized Word " +
+          "file instead of a copy of your upload; your original stays " +
+          "downloadable and the redline against it keeps working. This " +
+          "cannot be undone for this document." +
+          extraTitle
+        }
+      >
+        {detaching ? "Detaching…" : "Edit freely"}
+      </button>
+    ) : null;
+
   return (
     <aside
       className="flex min-w-[420px] flex-1 basis-[54%] flex-col bg-surface"
@@ -586,19 +660,33 @@ export default function ArtifactPanel({
               ⚠ {lintIssues.length}
             </span>
           )}
-          <Tip tip={draftTip} className="shrink-0">
-            <button
-              className={`rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${
-                draftPulse ? "draft-pulse" : ""
-              }`}
-              onClick={onDraftFull}
-              disabled={draftDisabled}
-              data-tour="draft-full"
-              data-capability="chat.full-draft"
-            >
-              ✨ Draft full section
-            </button>
-          </Tip>
+          {importedOutstanding > 0 ? (
+            <Tip tip={adaptTip} className="shrink-0">
+              <button
+                className="rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
+                onClick={onDraftAdapt}
+                disabled={busy}
+                data-tour="draft-full"
+                data-capability="chat.adapt-imported"
+              >
+                ✨ Adapt imported draft
+              </button>
+            </Tip>
+          ) : (
+            <Tip tip={draftTip} className="shrink-0">
+              <button
+                className={`rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40 ${
+                  draftPulse ? "draft-pulse" : ""
+                }`}
+                onClick={onDraftFull}
+                disabled={draftDisabled}
+                data-tour="draft-full"
+                data-capability="chat.full-draft"
+              >
+                ✨ Draft full section
+              </button>
+            </Tip>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           <span
@@ -691,7 +779,16 @@ export default function ArtifactPanel({
                     ) : (
                       <span
                         className="block cursor-default px-3 py-1.5 text-ink-faint"
-                        title="This project has no usable source package, or its edits exceed the source-preserving boundary"
+                        title={
+                          // Say WHY it is unavailable: the generic sentence
+                          // is wrong for a detached document (a choice, not
+                          // a fault) and for a frozen package (the package
+                          // is fine; it is locked — server's own words).
+                          sourceDetached
+                            ? "You chose Edit freely for this document — export is a normalized Build-a-Spec Word file. The exact original is still downloadable below."
+                            : (frozenCause?.message ??
+                              "This project has no usable source package, or its edits exceed the source-preserving boundary")
+                        }
                       >
                         Export preserved DOCX unavailable
                       </span>
@@ -910,7 +1007,7 @@ export default function ArtifactPanel({
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) onImportMaster(file);
+              if (file) setPendingImport(file);
               e.target.value = "";
             }}
           />
@@ -938,6 +1035,64 @@ export default function ArtifactPanel({
           />
         </div>
       </div>
+
+      {/* The import-time intent choice. The two options are different
+          product CONTRACTS, not a detail — a starting point behaves like a
+          template (fully editable, fresh export), preservation buys the
+          byte-exact export at the cost of the editing limits. The mode copy
+          here describes the modes; specific denials stay server strings. */}
+      {pendingImport && (
+        <ModalShell
+          title="Import a Word specification"
+          onClose={() => setPendingImport(null)}
+          wide
+        >
+          <p className="text-sm leading-relaxed text-ink-dim">
+            How should <span className="text-ink">{pendingImport.name}</span>{" "}
+            be used? Either way, the exact file you uploaded stays
+            downloadable and a redline against it keeps working.
+          </p>
+          <div className="mt-4 grid gap-2">
+            <button
+              type="button"
+              onClick={() => chooseImportIntent("start")}
+              className={primaryBtn + " w-full py-2.5 text-left"}
+              data-capability="import.intent"
+            >
+              <span className="block font-semibold">
+                Use as a starting point
+              </span>
+              <span className="mt-0.5 block text-xs font-normal opacity-90">
+                Recommended. The content becomes fully editable for you and
+                the assistant; export produces a fresh Build-a-Spec Word
+                file.
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => chooseImportIntent("preserve")}
+              className={quietBtn + " w-full py-2.5 text-left"}
+            >
+              <span className="block font-semibold">
+                Preserve original formatting
+              </span>
+              <span className="mt-0.5 block text-xs font-normal text-ink-dim">
+                Editing is limited so the exported Word file can stay a
+                byte-exact copy of your upload with only approved changes.
+                You can switch to free editing later (Edit freely); switching
+                back means re-importing.
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingImport(null)}
+              className={quietBtn + " w-full py-1.5 text-center text-xs"}
+            >
+              Cancel — don't import
+            </button>
+          </div>
+        </ModalShell>
+      )}
 
       {fileLoading && (
         <div
@@ -1048,7 +1203,20 @@ export default function ArtifactPanel({
             <span />
             <span />
           </span>
-          <span>{pendingReason}</span>
+          <span className="min-w-0 flex-1">
+            {pendingReason}
+            {capabilityProgress && (
+              <span className="text-ink-faint tabular-nums">
+                {" "}
+                — {capabilityProgress.done.toLocaleString()} of{" "}
+                {capabilityProgress.total.toLocaleString()} blocks checked
+              </span>
+            )}
+          </span>
+          {editFreelyButton(
+            " shrink-0",
+            " Choosing it now skips the rest of the permission analysis.",
+          )}
         </div>
       )}
 
@@ -1066,22 +1234,25 @@ export default function ArtifactPanel({
             Read-only: {frozenCause.message}
           </p>
           <p className="mt-1 text-ink-dim">{frozenCause.remedy}</p>
-          {onDetachSource && (
-            <button
-              type="button"
-              className={`mt-2 ${actionButton}`}
-              data-capability="document.detach-source"
-              disabled={busy || detaching}
-              onClick={onDetachSource}
-              title={
-                "Edit this document freely. Export becomes a normalized " +
-                "Word file instead of a copy of your upload; your original " +
-                "stays downloadable. This cannot be undone for this document."
-              }
-            >
-              {detaching ? "Detaching…" : "Edit freely"}
-            </button>
-          )}
+          {editFreelyButton(" mt-2")}
+        </div>
+      )}
+
+      {/* The ordinary settled master: not frozen, not pending — just the
+          preservation contract quietly limiting what is editable. One compact
+          always-on line, so the mode (and the way out) is discoverable
+          without hovering a greyed control. */}
+      {sourcePreserveReady && (
+        <div
+          className="flex flex-wrap items-center gap-2 border-b border-edge bg-bg/40 px-5 py-2 text-[11px] text-ink-dim"
+          role="status"
+        >
+          <span className="min-w-0 flex-1">
+            Source-preserving mode: editing is limited so the exported Word
+            file stays a byte-exact copy of your upload with only approved
+            changes.
+          </span>
+          {editFreelyButton(" shrink-0")}
         </div>
       )}
 

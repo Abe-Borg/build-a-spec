@@ -330,10 +330,16 @@ def test_numbered_island_reports_exact_add_delete_and_move_positions(tmp_path):
     assert add.placements[0].island_key == "pt1.a1.p1"
     assert add.placements[0].allowed_positions == (0, 1, 2, 3)
 
+    # Advertised move positions are ADJACENT-ONLY — the set the up/down
+    # buttons consume. Probing every sibling slot ran one full gate
+    # validation per position (the super-quadratic term of the sweep) to
+    # advertise positions only drag-and-drop ever read; the real gate still
+    # validates any other position on request (capability reports are UI
+    # guidance, never authorization — DOCX_FIDELITY.md).
     expected_moves = {
-        "pt1.a1.p1": (0, (1, 2)),
+        "pt1.a1.p1": (0, (1,)),
         "pt1.a1.p2": (1, (0, 2)),
-        "pt1.a1.p3": (2, (0, 1)),
+        "pt1.a1.p3": (2, (1,)),
     }
     for uid, (current_position, allowed_positions) in expected_moves.items():
         operations = report.elements[uid].operations
@@ -373,7 +379,8 @@ def test_capabilities_recompute_after_prior_add_delete_and_move(tmp_path):
     assert added["delete"].island_key == "pt1.a1.p1"
     assert added["move"].allowed is True
     assert added["move"].current_position == 1
-    assert added["move"].allowed_positions == (0, 2, 3)
+    # Adjacent-only advertised positions (see the comment above).
+    assert added["move"].allowed_positions == (0, 2)
     assert _operation(
         added_report,
         "pt1.a1",
@@ -404,7 +411,8 @@ def test_capabilities_recompute_after_prior_add_delete_and_move(tmp_path):
     moved_report = _report(inputs, after_move)
     moved = _operation(moved_report, "pt1.a1.p3", "move")
     assert moved.current_position == 0
-    assert moved.allowed_positions == (1, 2)
+    # Adjacent-only advertised positions (see the earlier comment).
+    assert moved.allowed_positions == (1,)
     assert _operation(moved_report, added_uid, "move").current_position == 2
 
 
@@ -645,7 +653,16 @@ def test_compact_summary_contains_ids_and_islands_without_package_details(tmp_pa
     assert "word/document.xml" not in summary
     assert "heading_change" not in summary
     assert "ZIP" not in summary
-    assert len(summary) < 1_000
+    # The summary now also states the mode's categorical limits, the
+    # all-or-nothing batching consequence, and the "Edit freely" way out —
+    # the three things whose absence made the model read a mostly-denied
+    # report as "this document is read-only" and stop drafting. The budget
+    # grew accordingly; the cap still pins that per-element DATA stays
+    # compact ids/positions, never prose per element or package internals.
+    assert "never text-editable" in summary
+    assert "all-or-nothing" in summary
+    assert "Edit freely" in summary
+    assert len(summary) < 2_600
 
 
 def test_api_capabilities_refresh_across_history_project_load_and_qc_apply(
@@ -1440,3 +1457,181 @@ def test_cache_is_not_published_when_the_document_moves_mid_sweep(
         "a report analyzed against a document that then moved must not be "
         "published under the pre-sweep key"
     )
+
+
+# ---------------------------------------------------------------------------
+# The sweep's categorical short-circuits (safe wins, equivalence-pinned)
+# ---------------------------------------------------------------------------
+
+
+def _counting_gate(monkeypatch):
+    """Count every full gate validation the sweep runs."""
+    counter = {"calls": 0}
+    real = source_patch_module._validate_source_and_plan
+
+    def counting(*args, **kwargs):
+        counter["calls"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(
+        source_patch_module, "_validate_source_and_plan", counting
+    )
+    return counter
+
+
+def test_a_frozen_package_report_is_probe_free_and_categorical(
+    tmp_path, monkeypatch
+):
+    """Minutes of O(n²) sweep on a frozen master became milliseconds.
+
+    The gate raises the package-wide mutation blocker before any
+    per-candidate analysis, so every probe on a frozen package rediscovered
+    a constant at full document-compose/reparse/preflight price. The fast
+    path was landed only after a byte-for-byte comparison against the swept
+    report on tracked-changes and document-protection fixtures; this pins
+    that it stays probe-free and keeps the fail-closed shape.
+    """
+    inputs = _source_inputs(
+        tmp_path,
+        add_tracked_change(make_fidelity_master(tmp_path)),
+        filename="frozen-fast-path.docx",
+    )
+    counter = _counting_gate(monkeypatch)
+    report = _report(inputs)
+
+    assert counter["calls"] == 0
+    assert report.status == "pass_through_only"
+    assert report.causes == ("tracked_changes",)
+    # Same element shape as the fail-closed constructor: body denied with
+    # the package cause, metadata still allowed.
+    for uid, element in report.elements.items():
+        for name, capability in element.operations.items():
+            if name in {
+                "set_status",
+                "set_provenance",
+                "set_project_identity",
+                "set_project_profile",
+                "set_standard_edition",
+                "set_standard_suppressed",
+            }:
+                assert capability.allowed is True, (uid, name)
+            else:
+                assert capability.allowed is False, (uid, name)
+                assert capability.blocker == "tracked_changes", (uid, name)
+
+
+def test_heading_probe_and_categorical_denial_agree(tmp_path):
+    """The equivalence canary for the heading short-circuit.
+
+    ``_probe_heading_capability`` is retained precisely so this test can
+    keep re-asserting that the constant the sweep now reports is the one
+    the full probe still derives. If the gate ever learns to patch a
+    heading, this goes red before any user sees a wrong denial.
+    """
+    inputs = _source_inputs(
+        tmp_path,
+        make_numbered_island_master(tmp_path),
+        filename="heading-canary.docx",
+    )
+    report = _report(inputs)
+    for uid in ("sec", "pt1", "pt1.a1"):
+        probed = source_patch_module._probe_heading_capability(
+            uid=uid,
+            context=inputs.context,
+            source_map=inputs.source_map,
+            baseline=inputs.baseline,
+            current=inputs.current,
+        )
+        assert probed.to_dict() == (
+            report.elements[uid].operations["replace_text"].to_dict()
+        ), uid
+
+
+def test_the_sweep_runs_a_linear_number_of_gate_validations(
+    tmp_path, monkeypatch
+):
+    """The complexity contract, pinned by counting rather than timing.
+
+    Move probes are capped to adjacent positions and headings are
+    categorical, so the sweep runs a bounded number of validations per
+    element — no term may grow with sibling COUNT per element any more.
+    Generous constant, zero flake: a reintroduced per-position loop blows
+    straight through it on this fixture and worse on a real master.
+    """
+    inputs = _source_inputs(
+        tmp_path,
+        make_numbered_island_master(tmp_path),
+        filename="linear-sweep.docx",
+    )
+    counter = _counting_gate(monkeypatch)
+    report = _report(inputs)
+    assert report.status == "ready"
+
+    element_count = len(report.elements)
+    # Per paragraph: replace + delete + ≤2 moves + (children+1) adds +
+    # set_status + set_provenance; per article: delete + (paragraphs+1)
+    # adds; plus the one whole-document validation. Add probing is linear
+    # per PARENT (positions ≈ children), so charge each element once more.
+    assert counter["calls"] <= 8 * element_count + 2, (
+        counter["calls"],
+        element_count,
+    )
+
+
+def test_the_sweep_reports_progress_per_element(tmp_path):
+    inputs = _source_inputs(
+        tmp_path,
+        make_numbered_island_master(tmp_path),
+        filename="progress.docx",
+    )
+    seen: list[tuple[int, int]] = []
+    source_edit_capabilities(
+        context=inputs.context,
+        source_map=inputs.source_map,
+        baseline=inputs.baseline,
+        current=inputs.current,
+        progress=lambda done, total: seen.append((done, total)),
+    )
+    assert seen, "the sweep must narrate its progress"
+    totals = {total for _done, total in seen}
+    assert len(totals) == 1
+    total = totals.pop()
+    assert [done for done, _total in seen] == list(range(1, total + 1))
+
+
+def test_the_capabilities_poll_has_a_slim_status_projection(
+    api_client, tmp_path
+):
+    """``status_only=1`` drops the per-element map the poll never reads.
+
+    The full map re-serialized once per tick is multi-MB on a large master,
+    for a sweep that can run minutes; the slim shape carries exactly what
+    the poll and the pending strip consume — status, causes, progress.
+    """
+    source = make_numbered_island_master(tmp_path)
+    imported = api_client.post(
+        "/api/import/master",
+        files={"file": ("m.docx", source, DOCX_MEDIA_TYPE)},
+    )
+    assert imported.status_code == 200, imported.text
+
+    slim = api_client.get(
+        "/api/doc/capabilities", params={"status_only": "1"}
+    ).json()["source_capabilities"]
+    assert slim is not None
+    assert "elements" not in slim
+    assert set(slim) <= {"status", "causes", "progress"}
+
+    settle_capability_sweep()
+    settled = api_client.get(
+        "/api/doc/capabilities", params={"status_only": "1"}
+    ).json()["source_capabilities"]
+    assert settled["status"] == "ready"
+    assert settled["causes"] == []
+    assert "elements" not in settled
+    # The full shape is unchanged for every non-poll consumer.
+    full = api_client.get("/api/doc/capabilities").json()[
+        "source_capabilities"
+    ]
+    assert full["status"] == "ready"
+    assert "elements" in full

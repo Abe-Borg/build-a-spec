@@ -125,6 +125,36 @@ sheet, a previous project's section, or meeting notes.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
 
+## Shipped in v1.12.0 (Import as a starting point)
+
+**The import asks what you mean by it.** *Use as a starting point* — the
+recommended default — makes the imported content fully editable for you and
+the assistant immediately (no permission analysis to wait out); *Preserve
+original formatting* keeps the byte-exact export contract with the editing
+limits that promise costs. Either way the exact upload stays downloadable and
+*Redline vs master* keeps working.
+
+- **Word's own numbering is read as structure.** An auto-numbered master's
+  PART and article headings carry their labels in the numbering definitions
+  — the visible text is just the title — so they used to land as one blob
+  under a placeholder article. The import now reads the definitions' label
+  grammar and builds the real parts and articles. (Provably round-trip safe:
+  the app's own exports use a different grammar by construction.)
+- **Edit freely is offered wherever it applies** — while permissions are
+  still being checked, on a frozen package, and on the ordinary settled
+  master — and the assistant now knows the mode's categorical rules, batches
+  accordingly, and suggests Edit freely instead of calling the document a
+  dead end.
+- **Adapt imported draft** walks every imported block against this project
+  in one click — keep, adapt, or delete, article by article — the way
+  *Draft full section* lays down an empty page. The review queue gains a
+  per-PART press-and-hold confirm.
+- **Nothing dropped silently.** Content after END OF SECTION (a second
+  section in a combined file, usually) is named and counted; import warnings
+  point at the block they mean (ref + id), not an unfindable line number.
+  The permission check on preserved imports is much faster, shows progress,
+  and skips entirely for locked packages.
+
 ## Shipped in v1.9.0 (Edit freely, and a tour that just shows you)
 
 **An imported Word section is no longer something you can only look at.**

@@ -402,6 +402,87 @@ export default function ReviewDrawer({
     window.clearTimeout(holdTimer.current);
   };
 
+  // --- Per-PART bulk confirm -----------------------------------------------
+  // A master import dumps its entire review debt at once (hundreds of
+  // imported blocks), and the per-article hold pays it one article at a
+  // time. The per-PART hold is the sanctioned middle ground — materially
+  // narrower than a document-wide confirm (which stays off the table:
+  // Batch 3's frozen decision, revisited with the owner 2026-08-19 only
+  // this far). Same mechanics as the article hold: deny-check every op,
+  // one /api/doc/edit batch, one undo step. Confirming is also the cheap
+  // path server-side — status-only edits never re-arm the permission sweep.
+  const partId = current ? current.articleId.split(".")[0] : "";
+  const partGroup = useMemo(
+    () =>
+      partId
+        ? queue.filter((entry) => entry.articleId.split(".")[0] === partId)
+        : [],
+    [partId, queue],
+  );
+  const partArticleCount = useMemo(
+    () => new Set(partGroup.map((entry) => entry.articleId)).size,
+    [partGroup],
+  );
+  const partStatusOps = useMemo(
+    () =>
+      partGroup.map((entry) => ({
+        action: "set_status" as const,
+        target_id: entry.elementId,
+        status: "confirmed" as const,
+      })),
+    [partGroup],
+  );
+  const partStatusDenial = partStatusOps
+    .map((op) => sourceEditOpDecision(sourceCapabilities, sourceExpected, op))
+    .find((capability) => !capability.allowed);
+  const partLabel = partId
+    ? `PART ${partId.replace(/^pt/, "")}`
+    : "this part";
+
+  const confirmPart = useCallback(() => {
+    if (locked || partStatusOps.length === 0) return;
+    if (
+      partStatusOps.some(
+        (op) =>
+          !sourceEditOpDecision(sourceCapabilities, sourceExpected, op).allowed,
+      )
+    ) {
+      return;
+    }
+    runEdit(partStatusOps);
+    setTally((t) => ({ ...t, confirmed: t.confirmed + partGroup.length }));
+    setEditing(false);
+    focusWalker();
+  }, [
+    locked,
+    partStatusOps,
+    partGroup.length,
+    sourceCapabilities,
+    sourceExpected,
+    runEdit,
+    focusWalker,
+  ]);
+  const confirmPartRef = useRef(confirmPart);
+  confirmPartRef.current = confirmPart;
+  const [holdingPart, setHoldingPart] = useState(false);
+  const holdPartTimer = useRef(0);
+  // The PART hold earns its slot only when it does more than the article
+  // hold beside it: ≥2 outstanding entries spread across ≥2 articles.
+  const partHoldVisible =
+    partGroup.length >= 2 && partArticleCount >= 2;
+  const startHoldPart = () => {
+    if (locked || partStatusDenial || !partHoldVisible) return;
+    setHoldingPart(true);
+    holdPartTimer.current = window.setTimeout(() => {
+      setHoldingPart(false);
+      confirmPartRef.current();
+    }, HOLD_MS);
+  };
+  const cancelHoldPart = () => {
+    setHoldingPart(false);
+    window.clearTimeout(holdPartTimer.current);
+  };
+
   // --- Keyboard on the walker container ------------------------------------
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -684,6 +765,50 @@ export default function ReviewDrawer({
                           {holding
                             ? "Keep holding…"
                             : `Hold to confirm remaining ${articleGroup.length} in “${current.articleTitle}”`}
+                        </span>
+                      </button>
+                    </span>
+                  )}
+
+                  {partHoldVisible && (
+                    <span
+                      className="block w-full"
+                      title={
+                        locked || partStatusDenial
+                          ? capabilityReason(
+                              partStatusDenial ?? null,
+                              locked,
+                              `Confirm every outstanding block in ${partLabel}`,
+                            )
+                          : undefined
+                      }
+                    >
+                      <button
+                        className="relative mt-1.5 w-full overflow-hidden rounded-md border border-edge bg-raised px-2 py-1 text-[11px] text-ink-dim transition-colors hover:border-accent/60 disabled:pointer-events-none disabled:opacity-40"
+                        onPointerDown={startHoldPart}
+                        onPointerUp={cancelHoldPart}
+                        onPointerLeave={cancelHoldPart}
+                        onPointerCancel={cancelHoldPart}
+                        disabled={locked || !!partStatusDenial}
+                        title={
+                          locked || partStatusDenial
+                            ? undefined
+                            : `Press and hold to confirm all ${partGroup.length} outstanding blocks across ${partArticleCount} articles in ${partLabel} — one request, one undo step. Confirming never re-runs the imported-source permission check.`
+                        }
+                      >
+                        <span
+                          className="absolute inset-y-0 left-0 bg-accent/25"
+                          style={{
+                            width: holdingPart ? "100%" : "0%",
+                            transition: holdingPart
+                              ? `width ${HOLD_MS}ms linear`
+                              : "width 120ms ease-out",
+                          }}
+                        />
+                        <span className="relative">
+                          {holdingPart
+                            ? "Keep holding…"
+                            : `Hold to confirm all ${partGroup.length} in ${partLabel}`}
                         </span>
                       </button>
                     </span>

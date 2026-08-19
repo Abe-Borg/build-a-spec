@@ -6806,13 +6806,48 @@ schema or protocol bump; one new SSE event type.
 - **`BUILD_A_SPEC_QC_BATCH_VERIFICATION=0` falls back to the streaming path**,
   which is retained verbatim and is still what phase 1 uses.
   `QC_BATCH_MAX_WAIT_SECONDS` (2h) is a runaway guard, not a target.
-- **Tests**: `tests/test_qc_batch_verification.py` (15) — the parity claim,
+- **The discount has to reach the METER, and that is where it nearly did
+  not** (caught in review on PR #136, Codex). Batched tokens are billed at
+  `settings.BATCH_COST_MULTIPLIER` (0.5), and every cost surface was still
+  pricing them at list — so the change whose entire point is a cheaper run
+  reported the old number, inside a document that presents itself as an
+  audit record. The multiplier rides the RECORD
+  (`QCVerdict.cost_multiplier`), never `cost_basis`: the rate table did not
+  change, only how one call was billed, and adding a field to the strictly
+  shape-validated pricing snapshot would have meant a third entry in
+  `_COST_BASIS_SHAPES` — the surface this file already records a
+  hybrid-forgery review finding about. Three consequences, all load-bearing:
+  (1) a mixed-rate run CANNOT be priced from merged usage, because one
+  multiplier cannot describe a total whose parts were billed at two, so
+  `_run_estimated_cost` sums the records instead — and
+  `_audit_accounting_consistent` reconciles it the same two ways round,
+  GATED on whether anything is discounted, so every pre-existing report
+  keeps passing its original check byte-for-byte (that check runs on load;
+  a total that disagreed would `from_dict` to None and discard the whole
+  paid report). (2) Phase 1 is NOT discounted — it still streams, and
+  discounting the run wholesale would understate the bill by as much as the
+  old code overstated it. (3) The session meter needs its own `qc_batched`
+  category, because one bucket can only ever be priced at one rate; the
+  runner therefore meters per billing class (`usage_by_meter_category`)
+  and the sink signature gained the category.
+- **Batch progress is PHASE-level, not round-level** (same review). A later
+  round carries only the seats that still need work, so its own `submitted`
+  shrinks while earlier rounds' results still stand — rendering the
+  provider's per-batch counters showed "2 of 1" mid-phase and finished at
+  "1 of 1" on a phase with three seats. `settled`/`total` are recomputed
+  from the seats on every frame and are what the board renders;
+  `mergeBatchProgress` resets the provider counters when the round changes.
+- **Tests**: `tests/test_qc_batch_verification.py` (22) — the parity claim,
   request-byte identity across transports, one batch per phase with unique
   custom_ids, the transport on the roster event, progress from real counts,
   no live frames, pause_turn spanning two rounds, a retry on a fresh
   conversation, non-retryable and shared-invalid failures, a missing result
-  line, cancellation mid-flight and before submission, and the manifest
-  round trip. The fake `_FakeBatches` routes through the SAME scripts as the
+  line, cancellation mid-flight and before submission, the manifest
+  round trip, and seven on cost accounting (seat rate, lenses never
+  discounted, the summed run total surviving a reload, the reported total
+  actually dropping, bounds on a persisted multiplier, a pre-discount
+  record pricing at list, and the meter's split buckets). The fake
+  `_FakeBatches` routes through the SAME scripts as the
   streaming fake, so an existing QC fixture proves parity rather than needing
   a parallel fixture set — which is why the whole pre-existing QC suite runs
   through the batched path by default.

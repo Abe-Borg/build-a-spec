@@ -448,6 +448,14 @@ def load_project(data: Any, session) -> None:
     # The context gauge measured the outgoing conversation; the loaded one
     # has no measurement until its first turn commits.
     session.last_context_tokens = None
+    # Where the OUTGOING session had been saving itself. Assign
+    # UNCONDITIONALLY (load_project does not call session.reset()): the file
+    # being opened is a different project, and the next Save must ask where
+    # it goes rather than overwrite the one that was open. Guarded with
+    # hasattr for the lightweight session objects format-1 compatibility
+    # callers still pass.
+    if hasattr(session, "save_target"):
+        session.save_target = ""
     # Semantic/legacy JSON never contains source bytes. Clear them only after
     # the incoming project's load-bearing content validates. A .baspec caller
     # attaches its separately validated bytes after this semantic commit.

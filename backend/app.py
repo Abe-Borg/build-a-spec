@@ -1480,6 +1480,12 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         # than ask (section / project type / country). Server-derived so the
         # panel's tooltip and the endpoint's decision share one answer.
         "draft_prerequisites": _draft_prerequisites(session).to_dict(),
+        # Where this session already saved itself, or null when it never
+        # has ({"path", "name"}). The panel's Save button asks the first
+        # time and overwrites afterwards, and this is what tells it which
+        # of the two it is — server-owned so the button can never offer a
+        # silent overwrite of a file the session has been reset away from.
+        "project_save_target": sessions.project_save_target(session),
         "research_status": session.research.status,
         # The imported-master version index (Batch 5), for the compare
         # picker's "Master (import)" option; ``None`` for from-scratch.

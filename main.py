@@ -24,6 +24,7 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from typing import Any
 
 import uvicorn
 
@@ -422,10 +423,15 @@ class _CloseController:
 
     # --- exposed to the window's JS as window.pywebview.api.* --------------
     def save_and_close(self) -> None:
-        """Frontend chose 'Save & close': write a project file, then close."""
+        """Frontend chose 'Save & close': write a project file, then close.
+
+        A session that has already saved once overwrites that file without
+        asking, exactly like the in-app Save button — the dialog only appears
+        when there is nowhere established to write.
+        """
         if not self._trusted_page():
             return
-        if self._save_project_file():
+        if self._save_project_file()["ok"]:
             self._force_close()
         # If the user backed out of the native Save dialog, stay in the app —
         # the close is still vetoed, so nothing else is needed.
@@ -436,19 +442,35 @@ class _CloseController:
             return
         self._force_close()
 
-    def save_project(self) -> bool:
-        """Frontend's in-app save gate (New session / Open project) chose
-        'Save': write a project file but keep the window open.
+    def save_project(self) -> dict[str, Any]:
+        """Save without closing: the panel's Save button, and the save gate
+        in front of New session / Open project.
 
-        Returns True if a file was written, False if the user cancelled the
-        native Save dialog or the write failed. The frontend proceeds to the
-        reset/load only on True, so a cancelled save never discards the
-        session. Same payload + native dialog as ``save_and_close``, minus the
-        ``_force_close()``.
+        Asks where to save the FIRST time this session is saved, then
+        overwrites that file silently on every later save — the way a save
+        button works everywhere else. ``save_project_as`` is how the user
+        gets the dialog back.
+
+        Returns the shared save result (see ``_save_result``). The frontend
+        proceeds to a reset/load only on ``ok``, so a cancelled or failed
+        save never discards the session.
         """
         if not self._trusted_page():
-            return False
+            return self._save_result(False, error="This page cannot save.")
         return self._save_project_file()
+
+    def save_project_as(self) -> dict[str, Any]:
+        """'Save as…': always ask where, then make that the file later saves
+        overwrite.
+
+        The dialog opens in the folder of the current target (when there is
+        one) but still proposes a fresh timestamped filename, so confirming
+        it writes a new file rather than quietly landing back on the one Save
+        already overwrites.
+        """
+        if not self._trusted_page():
+            return self._save_result(False, error="This page cannot save.")
+        return self._save_project_file(force_dialog=True)
 
     def open_external_link(self, url: str) -> bool:
         """Open a URL in the user's default system browser.
@@ -558,69 +580,120 @@ class _CloseController:
         if self._window is not None:
             self._window.destroy()
 
-    def _save_project_file(self) -> bool:
-        """Write the current session to a user-chosen project file.
+    @staticmethod
+    def _save_result(
+        ok: bool,
+        *,
+        cancelled: bool = False,
+        error: str = "",
+        target: str = "",
+    ) -> dict[str, Any]:
+        """The one shape every save path returns.
 
-        Returns True if a file was written, False if the user cancelled the
-        Save dialog or the write failed.
+        ``cancelled`` is kept apart from ``error`` because the UI must treat
+        them differently: backing out of a Save dialog is a decision and
+        deserves silence, while a write that failed needs to say so — and the
+        two are indistinguishable once both are just ``False``.
+        """
+        return {
+            "ok": bool(ok),
+            "cancelled": bool(cancelled),
+            "error": error,
+            "target": target,
+            "name": os.path.basename(target) if target else "",
+        }
+
+    def _save_project_file(self, *, force_dialog: bool = False) -> dict[str, Any]:
+        """Write the current session to a project file.
+
+        Overwrites ``session.save_target`` when the session has one and the
+        caller did not force the dialog; otherwise asks, and remembers the
+        answer. A remembered target that cannot be written (moved, deleted,
+        read-only, a disconnected drive) falls back to the dialog rather than
+        failing: the user asked for a save, and the honest response to "that
+        file is gone" is to ask where it should go now.
         """
         import webview
 
         from backend import sessions
+        from backend.spec_doc.project_package import ProjectPackageError
 
         if not self._trusted_page():
-            return False
+            return self._save_result(False, error="This page cannot save.")
         workspace = sessions.get_workspace()
         if workspace.scope != "original":
-            return False
+            return self._save_result(
+                False,
+                error="Return to your project before saving it.",
+            )
         session = workspace.session
+        # Sampled beside the payload: a reset or project load while the Save
+        # dialog is up must not bind the replacement session to this file.
+        generation = session.generation
         try:
             payload = sessions.project_package_bytes(session)
             filename = sessions.project_default_filename(session)
+        except ProjectPackageError as exc:
+            return self._save_result(False, error=str(exc))
         except Exception:
-            return False
+            return self._save_result(
+                False,
+                error="This project could not be packaged for saving.",
+            )
+
+        # Where this session already saves itself, and whether this call is allowed
+        # to write there without asking. Kept apart: "Save as…" forces the
+        # dialog but should still OPEN in the folder the user last chose.
+        current = str(getattr(session, "save_target", "") or "")
+        remembered = "" if force_dialog else current
+        if remembered:
+            written = self._resolved_write(remembered, payload)
+            if written:
+                return self._save_result(True, target=written)
+            # Fall through to the dialog: the remembered file is no longer
+            # writable, so asking is the only way forward that saves anything.
+
         target = self._window.create_file_dialog(
             webview.FileDialog.SAVE,
             save_filename=filename,
             file_types=_PROJECT_SAVE_FILE_TYPES,
+            **({"directory": os.path.dirname(current)} if current else {}),
         )
         if not target:
-            return False  # user cancelled the Save dialog
+            return self._save_result(
+                False,
+                cancelled=True,
+                error="The save was cancelled.",
+            )
         # create_file_dialog returns a path string on some backends, a
         # 1-tuple on others.
         if isinstance(target, (tuple, list)):
             target = target[0]
         if not self._trusted_page():
-            return False
-        temp_path: str | None = None
+            return self._save_result(False, error="This page cannot save.")
+        written = self._resolved_write(target, payload)
+        if not written:
+            return self._save_result(
+                False,
+                error="That file could not be written. Try another location.",
+            )
+        sessions.remember_project_save_target(
+            session, written, generation=generation
+        )
+        return self._save_result(True, target=written)
+
+    @classmethod
+    def _resolved_write(cls, target, payload: bytes) -> str:
+        """Atomically write ``payload`` to ``target``; return the absolute
+        path written, or "" on failure."""
         try:
-            # Write beside the selected target, close it, then atomically
-            # replace. A crash or short write cannot leave a half-valid
-            # project under the user's chosen filename.
             target_path = os.path.abspath(os.fspath(target))
-            target_dir = os.path.dirname(target_path)
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=target_dir,
-                prefix=".buildaspec-save-",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                temp_path = handle.name
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_path, target_path)
-            temp_path = None
-        except (OSError, TypeError, ValueError):
-            return False
-        finally:
-            if temp_path is not None:
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
-        return True
+        except (TypeError, ValueError):
+            return ""
+        ok = cls._atomic_write_target(
+            target_path, payload, prefix=".buildaspec-save-"
+        )
+        return target_path if ok else ""
 
     @staticmethod
     def _atomic_write_target(target, payload: bytes, *, prefix: str) -> bool:

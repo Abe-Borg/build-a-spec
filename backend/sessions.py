@@ -7,6 +7,7 @@ also carry the exact imported DOCX as a separate binary member.
 from __future__ import annotations
 
 import copy
+import os
 import threading
 import uuid
 from contextlib import contextmanager
@@ -648,6 +649,48 @@ def project_default_filename(session: SessionState) -> str:
     stem = project_default_stem(session)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
     return f"buildaspec-{stem}-{stamp}.baspec"
+
+
+def project_save_target(session: SessionState) -> dict[str, str] | None:
+    """Where this session has already saved itself, or ``None`` if nowhere.
+
+    ``{"path", "name"}`` — the absolute path the native shell will overwrite,
+    and its basename for a button label that has to fit in a toolbar. The
+    frontend renders the plain Save / split-button-with-Save-as distinction
+    off this being null or not, so it is the same answer the shell acts on
+    rather than a second one the UI keeps for itself.
+    """
+    path = str(getattr(session, "save_target", "") or "")
+    if not path:
+        return None
+    return {"path": path, "name": os.path.basename(path) or path}
+
+
+def remember_project_save_target(
+    session: SessionState,
+    path: str,
+    *,
+    generation: int | None = None,
+) -> bool:
+    """Record ``path`` as the file later saves overwrite. Returns whether it
+    stuck.
+
+    ``generation`` is the session's generation sampled before the native Save
+    dialog opened. A reset or project load while that dialog was up replaces
+    the session out from under the write: the file the user just named is
+    still written (they asked for it, and the payload it holds was captured
+    before the swap), but the session that took its place never asked to be
+    bound to it, and a silent overwrite is exactly what must not be inherited.
+    So the target is dropped instead. The same posture as the zombie-turn
+    generation guard, for the same reason.
+    """
+    target = str(path or "").strip()
+    if not target:
+        return False
+    if generation is not None and session.generation != generation:
+        return False
+    session.save_target = target
+    return True
 
 
 def clone_session_for_tutorial(source: SessionState) -> SessionState:

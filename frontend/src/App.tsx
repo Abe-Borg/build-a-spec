@@ -53,6 +53,7 @@ import {
   getSessionBundle,
   getUsage,
   importMaster,
+  type ImportIntent,
   instantiateTemplate,
   uploadReference,
   deleteReference,
@@ -956,7 +957,7 @@ export default function App() {
   );
 
   const onImportMaster = useCallback(
-    async (file: File) => {
+    async (file: File, intent: ImportIntent) => {
       // One upload at a time: the endpoint rejects a second import anyway
       // (the document is no longer blank), and a queued duplicate would only
       // produce a confusing error after a long wait.
@@ -969,7 +970,7 @@ export default function App() {
       // an upload is a panel action, and the panel reports it (progress line,
       // button label, skeleton sheet, and the error slot below).
       try {
-        const result = await importMaster(file);
+        const result = await importMaster(file, intent);
         if (!applyDocPayload(result)) return;
         // Import advances the original session generation. Keep the full
         // presentation Health object on the same accepted lease immediately

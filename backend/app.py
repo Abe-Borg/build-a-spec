@@ -86,7 +86,7 @@ from typing import Any, Callable, Iterator, Literal
 from urllib.parse import quote
 
 import anthropic
-from fastapi import Body, FastAPI, Request, UploadFile
+from fastapi import Body, FastAPI, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
@@ -4163,7 +4163,18 @@ def create_app(
     # --- Master-spec import (Phase 5) ---------------------------------------
 
     @app.post("/api/import/master")
-    async def import_master(request: Request, file: UploadFile) -> JSONResponse:
+    async def import_master(
+        request: Request,
+        file: UploadFile,
+        # The import-time intent choice. ``detach=true`` means "use this
+        # master as a starting point": the same one-way door as
+        # POST /api/doc/detach-source, taken atomically inside the adopt
+        # transaction so no turn, edit, or poll ever observes an attached
+        # document it would have to fail closed against. The default is
+        # byte-compatible with every pre-intent client: attached,
+        # source-preserving, sweep warming.
+        detach: bool = Form(False),
+    ) -> JSONResponse:
         entry_lease = sessions.get_workspace()
         session = entry_lease.session
         if entry_lease.scope == "tutorial":
@@ -4289,6 +4300,14 @@ def create_app(
                 session.source_docx_map = result.source_map
                 session.source_patch_context = source_context
                 session.import_report = report
+                if detach:
+                    # "Use as a starting point": drop the preservation claim
+                    # in the same transaction that made it, AFTER
+                    # adopt_imported (which deliberately clears the flag).
+                    # Everything is kept — bytes, map, baseline — so the
+                    # exact original stays downloadable and redline vs
+                    # master keeps working; only the source gate goes away.
+                    session.detach_source()
                 # The import counts as session-changing work: invalidate any
                 # turn that was streaming against the empty document.
                 session.invalidate_model_turn()
@@ -4301,6 +4320,7 @@ def create_app(
             blocks=result.imported_block_count,
             warnings=len(report["warnings"]),
             tracked_changes=result.tracked_changes_detected,
+            detached=detach,
             warning_messages=report["warnings"],
             skipped_empty=report["skipped_empty_count"],
             source_sha256=report["sha256"],
@@ -4319,7 +4339,11 @@ def create_app(
         # longer runs inline anywhere: start it here so it is already working
         # while this response is written, and report ``pending`` capabilities
         # until it lands. The panel polls ``GET /api/doc/capabilities``.
-        session.start_capability_warm()
+        # A detached import never starts one: the scope is inactive, so the
+        # sweep would be minutes of O(n²) work producing a memo no reader
+        # can ever ask for.
+        if not detach:
+            session.start_capability_warm()
         # ``_doc_payload`` still costs one source-readiness plan on a freshly
         # imported master. Every other endpoint reaches it through a plain
         # ``def`` handler, i.e. already on a worker thread — this async

@@ -780,9 +780,24 @@ export async function* streamResearch(
 
 /* --- Master import + updates (Phase 5) --- */
 
-export async function importMaster(file: File): Promise<ImportResultPayload> {
+/**
+ * The import-time intent choice. "start" imports the master as a starting
+ * point: the server detaches the source in the same transaction, so the
+ * document is fully editable from the first payload (the exact original
+ * stays downloadable and redline-vs-master keeps working). "preserve" is
+ * the historical behavior: source-preserving mode, permission sweep and all.
+ */
+export type ImportIntent = "start" | "preserve";
+
+export async function importMaster(
+  file: File,
+  intent: ImportIntent,
+): Promise<ImportResultPayload> {
   const form = new FormData();
   form.append("file", file);
+  if (intent === "start") {
+    form.append("detach", "true");
+  }
   const resp = await fetch("/api/import/master", {
     method: "POST",
     body: form,

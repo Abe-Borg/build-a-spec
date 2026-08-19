@@ -50,6 +50,7 @@ export const END_USER_CAPABILITIES = [
   "figure.create",
   "figure.manage",
   "import.master",
+  "import.intent",
   "import.source-output",
   "reference.attach",
   "reference.use",

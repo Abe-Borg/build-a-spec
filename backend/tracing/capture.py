@@ -672,6 +672,7 @@ def import_event(
     blocks: int,
     warnings: int,
     tracked_changes: bool,
+    detached: bool = False,
     warning_messages: list[str] | tuple[str, ...] | None = None,
     skipped_empty: int = 0,
     source_sha256: str = "",
@@ -709,6 +710,7 @@ def import_event(
                 0, warning_message_count - len(warning_evidence)
             ),
             "tracked_changes": bool(tracked_changes),
+            "detached": bool(detached),
             "spec_shape_detected": bool(spec_shape_detected),
             "source_bytes": max(0, int(source_bytes)),
             "zip_member_count": max(0, int(zip_member_count)),

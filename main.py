@@ -649,7 +649,12 @@ class _CloseController:
         if remembered:
             written = self._resolved_write(remembered, payload)
             if written:
-                return self._save_result(True, target=written)
+                return self._save_result(
+                    True,
+                    target=self._bind_save_target(
+                        session, written, generation
+                    ),
+                )
             # Fall through to the dialog: the remembered file is no longer
             # writable, so asking is the only way forward that saves anything.
 
@@ -677,10 +682,29 @@ class _CloseController:
                 False,
                 error="That file could not be written. Try another location.",
             )
-        sessions.remember_project_save_target(
+        return self._save_result(
+            True,
+            target=self._bind_save_target(session, written, generation),
+        )
+
+    @staticmethod
+    def _bind_save_target(session, written: str, generation: int) -> str:
+        """Bind ``session`` to the file just written, and report back only a
+        target that actually stuck.
+
+        Both write paths go through here so that a reported target means one
+        thing: this session will overwrite that file next time. When the guard
+        refuses — a reset or project load raced the save — the file is still
+        written and the save still succeeded, but there is nothing to report,
+        and saying otherwise would leave the panel promising an overwrite the
+        very next click would turn back into a dialog.
+        """
+        from backend import sessions
+
+        bound = sessions.remember_project_save_target(
             session, written, generation=generation
         )
-        return self._save_result(True, target=written)
+        return written if bound else ""
 
     @classmethod
     def _resolved_write(cls, target, payload: bytes) -> str:

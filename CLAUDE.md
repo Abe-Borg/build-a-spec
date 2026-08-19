@@ -6413,6 +6413,16 @@ new SSE event, no new dep, no project-format bump.
   the session they were looking at — but ``remember_project_save_target``
   refuses to bind the REPLACEMENT session to it. Same posture, and the same
   reason, as the zombie-turn generation guard.
+- **A reported target is a promise, so only a bound one is reported**
+  (caught in review on PR #133, Codex). Both write paths return through
+  ``_bind_save_target``, which reports the path only when the generation
+  guard above actually accepted it. Dropping that return value left the
+  result claiming a target the server had just refused — and the frontend
+  adopts a successful save's target directly, so the replacement session drew
+  a split Save button promising to overwrite the outgoing project's file
+  while the very next click would (correctly) re-open the dialog. The file is
+  still written and the save still succeeds; there is simply nothing to
+  report.
 - **The panel says what it is about to do.** Save's tooltip names the exact
   path it will overwrite, the caret's menu repeats it under Save as…, and a
   completed save flashes "Saved ✓" for two seconds — an overwrite produces no
@@ -6432,17 +6442,18 @@ new SSE event, no new dep, no project-format bump.
   ``updates.manage`` precedent (one capability, several controls) — and
   ``data-tour="save"`` moved to the wrapper, so the tour's anchor still
   resolves onto the whole split button.
-- **Tests**: 12 in `tests/test_save_overwrite.py` (the headline ask-then-
+- **Tests**: 14 in `tests/test_save_overwrite.py` (the headline ask-then-
   overwrite, an overwrite writing the session as it is NOW rather than the
   first save's bytes, Save as… re-pointing the target while leaving the old
   file alone, the folder hint, a New session forgetting the target end to
   end with the old project provably untouched, project load forgetting it,
-  the tutorial refusal, the mid-dialog reset, the unwritable-target
-  fallback, the doc payload, the path staying out of the saved package, and
-  Save & close). Every mechanism was reverted in place to prove it
+  the tutorial refusal, the mid-dialog reset and the mid-overwrite reset,
+  the unwritable-target fallback, the doc payload, the path staying out of
+  the saved package, and Save & close). Every mechanism was reverted in place to prove it
   load-bearing: the overwrite branch → 4 red, the reset's clear → 16 red (a
   leaked target poisons every later test in the module, which is the point),
-  the load clear → 1, the generation guard → 1, the dialog fallback → 1.
+  the load clear → 1, the generation guard → 1, the dialog fallback → 1,
+  reporting an unbound target → 2.
 
 ## Commands
 

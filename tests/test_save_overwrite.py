@@ -23,6 +23,8 @@ from backend.app import create_app
 from backend.llm.conversation import SessionState
 from backend.spec_doc.project import load_project
 from backend.spec_doc.project_package import parse_project_package
+
+import main
 from tests.test_close_prompt import (
     _FakeWindow,
     _controller_with,
@@ -228,9 +230,46 @@ def test_a_reset_during_the_save_dialog_does_not_bind_the_fresh_session(
     controller = _controller_with(_ResettingWindow(dialog_path=str(target)))
     _draft("SUMMARY")
 
-    assert controller.save_project()["ok"] is True
+    result = controller.save_project()
 
+    assert result["ok"] is True
     assert target.exists()
+    assert sessions.project_save_target(sessions.get_session()) is None
+    # …and the result says so. A reported target is a promise the panel draws
+    # a split Save button from; reporting one the guard just refused would
+    # leave it offering to overwrite a file the next click re-opens a dialog
+    # for (Codex review on PR #133).
+    assert result["target"] == ""
+    assert result["name"] == ""
+
+
+def test_a_reset_while_an_overwrite_is_in_flight_does_not_rebind_it(
+    tmp_path, monkeypatch
+):
+    # The same guard on the other write path. There is no dialog to race
+    # here, but packaging a large project is not instant, so a New session
+    # can still land between reading the target and finishing the write.
+    _fake_webview(monkeypatch)
+    target = tmp_path / "the-project.baspec"
+    controller = _controller_with(_FakeWindow(dialog_path=str(target)))
+    _draft("SUMMARY")
+    controller.save_project()
+
+    original_write = main._CloseController._resolved_write.__func__
+
+    def _reset_then_write(cls, path, payload):
+        sessions.get_session().reset()
+        return original_write(cls, path, payload)
+
+    monkeypatch.setattr(
+        main._CloseController,
+        "_resolved_write",
+        classmethod(_reset_then_write),
+    )
+    result = controller.save_project()
+
+    assert result["ok"] is True, "the file the user asked for is still written"
+    assert result["target"] == ""
     assert sessions.project_save_target(sessions.get_session()) is None
 
 

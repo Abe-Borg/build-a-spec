@@ -119,6 +119,7 @@ from ..spec_doc.source_patch import (
 )
 from ..compliance import AuditRunner
 from ..qc import QCRunner
+from ..qc.context import qc_review_context_block
 from ..research import ResearchRunner, research_context_block
 from ..research.grounding import response_container_id
 from .server_tool_pairing import (
@@ -1627,6 +1628,27 @@ def _turn_context_text(session: SessionState) -> str:
                 f"{item.get('label')} (element {item.get('element_id')})"
             )
         parts.append("\n".join(lines))
+    # The retained Final QC result, compactly — QC lives on its own channel,
+    # so without this the model could not answer "what did the review find?"
+    # about a report one panel away. Lock-free plain-attribute read (the
+    # readiness/_doc_payload posture); ``doc``/``session.doc.index`` are the
+    # committed pre-turn tree this whole block describes.
+    qc_result = getattr(session.qc, "result", None)
+    if qc_result is not None:
+        attempt_note = ""
+        if getattr(session.qc, "status", "") == "failed":
+            attempt_note = (
+                "NOTE: a newer Final QC attempt after this retained review "
+                "did not complete — this block describes the retained "
+                "successful review only."
+            )
+        qc_block, _qc_trimmed = qc_review_context_block(
+            qc_result,
+            current_version_index=session.doc.index,
+            current_section=doc,
+            latest_attempt_note=attempt_note,
+        )
+        parts.append(qc_block)
     figure_stubs = session.figures.context_stubs()
     if figure_stubs:
         parts.append(figure_stubs)

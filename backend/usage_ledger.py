@@ -109,8 +109,18 @@ def _category_models() -> dict[str, str]:
         "research": settings.RESEARCH_MODEL,
         "audit": settings.RESEARCH_MODEL,
         "qc": settings.QC_MODEL,
+        # Final QC's verification phase, when it ran on the Message Batches
+        # API. Same model and same rate table as "qc" — a SEPARATE bucket
+        # because those tokens were billed at a different multiplier, and a
+        # single bucket could only ever be priced at one of the two.
+        "qc_batched": settings.QC_MODEL,
         "template": settings.INTERVIEW_MODEL,
     }
+
+
+def _category_multipliers() -> dict[str, float]:
+    """Per-category rate multipliers. Absent means full list price."""
+    return {"qc_batched": settings.BATCH_COST_MULTIPLIER}
 
 
 def _rates(model: str) -> dict[str, float]:
@@ -139,7 +149,9 @@ def cache_write_split(usage: Mapping[str, Any]) -> tuple[int, int]:
     return max(0, total) - one_hour, one_hour
 
 
-def estimate_usage_cost(model: str, usage: dict[str, int]) -> float:
+def estimate_usage_cost(
+    model: str, usage: dict[str, int], *, multiplier: float = 1.0
+) -> float:
     """Estimate one recorded run's cost from its model and usage snapshot.
 
     The result is deliberately labeled an estimate everywhere it is exposed:
@@ -147,6 +159,11 @@ def estimate_usage_cost(model: str, usage: dict[str, int]) -> float:
     authority. Thinking tokens already live inside ``output_tokens`` and are
     therefore not added a second time — and neither is the one-hour cache
     subtotal, which lives inside the cache-creation total.
+
+    ``multiplier`` scales every charge, for usage billed at something other
+    than list price — today only the Message Batches API's 50%. It is a
+    property of HOW the call was sent, not of the rate table, so the rates
+    themselves stay untouched and a report can still show both.
 
     ``estimated_output_tokens`` is the opposite case and IS added: it is the
     output a stopped turn produced BEYOND what the provider reported (the
@@ -158,13 +175,16 @@ def estimate_usage_cost(model: str, usage: dict[str, int]) -> float:
     rates = _rates(model)
     five_minute, one_hour = cache_write_split(usage)
     return round(
-        usage.get("input_tokens", 0) * rates["input"]
-        + usage.get("output_tokens", 0) * rates["output"]
-        + usage.get(ESTIMATED_OUTPUT_TOKENS_KEY, 0) * rates["output"]
-        + usage.get("cache_read_input_tokens", 0) * rates["cache_read"]
-        + five_minute * rates["cache_write"]
-        + one_hour * rates.get("cache_write_1h", rates["cache_write"])
-        + usage.get("web_search_requests", 0) * settings.WEB_SEARCH_COST,
+        multiplier
+        * (
+            usage.get("input_tokens", 0) * rates["input"]
+            + usage.get("output_tokens", 0) * rates["output"]
+            + usage.get(ESTIMATED_OUTPUT_TOKENS_KEY, 0) * rates["output"]
+            + usage.get("cache_read_input_tokens", 0) * rates["cache_read"]
+            + five_minute * rates["cache_write"]
+            + one_hour * rates.get("cache_write_1h", rates["cache_write"])
+            + usage.get("web_search_requests", 0) * settings.WEB_SEARCH_COST
+        ),
         6,
     )
 
@@ -255,7 +275,9 @@ class UsageLedger:
 
     def _estimate_category(self, category: str, bucket: dict[str, int]) -> float:
         return estimate_usage_cost(
-            _category_models().get(category, settings.INTERVIEW_MODEL), bucket
+            _category_models().get(category, settings.INTERVIEW_MODEL),
+            bucket,
+            multiplier=_category_multipliers().get(category, 1.0),
         )
 
     def _estimated_cost(self) -> dict[str, Any]:
@@ -275,8 +297,14 @@ class UsageLedger:
             rates = _rates(
                 _category_models().get(category, settings.INTERVIEW_MODEL)
             )
-            saved += bucket.get("cache_read_input_tokens", 0) * (
-                rates["input"] - rates["cache_read"]
+            # Discounted usage saved a discounted amount: the counterfactual
+            # is paying full INPUT price on the same batched request, not
+            # list price. Scaling both sides keeps the comparison honest.
+            multiplier = _category_multipliers().get(category, 1.0)
+            saved += (
+                multiplier
+                * bucket.get("cache_read_input_tokens", 0)
+                * (rates["input"] - rates["cache_read"])
             )
         return round(saved, 6)
 

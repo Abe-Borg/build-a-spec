@@ -915,3 +915,170 @@ test("a run with no grouping step folds exactly as it always did", () => {
   assert.equal(live.consolidation.panelsAvoided, 0);
   assert.equal(live.phase, "verification");
 });
+
+// --- Batched phase 2 --------------------------------------------------------
+//
+// Phase 2 on the Message Batches API costs half as much and cannot stream, so
+// the board has to say what is happening without inventing per-seat motion.
+// These pin the two halves of that: the transport is known from the roster,
+// and progress is only ever the provider's own counts.
+
+const batchRoster = (seq: number): QcEvent => ({
+  type: "verification_started",
+  seq,
+  candidates: [
+    {
+      candidate_id: "candidate-1",
+      title: "Batched finding",
+      original_severity: "medium",
+      lens_id: "code_compliance",
+      panel_size: 2,
+      uphold_requires: 2,
+      rule: "final-qc/4",
+      evidence_gated: false,
+      outcomes: ["upheld", "disputed", "refuted", "inconclusive"],
+    },
+  ],
+  total_candidates: 1,
+  total_seats: 2,
+  transport: "batch",
+});
+
+test("a batched roster marks the transport and a streamed one does not", () => {
+  const batched = foldQcLiveState([started(), batchRoster(1)], {
+    status: "running",
+    error: "",
+  });
+  assert.equal(batched.transport, "batch");
+
+  const streamed = foldQcLiveState(
+    [
+      started(),
+      { ...(batchRoster(1) as Record<string, unknown>), transport: "stream" } as QcEvent,
+    ],
+    { status: "running", error: "" },
+  );
+  assert.equal(streamed.transport, "stream");
+  assert.equal(streamed.batch, null);
+});
+
+test("batch progress carries submitted totals forward across polling frames", () => {
+  // A polling frame reports live counts but no `submitted`/`total`. Resetting
+  // those to zero between ticks would make the line read "0 of 0" mid-run,
+  // which on the one transport that cannot show per-seat motion looks like a
+  // stall rather than progress.
+  const live = foldQcLiveState(
+    [
+      started(),
+      batchRoster(1),
+      {
+        type: "verification_batch",
+        seq: 2,
+        status: "submitted",
+        round: 1,
+        submitted: 2,
+        total: 2,
+      },
+      {
+        type: "verification_batch",
+        seq: 3,
+        status: "polling",
+        round: 1,
+        processing: 1,
+        succeeded: 1,
+        errored: 0,
+      },
+    ] as QcEvent[],
+    { status: "running", error: "" },
+  );
+
+  assert.equal(live.transport, "batch");
+  assert.equal(live.batch?.status, "polling");
+  assert.equal(live.batch?.submitted, 2);
+  assert.equal(live.batch?.total, 2);
+  assert.equal(live.batch?.succeeded, 1);
+});
+
+test("batch progress is phase-level, so a second round cannot shrink it", () => {
+  // Round 2 carries only the seats that still need work (a pause_turn
+  // continuation, a retry). Rendering that round's own `submitted` against
+  // an earlier round's success count showed "2 of 1" mid-phase and finished
+  // at "1 of 1" on a phase that had three seats.
+  const frames: QcEvent[] = [
+    started(),
+    batchRoster(1),
+    { type: "verification_batch", seq: 2, status: "submitted", round: 1, submitted: 3, total: 3, settled: 0 },
+    { type: "verification_batch", seq: 3, status: "polling", round: 1, succeeded: 3, errored: 0, processing: 0, total: 3, settled: 0 },
+    // One seat paused; the other two settled.
+    { type: "verification_batch", seq: 4, status: "submitted", round: 2, submitted: 1, total: 3, settled: 2 },
+  ];
+  const midway = foldQcLiveState(frames, { status: "running", error: "" });
+  assert.equal(midway.batch?.total, 3);
+  assert.equal(midway.batch?.settled, 2);
+  // Round 1's success count must not survive into round 2's window.
+  assert.equal(midway.batch?.succeeded, 0);
+  assert.equal(midway.batch?.returned, 2);
+  assert.ok((midway.batch?.returned ?? 0) <= (midway.batch?.total ?? 0));
+
+  const ended = foldQcLiveState(
+    [
+      ...frames,
+      { type: "verification_batch", seq: 5, status: "polling", round: 2, succeeded: 1, errored: 0, processing: 0, total: 3, settled: 2 },
+      { type: "verification_batch", seq: 6, status: "ended", total: 3, settled: 3 },
+    ] as QcEvent[],
+    { status: "running", error: "" },
+  );
+  assert.equal(ended.batch?.status, "ended");
+  assert.equal(ended.batch?.total, 3);
+  assert.equal(ended.batch?.settled, 3);
+  assert.equal(ended.batch?.returned, 3);
+});
+
+test("a batched run still resolves its candidates from seat events", () => {
+  // The seat cards are unchanged by the transport — only the activity frames
+  // between `verifier_started` and `verifier_complete` are missing.
+  const live = foldQcLiveState(
+    [
+      started(),
+      batchRoster(1),
+      { type: "verifier_started", seq: 2, candidate_id: "candidate-1", reviewer_index: 1 },
+      { type: "verifier_started", seq: 3, candidate_id: "candidate-1", reviewer_index: 2 },
+      {
+        type: "verifier_complete",
+        seq: 4,
+        candidate_id: "candidate-1",
+        reviewer_index: 1,
+        status: "completed",
+        upholds: true,
+      },
+      {
+        type: "verifier_complete",
+        seq: 5,
+        candidate_id: "candidate-1",
+        reviewer_index: 2,
+        status: "completed",
+        upholds: true,
+      },
+      {
+        type: "candidate_complete",
+        seq: 6,
+        candidate_id: "candidate-1",
+        outcome: "upheld",
+        panel_size: 2,
+        uphold_requires: 2,
+        completed_seats: 2,
+        upholds: 2,
+      },
+    ] as QcEvent[],
+    { status: "running", error: "" },
+  );
+
+  assert.equal(live.candidates.length, 1);
+  assert.equal(live.candidates[0].outcome, "upheld");
+  assert.equal(live.candidates[0].seats.length, 2);
+  // Both seats resolved, so the panel is in the Resolved group rather than
+  // stuck "in review" — the failure mode a transport with no per-seat
+  // activity would otherwise be indistinguishable from.
+  assert.equal(live.resolved.length, 1);
+  assert.equal(live.inReview.length, 0);
+});

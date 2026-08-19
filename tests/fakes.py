@@ -1073,6 +1073,27 @@ class SequencedFakeClient:
         self._lock = threading.Lock()
         self.requests: list[dict] = []
         self.messages = self  # client.messages.stream(...)
+        # client.messages.batches.{create,retrieve,results,cancel} — the
+        # batched phase-2 transport routes through the SAME scripts, so an
+        # existing QC fixture proves parity between the two paths instead of
+        # needing a parallel set of batch fixtures.
+        self.batches = _FakeBatches(self)
+
+    def pop_turn(self, request: dict):
+        """Resolve one request against the scripts. Raises a scripted error.
+
+        Shared by the streaming and batch fakes so both consume the same
+        queues in the same way; the batch fake catches what this raises and
+        turns it into an errored result line, which is what the real API
+        does with a per-request failure inside a batch.
+        """
+        with self._lock:
+            captured = dict(request)
+            if isinstance(captured.get("messages"), list):
+                captured["messages"] = list(captured["messages"])
+            self.requests.append(captured)
+            first_user = _user_text(request.get("messages", []))
+            return self._match_locked(first_user)
 
     def stream(self, **request):
         with self._lock:
@@ -1081,43 +1102,7 @@ class SequencedFakeClient:
                 captured["messages"] = list(captured["messages"])
             self.requests.append(captured)
             first_user = _user_text(request.get("messages", []))
-            # A grouping call quotes every candidate's title verbatim, so
-            # ordinary title-keyed scripts all match it. Routing it here —
-            # before the substring sweep, and only against keys that carry
-            # the marker themselves — stops it consuming a verdict scripted
-            # for one of the findings it is merely quoting, which would
-            # desynchronize that finding's whole panel.
-            consolidating = _CONSOLIDATION_MARKER in first_user
-            candidates = (
-                {
-                    key: queue
-                    for key, queue in self._scripts.items()
-                    if _CONSOLIDATION_MARKER in key
-                }
-                if consolidating
-                else {
-                    key: queue
-                    for key, queue in self._scripts.items()
-                    if _CONSOLIDATION_MARKER not in key
-                }
-            )
-            for key, queue in candidates.items():
-                if key in first_user:
-                    if not queue:
-                        raise AssertionError(
-                            f"Fake research client: no scripted turns left "
-                            f"for {key!r}."
-                        )
-                    turn = queue.pop(0)
-                    break
-            else:
-                if consolidating:
-                    turn = singleton_consolidation_for(first_user)
-                else:
-                    raise AssertionError(
-                        "Fake research client: no script matches the request "
-                        f"({first_user[:80]!r})."
-                    )
+            turn = self._match_locked(first_user)
         if isinstance(turn, Exception):
             raise turn
         return _FakeStreamCtx(
@@ -1128,6 +1113,163 @@ class SequencedFakeClient:
                 **_container_of(turn),
             )
         ) if not hasattr(turn, "usage") else _FakeResearchStreamCtx(turn)
+
+    def _match_locked(self, first_user: str):
+        # A grouping call quotes every candidate's title verbatim, so
+        # ordinary title-keyed scripts all match it. Routing it here —
+        # before the substring sweep, and only against keys that carry
+        # the marker themselves — stops it consuming a verdict scripted
+        # for one of the findings it is merely quoting, which would
+        # desynchronize that finding's whole panel.
+        consolidating = _CONSOLIDATION_MARKER in first_user
+        candidates = (
+            {
+                key: queue
+                for key, queue in self._scripts.items()
+                if _CONSOLIDATION_MARKER in key
+            }
+            if consolidating
+            else {
+                key: queue
+                for key, queue in self._scripts.items()
+                if _CONSOLIDATION_MARKER not in key
+            }
+        )
+        for key, queue in candidates.items():
+            if key in first_user:
+                if not queue:
+                    raise AssertionError(
+                        f"Fake research client: no scripted turns left "
+                        f"for {key!r}."
+                    )
+                turn = queue.pop(0)
+                break
+        else:
+            if consolidating:
+                turn = singleton_consolidation_for(first_user)
+            else:
+                raise AssertionError(
+                    "Fake research client: no script matches the request "
+                    f"({first_user[:80]!r})."
+                )
+        return turn
+
+
+
+class _FakeBatches:
+    """In-memory Message Batches API over a SequencedFakeClient's scripts.
+
+    Deliberately synchronous: ``create`` resolves every request immediately
+    and ``retrieve`` reports ``ended`` on the first poll, so a test never
+    sleeps. That models the parts of the contract the engine actually
+    depends on — custom_id round-tripping, per-request success/error result
+    lines, request_counts, pause_turn results carried into a second round,
+    and cancellation — without pretending to model provider queue latency,
+    which the engine treats as opaque anyway.
+
+    A scripted turn that is an Exception becomes an ERRORED result line
+    rather than a raised call, because that is where the real API puts a
+    per-request failure inside an otherwise healthy batch. A scripted
+    ``AssertionError`` from an exhausted or unmatched script is re-raised:
+    that is a broken fixture, not a modelled provider failure, and swallowing
+    it into an errored seat would turn a test bug into a passing partial run.
+    """
+
+    def __init__(self, client: "SequencedFakeClient"):
+        self._client = client
+        self._batches: dict[str, dict] = {}
+        self._counter = 0
+        self.created: list[list[dict]] = []
+        self.cancelled: list[str] = []
+
+    def create(self, *, requests):
+        self._counter += 1
+        batch_id = f"msgbatch_fake_{self._counter}"
+        self.created.append([dict(r) for r in requests])
+        results = []
+        counts = {
+            "processing": 0,
+            "succeeded": 0,
+            "errored": 0,
+            "canceled": 0,
+            "expired": 0,
+        }
+        for request in requests:
+            custom_id = request["custom_id"]
+            params = dict(request["params"])
+            try:
+                turn = self._client.pop_turn(params)
+            except AssertionError:
+                raise
+            if isinstance(turn, Exception):
+                counts["errored"] += 1
+                results.append(
+                    SimpleNamespace(
+                        custom_id=custom_id,
+                        result=SimpleNamespace(
+                            type="errored",
+                            error=_fake_batch_error(turn),
+                        ),
+                    )
+                )
+                continue
+            counts["succeeded"] += 1
+            message = SimpleNamespace(
+                content=turn.content,
+                stop_reason=turn.stop_reason,
+                usage=getattr(turn, "usage", None),
+                **_container_of(turn),
+            )
+            results.append(
+                SimpleNamespace(
+                    custom_id=custom_id,
+                    result=SimpleNamespace(type="succeeded", message=message),
+                )
+            )
+        self._batches[batch_id] = {"results": results, "counts": counts}
+        return SimpleNamespace(
+            id=batch_id,
+            processing_status="ended",
+            request_counts=SimpleNamespace(**counts),
+        )
+
+    def retrieve(self, batch_id):
+        record = self._batches[batch_id]
+        return SimpleNamespace(
+            id=batch_id,
+            processing_status="ended",
+            request_counts=SimpleNamespace(**record["counts"]),
+        )
+
+    def results(self, batch_id):
+        return list(self._batches[batch_id]["results"])
+
+    def cancel(self, batch_id):
+        self.cancelled.append(batch_id)
+        return SimpleNamespace(id=batch_id, processing_status="canceling")
+
+
+def _fake_batch_error(exc: Exception) -> SimpleNamespace:
+    """Wrap a scripted exception in the batch error envelope.
+
+    The type string is what the engine classifies on, so it has to be the
+    wire name rather than the Python class name.
+    """
+    name = type(exc).__name__.lower()
+    if "auth" in name:
+        wire = "authentication_error"
+    elif "ratelimit" in name or "rate_limit" in name:
+        wire = "rate_limit_error"
+    elif "badrequest" in name or "invalid" in name:
+        wire = "invalid_request_error"
+    elif "connection" in name or "timeout" in name:
+        wire = "timeout_error"
+    else:
+        wire = "api_error"
+    return SimpleNamespace(
+        type="error",
+        error=SimpleNamespace(type=wire, message=str(exc)),
+    )
 
 
 class _FakeResearchStreamCtx:

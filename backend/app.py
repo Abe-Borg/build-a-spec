@@ -4706,13 +4706,14 @@ def create_app(
                 client=client,
                 model=settings.QC_MODEL,
                 max_tokens=settings.QC_MAX_TOKENS,
-                effort=settings.QC_EFFORT,
+                lens_effort=settings.QC_LENS_EFFORT,
+                verifier_effort=settings.QC_VERIFIER_EFFORT,
                 version_index=session.doc.index,
                 discipline=effective_discipline(session),
                 source_guard=source_guard,
                 remembered_dismissed=remembered,
-                usage_sink=lambda u, g=run_generation: session.add_usage_if_current(
-                    g, "qc", u
+                usage_sink=lambda cat, u, g=run_generation: (
+                    session.add_usage_if_current(g, cat, u)
                 ),
             )
             if not started:

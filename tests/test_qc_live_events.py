@@ -116,6 +116,13 @@ def _run_client(
         started_at="2026-07-28T10:00:00-07:00",
         finished_at="2026-07-28T10:01:00-07:00",
         run_id="qc-live-test",
+        # This file pins the STREAMING relay: per-seat activity, search,
+        # fetch and retry frames exist only because a streamed request is
+        # iterated as it arrives. The batched transport has no stream to
+        # relay and deliberately emits none of them, so pinning it here
+        # would be pinning the wrong contract. Its own coverage lives in
+        # tests/test_qc_batch_verification.py.
+        batch_verification=False,
         event_sink=event_sink or events.append,
         should_stop=should_stop,
     )
@@ -144,6 +151,7 @@ def test_zero_candidates_emits_truthful_empty_phase_transitions() -> None:
             "total_candidates": 0,
             "total_seats": 0,
             "max_workers": max(1, settings.QC_MAX_WORKERS),
+            "transport": "stream",
         }
     ]
     assert _events_for(events, type="verify_progress") == [

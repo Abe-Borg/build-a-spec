@@ -1910,11 +1910,18 @@ def test_a_verifier_seats_one_hour_cache_subtotal_is_captured_and_priced() -> No
         assert seat.usage_totals["cache_creation_1h_input_tokens"] == 400
         rates = result.cost_basis["rates_per_token"]
         # 500 five-minute + 400 one-hour, each at its own rate — not 900 at
-        # either one.
+        # either one. Scaled by the seat's own rate multiplier, which is the
+        # batch discount under the default transport: the two mechanisms
+        # compose, and asserting the product is what pins that they do.
+        assert seat.cost_multiplier == settings.BATCH_COST_MULTIPLIER
         assert seat.estimated_cost_usd == round(
-            500 * rates["cache_write"] + 400 * rates["cache_write_1h"], 6
+            seat.cost_multiplier
+            * (500 * rates["cache_write"] + 400 * rates["cache_write_1h"]),
+            6,
         )
-        assert seat.estimated_cost_usd != round(900 * rates["cache_write"], 6)
+        assert seat.estimated_cost_usd != round(
+            seat.cost_multiplier * 900 * rates["cache_write"], 6
+        )
 
     assert result.usage_totals["cache_creation_1h_input_tokens"] == 800
     # Per-record and aggregate accounting both reconcile under the saved

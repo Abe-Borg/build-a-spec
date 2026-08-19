@@ -112,6 +112,13 @@ def _run(client: object) -> QCResult:
         version_index=store.index,
         started_at="2026-07-25T10:00:00-07:00",
         finished_at="2026-07-25T10:01:00-07:00",
+        # Streaming transport: these clients drive the fan-out by overriding
+        # `stream`, and the shared-failure circuit breaker they exercise is a
+        # property of a bounded submission pool — it caps calls by declining
+        # to START queued seats. A batch submits the whole phase at once, so
+        # there is nothing left to decline; its (equally safe, differently
+        # shaped) behaviour is pinned in tests/test_qc_batch_verification.py.
+        batch_verification=False,
     )
 
 

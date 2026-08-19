@@ -89,6 +89,81 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.12.0",
+        date="2026-08-19",
+        headline="Final QC costs about half as much",
+        summary=(
+            "The pre-issue review is the most expensive thing the app "
+            "does, and most of that went on the stage that checks "
+            "findings rather than the stage that finds them. Two changes "
+            "cut a typical pass by roughly half. Nothing about the review "
+            "itself was traded away: the same five specialists, the same "
+            "panel of reviewers arguing against every finding, the same "
+            "evidence rules and the same readiness gate."
+        ),
+        sections=(
+            ReleaseSection(
+                title="What Final QC costs",
+                items=(
+                    ReleaseItem(
+                        title="The checking stage runs at half price",
+                        body=(
+                            "Every finding is handed to two or three "
+                            "independent reviewers, and on a long section "
+                            "that is nine calls in ten. Those reviewers are "
+                            "now submitted together as one batch, which "
+                            "Anthropic prices at half. They read the same "
+                            "document, argue the same way and reach the same "
+                            "verdicts — the only difference is that they "
+                            "are queued rather than watched."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The review panel shows progress instead of activity",
+                        body=(
+                            "Because the checking stage is now queued, the "
+                            "Review Room can no longer show each reviewer "
+                            "searching and reading as it happens. It reports "
+                            "how many have returned instead, and every "
+                            "finding still shows its own reviewers and their "
+                            "votes. The first stage — the five "
+                            "specialists reading your section — is "
+                            "unchanged and still live."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Each stage now thinks as hard as its job needs",
+                        body=(
+                            "A specialist reads your whole section cold and "
+                            "has to work out what is wrong with it. A "
+                            "reviewer is handed one finding and asked "
+                            "whether it holds up. Those are not the same "
+                            "job, and they were being given the same amount "
+                            "of thinking time. The specialists are unchanged; "
+                            "the reviewers now think proportionally, which is "
+                            "where most of the remaining saving comes from."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Saved reviews will ask to be re-run once",
+                        body=(
+                            "A Final QC report records exactly how it was "
+                            "produced, and refuses to call itself current "
+                            "when any of that changes — that is what "
+                            "stops an old review being trusted for a "
+                            "document it no longer describes. Because this "
+                            "release changes how the review runs, a report "
+                            "saved in a project file will read as out of "
+                            "date the first time you open it. The report "
+                            "itself is kept and stays readable; re-running "
+                            "brings it current."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.11.0",
         date="2026-08-19",
         headline="The chat reads the research and the review — and briefs you",

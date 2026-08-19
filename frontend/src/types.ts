@@ -1197,6 +1197,29 @@ export type QcEvent =
       total_candidates?: number;
       total_seats?: number;
       max_workers?: number;
+      /** How phase 2 is being executed. "batch" submits every seat to the
+       *  Message Batches API at half price and therefore emits no per-seat
+       *  activity frames; "stream" is the live-relay path. The review is
+       *  identical either way — this only tells the board what kind of
+       *  progress it can honestly show. */
+      transport?: "batch" | "stream";
+    })
+  /** Progress of one batched verification round, reported from the
+   *  provider's own request_counts rather than inferred. */
+  | (QcEventBase & {
+      type: "verification_batch";
+      status: "submitted" | "polling" | "ended" | "cancelled" | "timeout" | "failed";
+      round?: number;
+      batch_id?: string;
+      submitted?: number;
+      settled?: number;
+      total?: number;
+      processing?: number;
+      succeeded?: number;
+      errored?: number;
+      canceled?: number;
+      expired?: number;
+      error?: string;
     })
   | (QcVerifierEventBase & { type: "verifier_started" })
   | (QcVerifierEventBase & {

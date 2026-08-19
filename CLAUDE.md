@@ -55,7 +55,13 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
 backend/
   settings.py              models (claude-sonnet-5 default), effort levels
                            (interview high / research high, dialed back
-                           2026-07-28 from xhigh — cost), max_tokens at
+                           2026-07-28 from xhigh — cost; Final QC's is now
+                           PER PHASE — QC_LENS_EFFORT high / QC_VERIFIER_EFFORT
+                           medium, both falling back to an explicitly-set
+                           QC_EFFORT so the global knob is never silently
+                           overridden upward), QC_BATCH_VERIFICATION (+ poll /
+                           wait / round ceilings) — see "Final QC phase 2 is
+                           batched"; max_tokens at
                            the 128k model ceiling, chat web-tool allowances,
                            port 8756, env knobs; PRICING carries BOTH
                            cache-write rates per model (cache_write = 1.25×
@@ -228,6 +234,13 @@ backend/
                            (SHAPE only — the partition is the engine's to validate
                            against the bucket it asked about)
   qc/engine.py             [Batch 4, pattern: research/engine.py] run_final_qc:
+                           _qc_request_kwargs is the ONE request shape both
+                           transports build from (one cache lineage); phase 2
+                           runs either as a streamed ThreadPool fan-out or —
+                           default — as one Message Batches submission
+                           (_run_batch_calls: rounds carry pause_turn
+                           continuations and retries, same policy/ceilings,
+                           50% token price, no live seat frames);
                            lens fan-out (ThreadPool cap settings.QC_MAX_WORKERS
                            = 8, pause_turn loop, 2×
                            search ceiling, PDF elision, retry policy, grounding) →
@@ -6850,6 +6863,177 @@ project-format bump.
   per-call read shows up as four disagreeing dimension dates, or as more
   than one reading inside a QC run, rather than passing quietly until the
   next midnight run.
+
+## Final QC per-phase effort — implemented notes
+
+Reported ask (Abraham): Final QC is still expensive. The first of two cost
+changes, and the one that costs nothing in rigor. No new endpoint, no new SSE
+event, no new dep, no schema or protocol bump.
+
+- **One effort across ~40 calls spent the budget where it bought least.**
+  Thinking bills as OUTPUT at the QC model's output rate, and reconciling the
+  v1.8.0 figures says output is ~85% of a run: ~561k input tokens on a 40-call
+  run is ~$2.80 at $5/M, against ~$13 of the pre-v1.8.0 $15.80. So the lever
+  is depth × call count, and phase 2 is ~90% of the calls.
+- **The two phases are not the same work.** A lens GENERATES — it reads the
+  section cold and decides what is wrong with it, so its depth is the review's
+  depth. A verifier seat ADJUDICATES — it is handed one claim, its rationale,
+  its proposed operations and the same document, and answers a bounded
+  question about that one claim. `QC_LENS_EFFORT` stays `high`;
+  `QC_VERIFIER_EFFORT` defaults to `medium`.
+- **An explicitly-set `BUILD_A_SPEC_QC_EFFORT` still moves BOTH, and the
+  resolution order is what makes that true.** The verifier default is a
+  default, not a floor: falling back to a literal `"medium"` would silently
+  run the phase that dominates the bill ABOVE a global `low` an operator had
+  deliberately set. So the fallback is the global when the global was set,
+  and `"medium"` only when it was not.
+- **Consolidation rides the LENS depth.** It is phase-1 judgement and one call
+  per bucket, so the seat depth would be the wrong dial and the saving is nil.
+- **Pinned once per run, per phase**, for the reason the single value was
+  pinned once before (v1.8.0): the audit record must provably describe what
+  was sent even if the environment changes mid-run. `effort` survives as the
+  one-value fallback that sets both, so every direct caller and every
+  pre-split test keeps working unchanged.
+- **Both depths are recorded and hashed.** `QCResult.verifier_effort` sits
+  beside `effort`, both ride `input_manifest.configuration`, and both render
+  in the Word memo and the report modal. A retained result therefore reads
+  STALE once either depth moves — the same posture `model` and `effort`
+  already took in v1.8.0, and the reason NEITHER version identifier was
+  bumped: bumping the protocol without the schema makes every saved v4
+  report `from_dict` to **None** (the strict block at
+  `schema_version >= QC_REPORT_SCHEMA_VERSION` requires an exact protocol
+  match), i.e. silently discards a paid report on load. Manifest staleness
+  is the tool for a configuration change; a version bump is not.
+- **A pre-split record must still load.** `_manifest_claims_consistent`
+  reconciles `verifier_effort` only as a PAIR — absent in the manifest and
+  empty on the record is consistent (an older report), present-and-different
+  is tampering. The report surfaces say "Not recorded" rather than repeating
+  the lens depth as if it were the seat's.
+- **Tests**: `tests/test_qc_phase_effort.py` (9) — per-phase routing, the
+  shipped defaults, one-effort-sets-both, per-phase override, the global-env
+  floor case (via a settings reload), both depths hashed and round-tripped,
+  a genuine pre-split record still loading (its fingerprint recomputed —
+  leaving the newer hash in place builds a record no version could have
+  written, and is caught by the manifest/fingerprint gate instead of by the
+  compatibility the test is about), and a tampered value still refused.
+
+## Final QC phase 2 is batched — implemented notes
+
+The second cost change, and a transport change only. Phase 2 is ~90% of a
+run's calls and every verifier seat is independent by construction — that is
+what makes the panel adversarial — so it is submitted as one Message Batches
+request at **50% of standard token prices**. No new endpoint, no new dep, no
+schema or protocol bump; one new SSE event type.
+
+- **The claim is narrow and total: batching changes transport and nothing
+  else.** Same model, same per-phase effort, same panel sizes, same prompts,
+  same grounding, same v4 adjudication, same audit records. Pinned by
+  `test_batched_and_streamed_verification_reach_the_same_verdicts`, which
+  compares the audit projection rather than a summary.
+- **`_qc_request_kwargs` is ONE definition on purpose.** The cache is a
+  strict prefix match over tools → system → messages, so two transports that
+  built those blocks separately would drift into two cache lineages the
+  moment either was edited — and the drift presents as a quietly doubled
+  bill, not as a failure. Both paths call it; pinned by a byte-comparison of
+  a streamed and a batched seat's request.
+- **`_run_batch_calls` is `_run_streaming_call` transposed.** Same pause_turn
+  continuation loop, same retry policy and attempt ceiling, same 2× search
+  runaway ceiling, same billed-usage accumulation across attempts, same
+  `_CallResult` shape — except the loop's inner step is one batch ROUND
+  rather than one request. Each result settles its seat, queues a
+  continuation, or queues a retry on a fresh conversation (a retry abandons
+  its attempt's conversation and container, exactly as streaming does).
+  `_verify_one` was split into `_verifier_call_spec` (request) and
+  `_verifier_outcome` (record) so both transports produce byte-identical
+  audit records from the same response.
+- **Batch failures are error OBJECTS, not raised exceptions**, so
+  `classify_exception` cannot see them. `_BATCH_ERROR_CLASSES` maps the wire
+  `type` onto the same `FailureClass` taxonomy, because the retry decision
+  and the shared-failure circuit both key off it and a batched seat must
+  reach the same verdict a streamed one would.
+- **A seat with no result line is recorded FAILED, never dropped.** A
+  silently shortened panel can reach `upheld` on fewer seats than the
+  severity demanded. Same reasoning for a round ceiling breach and a
+  wall-clock timeout: everything unsettled becomes a failed seat, which makes
+  the run partial and blocks readiness.
+- **The streamed circuit breaker's CALL CAP does not survive, and cannot.**
+  It caps calls by declining to START queued seats; a batch submits the whole
+  phase at once. The safety property it protects does survive — every
+  expected seat is present as a failed record, nothing is promoted, the run
+  is partial — and the dollar exposure is nil, because a shared
+  `invalid_request_error` is rejected before inference and bills nothing.
+  `tests/test_qc_verifier_v3.py` and `tests/test_qc_live_events.py` therefore
+  pin `batch_verification=False`: they describe contracts (a bounded
+  submission pool, a live relay) that belong to the streaming transport.
+- **Stop is better here, not worse.** `batches.cancel` means seats that had
+  not started are never billed, where a streamed stop lets in-flight calls
+  finish and discards them. A stop before submission spends nothing at all.
+- **What is genuinely lost is live seat frames.** A batch request does not
+  stream, so there is no `verifier_activity`/`_search`/`_fetch` to relay —
+  and none is synthesized. `verification_started` gains `transport`, and a
+  new `verification_batch` event reports the provider's own `request_counts`
+  (submitted / polling / ended / cancelled / timeout / failed). Phase 1 still
+  streams and is untouched. `QCDrawer`'s `QcBatchLine` renders that progress;
+  `qcLive.mergeBatchProgress` carries `submitted`/`total` forward across
+  polling frames, which report counts but not totals — a line flickering back
+  to "0 of 0" would read as a stall on the one transport that cannot show
+  per-seat motion.
+- **Recorded in the hashed manifest** (`configuration.batch_verification`),
+  because it is a fact about how the review was executed and about what
+  evidence the record carries. `build_qc_input_manifest` defaults it to the
+  live SETTING rather than `False` — that manifest is rebuilt by
+  `matches_inputs` for the staleness check, and a caller who forgets the
+  argument would otherwise fingerprint a regime no run ever used and mark
+  every result stale forever (which is exactly what happened, caught by
+  `test_qc_start_gates_and_apply_is_one_undo_step`).
+- **`BUILD_A_SPEC_QC_BATCH_VERIFICATION=0` falls back to the streaming path**,
+  which is retained verbatim and is still what phase 1 uses.
+  `QC_BATCH_MAX_WAIT_SECONDS` (2h) is a runaway guard, not a target.
+- **The discount has to reach the METER, and that is where it nearly did
+  not** (caught in review on PR #136, Codex). Batched tokens are billed at
+  `settings.BATCH_COST_MULTIPLIER` (0.5), and every cost surface was still
+  pricing them at list — so the change whose entire point is a cheaper run
+  reported the old number, inside a document that presents itself as an
+  audit record. The multiplier rides the RECORD
+  (`QCVerdict.cost_multiplier`), never `cost_basis`: the rate table did not
+  change, only how one call was billed, and adding a field to the strictly
+  shape-validated pricing snapshot would have meant a third entry in
+  `_COST_BASIS_SHAPES` — the surface this file already records a
+  hybrid-forgery review finding about. Three consequences, all load-bearing:
+  (1) a mixed-rate run CANNOT be priced from merged usage, because one
+  multiplier cannot describe a total whose parts were billed at two, so
+  `_run_estimated_cost` sums the records instead — and
+  `_audit_accounting_consistent` reconciles it the same two ways round,
+  GATED on whether anything is discounted, so every pre-existing report
+  keeps passing its original check byte-for-byte (that check runs on load;
+  a total that disagreed would `from_dict` to None and discard the whole
+  paid report). (2) Phase 1 is NOT discounted — it still streams, and
+  discounting the run wholesale would understate the bill by as much as the
+  old code overstated it. (3) The session meter needs its own `qc_batched`
+  category, because one bucket can only ever be priced at one rate; the
+  runner therefore meters per billing class (`usage_by_meter_category`)
+  and the sink signature gained the category.
+- **Batch progress is PHASE-level, not round-level** (same review). A later
+  round carries only the seats that still need work, so its own `submitted`
+  shrinks while earlier rounds' results still stand — rendering the
+  provider's per-batch counters showed "2 of 1" mid-phase and finished at
+  "1 of 1" on a phase with three seats. `settled`/`total` are recomputed
+  from the seats on every frame and are what the board renders;
+  `mergeBatchProgress` resets the provider counters when the round changes.
+- **Tests**: `tests/test_qc_batch_verification.py` (22) — the parity claim,
+  request-byte identity across transports, one batch per phase with unique
+  custom_ids, the transport on the roster event, progress from real counts,
+  no live frames, pause_turn spanning two rounds, a retry on a fresh
+  conversation, non-retryable and shared-invalid failures, a missing result
+  line, cancellation mid-flight and before submission, the manifest
+  round trip, and seven on cost accounting (seat rate, lenses never
+  discounted, the summed run total surviving a reload, the reported total
+  actually dropping, bounds on a persisted multiplier, a pre-discount
+  record pricing at list, and the meter's split buckets). The fake
+  `_FakeBatches` routes through the SAME scripts as the
+  streaming fake, so an existing QC fixture proves parity rather than needing
+  a parallel fixture set — which is why the whole pre-existing QC suite runs
+  through the batched path by default.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

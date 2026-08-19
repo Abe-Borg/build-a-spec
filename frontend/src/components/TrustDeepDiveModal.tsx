@@ -897,6 +897,11 @@ function Dossier() {
               (critical/high refutations additionally need at least one
               validated citation to count). Survivors
               take the median of the original and the upheld revised severities.
+              This stage is submitted as one <em>batch</em> of independent
+              requests, which the API prices at half. Nothing about the review
+              changes; batched requests are not streamed, so the panel board
+              reports how many seats have returned instead of showing each
+              seat’s activity as it happens.
               Refuted findings are kept and shown in the report rather than
               quietly deleted. The verifiers also judge the proposed fix as
               untrusted input, and must reject one that is partial, ambiguous,
@@ -920,19 +925,26 @@ function Dossier() {
           }
           model={
             <>
-              Claude Opus 5, effort “high” — five lens calls plus two or three
-              verifier calls <em>per finding</em>. This is still the most
-              expensive action in the app. Your document is sent once per
-              stage rather than once per call: the API caches it and every
-              later call in that stage reads the cached copy at a tenth of the
-              price.
+              Claude Opus 5 — five lens calls plus two or three verifier calls{" "}
+              <em>per finding</em>. Reasoning depth is set per stage: “high” for
+              the lenses, which read the section cold and decide what is wrong
+              with it, and “medium” for the verifier seats, which adjudicate one
+              already-stated claim with the same document in front of them.
+              This is still the most expensive action in the app. Your document
+              is sent once per stage rather than once per call: the API caches
+              it and every later call in that stage reads the cached copy at a
+              tenth of the price.
             </>
           }
           bounds={
             <>
               A failed verifier seat makes its finding{" "}
               <b className="text-ink">inconclusive</b> — never counted as either
-              confirmed or refuted — and marks the whole run partial. A missing
+              confirmed or refuted — and marks the whole run partial. That holds
+              on the batched path too: a seat the batch never returned a result
+              for is recorded as failed rather than dropped, because a silently
+              shortened panel could reach “upheld” on fewer seats than the
+              severity demanded. A missing
               lens or a failed seat{" "}
               <b className="text-ink">blocks “ready to issue”</b> even when the
               surviving votes would pass. Findings are content-addressed: the id

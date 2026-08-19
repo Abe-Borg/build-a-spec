@@ -2672,8 +2672,17 @@ def _qc_render_identity(
         ("Section title", section.title or "[TBD]"),
         ("Model", qc_result.get("model") or "Not recorded"),
         (
-            "Reasoning effort",
+            "Reasoning effort (lens review)",
             "Not recorded" if legacy else qc_result.get("effort") or "Not recorded",
+        ),
+        # Recorded separately since the phases run at different depths. A
+        # report written before the split carries no value here and says so
+        # rather than repeating the lens depth as if it were the seat's.
+        (
+            "Reasoning effort (verifier seats)",
+            "Not recorded"
+            if legacy
+            else qc_result.get("verifier_effort") or "Not recorded",
         ),
         # The reviewers judge edition currency against this, and it is the
         # user's local date — not the UTC calendar date of "Started" above.

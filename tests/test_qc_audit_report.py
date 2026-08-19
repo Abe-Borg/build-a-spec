@@ -767,6 +767,146 @@ def test_detailed_docx_preserves_key_sections_findings_evidence_and_votes() -> N
     assert "2 reviewer record(s)" in text
 
 
+def test_the_word_memo_condenses_panels_and_telemetry_without_omitting() -> None:
+    """The memo is a report, not a transcript of the run record.
+
+    The reviewed production report ran ~68k words because every candidate
+    rendered a full per-seat dossier: near-verbatim verdict notes three
+    times over, four "No X record was persisted" lines per seat, per-seat
+    billing counters, and every URL reprinted at each mention (5.2 prints
+    per unique URL). The condensed memo keeps every fact reachable — seat
+    votes in a table, one representative note per vote side, URLs resolved
+    once in Appendix B and cited by E-number — with the complete record in
+    the JSON export. This test pins each mechanism.
+    """
+    store, result = _rich_audit_result()
+    document = Document(
+        io.BytesIO(build_qc_memo(result.to_dict(), store.doc, stale=False))
+    )
+    paragraphs = "\n".join(p.text for p in document.paragraphs)
+    text = _document_text(document)
+
+    # Every seat is still accounted for — as a table row with its vote.
+    assert "Fix adequate" in text
+    assert "UPHOLD" in text and "REFUTE" in text
+
+    # One representative note per vote side, not one per seat: the first
+    # upholding seat speaks for the unanimous panel and the later seats'
+    # distinct notes stay in the JSON export.
+    assert "Representative verdict note for 3 upholding seats" in text
+    assert "The retrieved basis supports the defect." in text
+    assert "The document and citation conflict." not in text
+    assert "The complete correction is safe to apply." not in text
+    # The refuted candidate's refuting side still speaks.
+    assert "The text is objectively measurable." in text
+    assert "No actionable language defect remains." not in text
+
+    # Empty telemetry lists render nothing instead of boilerplate negatives.
+    assert "No verifier search-query record was persisted." not in text
+    assert "No verifier retrieved-source record was persisted." not in text
+    assert "No separate billed-attempt" not in text
+    assert "No disposition-event history was persisted." not in text
+
+    # Per-seat billing counters live in the JSON export, not the memo.
+    assert "Verifier usage" not in text
+    assert "Estimated verifier cost" not in text
+
+    # Inline sections cite the evidence register instead of reprinting the
+    # URL; the register itself resolves the number to the full URL once.
+    url = "https://example.test/nfpa-13-edition"
+    assert url not in paragraphs
+    assert url in text  # the Appendix B table
+    assert "E-001" in paragraphs
+
+    # The surviving finding's fix renders its exact proposed text without
+    # the JSON envelope. (The refuted-ops count line is pinned in
+    # test_disputed_candidates_reach_the_register_and_their_own_heading,
+    # whose payload actually carries refuted operations.)
+    assert "Comply with the recorded edition of NFPA 13." in text
+    assert '"action": "replace"' not in text
+
+
+def test_disputed_candidates_reach_the_register_and_their_own_heading() -> None:
+    """DP candidates are swept into Appendix B under their body ordinal.
+
+    The pre-condensation register never swept the ``disputed`` collection
+    (Chunk 5.1 added it after the sweep was written), and its "Referenced
+    by" labels numbered raw collection order while headings numbered
+    severity-sorted — two ways one URL's provenance could point at the
+    wrong candidate. Both are pinned here, along with the layout fix that
+    "Why disputed" renders under the candidate's heading rather than above
+    it (where it visually attached to the previous entry).
+    """
+    store, result = _rich_audit_result()
+    payload = copy.deepcopy(result.to_dict())
+    disputed_url = "https://example.test/disputed-evidence"
+    survivor = copy.deepcopy(payload["findings"][0])
+    survivor.update(
+        {
+            "finding_id": "qc-dp-contested01",
+            "title": "Contested cutout prohibition",
+            "verification_outcome": "disputed",
+            "dispute_reason": "split_panel",
+            "source_urls": [disputed_url],
+            "accepted_sources": [disputed_url],
+            "ops_semantic_status": "not_evaluated",
+            "ops_valid": False,
+        }
+    )
+    payload["disputed"] = [survivor]
+    refuted_with_ops = copy.deepcopy(payload["findings"][0])
+    refuted_with_ops.update(
+        {
+            "finding_id": "qc-rf-withops001",
+            "title": "Refuted candidate that proposed an edit",
+            "verification_outcome": "refuted",
+            "proposed_ops": [
+                {
+                    "action": "replace",
+                    "target_id": "pt1.a1.p1",
+                    "text": "Never-applied refuted operation text.",
+                }
+            ],
+            "ops_semantic_status": "not_evaluated",
+            "ops_valid": False,
+        }
+    )
+    payload["refuted"] = [*payload["refuted"], refuted_with_ops]
+    document = Document(
+        io.BytesIO(build_qc_memo(payload, store.doc, stale=False))
+    )
+    text = _document_text(document)
+    paragraph_texts = [p.text for p in document.paragraphs]
+
+    register_rows = [
+        "|".join(cell.text for cell in row.cells)
+        for table in document.tables
+        for row in table.rows
+    ]
+    dp_rows = [row for row in register_rows if disputed_url in row]
+    assert dp_rows, "the disputed candidate's source must reach Appendix B"
+    assert any("DP-001" in row for row in dp_rows)
+
+    heading_index = next(
+        index
+        for index, value in enumerate(paragraph_texts)
+        if value.startswith("DP-001 |")
+    )
+    why_index = next(
+        index
+        for index, value in enumerate(paragraph_texts)
+        if value.startswith("Why disputed:")
+    )
+    assert heading_index < why_index
+    assert "NOT EVALUATED - CANDIDATE DISPUTED" in text
+
+    # A refuted candidate's operations are counted with a pointer to the
+    # JSON export, never itemized as applicable-looking edit text.
+    assert "1 operation(s) recorded" in text
+    assert "Never-applied refuted operation text." not in text
+    assert "NOT EVALUATED - CANDIDATE REFUTED" in text
+
+
 def test_docx_export_time_qc_controls_cannot_present_a_complete_signoff() -> None:
     store, result = _rich_audit_result()
     base = result.to_dict()

@@ -6344,6 +6344,104 @@ No new dep.
   and every surface offering them says so. Treat both folders and every
   exported bundle as sensitive project data.
 
+## The Final QC Word report is a memo, not a transcript — implemented notes (v1.10.0)
+
+Reported symptom (Abraham): "the final qc report is stupid long… we need
+important shit, not bullshit." Measured on the reporting run: **67,981 words
+across 4,213 paragraphs (~150 pages)** for 33 candidates. Three mechanical
+drivers: 76 verifier-seat dossiers at ~15 paragraphs each (near-verbatim
+verdict notes three times over on unanimous panels, plus per-seat token
+usage, dollar cost, and request/response counters), 302 lines of
+"No X record was persisted" empty-list boilerplate, and every URL reprinted
+at every mention — 2,550 URL prints for 488 unique URLs (5.2× each; the
+worst printed 51 times) while Appendix B, the deduplicated register built
+for exactly this, was referenced by nothing. The fix condenses the WORD
+rendering only; `QCResult`, `/api/qc/export.json`, `QCReportModal` (the
+on-screen no-truncation surface, per its own contract) and the whole run
+pipeline are untouched. This is the reporting contract's own sentence doing
+the work: "Word can format or condense dense structures for readability" —
+nothing is omitted, and the owner ratified trimming refuted/inconclusive
+operation payloads to counted pointers ("handle it", 2026-08-19).
+
+- **One evidence sweep feeds the whole build.** `build_qc_memo` computes
+  `_qc_candidate_ordinals` (id(dict)→SF/RF/DP/IC ordinal, keyed by object
+  identity — safe because the memo clones the result once and every
+  renderer reads that clone) and primes `_qc_memo_evidence_entries` (the
+  register + a url→E-number map, memoized on the document like
+  `_qc_schema_version`) BEFORE any section renders. Inline sections cite
+  `E-004 (host)` via `_qc_source_refs_line`; only Appendix B prints full
+  URLs (hyperlinked). A URL the register somehow missed falls back to
+  printing verbatim — nothing is ever silently dropped. Two latent bugs
+  died with this: the register never swept the `disputed` collection
+  (Chunk 5.1 added it after the sweep was written), and its "Referenced by"
+  labels numbered raw collection order while body headings numbered
+  severity-sorted — same URL, two candidate numbers. Both pinned.
+- **Panels are a table plus per-side representative prose**
+  (`_qc_render_panel`, replacing the per-seat `_qc_render_verdict`
+  dossiers). Every seat keeps a row (seat/status/vote/revised severity/fix
+  adequate); the first completed seat of each VOTE SIDE speaks for it
+  ("Representative verdict note for 3 upholding seats"), so a dissenting
+  seat always prints. A **disputed** candidate prints every completed
+  seat's note — the disagreement IS the content. Refutation evidence
+  (v4's severity gate) now renders per refuting seat with its validation
+  result — the old memo never rendered `refutation_evidence` at all.
+  Failed/cancelled seats stay loud (risk callout with the error). Seat
+  telemetry aggregates to panel-level query/source lines; per-seat
+  usage/cost/request/response counters are JSON-only now, and the usage
+  section's citation says so instead of "remain in their detailed records
+  above". `Proposed fix adequate: APPROVED (N of M completed seats)` is
+  derived once per finding in `_qc_render_ops` (keeps the pinned literal).
+- **Empty telemetry renders nothing.** `_qc_source_refs_line` /
+  `_qc_query_line` take `empty=None` (skip) by default; explicit empty text
+  survives only where absence is itself the disclosure (a grounded finding
+  with no accepted source, the legacy no-verdicts paragraph, the
+  missing-lens/missing-checks callouts). Billed-attempt lists render as the
+  DELTA vs the final record ("Additional billed-attempt …"), not a second
+  full copy. Source-check blocks render exceptions only (`accepted=False`
+  with reason); accepted ones are the register's rows.
+- **Operations render as their content, not their envelope.**
+  `_qc_operation_lines` puts action/target/other-keys on a header line and
+  the `text` payload verbatim in the `QC Operation` style — every persisted
+  key still renders, just without JSON braces/escaping (the exact dict
+  stays in the JSON export, which Apply revalidates anyway). Refuted and
+  inconclusive candidates get a count + JSON pointer instead of an
+  operation dump (they are non-actionable by construction); disputed keeps
+  full rendered ops because a human adjudicates them from this document.
+- **Identity lines merged** (Location = element · reviewed ref · anchor
+  state, one Severity line carrying the submitted original), reviewed
+  text/issue/rationale kept in full for every candidate kind — that is the
+  important shit. Multi-origin candidates render one line per origin
+  (lens, severity, title, evidence E-refs, own-ops note, origin id); the
+  full origin claims stay verbatim in the JSON record, and the intro says
+  so instead of "reproduced below exactly". Reviewed checks render as a
+  `# | Outcome | Reviewed check` table with a note line per check that has
+  one. "Why disputed" moved INSIDE `_render_memo_finding` — it used to
+  render before the DP heading and visually attached to the previous
+  candidate.
+- **Shared partitions** (`_qc_ordered_survivors`, `_qc_substantively_refuted`,
+  `_qc_disputed_candidates`, `_qc_inconclusive_candidates`) are extracted so
+  the appendix renderers and the ordinal map cannot disagree about which
+  candidate is RF vs IC (legacy `default_refuted` records still file under
+  IC).
+- **Result**: a synthetic run shaped like the reported one (19 SF + 9 RF +
+  5 DP, 3-seat panels) renders 4,787 → 1,257 paragraphs and 34.2k → 20.4k
+  words; production reports shrink more (their telemetry share was larger).
+  What survives is severity-ordered findings at ~400 words each, and the
+  methodology section discloses the condensation and names the JSON export
+  as the lossless companion.
+- **Tests**: the fidelity pins survived unchanged by design ("Proposed fix
+  adequate: APPROVED", "N reviewer record(s)", seat-1 notes, refuted
+  claim/rationale, disputed/inconclusive labels). New:
+  `test_the_word_memo_condenses_panels_and_telemetry_without_omitting`
+  (representative-note rule incl. later seats' notes ABSENT, no empty-list
+  boilerplate, no per-seat billing, URL-once-in-register + E-ids inline,
+  ops without JSON braces) and
+  `test_disputed_candidates_reach_the_register_and_their_own_heading`
+  (DP sweep + ordinal agreement + the Why-disputed ordering fix + the
+  refuted ops count line); both fail against the pre-change renderer.
+  `test_qc_consolidation.py`'s origin-evidence test now reads tables too
+  and additionally pins that the origin URL appears ONLY in the register.
+
 ## Commands
 
 ```

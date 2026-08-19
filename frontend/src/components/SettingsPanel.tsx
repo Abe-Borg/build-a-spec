@@ -24,6 +24,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   research: "Research",
   audit: "Audit",
   qc: "Final QC",
+  qc_batched: "Final QC (batched)",
   template: "Template creation",
 };
 

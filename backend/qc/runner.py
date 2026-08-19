@@ -117,7 +117,7 @@ class QCRunner:
         source_guard: QCSourceGuard | None = None,
         remembered_dismissed: set[str] | dict[str, dict[str, Any]] | None = None,
         on_settled: Callable[[], None] | None = None,
-        usage_sink: Callable[[dict], None] | None = None,
+        usage_sink: Callable[[str, dict], None] | None = None,
     ) -> bool:
         """Kick QC off; false while another attempt runs or still settles."""
         with self._lock:
@@ -205,7 +205,9 @@ class QCRunner:
             except QCFanoutError as exc:
                 if usage_sink is not None and exc.usage_totals:
                     try:
-                        usage_sink(exc.usage_totals)
+                        # A total lens failure never reaches phase 2, so
+                        # nothing here was batched.
+                        usage_sink("qc", exc.usage_totals)
                     except Exception:  # noqa: BLE001 — metering never hides failure
                         pass
                 if exc.result is not None:
@@ -244,7 +246,14 @@ class QCRunner:
                 result.finished_at = _now_iso()
                 if usage_sink is not None:
                     try:
-                        usage_sink(result.usage_totals)
+                        # Per billing class, not one lump: the batched
+                        # verification phase was charged at the provider's
+                        # batch rate and a single bucket could only be
+                        # priced at one of the two.
+                        for category, bucket in (
+                            result.usage_by_meter_category().items()
+                        ):
+                            usage_sink(category, bucket)
                     except Exception:  # noqa: BLE001 — metering never sinks a run
                         pass
                 self._finalize_attempt(

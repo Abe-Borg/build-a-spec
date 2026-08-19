@@ -316,6 +316,14 @@ PRICING: dict[str, dict[str, float]] = {
 # no separate per-request charge — only the tokens it returns.
 WEB_SEARCH_COST = 10.0 / 1_000
 
+# The Message Batches API prices all token usage at 50% of standard rates
+# (VERIFIED 2026-08). Deliberately NOT env-overridable: this is a published
+# provider rate, like the PRICING table above, not an operator preference —
+# and a meter that could be told the discount is something else would stop
+# describing the invoice. Final QC's batched verification phase is the only
+# thing that uses it today. Keep it current if Anthropic's discount moves.
+BATCH_COST_MULTIPLIER = 0.5
+
 # --- Prompt cache -----------------------------------------------------------
 
 # The TTL every breakpoint in a chat request is written at. One hour by

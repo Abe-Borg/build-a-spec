@@ -468,3 +468,155 @@ def test_a_retained_batched_result_reads_stale_once_the_transport_flips(
     assert not result.matches_inputs(
         store.index, store.doc, None, DEFAULT_MODULE
     )
+
+
+# ---------------------------------------------------------------------------
+# The bill
+# ---------------------------------------------------------------------------
+#
+# The point of batching is that those tokens cost half. A meter that still
+# quotes list price defeats the change and, worse, overstates what the user
+# actually spent — in a report that presents itself as an audit record.
+
+
+def test_a_batched_seat_is_priced_at_the_batch_rate():
+    from backend.usage_ledger import estimate_usage_cost
+
+    batched = _run(SequencedFakeClient(_one_finding_scripts()), batch=True)
+    streamed = _run(SequencedFakeClient(_one_finding_scripts()), batch=False)
+
+    batched_seats = [v for f in batched.findings for v in f.verdicts]
+    streamed_seats = [v for f in streamed.findings for v in f.verdicts]
+    assert batched_seats and streamed_seats
+
+    for seat in batched_seats:
+        assert seat.cost_multiplier == settings.BATCH_COST_MULTIPLIER
+        assert seat.estimated_cost_usd == estimate_usage_cost(
+            settings.QC_MODEL,
+            seat.usage_totals,
+            multiplier=settings.BATCH_COST_MULTIPLIER,
+        )
+    for seat in streamed_seats:
+        assert seat.cost_multiplier == 1.0
+        assert seat.estimated_cost_usd == estimate_usage_cost(
+            settings.QC_MODEL, seat.usage_totals
+        )
+
+
+def test_lens_records_are_never_discounted():
+    """Phase 1 still streams, so it is still billed at list price.
+
+    Discounting the whole run because the run was 'batched' would understate
+    the bill by as much as the old code overstated it.
+    """
+    from backend.usage_ledger import estimate_usage_cost
+
+    result = _run(SequencedFakeClient(_one_finding_scripts()), batch=True)
+    for lens in result.lens_statuses:
+        assert lens.estimated_cost_usd == estimate_usage_cost(
+            settings.QC_MODEL, lens.usage_totals
+        )
+
+
+def test_the_run_total_is_the_sum_of_its_records_when_any_was_discounted():
+    """A mixed-rate run cannot be priced from merged usage, so it is summed.
+
+    And the audit record has to agree with itself: `_audit_accounting_
+    consistent` runs on load, so a total that did not reconcile would make
+    `from_dict` discard the whole paid report.
+    """
+    result = _run(SequencedFakeClient(_one_finding_scripts()), batch=True)
+    records = [
+        *result.lens_statuses,
+        *([result.consolidation] if result.consolidation is not None else []),
+        *(v for f in result.findings for v in f.verdicts),
+    ]
+    assert result.estimated_cost_usd == round(
+        sum(record.estimated_cost_usd for record in records), 6
+    )
+    from backend.qc.engine import QCResult
+
+    assert QCResult.from_dict(result.to_dict()) is not None
+
+
+def test_batching_actually_lowers_the_reported_run_cost():
+    """The headline claim, asserted as a number rather than a comment."""
+
+    def priced_scripts():
+        # The default fixtures bill nothing, so a cost comparison over them
+        # is vacuously equal. These seats spend.
+        return _one_finding_scripts(
+            verdicts=[
+                qc_verdict_response(
+                    True, tokens={"input": 20_000, "output": 4_000}
+                ),
+                qc_verdict_response(
+                    True, tokens={"input": 20_000, "output": 4_000}
+                ),
+            ]
+        )
+
+    batched = _run(SequencedFakeClient(priced_scripts()), batch=True)
+    streamed = _run(SequencedFakeClient(priced_scripts()), batch=False)
+    # Identical tokens, identical verdicts — only the rate differs.
+    assert batched.usage_totals == streamed.usage_totals
+    assert batched.estimated_cost_usd > 0
+    assert batched.estimated_cost_usd < streamed.estimated_cost_usd
+
+
+def test_the_multiplier_survives_a_round_trip_and_bounds_are_enforced():
+    from backend.qc.engine import QCResult
+
+    result = _run(SequencedFakeClient(_one_finding_scripts()), batch=True)
+    restored = QCResult.from_dict(result.to_dict())
+    assert restored is not None
+    assert all(
+        v.cost_multiplier == settings.BATCH_COST_MULTIPLIER
+        for f in restored.findings
+        for v in f.verdicts
+    )
+
+    # A record claiming a multiplier outside (0, 1] is not a discount; it is
+    # a way to understate real spend, so it is refused rather than clamped.
+    for bad in (0.0, -0.5, 1.5, "half", True):
+        payload = result.to_dict()
+        payload["findings"][0]["verdicts"][0]["cost_multiplier"] = bad
+        assert QCResult.from_dict(payload) is None, bad
+
+
+def test_a_record_written_before_the_discount_prices_at_list():
+    """Absent means 1.0, and the saved total must still reconcile."""
+    from backend.qc.engine import QCResult
+
+    payload = _run(
+        SequencedFakeClient(_one_finding_scripts()), batch=False
+    ).to_dict()
+    for finding in payload["findings"]:
+        for verdict in finding["verdicts"]:
+            verdict.pop("cost_multiplier")
+
+    restored = QCResult.from_dict(payload)
+    assert restored is not None
+    assert all(
+        v.cost_multiplier == 1.0
+        for f in restored.findings
+        for v in f.verdicts
+    )
+
+
+def test_the_session_meter_prices_the_batched_phase_separately():
+    """The ledger buckets discounted tokens apart, or it cannot price them."""
+    from backend.usage_ledger import UsageLedger, estimate_usage_cost
+
+    ledger = UsageLedger()
+    tokens = {"input_tokens": 1_000_000, "output_tokens": 100_000}
+    ledger.add("qc", dict(tokens))
+    ledger.add("qc_batched", dict(tokens))
+    snapshot = ledger.snapshot()
+
+    by_category = snapshot["estimated_cost_usd"]["by_category"]
+    assert by_category["qc"] == estimate_usage_cost(settings.QC_MODEL, tokens)
+    assert by_category["qc_batched"] == estimate_usage_cost(
+        settings.QC_MODEL, tokens, multiplier=settings.BATCH_COST_MULTIPLIER
+    )
+    assert by_category["qc_batched"] < by_category["qc"]

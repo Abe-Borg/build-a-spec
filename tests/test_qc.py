@@ -1261,17 +1261,26 @@ def test_qc_usage_rolls_up_under_the_qc_model_pricing(monkeypatch):
     _wait_qc(client)
 
     usage = client.get("/api/usage").json()
+    # Split by the rate each phase was billed at: the streamed lens phase at
+    # list price, the batched verification phase at the provider's batch
+    # rate. One bucket could only ever be priced at one of the two.
     qc = usage["categories"]["qc"]
-    assert qc["input_tokens"] == 5000  # 4000 lens + 2 × 500 verifiers
+    batched = usage["categories"]["qc_batched"]
+    assert qc["input_tokens"] == 4000  # the lens phase
     assert qc["output_tokens"] == 800
+    assert batched["input_tokens"] == 1000  # 2 x 500 verifier seats
     # The QC model MUST carry its own PRICING entry. A model absent from the
     # table is silently metered at Sonnet 5's rates (``usage_ledger._rates``
     # falls back via ``dict.get``) and the resulting cost_basis still passes
     # every audit-integrity gate — so the wrong number would ship unnoticed.
     assert settings.QC_MODEL in settings.PRICING
     rates = settings.PRICING[settings.QC_MODEL]
-    assert usage["estimated_cost_usd"]["by_category"]["qc"] == round(
-        5000 * rates["input"] + 800 * rates["output"], 6
+    by_category = usage["estimated_cost_usd"]["by_category"]
+    assert by_category["qc"] == round(
+        4000 * rates["input"] + 800 * rates["output"], 6
+    )
+    assert by_category["qc_batched"] == round(
+        settings.BATCH_COST_MULTIPLIER * 1000 * rates["input"], 6
     )
 
 

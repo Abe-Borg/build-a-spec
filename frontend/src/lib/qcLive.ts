@@ -155,11 +155,24 @@ export interface QcStageLiveState {
 export interface QcBatchLiveState {
   status: "submitted" | "polling" | "ended" | "cancelled" | "timeout" | "failed";
   round: number;
+  /** PHASE-level, not round-level: total seats, and seats with a final
+   *  result. These are what the board renders, because a later round
+   *  carries only the seats that still need work — so a round's own
+   *  `submitted` shrinks while earlier rounds' results still stand, and
+   *  rendering it would show "2 of 1" and finish at "1 of 1" on a phase
+   *  that had many more seats. */
+  total: number;
+  settled: number;
+  /** Seats that have at least returned once, phase-wide: settled in an
+   *  earlier round, plus this round's provider-side completions. Monotonic
+   *  within a round; it can step back by the number of seats that paused,
+   *  which is honest — those seats returned but did not finish. */
+  returned: number;
+  /** Provider counters, scoped to the CURRENT round only. */
   submitted: number;
   succeeded: number;
   errored: number;
   processing: number;
-  total: number;
   error: string;
 }
 
@@ -175,14 +188,30 @@ function mergeBatchProgress(
   previous: QcBatchLiveState | null,
   event: QcBatchEvent,
 ): QcBatchLiveState {
+  const round = event.round ?? previous?.round ?? 1;
+  // Provider counters describe ONE batch, so a new round starts them over.
+  // Carrying them across rounds is what produced "2 of 1": round 2 submits
+  // only the seats that still need work while round 1's success count is
+  // still standing.
+  const sameRound = previous !== null && previous.round === round;
+  const carry = sameRound ? previous : null;
+  const submitted = event.submitted ?? carry?.submitted ?? 0;
+  const succeeded = event.succeeded ?? carry?.succeeded ?? 0;
+  const errored = event.errored ?? carry?.errored ?? 0;
+  // Phase-level, and always taken from the event: the backend recomputes
+  // both on every frame from the seats themselves.
+  const total = event.total ?? previous?.total ?? 0;
+  const settled = event.settled ?? previous?.settled ?? 0;
   return {
     status: event.status,
-    round: event.round ?? previous?.round ?? 1,
-    submitted: event.submitted ?? previous?.submitted ?? 0,
-    succeeded: event.succeeded ?? previous?.succeeded ?? 0,
-    errored: event.errored ?? previous?.errored ?? 0,
-    processing: event.processing ?? previous?.processing ?? 0,
-    total: event.total ?? previous?.total ?? 0,
+    round,
+    total,
+    settled,
+    returned: Math.min(total || Infinity, settled + succeeded + errored),
+    submitted,
+    succeeded,
+    errored,
+    processing: event.processing ?? carry?.processing ?? 0,
     error: event.error ?? "",
   };
 }

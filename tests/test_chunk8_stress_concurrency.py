@@ -685,7 +685,9 @@ def test_reset_discards_late_qc_usage_from_abandoned_runner(monkeypatch):
 
     late_usage = captured["usage_sink"]
     session.reset()
-    late_usage({"input_tokens": 17, "output_tokens": 9})
+    # The sink is now per billing class, so the abandoned runner names the
+    # category too — the generation guard is what must still discard it.
+    late_usage("qc", {"input_tokens": 17, "output_tokens": 9})
 
     assert session.usage.snapshot()["categories"] == {}
     assert session.usage.snapshot()["totals"] == {}

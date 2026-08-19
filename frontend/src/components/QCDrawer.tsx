@@ -394,7 +394,9 @@ function QcCandidateCard({
 function QcBatchLine({ live }: { live: QcLiveState }) {
   const batch = live.batch;
   if (live.transport !== "batch" || !batch) return null;
-  const settled = batch.succeeded + batch.errored;
+  // Phase-level, so a second round (pause_turn continuations, retries)
+  // cannot make the count shrink or finish short of the real seat total.
+  const returned = batch.status === "ended" ? batch.total : batch.returned;
   const done = batch.status === "ended";
   const failed =
     batch.status === "failed" ||
@@ -413,8 +415,8 @@ function QcBatchLine({ live }: { live: QcLiveState }) {
         {failed
           ? `Batched review ${batch.status}${batch.error ? ` — ${batch.error}` : ""}`
           : done
-            ? `Batched review complete — ${settled} of ${batch.submitted} seats returned`
-            : `Batched review in progress — ${settled} of ${batch.submitted} seats returned` +
+            ? `Batched review complete — ${batch.total} seats returned`
+            : `Batched review in progress — ${returned} of ${batch.total} seats returned` +
               (batch.round > 1 ? ` (round ${batch.round})` : "")}
       </span>
     </p>

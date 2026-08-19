@@ -460,29 +460,86 @@ def _cache_write_tokens_by_ttl(usage: dict[str, int]) -> tuple[int, int]:
     return total - one_hour, one_hour
 
 
+def _persisted_rate_multiplier(value: object, *, field_name: str) -> float:
+    """A billed record's rate multiplier: a real number in (0, 1]."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"Persisted QC {field_name} must be a number.")
+    number = float(value)
+    if not (0.0 < number <= 1.0):
+        raise ValueError(
+            f"Persisted QC {field_name} must be greater than 0 and at most 1."
+        )
+    return number
+
+
 def _estimated_cost_from_basis(
-    usage: dict[str, int], cost_basis: dict[str, Any]
+    usage: dict[str, int], cost_basis: dict[str, Any], multiplier: float = 1.0
 ) -> float:
     """Recompute a report's estimate from its immutable pricing snapshot.
 
     A legacy basis carries no one-hour rate and a legacy usage record no
     one-hour subtotal, so the whole cache-creation total falls through to
     ``cache_write`` and the saved estimate reproduces exactly.
+
+    ``multiplier`` is the record's own rate multiplier — 1.0 for a call sent
+    at list price, ``settings.BATCH_COST_MULTIPLIER`` for one sent through
+    the Message Batches API. It lives on the RECORD rather than in
+    ``cost_basis`` because the rate table did not change; what changed is
+    how that particular call was billed. Keeping it out of the basis also
+    keeps the strictly shape-validated pricing snapshot untouched, so every
+    report ever written still loads.
     """
     rates = cost_basis["rates_per_token"]
     five_minute, one_hour = _cache_write_tokens_by_ttl(usage)
     return round(
-        usage.get("input_tokens", 0) * rates["input"]
-        + usage.get("output_tokens", 0) * rates["output"]
-        + usage.get("cache_read_input_tokens", 0) * rates["cache_read"]
-        + five_minute * rates["cache_write"]
-        + one_hour * rates.get("cache_write_1h", rates["cache_write"])
-        + usage.get("web_search_requests", 0)
-        * cost_basis["web_search_per_request"]
-        + usage.get("web_fetch_requests", 0)
-        * cost_basis["web_fetch_per_request"],
+        multiplier
+        * (
+            usage.get("input_tokens", 0) * rates["input"]
+            + usage.get("output_tokens", 0) * rates["output"]
+            + usage.get("cache_read_input_tokens", 0) * rates["cache_read"]
+            + five_minute * rates["cache_write"]
+            + one_hour * rates.get("cache_write_1h", rates["cache_write"])
+            + usage.get("web_search_requests", 0)
+            * cost_basis["web_search_per_request"]
+            + usage.get("web_fetch_requests", 0)
+            * cost_basis["web_fetch_per_request"]
+        ),
         6,
     )
+
+
+def _run_estimated_cost(
+    model: str,
+    usage_totals: dict[str, int],
+    records: list[Any],
+) -> float:
+    """A run's estimate, and the two ways it can legitimately be reached.
+
+    With every record at list price the merged usage is enough, and that is
+    the arithmetic every report written before batched verification already
+    claims — so it is preserved exactly rather than replaced.
+
+    Once any record was billed at a discount, no single multiplier over the
+    merged usage can describe the total, so the total IS the sum of its
+    records. :meth:`QCResult._audit_accounting_consistent` reconciles the
+    same two ways round, and the two must not drift apart.
+    """
+    if not any(_record_cost_multiplier(record) != 1.0 for record in records):
+        return estimate_usage_cost(model, usage_totals)
+    return round(
+        sum(record.estimated_cost_usd for record in records), 6
+    )
+
+
+def _record_cost_multiplier(record: Any) -> float:
+    """The rate multiplier a billed record was charged at.
+
+    Only verifier seats can carry one today, so the other record types are
+    read through a default rather than gaining a field that would always be
+    1.0. A persisted value outside (0, 1] is refused at load.
+    """
+    value = getattr(record, "cost_multiplier", 1.0)
+    return float(value) if isinstance(value, (int, float)) else 1.0
 
 
 def _cache_write_subtotal_possible(usage: dict[str, int]) -> bool:
@@ -728,6 +785,12 @@ class QCVerdict:
     attempted_sources: list[QCSourceRecord] = field(default_factory=list)
     usage_totals: dict[str, int] = field(default_factory=dict)
     estimated_cost_usd: float = 0.0
+    # The rate multiplier this seat's tokens were billed at: 1.0 at list
+    # price, settings.BATCH_COST_MULTIPLIER when the seat was sent through
+    # the Message Batches API. Recorded per seat rather than inferred from
+    # the run's transport, because a report has to be able to reproduce its
+    # own arithmetic from the record in front of it.
+    cost_multiplier: float = 1.0
     api_request_count: int = 0
     model_response_count: int = 0
 
@@ -792,6 +855,13 @@ class QCVerdict:
             estimated_cost_usd=_persisted_nonnegative_number(
                 raw.get("estimated_cost_usd", 0.0),
                 field_name="verdict estimated_cost_usd",
+            ),
+            # Absent on every record written before batched verification,
+            # which is exactly what 1.0 means. A value outside (0, 1] is not
+            # a discount and would let a record understate real spend.
+            cost_multiplier=_persisted_rate_multiplier(
+                raw.get("cost_multiplier", 1.0),
+                field_name="verdict cost_multiplier",
             ),
             api_request_count=_persisted_nonnegative_int(
                 raw.get("api_request_count", 0),
@@ -1748,13 +1818,18 @@ class QCResult:
             *verdicts,
         ]
         aggregate_usage: dict[str, int] = {}
+        record_cost_total = 0.0
+        discounted = False
         for record in records:
             for key, value in record.usage_totals.items():
                 aggregate_usage[key] = aggregate_usage.get(key, 0) + value
             if not _cache_write_subtotal_possible(record.usage_totals):
                 return False
+            multiplier = _record_cost_multiplier(record)
+            if multiplier != 1.0:
+                discounted = True
             expected_cost = _estimated_cost_from_basis(
-                record.usage_totals, self.cost_basis
+                record.usage_totals, self.cost_basis, multiplier
             )
             if not math.isclose(
                 record.estimated_cost_usd,
@@ -1763,6 +1838,7 @@ class QCResult:
                 abs_tol=1e-9,
             ):
                 return False
+            record_cost_total += record.estimated_cost_usd
 
         if _canonical_usage(self.usage_totals) != _canonical_usage(
             aggregate_usage
@@ -1778,8 +1854,21 @@ class QCResult:
             record.model_response_count for record in records
         ):
             return False
-        expected_total = _estimated_cost_from_basis(
-            self.usage_totals, self.cost_basis
+        # With every record at list price the run total is derivable from
+        # the merged usage, and that is the check every report written before
+        # batched verification has to keep passing — byte for byte.
+        #
+        # Once any record carries a discount that derivation is impossible in
+        # principle: one multiplier cannot describe a total whose parts were
+        # billed at two different ones. The total then has to BE the sum of
+        # its records, which is the stronger claim anyway — each part is
+        # already reconciled to its own usage and multiplier just above, so
+        # the sum is verified transitively rather than by a second formula
+        # that could disagree with them.
+        expected_total = (
+            round(record_cost_total, 6)
+            if discounted
+            else _estimated_cost_from_basis(self.usage_totals, self.cost_basis)
         )
         return math.isclose(
             self.estimated_cost_usd,
@@ -2044,6 +2133,42 @@ class QCResult:
             batch_verification=settings.QC_BATCH_VERIFICATION,
         )
         return self.input_fingerprint == qc_input_fingerprint(manifest)
+
+    def usage_by_meter_category(self) -> dict[str, dict[str, int]]:
+        """This run's spend, split by the rate it was billed at.
+
+        The session meter prices a bucket by category, so discounted tokens
+        need their own bucket — one bucket could only ever be priced at one
+        of the two rates. Built by SUMMING the records rather than
+        subtracting one population from the other, so a malformed record can
+        skew a bucket but can never produce a negative count.
+        """
+        buckets: dict[str, dict[str, int]] = {}
+        records: list[Any] = [
+            *self.lens_statuses,
+            *([self.consolidation] if self.consolidation is not None else []),
+            *(
+                verdict
+                for finding in [
+                    *self.findings,
+                    *self.refuted,
+                    *self.disputed,
+                    *self.inconclusive,
+                ]
+                for verdict in finding.verdicts
+            ),
+        ]
+        for record in records:
+            category = (
+                "qc_batched"
+                if _record_cost_multiplier(record) != 1.0
+                else "qc"
+            )
+            bucket = buckets.setdefault(category, {})
+            for key, value in record.usage_totals.items():
+                if value:
+                    bucket[key] = bucket.get(key, 0) + int(value)
+        return {name: bucket for name, bucket in buckets.items() if bucket}
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -4540,6 +4665,7 @@ def _verifier_outcome(
     reviewer_index: int,
     element_ids: frozenset[str] = frozenset(),
     shared_stop_active: bool = False,
+    cost_multiplier: float = 1.0,
 ) -> _VerifierOutcome:
     """Map one seat's call result onto its verdict record.
 
@@ -4579,7 +4705,10 @@ def _verifier_outcome(
                 attempted_search_queries=attempted_queries,
                 attempted_sources=attempted_sources,
                 usage_totals=usage,
-                estimated_cost_usd=estimate_usage_cost(model, usage),
+                estimated_cost_usd=estimate_usage_cost(
+                    model, usage, multiplier=cost_multiplier
+                ),
+                cost_multiplier=cost_multiplier,
                 api_request_count=result.api_request_count,
                 model_response_count=len(result.billed),
             ),
@@ -4603,7 +4732,10 @@ def _verifier_outcome(
                 attempted_search_queries=attempted_queries,
                 attempted_sources=attempted_sources,
                 usage_totals=usage,
-                estimated_cost_usd=estimate_usage_cost(model, usage),
+                estimated_cost_usd=estimate_usage_cost(
+                    model, usage, multiplier=cost_multiplier
+                ),
+                cost_multiplier=cost_multiplier,
                 api_request_count=result.api_request_count,
                 model_response_count=len(result.billed),
             ),
@@ -4631,7 +4763,10 @@ def _verifier_outcome(
             attempted_search_queries=attempted_queries,
             attempted_sources=attempted_sources,
             usage_totals=usage,
-            estimated_cost_usd=estimate_usage_cost(model, usage),
+            estimated_cost_usd=estimate_usage_cost(
+                model, usage, multiplier=cost_multiplier
+            ),
+            cost_multiplier=cost_multiplier,
             api_request_count=result.api_request_count,
             model_response_count=len(result.billed),
         ),
@@ -5674,7 +5809,9 @@ def run_final_qc(
                 0, int((time.monotonic() - pipeline_started) * 1000)
             ),
             usage_totals=usage_totals,
-            estimated_cost_usd=estimate_usage_cost(model, usage_totals),
+            estimated_cost_usd=_run_estimated_cost(
+                model, usage_totals, list(lens_statuses)
+            ),
             cost_basis=usage_pricing_snapshot(model),
             api_request_count=api_request_count,
             model_response_count=model_response_count,
@@ -5912,6 +6049,11 @@ def run_final_qc(
                     model=model,
                     reviewer_index=j + 1,
                     element_ids=element_ids,
+                    # Batched tokens are billed at the provider's batch rate,
+                    # so the seat's own record must say so — the report
+                    # reproduces its arithmetic from these, not from the run's
+                    # transport flag.
+                    cost_multiplier=settings.BATCH_COST_MULTIPLIER,
                 )
                 record_verifier_outcome(i, outcome)
                 if outcome.shared_request_failure and not shared_failure.is_set():
@@ -6227,7 +6369,24 @@ def run_final_qc(
         max_tokens=max_tokens,
         duration_ms=max(0, int((time.monotonic() - pipeline_started) * 1000)),
         usage_totals=usage_totals,
-        estimated_cost_usd=estimate_usage_cost(model, usage_totals),
+        estimated_cost_usd=_run_estimated_cost(
+            model,
+            usage_totals,
+            [
+                *lens_statuses,
+                *([consolidation] if consolidation is not None else []),
+                *(
+                    verdict
+                    for finding in [
+                        *survivors,
+                        *refuted,
+                        *disputed,
+                        *inconclusive,
+                    ]
+                    for verdict in finding.verdicts
+                ),
+            ],
+        ),
         cost_basis=usage_pricing_snapshot(model),
         api_request_count=api_request_count,
         model_response_count=model_response_count,

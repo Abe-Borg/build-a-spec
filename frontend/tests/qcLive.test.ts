@@ -999,6 +999,41 @@ test("batch progress carries submitted totals forward across polling frames", ()
   assert.equal(live.batch?.succeeded, 1);
 });
 
+test("batch progress is phase-level, so a second round cannot shrink it", () => {
+  // Round 2 carries only the seats that still need work (a pause_turn
+  // continuation, a retry). Rendering that round's own `submitted` against
+  // an earlier round's success count showed "2 of 1" mid-phase and finished
+  // at "1 of 1" on a phase that had three seats.
+  const frames: QcEvent[] = [
+    started(),
+    batchRoster(1),
+    { type: "verification_batch", seq: 2, status: "submitted", round: 1, submitted: 3, total: 3, settled: 0 },
+    { type: "verification_batch", seq: 3, status: "polling", round: 1, succeeded: 3, errored: 0, processing: 0, total: 3, settled: 0 },
+    // One seat paused; the other two settled.
+    { type: "verification_batch", seq: 4, status: "submitted", round: 2, submitted: 1, total: 3, settled: 2 },
+  ];
+  const midway = foldQcLiveState(frames, { status: "running", error: "" });
+  assert.equal(midway.batch?.total, 3);
+  assert.equal(midway.batch?.settled, 2);
+  // Round 1's success count must not survive into round 2's window.
+  assert.equal(midway.batch?.succeeded, 0);
+  assert.equal(midway.batch?.returned, 2);
+  assert.ok((midway.batch?.returned ?? 0) <= (midway.batch?.total ?? 0));
+
+  const ended = foldQcLiveState(
+    [
+      ...frames,
+      { type: "verification_batch", seq: 5, status: "polling", round: 2, succeeded: 1, errored: 0, processing: 0, total: 3, settled: 2 },
+      { type: "verification_batch", seq: 6, status: "ended", total: 3, settled: 3 },
+    ] as QcEvent[],
+    { status: "running", error: "" },
+  );
+  assert.equal(ended.batch?.status, "ended");
+  assert.equal(ended.batch?.total, 3);
+  assert.equal(ended.batch?.settled, 3);
+  assert.equal(ended.batch?.returned, 3);
+});
+
 test("a batched run still resolves its candidates from seat events", () => {
   // The seat cards are unchanged by the transport — only the activity frames
   // between `verifier_started` and `verifier_complete` are missing.

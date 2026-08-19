@@ -4728,8 +4728,8 @@ def create_app(
                 discipline=effective_discipline(session),
                 source_guard=source_guard,
                 remembered_dismissed=remembered,
-                usage_sink=lambda u, g=run_generation: session.add_usage_if_current(
-                    g, "qc", u
+                usage_sink=lambda cat, u, g=run_generation: (
+                    session.add_usage_if_current(g, cat, u)
                 ),
             )
             if not started:

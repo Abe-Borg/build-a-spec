@@ -2476,6 +2476,10 @@ def create_app(
             "workspace_id": workspace.workspace_id,
             "workspace_scope": workspace.scope,
             "generation": session.generation,
+            # Whether the frontend should auto-send the completion debrief
+            # turn when research / Final QC finishes (the endpoints stay
+            # callable either way — this gates only the automatic send).
+            "auto_debrief": settings.AUTO_DEBRIEF,
         }
         if desktop_security is not None:
             payload.update(

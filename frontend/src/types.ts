@@ -78,6 +78,9 @@ export interface Health {
   workspace_id: number;
   workspace_scope: "original" | "tutorial" | "scenario";
   generation: number;
+  /** Whether completed research/QC runs auto-send a debrief chat turn.
+   *  Optional: an older backend simply doesn't send it (treated as on). */
+  auto_debrief?: boolean;
 }
 
 /** API-key resolution status (WI3 settings panel). Never carries the key. */
@@ -1529,6 +1532,7 @@ export type StreamEvent =
   | { type: "web_fetch"; url: string }
   | { type: "figure"; figure: Figure }
   | { type: "suggested_prompts"; prompts: string[] }
+  | { type: "qc_dispositions"; outcomes: Record<string, string> }
   | { type: "doc_patch"; ops: DocOp[]; doc: SpecDoc }
   | { type: "doc_snapshot"; doc: SpecDoc }
   | { type: "open_questions"; items: OpenItem[] }

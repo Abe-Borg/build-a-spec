@@ -432,6 +432,31 @@ export async function draftFull(): Promise<DraftFullPlan> {
   };
 }
 
+/**
+ * Fetch the debrief message a just-completed research round should send
+ * through {@link streamChat}. Throws on any refusal (409 while a turn
+ * streams / research runs / nothing to debrief) — the auto-fire caller
+ * treats a throw as "skip the debrief silently", never a surfaced error.
+ */
+export async function fetchResearchDebrief(): Promise<string> {
+  const resp = await fetch("/api/research/debrief", { method: "POST" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `debrief unavailable (${resp.status})`);
+  }
+  return data.message as string;
+}
+
+/** The Final QC counterpart of {@link fetchResearchDebrief}. */
+export async function fetchQcDebrief(): Promise<string> {
+  const resp = await fetch("/api/qc/debrief", { method: "POST" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `debrief unavailable (${resp.status})`);
+  }
+  return data.message as string;
+}
+
 /** POST /api/chat and yield parsed SSE events as they arrive. */
 export async function* streamChat(
   message: string,

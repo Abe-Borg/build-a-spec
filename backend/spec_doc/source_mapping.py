@@ -1291,6 +1291,10 @@ _BLOCKER_MESSAGES = {
         "checked; body edits are held until that check finishes"
     ),
     "complex_paragraph_markup": "the source paragraph contains unsupported paragraph-level markup",
+    "content_control_projection": (
+        "the provision is a read-only projection of a preserved Word content "
+        "control"
+    ),
     "complex_run_markup": "the source paragraph contains multiple or unsupported inline runs",
     "cross_island_move": (
         "provisions cannot move across numbered-island, parent, or opaque-body "

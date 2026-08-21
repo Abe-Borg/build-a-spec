@@ -125,6 +125,30 @@ sheet, a previous project's section, or meeting notes.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
 
+## Shipped in v1.14.0 (Keep your formatting, edit the content)
+
+**Importing a Word spec no longer asks you to choose.** The document keeps
+its header, footer, fonts, styles, numbering and page setup, and is fully
+editable at the same time — rewrite provisions, add and remove articles and
+paragraphs, reorder anything. The export carries your formatting with the new
+content in it.
+
+- **A provision you did not touch is copied out of your original character
+  for character**; a provision you edited keeps its style, font, size,
+  indent and numbering, and only the words change. (Character-level emphasis
+  inside a sentence you rewrote is best-effort — the words it was attached
+  to are gone.)
+- **Tables, pictures, embedded objects and content controls are preserved
+  blocks**: emitted verbatim, so their contents cannot be retyped here, but
+  free to move, delete and mark reviewed. Hovering the lock chip says why. A
+  schedule is one block now, not one row per line.
+- **The permission sweep is gone**, along with the whole class of frozen
+  document — tracked changes, macros, an embedded spreadsheet or enforced
+  protection no longer make a file read-only.
+- **A stale section number in a preserved footer is flagged** rather than
+  silently printed on every page. Headers and footers are never rewritten,
+  so the remedy is Word, and the issues list says so.
+
 ## Shipped in v1.13.0 (Import as a starting point)
 
 **The import asks what you mean by it.** *Use as a starting point* — the

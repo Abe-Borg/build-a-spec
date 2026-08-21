@@ -191,6 +191,39 @@ function ReadOnlyBadge({
   );
 }
 
+/**
+ * The lock chip on a preserved block, with the explanation on hover.
+ *
+ * A read-only control with no reason reads as a bug, and this one is not a
+ * denial the user can act on by changing their file — a table is preserved
+ * BECAUSE that is what keeps it looking like their table. So the bubble says
+ * what the block is, why it cannot be retyped, and what it still allows.
+ * The prose is the server's (``locked_message``); nothing is restated here.
+ */
+function PreservedBadge({ reason, message }: { reason: string; message: string }) {
+  if (!reason) return null;
+  const label = reason.replace(/_/g, " ");
+  return (
+    <span className="group relative ml-2 inline-block align-middle">
+      <span
+        tabIndex={0}
+        role="note"
+        aria-label={message || `Preserved ${label}`}
+        className="inline-flex cursor-help items-center gap-1 rounded border border-paper-edge bg-paper-edge/35 px-1 py-px text-[9px] font-semibold tracking-wide text-paper-dim uppercase outline-none focus-visible:border-[#c08457]"
+      >
+        <span aria-hidden="true">🔒</span>
+        {label}
+      </span>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-0 top-full z-20 mt-1 w-64 rounded border border-paper-edge bg-white/95 p-2 text-[11px] font-normal normal-case leading-relaxed text-paper-ink opacity-0 shadow-lg transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        {message}
+      </span>
+    </span>
+  );
+}
+
 type SubmitEdit = (ops: EditOp[]) => boolean;
 
 const dragInstructions = {
@@ -337,6 +370,7 @@ function DragHandle({
 function RowActions({
   canConfirm,
   busy,
+  locked = false,
   replaceCapability,
   deleteCapability,
   moveCapability,
@@ -352,6 +386,8 @@ function RowActions({
 }: {
   canConfirm: boolean;
   busy: boolean;
+  /** Preserved Word content: no retype control, everything else stays. */
+  locked?: boolean;
   replaceCapability: SourceOperationCapability;
   deleteCapability: SourceOperationCapability;
   moveCapability: SourceOperationCapability;
@@ -415,14 +451,19 @@ function RowActions({
           ✓
         </CapabilityButton>
       )}
-      <CapabilityButton
-        className={actionBtn}
-        onClick={onEdit}
-        disabled={busy || !replaceCapability.allowed}
-        title={sourceCapabilityTitle(replaceCapability, "Edit this provision")}
-      >
-        ✏️
-      </CapabilityButton>
+      {locked ? null : (
+        <CapabilityButton
+          className={actionBtn}
+          onClick={onEdit}
+          disabled={busy || !replaceCapability.allowed}
+          title={sourceCapabilityTitle(
+            replaceCapability,
+            "Edit this provision",
+          )}
+        >
+          ✏️
+        </CapabilityButton>
+      )}
       <CapabilityButton
         className={actionBtn}
         onClick={onDelete}
@@ -499,6 +540,11 @@ function ParagraphNode({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(p.text);
   const [confirming, setConfirming] = useState(false);
+  // Preserved Word content. The document model refuses a retype outright, so
+  // offering the pencil would be a control that cannot work; move, delete and
+  // the review status all stay, because none of them touches the block the
+  // export emits.
+  const locked = Boolean(p.locked);
 
   const replaceOp: EditOp = {
     action: "replace",
@@ -553,7 +599,7 @@ function ParagraphNode({
   };
 
   const startEdit = () => {
-    if (busy || !replaceCapability.allowed) return;
+    if (busy || locked || !replaceCapability.allowed) return;
     setDraft(p.text);
     setEditing(true);
   };
@@ -652,16 +698,30 @@ function ParagraphNode({
           </span>
         ) : (
           <span className="min-w-0 flex-1">
-            <TbdText text={p.text} />
+            {locked ? (
+              // One line per table row, so the grid still reads on screen.
+              <span className="whitespace-pre-line font-mono text-[12px] leading-relaxed">
+                {p.text}
+              </span>
+            ) : (
+              <TbdText text={p.text} />
+            )}
             <StatusBadge status={p.status} blockId={p.id} />
             <SourceChip itemId={p.source_item_id} lookup={sourceLookup} />
-            <ReadOnlyBadge
-              capability={replaceCapability}
-              sourceExpected={sourceExpected}
+            <PreservedBadge
+              reason={p.locked ?? ""}
+              message={p.locked_message ?? ""}
             />
+            {locked ? null : (
+              <ReadOnlyBadge
+                capability={replaceCapability}
+                sourceExpected={sourceExpected}
+              />
+            )}
             <RowActions
               canConfirm={p.status === "assumed" || p.status === "imported"}
               busy={busy}
+              locked={locked}
               replaceCapability={replaceCapability}
               deleteCapability={deleteCapability}
               moveCapability={moveCapability}

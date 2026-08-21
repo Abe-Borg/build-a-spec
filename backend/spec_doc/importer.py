@@ -63,6 +63,15 @@ from .model import (
     SpecSection,
     iter_paragraphs,
 )
+from .source_format import (
+    FormatAnchor,
+    SECTION_TITLE_UID,
+    LABEL_AUTO,
+    LABEL_MANUAL,
+    LABEL_NONE,
+    SourceFormatMap,
+    build_format_map,
+)
 from .source_mapping import (
     SourceBodyMap,
     SourceParagraphBinding,
@@ -224,6 +233,10 @@ class ImportResult:
     # Immutable UID -> source-body anchors for P1 source-preserving export.
     # Kept outside SpecSection/version snapshots and never sent to the model.
     source_map: SourceBodyMap | None = None
+    # Where every semantic element came from in the uploaded package, for the
+    # appearance-preserving export. Like ``source_map`` it lives outside the
+    # SpecSection/version snapshots and is never sent to the model.
+    format_map: SourceFormatMap | None = None
     # True when the parse recognized at least one SectionFormat marker (a
     # SECTION line, a PART heading, or an ``N.M`` article). False means the
     # spec scaffolding around the content — section header, empty parts, the
@@ -368,19 +381,67 @@ class _BodyTextEntry:
     body_child_index: int
     source_element: object
     opaque_blocker: str = ""
+    # Non-empty when the body child is preserved content the appearance-
+    # preserving export emits verbatim (model.LOCK_REASONS). Distinct from
+    # ``opaque_blocker``, which is the older byte-exact mode's vocabulary.
+    lock_reason: str = ""
+    # Pre-normalized text that must survive the main loop's whitespace fold —
+    # a preserved table keeps one line per row so it stays readable.
+    preformatted: bool = False
+
+
+def _header_footer_text(document) -> tuple[str, ...]:
+    """Readable lines from every header and footer, in part order.
+
+    Captured so the app can NOTICE when a spec footer still carries the
+    number of the master the section was adapted from. Headers and footers
+    are never rewritten — that is the preservation contract — so this is
+    evidence for a warning, never an editing surface.
+    """
+    lines: list[str] = []
+    for section in document.sections:
+        for part in (
+            section.header,
+            section.footer,
+            section.first_page_header,
+            section.first_page_footer,
+            section.even_page_header,
+            section.even_page_footer,
+        ):
+            if part is None:
+                continue
+            try:
+                paragraphs = part.paragraphs
+            except (AttributeError, ValueError):  # pragma: no cover - defensive
+                continue
+            for paragraph in paragraphs:
+                text = " ".join(paragraph.text.split())
+                if text and text not in lines:
+                    lines.append(text)
+    return tuple(lines)
 
 
 def _iter_body_texts(document) -> list[_BodyTextEntry]:
     """Body content in document order: (accept-all text, paragraph or None).
 
-    Tables are flattened row by row (cells joined with `` | ``) — spec
-    masters use tables mostly for schedules; the content survives as
-    paragraphs and the caller records a warning. The paragraph object is
-    carried for numbering-level access (None for table rows).
+    A table is ONE entry, not one per row. Under the appearance-preserving
+    contract a table is emitted back as the single Word block it is, so it
+    has to be one thing the user can move or delete — a row-per-paragraph
+    projection made "delete this schedule" an N-paragraph operation and let
+    a row beginning "A." be read as a heading. Rows are joined with newlines
+    and cells with `` | `` so the grid still reads in the panel and in the
+    model's context.
+
+    Paragraphs carrying a picture, an embedded object, or a content control
+    are locked for the same reason: their markup is carried through verbatim,
+    so their text is not ours to retype.
     """
     results: list[_BodyTextEntry] = []
     body = document.element.body
     source_index = 0
+    drawing_qn = qn("w:drawing")
+    pict_qn = qn("w:pict")
+    object_qn = qn("w:object")
     for child in body.iterchildren():
         if not isinstance(child.tag, str):
             continue
@@ -388,34 +449,69 @@ def _iter_body_texts(document) -> list[_BodyTextEntry]:
         source_index += 1
         if child.tag == qn("w:p"):
             paragraph = DocxParagraph(child, document)
+            if child.find(".//" + object_qn) is not None:
+                lock = "embedded_object"
+            elif (
+                child.find(".//" + drawing_qn) is not None
+                or child.find(".//" + pict_qn) is not None
+            ):
+                lock = "image"
+            else:
+                lock = ""
             results.append(
                 _BodyTextEntry(
                     _accept_all_paragraph_text(child),
                     paragraph,
                     body_child_index,
                     child,
+                    "",
+                    lock,
                 )
             )
         elif child.tag == qn("w:tbl"):
             table = DocxTable(child, document)
+            rows = []
             for row in table.rows:
                 cells = []
                 for cell in row.cells:
                     cell_text = " ".join(
                         _accept_all_paragraph_text(p._p) for p in cell.paragraphs
                     ).strip()
-                    cells.append(cell_text)
-                text = " | ".join(c for c in cells if c)
-                if text:
-                    results.append(
-                        _BodyTextEntry(
-                            text,
-                            None,
-                            body_child_index,
-                            child,
-                            "table_projection",
-                        )
+                    cells.append(" ".join(cell_text.split()))
+                line = " | ".join(c for c in cells if c)
+                if line:
+                    rows.append(line)
+            if rows:
+                results.append(
+                    _BodyTextEntry(
+                        "\n".join(rows),
+                        None,
+                        body_child_index,
+                        child,
+                        "table_projection",
+                        "table",
+                        True,
                     )
+                )
+        elif child.tag == qn("w:sdt"):
+            # Structured document tags were silently dropped before, which
+            # under a rebuild-the-body export would have deleted them from
+            # the user's file. Keep the readable text, lock the block.
+            text = " ".join(
+                " ".join(_accept_all_paragraph_text(p).split())
+                for p in child.iter(qn("w:p"))
+            ).strip()
+            if text:
+                results.append(
+                    _BodyTextEntry(
+                        text,
+                        None,
+                        body_child_index,
+                        child,
+                        "content_control_projection",
+                        "content_control",
+                    )
+                )
     return results
 
 
@@ -653,6 +749,10 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     # tree actually holds), never merely for being numbered.
     saw_spec_marker = False
     source_bindings: list[SourceParagraphBinding] = []
+    # Where each semantic element came from, for the appearance-preserving
+    # export. Paragraph anchors are appended by add_mapped_paragraph;
+    # headings are recorded at the branch that creates them.
+    format_anchors: list[FormatAnchor] = []
     # The numbering-definition label grammars, for heading promotion.
     numbering_catalog = _load_numbering_catalog(document)
     # Promoted PART headings are numbered by order of appearance — the
@@ -684,21 +784,31 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     for line_no, entry in enumerate(entries, start=1):
         raw_text = entry.text
         docx_paragraph = entry.paragraph
-        text = " ".join(raw_text.split())
+        text = (
+            raw_text.strip()
+            if entry.preformatted
+            else " ".join(raw_text.split())
+        )
         if not text:
             skipped_empty += 1
             continue
         first_content = not saw_any_content
         saw_any_content = True
-        if docx_paragraph is None and not saw_table:
+        if entry.lock_reason == "table" and not saw_table:
             saw_table = True
             builder.warnings.append(
-                "The master contains tables; their rows were flattened into "
-                "paragraphs (cells joined with ' | ') — review formatting."
+                "The master contains tables. Each is preserved as one "
+                "read-only block — the export carries its cells and "
+                "formatting through exactly as they came in. You can move "
+                "or delete a table, but not retype it here."
             )
 
         def add_mapped_paragraph(
-            depth: int, semantic_text: str, *, numbered: bool = False
+            depth: int,
+            semantic_text: str,
+            *,
+            numbered: bool = False,
+            manual_label: bool = False,
         ) -> None:
             # `depth` is a raw ``w:numPr`` indent level for a numbered
             # paragraph and an absolute depth for a manual label ("A." is
@@ -725,6 +835,47 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                     baseline_text=semantic_text,
                 )
             source_bindings.append(binding)
+            if entry.lock_reason:
+                paragraph.locked = entry.lock_reason
+            # How this provision's label was expressed decides whether the
+            # export writes one back. Word renders an auto-numbered label
+            # itself; a stripped literal has to be regenerated positionally.
+            if numbered:
+                label_kind = LABEL_AUTO
+            elif manual_label:
+                label_kind = LABEL_MANUAL
+            else:
+                label_kind = LABEL_NONE
+            format_anchors.append(
+                FormatAnchor(
+                    uid=paragraph.uid,
+                    origin_index=entry.body_child_index,
+                    label_kind=label_kind,
+                    locked=entry.lock_reason,
+                )
+            )
+
+        if entry.lock_reason:
+            # A preserved block is content, never structure. Running a table
+            # row or a caption through the heading grammars is how a row
+            # beginning "A." used to become an article; and since the block
+            # is emitted verbatim, its text was never a label to strip.
+            #
+            # It must also never become a HIERARCHY PARENT. Placing it at
+            # depth 0 made it the current depth-0 node, so a following "1."
+            # provision nested underneath it — and a table cannot own a
+            # subparagraph in Word, in the export, or in any reading of the
+            # document. Restoring the stack leaves the block a sibling and
+            # sends the next nested provision to the real provision above it.
+            # (Caught in review on PR #141, Codex: the renderer skipped those
+            # children and the trailing sweep excluded them as anchored, so
+            # an untouched export silently DELETED them.)
+            stack_before = list(builder.stack)
+            offset_before = builder.numbering_offset
+            add_mapped_paragraph(0, text)
+            builder.stack = stack_before
+            builder.numbering_offset = offset_before
+            continue
 
         # Direct Word numbering is structural metadata, so it must win over
         # text-pattern heuristics. Normalized exports deliberately keep the
@@ -754,6 +905,14 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                     builder.part(
                         _remap_out_of_range_part(promoted_part_count, line_no)
                     )
+                    if builder.current_part is not None:
+                        format_anchors.append(
+                            FormatAnchor(
+                                uid=builder.current_part.uid,
+                                origin_index=entry.body_child_index,
+                                label_kind=LABEL_AUTO,
+                            )
+                        )
                     continue
                 if kind == "article":
                     saw_spec_marker = True
@@ -763,6 +922,16 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                         else 1,
                         text,
                     )
+                    if builder.current_article is not None:
+                        # Word renders this heading's "2.01" itself, so the
+                        # export must not write one into the text as well.
+                        format_anchors.append(
+                            FormatAnchor(
+                                uid=builder.current_article.uid,
+                                origin_index=entry.body_child_index,
+                                label_kind=LABEL_AUTO,
+                            )
+                        )
                     continue
                 # The raw indent level: numbered_paragraph places it against
                 # its own list, never as an absolute depth.
@@ -790,6 +959,13 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             g1, g2, g3, g4, remainder = section_match.groups()
             number = f"{g1} {g2} {g3}" + (f".{g4}" if g4 else "")
             builder.section.number = number
+            format_anchors.append(
+                FormatAnchor(
+                    uid="sec",
+                    origin_index=entry.body_child_index,
+                    label_kind=LABEL_NONE,
+                )
+            )
             if remainder.strip():
                 builder.section.title = remainder.strip()
                 pending_title = False
@@ -809,6 +985,13 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                     f".{b4}" if b4 else ""
                 )
                 builder.section.title = bare_title.strip()
+                format_anchors.append(
+                    FormatAnchor(
+                        uid="sec",
+                        origin_index=entry.body_child_index,
+                        label_kind=LABEL_NONE,
+                    )
+                )
                 pending_title = False
                 builder.warnings.append(
                     "Line 1: no 'SECTION' keyword — the section number and "
@@ -819,6 +1002,13 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             pending_title = False
             if not (_PART_RE.match(text) or _ARTICLE_RE.match(text)):
                 builder.section.title = text
+                format_anchors.append(
+                    FormatAnchor(
+                        uid=SECTION_TITLE_UID,
+                        origin_index=entry.body_child_index,
+                        label_kind=LABEL_NONE,
+                    )
+                )
                 continue
 
         part_match = _PART_RE.match(text)
@@ -827,6 +1017,14 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             builder.part(
                 _remap_out_of_range_part(int(part_match.group(1)), line_no)
             )
+            if builder.current_part is not None:
+                format_anchors.append(
+                    FormatAnchor(
+                        uid=builder.current_part.uid,
+                        origin_index=entry.body_child_index,
+                        label_kind=LABEL_MANUAL,
+                    )
+                )
             continue
 
         article_match = _ARTICLE_RE.match(text)
@@ -837,6 +1035,14 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                 _remap_out_of_range_part(int(part_digit), line_no),
                 title.strip(),
             )
+            if builder.current_article is not None:
+                format_anchors.append(
+                    FormatAnchor(
+                        uid=builder.current_article.uid,
+                        origin_index=entry.body_child_index,
+                        label_kind=LABEL_MANUAL,
+                    )
+                )
             continue
 
         # Manual paragraph labels, most-specific first (uppercase before
@@ -848,7 +1054,9 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                 matched_level = (depth, match.group(2).strip())
                 break
         if matched_level is not None:
-            add_mapped_paragraph(matched_level[0], matched_level[1])
+            add_mapped_paragraph(
+                matched_level[0], matched_level[1], manual_label=True
+            )
             continue
 
         # Unlabeled content: keep as a level-0 paragraph (never drop).
@@ -936,8 +1144,24 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             "The document body could not be mapped safely for editing."
         ) from exc
 
+    format_map = build_format_map(
+        source_bytes=source_bytes,
+        # Body CHILDREN, not semantic entries: origin indexes are positions
+        # in the source body, and blank paragraphs occupy one each.
+        body_child_count=sum(
+            1
+            for child in document.element.body.iterchildren()
+            if isinstance(child.tag, str)
+        ),
+        anchors=format_anchors,
+        header_footer_text=_header_footer_text(document),
+        section_number=builder.section.number,
+        section_title=builder.section.title,
+    )
+
     return ImportResult(
         section=builder.section,
+        format_map=format_map,
         warnings=builder.warnings,
         tracked_changes_detected=tracked,
         imported_block_count=builder.imported_count,

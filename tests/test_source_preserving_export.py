@@ -505,7 +505,12 @@ def test_table_projection_is_read_only_and_preserved_as_a_table(tmp_path):
         },
     )
     assert rejected.status_code == 400
-    assert "[table_projection]" in rejected.json()["error"]
+    # The refusal now comes from the document model, before the source gate
+    # is consulted: a preserved table is locked content whatever export mode
+    # the session is in, and the model's message explains why and says what
+    # the block still allows. The old source-gate blocker code only ever
+    # appeared once the request reached the byte-exact validator.
+    assert "preserved Word table" in rejected.json()["error"]
     assert client.get("/api/doc").json()["doc"] == before
     exported = _source_export(client)
     assert exported.status_code == 200

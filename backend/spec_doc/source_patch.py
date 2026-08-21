@@ -26,7 +26,14 @@ from typing import Callable, Mapping
 
 from lxml import etree
 
-from .model import Paragraph, STATUSES, SpecEditError, SpecSection, apply_edits
+from .model import (
+    Paragraph,
+    STATUSES,
+    SpecEditError,
+    SpecSection,
+    apply_edits,
+    iter_paragraphs,
+)
 from .raw_zip import (
     RawZipArchive,
     RawZipError,
@@ -89,6 +96,24 @@ _W_R = f"{{{_W_NS}}}r"
 _W_RPR = f"{{{_W_NS}}}rPr"
 _W_T = f"{{{_W_NS}}}t"
 _W_SECTPR = f"{{{_W_NS}}}sectPr"
+
+#: Body children that are projected read-only rather than patched, and the
+#: single blocker each one's binding must carry. A structured document tag
+#: joined tables here when the importer stopped dropping content controls:
+#: silently discarding them was invisible while the export only ever patched
+#: the upload, and became content loss the moment it rebuilt the body.
+#: A preserved block's lock reason, in this module's blocker vocabulary.
+_LOCK_BLOCKERS = {
+    "table": "table_projection",
+    "content_control": "content_control_projection",
+    "image": "complex_paragraph_markup",
+    "embedded_object": "complex_paragraph_markup",
+}
+
+_OPAQUE_BODY_TAGS = {
+    "tbl": "table_projection",
+    "sdt": "content_control_projection",
+}
 _W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
 _DOCUMENT_RELS_PART = "word/_rels/document.xml.rels"
 _CONTENT_TYPES_PART = "[Content_Types].xml"
@@ -1405,15 +1430,18 @@ def build_source_patch_context(
                     "the paragraph binding does not match its source XML",
                 )
         elif (
-            element.tag.rsplit("}", 1)[-1] != "tbl"
+            element.tag.rsplit("}", 1)[-1] not in _OPAQUE_BODY_TAGS
             or binding.text_span is not None
             or binding.para_id
-            or binding.blockers != ("table_projection",)
+            or len(binding.blockers) != 1
+            or _OPAQUE_BODY_TAGS.get(element.tag.rsplit("}", 1)[-1])
+            != binding.blockers[0]
         ):
             raise SourcePatchError(
                 uid,
                 "source_map_mismatch",
-                "the opaque projection binding is not a preserved table row",
+                "the opaque projection binding does not match its preserved "
+                "source block",
             )
     try:
         actual_global_blockers = detect_global_source_blockers(source_bytes)
@@ -2417,6 +2445,16 @@ def _probe_heading_capability(
     return _capability_from_error(error) if error else _allowed_capability()
 
 
+def _locked_blocker(current: SpecSection, operation: dict[str, object]) -> str:
+    """The blocker code for a model-level refusal, from the target's lock."""
+    target = operation.get("target_id")
+    if isinstance(target, str):
+        for _part, _article, paragraph, _depth, _ref in iter_paragraphs(current):
+            if paragraph.uid == target and paragraph.locked:
+                return _LOCK_BLOCKERS.get(paragraph.locked, "table_projection")
+    return "structural_change"
+
+
 def _probe_edit_capability(
     *,
     operation: dict[str, object],
@@ -2426,7 +2464,15 @@ def _probe_edit_capability(
     current: SpecSection,
     bound_inputs: _BoundInputs | None = None,
 ) -> SourceOperationCapability:
-    candidate, _applied = apply_edits(current, [operation])
+    try:
+        candidate, _applied = apply_edits(current, [operation])
+    except SpecEditError as exc:
+        # The document model itself refused — a preserved block (see
+        # model.LOCK_REASONS) is the ordinary case. A capability probe asks
+        # "may this be done?", so a refusal is an ANSWER, not an error; the
+        # add probe has always read it that way and the edit probe must too,
+        # or a locked block takes the whole sweep down.
+        return _denied_capability(_locked_blocker(current, operation), str(exc))
     _validated, error = _run_capability_probe(
         context=context,
         source_map=source_map,

@@ -1035,20 +1035,28 @@ function Dossier() {
               normalized tree of the supported body content, which is what you
               edit. Tracked changes are read as the Accept-All view, with a
               warning. Every extracted block lands stamped{" "}
-              <Tag>imported</Tag> until you review it. The server then works out,
-              per element and per operation, which source-preserving edits it can
-              prove safe; that analysis runs in the background and everything
-              stays denied until it finishes.
+              <Tag>imported</Tag> until you review it.
               <p className="mt-2">
-                Some packages cannot be patched at all — ones carrying tracked
-                changes, macros, an embedded object, a signature, or enforced
-                protection. The panel names that cause and what to do about it,
-                and offers{" "}
-                <b className="text-ink">Edit freely</b>: a one-way choice, for
-                that document, to give up the byte-exact export in return for
-                unrestricted editing. It drops the promise, not the evidence —
-                your original upload stays downloadable exactly as you sent it,
-                and the redline against it still works.
+                The document keeps your formatting and stays fully editable at
+                the same time. On export, every part of your package except the
+                document body is copied through{" "}
+                <b className="text-ink">byte for byte</b> — header, footer,
+                styles, fonts, numbering, page setup. In the body, a provision
+                you did not touch is copied out of your original character for
+                character; one you edited keeps its style, font, size, indent
+                and numbering, and only the words change. Character-level
+                emphasis inside a sentence you rewrote is the one thing that
+                may not survive.
+              </p>
+              <p className="mt-2">
+                Tables, pictures, embedded objects and content controls are{" "}
+                <b className="text-ink">preserved blocks</b>: they come through
+                your export exactly as they arrived, so their contents cannot
+                be retyped here. You can move them, delete them and mark them
+                reviewed, and hovering the lock chip says why. Headers and
+                footers are never rewritten at all — so if a preserved footer
+                still carries the section number of the master you adapted, the
+                issues list tells you, and the fix is in Word.
               </p>
             </>
           }

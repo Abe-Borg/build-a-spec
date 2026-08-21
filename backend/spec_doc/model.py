@@ -64,6 +64,57 @@ class SpecEditError(ValueError):
 # ---------------------------------------------------------------------------
 
 
+#: Why a provision is immutable. A locked paragraph is a READ-ONLY
+#: PROJECTION of preserved Word content (a table, a picture, an embedded
+#: object, a content control) that the appearance-preserving export emits
+#: back verbatim. Its text and structure are therefore not ours to edit —
+#: but the block is still the user's to REMOVE or REORDER, and its review
+#: status is Build-a-Spec workflow state that never reaches the Word output,
+#: so both stay available (decided with Abraham, 2026-08-21).
+#:
+#: The reason code is the stable vocabulary; the message is the prose every
+#: surface shows. Server-owned, exactly like ``source_blocker_message`` —
+#: never restate a denial in client prose.
+LOCK_REASONS: dict[str, str] = {
+    "table": (
+        "This is a preserved Word table. Its cells and formatting are "
+        "carried into the export exactly as they came in, so the content "
+        "cannot be edited here."
+    ),
+    "image": (
+        "This block holds a picture or drawing from the original file. It "
+        "is carried into the export exactly as it came in, so it cannot be "
+        "edited here."
+    ),
+    "embedded_object": (
+        "This block holds an embedded object from the original file. It is "
+        "carried into the export exactly as it came in, so it cannot be "
+        "edited here."
+    ),
+    "content_control": (
+        "This block is a Word content control from the original file. It is "
+        "carried into the export exactly as it came in, so it cannot be "
+        "edited here."
+    ),
+}
+
+#: What a locked block still allows, appended to every lock message so the
+#: user is never left thinking the block is simply stuck there.
+LOCK_REMEDY = "You can still move it or delete it."
+
+
+def lock_message(reason: str) -> str:
+    """The full user-facing explanation for a locked provision."""
+    if not reason:
+        return ""
+    detail = LOCK_REASONS.get(
+        reason,
+        "This block is preserved from the original file and cannot be "
+        "edited here.",
+    )
+    return f"{detail} {LOCK_REMEDY}"
+
+
 @dataclass
 class Paragraph:
     uid: str
@@ -76,6 +127,12 @@ class Paragraph:
     # the panel renders a citation chip; nothing validates existence
     # (research can be re-run, items re-minted).
     source_item_id: str = ""
+    # Non-empty when this provision is a read-only projection of preserved
+    # Word content (see LOCK_REASONS). Persisted with the tree rather than
+    # derived, so it survives undo/redo, versions and project files the way
+    # ``status`` does, and so every consumer (panel, QC, review walk) reads
+    # one answer.
+    locked: str = ""
 
 
 @dataclass
@@ -281,18 +338,47 @@ def _paragraph_label(depth: int, index: int) -> str:
     return f"{index + 1})"
 
 
+def labelled_paragraphs(
+    paragraphs: list[Paragraph],
+) -> list[tuple[Paragraph, int]]:
+    """Pair each provision with its label position, skipping locked blocks.
+
+    A preserved table sitting between provisions A and B is not provision B —
+    it carries no SectionFormat label at all, and letting it consume one
+    would renumber every sibling after it. Both the panel's rendering and
+    the appearance-preserving export read this one function, so the label a
+    user sees on screen is the label the exported Word file carries.
+    """
+    paired: list[tuple[Paragraph, int]] = []
+    position = 0
+    for paragraph in paragraphs:
+        if paragraph.locked:
+            paired.append((paragraph, -1))
+            continue
+        paired.append((paragraph, position))
+        position += 1
+    return paired
+
+
 def _paragraph_to_dict(p: Paragraph, depth: int, index: int) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         "id": p.uid,
-        "label": _paragraph_label(depth, index),
+        "label": "" if p.locked else _paragraph_label(depth, index),
         "text": p.text,
         "status": p.status,
         "source_item_id": p.source_item_id,
         "children": [
-            _paragraph_to_dict(c, depth + 1, i) for i, c in enumerate(p.children)
+            _paragraph_to_dict(c, depth + 1, i)
+            for c, i in labelled_paragraphs(p.children)
         ],
         "seq": p.next_seq,
     }
+    if p.locked:
+        # Emitted only when set, so a document with no preserved blocks
+        # serializes byte-identically to before locking existed.
+        data["locked"] = p.locked
+        data["locked_message"] = lock_message(p.locked)
+    return data
 
 
 def _article_to_dict(a: Article, part_number: int, index: int) -> dict[str, Any]:
@@ -301,7 +387,8 @@ def _article_to_dict(a: Article, part_number: int, index: int) -> dict[str, Any]
         "number": f"{part_number}.{index + 1}",
         "title": a.title,
         "paragraphs": [
-            _paragraph_to_dict(p, 0, i) for i, p in enumerate(a.paragraphs)
+            _paragraph_to_dict(p, 0, i)
+            for p, i in labelled_paragraphs(a.paragraphs)
         ],
         "seq": a.next_seq,
     }
@@ -331,6 +418,11 @@ def _paragraph_from_dict(data: dict[str, Any]) -> Paragraph:
         children=[_paragraph_from_dict(c) for c in data.get("children", [])],
         next_seq=int(data.get("seq", 1)),
         source_item_id=str(data.get("source_item_id", "") or ""),
+        # Unknown codes are kept rather than dropped: a project written by a
+        # newer build must not come back with its preserved tables editable.
+        # ``lock_message`` already degrades an unrecognized code to honest
+        # generic prose.
+        locked=str(data.get("locked", "") or ""),
     )
 
 
@@ -539,12 +631,20 @@ def outline(section: SpecSection, *, max_text: int | None = 160) -> str:
             )
 
             def walk(paragraphs: list[Paragraph], depth: int) -> None:
-                for i, p in enumerate(paragraphs):
+                for p, i in labelled_paragraphs(paragraphs):
                     text = " ".join(p.text.split())
                     if max_text is not None and len(text) > max_text:
                         text = text[: max_text - 1] + "…"
                     indent = "    " + "  " * depth
-                    label = _paragraph_label(depth, i)
+                    # A locked block carries no SectionFormat label, so the
+                    # marker takes the label's place: the model needs to know
+                    # this id exists (to move or delete it, and to write
+                    # around it) while never trying to retype it.
+                    label = (
+                        f"[preserved {p.locked}]"
+                        if p.locked
+                        else _paragraph_label(depth, i)
+                    )
                     source = (
                         f" ◆{p.source_item_id}" if p.source_item_id else ""
                     )
@@ -868,6 +968,14 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             parent_seq_owner = node
             siblings = node.paragraphs
         elif isinstance(node, Paragraph):
+            if node.locked:
+                # A preserved table or picture is emitted back as one Word
+                # block; it has nowhere to put a nested provision.
+                raise SpecEditError(
+                    f"add_paragraph: {node.uid} is preserved content and "
+                    f"cannot hold nested provisions. "
+                    f"{lock_message(node.locked)}"
+                )
             if _paragraph_depth(section, node.uid) + 1 >= MAX_PARAGRAPH_DEPTH:
                 raise SpecEditError(
                     "add_paragraph: maximum nesting depth reached "
@@ -961,6 +1069,15 @@ def _apply_one(section: SpecSection, op: dict[str, Any]) -> dict[str, Any]:
             if text is not None:
                 if not isinstance(text, str) or not text.strip():
                     raise SpecEditError("replace: 'text' must be non-empty.")
+                if node.locked:
+                    # Status and provenance below stay available on purpose:
+                    # they are Build-a-Spec workflow state that never reaches
+                    # the Word output, so a reviewer can still confirm a
+                    # preserved table.
+                    raise SpecEditError(
+                        f"replace: {node.uid} is preserved content that "
+                        f"cannot be retyped. {lock_message(node.locked)}"
+                    )
                 node.text = text.strip()
             if status is not None:
                 node.status = status

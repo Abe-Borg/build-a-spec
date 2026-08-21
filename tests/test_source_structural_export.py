@@ -1101,7 +1101,20 @@ def test_noncontiguous_numbered_island_is_rejected(tmp_path, separator):
         client,
         {"action": "move", "target_id": "pt1.a1.p3", "position": 0},
     )
-    assert "[noncontiguous_structural_island]" in error
+    # The move is refused either way; WHICH rule refuses it depends on
+    # whether the separator is visible to the tree. A content control is now
+    # imported as a locked block rather than dropped (dropping it was
+    # invisible while the export only patched the upload, and became content
+    # loss the moment it rebuilt the body), so the island reads as contiguous
+    # and the leaked numbering instance is what fails it instead. Both codes
+    # protect the same preserved content.
+    assert any(
+        blocker in error
+        for blocker in (
+            "[noncontiguous_structural_island]",
+            "[numbering_instance_not_isolated]",
+        )
+    )
 
 
 def test_mixed_num_id_island_is_rejected(tmp_path):

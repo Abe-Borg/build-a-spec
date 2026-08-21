@@ -3630,6 +3630,42 @@ project-format bump; two REST routes and one new capability-free modal.
   releases nobody had. Future entries are per-version as normal; the data
   model was per-version from the start.
 
+### A released version's entry is frozen (learned the hard way, v1.13.0)
+
+`v1.12.0` was tagged, built and installed, and a later PR then **edited
+that same `1.12.0` entry** to describe its own work — new headline, new
+sections — because `VERSION` still read `1.12.0` and the entry looked
+like "the one we are writing". The repo then claimed a shipped release
+contained work that was not in it, and the import + attached-documents
+batches had no version of their own.
+
+- **Once a `vX.Y.Z` tag exists, its `ReleaseNote` is history — append a
+  new entry, never edit that one.** The entry is what a user who already
+  updated reads in their What's-new modal, and what `manifest_summary`
+  put in the `latest.json` they downloaded. Editing it rewrites a claim
+  already delivered. Same posture as this file's own never-rewrite rule
+  for implemented notes.
+- **`git tag -l` is empty in a fresh clone** — the container clones
+  without tags, so "is this version released?" must be answered from
+  the GitHub Releases API (or `git fetch --tags`), never from local
+  refs. That absence is part of how the mistake survived review.
+- **The safety net has one hole, and it is this one.**
+  `test_the_shipped_notes_describe_the_shipped_version` only checks that
+  *an* entry matches `settings.VERSION`; it cannot know that entry's
+  content no longer matches the build users hold. So an overwrite passes
+  CI and fails later — at the *next* release, when
+  `render_release_notes.py --version <new>` exits non-zero and that same
+  test goes red, with the new work stranded under the old number.
+- **The fix is always the same shape**: restore the released entry to
+  what it shipped (recover it from the tagged commit — it is the ground
+  truth, and the published release body is the check), move the new
+  work into a fresh entry, and bump `VERSION` in **four** places —
+  `backend/settings.py`, `frontend/package.json`, and *both* `version`
+  fields in `frontend/package-lock.json` (the top-level one and
+  `packages[""]`; `check_release_version.py` reads neither lockfile
+  field, so only `npm ci` catches a half-bump). Any `README.md`
+  "Shipped in vX.Y.Z" heading moves with it.
+
 ## Live research visibility — implemented notes (the per-agent board)
 
 Abraham's ask: research takes minutes and the user saw nothing between

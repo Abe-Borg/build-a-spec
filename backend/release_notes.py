@@ -89,22 +89,18 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
-        version="1.12.0",
-        date="2026-08-19",
+        version="1.13.0",
+        date="2026-08-21",
         headline="Importing a spec finally works the way you meant it",
         summary=(
-            "This is the first release since 1.9.1, so it also brings the "
-            "two builds in between: a Final QC report that leads with what "
-            "you need to act on, and a chat that reads your research and "
-            "review results and tells you what they mean for the section. "
-            "The two headline changes here: importing an office master is "
-            "no longer a fight — the import asks whether you want a fully "
-            "editable starting point (now the default) or a byte-exact "
-            "preserved original, real Word auto-numbered masters come in "
-            "with their parts and articles recognized, and the assistant "
-            "finally knows the rules of an imported document instead of "
-            "telling you it is read-only. And Final QC costs about half "
-            "as much, with nothing about the review traded away."
+            "Importing an office master is no longer a fight. The import "
+            "asks whether you want a fully editable starting point — now "
+            "the default — or a byte-exact preserved original; real Word "
+            "auto-numbered masters arrive with their parts and articles "
+            "recognized; and the assistant knows the rules of an imported "
+            "document instead of telling you it is read-only. Separately, "
+            "the documents you attach as background are now read by the "
+            "research and review teams, not just the chat."
         ),
         sections=(
             ReleaseSection(
@@ -177,6 +173,89 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                     ),
                 ),
             ),
+            ReleaseSection(
+                title="The documents you attach",
+                items=(
+                    ReleaseItem(
+                        title="Research and Final QC read them",
+                        body=(
+                            "An owner standard, a client guideline or a "
+                            "basis-of-design you attach as background used "
+                            "to be visible only in the chat. The research "
+                            "agents and every Final QC specialist and "
+                            "reviewer now read them in full — so a "
+                            "requirement that exists only in the owner's "
+                            "standard is no longer invisible to the "
+                            "completeness check, and a provision written to "
+                            "satisfy one is no longer argued down for want "
+                            "of anything supporting it."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A provision can credit an attached document",
+                        body=(
+                            "The source chip beside a provision now points "
+                            "at an attached document as well as a research "
+                            "finding, and the review flags a provision that "
+                            "credits one which does not actually support it."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Attached text is read as reference, never as instruction",
+                        body=(
+                            "An attached file is somebody else's content — "
+                            "a vendor PDF, a client's standard — and it now "
+                            "reaches every research and review agent. It is "
+                            "handled as material to work from: an owner's "
+                            "requirement, never a code authority, and never "
+                            "a set of instructions to the app. Where one "
+                            "conflicts with the governing code, that is "
+                            "reported as a finding rather than quietly "
+                            "resolved."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Saved Final QC reviews",
+                items=(
+                    ReleaseItem(
+                        title="They will ask to be re-run once",
+                        body=(
+                            "A Final QC report refuses to call itself "
+                            "current when anything it was produced from "
+                            "changes. Attaching or removing a background "
+                            "document counts, and so does this release's "
+                            "change to what an imported document tells the "
+                            "reviewers — so a report saved in a project "
+                            "file may read as out of date the first time "
+                            "you open it. The report itself is kept and "
+                            "stays readable; re-running brings it current."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
+        version="1.12.0",
+        date="2026-08-19",
+        headline="Final QC costs about half as much",
+        summary=(
+            "This is the first release since 1.9.1, so it also brings the "
+            "two builds in between: a Final QC report that leads with what "
+            "you need to act on, and a chat that reads your research and "
+            "review results and tells you what they mean for the section. "
+            "The headline change here is cost. The pre-issue review is the "
+            "most expensive thing the app does, and most of that went on "
+            "the stage that checks findings rather than the stage that "
+            "finds them. Two changes cut a typical pass by roughly half. "
+            "Nothing about the review itself was traded away: the same "
+            "five specialists, the same panel of reviewers arguing against "
+            "every finding, the same evidence rules and the same readiness "
+            "gate."
+        ),
+        sections=(
             ReleaseSection(
                 title="What Final QC costs",
                 items=(

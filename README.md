@@ -125,7 +125,7 @@ sheet, a previous project's section, or meeting notes.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
 
-## Shipped in v1.12.0 (Import as a starting point)
+## Shipped in v1.13.0 (Import as a starting point)
 
 **The import asks what you mean by it.** *Use as a starting point* — the
 recommended default — makes the imported content fully editable for you and

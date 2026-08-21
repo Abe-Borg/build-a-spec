@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Build-a-Spec"
-VERSION = "1.12.0"
+VERSION = "1.13.0"
 
 # --- Models -----------------------------------------------------------------
 

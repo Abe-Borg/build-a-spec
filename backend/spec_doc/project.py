@@ -54,11 +54,12 @@ class ValidatedProjectData:
     doc_data: dict[str, Any]
     import_report: dict[str, Any] | None
     source_map: dict[str, Any] | None
+    format_map: dict[str, Any] | None
     template_origin: dict[str, Any] | None
 
 
-def sanitize_source_map(value: Any) -> dict[str, Any] | None:
-    """Bound and clone optional source-to-OOXML locator metadata.
+def _sanitize_map_json(value: Any, label: str) -> dict[str, Any] | None:
+    """Bound and clone optional locator metadata.
 
     Source-map details evolve independently from the format-1 semantic tree,
     so persistence deliberately validates JSON safety rather than interpreting
@@ -70,7 +71,7 @@ def sanitize_source_map(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
     if not isinstance(value, dict):
-        raise ValueError("Malformed source map.")
+        raise ValueError(f"Malformed {label}.")
 
     nodes = 0
     active: set[int] = set()
@@ -82,24 +83,24 @@ def sanitize_source_map(value: Any) -> dict[str, Any] | None:
             nodes > MAX_SOURCE_DOCX_MAP_NODES
             or depth > MAX_SOURCE_DOCX_MAP_DEPTH
         ):
-            raise ValueError("Source map exceeds its structural limits.")
+            raise ValueError(f"The {label} exceeds its structural limits.")
         if item is None or isinstance(item, (str, bool, int)):
             if (
                 isinstance(item, str)
                 and len(item) > MAX_SOURCE_DOCX_MAP_STRING_CHARS
             ):
-                raise ValueError("Source map contains an oversized string.")
+                raise ValueError(f"The {label} contains an oversized string.")
             return item
         if isinstance(item, float):
             if not math.isfinite(item):
-                raise ValueError("Source map contains a non-finite number.")
+                raise ValueError(f"The {label} contains a non-finite number.")
             return item
         if isinstance(item, bytes):
             raise ValueError("Source bytes cannot be embedded in project JSON.")
         if isinstance(item, (list, dict)):
             identity = id(item)
             if identity in active:
-                raise ValueError("Source map contains a reference cycle.")
+                raise ValueError(f"The {label} contains a reference cycle.")
             active.add(identity)
             try:
                 if isinstance(item, list):
@@ -112,7 +113,7 @@ def sanitize_source_map(value: Any) -> dict[str, Any] | None:
                         or len(key) > MAX_SOURCE_DOCX_MAP_KEY_CHARS
                         or any(ord(ch) < 32 or ord(ch) == 127 for ch in key)
                     ):
-                        raise ValueError("Source map contains an invalid key.")
+                        raise ValueError(f"The {label} contains an invalid key.")
                     folded = re.sub(r"[^a-z0-9]", "", key.casefold())
                     if folded in _EMBEDDED_SOURCE_KEYS:
                         raise ValueError(
@@ -122,7 +123,7 @@ def sanitize_source_map(value: Any) -> dict[str, Any] | None:
                 return result
             finally:
                 active.remove(identity)
-        raise ValueError("Source map contains unsupported data.")
+        raise ValueError(f"The {label} contains unsupported data.")
 
     cloned = clone(value, 0)
     try:
@@ -130,9 +131,20 @@ def sanitize_source_map(value: Any) -> dict[str, Any] | None:
             cloned, ensure_ascii=False, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
     except (TypeError, ValueError, RecursionError) as exc:  # defensive
-        raise ValueError("Malformed source map.") from exc
+        raise ValueError(f"Malformed {label}.") from exc
     if len(encoded) > MAX_SOURCE_DOCX_MAP_BYTES:
-        raise ValueError("Source map exceeds its size limit.")
+        raise ValueError(f"The {label} exceeds its size limit.")
+    # Mapping-specific validation is strict and canonicalizes away unknown
+    # fields. Keeping this lazy avoids loading OOXML machinery for projects
+    # that were authored from scratch and have no source map.
+    return cloned
+
+
+def sanitize_source_map(value: Any) -> dict[str, Any] | None:
+    """JSON-safe, then canonicalized through the byte-exact source map."""
+    cloned = _sanitize_map_json(value, "source map")
+    if cloned is None:
+        return None
     # Mapping-specific validation is strict and canonicalizes away unknown
     # fields. Keeping this lazy avoids loading OOXML machinery for projects
     # that were authored from scratch and have no source map.
@@ -147,8 +159,24 @@ def sanitize_source_map(value: Any) -> dict[str, Any] | None:
         if str(exc) == "Unsupported source map format.":
             raise
         raise ValueError("Malformed source map.") from exc
-    except (TypeError, KeyError) as exc:
-        raise ValueError("Malformed source map.") from exc
+
+
+def sanitize_format_map(value: Any) -> dict[str, Any] | None:
+    """JSON-safe, then canonicalized through the appearance-preserving map.
+
+    Deliberately a SEPARATE canonicalizer from ``sanitize_source_map``: the
+    two maps answer different questions and evolve independently, and running
+    a formatting map through the byte-exact validator rejects it outright.
+    """
+    cloned = _sanitize_map_json(value, "formatting map")
+    if cloned is None:
+        return None
+    from .source_format import SourceFormatMap
+
+    try:
+        return SourceFormatMap.from_dict(cloned).to_dict()
+    except (ValueError, TypeError, KeyError) as exc:
+        raise ValueError("Malformed formatting map.") from exc
 
 
 def validate_project_data(data: Any) -> ValidatedProjectData:
@@ -189,6 +217,10 @@ def validate_project_data(data: Any) -> ValidatedProjectData:
         doc_data=doc_data,
         import_report=sanitize_import_report(data.get("import_report")),
         source_map=sanitize_source_map(data.get("source_map")),
+        # Same JSON-safety posture as the source map above, canonicalized
+        # through SourceFormatMap — which binds it to the retained bytes
+        # before the export trusts a single origin index.
+        format_map=sanitize_format_map(data.get("format_map")),
         template_origin=sanitize_template_origin(data.get("template_origin")),
     )
 
@@ -208,6 +240,7 @@ def save_project(
     reference_docs: dict[str, Any] | None = None,
     import_report: dict[str, Any] | None = None,
     source_map: dict[str, Any] | None = None,
+    format_map: dict[str, Any] | None = None,
     template_origin: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
@@ -252,6 +285,10 @@ def save_project(
         safe_source_map = sanitize_source_map(source_map)
         if safe_source_map is not None:
             payload["source_map"] = safe_source_map
+    if format_map is not None:
+        safe_format_map = sanitize_format_map(format_map)
+        if safe_format_map is not None:
+            payload["format_map"] = safe_format_map
     safe_template_origin = sanitize_template_origin(template_origin)
     if safe_template_origin is not None:
         payload["template_origin"] = safe_template_origin
@@ -331,6 +368,19 @@ def load_project(data: Any, session) -> None:
         from .source_mapping import SourceBodyMap
 
         restored_source_docx_map = SourceBodyMap.from_dict(staged.source_map)
+    restored_format_map = None
+    if staged.format_map is not None:
+        from .source_format import SourceFormatMap
+
+        try:
+            restored_format_map = SourceFormatMap.from_dict(staged.format_map)
+        except ValueError:
+            # Fail SOFT and toward normalized export: a project whose
+            # formatting map cannot be read still opens, still holds every
+            # provision, and still offers the exact original download. The
+            # export simply stops claiming it can reproduce the layout,
+            # which is the honest answer when the map is unreadable.
+            restored_format_map = None
 
     # Parse and reconcile both QC records before touching the live session.
     # The retained successful result and the newer attempt form one state
@@ -461,6 +511,10 @@ def load_project(data: Any, session) -> None:
     # attaches its separately validated bytes after this semantic commit.
     session.source_docx_bytes = None
     session.source_docx_filename = ""
+    if hasattr(session, "source_format_map"):
+        # Cleared with the bytes it describes: origin indexes into a package
+        # this session no longer holds address whatever now sits there.
+        session.source_format_map = None
     if hasattr(session, "source_patch_context"):
         session.source_patch_context = None
     if hasattr(session, "_capability_cache"):
@@ -481,5 +535,6 @@ def load_project(data: Any, session) -> None:
     # an older/lightweight session object continue to load unchanged.
     if hasattr(session, "source_docx_map"):
         session.source_docx_map = restored_source_docx_map
+        session.source_format_map = restored_format_map
     # Invalidate any turn that was still streaming against the old state.
     session.invalidate_model_turn()

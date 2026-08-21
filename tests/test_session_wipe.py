@@ -25,6 +25,10 @@ from fastapi.testclient import TestClient
 from backend.app import create_app
 from backend.llm.conversation import SessionState
 from backend.research.engine import RequirementsProfile
+from backend.spec_doc.source_format import (
+    FormatAnchor,
+    SourceFormatMap,
+)
 from backend.spec_doc.source_mapping import SourceBodyMap
 
 
@@ -38,6 +42,7 @@ _STATE_PROBES = {
     "source_docx_bytes": lambda s: s.source_docx_bytes,
     "source_docx_filename": lambda s: s.source_docx_filename,
     "source_docx_map": lambda s: s.source_docx_map,
+    "source_format_map": lambda s: s.source_format_map,
     "source_patch_context": lambda s: s.source_patch_context,
     "_capability_cache": lambda s: s._capability_cache,
     "_pending_capability_cache": lambda s: s._pending_capability_cache,
@@ -110,6 +115,11 @@ def _dirty(session: SessionState) -> None:
         body_child_count=0,
         body_blocks=(),
         bindings={},
+    )
+    session.source_format_map = SourceFormatMap(
+        document_sha256="d" * 64,
+        body_child_count=1,
+        anchors=(FormatAnchor(uid="pt1.a1.p1", origin_index=0),),
     )
     session.source_patch_context = object()
     session._capability_cache = (("state",), object())

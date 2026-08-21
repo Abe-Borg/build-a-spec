@@ -101,6 +101,7 @@ from ..spec_doc import (
 )
 from ..spec_doc.model import apply_edits, iter_paragraphs
 from ..spec_doc.project import chat_transcript
+from ..spec_doc.source_format import SourceFormatMap
 from ..spec_doc.source_mapping import (
     SourceBodyMap,
     semantic_body_projection,
@@ -257,6 +258,14 @@ class SessionState:
     # of the semantic tree/LLM context; project-container persistence uses its
     # strict ``to_dict`` / ``from_dict`` representation.
     source_docx_map: SourceBodyMap | None = None
+    # Where every semantic element came from in ``source_docx_bytes``, for the
+    # appearance-preserving export (spec_doc/source_render.py). Distinct from
+    # ``source_docx_map`` on purpose: that one anchors byte-exact text slices
+    # for the retired patch-in-place mode and is validated far more strictly,
+    # while this one only has to answer "which source element do I clone, and
+    # did its label come from Word or from the text?". Rides the project file;
+    # never enters the semantic tree or model context.
+    source_format_map: SourceFormatMap | None = None
     # Process-local derived indexes for ``source_docx_bytes``. This cache is
     # deliberately absent from semantic/project persistence and is rebuilt
     # from the exact source after import/load. ``repr=False`` avoids dumping
@@ -1395,6 +1404,7 @@ class SessionState:
         self.source_docx_bytes = None
         self.source_docx_filename = ""
         self.source_docx_map = None
+        self.source_format_map = None
         self.source_patch_context = None
         self._capability_cache = None
         self._pending_capability_cache = None

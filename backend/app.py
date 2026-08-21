@@ -183,6 +183,10 @@ from .spec_doc.project_package import (
 )
 from .spec_doc.source_mapping import SourceBodyMap, source_blocker_message
 from .spec_doc import source_patch as source_patch_module
+from .spec_doc.source_render import (
+    SourceRenderError,
+    render_preserving_docx,
+)
 from .spec_doc.source_patch import (
     CAPABILITY_STATUS_PENDING,
     SourcePatchIssue,
@@ -781,6 +785,10 @@ class _ExportInputs:
     #: does not write it back — caching is not required for correctness, and
     #: publishing it would need the identity revalidated under the guard.
     source_context: Any | None = None
+    #: The appearance-preserving export's origin map. Present only for the
+    #: ``preserved`` mode, which rebuilds the body of a retained package
+    #: rather than patching text slices inside it.
+    format_map: Any | None = None
     audit_result: Any | None = None
     qc_result: dict[str, Any] | None = None
 
@@ -3044,6 +3052,7 @@ def create_app(
                 staged.source_docx_bytes = source_bytes
                 staged.source_docx_filename = "tutorial-section.docx"
                 staged.source_docx_map = imported.source_map
+                staged.source_format_map = imported.format_map
                 staged.source_patch_context = source_context
                 staged.import_report = report
             elif kind == "template":
@@ -3736,11 +3745,12 @@ def create_app(
         for without a validated source package.
         """
         store = session.doc
-        if mode not in (None, "source", "normalized"):
+        if mode not in (None, "source", "normalized", "preserved"):
             return JSONResponse(
                 {
                     "ok": False,
-                    "error": "mode must be 'source' or 'normalized'.",
+                    "error": "mode must be 'source', 'preserved', or "
+                    "'normalized'.",
                 },
                 status_code=400,
             )
@@ -3771,14 +3781,54 @@ def create_app(
                 or store.baseline_index is not None
             )
         )
-        selected_mode = (
-            "normalized"
-            if redline_base is not None
-            else (mode or ("source" if imported_scope else "normalized"))
+        # An imported document defaults to the appearance-preserving render:
+        # the whole point of importing a firm's master is that the export
+        # still looks like the firm's master. ``source`` (byte-exact patching)
+        # stays reachable for a project that predates the format map, and
+        # ``normalized`` is always available explicitly.
+        format_map = getattr(session, "source_format_map", None)
+        preserving_available = (
+            format_map is not None
+            and session.source_docx_bytes is not None
+            and format_map.matches(session.source_docx_bytes)
         )
+        if redline_base is not None:
+            selected_mode = "normalized"
+        elif mode:
+            selected_mode = mode
+        elif imported_scope:
+            # Still inside the byte-exact scope: that promise is the stronger
+            # one, and defaulting away from it would silently downgrade a
+            # project that never gave it up.
+            selected_mode = "source"
+        elif preserving_available:
+            # The product's ordinary imported document: free to edit, and the
+            # export still looks like the firm's master. Reached once the
+            # byte-exact claim has been released, which every import now does.
+            selected_mode = "preserved"
+        else:
+            selected_mode = "normalized"
         # Detach the current tree: the render walks it long after the guard
         # is gone, and a committing turn replaces ``store.doc`` outright.
         current = SpecSection.from_dict(store.doc.to_dict())
+        if selected_mode == "preserved":
+            if not preserving_available:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Formatting-preserving export is "
+                        "unavailable: this project does not retain a Word "
+                        "original and the formatting map built from it. "
+                        "Export it normalized instead.",
+                    },
+                    status_code=409,
+                )
+            return _ExportInputs(
+                selected_mode="preserved",
+                current=current,
+                source_bytes=session.source_docx_bytes,
+                format_map=format_map,
+            )
         if selected_mode == "source":
             if getattr(store, "source_detached", False):
                 # Every artifact is still here, so the generic message below
@@ -3855,6 +3905,26 @@ def create_app(
             if inputs.redline_base is not None
             else None
         )
+        if inputs.selected_mode == "preserved":
+            try:
+                payload = render_preserving_docx(
+                    source_bytes=inputs.source_bytes,
+                    format_map=inputs.format_map,
+                    current=inputs.current,
+                )
+            except SourceRenderError as exc:
+                return JSONResponse(
+                    {"ok": False, "error": str(exc)}, status_code=409
+                )
+            return Response(
+                content=payload,
+                media_type=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+                headers=_attachment_headers(export_filename(inputs.current)),
+            )
+
         if inputs.selected_mode == "source":
             try:
                 payload = build_source_preserving_docx(
@@ -4387,6 +4457,7 @@ def create_app(
                 session.source_docx_bytes = source_bytes
                 session.source_docx_filename = safe_filename
                 session.source_docx_map = result.source_map
+                session.source_format_map = result.format_map
                 session.source_patch_context = source_context
                 session.import_report = report
                 if detach:

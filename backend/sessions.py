@@ -579,6 +579,14 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         if source_docx_map is not None and hasattr(source_docx_map, "to_dict")
         else source_docx_map
     )
+    # The formatting map is meaningless without the bytes it indexes into, so
+    # it travels only when they do.
+    source_format_map = getattr(session, "source_format_map", None)
+    format_map_payload = (
+        source_format_map.to_dict()
+        if source_bytes is not None and source_format_map is not None
+        else None
+    )
     qc_record = session.qc.audit_record_snapshot()
     return save_project(
         session.history,
@@ -599,6 +607,7 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         reference_docs=session.references.to_dict(),
         import_report=session.import_report,
         source_map=source_map_payload,
+        format_map=format_map_payload,
         template_origin=session.template_origin,
     )
 

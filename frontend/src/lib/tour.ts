@@ -428,13 +428,13 @@ export const TOUR: readonly TourChunk[] = [
     steps: [
       {
         id: "master-import",
-        capabilities: ["import.master", "import.intent"],
+        capabilities: ["import.master"],
         mode: "explanatory",
         anchor: "import-master",
         placement: "bottom",
         title: "An office master is another real on-ramp",
         body:
-          "A DOCX imports only into a blank spec, and the import asks what it should mean: a fully editable starting point (the recommended default — the assistant can restructure and redraft it freely), or a preserved original whose export stays a byte-exact copy with editing limited accordingly. Either way the exact package is retained, extraction warnings are dismissible notes, and non-spec files get honest presentation.",
+          "A DOCX imports only into a blank spec, and there is nothing to choose: the document keeps your firm's formatting — header, footer, fonts, styles, page setup — and is fully editable at the same time, so the assistant can restructure and redraft it freely. Tables, pictures and embedded objects come through as preserved blocks you can move or delete but not retype. The exact package is retained, extraction warnings are dismissible notes, and non-spec files get honest presentation.",
       },
       {
         id: "source-permissions",

@@ -130,6 +130,16 @@ export interface DocParagraph {
   status: BlockStatus;
   /** Optional research-item provenance (r-… id from the profile). */
   source_item_id: string;
+  /**
+   * Non-empty when this block is a read-only projection of preserved Word
+   * content — a table, a picture, an embedded object, a content control.
+   * The export emits the original block verbatim, so its content is not
+   * ours to retype; it can still be moved, deleted and marked reviewed.
+   * Server-owned: the reason code and its prose both come from the backend
+   * (`model.LOCK_REASONS`), never restated here.
+   */
+  locked?: string;
+  locked_message?: string;
   children: DocParagraph[];
 }
 

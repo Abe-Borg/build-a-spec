@@ -40,7 +40,6 @@ import {
 } from "../lib/sourceCapabilities";
 import { reviewCounts } from "../lib/reviewQueue";
 import Tip from "./Tip";
-import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
 import type { ImportIntent } from "../lib/api";
 
 interface Props {
@@ -336,21 +335,17 @@ export default function ArtifactPanel({
     if (file === undefined) fileRef.current?.click();
     else if (file) onLoadProject(file);
   };
-  // A picked master waits here while the user chooses what the import should
-  // MEAN — a fully editable starting point (the default), or a byte-exact
-  // preserved original with the editing limits that promise costs. Both
-  // picker paths land in the same modal; Cancel/✕ abandons the import.
-  const [pendingImport, setPendingImport] = useState<File | null>(null);
+  // Importing is ONE path now: the document keeps the firm's formatting —
+  // header, footer, fonts, styles, page setup, and every preserved table —
+  // and is fully editable at the same time. There is nothing left to ask, so
+  // nothing is asked. The old chooser offered byte-exact preservation as the
+  // alternative, and that promise left three of twenty-seven body operations
+  // available on a clean master, which is why it stopped being an option.
   const handleImportClick = async () => {
     if (fileLoading) return;
     const file = await nativeOpenFile("docx");
     if (file === undefined) importRef.current?.click();
-    else if (file) setPendingImport(file);
-  };
-  const chooseImportIntent = (intent: ImportIntent) => {
-    const file = pendingImport;
-    setPendingImport(null);
-    if (file) onImportMaster(file, intent);
+    else if (file) onImportMaster(file, "start");
   };
   // Attaching reference material takes the same native-first path, but has no
   // blank-document precondition: it never touches the spec. Its own dialog
@@ -1007,7 +1002,7 @@ export default function ArtifactPanel({
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) setPendingImport(file);
+              if (file) onImportMaster(file, "start");
               e.target.value = "";
             }}
           />
@@ -1035,64 +1030,6 @@ export default function ArtifactPanel({
           />
         </div>
       </div>
-
-      {/* The import-time intent choice. The two options are different
-          product CONTRACTS, not a detail — a starting point behaves like a
-          template (fully editable, fresh export), preservation buys the
-          byte-exact export at the cost of the editing limits. The mode copy
-          here describes the modes; specific denials stay server strings. */}
-      {pendingImport && (
-        <ModalShell
-          title="Import a Word specification"
-          onClose={() => setPendingImport(null)}
-          wide
-        >
-          <p className="text-sm leading-relaxed text-ink-dim">
-            How should <span className="text-ink">{pendingImport.name}</span>{" "}
-            be used? Either way, the exact file you uploaded stays
-            downloadable and a redline against it keeps working.
-          </p>
-          <div className="mt-4 grid gap-2">
-            <button
-              type="button"
-              onClick={() => chooseImportIntent("start")}
-              className={primaryBtn + " w-full py-2.5 text-left"}
-              data-capability="import.intent"
-            >
-              <span className="block font-semibold">
-                Use as a starting point
-              </span>
-              <span className="mt-0.5 block text-xs font-normal opacity-90">
-                Recommended. The content becomes fully editable for you and
-                the assistant; export produces a fresh Build-a-Spec Word
-                file.
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => chooseImportIntent("preserve")}
-              className={quietBtn + " w-full py-2.5 text-left"}
-            >
-              <span className="block font-semibold">
-                Preserve original formatting
-              </span>
-              <span className="mt-0.5 block text-xs font-normal text-ink-dim">
-                Editing is limited so the exported Word file can stay a
-                byte-exact copy of your upload with only approved changes.
-                You can switch to free editing later (Edit freely); switching
-                back means re-importing.
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setPendingImport(null)}
-              className={quietBtn + " w-full py-1.5 text-center text-xs"}
-            >
-              Cancel — don't import
-            </button>
-          </div>
-        </ModalShell>
-      )}
 
       {fileLoading && (
         <div

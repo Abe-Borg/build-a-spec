@@ -115,6 +115,13 @@ class SourceFormatMap:
     document_sha256: str
     body_child_count: int
     anchors: tuple[FormatAnchor, ...] = ()
+    #: Readable text from the package's headers and footers, captured once at
+    #: import. They are never rewritten — that is the contract — but a spec
+    #: footer conventionally carries the section identifier ("23 05 48 - 1"),
+    #: which is exactly what changes when a master is adapted. Retaining the
+    #: text lets the app SAY so rather than let a stale number reach an issued
+    #: deliverable. Deliberately not an editing surface.
+    header_footer_text: tuple[str, ...] = ()
 
     def anchor(self, uid: str) -> FormatAnchor | None:
         return self._by_uid.get(uid)
@@ -140,6 +147,7 @@ class SourceFormatMap:
             "document_sha256": self.document_sha256,
             "body_child_count": self.body_child_count,
             "anchors": [anchor.to_dict() for anchor in self.anchors],
+            "header_footer_text": list(self.header_footer_text),
         }
 
     @classmethod
@@ -162,10 +170,17 @@ class SourceFormatMap:
             count = int(data.get("body_child_count", 0))
         except (TypeError, ValueError):
             raise ValueError("source format map requires a body child count")
+        raw_chrome = data.get("header_footer_text")
+        chrome = (
+            tuple(str(item) for item in raw_chrome if isinstance(item, str))
+            if isinstance(raw_chrome, list)
+            else ()
+        )
         return cls(
             document_sha256=digest,
             body_child_count=max(0, count),
             anchors=anchors,
+            header_footer_text=chrome,
         )
 
 
@@ -174,6 +189,7 @@ def build_format_map(
     source_bytes: bytes,
     body_child_count: int,
     anchors: list[FormatAnchor],
+    header_footer_text: tuple[str, ...] = (),
 ) -> SourceFormatMap:
     """Freeze the anchors captured during one import against its upload."""
     if not isinstance(source_bytes, bytes):
@@ -182,6 +198,7 @@ def build_format_map(
         document_sha256=hashlib.sha256(source_bytes).hexdigest(),
         body_child_count=max(0, int(body_child_count)),
         anchors=tuple(anchors),
+        header_footer_text=tuple(header_footer_text),
     )
 
 

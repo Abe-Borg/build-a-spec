@@ -1673,7 +1673,21 @@ def _turn_context_text(session: SessionState) -> str:
         + outline(doc, max_text=None)
     )
     lint_items = lint_document(
-        doc, session.module, unstructured_import=unstructured
+        doc,
+        session.module,
+        unstructured_import=unstructured,
+        # The model is told too: it is the one that can offer to renumber
+        # the section, and a stale footer is exactly the kind of thing a
+        # reviewer expects it to notice.
+        preserved_chrome=(
+            tuple(
+                getattr(session.source_format_map, "header_footer_text", ())
+                or ()
+            )
+            if getattr(session, "source_format_map", None) is not None
+            and session.source_docx_bytes is not None
+            else ()
+        ),
     )
     if lint_items:
         lines = [

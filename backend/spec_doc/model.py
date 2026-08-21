@@ -631,12 +631,20 @@ def outline(section: SpecSection, *, max_text: int | None = 160) -> str:
             )
 
             def walk(paragraphs: list[Paragraph], depth: int) -> None:
-                for i, p in enumerate(paragraphs):
+                for p, i in labelled_paragraphs(paragraphs):
                     text = " ".join(p.text.split())
                     if max_text is not None and len(text) > max_text:
                         text = text[: max_text - 1] + "…"
                     indent = "    " + "  " * depth
-                    label = _paragraph_label(depth, i)
+                    # A locked block carries no SectionFormat label, so the
+                    # marker takes the label's place: the model needs to know
+                    # this id exists (to move or delete it, and to write
+                    # around it) while never trying to retype it.
+                    label = (
+                        f"[preserved {p.locked}]"
+                        if p.locked
+                        else _paragraph_label(depth, i)
+                    )
                     source = (
                         f" ◆{p.source_item_id}" if p.source_item_id else ""
                     )

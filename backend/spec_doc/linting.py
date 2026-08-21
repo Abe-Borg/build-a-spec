@@ -37,6 +37,11 @@ Rules (stable ids consumers can branch on):
   differing only in a dimension or an article number are never flagged.
 - ``missing_section_header`` — articles drafted while the section
   number/title is still unset (info-level).
+- ``stale_document_identifier`` — a preserved header or footer still carries
+  a section number that the body no longer uses. Headers and footers are
+  never rewritten by the appearance-preserving export (that is the whole
+  contract), so adapting a master leaves the old identifier printed on every
+  page unless someone is told. Advisory, and the remedy is in Word.
 """
 from __future__ import annotations
 
@@ -59,6 +64,17 @@ RULE_EMPTY_ARTICLE = "empty_article"
 RULE_DUPLICATE_ARTICLE_TITLE = "duplicate_article_title"
 RULE_DUPLICATE_PROVISION = "duplicate_provision"
 RULE_MISSING_SECTION_HEADER = "missing_section_header"
+RULE_STALE_DOCUMENT_IDENTIFIER = "stale_document_identifier"
+
+#: A MasterFormat section number as it appears in running text: three or
+#: four pairs of digits, space- or dot-separated ("23 05 48", "23 05 48.13").
+_SECTION_NUMBER_RE = re.compile(r"\b\d{2}[ .]\d{2}[ .]\d{2}(?:\.\d{2})?\b")
+
+
+def _masterformat_key(value: str) -> str:
+    """Digits only, so "23 05 48" and "23.05.48" compare equal."""
+    digits = re.sub(r"\D", "", value or "")
+    return digits if len(digits) >= 6 else ""
 
 # ---------------------------------------------------------------------------
 # Text-scan vocabularies (ported patterns; [TBD: ...] is deliberately absent
@@ -449,6 +465,7 @@ def lint_document(
     overrides: Mapping[str, Mapping[str, str]] | None = None,
     *,
     unstructured_import: bool = False,
+    preserved_chrome: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
     """Lint the tree against ``module``; returns advisory issue dicts.
 
@@ -597,6 +614,30 @@ def lint_document(
                 )
             elif key:
                 titles_seen[key] = number
+
+    # A preserved header/footer that still names another section. The
+    # comparison is deliberately narrow: only a MasterFormat-shaped number
+    # counts, and only when the body has one of its own to disagree with, so
+    # a page number or a project name can never trip it.
+    current_number = _masterformat_key(section.number)
+    if current_number:
+        for line in preserved_chrome:
+            for match in _SECTION_NUMBER_RE.finditer(line):
+                found = _masterformat_key(match.group(0))
+                if not found or found == current_number:
+                    continue
+                add(
+                    RULE_STALE_DOCUMENT_IDENTIFIER,
+                    "sec",
+                    "—",
+                    "A preserved header or footer still reads "
+                    f"'{match.group(0)}' while this section is "
+                    f"{section.number}. Headers and footers are carried "
+                    "through from the original file and are not edited "
+                    "here — update them in Word before issuing.",
+                    match.group(0),
+                )
+                break
 
     if (
         any_articles

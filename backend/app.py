@@ -1276,6 +1276,19 @@ def _draft_prerequisites(session) -> DraftPrerequisites:
     )
 
 
+def _preserved_chrome(session) -> tuple[str, ...]:
+    """Header/footer lines retained from an imported package.
+
+    Empty for a from-scratch document, and empty once the retained bytes are
+    gone — the lines describe a specific upload, and reporting them beside a
+    document that no longer carries it would be a warning about nothing.
+    """
+    format_map = getattr(session, "source_format_map", None)
+    if format_map is None or session.source_docx_bytes is None:
+        return ()
+    return tuple(getattr(format_map, "header_footer_text", ()) or ())
+
+
 def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
     """Build the full document payload.
 
@@ -1311,6 +1324,7 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
             session.doc.doc,
             session.module,
             unstructured_import=session.import_is_unstructured(),
+            preserved_chrome=_preserved_chrome(session),
         ),
         "standards": standards_payload(session),
         "profile_complete": bool(profile and profile.is_complete()),
@@ -1488,6 +1502,7 @@ def _readiness_payload(
         doc,
         session.module,
         unstructured_import=session.import_is_unstructured(),
+        preserved_chrome=_preserved_chrome(session),
     )
     profile = ProjectProfile.from_dict(doc.project_profile)
     profile_ok = bool(profile and profile.is_complete())

@@ -511,3 +511,79 @@ def test_normalized_export_stays_available_explicitly():
     # header does not travel with it — that is the whole difference.
     document = Document(io.BytesIO(normalized.content))
     assert document.sections[0].header.paragraphs[0].text != HEADER_TEXT
+
+
+# ---------------------------------------------------------------------------
+# The header/footer the export never rewrites
+# ---------------------------------------------------------------------------
+
+
+def test_a_stale_footer_section_number_is_reported_not_rewritten():
+    """Headers and footers are immutable; a wrong one must still be caught.
+
+    Adapting a master is exactly when the section identifier changes, and a
+    spec footer conventionally carries it. Rewriting it would break the
+    "we do not touch your header and footer" contract, so the app says so
+    instead and names the remedy (Word), rather than letting a stale number
+    print on every page of an issued deliverable.
+    """
+    client = TestClient(create_app())
+    _import(client, _master_bytes())
+
+    clean = client.get("/api/doc").json()
+    assert not [
+        item
+        for item in clean["lint"]
+        if item["rule"] == "stale_document_identifier"
+    ]
+
+    renumbered = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": "sec",
+                    "text": "SEISMIC CONTROLS",
+                    "numbering": "23 05 93",
+                }
+            ]
+        },
+    )
+    assert renumbered.status_code == 200, renumbered.text
+
+    findings = [
+        item
+        for item in renumbered.json()["lint"]
+        if item["rule"] == "stale_document_identifier"
+    ]
+    assert len(findings) == 1
+    assert "23 05 48" in findings[0]["message"]
+    assert "update them in Word" in findings[0]["message"]
+
+    exported = client.get("/api/export/docx")
+    assert exported.status_code == 200
+    # Reported, never rewritten.
+    assert (
+        Document(io.BytesIO(exported.content))
+        .sections[0]
+        .footer.paragraphs[0]
+        .text
+        == FOOTER_TEXT
+    )
+
+
+def test_the_model_is_told_a_preserved_block_is_not_retypeable(tmp_path):
+    from backend.spec_doc.model import outline
+
+    source = _master_bytes()
+    path = tmp_path / "master.docx"
+    path.write_bytes(source)
+    imported = parse_master_docx(path)
+
+    rendered = outline(imported.section, max_text=None)
+
+    assert "[preserved table]" in rendered
+    # It still carries an id, because moving and deleting it are allowed.
+    table_uid = imported.section.parts[0].articles[1].paragraphs[0].uid
+    assert f"[id: {table_uid}]" in rendered

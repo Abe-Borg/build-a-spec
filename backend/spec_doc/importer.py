@@ -390,6 +390,37 @@ class _BodyTextEntry:
     preformatted: bool = False
 
 
+def _header_footer_text(document) -> tuple[str, ...]:
+    """Readable lines from every header and footer, in part order.
+
+    Captured so the app can NOTICE when a spec footer still carries the
+    number of the master the section was adapted from. Headers and footers
+    are never rewritten — that is the preservation contract — so this is
+    evidence for a warning, never an editing surface.
+    """
+    lines: list[str] = []
+    for section in document.sections:
+        for part in (
+            section.header,
+            section.footer,
+            section.first_page_header,
+            section.first_page_footer,
+            section.even_page_header,
+            section.even_page_footer,
+        ):
+            if part is None:
+                continue
+            try:
+                paragraphs = part.paragraphs
+            except (AttributeError, ValueError):  # pragma: no cover - defensive
+                continue
+            for paragraph in paragraphs:
+                text = " ".join(paragraph.text.split())
+                if text and text not in lines:
+                    lines.append(text)
+    return tuple(lines)
+
+
 def _iter_body_texts(document) -> list[_BodyTextEntry]:
     """Body content in document order: (accept-all text, paragraph or None).
 
@@ -1109,6 +1140,7 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             if isinstance(child.tag, str)
         ),
         anchors=format_anchors,
+        header_footer_text=_header_footer_text(document),
     )
 
     return ImportResult(

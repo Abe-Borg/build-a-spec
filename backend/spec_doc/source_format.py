@@ -122,6 +122,15 @@ class SourceFormatMap:
     #: text lets the app SAY so rather than let a stale number reach an issued
     #: deliverable. Deliberately not an editing surface.
     header_footer_text: tuple[str, ...] = ()
+    #: The section number and title as the import read them. The export
+    #: reproduces the header ELEMENT verbatim while both still match, because
+    #: the header line has several legitimate forms — "SECTION 23 05 48", a
+    #: bare "23 05 48 — TITLE", a number and title on separate lines — and
+    #: reconstructing one canonical form would rewrite the firm's header on a
+    #: no-op export. Once the user changes the section identity there is
+    #: nothing to reproduce and the canonical form is written instead.
+    section_number: str = ""
+    section_title: str = ""
 
     def anchor(self, uid: str) -> FormatAnchor | None:
         return self._by_uid.get(uid)
@@ -148,6 +157,8 @@ class SourceFormatMap:
             "body_child_count": self.body_child_count,
             "anchors": [anchor.to_dict() for anchor in self.anchors],
             "header_footer_text": list(self.header_footer_text),
+            "section_number": self.section_number,
+            "section_title": self.section_title,
         }
 
     @classmethod
@@ -181,6 +192,8 @@ class SourceFormatMap:
             body_child_count=max(0, count),
             anchors=anchors,
             header_footer_text=chrome,
+            section_number=str(data.get("section_number", "") or ""),
+            section_title=str(data.get("section_title", "") or ""),
         )
 
 
@@ -190,6 +203,8 @@ def build_format_map(
     body_child_count: int,
     anchors: list[FormatAnchor],
     header_footer_text: tuple[str, ...] = (),
+    section_number: str = "",
+    section_title: str = "",
 ) -> SourceFormatMap:
     """Freeze the anchors captured during one import against its upload."""
     if not isinstance(source_bytes, bytes):
@@ -199,6 +214,8 @@ def build_format_map(
         body_child_count=max(0, int(body_child_count)),
         anchors=tuple(anchors),
         header_footer_text=tuple(header_footer_text),
+        section_number=section_number,
+        section_title=section_title,
     )
 
 

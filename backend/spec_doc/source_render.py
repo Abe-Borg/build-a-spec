@@ -80,6 +80,11 @@ class SourceRenderError(ValueError):
     """The retained package cannot back an appearance-preserving export."""
 
 
+def _normalized(text: str) -> str:
+    """The importer's whitespace fold, for comparing like with like."""
+    return " ".join((text or "").split())
+
+
 def _is_blank_paragraph(element) -> bool:
     return element.tag == _W_P and not _accept_all_paragraph_text(element).strip()
 
@@ -162,6 +167,12 @@ class _BodyRenderer:
         # whatever happened to be adjacent.
         self._depth_templates: dict[int, int] = {}
         self._last_template: int | None = None
+        # The label convention each template ACTUALLY used, recorded rather
+        # than re-inferred. Absence of ``w:numPr`` does not mean "manual
+        # label": an unstructured import has no labels at all, and inventing
+        # one for its new siblings prints a "B." the document never had.
+        self._depth_label_kinds: dict[int, str] = {}
+        self._last_label_kind: str = ""
 
     # -- source access ---------------------------------------------------
     def _origin(self, uid: str) -> int:
@@ -208,6 +219,21 @@ class _BodyRenderer:
         self.output.append(copy.deepcopy(self._children[origin_index]))
         return True
 
+    def emit_verbatim(self, uid: str) -> bool:
+        """Emit an anchored element exactly as it arrived, whatever it says.
+
+        Used where the CALLER knows the content is unchanged but cannot
+        reconstruct the original wording — the section header, whose line has
+        several legitimate forms the parse folds into one number and title.
+        """
+        origin_index = self._origin(uid)
+        if origin_index == NO_ORIGIN:
+            return False
+        self._claimed.add(origin_index)
+        self._emit_leading_blanks(origin_index)
+        self.output.append(copy.deepcopy(self._children[origin_index]))
+        return True
+
     def emit_text(self, uid: str, text: str, *, depth: int | None = None) -> None:
         origin_index = self._origin(uid)
         if origin_index != NO_ORIGIN:
@@ -215,10 +241,24 @@ class _BodyRenderer:
             self._emit_leading_blanks(origin_index)
             source = self._children[origin_index]
             if source.tag == _W_P:
+                recorded = self._label_kind(uid)
                 if depth is not None:
                     self._depth_templates[depth] = origin_index
+                    if recorded:
+                        self._depth_label_kinds[depth] = recorded
                 self._last_template = origin_index
-                unchanged = _accept_all_paragraph_text(source).strip() == text
+                if recorded:
+                    self._last_label_kind = recorded
+                # Compare the NORMALIZED forms. The importer folds runs of
+                # whitespace (`" ".join(text.split())`), so a source
+                # paragraph containing a double space after a period — which
+                # is most office masters — would otherwise never match its
+                # own semantic text, take the rewrite path, and have its
+                # inline runs collapsed on a no-op export. Caught in review
+                # on PR #141 (Codex).
+                unchanged = _normalized(
+                    _accept_all_paragraph_text(source)
+                ) == _normalized(text)
                 if unchanged and not _element_has_tracked_changes(source):
                     # The untouched-provision guarantee: a byte-identical
                     # clone, markup and all.
@@ -251,6 +291,9 @@ class _BodyRenderer:
         will render its label — so writing one into the text as well would
         print it twice.
         """
+        recorded = self._depth_label_kinds.get(depth) or self._last_label_kind
+        if recorded:
+            return recorded
         index = self._depth_templates.get(depth)
         if index is None:
             index = self._last_template
@@ -286,8 +329,26 @@ class _BodyRenderer:
         return remainder
 
 
-def _render_body(section: SpecSection, renderer: _BodyRenderer) -> None:
+def _render_body(
+    section: SpecSection,
+    renderer: _BodyRenderer,
+    format_map: SourceFormatMap,
+) -> None:
     if section.number or section.title:
+        # While the section identity is exactly what was imported, reproduce
+        # the header ELEMENT rather than rebuild its text. The parse folds
+        # several legitimate header forms into one number and title — a
+        # "SECTION 23 05 48" line, a keyword-less "23 05 48 — TITLE", a
+        # number and title on separate lines — so rebuilding a canonical
+        # form rewrites the firm's header on a NO-OP export. Caught in
+        # review on PR #141 (Codex).
+        unchanged_identity = (
+            section.number == format_map.section_number
+            and section.title == format_map.section_title
+        )
+        if unchanged_identity and renderer.emit_verbatim("sec"):
+            renderer.emit_verbatim(SECTION_TITLE_UID)
+            return _render_parts(section, renderer)
         header = " ".join(part for part in ("SECTION", section.number) if part)
         if renderer._origin(SECTION_TITLE_UID) != NO_ORIGIN:
             renderer.emit_text("sec", header.strip())
@@ -295,6 +356,10 @@ def _render_body(section: SpecSection, renderer: _BodyRenderer) -> None:
         else:
             combined = f"{header} {section.title}".strip() if section.title else header
             renderer.emit_text("sec", combined.strip())
+    _render_parts(section, renderer)
+
+
+def _render_parts(section: SpecSection, renderer: _BodyRenderer) -> None:
 
     for part in section.parts:
         if not part.articles and renderer._origin(part.uid) == NO_ORIGIN:
@@ -335,12 +400,15 @@ def _render_paragraph(
     paragraph: Paragraph, depth: int, index: int, renderer: _BodyRenderer
 ) -> None:
     if paragraph.locked:
-        if not renderer.emit_locked(paragraph.uid):
-            # A locked block with no source behind it cannot be invented.
-            # It is skipped rather than emitted as prose, because writing a
-            # flattened table back as a paragraph would silently replace a
-            # grid with pipe characters.
-            return
+        # A locked block with no source behind it cannot be invented: writing
+        # a flattened table back as a paragraph would replace a grid with
+        # pipe characters. Its children are still rendered either way —
+        # the importer no longer lets a preserved block become a parent, but
+        # a project saved before that fix can still carry one, and dropping
+        # provisions on the floor is exactly the failure this guards.
+        renderer.emit_locked(paragraph.uid)
+        for child, child_label in labelled_paragraphs(paragraph.children):
+            _render_paragraph(child, depth, child_label, renderer)
         return
     label_kind = renderer._label_kind(paragraph.uid)
     if not label_kind:
@@ -409,7 +477,7 @@ def render_preserving_docx(
     )
 
     renderer = _BodyRenderer(children, format_map)
-    _render_body(current, renderer)
+    _render_body(current, renderer, format_map)
     rendered = renderer.output + renderer.trailing()
 
     for child in list(body):

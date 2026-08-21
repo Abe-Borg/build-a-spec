@@ -860,7 +860,21 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             # row or a caption through the heading grammars is how a row
             # beginning "A." used to become an article; and since the block
             # is emitted verbatim, its text was never a label to strip.
+            #
+            # It must also never become a HIERARCHY PARENT. Placing it at
+            # depth 0 made it the current depth-0 node, so a following "1."
+            # provision nested underneath it — and a table cannot own a
+            # subparagraph in Word, in the export, or in any reading of the
+            # document. Restoring the stack leaves the block a sibling and
+            # sends the next nested provision to the real provision above it.
+            # (Caught in review on PR #141, Codex: the renderer skipped those
+            # children and the trailing sweep excluded them as anchored, so
+            # an untouched export silently DELETED them.)
+            stack_before = list(builder.stack)
+            offset_before = builder.numbering_offset
             add_mapped_paragraph(0, text)
+            builder.stack = stack_before
+            builder.numbering_offset = offset_before
             continue
 
         # Direct Word numbering is structural metadata, so it must win over
@@ -1141,6 +1155,8 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
         ),
         anchors=format_anchors,
         header_footer_text=_header_footer_text(document),
+        section_number=builder.section.number,
+        section_title=builder.section.title,
     )
 
     return ImportResult(

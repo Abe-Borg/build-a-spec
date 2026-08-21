@@ -587,3 +587,184 @@ def test_the_model_is_told_a_preserved_block_is_not_retypeable(tmp_path):
     # It still carries an id, because moving and deleting it are allowed.
     table_uid = imported.section.parts[0].articles[1].paragraphs[0].uid
     assert f"[id: {table_uid}]" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Review findings (PR #141, Codex) — each reproduced before it was fixed
+# ---------------------------------------------------------------------------
+
+
+def _master_with(lines: list[str], *, table_after: str | None = None) -> bytes:
+    document = Document()
+    for line in lines:
+        document.add_paragraph(line)
+        if table_after is not None and line == table_after:
+            table = document.add_table(rows=1, cols=2)
+            table.rows[0].cells[0].text = "Equipment"
+            table.rows[0].cells[1].text = "Deflection"
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def test_a_preserved_block_never_becomes_a_hierarchy_parent(tmp_path):
+    """P1: a provision nested under a table was deleted by the export.
+
+    A locked block placed at depth 0 became the current depth-0 node, so a
+    following manually labelled "1." attached as its CHILD. The renderer
+    returned straight after emitting the locked element, and the trailing
+    sweep excluded those children as anchored — so an otherwise untouched
+    export silently dropped them.
+    """
+    source = _master_with(
+        [
+            "SECTION 23 05 48",
+            "VIBRATION",
+            "PART 1 - GENERAL",
+            "1.1 SCHEDULE",
+            "A. Intro paragraph.",
+            "1. Nested provision after the table.",
+        ],
+        table_after="A. Intro paragraph.",
+    )
+    path = tmp_path / "master.docx"
+    path.write_bytes(source)
+    imported = parse_master_docx(path)
+
+    article = imported.section.parts[0].articles[0]
+    table = next(p for p in article.paragraphs if p.locked)
+    assert table.children == []
+    # It went to the real provision above the table, which is where a
+    # subparagraph of a schedule intro belongs.
+    assert [c.text for c in article.paragraphs[0].children] == [
+        "Nested provision after the table."
+    ]
+
+    exported = _render(source, imported.section, imported.format_map)
+    assert "Nested provision after the table." in " ".join(_texts(exported))
+
+
+def test_a_legacy_locked_parent_still_renders_its_children(tmp_path):
+    """The belt-and-braces half: a project saved before the fix above."""
+    source = _master_with(
+        ["SECTION 23 05 48", "VIBRATION", "PART 1 - GENERAL", "1.1 SCHEDULE"],
+        table_after="1.1 SCHEDULE",
+    )
+    path = tmp_path / "master.docx"
+    path.write_bytes(source)
+    imported = parse_master_docx(path)
+    section = imported.section
+    table = section.parts[0].articles[0].paragraphs[0]
+    assert table.locked
+    # Hand-build the shape the old importer produced.
+    from backend.spec_doc.model import Paragraph
+
+    table.children.append(
+        Paragraph(uid=f"{table.uid}.p1", text="Stranded provision.")
+    )
+
+    exported = _render(source, section, imported.format_map)
+    assert "Stranded provision." in " ".join(_texts(exported))
+
+
+def test_an_unlabelled_import_does_not_invent_labels_for_new_siblings(
+    tmp_path,
+):
+    """P2: absence of ``w:numPr`` is not the same as "manual label".
+
+    An unstructured import has no labels at all, so a new sibling was
+    exported as "B. Another clause." — a label the document never had.
+    """
+    source = _master_with(["This memo describes the vibration approach."])
+    path = tmp_path / "memo.docx"
+    path.write_bytes(source)
+    imported = parse_master_docx(path)
+    article = imported.section.parts[0].articles[0]
+    section, _ = apply_edits(
+        imported.section,
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": article.uid,
+                "text": "Another clause.",
+            }
+        ],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    texts = _texts(exported)
+    assert "Another clause." in texts
+    assert not any(text.startswith("B. ") for text in texts)
+
+
+def test_a_keyword_less_section_header_is_not_rewritten(tmp_path):
+    """P2: importing and exporting must not restyle the firm's header.
+
+    The parse folds "23 05 48 — TITLE" and "SECTION 23 05 48" into the same
+    number and title, so rebuilding one canonical form changed the header
+    text — and its runs — on a no-op export.
+    """
+    source = _master_with(
+        [
+            "23 05 48 — VIBRATION CONTROLS",
+            "PART 1 - GENERAL",
+            "1.1 SUMMARY",
+            "A. Intro.",
+        ]
+    )
+    path = tmp_path / "bare.docx"
+    path.write_bytes(source)
+    imported = parse_master_docx(path)
+
+    exported = _render(source, imported.section, imported.format_map)
+
+    assert _texts(exported)[0] == "23 05 48 — VIBRATION CONTROLS"
+    before = [etree.tostring(el) for el in _body_children(source)]
+    after = [etree.tostring(el) for el in _body_children(exported)]
+    assert before == after
+
+    # Once the user changes the identity there is nothing to reproduce, and
+    # the canonical form is written instead.
+    renamed, _ = apply_edits(
+        imported.section,
+        [
+            {
+                "action": "replace",
+                "target_id": "sec",
+                "text": "SEISMIC CONTROLS",
+                "numbering": "23 05 93",
+            }
+        ],
+    )
+    rewritten = _render(source, renamed, imported.format_map)
+    assert _texts(rewritten)[0] == "SECTION 23 05 93 SEISMIC CONTROLS"
+
+
+def test_collapsed_whitespace_does_not_count_as_an_edit(tmp_path):
+    """P2: a double space after a period is most office masters.
+
+    The importer folds whitespace, so comparing its normalized text against
+    the raw source made every such provision look edited — taking the
+    rewrite path and collapsing its inline runs on a NO-OP export.
+    """
+    source = _master_with(
+        [
+            "SECTION 23 05 48",
+            "VIBRATION",
+            "PART 1 - GENERAL",
+            "1.1 SUMMARY",
+            "A. Provide isolators.  Comply with ASHRAE.",
+        ]
+    )
+    path = tmp_path / "spaced.docx"
+    path.write_bytes(source)
+    imported = parse_master_docx(path)
+
+    exported = _render(source, imported.section, imported.format_map)
+
+    before = [etree.tostring(el) for el in _body_children(source)]
+    after = [etree.tostring(el) for el in _body_children(exported)]
+    assert before == after
+    # The original spacing survives, because the element was never rewritten.
+    assert "A. Provide isolators.  Comply with ASHRAE." in _texts(exported)

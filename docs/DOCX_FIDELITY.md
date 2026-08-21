@@ -57,6 +57,68 @@ state is retained. It is not converted to Transitional OOXML. Supporting that
 semantic dialect is a future compatibility feature, not part of the bounded
 source-patching surface.
 
+## Appearance-preserving export (the import path)
+
+Every import takes this mode, and it is what "keep my formatting" means in
+the product. It is deliberately a WEAKER promise than the byte-exact
+source-preserving mode below, and it buys back the editing surface that
+promise cost — three of twenty-seven body operations on a clean master.
+
+**The contract.** Everything except the body of `word/document.xml` is
+carried through byte-for-byte: headers, footers, styles, theme, fonts,
+numbering definitions, page setup, section properties, and every other
+package part. Inside the body:
+
+* a provision the user did not touch is emitted as a **byte-identical clone**
+  of its source element;
+* a provision they edited keeps its `w:pPr` and its dominant run's `w:rPr`,
+  so style, font, size, indent, spacing and numbering are exact and only the
+  words change;
+* a **preserved block** (table, picture, embedded object, content control) is
+  emitted verbatim;
+* a provision they added is cloned from the nearest kin at its own depth;
+* blank spacer paragraphs travel with the provision below them, so spacing
+  survives a reorder;
+* body content the semantic tree never modelled (`END OF SECTION`, anything
+  after it) is emitted after the walk — but an element the tree DID model and
+  the walk did not reach was deleted by the user, and must not come back.
+
+**Two limits are inherent and are disclosed rather than worked around.**
+Intra-paragraph emphasis on an edited provision is best-effort: a bolded
+phrase is a run boundary attached to words that no longer exist, so an edited
+provision takes its dominant run properties. And a revision-bearing paragraph
+is rewritten rather than cloned, because the importer showed the Accept-All
+view and cloning the original markup would export text the user never saw.
+
+**Mechanics.** `spec_doc/source_format.py` records, per semantic element, the
+source body-child index it came from and whether its label was Word's
+(`w:numPr`) or literal text the importer stripped. That is all it records —
+the retained bytes are the format store. `spec_doc/source_render.py` reads it
+back, rebuilds the body, and hands the result to `replace_document_xml_raw`.
+The map is bound to the upload by SHA-256; read beside different bytes its
+origin indexes address whatever now sits there, so the export refuses.
+
+**Preserved blocks are a document-model property**, not a capability report:
+`Paragraph.locked` carries a `model.LOCK_REASONS` code, is persisted with the
+tree, and survives undo/redo and project files the way `status` does.
+`apply_edits` refuses a retype and refuses nesting under one; move, delete and
+status changes stay available, because none of them touches the block the
+export emits. A locked block takes no SectionFormat label and shifts none of
+its siblings' (`model.labelled_paragraphs`, read by both the panel and the
+renderer, so the label on screen is the label in the exported file).
+
+**Headers and footers are never rewritten**, which is why a stale section
+identifier in one is reported instead: the import captures their text into the
+format map, and the `stale_document_identifier` lint rule compares any
+MasterFormat-shaped number in them against the live section number. The
+remedy named is Word.
+
+**No permission sweep runs.** Capability derivation for this mode is the
+`locked` flag, so the quadratic probe sweep and its fail-closed `pending`
+state do not apply. The byte-exact machinery below is still reachable at
+`?mode=source` for a project that never released the claim, and its own
+suites still pin it.
+
 ## Five distinct user-visible contracts
 
 | Contract | API selection | Package basis | Guarantee |
@@ -64,6 +126,7 @@ source-patching surface.
 | Exact original | `GET /api/import/original` | Immutable imported bytes | The response is byte-for-byte identical to the retained upload. |
 | Exact source no-op | `GET /api/export/docx?mode=source` when the semantic body matches the imported baseline | Immutable imported bytes | Returns the exact same bytes, without rebuilding XML or ZIP. Status, provenance, standards, project-profile, and other metadata-only changes do not make this a body mutation. |
 | Source-preserving patched DOCX | `GET /api/export/docx?mode=source` after a proven-safe body change | Clone of the imported package | Only approved `word/document.xml` text slices or numbered-island paragraph spans change. Unchanged member payloads, local records, inter-record gaps, archive comment, and trailing bytes remain exact. Central-directory records change only for the replacement metadata and required local-header offsets. The proposed output is independently audited before return. |
+| Appearance-preserving DOCX | `GET /api/export/docx?mode=preserved`, and the default for an imported document that has released the byte-exact claim (i.e. every import) | Clone of the imported package with a rebuilt body | Every package part except `word/document.xml` is byte-identical. Untouched provisions are byte-identical elements; edited ones keep their paragraph and run properties; preserved blocks are verbatim. See the section above. |
 | Normalized DOCX | `GET /api/export/docx?mode=normalized` | Current SectionFormat tree | Generates a new DOCX with Build-a-Spec styles, schedules, and genuine Word automatic numbering. It does not preserve source-package formatting or opaque parts. Fresh projects default to this mode. |
 | Normalized redline | `GET /api/export/docx?redline=master` or `GET /api/export/docx?redline=version&base=N` | Semantic baseline/version and current SectionFormat tree | Generates a new DOCX containing Word `w:ins`/`w:del` markup. It is a semantic provision redline, not a source-package redline. It never adds tracked changes to the retained source. |
 

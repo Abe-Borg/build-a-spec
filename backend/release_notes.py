@@ -89,6 +89,90 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.14.0",
+        date="2026-08-21",
+        headline="Your master keeps its formatting AND becomes editable",
+        summary=(
+            "Importing a Word spec used to force a choice: keep your firm's "
+            "formatting and barely be able to edit anything, or edit freely "
+            "and export a document that no longer looks like yours. That "
+            "choice is gone. Every import now keeps the header, footer, "
+            "fonts, styles and page setup exactly as they were, and is "
+            "fully editable at the same time."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Importing an existing spec",
+                items=(
+                    ReleaseItem(
+                        title="Import no longer asks — it just works",
+                        body=(
+                            "The import dialog is gone. Your document keeps "
+                            "its header, footer, fonts, styles, numbering "
+                            "and page setup, and you and the assistant can "
+                            "change the content and its order freely: "
+                            "rewrite provisions, add and remove articles "
+                            "and paragraphs, reorder anything. The exported "
+                            "Word file carries your formatting with the new "
+                            "content in it."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A provision you did not touch comes back "
+                        "exactly as it was",
+                        body=(
+                            "Untouched text is copied straight out of your "
+                            "original, character for character. A provision "
+                            "you edited keeps its style, font, size, indent "
+                            "and numbering — only the words change. Bold or "
+                            "italic applied to part of a sentence you "
+                            "rewrote is the one thing that may not survive, "
+                            "because the words it was attached to are gone."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Tables, pictures and embedded objects are "
+                        "preserved blocks",
+                        body=(
+                            "They come through your export exactly as they "
+                            "arrived, so their contents cannot be retyped "
+                            "here. You can still move them, delete them and "
+                            "mark them reviewed, and hovering the lock chip "
+                            "explains why. A schedule table is now one "
+                            "block instead of one row per line, so deleting "
+                            "it is a single action."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="No more waiting for permissions, and no more "
+                        "read-only documents",
+                        body=(
+                            "The permission analysis that could sit there "
+                            "for minutes on a large master — freezing every "
+                            "edit while it ran — is gone entirely. So is "
+                            "the whole class of frozen document: a file "
+                            "with tracked changes, macros, an embedded "
+                            "spreadsheet or enforced protection imports and "
+                            "edits like any other."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A stale section number in the footer is "
+                        "flagged",
+                        body=(
+                            "Headers and footers are carried through "
+                            "untouched, which means adapting a master can "
+                            "leave the original section number printed on "
+                            "every page. When the footer disagrees with the "
+                            "section you are drafting, the issues list says "
+                            "so — update it in Word before issuing."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.13.0",
         date="2026-08-21",
         headline="Importing a spec finally works the way you meant it",

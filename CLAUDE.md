@@ -497,6 +497,29 @@ backend/
                            only, ≥25 chars, numeric tokens must match before any
                            similarity ratio — a dimension or article number
                            differing is decisive evidence AGAINST duplication)
+  spec_doc/source_format.py
+                           the import→export formatting contract's ledger:
+                           FormatAnchor (origin body-child index + label kind
+                           auto/manual/none + lock reason) + SourceFormatMap
+                           (SHA-256-bound to the upload, header/footer text
+                           captured for the stale-identifier lint). Records
+                           WHERE each element came from, never the formatting
+                           itself — the retained bytes ARE the format store
+  spec_doc/source_render.py
+                           render_preserving_docx: rebuilds word/document.xml's
+                           body from the current tree, cloning each element's
+                           formatting from its origin; every other package part
+                           byte-identical. Untouched provision = byte-identical
+                           clone (parse with docx.oxml.parse_xml, NOT
+                           etree.fromstring — the Accept-All reader needs
+                           python-docx's element classes or every paragraph
+                           reads empty and silently takes the rewrite path);
+                           edited = w:pPr + dominant w:rPr kept; locked = the
+                           origin block verbatim; new = cloned from nearest kin
+                           at its depth; blank spacers travel with the provision
+                           below them; trailing UNANCHORED children survive
+                           (END OF SECTION) while anchored-but-unreached ones
+                           stay deleted
   spec_doc/xml_text.py     XML 1.0-safe artifact text: the handful of code points
                            XML cannot carry (C0 controls, lone surrogates)
                            render as VISIBLE \uXXXX escapes rather than being
@@ -7347,6 +7370,105 @@ and analytic island enumeration explicitly deferred); everything else below.
   UI-consumption rationale; the summary length cap grew with its three new
   obligations). Frontend pinned by `npm test` (capability contract:
   `import.intent`, `chat.adapt-imported`) + `npm run build`.
+
+## Keep the formatting, edit the content — implemented notes (v1.14.0)
+
+Owner ask (Abraham, 2026-08-21): import a spec with its formatting, headers
+and footers; header/footer/fonts immutable; body content and ordering freely
+editable — add/remove articles, paragraphs, subparagraphs; export a `.docx`
+that keeps what we didn't want to change and shows the new content; tables
+immutable, with the UI saying WHY on hover. Three decisions taken with him
+up front: **one import path** (no chooser), **a preserved block is content-
+locked but movable and deletable**, and **headers/footers stay immutable with
+a mismatch WARNING rather than a carve-out**.
+
+- **The mechanism inverts.** The old byte-exact mode PATCHED text slices
+  inside the upload and proved nothing else moved. This one REBUILDS the
+  body from the semantic tree and clones formatting back out of the retained
+  package. That is why it can afford to be permissive: it is not defending a
+  byte-exact whole-file claim, so headings, structure and arbitrary markup
+  stop being unpatchable. The contract, the two inherent limits, and the
+  emit rules are in `docs/DOCX_FIDELITY.md` under "Appearance-preserving
+  export"; do not restate them in a third place.
+- **The retained bytes are the format store**, so `source_format.py` only
+  records an origin index and a label kind per element. The literal label
+  never needs storing: `model._paragraph_label` regenerates exactly the four
+  forms `importer._LEVEL_RES` strips (`A.` / `1.` / `a.` / `1)`), which is
+  also what makes an inserted provision renumber its siblings for free —
+  the thing `manual_label_structural_change` could never do.
+- **The invariant to keep green is `test_an_untouched_document_round_trips_
+  element_for_element`.** Import → export with no edits must be
+  element-for-element byte-identical, and one edit must change exactly one
+  element. It is also the regression guard for the parser: a plain
+  `etree.fromstring` tree makes `_accept_all_paragraph_text` return `""` for
+  every paragraph, so every untouched provision takes the rewrite path and
+  the whole formatting claim becomes a guess. Parse with
+  `docx.oxml.parse_xml`.
+- **"Unclaimed" and "never modelled" are different questions**, and
+  conflating them undoes deletions. The trailing sweep exists so
+  `END OF SECTION` survives; an ANCHORED element the walk did not reach was
+  deleted by the user, so `_BodyRenderer._anchored` excludes it. Without
+  that, deleting a table put it straight back at the end of the document.
+- **A table is ONE locked block, not one paragraph per row.** The row
+  projection made "delete this schedule" an N-paragraph operation, let a row
+  beginning `A.` be read as an article heading, and had no single thing to
+  move. Rows are joined with newlines and cells with ` | `, so the grid
+  still reads in the panel (`whitespace-pre-line`, monospace) and in the
+  model's context.
+- **`Paragraph.locked` is persisted with the tree, not derived.** It
+  survives undo/redo, versions and project files the way `status` does, and
+  every consumer reads one answer. `apply_edits` refuses a retype and
+  refuses nesting under one; move, delete and status stay allowed, because
+  none of them touches the block the export emits — which is also why a
+  reviewer can still confirm a table in the review walk.
+- **A locked block takes no label slot** (`model.labelled_paragraphs`, read
+  by `_paragraph_to_dict`, `outline`, and the renderer). Letting a preserved
+  table consume `A.` renumbered every provision after it, on screen AND in
+  the exported file.
+- **Content controls (`w:sdt`) were being DROPPED at import.** Invisible
+  while the export only patched the upload; silent content loss the moment
+  it rebuilt the body. They are locked blocks now, with their own
+  `content_control_projection` opaque blocker so the legacy byte-exact
+  validator still recognizes them.
+- **The permission sweep is retired by construction, not by deletion.**
+  Import always detaches (`detach=true` from the panel, the endpoint's knob
+  kept for compatibility), the scope is inactive, and `if not detach:`
+  already guarded the warm. `source_patch.py` stays for projects that never
+  released the claim — and `_probe_edit_capability` now treats a
+  `SpecEditError` as an ANSWER rather than an error, or one locked block
+  takes the whole sweep down.
+- **Export precedence is `redline → explicit mode → imported_scope
+  ("source") → preserving_available ("preserved") → normalized`.** The
+  byte-exact branch stays FIRST so a project still inside that scope is
+  never silently downgraded; the new mode is reached exactly where the
+  product lives.
+- **Headers and footers are never rewritten, so a stale identifier is
+  reported.** `stale_document_identifier` compares any MasterFormat-shaped
+  number in the captured header/footer text against the live section number
+  — narrow on purpose, so a page number or project name cannot trip it —
+  and names Word as the remedy. It reaches the model's lint report too,
+  since the model is what can offer to renumber the section.
+- **The model is told, not left to discover.** `outline` marks a locked
+  block `[preserved table]` in place of its label (it still carries its id —
+  moving and deleting are allowed), and `_GAP_AND_ADAPT` gains the rule:
+  never retype one, write provisions around it, and if the user wants its
+  contents changed, say it means editing the table in Word and re-importing.
+- **`import.intent` was retired** (the three-place edit in reverse:
+  registry, the control's `data-capability`, the tour step) along with the
+  chooser modal. `TOUR_VERSION` was NOT bumped — no chapter or step order
+  changed, only a step's capability list and body.
+- **Tests**: `tests/test_preserving_export.py` (18) — the package-level
+  promise, the element-for-element round trip, one-edit-one-element, the
+  trailing content, spacers surviving a reorder, a table as one block with
+  no label slot, refusing a retype while allowing move/delete, a moved table
+  still a table, a new provision inheriting its kin's `w:pPr`, renumbering
+  after a delete, the SHA-256 binding, import→edit→export through the API,
+  save/reload still preserving, normalized still available, the stale-footer
+  warning, and the model's outline marker. Two knowing contract changes were
+  recorded in place in the legacy suites: a preserved table now refuses from
+  the MODEL with better prose (before the source gate is consulted), and the
+  `sdt` structural case is refused by a different-but-equally-correct rule
+  now that the control is a visible block.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

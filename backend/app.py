@@ -137,6 +137,7 @@ from .research.engine import (
     research_manifest_facts,
     validate_research_facts,
 )
+from .research.schema import extract_tool_use_block
 from .qc.engine import (
     DISPUTE_REASON_INSUFFICIENT_EVIDENCE,
     QC_PROTOCOL_VERSION,
@@ -205,11 +206,13 @@ from .spec_doc.source_package import (
 )
 from .templates import (
     MAX_TEMPLATE_BYTES,
+    TEMPLATE_DOCUMENT_TOOL_NAME,
     TEMPLATE_MEDIA_TYPE,
     TemplateError,
     TemplateImmutableError,
     TemplateNotFoundError,
     get_template_catalog,
+    template_document_tool,
     template_summary,
 )
 from .tracing import capture as _trace_capture
@@ -2003,18 +2006,6 @@ def _template_binding(lease: sessions.WorkspaceLease) -> dict[str, Any]:
     }
 
 
-def _response_text(response: Any) -> str:
-    parts: list[str] = []
-    for block in getattr(response, "content", []) or []:
-        if isinstance(block, dict):
-            text = block.get("text")
-        else:
-            text = getattr(block, "text", None)
-        if isinstance(text, str):
-            parts.append(text)
-    return "\n".join(parts).strip()
-
-
 def _template_structure_contract(section: SpecSection) -> dict[str, Any]:
     """The facts an AI template preview is never allowed to rewrite.
 
@@ -2064,9 +2055,9 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
         )
     prompt = (
         "Turn the following specification into a reusable semantic starter. "
-        "Return ONLY one JSON object with a 'document' field. Preserve every "
-        "id, sequence counter, PART/article/paragraph shape, section number, "
-        "section title, discipline, and project type. Generalize client, site, "
+        "Preserve every id, sequence counter, PART/article/paragraph shape, "
+        "section number, section title, discipline, and project type. "
+        "Generalize client, site, "
         "location, quantity, and project-specific body wording without adding "
         "new requirements. Clear project_profile, edition_overrides, "
         "suppressed_standards, and every source_item_id. Keep needs_input and "
@@ -2077,20 +2068,22 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
         response = get_client().messages.create(
             model=settings.INTERVIEW_MODEL,
             max_tokens=settings.INTERVIEW_MAX_TOKENS,
+            # Stated explicitly, like every other model call in this app, so
+            # the pass's depth is a recorded decision rather than whatever
+            # the model happens to default to.
+            thinking={"type": "adaptive"},
+            output_config={"effort": settings.TEMPLATE_EFFORT},
+            tools=[template_document_tool()],
             messages=[{"role": "user", "content": prompt}],
         )
     except MissingApiKeyError:
         raise
     session.usage.add("template", getattr(response, "usage", None), count_turn=True)
-    text = _response_text(response)
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I | re.S)
-    try:
-        payload = json.loads(text)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise TemplateError(
-            "The model did not return a valid template preview; try again or use Exact."
-        ) from exc
+    # The payload rides a ``tool_use`` block the API has already parsed, so
+    # there is no prose to fence-strip and no ``json.loads`` to fail. A turn
+    # that answered in text instead simply has no block, which lands on the
+    # same "try again or use Exact" path a malformed reply always did.
+    payload = extract_tool_use_block(response, TEMPLATE_DOCUMENT_TOOL_NAME)
     if not isinstance(payload, dict) or not isinstance(payload.get("document"), dict):
         raise TemplateError(
             "The model did not return a valid template document; try again or use Exact."

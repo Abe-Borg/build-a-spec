@@ -457,18 +457,32 @@ project requires.
 </attached_reference_documents>"""
 
 
-# The block's own framing tags. A document that contains one verbatim would
-# otherwise close the frame early and everything after it would read as
-# top-level instructions to a research worker or a verifier seat — the
-# attachment is third-party content (a vendor PDF, a standard from a client),
-# so this is a real injection vector and not a hypothetical one.
+# The framing tags of every channel that carries this text. A document that
+# contains one verbatim would otherwise close the frame early and everything
+# after it would read as top-level instructions to a research worker, a
+# verifier seat, or the interview model — the attachment is third-party
+# content (a vendor PDF, a standard from a client), so this is a real
+# injection vector and not a hypothetical one.
+#
+# The trailing ``s`` is optional because two frames carry the same text: the
+# PLURAL ``<attached_reference_documents>`` block the research and QC
+# fan-outs receive (many documents, with their shared framing), and the
+# SINGULAR ``<attached_reference_document>`` wrapper the chat loop's
+# ``read_reference_doc`` tool result uses (one document, on demand). Both
+# forms are neutralized on every channel: a pattern that matched only the
+# frame it happened to be rendering would leave the other one open, which is
+# exactly the hole this guard exists to close.
 _BLOCK_TAG_PATTERN = re.compile(
-    r"<\s*/?\s*attached_reference_documents\s*>", re.IGNORECASE
+    r"<\s*/?\s*attached_reference_documents?\s*>", re.IGNORECASE
 )
 
+# The chat loop's single-document frame. Defined here, beside the pattern
+# that defuses it, so the two can never drift apart.
+REFERENCE_DOC_TAG = "attached_reference_document"
 
-def _neutralize_block_delimiters(text: str) -> str:
-    """Make the block's own delimiters inert wherever they appear in content.
+
+def neutralize_reference_delimiters(text: str) -> str:
+    """Make the framing delimiters inert wherever they appear in content.
 
     Disclosed rather than silently deleted — the ``xml_text`` posture, where
     code points XML cannot carry render as visible escapes because an audit
@@ -480,9 +494,31 @@ def _neutralize_block_delimiters(text: str) -> str:
     This closes the STRUCTURAL half only. Instruction-like prose *inside* an
     intact frame is handled by classifying the block as data in every system
     prompt that receives it — both halves are needed.
+
+    Public because three channels need it: the research and QC fan-outs
+    (through :func:`reference_context_block`) and the chat loop's
+    ``read_reference_doc`` tool result, which reaches the same third-party
+    bytes by a different route.
     """
     return _BLOCK_TAG_PATTERN.sub(
         lambda m: f"[escaped tag: {m.group(0).strip('<>/ ')}]", text
+    )
+
+
+def wrap_reference_doc_body(header: str, body: str) -> str:
+    """Frame ONE document's text for the chat loop's tool result.
+
+    The chat counterpart of :func:`reference_context_block`: same third-party
+    bytes, same two-part defence, minus the multi-document framing that block
+    carries. ``header`` is neutralized along with ``body`` because it carries
+    the document's title and filename, which come from the upload and are
+    therefore as user-controlled as the text itself.
+    """
+    return (
+        f"<{REFERENCE_DOC_TAG}>\n"
+        f"{neutralize_reference_delimiters(header)}"
+        f"{neutralize_reference_delimiters(body)}\n"
+        f"</{REFERENCE_DOC_TAG}>"
     )
 
 
@@ -536,7 +572,7 @@ def _render_reference_doc(doc: ReferenceDoc, allowed_tokens: int) -> tuple[str, 
     """One document, cut to its share. Returns ``(text, was_truncated)``."""
     total = _doc_tokens(doc)
     header = (
-        f'--- {doc.rid} "{_neutralize_block_delimiters(doc.title)}" '
+        f'--- {doc.rid} "{neutralize_reference_delimiters(doc.title)}" '
         f"({doc.kind_label()}, {total:,} tokens) ---"
     )
     if allowed_tokens <= 0:
@@ -546,13 +582,13 @@ def _render_reference_doc(doc: ReferenceDoc, allowed_tokens: int) -> tuple[str, 
             True,
         )
     if allowed_tokens >= total:
-        return f"{header}\n{_neutralize_block_delimiters(doc.text)}", False
+        return f"{header}\n{neutralize_reference_delimiters(doc.text)}", False
     # Slice by the document's own characters-per-token rather than a chars/4
     # estimate — every record carries a real Anthropic count, so this is the
     # more accurate conversion and costs nothing.
     chars_per_token = len(doc.text) / total
     keep = max(0, int(allowed_tokens * chars_per_token))
-    body = _neutralize_block_delimiters(
+    body = neutralize_reference_delimiters(
         doc.text[:keep].rstrip()
     ) + _BLOCK_TRUNCATION_MARK.format(
         omitted=max(0, total - allowed_tokens), total=total

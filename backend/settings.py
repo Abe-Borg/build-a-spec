@@ -93,6 +93,14 @@ def _effort_env(name: str, default: str) -> str:
 
 INTERVIEW_EFFORT = _effort_env("BUILD_A_SPEC_INTERVIEW_EFFORT", "high")
 
+# AI template generalization is a bounded, mechanical rewrite: same tree,
+# same ids, same unresolved decisions, project-specific wording made
+# reusable. The structural contract (``app._template_structure_contract``)
+# rejects anything more ambitious, so depth beyond "medium" buys nothing
+# the contract would accept. Declared here rather than hardcoded at the call
+# site so every model call in the app states its effort the same way.
+TEMPLATE_EFFORT = _effort_env("BUILD_A_SPEC_TEMPLATE_EFFORT", "medium")
+
 # Thinking-summary display. Sonnet 5 defaults to ``omitted`` — thinking
 # blocks stream with empty text, so a reasoning-heavy turn looks like a long
 # silent pause. ``summarized`` streams a readable summary of the model's

@@ -16,6 +16,7 @@ from backend.spec_doc.model import SpecSection, iter_paragraphs
 from backend.spec_doc.project import load_project
 from backend.templates import (
     MAX_TEMPLATE_BYTES,
+    TEMPLATE_DOCUMENT_TOOL_NAME,
     TEMPLATE_EXTENSION,
     TemplateCatalog,
     TemplateError,
@@ -248,10 +249,19 @@ def test_ai_generalization_is_usage_metered_and_must_preserve_structure(
     first = next(iter(iter_paragraphs(generalized)))[2]
     first.text = first.text.replace("this Section", "the applicable work")
 
+    requests: list[dict] = []
+
     class _Messages:
-        def create(self, **_kwargs):
+        def create(self, **kwargs):
+            requests.append(kwargs)
             return SimpleNamespace(
-                content=[{"text": json.dumps({"document": generalized.to_dict()})}],
+                content=[
+                    {
+                        "type": "tool_use",
+                        "name": TEMPLATE_DOCUMENT_TOOL_NAME,
+                        "input": {"document": generalized.to_dict()},
+                    }
+                ],
                 usage={"input_tokens": 9, "output_tokens": 4},
             )
 
@@ -265,10 +275,49 @@ def test_ai_generalization_is_usage_metered_and_must_preserve_structure(
         "output_tokens": 4,
     }
 
+    # The document comes back through an output TOOL, not prose the server
+    # has to fence-strip and json.loads. The request must therefore carry the
+    # tool, and — like every other model call in this app — state its own
+    # thinking depth rather than inheriting whatever the model defaults to.
+    assert [t["name"] for t in requests[0]["tools"]] == [TEMPLATE_DOCUMENT_TOOL_NAME]
+    assert requests[0]["thinking"] == {"type": "adaptive"}
+    assert requests[0]["output_config"]["effort"]
+    # The prose JSON-forcing instruction went with the scaffold it served.
+    prompt_text = requests[0]["messages"][0]["content"]
+    assert "Return ONLY" not in prompt_text
+
     # Removing even one article turns an AI preview into an unauthorized
     # redraft, so it must fail without yielding a confirmable preview.
     generalized.parts[0].articles.pop()
     with pytest.raises(TemplateError, match="changed structure"):
+        _ai_generalized_template_document(session)
+
+
+def test_a_reply_without_the_output_tool_is_refused_not_parsed(tmp_path, monkeypatch):
+    """A prose answer has no payload, and must not be mined for one.
+
+    The old path fence-stripped the text and ran ``json.loads`` on whatever
+    was left, so a chatty reply that happened to contain a JSON-looking body
+    could be adopted as a template. There is nothing to salvage from a turn
+    that never called the tool: it lands on the same "try again or use
+    Exact" path a malformed reply always did.
+    """
+    catalog = _catalog(tmp_path)
+    session = SessionState()
+    session.doc.seed_template(_starter(catalog))
+    document = json.dumps({"document": session.doc.doc.to_dict()})
+
+    class _Messages:
+        def create(self, **_kwargs):
+            return SimpleNamespace(
+                content=[{"type": "text", "text": f"```json\n{document}\n```"}],
+                usage={"input_tokens": 9, "output_tokens": 4},
+            )
+
+    monkeypatch.setattr(
+        "backend.app.get_client", lambda: SimpleNamespace(messages=_Messages())
+    )
+    with pytest.raises(TemplateError, match="did not return a valid template document"):
         _ai_generalized_template_document(session)
 
 

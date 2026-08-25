@@ -7472,6 +7472,98 @@ a mismatch WARNING rather than a carve-out**.
   `sdt` structural case is refused by a different-but-equally-correct rule
   now that the control is a visible block.
 
+## Attached text is untrusted on EVERY channel — implemented notes
+
+A scheduled prompt-optimization audit of every Claude API call site found the
+integration in good shape — current models only, adaptive thinking with
+per-phase effort, strict output tools, the documented cache-breakpoint
+design, `allowed_callers: ["direct"]`, and no deprecated scaffolding (no
+`budget_tokens`, no sampling parameters, no prefill, no scratchpad tags, no
+pressure language) — and two real gaps. Both are fixed here. No new endpoint,
+no new SSE event, no new dep, no project-format bump; one new env knob.
+
+- **The defence existed, on two of three channels.** PR #138 gave research and
+  QC both halves of the standard guard for attached reference documents: a
+  STRUCTURAL half (`<attached_reference_documents>` framing, with the frame's
+  own tag made inert inside the untrusted text) and a BEHAVIOURAL half (every
+  fan-out system prompt classifying the frame's contents as data). The chat
+  loop reaches the SAME `ReferenceDoc.text` by a different route — the
+  `read_reference_doc` tool result — and had neither: a one-line prose header
+  and `header + doc.text`. Same bytes, same threat, no guard.
+- **One pattern guards both frames, and the optional `s` is why.** The chat
+  result wraps ONE document (`<attached_reference_document>`); the fan-outs
+  wrap many (`<attached_reference_documents>`). `_BLOCK_TAG_PATTERN` matches
+  `attached_reference_documents?` so both forms are defused on both channels
+  — a pattern matching only the frame it happens to be rendering leaves the
+  other one open, and a document that escapes a frame it is not currently
+  sitting in still escapes it on the next channel to read it. Pinned by
+  `test_the_plural_frame_is_neutralised_on_the_chat_channel_too`; dropping
+  the `?` turns `test_a_read_document_cannot_close_its_own_frame` red.
+- **`neutralize_reference_delimiters` is public now** (was
+  `_neutralize_block_delimiters`) because three channels need it, and
+  `wrap_reference_doc_body` is the chat counterpart of
+  `reference_context_block` — same two-part defence, minus the multi-document
+  framing. The header is neutralized along with the body: it carries the
+  title and filename, which come from the upload and are as user-controlled
+  as the text.
+- **PROJECT CONTEXT's own markers are a frame like any other.**
+  `_neutralize_context_boundaries` defuses `=== PROJECT CONTEXT ===` /
+  `=== END PROJECT CONTEXT ===` wherever they appear in the assembled body.
+  Most of that block is user- or model-authored, but an imported office
+  master lands VERBATIM (keep-everything-warn-loudly), so the marker is
+  reachable. Applied to the assembled body and NOT inside `outline()` on
+  purpose: these markers are the chat channel's frame, and QC renders the
+  same document through `outline()` inside XML tags instead — escaping there
+  would change QC request bytes for a concern QC does not have.
+- **`_REFERENCE_DOC_POLICY` carries the behavioural half**, mirroring the
+  sentence `_lens_system_prompt` / `_verifier_system_prompt` already carry.
+  One line in an already-cached block, so it costs nothing per turn.
+  Escaping alone does not stop instruction-like prose inside an INTACT frame;
+  classification alone does not stop a frame escape. Both halves, always.
+- **The AI-generalize call was the last prose-JSON scaffold in the app.**
+  `_ai_generalized_template_document` asked for JSON in prose, stripped
+  markdown fences with a regex, and ran a bare `json.loads` — and was the one
+  model call with no `thinking`/`output_config` at all. It now sends
+  `template_document_tool()` and reads `tool_use.input` through
+  `extract_tool_use_block`, so the fence regex, the `json.loads`, and the
+  "Return ONLY one JSON object" line are gone with the scaffold they served
+  (`app._response_text` went too — its only caller). A reply that never calls
+  the tool has no payload and lands on the same "try again or use Exact"
+  path a malformed reply always did; it is no longer MINED for one, which is
+  its own small win (the old path would adopt any JSON-looking body it could
+  fence-strip out of a chatty answer).
+- **That tool is deliberately NOT `strict: true`**, unlike every other
+  structured output here. Those describe flat, fully-enumerable payloads;
+  this one carries a whole serialized `SpecSection` — a RECURSIVE tree
+  (paragraphs nest four levels), which the strict-mode subset cannot express.
+  Declaring `strict` over a free-form object would risk a 400 on the one call
+  whose failure reads as "AI Generalize is broken", to buy validation
+  `_template_structure_contract` already performs and better: it re-derives
+  ids, parents, depths and unresolved decisions from the returned tree and
+  rejects any drift. The dated pattern was the prose-and-regex parse boundary,
+  not the absence of `strict`.
+- **`TEMPLATE_EFFORT`** (`BUILD_A_SPEC_TEMPLATE_EFFORT`, default `medium`)
+  joins the other effort knobs. The pass is a bounded mechanical rewrite the
+  structural contract polices, so depth past `medium` buys nothing the
+  contract would accept — and every model call in the app now states its
+  effort the same way rather than inheriting a default.
+- **Deliberately NOT done**: forcing `tool_choice` on the generalize call
+  (its interaction with adaptive thinking was not verified, and the existing
+  refusal path already handles a tool-less reply), and re-baselining
+  `QC_VERIFIER_EFFORT` — the audit raised the latter as an experimental note
+  to test against real run telemetry, not a change to make on general
+  guidance.
+- **Tests**: 6 new. `tests/test_reference_docs.py` (5 — the chat result
+  framed, a document unable to close its own frame, the plural frame defused
+  on the chat channel, the stable prompt's classification sentence, and
+  document text unable to forge the context boundary);
+  `tests/test_templates.py` (1 — a reply without the output tool refused
+  rather than parsed, plus the existing AI-generalize test extended to pin
+  the tool, the thinking/effort parameters, and the absence of the prose
+  JSON instruction). Every mechanism was reverted in place to prove it
+  load-bearing: the wrapper → 3 red, the optional `s` → 1, the prompt
+  sentence → 1, the boundary neutralizer → 1, the tool-use read → 2.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

@@ -266,10 +266,15 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4)
 
 # --- Pricing (WI4 cost meter) -----------------------------------------------
 
-# USD per token unless noted. VERIFIED 2026-07 against the claude-api
-# reference (Current Models table) + Anthropic's web-search pricing. Sonnet 5
-# lists an intro rate ($2/$10 per MTok through 2026-08-31); we deliberately
-# use the POST-intro numbers ($3/$15) so the meter never under-reports.
+# USD per token unless noted. VERIFIED 2026-08-25 against
+# platform.claude.com/docs/en/about-claude/pricing. Sonnet 5 launched with
+# $2/$10 per MTok as introductory pricing through 2026-08-31, with a
+# scheduled increase to $3/$15 the next day — this table used to price at
+# the post-increase rate defensively, so the meter would never under-report
+# once it took effect. Anthropic has since confirmed that increase will NOT
+# happen: $2/$10 is now the permanent standard rate. Pricing here follows
+# suit — the defensive $3/$15 would now OVER-report every dollar figure the
+# app shows for Sonnet 5 usage instead of protecting against under-reporting.
 # Cache read is 0.1× input. Cache WRITE is per-TTL and this table carries
 # both rates: ``cache_write`` is the 5-minute ephemeral entry at 1.25× input,
 # ``cache_write_1h`` the one-hour entry at 2.0× input (VERIFIED 2026-07 —
@@ -290,11 +295,11 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4)
 # under-report, so a new QC model MUST land here in the same change.
 PRICING: dict[str, dict[str, float]] = {
     MODEL_SONNET_5: {
-        "input": 3.0 / 1_000_000,
-        "output": 15.0 / 1_000_000,
-        "cache_read": 0.30 / 1_000_000,
-        "cache_write": 3.75 / 1_000_000,
-        "cache_write_1h": 6.00 / 1_000_000,
+        "input": 2.0 / 1_000_000,
+        "output": 10.0 / 1_000_000,
+        "cache_read": 0.20 / 1_000_000,
+        "cache_write": 2.50 / 1_000_000,
+        "cache_write_1h": 4.00 / 1_000_000,
     },
     MODEL_OPUS_48: {
         "input": 5.0 / 1_000_000,

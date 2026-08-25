@@ -170,6 +170,36 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                     ),
                 ),
             ),
+            ReleaseSection(
+                title="Under the hood",
+                items=(
+                    ReleaseItem(
+                        title="Attached documents are handled as data "
+                        "everywhere they are read",
+                        body=(
+                            "A document you attach is somebody else's file — "
+                            "a vendor PDF, a client's standard. The research "
+                            "and review teams already treated one as material "
+                            "to read rather than instructions to follow, no "
+                            "matter what its text says. The chat assistant "
+                            "now does too."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="AI Generalize fails less often",
+                        body=(
+                            "Turning a section into a reusable template asked "
+                            "the assistant for its answer as plain text the "
+                            "app then had to pick apart, which occasionally "
+                            "came back in a shape it could not read and sent "
+                            "you back to try again. The answer now arrives in "
+                            "a structured form, so that class of retry is "
+                            "gone. The preview you approve, and the checks "
+                            "behind it, are unchanged."
+                        ),
+                    ),
+                ),
+            ),
         ),
     ),
     ReleaseNote(

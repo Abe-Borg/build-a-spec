@@ -626,6 +626,73 @@ class TemplateCatalog:
         }
 
 
+# ---------------------------------------------------------------------------
+# AI-generalize output tool
+# ---------------------------------------------------------------------------
+
+TEMPLATE_DOCUMENT_TOOL_NAME = "submit_template_document"
+
+# Deliberately NOT a ``strict: true`` tool, unlike every other structured
+# output in this app (research findings, QC findings/verdicts/consolidation).
+# Those describe flat, fully-enumerable payloads; this one carries a whole
+# serialized :class:`SpecSection` — a RECURSIVE tree (paragraphs nest inside
+# paragraphs to four levels), which the strict-mode schema subset cannot
+# express without the recursion it does not support. Declaring ``strict``
+# over a free-form object would risk a 400 on the one call whose failure the
+# user sees as "AI Generalize is broken", to buy validation the structural
+# contract already performs afterwards and better: ``_template_structure_
+# contract`` re-derives ids, parents, depths and unresolved decisions from
+# the returned tree and rejects any drift, which is a far stronger check than
+# shape conformance.
+#
+# What the tool IS here for is the parse boundary. The payload arrives as a
+# ``tool_use`` input the API has already parsed into JSON, so the prose
+# "return ONLY one JSON object" instruction, the markdown-fence-stripping
+# regex, and the bare ``json.loads`` around it all go away — that scaffold,
+# not the absence of ``strict``, was the dated pattern.
+TEMPLATE_DOCUMENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["document"],
+    "properties": {
+        "document": {
+            "type": "object",
+            "description": (
+                "The generalized specification document, in exactly the "
+                "same shape as the one supplied — same keys, same nesting, "
+                "same ids and sequence counters."
+            ),
+        },
+    },
+}
+
+
+def template_document_tool() -> dict[str, Any]:
+    """The output tool for the AI-generalize pass.
+
+    One call, at the end of the turn, carrying the rewritten document. The
+    description states the contract the structural check enforces, so a
+    rejected preview is a model mistake it was told how to avoid rather than
+    a rule it was never given.
+    """
+    return {
+        "name": TEMPLATE_DOCUMENT_TOOL_NAME,
+        "description": (
+            "Submit the generalized specification document. Call this tool "
+            "exactly once, as the final step of your turn, with the complete "
+            "rewritten document under 'document'.\n"
+            "\n"
+            "The document must have the same shape as the one you were "
+            "given: every element id and sequence counter preserved, every "
+            "PART/article/paragraph in place, nothing added, removed, or "
+            "reparented, and every unresolved decision (needs_input status, "
+            "[TBD: ...] text) still unresolved at the same id. Only wording "
+            "and the project-specific metadata change. A submission that "
+            "alters the structure is rejected and nothing is saved."
+        ),
+        "input_schema": TEMPLATE_DOCUMENT_SCHEMA,
+    }
+
+
 _CATALOG: TemplateCatalog | None = None
 _CATALOG_LOCK = threading.Lock()
 

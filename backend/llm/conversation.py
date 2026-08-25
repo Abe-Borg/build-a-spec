@@ -74,6 +74,7 @@ rollback a genuine failure gets.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -89,6 +90,7 @@ from ..reference_docs import (
     READ_REFERENCE_DOC_TOOL,
     ReferenceDocStore,
     TurnReferenceBudget,
+    wrap_reference_doc_body,
 )
 from ..spec_doc import (
     APPLY_SPEC_EDITS_TOOL,
@@ -1590,6 +1592,31 @@ def _source_editing_boundary_block(session: SessionState) -> str | None:
     )
 
 
+# The PROJECT CONTEXT block's own boundary markers. Most of what the block
+# carries is user- or model-authored, but not all of it: an imported office
+# master lands verbatim (the importer's keep-everything-warn-loudly rule), so
+# a document containing the closing marker would end the frame early and
+# everything after it would read as top-level instructions. Same threat, same
+# disclosed-escape remedy, as the reference-document delimiters — see
+# ``reference_docs.neutralize_reference_delimiters``.
+#
+# Deliberately applied to the ASSEMBLED body rather than inside ``outline()``:
+# these markers are this channel's frame, and QC renders the same document
+# through ``outline()`` inside XML tags instead. Escaping there would change
+# QC request bytes for a concern QC does not have.
+_CONTEXT_BOUNDARY_PATTERN = re.compile(
+    r"={2,}\s*(?:END\s+)?PROJECT\s+CONTEXT\b[^\n=]*={2,}", re.IGNORECASE
+)
+
+
+def _neutralize_context_boundaries(text: str) -> str:
+    """Make the context block's own markers inert wherever they appear."""
+    return _CONTEXT_BOUNDARY_PATTERN.sub(
+        lambda m: f"[escaped marker: {' '.join(m.group(0).strip('= ').split())}]",
+        text,
+    )
+
+
 def _turn_context_text(session: SessionState) -> str:
     """The PROJECT CONTEXT block: everything live, rendered at turn start.
 
@@ -1761,7 +1788,7 @@ def _turn_context_text(session: SessionState) -> str:
     return (
         "=== PROJECT CONTEXT (current state — supersedes anything "
         "remembered from earlier turns) ===\n\n"
-        + "\n\n".join(parts)
+        + _neutralize_context_boundaries("\n\n".join(parts))
         + "\n\n=== END PROJECT CONTEXT ==="
     )
 
@@ -2721,11 +2748,18 @@ def _run_read_reference_doc(
         f"provisions in your own specification language, never paste from "
         f"this.\n\n"
     )
+    # Framed and delimiter-neutralized, exactly as the research and QC
+    # fan-outs already frame the SAME bytes (``reference_context_block``).
+    # This is third-party content — a vendor PDF, a client's standard — and
+    # the chat loop was the one channel receiving it raw: no container to
+    # bound it and nothing making the container's own tag inert inside it.
+    # The behavioural half rides ``_REFERENCE_DOC_POLICY`` in the stable
+    # prompt; both halves are needed, neither works alone.
     return (
         {
             "type": "tool_result",
             "tool_use_id": block.get("id"),
-            "content": header + doc.text,
+            "content": wrap_reference_doc_body(header, doc.text),
         },
         [],
     )

@@ -1370,7 +1370,9 @@ Interview policy (decided 2026-07-21, conversation w/ Abraham):
   — they meter BEFORE the
   status flip so a poller that sees `complete` finds the ledger updated).
   Reset/load clear it; not persisted. `settings.PRICING` (`VERIFY`-checked
-  2026-07: Sonnet 5 at post-intro $3/$15, cache read 0.1×, cache write
+  2026-08-25, after Anthropic confirmed Sonnet 5's introductory $2/$10 is
+  now permanent and the scheduled post-intro $3/$15 increase will not
+  happen: Sonnet 5 at $2/$10, cache read 0.1×, cache write
   1.25×, web search $0.01/req, Opus 5 $5/$25 for Final QC, Fable 5 $10/$50)
   drives
   the estimate. `GET /api/usage` → categories/totals/turns/estimate/

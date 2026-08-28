@@ -1286,7 +1286,22 @@ Build-a-Spec is an AI-assisted drafting aid, not an authority. Its output is adv
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Source-available under the [PolyForm Shield License 1.0.0](LICENSE).
+
+**In short:** use it for anything — including commercial work — except building a
+product that competes with Build-a-Spec. A design firm running it to draft
+specifications on billable projects is squarely permitted. Reading, forking,
+modifying and redistributing it are permitted. Selling a rival specification tool
+built on it is not, unless you hold a separate license from the copyright holder.
+The [LICENSE](LICENSE) file governs; this paragraph is a summary, not the terms.
+
+This is a *source-available* license rather than an OSI-approved open-source one:
+the Open Source Definition forbids restricting a field of endeavour, and the
+noncompete term does exactly that. Every runtime dependency is permissively
+licensed (MIT, BSD, Apache-2.0, MPL-2.0), and PyInstaller's bootloader exception
+permits packaging under any license, so nothing here is imposed by a dependency.
+
+For a commercial or competing-use license, contact the copyright holder.
 
 Copyright (c) 2026 [Abraham Borg](https://github.com/Abe-Borg) ·
 [LinkedIn](https://www.linkedin.com/in/abrahamborg/)

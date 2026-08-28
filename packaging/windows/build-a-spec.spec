@@ -92,8 +92,10 @@ datas += [(
     os.path.join("backend", "templates", "curated"),
 )]
 
-# The MIT license text — the installed copy must carry it (permission
-# notice requirement), not just the git checkout. Lands at the top level
+# The PolyForm Shield license text — the installed copy must carry it (the
+# Notices section requires that anyone receiving any part of the software also
+# receives these terms and the `Required Notice:` line, and the Noncompete term
+# only binds a recipient who has them). Lands at the top level
 # of dist/BuildASpec, which installer.iss bundles wholesale via its
 # `Source: "..\..\dist\BuildASpec\*"` entry.
 datas += [(os.path.join(_repo_root, "LICENSE"), ".")]

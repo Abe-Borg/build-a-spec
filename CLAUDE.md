@@ -1250,7 +1250,7 @@ already resolved and does nothing). 409 when nothing is running.
 - **Packaging** (`packaging/windows/`): PyInstaller one-folder →
   `dist/BuildASpec`; bundles `frontend/dist` (resolved frozen via
   `sys._MEIPASS` in `settings._resolve_frontend_dist`), the trace
-  viewer, and the root `LICENSE` file (the MIT notice must travel with
+  viewer, and the root `LICENSE` file (the license notice must travel with
   every installed copy, not just the git checkout — `installer.iss`
   picks it up for free via its wholesale `dist\BuildASpec\*` bundling);
   Inno AppId `{89E58C42-A4F6-49F8-8FCB-1147CB0186DB}` is
@@ -7563,6 +7563,81 @@ no new SSE event, no new dep, no project-format bump; one new env knob.
   JSON instruction). Every mechanism was reverted in place to prove it
   load-bearing: the wrapper → 3 red, the optional `s` → 1, the prompt
   sentence → 1, the boundary neutralizer → 1, the tool-use read → 2.
+
+## The license is PolyForm Shield, not MIT — implemented notes
+
+Owner ask (Abraham, 2026-08-28): open source if possible, but restrictive —
+"allows forking and using the code, but not for commercial use, without my
+permission." The repo shipped **MIT**, which is the opposite: it lets anyone
+close the source, rebrand, and sell a fork into Build-a-Spec's own market with
+no obligation beyond keeping a copyright line. Relicensed to **PolyForm Shield
+1.0.0**. No code change, no dependency change.
+
+- **No dependency forced MIT, and none constrains the choice.** Audited at the
+  relicense: every runtime dependency is permissive — MIT (anthropic, fastapi,
+  pydantic, platformdirs, python-docx, keyring, react, react-dom,
+  react-markdown, remark-gfm, mermaid, @dnd-kit/*, tailwindcss, vite),
+  BSD-3-Clause (uvicorn, lxml, pypdf, httpx, pywebview), Apache-2.0
+  (python-multipart, typescript), and dompurify's Apache-2.0-OR-MPL-2.0.
+  Nothing copyleft. **PyInstaller is GPL-2.0+ but carries the bootloader
+  exception**, which explicitly permits packaging an application under any
+  license including proprietary — so the frozen build inherits no obligation.
+  Inno Setup's own terms likewise permit installers for any license. A future
+  dependency that is GPL/AGPL would change this analysis and must be checked.
+- **Shield, not Noncommercial — because Noncommercial would ban the intended
+  users.** An engineer at a design firm drafting a section for a paying client
+  is making commercial use. PolyForm Noncommercial would require every such
+  firm to buy a license; Shield permits them outright and blocks only a product
+  that *competes with* Build-a-Spec. Adoption by the target market stays free;
+  a rival specification tool built on this code does not.
+- **It is source-available, NOT OSI open source, and the README says so.** The
+  Open Source Definition (clause 6) forbids discriminating against a field of
+  endeavour, which the noncompete does. Practical consequences to expect:
+  GitHub shows no license badge, and some corporate policies auto-block
+  non-OSI licenses. That trade was made deliberately, not overlooked.
+- **The terms are byte-verbatim upstream.** `LICENSE` was generated from
+  `polyformproject/polyform-licenses@PolyForm-Shield-1.0.0.md` with the body
+  asserted identical from `## Acceptance` onward — never retyped. Only the
+  header gained the two notice lines the license itself references.
+- **Both notice lines are single lines, and that is load-bearing.** The Notices
+  section obliges a redistributor to pass along "plain-text **lines** beginning
+  with `Required Notice:`"; a wrapped continuation line does not begin with the
+  prefix, so a strict downstream reader would drop half of it. Keep
+  `Required Notice:` and `Licensor Line of Business:` each on one physical line
+  however long they get. The Line-of-Business line is what preserves the
+  Discontinued Products protection if Build-a-Spec is ever retired.
+- **Seven surfaces carry the license claim, and they must move together.**
+  `LICENSE`; **`frontend/LICENSE`** (a byte-identical copy — see below);
+  `README.md`'s License section; `frontend/package.json` and BOTH
+  root entries of `frontend/package-lock.json` (`packages[""]` — the
+  dependencies' own `"license": "MIT"` entries are *their* licenses and must
+  never be rewritten); the comment in `packaging/windows/build-a-spec.spec`
+  that explains why `LICENSE` is bundled; and — the one most easily missed —
+  **`HelpModal.tsx`'s About footer, which states the license to every user in
+  the shipped app.** A grep for `MIT` that filters out `SUBMIT`/`COMMIT`/
+  `LIMIT`/`PERMIT` finds all of them.
+- **`package.json` uses `"SEE LICENSE IN LICENSE"`**, npm's documented form for
+  a non-SPDX-standard license. A bare `PolyForm-Shield-1.0.0` would avoid the
+  duplicated file, but **that id is not in the SPDX list** — verified against
+  `spdx-license-ids`, which carries only `PolyForm-Noncommercial-1.0.0` and
+  `PolyForm-Small-Business-1.0.0` — so `validate-npm-package-license` warns on
+  it. Re-check if SPDX ever adds Shield; until then the pointer is correct.
+- **`SEE LICENSE IN <file>` resolves against the PACKAGE root, not the repo
+  root** (caught by a review bot on PR #144). Tooling that treats `frontend/`
+  as the package — `npm pack`, license scanners — looked for `frontend/LICENSE`
+  and found nothing, so the license was unresolvable there even though the
+  consistency test passed. Fixed with a checked-in **copy**, not a symlink:
+  Windows is the primary platform and symlinks do not survive a default
+  Windows checkout. The duplicate is a drift hazard, so the same test pins the
+  two files byte-identical; reverting either half turns it red. Verify a change
+  here with `cd frontend && npm pack --dry-run`, which must list `LICENSE`.
+- **Relicensing was clean, and the window was open.** Sole copyright holder
+  (the Claude-authored commits create no competing claim, and the ported
+  `Claude-Spec-Critic` code is the same owner's), and the public repo had 0
+  forks and 0 stars — so no one held meaningful MIT rights to a snapshot. MIT
+  already distributed can never be revoked for a copy someone already has, so
+  this only ever got harder to do.
+- **Not legal advice.** Confirm with an IP attorney before selling licenses.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

@@ -9,6 +9,7 @@ no build tools required.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -58,15 +59,69 @@ def test_installer_appid_is_frozen():
 
 
 def test_pyinstaller_spec_bundles_the_license():
-    """The MIT notice must travel with every installed copy, not just the
-    git checkout — installer.iss bundles dist/BuildASpec wholesale, so
+    """The license notice must travel with every installed copy, not just
+    the git checkout — installer.iss bundles dist/BuildASpec wholesale, so
     getting the LICENSE file into the PyInstaller output is what actually
-    ships it."""
+    ships it. Under PolyForm Shield this is not merely a courtesy: the
+    Notices section obliges anyone passing on any part of the software to
+    pass on these terms, and the Noncompete term only binds a recipient who
+    received them."""
     assert (REPO_ROOT / "LICENSE").is_file(), "repo root LICENSE is missing"
     spec = (PKG / "build-a-spec.spec").read_text(encoding="utf-8")
     assert '"LICENSE"' in spec, (
         "the PyInstaller spec must bundle the root LICENSE file into the "
         "frozen app"
+    )
+
+
+
+def test_every_surface_states_the_same_license():
+    """The license claim lives in six places and they must not drift.
+
+    Relicensed MIT -> PolyForm Shield 1.0.0 on 2026-08-28. The one that is
+    easiest to miss is HelpModal's About footer, because it is the only copy
+    the *user* ever reads. A stale surface here is a false license claim, so
+    this pins all of them rather than trusting a future grep."""
+    license_text = (REPO_ROOT / "LICENSE").read_text(encoding="utf-8")
+
+    assert license_text.startswith("# PolyForm Shield License 1.0.0"), (
+        "LICENSE is no longer PolyForm Shield 1.0.0 — if that is deliberate, "
+        "update every surface asserted below in the same change"
+    )
+
+    # The two notice lines the license itself references must each be ONE
+    # physical line: the Notices section obliges redistributors to carry
+    # "plain-text lines beginning with `Required Notice:`", and a wrapped
+    # continuation line does not begin with that prefix.
+    for prefix in ("Required Notice:", "Licensor Line of Business:"):
+        matches = [ln for ln in license_text.splitlines() if ln.startswith(prefix)]
+        assert len(matches) == 1, f"expected exactly one {prefix!r} line"
+        assert "Abraham Borg" in matches[0] or "Build-a-Spec" in matches[0]
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "PolyForm Shield License 1.0.0" in readme
+    assert "MIT License" not in readme
+
+    # The About footer in the shipped UI.
+    help_modal = (
+        REPO_ROOT / "frontend" / "src" / "components" / "HelpModal.tsx"
+    ).read_text(encoding="utf-8")
+    assert "PolyForm Shield License 1.0.0" in help_modal, (
+        "the in-app About footer still claims a different license than LICENSE"
+    )
+    assert "MIT License" not in help_modal
+
+    # package.json / package-lock.json root entries. Dependency entries in the
+    # lockfile carry THEIR OWN licenses and must never be rewritten.
+    pkg = json.loads(
+        (REPO_ROOT / "frontend" / "package.json").read_text(encoding="utf-8")
+    )
+    lock = json.loads(
+        (REPO_ROOT / "frontend" / "package-lock.json").read_text(encoding="utf-8")
+    )
+    assert pkg["license"] == "SEE LICENSE IN LICENSE"
+    assert lock["packages"][""]["license"] == pkg["license"], (
+        "the lockfile root entry drifted from package.json"
     )
 
 

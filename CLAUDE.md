@@ -7606,8 +7606,9 @@ no obligation beyond keeping a copyright line. Relicensed to **PolyForm Shield
   `Required Notice:` and `Licensor Line of Business:` each on one physical line
   however long they get. The Line-of-Business line is what preserves the
   Discontinued Products protection if Build-a-Spec is ever retired.
-- **Six surfaces carry the license claim, and they must move together.**
-  `LICENSE`; `README.md`'s License section; `frontend/package.json` and BOTH
+- **Seven surfaces carry the license claim, and they must move together.**
+  `LICENSE`; **`frontend/LICENSE`** (a byte-identical copy — see below);
+  `README.md`'s License section; `frontend/package.json` and BOTH
   root entries of `frontend/package-lock.json` (`packages[""]` — the
   dependencies' own `"license": "MIT"` entries are *their* licenses and must
   never be rewritten); the comment in `packaging/windows/build-a-spec.spec`
@@ -7616,9 +7617,20 @@ no obligation beyond keeping a copyright line. Relicensed to **PolyForm Shield
   the shipped app.** A grep for `MIT` that filters out `SUBMIT`/`COMMIT`/
   `LIMIT`/`PERMIT` finds all of them.
 - **`package.json` uses `"SEE LICENSE IN LICENSE"`**, npm's documented form for
-  a non-SPDX-standard license, rather than a bare `PolyForm-Shield-1.0.0`
-  identifier whose presence in the SPDX list was not verified. A wrong SPDX id
-  is worse than an honest pointer at the file.
+  a non-SPDX-standard license. A bare `PolyForm-Shield-1.0.0` would avoid the
+  duplicated file, but **that id is not in the SPDX list** — verified against
+  `spdx-license-ids`, which carries only `PolyForm-Noncommercial-1.0.0` and
+  `PolyForm-Small-Business-1.0.0` — so `validate-npm-package-license` warns on
+  it. Re-check if SPDX ever adds Shield; until then the pointer is correct.
+- **`SEE LICENSE IN <file>` resolves against the PACKAGE root, not the repo
+  root** (caught by a review bot on PR #144). Tooling that treats `frontend/`
+  as the package — `npm pack`, license scanners — looked for `frontend/LICENSE`
+  and found nothing, so the license was unresolvable there even though the
+  consistency test passed. Fixed with a checked-in **copy**, not a symlink:
+  Windows is the primary platform and symlinks do not survive a default
+  Windows checkout. The duplicate is a drift hazard, so the same test pins the
+  two files byte-identical; reverting either half turns it red. Verify a change
+  here with `cd frontend && npm pack --dry-run`, which must list `LICENSE`.
 - **Relicensing was clean, and the window was open.** Sole copyright holder
   (the Claude-authored commits create no competing claim, and the ported
   `Claude-Spec-Critic` code is the same owner's), and the public repo had 0

@@ -124,6 +124,25 @@ def test_every_surface_states_the_same_license():
         "the lockfile root entry drifted from package.json"
     )
 
+    # `SEE LICENSE IN <filename>` resolves relative to the PACKAGE root, so
+    # npm tooling and license scanners treating frontend/ as the package look
+    # for frontend/LICENSE, not the repo root's. It must therefore exist and
+    # must not drift from the canonical copy. A bare `PolyForm-Shield-1.0.0`
+    # would avoid the duplicate, but that id is NOT in the SPDX list (only
+    # PolyForm-Noncommercial-1.0.0 and PolyForm-Small-Business-1.0.0 are), so
+    # npm warns on it. A checked-in copy is used rather than a symlink because
+    # Windows is the primary platform and symlinks do not survive a default
+    # Windows checkout.
+    frontend_license = REPO_ROOT / "frontend" / "LICENSE"
+    assert frontend_license.is_file(), (
+        "frontend/package.json says `SEE LICENSE IN LICENSE`, so frontend/"
+        "LICENSE must exist or the reference dangles"
+    )
+    assert frontend_license.read_bytes() == (REPO_ROOT / "LICENSE").read_bytes(), (
+        "frontend/LICENSE drifted from the root LICENSE — they are the same "
+        "license and must stay byte-identical"
+    )
+
 
 def test_installer_gates_webview2_on_the_bootstrapper_being_present():
     """The WebView2 bundling is preprocessor-guarded so a manual build

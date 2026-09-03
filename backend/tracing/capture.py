@@ -175,6 +175,16 @@ def _import_warning_code(message: str) -> str:
         return "nesting_gap_rebased"
     if message.endswith("acknowledge this scope mismatch."):
         return "module_section_mismatch"
+    if "before the first PART heading" in message:
+        return "front_matter_preserved"
+    if "was read from the cover page" in message:
+        return "title_from_cover_page"
+    if "was read from the page header/footer" in message:
+        return "identity_from_chrome"
+    if "no 'SECTION' keyword" in message:
+        return "bare_header_line"
+    if "after 'END OF SECTION' were not imported" in message:
+        return "trailing_content"
     return "other"
 
 
@@ -685,6 +695,9 @@ def import_event(
     generation_before: int | None = None,
     generation_after: int | None = None,
     request_id: str = "",
+    header_source: str = "",
+    front_matter_count: int = 0,
+    style_numbering_resolved: bool = False,
 ) -> None:
     """Record import provenance and sanitized parse evidence.
 
@@ -712,6 +725,12 @@ def import_event(
             "tracked_changes": bool(tracked_changes),
             "detached": bool(detached),
             "spec_shape_detected": bool(spec_shape_detected),
+            # Which parser path the master took: where its identity came
+            # from, how much front matter preceded it, and whether its
+            # outline lived on styles. Closed vocabulary and counts only.
+            "header_source": str(header_source)[:16],
+            "front_matter_count": max(0, int(front_matter_count)),
+            "style_numbering_resolved": bool(style_numbering_resolved),
             "source_bytes": max(0, int(source_bytes)),
             "zip_member_count": max(0, int(zip_member_count)),
             "zip_uncompressed_bytes": max(

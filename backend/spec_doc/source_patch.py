@@ -108,6 +108,7 @@ _LOCK_BLOCKERS = {
     "content_control": "content_control_projection",
     "image": "complex_paragraph_markup",
     "embedded_object": "complex_paragraph_markup",
+    "field": "complex_paragraph_markup",
 }
 
 _OPAQUE_BODY_TAGS = {

@@ -55,6 +55,8 @@ from .model import (
 )
 from .raw_zip import replace_document_xml_raw
 from .source_format import (
+    HEADER_SOURCE_CHROME,
+    HEADER_SOURCE_FRONT_MATTER,
     LABEL_AUTO,
     LABEL_MANUAL,
     NO_ORIGIN,
@@ -74,6 +76,16 @@ _W_BR = qn("w:br")
 _W_SECTPR = qn("w:sectPr")
 _W_NUMPR = qn("w:numPr")
 _XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
+# A paragraph carrying any of these is layout, not a spacer: a picture, a
+# text box (most cover pages), an embedded object, a content control. It is
+# never dropped as a blank, and it travels with the element below it.
+_LAYOUT_TAGS = (
+    qn("w:drawing"),
+    qn("w:pict"),
+    qn("w:object"),
+    qn("w:txbxContent"),
+    qn("w:sdt"),
+)
 
 
 class SourceRenderError(ValueError):
@@ -86,7 +98,12 @@ def _normalized(text: str) -> str:
 
 
 def _is_blank_paragraph(element) -> bool:
-    return element.tag == _W_P and not _accept_all_paragraph_text(element).strip()
+    """A spacer: a paragraph with no text and nothing drawn in it."""
+    if element.tag != _W_P:
+        return False
+    if _accept_all_paragraph_text(element).strip():
+        return False
+    return all(element.find(f".//{tag}") is None for tag in _LAYOUT_TAGS)
 
 
 def _template_run_properties(paragraph_element):
@@ -188,19 +205,24 @@ class _BodyRenderer:
         return anchor.label_kind if anchor is not None else ""
 
     def _emit_leading_blanks(self, origin_index: int) -> None:
-        """Carry the blank spacers that directly preceded this element.
+        """Carry the unmodelled content that directly preceded this element.
 
-        Attaching them to the FOLLOWING element rather than replaying them
-        at fixed positions is what makes them survive a reorder: the spacing
-        above an article travels with the article when it moves.
+        Blank spacers, but also everything the tree never modelled: a cover
+        page, a revision history, a table of contents, a picture-only
+        paragraph, a page break. Attaching them to the FOLLOWING element
+        rather than replaying them at fixed positions is what makes them
+        survive a reorder (the spacing above an article travels with the
+        article when it moves) and what keeps a cover page ahead of the
+        section it introduces. The walk stops at the nearest modelled
+        element: content between two provisions belongs to the later one.
         """
         run: list[int] = []
         cursor = origin_index - 1
         while cursor >= 0 and cursor not in self._claimed:
-            child = self._children[cursor]
-            if not _is_blank_paragraph(child):
+            if cursor in self._anchored or cursor in self._emitted_blanks:
                 break
-            if cursor in self._emitted_blanks:
+            child = self._children[cursor]
+            if child.tag == _W_SECTPR:
                 break
             run.append(cursor)
             cursor -= 1
@@ -348,6 +370,16 @@ def _render_body(
         )
         if unchanged_identity and renderer.emit_verbatim("sec"):
             renderer.emit_verbatim(SECTION_TITLE_UID)
+            return _render_parts(section, renderer)
+        if format_map.header_source in (
+            HEADER_SOURCE_FRONT_MATTER,
+            HEADER_SOURCE_CHROME,
+        ):
+            # The identity lives in content this export carries through
+            # verbatim anyway — a cover page's "Section Number:" field, the
+            # page header/footer — so there is no header element to rewrite
+            # and inventing one would print the section twice. A changed
+            # identity is reported by the stale-identifier lint instead.
             return _render_parts(section, renderer)
         header = " ".join(part for part in ("SECTION", section.number) if part)
         if renderer._origin(SECTION_TITLE_UID) != NO_ORIGIN:

@@ -671,3 +671,77 @@ def test_native_file_filters_are_pywebview_valid():
                 f"{entry!r} is not a valid pywebview file filter "
                 "(hyphens in the description make create_file_dialog raise)"
             )
+
+
+# --- Open in Word -----------------------------------------------------------
+
+
+def _fake_backend():
+    return types.SimpleNamespace(host="127.0.0.1", port=1, api_token="token")
+
+
+def test_open_in_word_exports_through_the_local_route_and_launches(monkeypatch, tmp_path):
+    """The bridge fetches the export with the shell's own token, writes a
+    fresh temp file, and hands it to the system's default .docx app."""
+    fetched: list[str] = []
+    launched: list[str] = []
+
+    def fake_fetch(backend, path):
+        assert backend.api_token == "token"
+        fetched.append(path)
+        return b"PK\x03\x04docx", "Section 21 05 00 - COMMON WORK.docx"
+
+    monkeypatch.setattr(main, "_fetch_backend_bytes", fake_fetch)
+    monkeypatch.setattr(main, "_launch_file", lambda p: launched.append(str(p)))
+    monkeypatch.setattr(main.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    controller = main._CloseController(None, backend=_fake_backend())
+    result = controller.open_in_word("preserved")
+
+    assert result["ok"] is True, result
+    assert fetched == ["/api/export/docx?mode=preserved"]
+    assert launched == [result["path"]]
+    written = tmp_path / "BuildASpec"
+    files = list(written.glob("*.docx"))
+    assert len(files) == 1
+    assert files[0].read_bytes() == b"PK\x03\x04docx"
+    assert files[0].name.startswith("Section 21 05 00 - COMMON WORK ")
+    assert result["name"] == files[0].name
+
+
+def test_open_in_word_reports_the_servers_own_refusal(monkeypatch, tmp_path):
+    def failing_fetch(backend, path):
+        raise RuntimeError("Formatting-preserving export is unavailable: no map.")
+
+    monkeypatch.setattr(main, "_fetch_backend_bytes", failing_fetch)
+    monkeypatch.setattr(main, "_launch_file", lambda p: (_ for _ in ()).throw(AssertionError("must not launch")))
+    monkeypatch.setattr(main.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    controller = main._CloseController(None, backend=_fake_backend())
+    result = controller.open_in_word("preserved")
+    assert result["ok"] is False
+    assert "no map" in result["error"]
+    assert not (tmp_path / "BuildASpec").exists() or not list(
+        (tmp_path / "BuildASpec").glob("*.docx")
+    )
+
+
+def test_open_in_word_refuses_unknown_modes_and_a_browser_session():
+    controller = main._CloseController(None, backend=_fake_backend())
+    assert controller.open_in_word("evil")["ok"] is False
+    no_backend = main._CloseController(None)
+    result = no_backend.open_in_word("preserved")
+    assert result["ok"] is False
+    assert "desktop app" in result["error"]
+
+
+def test_filename_from_disposition_prefers_the_encoded_form():
+    assert (
+        main._filename_from_disposition(
+            "attachment; filename=\"fallback.docx\"; filename*=UTF-8''Section%2021%2005%2000.docx"
+        )
+        == "Section 21 05 00.docx"
+    )
+    assert main._filename_from_disposition('attachment; filename="plain.docx"') == "plain.docx"
+    assert main._filename_from_disposition("") == main._OPEN_IN_WORD_FALLBACK_NAME
+    assert main._filename_from_disposition('attachment; filename="../x/evil"') == "evil.docx"

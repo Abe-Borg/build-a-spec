@@ -817,23 +817,16 @@ export async function* streamResearch(
 /* --- Master import + updates (Phase 5) --- */
 
 /**
- * The import-time intent choice. "start" imports the master as a starting
- * point: the server detaches the source in the same transaction, so the
- * document is fully editable from the first payload (the exact original
- * stays downloadable and redline-vs-master keeps working). "preserve" is
- * the historical behavior: source-preserving mode, permission sweep and all.
+ * Import a Word master as the editable starting point. There is one
+ * contract: the document keeps its header, footer, fonts, styles, numbering
+ * and page setup for export, and its content is editable at once. The
+ * server's ``detach`` knob is what selects that contract (its absence is the
+ * older byte-exact mode, kept for API compatibility), so it is always sent.
  */
-export type ImportIntent = "start" | "preserve";
-
-export async function importMaster(
-  file: File,
-  intent: ImportIntent,
-): Promise<ImportResultPayload> {
+export async function importMaster(file: File): Promise<ImportResultPayload> {
   const form = new FormData();
   form.append("file", file);
-  if (intent === "start") {
-    form.append("detach", "true");
-  }
+  form.append("detach", "true");
   const resp = await fetch("/api/import/master", {
     method: "POST",
     body: form,

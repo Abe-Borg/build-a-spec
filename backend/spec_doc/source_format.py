@@ -58,6 +58,18 @@ SECTION_TITLE_UID = "sec:title"
 #: kin instead.
 NO_ORIGIN = -1
 
+#: Where the section identity was read from at import. A header LINE in the
+#: body is anchored and reproduced by the export; a cover page's
+#: ``Section Number:`` field (FRONT_MATTER) and the page header/footer
+#: (CHROME) are content the export carries through verbatim anyway, so no
+#: header element is synthesized for them — one is already printed.
+HEADER_SOURCE_LINE = "line"
+HEADER_SOURCE_FRONT_MATTER = "front_matter"
+HEADER_SOURCE_CHROME = "chrome"
+HEADER_SOURCES = frozenset(
+    {"", HEADER_SOURCE_LINE, HEADER_SOURCE_FRONT_MATTER, HEADER_SOURCE_CHROME}
+)
+
 
 @dataclass(frozen=True)
 class FormatAnchor:
@@ -131,9 +143,21 @@ class SourceFormatMap:
     #: nothing to reproduce and the canonical form is written instead.
     section_number: str = ""
     section_title: str = ""
+    #: Readable text of the body blocks before the first PART/article
+    #: heading — a cover page, a revision history, a table of contents. Like
+    #: the header/footer text: evidence for the stale-identifier lint, never
+    #: an editing surface; the export carries the blocks through verbatim.
+    front_matter_text: tuple[str, ...] = ()
+    #: One of the HEADER_SOURCE_* values, or "" when nothing stated the
+    #: identity. The renderer synthesizes a header only for "".
+    header_source: str = ""
 
     def anchor(self, uid: str) -> FormatAnchor | None:
         return self._by_uid.get(uid)
+
+    def preserved_chrome(self) -> tuple[str, ...]:
+        """Every preserved line the stale-identifier lint should read."""
+        return tuple(self.header_footer_text) + tuple(self.front_matter_text)
 
     @property
     def _by_uid(self) -> dict[str, FormatAnchor]:
@@ -159,6 +183,8 @@ class SourceFormatMap:
             "header_footer_text": list(self.header_footer_text),
             "section_number": self.section_number,
             "section_title": self.section_title,
+            "front_matter_text": list(self.front_matter_text),
+            "header_source": self.header_source,
         }
 
     @classmethod
@@ -187,6 +213,17 @@ class SourceFormatMap:
             if isinstance(raw_chrome, list)
             else ()
         )
+        raw_front = data.get("front_matter_text")
+        front_matter = (
+            tuple(str(item) for item in raw_front if isinstance(item, str))
+            if isinstance(raw_front, list)
+            else ()
+        )
+        header_source = str(data.get("header_source", "") or "")
+        if header_source not in HEADER_SOURCES:
+            # Fail soft toward "a header line exists": that only ever makes
+            # the export reproduce a header it can find an anchor for.
+            header_source = ""
         return cls(
             document_sha256=digest,
             body_child_count=max(0, count),
@@ -194,6 +231,8 @@ class SourceFormatMap:
             header_footer_text=chrome,
             section_number=str(data.get("section_number", "") or ""),
             section_title=str(data.get("section_title", "") or ""),
+            front_matter_text=front_matter,
+            header_source=header_source,
         )
 
 
@@ -205,22 +244,43 @@ def build_format_map(
     header_footer_text: tuple[str, ...] = (),
     section_number: str = "",
     section_title: str = "",
+    front_matter_text: tuple[str, ...] = (),
+    header_source: str = "",
 ) -> SourceFormatMap:
-    """Freeze the anchors captured during one import against its upload."""
+    """Freeze the anchors captured during one import against its upload.
+
+    One anchor per uid, first wins: ``from_dict`` refuses a duplicate, and a
+    map that could not be read back would fail every later project save.
+    """
     if not isinstance(source_bytes, bytes):
         raise TypeError("source_bytes must be bytes")
+    unique: list[FormatAnchor] = []
+    seen: set[str] = set()
+    for anchor in anchors:
+        if anchor.uid in seen:
+            continue
+        seen.add(anchor.uid)
+        unique.append(anchor)
+    if header_source not in HEADER_SOURCES:
+        header_source = ""
     return SourceFormatMap(
         document_sha256=hashlib.sha256(source_bytes).hexdigest(),
         body_child_count=max(0, int(body_child_count)),
-        anchors=tuple(anchors),
+        anchors=tuple(unique),
         header_footer_text=tuple(header_footer_text),
         section_number=section_number,
         section_title=section_title,
+        front_matter_text=tuple(front_matter_text),
+        header_source=header_source,
     )
 
 
 __all__ = [
     "FormatAnchor",
+    "HEADER_SOURCES",
+    "HEADER_SOURCE_CHROME",
+    "HEADER_SOURCE_FRONT_MATTER",
+    "HEADER_SOURCE_LINE",
     "LABEL_AUTO",
     "LABEL_KINDS",
     "LABEL_MANUAL",

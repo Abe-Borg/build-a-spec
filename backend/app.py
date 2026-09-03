@@ -611,6 +611,7 @@ def _prepare_master_import(
             warnings=result.warnings,
             tracked_changes_detected=result.tracked_changes_detected,
             spec_shape_detected=result.spec_shape_detected,
+            front_matter=getattr(result, "front_matter", ()),
         )
         if result.source_map is None:
             raise MasterImportError(
@@ -1183,6 +1184,32 @@ def _source_preservation_payload(
         return None
 
     source_available = session.source_docx_bytes is not None
+    if getattr(session.doc, "source_detached", False):
+        # Every import takes this path now. Reporting it as ``blocked`` with
+        # a "baseline unavailable" blocker — what the branches below would
+        # say, since readiness is deliberately None for a detached document
+        # — described a fault the document does not have. Say what is true:
+        # the byte-exact claim was released, the formatting-preserving
+        # export is the one in use, and the exact original is still here.
+        return {
+            "status": "detached",
+            "source_export_ready": False,
+            "exact_original_available": source_available,
+            "body_editing": "unrestricted",
+            "no_op": False,
+            "changed_uids": [],
+            "blockers": [
+                {
+                    "uid": "source",
+                    "blocker": "source_detached",
+                    "message": (
+                        "this document is edited freely; the export keeps "
+                        "its formatting through the appearance-preserving "
+                        "renderer rather than by patching the upload"
+                    ),
+                }
+            ],
+        }
     source_map = getattr(session, "source_docx_map", None)
     global_blockers = (
         tuple(source_map.global_blockers)
@@ -1279,6 +1306,33 @@ def _draft_prerequisites(session) -> DraftPrerequisites:
     )
 
 
+def _preserved_export_available(session) -> bool:
+    """Can this session export through the appearance-preserving renderer?
+
+    The retained Word original plus the formatting map built from it, still
+    describing each other (the map is SHA-256-bound to the bytes). ONE
+    derivation for the export route's mode selection and the payload flag
+    the panel's Export menu reads — a second derivation would be free to
+    offer an export the route is about to refuse. The hash is cached per
+    (bytes, map) pair: ``_doc_payload`` is built on every edit, undo and
+    poll, and a multi-megabyte master must not be re-hashed each time.
+    """
+    format_map = getattr(session, "source_format_map", None)
+    source = session.source_docx_bytes
+    if format_map is None or source is None:
+        return False
+    key = (id(source), len(source), id(format_map), format_map.document_sha256)
+    cached = getattr(session, "_preserved_export_cache", None)
+    if isinstance(cached, tuple) and len(cached) == 2 and cached[0] == key:
+        return bool(cached[1])
+    answer = bool(format_map.matches(source))
+    try:
+        session._preserved_export_cache = (key, answer)
+    except Exception:  # noqa: BLE001 - a read-only session object still answers
+        pass
+    return answer
+
+
 def _preserved_chrome(session) -> tuple[str, ...]:
     """Header/footer lines retained from an imported package.
 
@@ -1289,6 +1343,9 @@ def _preserved_chrome(session) -> tuple[str, ...]:
     format_map = getattr(session, "source_format_map", None)
     if format_map is None or session.source_docx_bytes is None:
         return ()
+    preserved = getattr(format_map, "preserved_chrome", None)
+    if callable(preserved):
+        return tuple(preserved())
     return tuple(getattr(format_map, "header_footer_text", ()) or ())
 
 
@@ -1369,6 +1426,14 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         # source document and greys out the very editing the user just turned
         # on. See sourceCapabilitiesExpected.
         "source_detached": bool(getattr(session.doc, "source_detached", False)),
+        # The formatting-preserving export — the product's import path — is
+        # a fact the panel could not otherwise know: it needs the retained
+        # original AND the map built from it, neither of which the payload
+        # carries. Without this the Export menu offered only the byte-exact
+        # mode (gone the moment a document is detached, i.e. on every
+        # import) and the normalized re-render, and a user who imported a
+        # master to keep its formatting got the app's fonts back instead.
+        "preserved_export_available": _preserved_export_available(session),
         "preservation_ready": bool(preservation and preservation.ready),
         "source_preservation": _source_preservation_payload(
             session, preservation
@@ -3063,6 +3128,10 @@ def create_app(
                 staged.source_format_map = imported.format_map
                 staged.source_patch_context = source_context
                 staged.import_report = report
+                # The same contract the panel's import takes: editable, the
+                # formatting kept for export, and no permission sweep — a
+                # practice copy that sweeps for minutes teaches nothing.
+                staged.detach_source()
             elif kind == "template":
                 staged = SessionState()
                 token, _template = get_template_catalog().preview(
@@ -3795,11 +3864,7 @@ def create_app(
         # stays reachable for a project that predates the format map, and
         # ``normalized`` is always available explicitly.
         format_map = getattr(session, "source_format_map", None)
-        preserving_available = (
-            format_map is not None
-            and session.source_docx_bytes is not None
-            and format_map.matches(session.source_docx_bytes)
-        )
+        preserving_available = _preserved_export_available(session)
         if redline_base is not None:
             selected_mode = "normalized"
         elif mode:
@@ -4501,6 +4566,11 @@ def create_app(
             generation_before=entry_generation,
             generation_after=import_generation_after,
             request_id=getattr(request.state, "request_id", ""),
+            header_source=getattr(result, "header_source", ""),
+            front_matter_count=len(getattr(result, "front_matter", ())),
+            style_numbering_resolved=bool(
+                getattr(result, "style_numbering_resolved", False)
+            ),
         )
         # The per-element permission sweep is the most expensive thing this
         # app does (O(document) per probe, ~5 probes per paragraph). It no

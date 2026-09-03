@@ -27,6 +27,7 @@ import type {
   StandardInfo,
   TemplateOrigin,
   UsageSummary,
+  OpenInWordResult,
 } from "../types";
 import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
 import QCDrawer from "./QCDrawer";
@@ -40,7 +41,6 @@ import {
 } from "../lib/sourceCapabilities";
 import { reviewCounts } from "../lib/reviewQueue";
 import Tip from "./Tip";
-import type { ImportIntent } from "../lib/api";
 
 interface Props {
   doc: SpecDoc | null;
@@ -70,6 +70,17 @@ interface Props {
    *  it cannot be inferred from the retained artifacts, which detaching keeps. */
   sourceDetached: boolean;
   preservationReady: boolean;
+  /** The formatting-preserving export can run: the retained Word original
+   *  and its formatting map are both present and describe each other.
+   *  Server-derived (DocPayload.preserved_export_available), the same
+   *  derivation the export route selects its mode by. */
+  preservedExportAvailable: boolean;
+  /** Export to a temporary .docx and open it with Word through the native
+   *  shell; resolves to the shell's result (never throws). Rendered only
+   *  when the bridge exists at click time. */
+  onOpenInWord?: (
+    mode: "preserved" | "normalized",
+  ) => Promise<OpenInWordResult>;
   sourceCapabilities: SourceCapabilitiesState | null;
   templateOrigin: TemplateOrigin | null;
   tutorialActive: boolean;
@@ -96,7 +107,7 @@ interface Props {
   nativeOpenFile: (
     kind: "project" | "docx" | "reference",
   ) => Promise<File | null | undefined>;
-  onImportMaster: (file: File, intent: ImportIntent) => void;
+  onImportMaster: (file: File) => void;
   /** Permission-sweep progress while capabilities are pending (from the
    *  status poll), or null. Display only. */
   capabilityProgress?: { done: number; total: number } | null;
@@ -289,6 +300,8 @@ export default function ArtifactPanel({
   sourceAvailable,
   sourceDetached,
   preservationReady,
+  preservedExportAvailable,
+  onOpenInWord,
   sourceCapabilities,
   templateOrigin,
   tutorialActive,
@@ -345,7 +358,7 @@ export default function ArtifactPanel({
     if (fileLoading) return;
     const file = await nativeOpenFile("docx");
     if (file === undefined) importRef.current?.click();
-    else if (file) onImportMaster(file, "start");
+    else if (file) onImportMaster(file);
   };
   // Attaching reference material takes the same native-first path, but has no
   // blank-document precondition: it never touches the spec. Its own dialog
@@ -360,6 +373,35 @@ export default function ArtifactPanel({
   // Open-items list collapses like the Review / Final QC drawers; the count
   // stays visible in the bar, so nothing is lost at a glance when collapsed.
   const [openItemsExpanded, setOpenItemsExpanded] = useState(false);
+  // Open in Word: the shell writes the export to a temp file and launches
+  // Word. Busy while the export streams; a refusal is the server's own
+  // message, shown in a dismissible strip (a click that does nothing reads
+  // as a broken button).
+  const [openInWordBusy, setOpenInWordBusy] = useState(false);
+  const [openInWordError, setOpenInWordError] = useState("");
+  const hasNativeBridge =
+    typeof window !== "undefined" && !!window.pywebview?.api?.open_in_word;
+  const runOpenInWord = async () => {
+    if (!onOpenInWord || openInWordBusy) return;
+    setExportMenuOpen(false);
+    setOpenInWordBusy(true);
+    setOpenInWordError("");
+    try {
+      const result = await onOpenInWord(
+        preservedExportAvailable ? "preserved" : "normalized",
+      );
+      if (!result.ok) setOpenInWordError(result.error || "Open in Word failed.");
+    } finally {
+      setOpenInWordBusy(false);
+    }
+  };
+  // Body blocks ahead of the section (cover page, revision history, table of
+  // contents): kept for export exactly as they are, shown here so the user
+  // knows where they went rather than finding them missing from the paper.
+  const frontMatter =
+    importReport?.front_matter && importReport.front_matter.count > 0
+      ? importReport.front_matter
+      : null;
   // The tour opens the list by bumping the nonce (same idiom as the drawers).
   const openItemsNonce = drawerNonces?.openItems ?? 0;
   useEffect(() => {
@@ -761,41 +803,69 @@ export default function ArtifactPanel({
               >
                 {importedMode ? (
                   <>
-                    {preservationReady ? (
+                    {/* The product's import path: the retained original
+                        rebuilt with the current content. It needs the
+                        original AND its formatting map, which the server
+                        alone can vouch for — hence the payload flag. Before
+                        this entry existed the menu offered only the
+                        byte-exact mode (gone the moment a document is
+                        detached, i.e. on every import) and the normalized
+                        re-render, so a user who imported a master to keep
+                        its formatting got the app's fonts back. */}
+                    {preservedExportAvailable ? (
                       <a
                         className="block px-3 py-1.5 font-medium text-accent hover:bg-surface hover:text-accent-hover"
-                        href="/api/export/docx?mode=source"
+                        href="/api/export/docx?mode=preserved"
                         download
                         onClick={() => setExportMenuOpen(false)}
-                        title="Clone the original DOCX and apply only verified body edits, including bounded structural edits in eligible isolated Word-list islands"
+                        title="Your original Word file rebuilt with the current content: headers, footers, fonts, styles, numbering and page setup are kept, untouched provisions are copied exactly, and tables and pictures come through as they were"
                       >
-                        Export preserved DOCX
+                        Export Word (keeps your formatting)
                       </a>
                     ) : (
                       <span
                         className="block cursor-default px-3 py-1.5 text-ink-faint"
-                        title={
-                          // Say WHY it is unavailable: the generic sentence
-                          // is wrong for a detached document (a choice, not
-                          // a fault) and for a frozen package (the package
-                          // is fine; it is locked — server's own words).
-                          sourceDetached
-                            ? "You chose Edit freely for this document — export is a normalized Build-a-Spec Word file. The exact original is still downloadable below."
-                            : (frozenCause?.message ??
-                              "This project has no usable source package, or its edits exceed the source-preserving boundary")
-                        }
+                        title="This project has no retained Word original with a formatting map to rebuild from — a project saved before formatting-preserving import, or a legacy JSON project. Export the Build-a-Spec styled file, or import the original again."
                       >
-                        Export preserved DOCX unavailable
+                        Export Word (keeps your formatting) unavailable
                       </span>
+                    )}
+                    {hasNativeBridge && onOpenInWord && (
+                      <button
+                        className="block w-full px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink disabled:opacity-50"
+                        onClick={() => {
+                          void runOpenInWord();
+                        }}
+                        disabled={openInWordBusy}
+                        title={
+                          preservedExportAvailable
+                            ? "Write the formatting-preserving export to a temporary file and open it in Word, so you see the real layout"
+                            : "Write the Build-a-Spec styled export to a temporary file and open it in Word"
+                        }
+                        data-capability="export.open-in-word"
+                      >
+                        {openInWordBusy ? "Opening in Word…" : "Open in Word"}
+                      </button>
+                    )}
+                    {preservationReady && (
+                      <a
+                        className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
+                        href="/api/export/docx?mode=source"
+                        download
+                        onClick={() => setExportMenuOpen(false)}
+                        title="The older byte-exact contract: clone the original DOCX and apply only verified body edits. Offered only while this project still holds that claim."
+                      >
+                        Export byte-exact original with edits
+                      </a>
                     )}
                     <a
                       className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
                       href="/api/export/docx?mode=normalized"
                       download
                       onClick={() => setExportMenuOpen(false)}
-                      title="Generate a new DOCX from extracted content; source Word formatting and layout are not preserved"
+                      title="A new DOCX in Build-a-Spec's own styles and fonts, with automatic numbering and the assumptions / open-items schedules; your original's formatting is not used"
                     >
-                      Export normalized DOCX
+                      Export as Build-a-Spec styled Word
                     </a>
                     {sourceAvailable ? (
                       <a
@@ -818,15 +888,29 @@ export default function ArtifactPanel({
                     )}
                   </>
                 ) : (
-                  <a
-                    className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
-                    href="/api/export/docx?mode=normalized"
-                    download
-                    onClick={() => setExportMenuOpen(false)}
-                    title="Generate a clean DOCX with the assumptions / open-items schedules"
-                  >
-                    Export clean
-                  </a>
+                  <>
+                    <a
+                      className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
+                      href="/api/export/docx?mode=normalized"
+                      download
+                      onClick={() => setExportMenuOpen(false)}
+                      title="Generate a clean DOCX with the assumptions / open-items schedules"
+                    >
+                      Export clean
+                    </a>
+                    {hasNativeBridge && onOpenInWord && (
+                      <button
+                        className="block w-full px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink disabled:opacity-50"
+                        onClick={() => {
+                          void runOpenInWord();
+                        }}
+                        disabled={openInWordBusy}
+                        title="Write the clean export to a temporary file and open it in Word"
+                      >
+                        {openInWordBusy ? "Opening in Word…" : "Open in Word"}
+                      </button>
+                    )}
+                  </>
                 )}
                 {baselineIndex !== null ? (
                   <a
@@ -982,7 +1066,7 @@ export default function ArtifactPanel({
                   ? "Import needs a blank document — start a new session first (New session)."
                   : busy
                     ? "Finish the current turn first."
-                    : "Import supported body content while retaining the exact source package for narrowly scoped, source-preserving export."
+                    : "Import a Word master as the editable starting point. Its header, footer, fonts, styles, numbering and page setup are kept for export; tables, pictures and a cover page come through as preserved blocks."
             }
           >
             <button
@@ -1002,7 +1086,7 @@ export default function ArtifactPanel({
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) onImportMaster(file, "start");
+              if (file) onImportMaster(file);
               e.target.value = "";
             }}
           />
@@ -1123,6 +1207,47 @@ export default function ArtifactPanel({
             ✕
           </button>
         </div>
+      )}
+
+      {openInWordError && (
+        <div
+          className="flex items-start justify-between gap-3 border-b border-warn/40 bg-warn/10 px-5 py-2 text-[11px]"
+          role="alert"
+          data-testid="open-in-word-error"
+        >
+          <span className="min-w-0 text-warn">
+            Open in Word failed — {openInWordError}
+          </span>
+          <button
+            className="shrink-0 text-[11px] text-ink-faint hover:text-ink"
+            onClick={() => setOpenInWordError("")}
+            title="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Everything the import kept ahead of the section — cover page,
+          revision history, table of contents. Not provisions, not editable
+          here; carried into the export exactly as it came in. Shown so the
+          user knows where it went instead of finding it missing. */}
+      {frontMatter && (
+        <details
+          className="border-b border-edge bg-bg/40 px-5 py-2 text-[11px] text-ink-dim"
+          data-testid="front-matter"
+        >
+          <summary className="cursor-pointer">
+            {frontMatter.count} front-matter block
+            {frontMatter.count === 1 ? "" : "s"} (cover page, revision history,
+            contents) kept for export exactly as {frontMatter.count === 1 ? "it is" : "they are"} — not editable here
+          </summary>
+          <ul className="mt-1.5 list-disc space-y-0.5 whitespace-pre-line pl-5">
+            {frontMatter.lines.map((line, index) => (
+              <li key={`${index}-${line}`}>{line}</li>
+            ))}
+          </ul>
+        </details>
       )}
 
       {/* The per-element permission sweep runs in the background after an

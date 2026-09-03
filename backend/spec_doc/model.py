@@ -96,6 +96,11 @@ LOCK_REASONS: dict[str, str] = {
         "carried into the export exactly as it came in, so it cannot be "
         "edited here."
     ),
+    "field": (
+        "This block is a Word field result (a table of contents) from the "
+        "original file. It is carried into the export exactly as it came "
+        "in, so it cannot be edited here."
+    ),
 }
 
 #: What a locked block still allows, appended to every lock message so the

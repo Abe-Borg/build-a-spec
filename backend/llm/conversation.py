@@ -1576,6 +1576,33 @@ def _profile_status_block(project_profile: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def _front_matter_summary(session: SessionState) -> str:
+    """One line about the imported file's front matter, or "" when none."""
+    report = getattr(session, "import_report", None)
+    if not isinstance(report, dict) or session.doc.baseline_index is None:
+        return ""
+    front = report.get("front_matter")
+    if not isinstance(front, dict):
+        return ""
+    count = front.get("count")
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        return ""
+    lines = [
+        line for line in front.get("lines", []) if isinstance(line, str) and line
+    ]
+    preview = "; ".join(line[:80] for line in lines[:3])
+    if preview:
+        preview = f" It begins: {preview}"
+    return (
+        f"FRONT MATTER: {count} block(s) precede the section in the imported "
+        "file (cover page, revision history, table of contents). They are "
+        "carried into the exported Word file exactly as they are and are NOT "
+        "part of the editable specification: never reproduce them as "
+        "provisions, never report them as missing, and never try to edit "
+        f"them — that is done in Word.{preview}"
+    )
+
+
 def _source_editing_boundary_block(session: SessionState) -> str | None:
     """Render compact, server-derived source permissions for the model.
 
@@ -1707,10 +1734,7 @@ def _turn_context_text(session: SessionState) -> str:
         # the section, and a stale footer is exactly the kind of thing a
         # reviewer expects it to notice.
         preserved_chrome=(
-            tuple(
-                getattr(session.source_format_map, "header_footer_text", ())
-                or ()
-            )
+            tuple(session.source_format_map.preserved_chrome())
             if getattr(session, "source_format_map", None) is not None
             and session.source_docx_bytes is not None
             else ()
@@ -1756,6 +1780,14 @@ def _turn_context_text(session: SessionState) -> str:
             "adapted, or deleted — the gap-and-adapt pass. This is the "
             "standing work list whenever the user has no other priority."
         )
+    # A cover page, revision history or table of contents ahead of the
+    # section is carried through to the export verbatim and is not in the
+    # tree at all — say so, or the model will try to reproduce it as
+    # provisions, or report it missing. Read only while the import's
+    # baseline is still live, like the unstructured-import framing.
+    front_matter = _front_matter_summary(session)
+    if front_matter:
+        parts.append(front_matter)
     # The retained Final QC result, compactly — QC lives on its own channel,
     # so without this the model could not answer "what did the review find?"
     # about a report one panel away. Lock-free plain-attribute read (the

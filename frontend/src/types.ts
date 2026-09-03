@@ -319,6 +319,13 @@ export interface ImportReport {
    * missing value as true so their presentation is unchanged.
    */
   spec_shape_detected?: boolean;
+  /**
+   * Body blocks before the first PART heading — a cover page, a revision
+   * history, a table of contents — kept for export exactly as they are and
+   * not part of the editable section. Absent on projects saved before it
+   * was recorded.
+   */
+  front_matter?: { count: number; lines: string[] };
   fidelity_notice: string;
 }
 
@@ -326,7 +333,9 @@ export type SourcePreservationStatus =
   | "ready"
   | "pass_through_only"
   | "blocked"
-  | "unavailable";
+  | "unavailable"
+  /** The byte-exact claim was released ("Edit freely" / every import). */
+  | "detached";
 
 export interface SourcePreservationBlocker {
   uid: string;
@@ -562,6 +571,13 @@ export interface DocPayload {
    * from the retained artifacts locks a document the user just unlocked.
    */
   source_detached: boolean;
+  /**
+   * True when the export can rebuild the retained Word original with the
+   * current content — headers, footers, fonts, styles and page setup kept.
+   * Server-derived (it needs the retained bytes and the formatting map),
+   * and the same derivation the export route selects its mode by.
+   */
+  preserved_export_available: boolean;
   /** True when edits can be exported by cloning and narrowly patching the source. */
   preservation_ready: boolean;
   /** Detailed imported-source capability state; null for from-scratch documents. */
@@ -1919,6 +1935,14 @@ export interface DiagnosticsActivity {
  * `buildaspecRequestClose` is the hook the shell calls when the user tries
  * to close the window so the app can offer to save first.
  */
+/** What the shell's Open in Word reports back (mirrors main.py). */
+export interface OpenInWordResult {
+  ok: boolean;
+  error: string;
+  path: string;
+  name: string;
+}
+
 declare global {
   interface Window {
     pywebview?: {
@@ -1950,6 +1974,16 @@ declare global {
          *  Also how Developer tools opens the trace viewer (an app-served
          *  localhost URL) — the shell has no reliable target=_blank. */
         open_external_link?: (url: string) => Promise<boolean>;
+        /** Export the section to a fresh temporary .docx and open it with
+         *  the system's default Word application, so the real layout can be
+         *  seen. "preserved" rebuilds the imported original with the current
+         *  content; "normalized" is the Build-a-Spec styled file. Goes
+         *  through the same export route as the menu, so its refusals
+         *  (a detached legacy project, a tutorial copy) come back as the
+         *  server's own message. */
+        open_in_word?: (
+          mode: "preserved" | "normalized",
+        ) => Promise<OpenInWordResult>;
       };
     };
     buildaspecRequestClose?: (

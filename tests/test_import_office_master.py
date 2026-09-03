@@ -162,6 +162,7 @@ def _office_master(
     cross_reference: bool = True,
     toc: bool = False,
     text_box: bool = False,
+    number_in_text_box: bool = False,
     picture_between: bool = False,
 ) -> bytes:
     """The reported master's shape, with the knobs the tests need."""
@@ -203,7 +204,9 @@ def _office_master(
             _text_box_paragraph(document, TITLE)
         else:
             document.add_paragraph(TITLE)
-        if number_line:
+        if number_line and number_in_text_box:
+            _text_box_paragraph(document, "Section Number: 21 05 00")
+        elif number_line:
             document.add_paragraph("Section Number: 21 05 00")
         document.add_paragraph("CLT11")
         document.add_paragraph("Maiden, NC")
@@ -522,6 +525,51 @@ def test_text_box_content_is_read_not_dropped(tmp_path):
 
     assert TITLE in result.front_matter
     assert result.section.title == TITLE
+
+
+def test_identity_drawn_in_a_text_box_is_still_read(tmp_path):
+    """Both the number field AND the title in text boxes (Codex, PR #145).
+
+    A locked ``image`` paragraph used to be excluded from identity matching
+    altogether, so a cover page built entirely from text boxes — the common
+    template shape — left the section blank even though the exact line had
+    been read out of the box. The block stays front matter, is never
+    anchored (rewriting it on a rename would delete the box), and the export
+    still carries it verbatim.
+    """
+    source = _office_master(text_box=True, number_in_text_box=True, chrome=False)
+    result = _parse(source, tmp_path)
+
+    assert result.section.number == "21 05 00"
+    assert result.section.title == TITLE
+    assert result.header_source == HEADER_SOURCE_FRONT_MATTER
+    assert "Section Number: 21 05 00" in result.front_matter
+    assert not any(anchor.uid == "sec" for anchor in result.format_map.anchors)
+    exported = render_preserving_docx(
+        source_bytes=source, format_map=result.format_map, current=result.section
+    )
+    before = _body_children(source)
+    after = _body_children(exported)
+    assert len(before) == len(after)
+
+
+def test_a_section_line_drawn_in_a_text_box_is_the_identity_not_a_provision(tmp_path):
+    document = Document()
+    _text_box_paragraph(document, "SECTION 21 05 00")
+    _text_box_paragraph(document, TITLE)
+    document.add_paragraph("PART 1 - GENERAL")
+    document.add_paragraph("1.1 SUMMARY")
+    document.add_paragraph("A. Section includes piping.")
+    document.add_paragraph("END OF SECTION")
+    buffer = io.BytesIO()
+    document.save(buffer)
+
+    result = _parse(buffer.getvalue(), tmp_path)
+    assert result.section.number == "21 05 00"
+    assert result.section.title == TITLE
+    assert result.header_source == HEADER_SOURCE_FRONT_MATTER
+    assert result.front_matter == ("SECTION 21 05 00", TITLE)
+    assert _paragraph_texts(result.section) == ["Section includes piping."]
 
 
 # ---------------------------------------------------------------------------

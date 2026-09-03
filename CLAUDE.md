@@ -55,8 +55,9 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            /api/export/docx from this launch's own backend
                            with its own token (_BackendRuntime.api_token —
                            same route, same guards), writes a fresh
-                           timestamped file under <temp>/BuildASpec and
-                           os.startfile()s it (v1.15.0)
+                           mkstemp-unique file under <temp>/BuildASpec —
+                           never a timestamp name, Word holds the previous
+                           one open — and os.startfile()s it (v1.15.0)
 backend/
   settings.py              models (claude-sonnet-5 default), effort levels
                            (interview high / research high, dialed back
@@ -7732,7 +7733,11 @@ his complaints. All fixed here; 1.14.0's own work ships with them.
   line beside the number field (`_title_like`: 2+ mostly-alphabetic words,
   no number, no `Label: value` colon, none of the cover-page label words);
   the page header/footer (`_identity_from_chrome`) is the disclosed last
-  resort, never consulted for a structureless memo.
+  resort, never consulted for a structureless memo. A cover page's identity
+  line may sit in a TEXT BOX (an `image`-locked paragraph): it is read like
+  a cover-page field — recorded, never anchored, the block stays front
+  matter — because rewriting that paragraph on a rename would delete the
+  box (Codex, PR #145; the first cut excluded every locked entry).
 - **Front matter is preserved, not modelled.** Lines land in
   `ImportResult.front_matter` → `import_report["front_matter"]` (count +
   bounded lines, optional on legacy reports) → `SourceFormatMap.
@@ -7782,9 +7787,11 @@ his complaints. All fixed here; 1.14.0's own work ships with them.
 - **Open in Word** (owner ask): `js_api.open_in_word(mode)` in `main.py`.
   The shell GETs `/api/export/docx?mode=…` from its own backend with the
   launch token (`_BackendRuntime.api_token`, `X-BuildASpec-Token`) so the
-  route's guards apply unchanged, writes `<temp>/BuildASpec/<name> <stamp>
-  .docx` (a fresh file every time — Word locks the one it has open) and
-  `os.startfile`s it. Capability `export.open-in-word` on the `export` tour
+  route's guards apply unchanged, writes `<temp>/BuildASpec/<name> <mkstemp
+  suffix>.docx` and `os.startfile`s it. The name is minted by `mkstemp`,
+  never from a timestamp (Codex, PR #145): two clicks within a second
+  collided, and Word holds the first file open, so the second write failed
+  on Windows or overwrote the file behind the first Word window elsewhere. Capability `export.open-in-word` on the `export` tour
   step (three-place edit); rendered only when the bridge exists.
 - **Diagnostics**: the import trace event gains `header_source`,
   `front_matter_count`, `style_numbering_resolved`, and closed codes for the

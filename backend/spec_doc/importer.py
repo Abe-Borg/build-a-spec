@@ -1361,15 +1361,36 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             )
 
         # --- The section identity: decided in the front matter, once. -----
-        if header_allowed and not entry.lock_reason and numbering is None:
+        # A cover page routinely puts its "SECTION 21 05 00" or "Section
+        # Number:" line inside a text box. That paragraph is a preserved
+        # ``image`` block — its text was read out of the box, it can never be
+        # retyped, and the export carries it verbatim — so its identity is
+        # recorded like a cover-page field (no header anchor: rewriting the
+        # paragraph on a rename would delete the box) and the block stays
+        # front matter. Tables and fields are never identity lines.
+        identity_carrier = not entry.lock_reason or (
+            in_front_matter and entry.lock_reason == "image"
+        )
+        if header_allowed and identity_carrier and numbering is None:
             section_match = _SECTION_RE.match(text)
             if section_match:
                 saw_spec_marker = True
-                header_source = HEADER_SOURCE_LINE
                 g1, g2, g3, g4, remainder = section_match.groups()
                 builder.section.number = f"{g1} {g2} {g3}" + (
                     f".{g4}" if g4 else ""
                 )
+                if entry.lock_reason:
+                    header_source = HEADER_SOURCE_FRONT_MATTER
+                    if remainder.strip():
+                        builder.section.title = remainder.strip()
+                    else:
+                        title = _cover_page_title(line_no)
+                        if title:
+                            builder.section.title = title
+                    front_matter_lines.append(text)
+                    front_matter_count += 1
+                    continue
+                header_source = HEADER_SOURCE_LINE
                 format_anchors.append(
                     FormatAnchor(
                         uid="sec",
@@ -1437,7 +1458,7 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
         if pending_title:
             pending_title = False
             if (
-                not entry.lock_reason
+                identity_carrier
                 and numbering is None
                 and not _structural_heading_kind(
                     entry,
@@ -1450,6 +1471,12 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                 and not _SECTION_NUMBER_FIELD_RE.match(text)
             ):
                 builder.section.title = text
+                if entry.lock_reason:
+                    # A title drawn in a text box: recorded, never anchored
+                    # (the block is emitted verbatim), and still front matter.
+                    front_matter_lines.append(text)
+                    front_matter_count += 1
+                    continue
                 format_anchors.append(
                     FormatAnchor(
                         uid=SECTION_TITLE_UID,

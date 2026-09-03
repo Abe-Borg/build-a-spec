@@ -1769,6 +1769,13 @@ export default function App() {
         reference_docs: merged.reference_docs ?? [],
         import_report: merged.import_report ?? null,
         source_available: merged.source_available ?? false,
+        // Forwarded explicitly, like every other source field: the import
+        // tutorial's practice copy arrives detached, and a bundle that
+        // dropped the flag hydrated it as "source-backed, report missing" —
+        // every editing control disabled on the one copy that exists to be
+        // edited (Codex, PR #145). tests/sessionBundle.test.ts pins that
+        // this mapping names every field applyDocPayload accepts.
+        source_detached: merged.source_detached ?? false,
         preservation_ready: merged.preservation_ready ?? false,
         preserved_export_available:
           merged.preserved_export_available ?? false,

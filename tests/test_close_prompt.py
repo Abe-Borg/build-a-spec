@@ -709,6 +709,34 @@ def test_open_in_word_exports_through_the_local_route_and_launches(monkeypatch, 
     assert result["name"] == files[0].name
 
 
+def test_open_in_word_never_reuses_a_file_word_may_hold_open(monkeypatch, tmp_path):
+    """Two clicks in the same second are two files (Codex review, PR #145).
+
+    A timestamp-derived name collided: Word holds the first file open, so the
+    second write failed on Windows — or overwrote the file behind the first
+    Word window elsewhere. The name is minted atomically by ``mkstemp``.
+    """
+    monkeypatch.setattr(
+        main, "_fetch_backend_bytes", lambda b, p: (b"first", "Section 21 05 00.docx")
+    )
+    monkeypatch.setattr(main, "_launch_file", lambda p: None)
+    monkeypatch.setattr(main.tempfile, "gettempdir", lambda: str(tmp_path))
+    controller = main._CloseController(None, backend=_fake_backend())
+
+    first = controller.open_in_word("preserved")
+    monkeypatch.setattr(
+        main, "_fetch_backend_bytes", lambda b, p: (b"second", "Section 21 05 00.docx")
+    )
+    second = controller.open_in_word("preserved")
+
+    assert first["ok"] and second["ok"], (first, second)
+    assert first["path"] != second["path"]
+    assert open(first["path"], "rb").read() == b"first"
+    assert open(second["path"], "rb").read() == b"second"
+    assert first["name"].startswith("Section 21 05 00 ")
+    assert first["name"].endswith(".docx")
+
+
 def test_open_in_word_reports_the_servers_own_refusal(monkeypatch, tmp_path):
     def failing_fetch(backend, path):
         raise RuntimeError("Formatting-preserving export is unavailable: no map.")

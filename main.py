@@ -365,15 +365,32 @@ def _launch_file(path: Path) -> None:
     raise RuntimeError("No application is registered to open Word files.")
 
 
-def _open_in_word_target(name: str) -> Path:
-    """A fresh file under the user's temp folder — never one Word may hold open."""
-    import datetime as _dt
+def _write_open_in_word_file(name: str, payload: bytes) -> Path:
+    """Write ``payload`` to a NEW file under the user's temp folder.
 
+    Created atomically with a unique name (``mkstemp``), never derived from a
+    timestamp: two clicks within a second would otherwise collide, and Word
+    holds the first file open — so the second write would fail on Windows,
+    or overwrite the file behind the first Word window where it does not.
+    The export's own filename survives as the prefix, so the Word title bar
+    still reads like the section.
+    """
     folder = Path(tempfile.gettempdir()) / "BuildASpec"
     folder.mkdir(parents=True, exist_ok=True)
     stem, suffix = os.path.splitext(name)
-    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    return folder / f"{stem} {stamp}{suffix or '.docx'}"
+    handle, raw_path = tempfile.mkstemp(
+        prefix=f"{stem} ", suffix=suffix or ".docx", dir=os.fspath(folder)
+    )
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(payload)
+    except OSError:
+        try:
+            os.unlink(raw_path)
+        except OSError:
+            pass
+        raise
+    return Path(raw_path)
 
 
 class _CloseController:
@@ -622,8 +639,7 @@ class _CloseController:
             payload, name = _fetch_backend_bytes(
                 self._backend, f"/api/export/docx?mode={mode}"
             )
-            target = _open_in_word_target(name)
-            target.write_bytes(payload)
+            target = _write_open_in_word_file(name, payload)
             _launch_file(target)
         except RuntimeError as exc:
             return {"ok": False, "error": str(exc), "path": "", "name": ""}

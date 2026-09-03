@@ -125,6 +125,57 @@ sheet, a previous project's section, or meeting notes.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
 
+## Shipped in v1.15.0 (Importing an office master actually works)
+
+**A real client master used to come in wearing another section's title, with
+every heading dumped as a flat provision under a placeholder article, read-only
+from end to end — and the formatting-preserving export could not be reached
+from the menu.** Every one of those was a separate defect; all are fixed.
+
+- **Headings numbered by their styles are headings.** Most office masters keep
+  the PART/article outline on their PRT, ART and PR1–PR4 paragraph styles, not
+  on the paragraphs. The parser now resolves numbering the way Word does — the
+  paragraph's own `w:numPr`, else its style's, through `basedOn` chains — and
+  reads the CSI style names as a fallback when a master carries the names
+  without the numbering. Such masters arrive with their real parts, articles
+  and nesting.
+- **A cross-reference is never the section title.** "Section 09 90 00 –
+  Painting and Coating" in a Related Requirements list used to become the
+  header. The identity is now read only in the *front matter* (the body before
+  the first PART/article heading) — a SECTION line, a bare `21 05 00 — TITLE`
+  line, or a cover page's `Section Number:` field — and the first one found is
+  never overwritten. When the body states nothing, the page header/footer is
+  consulted last and the import notes say so.
+- **Cover pages stay cover pages.** A cover page, revision history or table of
+  contents ahead of the section is kept for export exactly as it came in and
+  listed as front matter in the panel, not turned into provisions of a
+  placeholder article. Text boxes are read rather than dropped; a cached table
+  of contents is a Word field, never parsed as articles; a picture-only
+  paragraph keeps its place in the export instead of migrating to the end.
+- **Saving after such an import works.** Two SECTION-shaped lines used to
+  record two header anchors, which the formatting map refused — the import
+  succeeded and every project Save then failed with an internal error. One
+  anchor per element now, first wins.
+- **A hyperlink to a network share no longer freezes the package.** The
+  package scan rejected Word's own `file://` links (backslashes, spaces) and
+  marked the whole document read-only. External link targets are opaque to
+  the app and are read as such; identical duplicate content-type declarations
+  are tolerated; everything the package actually contains is still checked.
+- **Export Word (keeps your formatting) leads the menu.** The 1.14.0
+  formatting-preserving export was never linked from the Export menu — it
+  offered the byte-exact mode (unavailable on every detached import) and the
+  Build-a-Spec styled re-render, so an imported master came back in the app's
+  fonts. The menu now leads with your file rebuilt around the new content;
+  the styled export is named for what it is; the payload carries
+  `preserved_export_available` so the panel and the export route agree.
+- **Open in Word** writes the export to a temporary file and opens it in Word
+  (desktop app only), so the real layout can be checked at any time without
+  saving anything first.
+- **Pre-1.14.0 projects.** A `.baspec` saved before formatting-preserving
+  import has no formatting map, so it keeps the byte-exact contract it was
+  saved under; the way to the new mode is to download the exact original and
+  import it again.
+
 ## Shipped in v1.14.0 (Keep your formatting, edit the content)
 
 **Importing a Word spec no longer asks you to choose.** The document keeps

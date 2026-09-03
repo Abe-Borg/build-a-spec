@@ -79,9 +79,40 @@ package part. Inside the body:
 * a provision they added is cloned from the nearest kin at its own depth;
 * blank spacer paragraphs travel with the provision below them, so spacing
   survives a reorder;
+* body content the tree never modelled that sits ABOVE a modelled element —
+  a cover page, a revision history, a table of contents, a picture-only
+  paragraph, a page break — travels with the element below it too, so a
+  cover page stays ahead of the section it introduces and an unmodelled
+  block never migrates to the end of the file;
 * body content the semantic tree never modelled (`END OF SECTION`, anything
   after it) is emitted after the walk — but an element the tree DID model and
   the walk did not reach was deleted by the user, and must not come back.
+
+**The section identity is read in the front matter, once.** The body before
+the first PART or article heading is the front matter. A `SECTION 21 05 00`
+line, a bare `21 05 00 — TITLE` line, or a cover page's `Section Number:
+21 05 00` field found there sets the identity; a SECTION-shaped line after
+structure has begun is a provision citing a sibling section, and the first
+header found is never overwritten. When the body states nothing, the page
+header/footer is consulted last and the import notes disclose it. The map
+records where the identity came from (`header_source`: `line`,
+`front_matter`, `chrome`, or empty): only a header LINE is anchored and
+reproduced; for the other two the identity already sits in content the
+export carries through verbatim, so no header element is synthesized and a
+renamed section is reported by the `stale_document_identifier` lint instead
+(which reads the cover page's text as well as the headers and footers).
+Front matter itself is recorded (`ImportResult.front_matter`, the import
+report's `front_matter`, `SourceFormatMap.front_matter_text`) and never
+modelled: not provisions, not editable, carried through exactly.
+
+**Structure is read the way Word resolves it.** A paragraph's numbering is
+its own `w:numPr`, else the `w:numPr` its paragraph style carries through
+`w:basedOn` chains — where every MasterSpec-derived office master keeps its
+outline. The CSI style names (PRT, ART, PR1..PR5) are the secondary signal
+when the resolved numbering promotes nothing. A cached table of contents is
+a Word field: its paragraphs are locked `field` blocks, never parsed as
+articles. Text-box content is read into the projection (a cover page is
+routinely built from text boxes) though the paragraph stays an `image` block.
 
 **Two limits are inherent and are disclosed rather than worked around.**
 Intra-paragraph emphasis on an edited provision is best-effort: a bolded
@@ -92,8 +123,11 @@ view and cloning the original markup would export text the user never saw.
 
 **Mechanics.** `spec_doc/source_format.py` records, per semantic element, the
 source body-child index it came from and whether its label was Word's
-(`w:numPr`) or literal text the importer stripped. That is all it records —
-the retained bytes are the format store. `spec_doc/source_render.py` reads it
+(`w:numPr`) or literal text the importer stripped — one anchor per element,
+first wins, because a map `from_dict` refuses would fail every later project
+save. Beside the anchors it keeps the header/footer text, the front-matter
+text and `header_source`. That is all it records — the retained bytes are
+the format store. `spec_doc/source_render.py` reads it
 back, rebuilds the body, and hands the result to `replace_document_xml_raw`.
 The map is bound to the upload by SHA-256; read beside different bytes its
 origin indexes address whatever now sits there, so the export refuses.
@@ -180,16 +214,26 @@ the system depends on:
 - `GET /api/import/original` keeps returning the byte-exact upload.
 - `?redline=master` keeps working, because the imported baseline version is
   still present and immutable.
-- `GET /api/export/docx` defaults to normalized. An explicit `mode=source`
+- `GET /api/export/docx` defaults to the appearance-preserving render when
+  the formatting map is present, else normalized. An explicit `mode=source`
   returns 409 naming detachment as the reason, because every artifact it would
   otherwise report missing is in fact still there.
-- `source_preservation` reports no readiness and `source_capabilities` is
-  `null`.
-- `_doc_payload` carries an explicit `source_detached` boolean. Clients must
-  **not** infer source scope from the retained artifacts: a detached document
-  presents `source_available: true`, a set `baseline_index`, and a null
-  capability report, which is indistinguishable from a source-backed document
-  whose report has not been delivered.
+- `source_preservation` reports `status: "detached"` (`body_editing:
+  "unrestricted"`, the exact original still available) and
+  `source_capabilities` is `null`.
+- `_doc_payload` carries an explicit `source_detached` boolean, and an
+  explicit `preserved_export_available` boolean — the retained original and
+  its formatting map are both present and describe each other. It is the
+  same derivation the export route selects its default mode by, and it is
+  what the panel's Export menu leads with ("Export Word (keeps your
+  formatting)"). Clients must **not** infer source scope from the retained
+  artifacts: a detached document presents `source_available: true`, a set
+  `baseline_index`, and a null capability report, which is indistinguishable
+  from a source-backed document whose report has not been delivered.
+- **Open in Word** (`js_api.open_in_word(mode)`, desktop shell only) fetches
+  the same export route with the launch's own token, writes the file under
+  the user's temp folder and opens it with the default `.docx` application;
+  every refusal is the server's own message.
 - Project **loading** validates the retained source, its map, and the imported
   baseline exactly as before, but does not re-impose the per-version
   preservation boundary on a detached project. Exceeding that boundary is what
@@ -253,6 +297,7 @@ apply responses include these source-specific fields:
 ```json
 {
   "source_available": true,
+  "preserved_export_available": true,
   "preservation_ready": true,
   "source_preservation": {
     "status": "ready",
@@ -300,6 +345,7 @@ pass-through-only no-op reports `preservation_ready: true` and
 | `pass_through_only` | Exact source no-op is valid, but source-backed body editing is disabled by a package-wide or runtime mutation blocker. |
 | `blocked` | Source bytes exist, but the current semantic/source state cannot be exported through source mode. |
 | `unavailable` | The session represents an import but no exact source artifact is available, as with a resumed legacy JSON project. |
+| `detached` | The byte-exact claim was released ("Edit freely", and every import since 1.14.0). Body editing is unrestricted; the appearance-preserving export is the one in use; the exact original stays downloadable. |
 
 `source_export_ready` answers whether the current state can be downloaded in
 source mode. `exact_original_available` answers whether retained source bytes
@@ -399,7 +445,7 @@ allowed when body operations are blocked.
 | `DELETE /api/reference/{rid}` | Detach one reference document; 404 when unknown. |
 | `POST /api/import/master` | Bounded, atomic DOCX import. On success, returns import counts/warnings plus the full document payload. A failed import leaves the live session unchanged. Parsing and indexing run on a worker thread, so a long master never blocks the chat stream or any other request; the session is still adopted on the event-loop thread under `session_state_guard()`, which re-checks that the document is still blank. An optional `detach=true` form field performs the Edit-freely detach inside the same transaction ("use as a starting point") and skips the capability sweep entirely; omitted, the behavior is the historical source-preserving default. |
 | `GET /api/import/original` | Exact retained source with `Cache-Control: no-store`. Returns 409 for a source-less resumed legacy import and 404 when no import exists. |
-| `GET /api/export/docx` | Imported projects default to `mode=source`; fresh projects default to normalized. It never silently falls back from source mode. |
+| `GET /api/export/docx` | A detached imported project (every import) defaults to `mode=preserved` when its formatting map is present; a project still holding the byte-exact claim defaults to `mode=source`; fresh projects default to normalized. It never silently falls back from source mode. |
 | `GET /api/export/docx?mode=source` | Exact no-op or audited source patch. A blocked request returns 409. It cannot be combined with `redline`. |
 | `GET /api/export/docx?mode=normalized` | Explicit normalized reconstruction. |
 | `GET /api/export/docx?redline=master` | Normalized redline against the imported semantic baseline. Requires an imported baseline. |
@@ -451,7 +497,7 @@ explanation.
 | `document_protection` | Word document protection is enabled. |
 | `signed_package` | Mutation would invalidate a package signature. |
 | `tracked_changes` | Pending Word revisions or revision-bearing related parts are present. Build-a-Spec does not author into that revision graph. |
-| `unsafe_relationship_scan` | OPC relationships or content types cannot be inspected unambiguously. |
+| `unsafe_relationship_scan` | OPC relationships or content types cannot be inspected unambiguously. An external (`TargetMode="External"`) target is opaque and never trips it — Word writes backslashes and spaces into `file://` links — and a repeated, identical content-type declaration is tolerated; only declarations that disagree are ambiguous. |
 | `unsafe_revision_scan` | Revision-bearing Word parts cannot be inspected unambiguously. |
 | `unsafe_document_xml` | The main document XML is malformed or lexically unsafe. |
 | `unsafe_settings_xml` | Settings XML is malformed or unsafe. |

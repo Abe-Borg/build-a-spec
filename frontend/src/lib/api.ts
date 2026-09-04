@@ -9,6 +9,10 @@ import type {
   Figure,
   FollowUp,
   Health,
+  ProjectBriefInspection,
+  ProjectBriefManifest,
+  ProjectFact,
+  SeedReport,
   ImportResultPayload,
   KeyStatus,
   ProjectLoadResult,
@@ -256,6 +260,182 @@ export async function setFollowupStatus(
     throw new Error(data.error ?? `update failed (${resp.status})`);
   }
   return data.followups as FollowUp[];
+}
+
+/* --- Established project facts + project briefs (v1.17.0) --- */
+
+/** What the panel sends when it records or edits a fact. */
+export interface ProjectFactInput {
+  statement: string;
+  detail?: string;
+  scope?: ProjectFact["scope"];
+  section?: string;
+  status?: "confirmed" | "assumed";
+  source_ref?: string;
+}
+
+async function projectFactsFrom(
+  resp: Response,
+  verb: string,
+): Promise<ProjectFact[]> {
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `${verb} failed (${resp.status})`);
+  }
+  return data.project_facts as ProjectFact[];
+}
+
+/**
+ * Record a fact by hand (`source_kind` is "user" server-side). 400 with the
+ * store's reason for a duplicate or an over-long statement; 409 while a
+ * turn streams (the turn owns the store). Returns the whole ledger.
+ */
+export async function addProjectFact(
+  fact: ProjectFactInput,
+  lease: WorkspaceLeaseInput = {},
+): Promise<ProjectFact[]> {
+  const resp = await fetch("/api/project-facts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...fact,
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
+  });
+  return projectFactsFrom(resp, "record fact");
+}
+
+/** Edit an active fact in place; only the fields sent change. */
+export async function updateProjectFact(
+  pid: string,
+  changes: Partial<ProjectFactInput>,
+  lease: WorkspaceLeaseInput = {},
+): Promise<ProjectFact[]> {
+  const resp = await fetch(`/api/project-facts/${encodeURIComponent(pid)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...changes,
+      workspace_id: lease.workspaceId,
+      generation: lease.generation,
+    }),
+  });
+  return projectFactsFrom(resp, "update fact");
+}
+
+/**
+ * Retire a fact, with the user's one-line reason and, optionally, the
+ * statement that replaces it (recorded as a new fact linked to the old).
+ */
+export async function supersedeProjectFact(
+  pid: string,
+  supersede: { reason: string; replacement?: ProjectFactInput },
+  lease: WorkspaceLeaseInput = {},
+): Promise<ProjectFact[]> {
+  const resp = await fetch(
+    `/api/project-facts/${encodeURIComponent(pid)}/supersede`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        reason: supersede.reason,
+        ...(supersede.replacement ?? {}),
+        workspace_id: lease.workspaceId,
+        generation: lease.generation,
+      }),
+    },
+  );
+  return projectFactsFrom(resp, "retire fact");
+}
+
+/** What THIS session would export as a project brief — the confirm modal. */
+export async function projectBriefManifest(): Promise<ProjectBriefManifest> {
+  const resp = await fetch("/api/project/brief/manifest");
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `brief manifest failed (${resp.status})`);
+  }
+  return data.manifest as ProjectBriefManifest;
+}
+
+/**
+ * Read a .basproject — or a sibling section's .baspec, from which the brief
+ * is built — without touching the session: the New-section dialog's preview.
+ */
+export async function inspectProjectBrief(
+  file: File,
+): Promise<ProjectBriefInspection> {
+  const body = new FormData();
+  body.append("file", file);
+  const resp = await fetch("/api/project/brief/inspect", { method: "POST", body });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `brief inspect failed (${resp.status})`);
+  }
+  return {
+    source: data.source,
+    manifest: data.manifest as ProjectBriefManifest,
+    warnings: (data.warnings ?? []) as string[],
+  };
+}
+
+/**
+ * Seed a fresh session from a project brief (or a sibling .baspec). The
+ * server refuses while anything runs and inside a tour; the answer is the
+ * same session bundle a template start returns, plus the seed report.
+ */
+export async function startFromProjectBrief(
+  file: File,
+  opts: { discipline?: string; templateId?: string; moduleId?: string } = {},
+): Promise<SessionBundle & { seed: SeedReport }> {
+  const body = new FormData();
+  body.append("file", file);
+  if (opts.discipline) body.append("discipline", opts.discipline);
+  if (opts.templateId) body.append("template_id", opts.templateId);
+  if (opts.moduleId) body.append("module_id", opts.moduleId);
+  const resp = await fetch("/api/project/brief/start", { method: "POST", body });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `project brief start failed (${resp.status})`);
+  }
+  const session = (data.session ?? data) as SessionBundle & { seed: SeedReport };
+  session.seed = data.seed as SeedReport;
+  return session;
+}
+
+/**
+ * Download the project brief: the browser/dev fallback for the native Save
+ * dialog (`window.pywebview.api.save_project_brief`). Fetch-then-save, like
+ * the QC report, so a refusal (a streaming turn, a tour) surfaces the
+ * server's exact message instead of a download that silently never comes.
+ */
+export async function downloadProjectBrief(): Promise<void> {
+  const resp = await fetch("/api/project/brief");
+  if (!resp.ok) {
+    let message = "";
+    try {
+      const data = await resp.json();
+      message = typeof data?.error === "string" ? data.error : "";
+    } catch {
+      // A non-JSON failure body still gets the status-code fallback.
+    }
+    throw new Error(message || `project brief export failed (${resp.status})`);
+  }
+  const blob = await resp.blob();
+  const cd = resp.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(cd);
+  const filename = match?.[1] ?? "buildaspec-project.basproject";
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Deferred revocation, same as downloadProjectFile: revoking synchronously
+  // after click() can cancel the download.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** URL for a table figure's CSV download (server-rendered, text/csv). */

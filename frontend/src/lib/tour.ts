@@ -22,7 +22,7 @@ import {
  * with instructions that no longer match the active scenario. A bump simply
  * discards stale records, which is the correct outcome.
  */
-export const TOUR_VERSION = 6;
+export const TOUR_VERSION = 7;
 
 export interface StarterPrompt {
   label: string;
@@ -97,7 +97,13 @@ export interface TourStep {
   /** Stable data-tour value; blank is permitted only for tutorial chrome. */
   anchor: string;
   resolve?: TourResolver;
-  drawer?: "review" | "research" | "qc" | "openItems" | "followups";
+  drawer?:
+    | "review"
+    | "research"
+    | "qc"
+    | "openItems"
+    | "followups"
+    | "projectFacts";
   readiness?: TourReadiness;
   title: string;
   body: string;
@@ -301,6 +307,17 @@ export const TOUR: readonly TourChunk[] = [
         title: "Nothing the assistant needs from you gets lost",
         body:
           "Open items above are gaps in the spec. This list is the other half: the questions the assistant raised, the decisions only you can make, and the to-dos either side owes. It keeps them after the chat has scrolled past, marks the ones the draft cannot be right without, and checks each off the moment it is settled — by the assistant when it reads your answer, or by you with the tick. Every reply surfaces one of them, so a decision cannot quietly go missing.",
+      },
+      {
+        id: "project-facts",
+        capabilities: ["project.facts"],
+        mode: "explanatory",
+        anchor: "project-facts",
+        drawer: "projectFacts",
+        placement: "top",
+        title: "What the project has settled travels to its next section",
+        body:
+          "Each section of a project is its own session, and the next one starts without this conversation. Facts the project has established — the edition the authority confirmed, an owner standard, the water-supply basis, what another section specifies — are recorded here the moment they are settled, grouped by how far they reach: project-wide, discipline-wide, or one section's coordination fact. The assistant reads them every turn, the research and Final QC teams are briefed with them, and a project brief carries them into the next section. Retiring one keeps it in the record with its reason; a fact the user contradicts is superseded in the same reply, never drafted around.",
       },
       {
         id: "lint",
@@ -521,13 +538,14 @@ export const TOUR: readonly TourChunk[] = [
           "export.clean",
           "export.redline-source",
           "export.open-in-word",
+          "project.brief-export",
         ],
         mode: "optional",
         anchor: "export",
         placement: "bottom",
         title: "Choose the output guarantee deliberately",
         body:
-          "For an imported document, Export Word keeps your file's formatting and writes the new content into it, and Open in Word does the same into a temporary file and opens it. The Build-a-Spec styled DOCX uses automatic Word numbering and includes the assumption/open-item schedules. Redline compares committed semantic versions. Imported projects also keep the exact-original download; one output is never silently substituted for another.",
+          "For an imported document, Export Word keeps your file's formatting and writes the new content into it, and Open in Word does the same into a temporary file and opens it. The Build-a-Spec styled DOCX uses automatic Word numbering and includes the assumption/open-item schedules. Redline compares committed semantic versions. Imported projects also keep the exact-original download; one output is never silently substituted for another. Export project brief writes a .basproject — the project's profile, editions, research, attached references and recorded facts, never the conversation or this document — so the next section of the same project starts where this one left off.",
         details: SOURCE_OUTPUT_GUIDANCE,
         optionalReason: "The tour points at the real menu but never downloads anything.",
       },
@@ -585,13 +603,14 @@ export const TOUR: readonly TourChunk[] = [
           "template.start",
           "template.import",
           "template.manage",
+          "project.brief-start",
         ],
         mode: "explanatory",
         anchor: "templates",
         placement: "bottom",
         title: "Reusable starters, created and used in one place",
         body:
-          "The template studio is the one door to reusable work. From here a built-in or personal template starts an independent spec; personal templates import and export as files, rename, take a description, and delete behind a confirmation. The same studio turns the spec you have open into a named starter of your own — an exact copy, or an AI-generalized version where available, always previewed as real server-produced content before anything commits. Missing curated modules are shown rather than silently substituted.",
+          "The template studio is the one door to reusable work. From here a built-in or personal template starts an independent spec; personal templates import and export as files, rename, take a description, and delete behind a confirmation. The same studio turns the spec you have open into a named starter of your own — an exact copy, or an AI-generalized version where available, always previewed as real server-produced content before anything commits. Missing curated modules are shown rather than silently substituted. New session → New section in an existing project takes a project brief (or a sibling section's .baspec file) and can pair it with a template from here: the template's body under the project's own profile, editions, research, references and facts.",
       },
       {
         id: "finish",

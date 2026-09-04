@@ -10,6 +10,9 @@ import type {
   FileLoading,
   FollowUp,
   ImportNotice,
+  ProjectBriefManifest,
+  ProjectFact,
+  ProjectLink,
   ImportReport,
   LintIssue,
   OpenItem,
@@ -31,6 +34,10 @@ import type {
   OpenInWordResult,
 } from "../types";
 import FollowUpsPanel from "./FollowUpsPanel";
+import ProjectFactsPanel from "./ProjectFactsPanel";
+import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
+import { projectBriefManifest } from "../lib/api";
+import type { ProjectFactInput } from "../lib/api";
 import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
 import QCDrawer from "./QCDrawer";
 import ResearchDrawer from "./ResearchDrawer";
@@ -55,6 +62,22 @@ interface Props {
     status: "open" | "resolved",
     note?: string,
   ) => void;
+  /** Established project facts (v1.17.0) and this session's project link. */
+  projectFacts: ProjectFact[];
+  projectLink: ProjectLink | null;
+  /** Each resolves to null on success, or the server's reason to show. */
+  onAddProjectFact: (fact: ProjectFactInput) => Promise<string | null>;
+  onUpdateProjectFact: (
+    pid: string,
+    changes: Partial<ProjectFactInput>,
+  ) => Promise<string | null>;
+  onSupersedeProjectFact: (
+    pid: string,
+    reason: string,
+    replacement?: ProjectFactInput,
+  ) => Promise<string | null>;
+  /** Export the project brief: the native Save dialog, else a download. */
+  onExportProjectBrief: () => Promise<SaveOutcome>;
   lintIssues: LintIssue[];
   standards: StandardInfo[];
   profileComplete: boolean;
@@ -147,7 +170,79 @@ interface Props {
     qc: number;
     openItems: number;
     followups: number;
+    projectFacts: number;
   };
+}
+
+/** What the brief would carry, one line per asset — the export's receipt,
+ *  shown BEFORE the write so a missing research profile or a reference past
+ *  the cap is a decision rather than a surprise. */
+function BriefContents({ manifest }: { manifest: ProjectBriefManifest }) {
+  const research = manifest.research;
+  const rows: [string, string][] = [
+    ["Project", manifest.name || "Untitled project"],
+    [
+      "Profile",
+      manifest.profile.line
+        ? `${manifest.profile.line}${manifest.profile.complete ? "" : " (incomplete)"}`
+        : "not recorded",
+    ],
+    ["Project type", manifest.project_type || "not recorded"],
+    [
+      "Editions",
+      manifest.edition_overrides.count
+        ? manifest.edition_overrides.standards.join("; ")
+        : "none recorded",
+    ],
+    [
+      "Research",
+      research
+        ? `${research.items} finding${research.items === 1 ? "" : "s"} over ${research.rounds} round${
+            research.rounds === 1 ? "" : "s"
+          }, last ${research.last_research_date || "—"}`
+        : "none",
+    ],
+    [
+      "References",
+      manifest.references.length
+        ? `${manifest.references.length} document${
+            manifest.references.length === 1 ? "" : "s"
+          } (${manifest.reference_tokens.toLocaleString()} tokens of text): ${manifest.references
+            .map((doc) => doc.title)
+            .join("; ")}`
+        : "none",
+    ],
+    [
+      "Facts",
+      `${manifest.facts.active} active${
+        manifest.facts.superseded ? `, ${manifest.facts.superseded} retired` : ""
+      }`,
+    ],
+    [
+      "Sections",
+      manifest.sections.map((s) => `${s.number} ${s.title}`.trim()).join("; ") ||
+        "this one",
+    ],
+  ];
+  return (
+    <div className="mt-3 rounded-lg border border-edge bg-raised/50 p-3">
+      <dl className="grid gap-x-3 gap-y-1 text-xs sm:grid-cols-[7rem_1fr]">
+        {rows.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-ink-faint">{label}</dt>
+            <dd className="min-w-0 break-words text-ink-dim">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {manifest.warnings.length > 0 && (
+        <ul className="mt-2 space-y-1 border-t border-edge/60 pt-2 text-[11px] text-warn">
+          {manifest.warnings.map((warning) => (
+            <li key={warning}>⚠ {warning}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** The paper while a file is being read server-side. Same sheet as the empty
@@ -297,6 +392,12 @@ export default function ArtifactPanel({
   followups,
   followupTurn,
   onSetFollowupStatus,
+  projectFacts,
+  projectLink,
+  onAddProjectFact,
+  onUpdateProjectFact,
+  onSupersedeProjectFact,
+  onExportProjectBrief,
   lintIssues,
   standards,
   profileComplete,
@@ -391,6 +492,40 @@ export default function ArtifactPanel({
   // as a broken button).
   const [openInWordBusy, setOpenInWordBusy] = useState(false);
   const [openInWordError, setOpenInWordError] = useState("");
+  // Export project brief: a confirm modal that first shows what THIS session
+  // would export (the manifest route), then hands the write to the host —
+  // native Save dialog or download. A refusal is the server's own message.
+  const [briefConfirmOpen, setBriefConfirmOpen] = useState(false);
+  const [briefManifest, setBriefManifest] = useState<ProjectBriefManifest | null>(null);
+  const [briefManifestError, setBriefManifestError] = useState("");
+  const [briefBusy, setBriefBusy] = useState(false);
+  const [briefError, setBriefError] = useState("");
+  const openBriefConfirm = () => {
+    setExportMenuOpen(false);
+    setBriefConfirmOpen(true);
+    setBriefManifest(null);
+    setBriefManifestError("");
+    setBriefError("");
+    projectBriefManifest()
+      .then(setBriefManifest)
+      .catch((error: unknown) =>
+        setBriefManifestError(error instanceof Error ? error.message : String(error)),
+      );
+  };
+  const runBriefExport = async () => {
+    if (briefBusy) return;
+    setBriefBusy(true);
+    setBriefError("");
+    try {
+      const result = await onExportProjectBrief();
+      if (result.ok) setBriefConfirmOpen(false);
+      else if (!result.cancelled) {
+        setBriefError(result.error || "The project brief could not be exported.");
+      }
+    } finally {
+      setBriefBusy(false);
+    }
+  };
   const hasNativeBridge =
     typeof window !== "undefined" && !!window.pywebview?.api?.open_in_word;
   const runOpenInWord = async () => {
@@ -435,8 +570,19 @@ export default function ArtifactPanel({
     for (const doc of referenceDocs) {
       map.set(doc.rid, `${doc.title} (${doc.kind_label})`);
     }
+    // A provision drafted from an established project fact cites its id
+    // the same way. A retired fact stays resolvable so the chip can say
+    // that, rather than reading as a broken citation.
+    for (const fact of projectFacts) {
+      map.set(
+        fact.pid,
+        fact.status === "superseded"
+          ? `${fact.statement} (retired: ${fact.supersede_reason || "no reason given"})`
+          : fact.statement,
+      );
+    }
     return map;
-  }, [research, referenceDocs]);
+  }, [research, referenceDocs, projectFacts]);
   const version = doc?.version ?? { index: 0, count: 1 };
   const hasContent =
     !!doc &&
@@ -959,6 +1105,16 @@ export default function ArtifactPanel({
                   >
                     Redline vs version…
                   </span>
+                )}
+                {!tutorialActive && (
+                  <button
+                    className="block w-full border-t border-edge/60 px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink"
+                    onClick={openBriefConfirm}
+                    title="Write a .basproject carrying this project's profile, edition overrides, research, attached references and recorded facts — never the conversation or this document — so the next section of the same project starts where this one left off"
+                    data-capability="project.brief-export"
+                  >
+                    Export project brief (.basproject)…
+                  </button>
                 )}
                 {/* The Final QC report downloads deliberately do NOT appear
                     here: they live only in the Final QC surfaces (QCDrawer +
@@ -1494,6 +1650,69 @@ export default function ArtifactPanel({
         onSetStatus={onSetFollowupStatus}
         onJump={scrollToElement}
       />
+      <ProjectFactsPanel
+        items={projectFacts}
+        link={projectLink}
+        currentSection={doc?.section.number ?? ""}
+        busy={busy}
+        openNonce={drawerNonces?.projectFacts}
+        onAdd={onAddProjectFact}
+        onUpdate={onUpdateProjectFact}
+        onSupersede={onSupersedeProjectFact}
+      />
+      {briefConfirmOpen && (
+        <ModalShell
+          title="Export project brief"
+          onClose={() => setBriefConfirmOpen(false)}
+        >
+          <div data-capability="project.brief-export">
+            <p className="text-sm leading-relaxed text-ink-dim">
+              A <b className="text-ink">.basproject</b> carries what the next
+              section of this project should start with. It never carries the
+              conversation, this document, figures, the Final QC report or an
+              imported Word source — and excluded standards stay a per-section
+              decision.
+            </p>
+            {briefManifest ? (
+              <BriefContents manifest={briefManifest} />
+            ) : briefManifestError ? (
+              <p role="alert" className="mt-3 text-xs text-err">
+                {briefManifestError}
+              </p>
+            ) : (
+              <p className="mt-3 text-xs text-ink-faint">
+                Reading what this session would export…
+              </p>
+            )}
+            <p className="mt-3 text-[11px] text-ink-faint">
+              The file carries the full text of attached reference documents and
+              every recorded fact, so treat it as sensitive project data.
+            </p>
+            {briefError && (
+              <p role="alert" className="mt-2 text-xs text-err">
+                {briefError}
+              </p>
+            )}
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                className={primaryBtn}
+                onClick={() => void runBriefExport()}
+                disabled={briefBusy || !briefManifest}
+              >
+                {briefBusy ? "Exporting…" : "Export project brief"}
+              </button>
+              <button
+                type="button"
+                className={quietBtn}
+                onClick={() => setBriefConfirmOpen(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </ModalShell>
+      )}
 
       <StandardsStrip standards={standards} onEditDoc={onEditDoc} busy={busy} />
       <ReferenceDocumentsStrip

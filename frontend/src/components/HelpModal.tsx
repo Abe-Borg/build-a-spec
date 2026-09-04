@@ -255,7 +255,10 @@ function HowToUse({
                 package. The first save of a session asks where it goes; every
                 save after that overwrites that file, and <Tag>Save as…</Tag>
                 beside Save writes a new one. Turn a finished section into a
-                reusable template from the New session dialog.
+                reusable template from the New session dialog, or export a{" "}
+                <Tag>.basproject</Tag> project brief so the project's next
+                section starts with its profile, editions, research,
+                references and recorded facts already in hand.
               </>
             ),
           },
@@ -343,6 +346,16 @@ function Workflows() {
           "Template content lands imported, exactly like a master, so the same gap-and-adapt review applies — but there is no Word source package, so every editing control is available from the first turn.",
           "Tell Claude the project; it walks the starter article by article against this project's facts.",
           "Save a finished section back to the library from the New session dialog, or export a .bastemplate file to hand to a colleague.",
+        ]}
+      />
+      <Recipe
+        title="Start the next section of the same project"
+        tagline="Carry the paid work forward — never the conversation."
+        steps={[
+          "In the finished section, Export → Export project brief. The .basproject carries the project profile and type, the recorded edition overrides, every research round, the attached reference documents (their full text), the established project facts, and a registry of the sections drafted so far — not the chat, the document, figures, or the Final QC report.",
+          "New session → New section in an existing project → pick that file (or the finished section's .baspec directly — the brief is built from it). Read the manifest card, set the discipline if it differs, then start with a blank page or pair the brief with a template.",
+          "The new section opens with the profile filled, the standards strip showing the carried editions, the references attached, the Project facts panel seeded, and the readiness checklist passing research as carried from the earlier section. Import a master afterwards if the section starts from one; the setup survives.",
+          "Press Research once you have named the section: the round is briefed on everything already established and looks only for what is new, changed, or wrong here. Facts you settle in this section are recorded in the same panel, so the third section starts further along still.",
         ]}
       />
       <Recipe

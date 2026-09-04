@@ -154,6 +154,14 @@ function RoundsSection({ rounds }: { rounds: ResearchRoundView[] }) {
               <span className="font-medium text-ink-dim">
                 Round {round.round_index}
               </span>
+              {round.section && (
+                <span
+                  className="text-ink-faint"
+                  title="The section whose session ran this round — a round carried from another section of the project names that section"
+                >
+                  {round.section}
+                </span>
+              )}
               <span className="text-ink-faint">
                 {round.research_date || "—"}
               </span>

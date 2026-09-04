@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TemplatePreviewResult, TemplateSummary } from "../types";
+import type {
+  ProjectBriefInspection,
+  ProjectBriefManifest,
+  TemplatePreviewResult,
+  TemplateSummary,
+} from "../types";
 import {
   commitTemplate,
   deleteTemplate,
   importTemplate,
+  inspectProjectBrief,
   listTemplates,
   previewTemplate,
   templateExportUrl,
@@ -20,12 +26,102 @@ interface Props {
   onBlankSlate: () => void;
   onStartTemplate: (templateId: string) => void;
   openTemplateFile: () => Promise<File | null | undefined>;
+  /** Seed the next section of a project from its brief (or a sibling
+   *  section's .baspec), optionally paired with a template. */
+  onStartBrief: (
+    file: File,
+    opts: { discipline?: string; templateId?: string },
+  ) => void;
+  openBriefFile: () => Promise<File | null | undefined>;
 }
 
-type View = "start" | "browse" | "create" | "preview" | "manage";
+type View = "start" | "browse" | "create" | "preview" | "manage" | "brief";
 
 const fieldClass =
   "w-full rounded-lg border border-edge bg-raised px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none";
+
+/** What a brief holds, before anything is replaced. One row per asset the
+ *  seed installs, so a user can see a missing research profile or a dropped
+ *  reference document BEFORE starting rather than in a chat note after. */
+function BriefManifestCard({ manifest }: { manifest: ProjectBriefManifest }) {
+  const research = manifest.research;
+  const rows: [string, string][] = [
+    ["Project", manifest.name || "Untitled project"],
+    [
+      "Profile",
+      manifest.profile.line
+        ? `${manifest.profile.line}${manifest.profile.complete ? "" : " (incomplete)"}`
+        : "not recorded",
+    ],
+    ["Project type", manifest.project_type || "not recorded"],
+    [
+      "Module",
+      `${manifest.module_id || "default"}${
+        manifest.module_available ? "" : " (not installed — the default module will be used)"
+      }`,
+    ],
+    [
+      "Editions",
+      manifest.edition_overrides.count
+        ? manifest.edition_overrides.standards.join("; ")
+        : "none recorded",
+    ],
+    [
+      "Research",
+      research
+        ? `${research.items} finding${research.items === 1 ? "" : "s"} (${research.grounded} grounded) over ${research.rounds} round${
+            research.rounds === 1 ? "" : "s"
+          }; ${research.dimensions_completed} of ${
+            research.dimensions_declared ?? research.dimensions_recorded
+          } areas complete; last researched ${research.last_research_date || "—"}`
+        : "none — the new section starts unresearched",
+    ],
+    [
+      "References",
+      manifest.references.length
+        ? manifest.references
+            .map(
+              (doc) =>
+                `${doc.title} (${doc.kind}, ${doc.token_count.toLocaleString()} tokens${
+                  doc.carried ? "" : " — not carried"
+                })`,
+            )
+            .join("; ")
+        : "none",
+    ],
+    [
+      "Facts",
+      `${manifest.facts.active} active (${manifest.facts.confirmed} confirmed, ${manifest.facts.assumed} assumed)${
+        manifest.facts.superseded ? `, ${manifest.facts.superseded} retired` : ""
+      }`,
+    ],
+    [
+      "Sections so far",
+      manifest.sections.length
+        ? manifest.sections.map((s) => `${s.number} ${s.title}`.trim()).join("; ")
+        : "none recorded",
+    ],
+  ];
+  return (
+    <div className="mt-3 rounded-lg border border-edge bg-raised/50 p-3">
+      <dl className="grid gap-x-3 gap-y-1 text-xs sm:grid-cols-[8rem_1fr]">
+        {rows.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-ink-faint">{label}</dt>
+            <dd className="min-w-0 break-words text-ink-dim">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {manifest.warnings.length > 0 && (
+        <ul className="mt-2 space-y-1 border-t border-edge/60 pt-2 text-[11px] text-warn">
+          {manifest.warnings.map((warning) => (
+            <li key={warning}>⚠ {warning}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 export default function NewSessionDialog({
   open,
@@ -36,8 +132,19 @@ export default function NewSessionDialog({
   onBlankSlate,
   onStartTemplate,
   openTemplateFile,
+  onStartBrief,
+  openBriefFile,
 }: Props) {
   const [view, setView] = useState<View>(templatesOnly ? "browse" : "start");
+  // A project brief read for the New-section flow: the file, what the server
+  // found in it, and the discipline the new section will use. Kept while the
+  // user browses templates to pair with it; cleared on Escape / Cancel.
+  const [brief, setBrief] = useState<{
+    file: File;
+    inspection: ProjectBriefInspection;
+  } | null>(null);
+  const [briefDiscipline, setBriefDiscipline] = useState("");
+  const briefRef = useRef<HTMLInputElement>(null);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   const [templateFilter, setTemplateFilter] = useState("");
   const [invalidCount, setInvalidCount] = useState(0);
@@ -97,6 +204,8 @@ export default function NewSessionDialog({
     setSelected(null);
     setTemplateFilter("");
     setConfirmDelete(false);
+    setBrief(null);
+    setBriefDiscipline("");
     void refresh();
   }, [open, templatesOnly, refresh]);
 
@@ -109,6 +218,7 @@ export default function NewSessionDialog({
           setView(templatesOnly ? "browse" : "start");
           setSelected(null);
           setConfirmDelete(false);
+          setBrief(null);
         } else onCancel();
       }
     };
@@ -153,9 +263,35 @@ export default function NewSessionDialog({
     else if (file) void importFile(file);
   };
 
+  // Read the brief without touching the session, then show what it holds
+  // before anything is replaced — the file is the only thing kept.
+  const inspectBrief = (file: File) =>
+    run(async () => {
+      const inspection = await inspectProjectBrief(file);
+      setBrief({ file, inspection });
+      setBriefDiscipline(inspection.manifest.discipline ?? "");
+      setView("brief");
+    });
+
+  const chooseBriefFile = async () => {
+    const file = await openBriefFile();
+    if (file === undefined) briefRef.current?.click();
+    else if (file) void inspectBrief(file);
+  };
+
+  const startBrief = (templateId?: string) => {
+    if (!brief) return;
+    onStartBrief(brief.file, {
+      discipline: briefDiscipline.trim() || undefined,
+      templateId,
+    });
+  };
+
   const title =
     view === "start"
       ? "Start a new session"
+      : view === "brief"
+        ? "New section in an existing project"
       : view === "create"
         ? "Create a reusable template"
         : view === "preview"
@@ -208,12 +344,94 @@ export default function NewSessionDialog({
               >
                 Load your own template file
               </button>
+              <button
+                type="button"
+                onClick={() => void chooseBriefFile()}
+                disabled={busy || loading}
+                className={quietBtn + " w-full py-2.5 text-left"}
+                data-capability="project.brief-start"
+                title="Start the next section of a project you have already drafted a section for: its profile, edition overrides, research, attached references and recorded facts come with you — the conversation and the document do not"
+              >
+                New section in an existing project
+                <span className="block text-[11px] font-normal text-ink-faint">
+                  From a project brief (.basproject) or a finished section's .baspec file
+                </span>
+              </button>
+            </div>
+          </>
+        )}
+
+        {view === "brief" && brief && (
+          <>
+            <p className="text-sm leading-relaxed text-ink-dim">
+              {brief.inspection.source === "project"
+                ? "Read from that section's project file. "
+                : "Read from the project brief. "}
+              This is what the next section starts with. The conversation, the
+              document, figures, the Final QC report and any imported Word source
+              stay with the section that made them; excluded standards are a
+              per-section decision and do not carry either.
+            </p>
+            <BriefManifestCard manifest={brief.inspection.manifest} />
+            <label className="mt-3 block text-xs text-ink-dim">
+              Discipline for the new section
+              <input
+                value={briefDiscipline}
+                onChange={(event) => setBriefDiscipline(event.target.value)}
+                placeholder="Fire Suppression"
+                className={fieldClass + " mt-1"}
+                aria-label="Discipline for the new section"
+              />
+            </label>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => startBrief()}
+                disabled={busy || loading}
+                className={primaryBtn}
+              >
+                Start with a blank page
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("browse")}
+                disabled={busy || loading}
+                className={quietBtn}
+                title="The template supplies the document body; the brief supplies the project's profile, editions, research, references and facts"
+              >
+                Start from a template…
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setBrief(null);
+                  setView("start");
+                }}
+                className={quietBtn}
+              >
+                ‹ Start choices
+              </button>
             </div>
           </>
         )}
 
         {view === "browse" && (
           <>
+            {brief && (
+              <p className="mb-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-ink-dim">
+                Pairing with project brief{" "}
+                <b className="text-ink">{brief.inspection.manifest.name}</b>: the
+                template you start supplies the document body; the brief supplies the
+                project's profile, editions, research, references and facts.{" "}
+                <button
+                  type="button"
+                  className="underline underline-offset-2 hover:text-accent"
+                  onClick={() => setView("brief")}
+                >
+                  Back to the brief
+                </button>
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <p className="min-w-0 flex-1 text-sm text-ink-dim">
                 Templates seed a new, independent specification. Your template stays reusable.
@@ -299,11 +517,13 @@ export default function NewSessionDialog({
                       <div className="flex shrink-0 flex-col gap-1.5">
                         <button
                           type="button"
-                          onClick={() => onStartTemplate(template.id)}
+                          onClick={() =>
+                            brief ? startBrief(template.id) : onStartTemplate(template.id)
+                          }
                           disabled={busy || loading}
                           className={primaryBtn}
                         >
-                          Start
+                          {brief ? "Start with the brief" : "Start"}
                         </button>
                         {template.editable && (
                           <button
@@ -582,6 +802,17 @@ export default function NewSessionDialog({
         )}
 
         <input
+          ref={briefRef}
+          type="file"
+          accept=".basproject,.baspec,application/vnd.buildaspec.project-brief+json"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void inspectBrief(file);
+            event.target.value = "";
+          }}
+        />
+        <input
           ref={importRef}
           type="file"
           accept=".bastemplate,application/vnd.buildaspec.template+json,application/json"
@@ -594,11 +825,17 @@ export default function NewSessionDialog({
         />
 
         <div className="mt-4 flex items-center gap-2 border-t border-edge pt-3">
-          {view !== (templatesOnly ? "browse" : "start") && view !== "preview" && view !== "create" && (
+          {view !== (templatesOnly ? "browse" : "start") && view !== "preview" && view !== "create" && view !== "brief" && (
             <button type="button" onClick={() => setView("browse")} className={quietBtn}>‹ All templates</button>
           )}
           {view === "browse" && !templatesOnly && (
-            <button type="button" onClick={() => setView("start")} className={quietBtn}>‹ Start choices</button>
+            <button
+              type="button"
+              onClick={() => setView(brief ? "brief" : "start")}
+              className={quietBtn}
+            >
+              {brief ? "‹ Back to the brief" : "‹ Start choices"}
+            </button>
           )}
           <span className="flex-1" />
           <button

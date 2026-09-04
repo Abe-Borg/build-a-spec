@@ -1131,6 +1131,15 @@ def _qc_export_current_state(
         and capability_report.status == CAPABILITY_STATUS_PENDING
     )
     source_guard = _qc_source_guard(session, capability_report=capability_report)
+    # The SAME inputs `matches_current_inputs` rebuilds with, or this
+    # manifest describes a review nobody could run. `consolidation_enabled`
+    # is the one configuration field that defaults to a literal rather than
+    # the live setting, and reference documents were omitted outright — so
+    # this manifest recorded consolidation off and zero attachments however
+    # the app was actually configured, and `current_input_fingerprint` was
+    # a fingerprint of that fiction. Invisible while both manifests were
+    # dumped side by side as raw JSON; a contradiction the moment anything
+    # compares them (caught by Codex on PR #148).
     current_manifest = build_qc_input_manifest(
         session.doc.doc,
         session.research.profile_result,
@@ -1140,6 +1149,9 @@ def _qc_export_current_state(
         source_guard=source_guard,
         model=settings.QC_MODEL,
         max_tokens=settings.QC_MAX_TOKENS,
+        consolidation_enabled=settings.QC_CONSOLIDATION,
+        batch_verification=settings.QC_BATCH_VERIFICATION,
+        reference_docs=list(session.references.docs),
     )
     matches = _qc_matches_current_inputs(
         session, result, source_guard=source_guard

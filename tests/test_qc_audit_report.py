@@ -36,6 +36,7 @@ from backend.qc.schema import QC_FINDINGS_SCHEMA, QC_LENSES, normalize_findings
 from backend.research.engine import DimensionStatus, RequirementsProfile, ResearchItem
 from backend.spec_doc.docx_export import (
     QC_GROUNDING_METHODOLOGY_NOTE,
+    _qc_manifest_changes,
     qc_pre_remediation_state,
     qc_signoff_state,
     QC_REQUEST_METHODOLOGY_NOTE,
@@ -2525,6 +2526,108 @@ def test_infrastructure_failed_verification_is_structurally_inconclusive() -> No
         f"Refuted finding {candidate.finding_id} has incomplete verifier "
         "status(es): failed."
     ) not in legacy_text
+
+
+def test_the_export_time_manifest_describes_the_inputs_the_freshness_check_used() -> None:
+    """A "changed since the run" line must not contradict "matches: Yes".
+
+    ``_qc_export_current_state`` built its manifest without
+    ``consolidation_enabled``, ``batch_verification`` or the attached
+    reference documents, so it recorded consolidation OFF and zero
+    attachments however the app was configured — while the freshness check
+    beside it rebuilt with the live settings and the real attachments and
+    answered "matches". Both were dumped as raw JSON, so nothing compared
+    them and the disagreement never surfaced; ``current_input_fingerprint``
+    was a fingerprint of that fiction. Caught by Codex on PR #148 once the
+    report started stating the difference in English.
+    """
+    from backend import sessions
+    from tests.fakes import audit_grade_qc_result
+
+    client = TestClient(create_app())
+    session = sessions.get_session()
+    store = _section()
+    session.doc = store
+    result = audit_grade_qc_result(session, [])
+    session.qc.result = result
+    session.qc.status = "complete"
+    session.qc.latest_attempt_run_id = result.run_id
+    session.qc.latest_attempt_status = "complete"
+    session.qc.latest_attempt_result = result
+
+    state = client.get("/api/qc/export.json").json()["current_state"]
+    assert state["report_matches_current_inputs"] is True
+    # The two manifests the report puts side by side must be the same
+    # manifest when nothing has changed — including the configuration field
+    # that used to default to a literal rather than the live setting.
+    assert (
+        state["current_input_manifest"]["configuration"]["consolidation_enabled"]
+        is settings.QC_CONSOLIDATION
+    )
+    assert (
+        state["current_input_manifest"] == result.input_manifest
+    ), "the export-time manifest describes a review nobody could run"
+    assert state["current_input_fingerprint"] == result.input_fingerprint
+
+    texts = [
+        p.text
+        for p in Document(
+            io.BytesIO(client.get("/api/qc/export").content)
+        ).paragraphs
+    ]
+    assert (
+        "Inputs that changed since the run: None — every recorded material "
+        "input still matches this run."
+    ) in texts
+
+
+def test_an_unavailable_manifest_is_not_reported_as_an_exact_match() -> None:
+    """"No field differs" is an equality claim; it needs two manifests.
+
+    A legacy report persisted no structured manifest, so there is nothing to
+    diff against the export-time one. Returning an empty change list made the
+    caller assert every input still matched — contradicting the legacy
+    disclosure a few lines above it (Codex, PR #148).
+    """
+    assert _qc_manifest_changes({}, {"document": {}}) is None
+    assert _qc_manifest_changes({"document": {}}, {}) is None
+    assert _qc_manifest_changes({"document": {"a": 1}}, {"document": {"a": 1}}) == []
+    assert _qc_manifest_changes(
+        {"document": {"a": 1}}, {"document": {"a": 2}}
+    ) == ["Document"]
+
+    from backend import sessions
+    from tests.fakes import audit_grade_qc_result
+
+    client = TestClient(create_app())
+    session = sessions.get_session()
+    store = _section()
+    session.doc = store
+    # The in-memory shape a pre-manifest report loads as. Built by mutation
+    # rather than `from_dict`, which rightly refuses a current-schema payload
+    # carrying no manifest.
+    legacy = audit_grade_qc_result(session, [])
+    legacy.input_manifest = {}
+    legacy.input_fingerprint = ""
+    session.qc.result = legacy
+    session.qc.status = "complete"
+    session.qc.latest_attempt_run_id = legacy.run_id
+    session.qc.latest_attempt_status = "complete"
+    session.qc.latest_attempt_result = legacy
+
+    texts = [
+        p.text
+        for p in Document(
+            io.BytesIO(client.get("/api/qc/export").content)
+        ).paragraphs
+    ]
+    assert not any(
+        text.startswith("Inputs that changed since the run: None") for text in texts
+    )
+    assert any(
+        text.startswith("Inputs that changed since the run: Not comparable")
+        for text in texts
+    )
 
 
 # ---------------------------------------------------------------------------

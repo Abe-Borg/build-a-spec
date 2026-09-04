@@ -7217,7 +7217,24 @@ per their own contracts.
   `_qc_render_manifest_pointer` names the inputs the run was fixed to;
   `_qc_manifest_changes` diffs the run manifest against the export-time one
   and says **which inputs changed**, which is what a stale report's reader
-  actually wants. `_qc_render_manifest` is deleted.
+  actually wants. `_qc_render_manifest` is deleted. It returns **`None`, not
+  `[]`, when the two cannot be compared** — a legacy report persisted no
+  manifest, and "no field differs" is an equality claim that would contradict
+  the legacy disclosure a few lines above it (Codex, PR #148).
+- **Comparing them exposed a pre-existing lie in `_qc_export_current_state`**
+  (same review). It built `current_input_manifest` without
+  `consolidation_enabled`, `batch_verification` or `reference_docs` — and
+  `consolidation_enabled` is the ONE configuration field defaulting to a
+  literal rather than the live setting — so the export-time manifest recorded
+  consolidation off and zero attachments however the app was configured, and
+  `current_input_fingerprint` fingerprinted that fiction. Visible in the
+  reported export: `"consolidation_enabled": false` beside the run's `true`,
+  and an empty reference-document record beside one attached file. Invisible
+  while both were dumped as raw JSON; the moment anything compares them it
+  reads "Configuration, Reference Documents changed" three lines under
+  "Report matches all active inputs: Yes". It now builds with the same inputs
+  `matches_current_inputs` rebuilds with, so the two manifests are equal when
+  nothing changed — pinned by asserting exactly that.
 - **Two things stayed because they are contracts, not clutter.** The per-lens
   `Client API requests (streaming calls, including retries and pause_turn
   continuations)` and `Final model responses received` labels are Chunk 5.3's

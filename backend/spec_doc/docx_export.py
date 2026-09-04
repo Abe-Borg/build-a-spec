@@ -2635,12 +2635,19 @@ def _qc_manifest_label(key: str) -> str:
     return xml_safe_title(str(key).replace("_", " ").strip())
 
 
-def _qc_manifest_changes(before: object, after: object) -> list[str]:
-    """Which material inputs differ between the run and export-time manifests."""
+def _qc_manifest_changes(before: object, after: object) -> list[str] | None:
+    """Which material inputs differ between the run and export-time manifests.
+
+    ``None`` when the two cannot be compared — a legacy report persisted no
+    structured manifest, so there is nothing to diff. That is deliberately
+    not an empty list: "no field differs" is an equality claim, and asserting
+    it about a manifest that does not exist would contradict the legacy
+    disclosure a few lines above it.
+    """
     left = _qc_dict(before)
     right = _qc_dict(after)
     if not left or not right:
-        return []
+        return None
     changed: list[str] = []
     for key in sorted(set(left) | set(right)):
         if key not in left:
@@ -2919,7 +2926,17 @@ def _qc_render_export_current_state(
     changed = _qc_manifest_changes(
         qc_result.get("input_manifest"), state.get("current_input_manifest")
     )
-    if changed:
+    if changed is None:
+        if state.get("current_input_manifest"):
+            _qc_add_label(
+                document,
+                "Inputs that changed since the run",
+                "Not comparable — this report persisted no structured input "
+                "manifest, so there is nothing to compare the current one "
+                "against. The document-version identity above still applies.",
+                color=_QC_MUTED,
+            )
+    elif changed:
         _qc_add_label(
             document,
             "Inputs that changed since the run",
@@ -2928,7 +2945,7 @@ def _qc_render_export_current_state(
             "level difference.",
             color=_QC_CAUTION,
         )
-    elif state.get("current_input_manifest"):
+    else:
         _qc_add_label(
             document,
             "Inputs that changed since the run",

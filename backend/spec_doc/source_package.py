@@ -572,6 +572,7 @@ def build_import_report(
     warnings: list[str],
     tracked_changes_detected: bool,
     spec_shape_detected: bool = True,
+    front_matter: tuple[str, ...] | list[str] = (),
 ) -> dict[str, Any]:
     """Build the whitelist-only report persisted with a project."""
     report = {
@@ -585,6 +586,13 @@ def build_import_report(
         "warnings": list(warnings),
         "tracked_changes_detected": bool(tracked_changes_detected),
         "spec_shape_detected": bool(spec_shape_detected),
+        # Body blocks before the first PART heading (cover page, revision
+        # history, table of contents): counted and quoted so the panel and
+        # the model can say what was kept for export but not modelled.
+        "front_matter": {
+            "count": len(front_matter),
+            "lines": [str(line) for line in front_matter],
+        },
         "fidelity_notice": FIDELITY_NOTICE,
     }
     # Route application-created metadata through the same caps/whitelist as
@@ -657,6 +665,21 @@ def sanitize_import_report(value: Any) -> dict[str, Any] | None:
     shape = value.get("spec_shape_detected")
     spec_shape_detected = True if not isinstance(shape, bool) else shape
 
+    # Optional and non-fatal for the same reason: a project written before
+    # front matter was recorded simply has none to report. Quoted lines are
+    # document content, so they are bounded like the warnings above.
+    raw_front = value.get("front_matter")
+    front_lines: list[str] = []
+    front_count = 0
+    if isinstance(raw_front, dict):
+        lines_value = raw_front.get("lines")
+        if isinstance(lines_value, list):
+            for item in lines_value[:200]:
+                if isinstance(item, str) and item.strip():
+                    front_lines.append(item.strip()[:300])
+        count = _report_int(raw_front.get("count"), maximum=10_000_000)
+        front_count = count if count is not None else len(front_lines)
+
     return {
         "filename": sanitize_source_filename(value.get("filename")),
         "sha256": sha256.lower(),
@@ -668,6 +691,7 @@ def sanitize_import_report(value: Any) -> dict[str, Any] | None:
         "warnings": warnings,
         "tracked_changes_detected": tracked,
         "spec_shape_detected": spec_shape_detected,
+        "front_matter": {"count": front_count, "lines": front_lines},
         # Never trust persisted prose to overstate fidelity; this build's
         # canonical notice describes what its current exporter actually does.
         "fidelity_notice": FIDELITY_NOTICE,

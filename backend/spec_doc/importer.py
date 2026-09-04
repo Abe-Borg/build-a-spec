@@ -36,10 +36,28 @@ That is the structural signal the visible text cannot carry — an
 auto-numbered article's text is just ``SUMMARY`` — and it is provably safe
 for the export/re-import round trip: the app's own numbering definitions
 use only single-token ``lvlText``s (see ``word_numbering._LEVELS``), so
-neither grammar can match a normalized export. ``w:pStyle`` is deliberately
-NOT consulted: style names are localized and free-form, so they are weak
-evidence beside the label grammar the reader actually sees; revisit only
-with corpus evidence that real masters need it.
+neither grammar can match a normalized export.
+
+Numbering is resolved the way Word resolves it: a paragraph's own
+``w:numPr`` first, else the ``w:numPr`` its paragraph STYLE carries (through
+``w:basedOn`` chains). Office masters keep the whole outline on their
+PRT/ART/PR1-PR4 styles and the paragraph carries only ``w:pStyle`` — read
+direct numbering alone, every heading in such a master exposes its bare
+title ("SUMMARY") and the file arrives as one flat blob. The CSI style NAMES
+(PRT, ART, PR1..PR5) are the secondary signal, consulted only when the
+resolved numbering promotes nothing: they are a decades-old convention, not
+a localized free-form label.
+
+The section's identity is decided in the FRONT MATTER — the body before its
+first PART or article heading — and decided once: a ``SECTION 21 05 00``
+line, a bare ``21 05 00 — TITLE`` line, or a cover page's ``Section Number:
+21 05 00`` field. A SECTION-shaped line after structure has begun is a
+provision citing a sibling section ("Section 09 90 00 – Painting and
+Coating" in a Related Requirements list), never a header, and the first
+header found is never overwritten by a later one. Everything else in the
+front matter (cover page, revision history, table of contents) is recorded
+but not modelled: the appearance-preserving export emits it verbatim, in
+place, ahead of the section.
 """
 from __future__ import annotations
 
@@ -65,6 +83,9 @@ from .model import (
 )
 from .source_format import (
     FormatAnchor,
+    HEADER_SOURCE_CHROME,
+    HEADER_SOURCE_FRONT_MATTER,
+    HEADER_SOURCE_LINE,
     SECTION_TITLE_UID,
     LABEL_AUTO,
     LABEL_MANUAL,
@@ -93,6 +114,39 @@ _W_MOVE_FROM = qn("w:moveFrom")
 _W_MOVE_TO = qn("w:moveTo")
 
 _ACCEPTED_REVISION_WRAPPERS = frozenset({_W_INS, _W_MOVE_TO})
+_W_TXBX_CONTENT = qn("w:txbxContent")
+_MC_FALLBACK = (
+    "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+)
+
+
+def _text_box_text(run_el) -> list[str]:
+    """The text of every text box anchored in ``run_el``, one string per box.
+
+    A cover page is routinely built from text boxes, and a text box's
+    paragraphs live under ``w:txbxContent`` inside the drawing rather than
+    among the paragraph's own runs — invisible to ``Paragraph.text``, so a
+    whole cover page used to read as empty and be dropped. Word writes each
+    DrawingML text box twice, a ``mc:Choice`` drawing plus a ``mc:Fallback``
+    VML copy; the fallback is skipped or every box would read twice.
+    """
+    boxes: list[str] = []
+    for box in run_el.iter(_W_TXBX_CONTENT):
+        if any(ancestor.tag == _MC_FALLBACK for ancestor in box.iterancestors()):
+            continue
+        if any(
+            ancestor.tag == _W_TXBX_CONTENT and ancestor is not box
+            for ancestor in box.iterancestors()
+        ):
+            continue  # a box nested in a box is read by its outer box
+        lines = [
+            " ".join(_accept_all_paragraph_text(p_el).split())
+            for p_el in box.iter(qn("w:p"))
+        ]
+        text = " ".join(line for line in lines if line)
+        if text:
+            boxes.append(text)
+    return boxes
 _REVISION_MARKER_TAGS = (_W_INS, _W_DEL, _W_MOVE_FROM, _W_MOVE_TO)
 
 
@@ -112,6 +166,10 @@ def _collect_accept_all_text(container, parts: list[str]) -> None:
             continue  # comments / processing instructions carry no run text
         if tag == _W_R or tag == _W_HYPERLINK:
             parts.append(child.text or "")
+            if tag == _W_R:
+                boxed = _text_box_text(child)
+                if boxed:
+                    parts.append(" " + " ".join(boxed))
         elif tag in _ACCEPTED_REVISION_WRAPPERS:
             _collect_accept_all_text(child, parts)
 
@@ -206,6 +264,98 @@ _PART_LVLTEXT_RE = re.compile(r"\bPART\b", re.IGNORECASE)
 _ARTICLE_LVLTEXT_RE = re.compile(r"^%\d+\.%\d+\.?\s*$")
 _ARTICLE_NUM_FMTS = frozenset({"", "decimal", "decimalZero"})
 
+# A cover page's "Section Number: 21 05 00" field. Distinct from _SECTION_RE
+# (which needs the digits right after the keyword), so a number carried this
+# way is still found; the title then comes from the cover page's own title
+# line beside it, or from the page header/footer.
+_SECTION_NUMBER_FIELD_RE = re.compile(
+    r"^SECTION\s+(?:NUMBER|NO\.?|#)\s*[:\-–—]?\s*"
+    r"(\d{2})\s?(\d{2})\s?(\d{2})(?:\.(\d{2}))?\s*\.?$",
+    re.IGNORECASE,
+)
+# Any MasterFormat-shaped number, for the page header/footer fallback.
+_MASTERFORMAT_RE = re.compile(r"\b(\d{2})\s?(\d{2})\s?(\d{2})(?:\.(\d{2}))?\b")
+# The CSI/MasterSpec paragraph-style convention (PRT = part, ART = article,
+# PR1..PR5 = provision levels), matched on the style id or name after folding
+# case and separators. A secondary signal only: consulted when the resolved
+# numbering definition promoted nothing.
+_CSI_STYLE_KINDS: dict[str, object] = {
+    "PRT": "part",
+    "ART": "article",
+    "PR1": 0,
+    "PR2": 1,
+    "PR3": 2,
+    "PR4": 3,
+    "PR5": 3,
+}
+# Cover-page lines that are labels or metadata rather than the title.
+_FRONT_MATTER_TITLE_STOP_RE = re.compile(
+    r"^(?:specification|spec\b|prepared|issued|revision|rev\b|date\b|page\b|"
+    r"sheet\b|for\b|by\b|table of contents|contents\b)",
+    re.IGNORECASE,
+)
+def _clip(value: str, limit: int = 60) -> str:
+    return value if len(value) <= limit else value[:limit] + "…"
+
+
+def _title_like(text: str) -> bool:
+    """Does a front-matter or header/footer line read like a section title?
+
+    Two-plus mostly-alphabetic words, no MasterFormat number, no
+    ``Label: value`` colon, and none of the cover-page label words. This is
+    a fallback for a document that carries its identity only on a cover
+    page or in its page furniture; whatever it picks is reported in the
+    import notes as read-from-there, so the user checks it once.
+    """
+    if not text or len(text) > 120 or ":" in text:
+        return False
+    if (
+        _MASTERFORMAT_RE.search(text)
+        or _SECTION_RE.match(text)
+        or _SECTION_NUMBER_FIELD_RE.match(text)
+        or _FRONT_MATTER_TITLE_STOP_RE.match(text)
+    ):
+        return False
+    words = text.split()
+    if len(words) < 2 or len(words) > 14:
+        return False
+    non_space = sum(1 for ch in text if not ch.isspace())
+    letters = sum(1 for ch in text if ch.isalpha())
+    return non_space > 0 and letters / non_space >= 0.7
+
+
+def _identity_from_chrome(lines: tuple[str, ...]) -> tuple[str, str]:
+    """``(number, title)`` as far as the page headers/footers state them.
+
+    A spec's running header conventionally carries the title and its footer
+    the number (``21 05 00 - 1``); either may also carry a whole
+    ``SECTION 21 05 00 - TITLE`` line. Consulted only when the body itself
+    carries no header line, and always disclosed in the import notes.
+    """
+    number = ""
+    title = ""
+    for line in lines:
+        section_match = _SECTION_RE.match(line)
+        bare_match = _BARE_SECTION_RE.match(line) if not section_match else None
+        if section_match or bare_match:
+            g1, g2, g3, g4, remainder = (section_match or bare_match).groups()
+            if not number:
+                number = f"{g1} {g2} {g3}" + (f".{g4}" if g4 else "")
+                if remainder.strip() and _title_like(remainder.strip()):
+                    title = remainder.strip()
+            continue
+        found = _MASTERFORMAT_RE.search(line)
+        if found and not number:
+            number = f"{found.group(1)} {found.group(2)} {found.group(3)}" + (
+                f".{found.group(4)}" if found.group(4) else ""
+            )
+    if not title:
+        for line in lines:
+            if _title_like(line):
+                title = line
+                break
+    return number, title
+
 
 # Said once, at the top of the warning list, when a file carries none of the
 # three SectionFormat markers. The tree is still SectionFormat underneath (the
@@ -244,42 +394,210 @@ class ImportResult:
     # present it as something the source document carried. Defaults True so a
     # caller that never sets it keeps the historical posture.
     spec_shape_detected: bool = True
+    # Body blocks before the section's first PART/article heading — a cover
+    # page, a revision history, a table of contents — kept for export exactly
+    # as they are and NOT modelled in the tree. Readable lines, in order.
+    front_matter: tuple[str, ...] = ()
+    # Where the section number/title came from (one of the HEADER_SOURCE_*
+    # values, or "" when nothing stated it).
+    header_source: str = ""
+    # Whether any paragraph's numbering was inherited from its style — a
+    # diagnostics fact, so a bundle can say which parser path a master took.
+    style_numbering_resolved: bool = False
 
 
 class MasterImportError(ValueError):
     """The file could not be parsed as a master spec at all."""
 
 
-def _numbering_level(paragraph: DocxParagraph) -> int | None:
-    """The Word auto-numbering indent level (``ilvl``) or ``None``.
+def _direct_numbering(
+    paragraph: DocxParagraph,
+) -> tuple[int | None, int | None] | None:
+    """The paragraph's OWN ``w:numPr`` as ``(numId, ilvl)``, or ``None``.
 
-    Auto-numbered masters carry no visible "A."/"1." text — the label
-    lives in the numbering definition. It is an indent level *within* that
-    definition, not an outline depth — see
-    :meth:`_TreeBuilder.numbered_paragraph`, which places it.
+    Either member may be ``None`` when the element names only the other —
+    a direct ``w:numPr`` that carries just an ``ilvl`` inherits the
+    definition its style names, which :func:`_effective_numbering` resolves.
     """
     p_pr = paragraph._p.pPr
-    if p_pr is None or p_pr.numPr is None or p_pr.numPr.ilvl is None:
+    if p_pr is None or p_pr.numPr is None:
         return None
-    ilvl = p_pr.numPr.ilvl.val
-    return int(ilvl) if ilvl is not None else None
+    num_pr = p_pr.numPr
+    num_id = None
+    if num_pr.numId is not None and num_pr.numId.val is not None:
+        num_id = int(num_pr.numId.val)
+    ilvl = None
+    if num_pr.ilvl is not None and num_pr.ilvl.val is not None:
+        ilvl = int(num_pr.ilvl.val)
+    return num_id, ilvl
 
 
-def _numbering_num_id(paragraph: DocxParagraph) -> int | None:
-    """The paragraph's numbering definition id (``numId``) or ``None``.
-
-    ``numId`` 0 is OOXML for "no numbering" (it cancels an inherited
-    definition), so it reads as ``None`` here — a cancelled definition has
-    no label grammar to consult.
-    """
+def _paragraph_style_id(paragraph: DocxParagraph) -> str:
     p_pr = paragraph._p.pPr
-    if p_pr is None or p_pr.numPr is None or p_pr.numPr.numId is None:
+    if p_pr is None or p_pr.pStyle is None:
+        return ""
+    return str(p_pr.pStyle.val or "")
+
+
+def _effective_numbering(
+    paragraph: DocxParagraph,
+    style_numbering: dict[str, tuple[int, int]],
+    default_style_id: str = "",
+) -> tuple[int, int] | None:
+    """``(numId, ilvl)`` the way Word resolves it, or ``None`` when unnumbered.
+
+    Direct ``w:numPr`` wins. ``numId`` 0 is OOXML for "no numbering" and
+    cancels whatever the style would have supplied. A direct element naming
+    only a level inherits the style's definition; one naming only a
+    definition starts at that definition's level 0. With no direct element
+    at all the paragraph's style (or the document's default paragraph
+    style) decides — which is where every office master keeps its outline.
+    ``ilvl`` is an indent level within the definition, not an outline depth
+    (:meth:`_TreeBuilder.numbered_paragraph` places it).
+    """
+    style_id = _paragraph_style_id(paragraph) or default_style_id
+    inherited = style_numbering.get(style_id) if style_id else None
+    direct = _direct_numbering(paragraph)
+    if direct is None:
+        return inherited
+    num_id, ilvl = direct
+    if num_id is not None and num_id <= 0:
         return None
-    val = p_pr.numPr.numId.val
-    if val is None:
+    if num_id is None:
+        if inherited is None:
+            return None
+        num_id = inherited[0]
+        if ilvl is None:
+            ilvl = inherited[1]
+    if ilvl is None:
+        ilvl = 0
+    return num_id, ilvl
+
+
+def _int_attr(element, attribute: str) -> int | None:
+    value = element.get(qn(attribute)) if element is not None else None
+    if value is None:
         return None
-    num_id = int(val)
-    return num_id if num_id > 0 else None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _styles_root(document):
+    """The styles part's root, read through the relationship (never created)."""
+    try:
+        part = document.part.part_related_by(RELATIONSHIP_TYPE.STYLES)
+        return part.element
+    except (KeyError, AttributeError, ValueError):
+        return None
+
+
+def _default_paragraph_style_id(document) -> str:
+    root = _styles_root(document)
+    if root is None:
+        return ""
+    for style_el in root.findall(qn("w:style")):
+        if (style_el.get(qn("w:type")) or "paragraph") != "paragraph":
+            continue
+        if style_el.get(qn("w:default")) in ("1", "true", "on"):
+            return str(style_el.get(qn("w:styleId")) or "")
+    return ""
+
+
+def _load_style_numbering(document) -> dict[str, tuple[int, int]]:
+    """``styleId -> (numId, ilvl)`` for every paragraph style that numbers.
+
+    Resolved through ``w:basedOn`` chains once, the way Word resolves them,
+    so a ``PR2`` based on ``PR1`` based on a numbered ``Body`` style reads
+    the numbering it actually renders with. A style whose own ``w:numPr``
+    names ``numId`` 0 cancels its parent's numbering. Read via the
+    relationship directly, like the numbering catalog — an importer never
+    mutates the package it inspects — and any malformation degrades to no
+    style numbering at all, i.e. the direct-``w:numPr``-only behavior every
+    earlier import had.
+    """
+    root = _styles_root(document)
+    if root is None:
+        return {}
+    try:
+        # Each style's OWN ``w:numPr`` as (numId, ilvl), either side None
+        # when the element names only the other: a derived style routinely
+        # states just a deeper ``ilvl`` and inherits the definition.
+        own: dict[str, tuple[int | None, int | None]] = {}
+        based_on: dict[str, str] = {}
+        for style_el in root.findall(qn("w:style")):
+            if (style_el.get(qn("w:type")) or "paragraph") != "paragraph":
+                continue
+            style_id = style_el.get(qn("w:styleId"))
+            if not style_id:
+                continue
+            based_el = style_el.find(qn("w:basedOn"))
+            parent = based_el.get(qn("w:val")) if based_el is not None else None
+            if parent:
+                based_on[style_id] = parent
+            p_pr = style_el.find(qn("w:pPr"))
+            num_pr = p_pr.find(qn("w:numPr")) if p_pr is not None else None
+            if num_pr is None:
+                continue
+            own[style_id] = (
+                _int_attr(num_pr.find(qn("w:numId")), "w:val"),
+                _int_attr(num_pr.find(qn("w:ilvl")), "w:val"),
+            )
+        resolved: dict[str, tuple[int, int]] = {}
+        for style_id in set(own) | set(based_on):
+            # Property-by-property inheritance, the way Word merges a style
+            # chain: the nearest style naming a definition supplies it, the
+            # nearest naming a level supplies that, independently.
+            seen: set[str] = set()
+            cursor: str = style_id
+            num_id: int | None = None
+            ilvl: int | None = None
+            while cursor and cursor not in seen:
+                seen.add(cursor)
+                raw = own.get(cursor)
+                if raw is not None:
+                    if num_id is None and raw[0] is not None:
+                        num_id = raw[0]
+                    if ilvl is None and raw[1] is not None:
+                        ilvl = raw[1]
+                    if num_id is not None:
+                        break
+                cursor = based_on.get(cursor, "")
+            if num_id is not None and num_id > 0:
+                resolved[style_id] = (num_id, ilvl if ilvl is not None else 0)
+        return resolved
+    except Exception:  # noqa: BLE001 - a malformed styles part is no catalog
+        return {}
+
+
+def _load_style_kinds(document) -> dict[str, object]:
+    """``styleId -> CSI kind`` for paragraph styles following the convention.
+
+    Matched on the style id and on its name (Word derives one from the
+    other, but not always identically), after folding case and separators.
+    """
+    root = _styles_root(document)
+    if root is None:
+        return {}
+    kinds: dict[str, object] = {}
+    try:
+        for style_el in root.findall(qn("w:style")):
+            if (style_el.get(qn("w:type")) or "paragraph") != "paragraph":
+                continue
+            style_id = style_el.get(qn("w:styleId"))
+            if not style_id:
+                continue
+            name_el = style_el.find(qn("w:name"))
+            name = name_el.get(qn("w:val")) if name_el is not None else ""
+            for candidate in (style_id, name or ""):
+                key = re.sub(r"[\s_\-]+", "", candidate).upper()
+                if key in _CSI_STYLE_KINDS:
+                    kinds[style_id] = _CSI_STYLE_KINDS[key]
+                    break
+    except Exception:  # noqa: BLE001 - malformed styles carry no convention
+        return {}
+    return kinds
 
 
 def _lvl_entry(lvl_el) -> tuple[int, tuple[str, str]] | None:
@@ -354,14 +672,11 @@ def _load_numbering_catalog(document) -> dict[tuple[int, int], tuple[str, str]]:
 
 def _promoted_heading_kind(
     catalog: dict[tuple[int, int], tuple[str, str]],
-    paragraph: DocxParagraph,
+    num_id: int,
     ilvl: int,
 ) -> str:
     """``"part"`` / ``"article"`` when the numbering label says so, else ``""``."""
-    if not catalog:
-        return ""
-    num_id = _numbering_num_id(paragraph)
-    if num_id is None:
+    if not catalog or num_id <= 0:
         return ""
     entry = catalog.get((num_id, ilvl))
     if entry is None:
@@ -408,7 +723,14 @@ def _header_footer_text(document) -> tuple[str, ...]:
             section.even_page_header,
             section.even_page_footer,
         ):
-            if part is None:
+            # Only a part with its OWN definition is read. python-docx's
+            # ``paragraphs`` on a header that has none CREATES one — a new
+            # part plus a ``w:headerReference`` in the body's ``w:sectPr`` —
+            # and an importer must never mutate the package it inspects:
+            # the source map hashes that very ``w:sectPr``. A later section's
+            # linked header repeats the earlier text, which is deduplicated
+            # below anyway.
+            if part is None or getattr(part, "is_linked_to_previous", True):
                 continue
             try:
                 paragraphs = part.paragraphs
@@ -442,6 +764,13 @@ def _iter_body_texts(document) -> list[_BodyTextEntry]:
     drawing_qn = qn("w:drawing")
     pict_qn = qn("w:pict")
     object_qn = qn("w:object")
+    fld_char_qn = qn("w:fldChar")
+    instr_text_qn = qn("w:instrText")
+    # Open complex-field frames, outermost first; True marks a TOC field. A
+    # cached table of contents is ordinary paragraphs to python-docx, and
+    # its entries ("1.1 SUMMARY ... 3") match the article grammar exactly.
+    # They are a Word field result: carried through verbatim, never parsed.
+    open_fields: list[bool] = []
     for child in body.iterchildren():
         if not isinstance(child.tag, str):
             continue
@@ -449,6 +778,19 @@ def _iter_body_texts(document) -> list[_BodyTextEntry]:
         source_index += 1
         if child.tag == qn("w:p"):
             paragraph = DocxParagraph(child, document)
+            in_toc = any(open_fields)
+            for field_el in child.iter():
+                if field_el.tag == fld_char_qn:
+                    kind = field_el.get(qn("w:fldCharType"))
+                    if kind == "begin":
+                        open_fields.append(False)
+                    elif kind == "end" and open_fields:
+                        if open_fields.pop():
+                            in_toc = True
+                elif field_el.tag == instr_text_qn and open_fields:
+                    if (field_el.text or "").strip().upper().startswith("TOC"):
+                        open_fields[-1] = True
+                        in_toc = True
             if child.find(".//" + object_qn) is not None:
                 lock = "embedded_object"
             elif (
@@ -456,6 +798,8 @@ def _iter_body_texts(document) -> list[_BodyTextEntry]:
                 or child.find(".//" + pict_qn) is not None
             ):
                 lock = "image"
+            elif in_toc or any(open_fields):
+                lock = "field"
             else:
                 lock = ""
             results.append(
@@ -569,6 +913,99 @@ def extract_reference_text(filepath: str | Path) -> ReferenceExtraction:
     )
 
 
+def _entry_text(entry: _BodyTextEntry) -> str:
+    """The parse's normalized text for one entry ("" for a blank one)."""
+    return (
+        entry.text.strip()
+        if entry.preformatted
+        else " ".join(entry.text.split())
+    )
+
+
+def _structural_heading_kind(
+    entry: _BodyTextEntry,
+    text: str,
+    catalog: dict[tuple[int, int], tuple[str, str]],
+    style_numbering: dict[str, tuple[int, int]],
+    default_style_id: str,
+    style_kinds: dict[str, object],
+) -> str:
+    """``"part"`` / ``"article"`` when ANY recognition path would promote
+    this entry to a heading, else ``""``. The same order the parse applies:
+    the numbering definition's label grammar, the CSI style name, then the
+    text grammars — which a numbered paragraph never reaches, because its
+    label lives in the definition rather than in the text."""
+    if entry.lock_reason or not text:
+        return ""
+    paragraph = entry.paragraph
+    if paragraph is not None:
+        numbering = _effective_numbering(
+            paragraph, style_numbering, default_style_id
+        )
+        if numbering is not None:
+            kind = _promoted_heading_kind(catalog, *numbering)
+            if kind:
+                return kind
+        style_kind = style_kinds.get(
+            _paragraph_style_id(paragraph) or default_style_id
+        )
+        if style_kind in ("part", "article"):
+            return str(style_kind)
+        if numbering is not None:
+            return ""
+    if _PART_RE.match(text):
+        return "part"
+    if _ARTICLE_RE.match(text):
+        return "article"
+    return ""
+
+
+def _first_structure_line(
+    entries: list[_BodyTextEntry],
+    texts_by_line: dict[int, str],
+    catalog: dict[tuple[int, int], tuple[str, str]],
+    style_numbering: dict[str, tuple[int, int]],
+    default_style_id: str,
+    style_kinds: dict[str, object],
+) -> int | None:
+    """The 1-based line of the first PART/article heading, or ``None``.
+
+    ``None`` means the file has no structure — or ends (``END OF SECTION``)
+    before any — and keeps the historical posture in which every block is
+    content. Everything before the returned line is front matter.
+    """
+    for line_no, entry in enumerate(entries, start=1):
+        text = texts_by_line[line_no]
+        if not text:
+            continue
+        if _structural_heading_kind(
+            entry, text, catalog, style_numbering, default_style_id, style_kinds
+        ):
+            return line_no
+        if (
+            not entry.lock_reason
+            and entry.paragraph is not None
+            and _effective_numbering(
+                entry.paragraph, style_numbering, default_style_id
+            )
+            is None
+            and _END_RE.match(text)
+        ):
+            return None
+    return None
+
+
+def _promoted_part_title(requested: int, mapped: int, text: str) -> str:
+    """The Part title for a promoted heading whose visible text is just the
+    name ("GENERAL"): the master's own wording under the canonical label, or
+    "" (keep whatever the part has) when the part was remapped."""
+    if requested != mapped or not text:
+        return ""
+    if _PART_RE.match(text):
+        return text
+    return f"PART {mapped} - {text}"
+
+
 class _TreeBuilder:
     """Builds the SpecSection with the same uid/seq discipline as apply."""
 
@@ -590,8 +1027,15 @@ class _TreeBuilder:
         self.warning_uids: dict[int, str] = {}
         self.imported_count = 0
 
-    def part(self, number: int):
+    def part(self, number: int, title: str = ""):
         self.current_part = self.section.parts[number - 1]
+        # The master's own heading wording ("PART 1 - GENERAL REQUIREMENTS")
+        # rather than the canonical default, so the panel shows what the
+        # file says and the appearance-preserving export finds the heading
+        # unchanged instead of rewriting it. First heading for a part wins;
+        # a PART 4 remapped onto PART 3 never renames it.
+        if title and not self.current_part.articles:
+            self.current_part.title = title
         self.current_article = None
         self.stack = []
         self.numbering_offset = 0
@@ -742,11 +1186,11 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     saw_table = False
     pending_title = False  # SECTION number seen; next line may be the title
     # Any one of these means the file carried real SectionFormat structure.
-    # Deliberately the same three signals the parse itself acts on, so the
-    # verdict can never disagree with the tree that was built: a paragraph
-    # consumed by the direct-numbering branch below counts only when its
-    # numbering label PROMOTED it to real structure (a part or article the
-    # tree actually holds), never merely for being numbered.
+    # Deliberately the same signals the parse itself acts on, so the verdict
+    # can never disagree with the tree that was built: a paragraph consumed
+    # by the numbering branch below counts only when its numbering label
+    # PROMOTED it to real structure (a part or article the tree actually
+    # holds), never merely for being numbered.
     saw_spec_marker = False
     source_bindings: list[SourceParagraphBinding] = []
     # Where each semantic element came from, for the appearance-preserving
@@ -755,15 +1199,33 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     format_anchors: list[FormatAnchor] = []
     # The numbering-definition label grammars, for heading promotion.
     numbering_catalog = _load_numbering_catalog(document)
+    # Numbering the way Word resolves it: the paragraph's own ``w:numPr``,
+    # else the definition its paragraph STYLE carries. Office masters keep
+    # the whole outline on their PRT/ART/PR1-4 styles, so without this every
+    # heading exposes only its bare title and the file lands as one blob.
+    style_numbering = _load_style_numbering(document)
+    default_style_id = _default_paragraph_style_id(document)
+    style_kinds = _load_style_kinds(document)
+    style_numbering_used = False
     # Promoted PART headings are numbered by order of appearance — the
     # rendered "PART 1/2/3" is a counter this parse never runs.
     promoted_part_count = 0
-    # The bare-section header is consulted for the first content line only.
+    # The bare-section header is consulted for the first content line only
+    # in a document with no structure at all (see ``first_structure``).
     saw_any_content = False
     # PART 4/5 remaps warn once per out-of-range number, however the content
     # arrives — a heading line, an auto-numbered heading, or a bare "4.01"
     # article — instead of once per line about the same remap.
     warned_out_of_range_parts: set[int] = set()
+    # Where the section identity came from, and the rule that it is decided
+    # ONCE: the first header found wins, and a SECTION-shaped line after
+    # structure has begun is a provision citing a sibling section.
+    header_source = ""
+    # Body blocks before the first PART/article heading: recorded for the
+    # import notes, the lint and the model, never modelled in the tree. The
+    # appearance-preserving export carries them through verbatim, in place.
+    front_matter_lines: list[str] = []
+    front_matter_count = 0
 
     def _remap_out_of_range_part(part_number: int, line_no: int) -> int:
         if part_number <= 3:
@@ -781,27 +1243,70 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
     end_of_section_index: int | None = None
 
     entries = _iter_body_texts(document)
+    texts_by_line = {
+        line_no: _entry_text(entry)
+        for line_no, entry in enumerate(entries, start=1)
+    }
+    # The first PART or article heading by ANY recognition path. Everything
+    # before it is front matter, which is where — and only where — the
+    # section identity is read. ``None`` means the file has no structure and
+    # keeps the historical posture: every block is content, and a header
+    # line may sit anywhere (the first one still wins).
+    first_structure = _first_structure_line(
+        entries,
+        texts_by_line,
+        numbering_catalog,
+        style_numbering,
+        default_style_id,
+        style_kinds,
+    )
+
+    def _cover_page_title(line_no: int) -> str:
+        """The cover-page title beside a ``Section Number:`` line: the
+        nearest non-empty line above it, else the one below it, when it
+        reads like a title and is still inside the front matter."""
+        candidates: list[str] = []
+        for span in (
+            range(line_no - 1, 0, -1),
+            range(line_no + 1, len(entries) + 1),
+        ):
+            for other in span:
+                if first_structure is not None and other >= first_structure:
+                    break
+                candidate = texts_by_line.get(other, "")
+                if candidate:
+                    candidates.append(candidate)
+                    break
+        for candidate in candidates:
+            if _title_like(candidate):
+                return candidate
+        return ""
+
     for line_no, entry in enumerate(entries, start=1):
         raw_text = entry.text
         docx_paragraph = entry.paragraph
-        text = (
-            raw_text.strip()
-            if entry.preformatted
-            else " ".join(raw_text.split())
-        )
+        text = texts_by_line[line_no]
         if not text:
             skipped_empty += 1
             continue
         first_content = not saw_any_content
         saw_any_content = True
-        if entry.lock_reason == "table" and not saw_table:
-            saw_table = True
-            builder.warnings.append(
-                "The master contains tables. Each is preserved as one "
-                "read-only block — the export carries its cells and "
-                "formatting through exactly as they came in. You can move "
-                "or delete a table, but not retype it here."
-            )
+        in_front_matter = first_structure is not None and line_no < first_structure
+        # The identity is read in the front matter, or anywhere in a file
+        # with no structure — and only until something states it.
+        header_allowed = not header_source and (
+            in_front_matter or first_structure is None
+        )
+        numbering = (
+            _effective_numbering(docx_paragraph, style_numbering, default_style_id)
+            if docx_paragraph is not None
+            else None
+        )
+        style_kind = (
+            style_kinds.get(_paragraph_style_id(docx_paragraph) or default_style_id)
+            if docx_paragraph is not None
+            else None
+        )
 
         def add_mapped_paragraph(
             depth: int,
@@ -855,6 +1360,147 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                 )
             )
 
+        # --- The section identity: decided in the front matter, once. -----
+        # A cover page routinely puts its "SECTION 21 05 00" or "Section
+        # Number:" line inside a text box. That paragraph is a preserved
+        # ``image`` block — its text was read out of the box, it can never be
+        # retyped, and the export carries it verbatim — so its identity is
+        # recorded like a cover-page field (no header anchor: rewriting the
+        # paragraph on a rename would delete the box) and the block stays
+        # front matter. Tables and fields are never identity lines.
+        identity_carrier = not entry.lock_reason or (
+            in_front_matter and entry.lock_reason == "image"
+        )
+        if header_allowed and identity_carrier and numbering is None:
+            section_match = _SECTION_RE.match(text)
+            if section_match:
+                saw_spec_marker = True
+                g1, g2, g3, g4, remainder = section_match.groups()
+                builder.section.number = f"{g1} {g2} {g3}" + (
+                    f".{g4}" if g4 else ""
+                )
+                if entry.lock_reason:
+                    header_source = HEADER_SOURCE_FRONT_MATTER
+                    if remainder.strip():
+                        builder.section.title = remainder.strip()
+                    else:
+                        title = _cover_page_title(line_no)
+                        if title:
+                            builder.section.title = title
+                    front_matter_lines.append(text)
+                    front_matter_count += 1
+                    continue
+                header_source = HEADER_SOURCE_LINE
+                format_anchors.append(
+                    FormatAnchor(
+                        uid="sec",
+                        origin_index=entry.body_child_index,
+                        label_kind=LABEL_NONE,
+                    )
+                )
+                if remainder.strip():
+                    builder.section.title = remainder.strip()
+                    pending_title = False
+                else:
+                    pending_title = True
+                continue
+            field_match = _SECTION_NUMBER_FIELD_RE.match(text)
+            if field_match and in_front_matter:
+                # A cover page's "Section Number: 21 05 00". The line itself
+                # stays front matter — emitted verbatim in place, never
+                # anchored — so the identity is recorded without a header
+                # element for the export to reproduce.
+                saw_spec_marker = True
+                header_source = HEADER_SOURCE_FRONT_MATTER
+                f1, f2, f3, f4 = field_match.groups()
+                builder.section.number = f"{f1} {f2} {f3}" + (
+                    f".{f4}" if f4 else ""
+                )
+                title = _cover_page_title(line_no)
+                if title:
+                    builder.section.title = title
+                    builder.warnings.append(
+                        f"The section title ('{_clip(title)}') was read from "
+                        "the cover page beside its 'Section Number' line — "
+                        "check it."
+                    )
+                front_matter_lines.append(text)
+                front_matter_count += 1
+                continue
+            if in_front_matter or first_content:
+                # A keyword-less header — "23 05 48 — COMMON WORK RESULTS FOR
+                # HVAC" — is accepted anywhere in the front matter, and on
+                # the first content line of a file with no structure. Later
+                # in a section the same shape is a provision citing a
+                # sibling section, so it never re-arms.
+                bare_match = _BARE_SECTION_RE.match(text)
+                if bare_match:
+                    saw_spec_marker = True
+                    header_source = HEADER_SOURCE_LINE
+                    b1, b2, b3, b4, bare_title = bare_match.groups()
+                    builder.section.number = f"{b1} {b2} {b3}" + (
+                        f".{b4}" if b4 else ""
+                    )
+                    builder.section.title = bare_title.strip()
+                    format_anchors.append(
+                        FormatAnchor(
+                            uid="sec",
+                            origin_index=entry.body_child_index,
+                            label_kind=LABEL_NONE,
+                        )
+                    )
+                    pending_title = False
+                    builder.warnings.append(
+                        f"Line {line_no}: no 'SECTION' keyword — the section "
+                        "number and title were read from this line."
+                    )
+                    continue
+        if pending_title:
+            pending_title = False
+            if (
+                identity_carrier
+                and numbering is None
+                and not _structural_heading_kind(
+                    entry,
+                    text,
+                    numbering_catalog,
+                    style_numbering,
+                    default_style_id,
+                    style_kinds,
+                )
+                and not _SECTION_NUMBER_FIELD_RE.match(text)
+            ):
+                builder.section.title = text
+                if entry.lock_reason:
+                    # A title drawn in a text box: recorded, never anchored
+                    # (the block is emitted verbatim), and still front matter.
+                    front_matter_lines.append(text)
+                    front_matter_count += 1
+                    continue
+                format_anchors.append(
+                    FormatAnchor(
+                        uid=SECTION_TITLE_UID,
+                        origin_index=entry.body_child_index,
+                        label_kind=LABEL_NONE,
+                    )
+                )
+                continue
+        if in_front_matter:
+            # Cover page, revision history, table of contents: kept for
+            # export exactly as it is, reported, and not modelled.
+            front_matter_lines.append(text)
+            front_matter_count += 1
+            continue
+
+        # --- The section body. --------------------------------------------
+        if entry.lock_reason == "table" and not saw_table:
+            saw_table = True
+            builder.warnings.append(
+                "The master contains tables. Each is preserved as one "
+                "read-only block — the export carries its cells and "
+                "formatting through exactly as they came in. You can move "
+                "or delete a table, but not retype it here."
+            )
         if entry.lock_reason:
             # A preserved block is content, never structure. Running a table
             # row or a caption through the heading grammars is how a row
@@ -877,66 +1523,111 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             builder.numbering_offset = offset_before
             continue
 
-        # Direct Word numbering is structural metadata, so it must win over
-        # text-pattern heuristics. Normalized exports deliberately keep the
-        # generated A./1./a./1) marker out of w:t; their semantic text may
-        # therefore begin with strings such as "END OF SECTION", "PART 2",
-        # "1.2", or "A." without becoming a false heading or manual label on
-        # re-import. A numbered line also cannot serve as the pending section
-        # title.
-        if docx_paragraph is not None:
-            ilvl = _numbering_level(docx_paragraph)
-            if ilvl is not None:
-                pending_title = False
-                # An auto-numbered heading's visible text is just its title
-                # ("SUMMARY") — no text pattern can ever reach it. The
-                # numbering definition's own label grammar is the structural
-                # signal: promote what it says is a PART or an article, and
-                # leave everything else on the provision path. A promoted
-                # heading gets no source binding, exactly like a
-                # text-matched heading (headings live in the fixed
-                # projection, not the editable body surface).
-                kind = _promoted_heading_kind(
-                    numbering_catalog, docx_paragraph, ilvl
+        # Word numbering — the paragraph's own or its style's — is structural
+        # metadata, so it must win over text-pattern heuristics. Normalized
+        # exports deliberately keep the generated A./1./a./1) marker out of
+        # w:t; their semantic text may therefore begin with strings such as
+        # "END OF SECTION", "PART 2", "1.2", or "A." without becoming a false
+        # heading or manual label on re-import. A numbered line also cannot
+        # serve as the pending section title.
+        if numbering is not None:
+            num_id, ilvl = numbering
+            if _direct_numbering(docx_paragraph) is None:
+                style_numbering_used = True
+            pending_title = False
+            # An auto-numbered heading's visible text is just its title
+            # ("SUMMARY") — no text pattern can ever reach it. The numbering
+            # definition's own label grammar is the structural signal:
+            # promote what it says is a PART or an article. When the grammar
+            # says nothing but the style is named for what it is (PRT / ART),
+            # the convention decides. Everything else stays on the provision
+            # path. A promoted heading gets no source binding, exactly like
+            # a text-matched heading (headings live in the fixed projection,
+            # not the editable body surface).
+            kind = _promoted_heading_kind(numbering_catalog, num_id, ilvl)
+            if not kind and style_kind in ("part", "article"):
+                kind = str(style_kind)
+            if kind == "part":
+                saw_spec_marker = True
+                promoted_part_count += 1
+                part_number = _remap_out_of_range_part(
+                    promoted_part_count, line_no
                 )
-                if kind == "part":
-                    saw_spec_marker = True
-                    promoted_part_count += 1
-                    builder.part(
-                        _remap_out_of_range_part(promoted_part_count, line_no)
-                    )
-                    if builder.current_part is not None:
-                        format_anchors.append(
-                            FormatAnchor(
-                                uid=builder.current_part.uid,
-                                origin_index=entry.body_child_index,
-                                label_kind=LABEL_AUTO,
-                            )
+                builder.part(
+                    part_number,
+                    _promoted_part_title(promoted_part_count, part_number, text),
+                )
+                if builder.current_part is not None:
+                    format_anchors.append(
+                        FormatAnchor(
+                            uid=builder.current_part.uid,
+                            origin_index=entry.body_child_index,
+                            label_kind=LABEL_AUTO,
                         )
-                    continue
-                if kind == "article":
-                    saw_spec_marker = True
-                    builder.article(
-                        builder.current_part.number
-                        if builder.current_part is not None
-                        else 1,
-                        text,
                     )
-                    if builder.current_article is not None:
-                        # Word renders this heading's "2.01" itself, so the
-                        # export must not write one into the text as well.
-                        format_anchors.append(
-                            FormatAnchor(
-                                uid=builder.current_article.uid,
-                                origin_index=entry.body_child_index,
-                                label_kind=LABEL_AUTO,
-                            )
-                        )
-                    continue
-                # The raw indent level: numbered_paragraph places it against
-                # its own list, never as an absolute depth.
-                add_mapped_paragraph(max(0, ilvl), text, numbered=True)
                 continue
+            if kind == "article":
+                saw_spec_marker = True
+                builder.article(
+                    builder.current_part.number
+                    if builder.current_part is not None
+                    else 1,
+                    text,
+                )
+                if builder.current_article is not None:
+                    # Word renders this heading's "2.01" itself, so the
+                    # export must not write one into the text as well.
+                    format_anchors.append(
+                        FormatAnchor(
+                            uid=builder.current_article.uid,
+                            origin_index=entry.body_child_index,
+                            label_kind=LABEL_AUTO,
+                        )
+                    )
+                continue
+            # The raw indent level: numbered_paragraph places it against
+            # its own list, never as an absolute depth.
+            add_mapped_paragraph(max(0, ilvl), text, numbered=True)
+            continue
+
+        # A CSI-named style (PRT / ART) with no numbering of its own: the
+        # name says what the paragraph IS. A typed label in the text still
+        # wins below, because the reader sees it and the export must write
+        # it back.
+        if style_kind == "part" and not _PART_RE.match(text):
+            saw_spec_marker = True
+            promoted_part_count += 1
+            part_number = _remap_out_of_range_part(promoted_part_count, line_no)
+            builder.part(
+                part_number,
+                _promoted_part_title(promoted_part_count, part_number, text),
+            )
+            if builder.current_part is not None:
+                format_anchors.append(
+                    FormatAnchor(
+                        uid=builder.current_part.uid,
+                        origin_index=entry.body_child_index,
+                        label_kind=LABEL_AUTO,
+                    )
+                )
+            continue
+        if style_kind == "article" and not _ARTICLE_RE.match(text):
+            saw_spec_marker = True
+            builder.article(
+                builder.current_part.number
+                if builder.current_part is not None
+                else 1,
+                text,
+            )
+            if builder.current_article is not None:
+                format_anchors.append(
+                    FormatAnchor(
+                        uid=builder.current_article.uid,
+                        origin_index=entry.body_child_index,
+                        label_kind=LABEL_AUTO,
+                    )
+                )
+            continue
 
         # The normalized renderer emits this exact line only to show that a
         # PART has no articles. It is presentation, not a semantic provision;
@@ -953,69 +1644,13 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             end_of_section_index = line_no
             break
 
-        section_match = _SECTION_RE.match(text)
-        if section_match:
-            saw_spec_marker = True
-            g1, g2, g3, g4, remainder = section_match.groups()
-            number = f"{g1} {g2} {g3}" + (f".{g4}" if g4 else "")
-            builder.section.number = number
-            format_anchors.append(
-                FormatAnchor(
-                    uid="sec",
-                    origin_index=entry.body_child_index,
-                    label_kind=LABEL_NONE,
-                )
-            )
-            if remainder.strip():
-                builder.section.title = remainder.strip()
-                pending_title = False
-            else:
-                pending_title = True
-            continue
-        if first_content:
-            # Only the FIRST content line may be a keyword-less header —
-            # "23 05 48 — COMMON WORK RESULTS FOR HVAC". Later in a document
-            # the same shape is far more likely a provision citing a sibling
-            # section, so it never re-arms.
-            bare_match = _BARE_SECTION_RE.match(text)
-            if bare_match:
-                saw_spec_marker = True
-                b1, b2, b3, b4, bare_title = bare_match.groups()
-                builder.section.number = f"{b1} {b2} {b3}" + (
-                    f".{b4}" if b4 else ""
-                )
-                builder.section.title = bare_title.strip()
-                format_anchors.append(
-                    FormatAnchor(
-                        uid="sec",
-                        origin_index=entry.body_child_index,
-                        label_kind=LABEL_NONE,
-                    )
-                )
-                pending_title = False
-                builder.warnings.append(
-                    "Line 1: no 'SECTION' keyword — the section number and "
-                    "title were read from the first line."
-                )
-                continue
-        if pending_title:
-            pending_title = False
-            if not (_PART_RE.match(text) or _ARTICLE_RE.match(text)):
-                builder.section.title = text
-                format_anchors.append(
-                    FormatAnchor(
-                        uid=SECTION_TITLE_UID,
-                        origin_index=entry.body_child_index,
-                        label_kind=LABEL_NONE,
-                    )
-                )
-                continue
-
         part_match = _PART_RE.match(text)
         if part_match:
             saw_spec_marker = True
+            requested_part = int(part_match.group(1))
+            part_number = _remap_out_of_range_part(requested_part, line_no)
             builder.part(
-                _remap_out_of_range_part(int(part_match.group(1)), line_no)
+                part_number, text if part_number == requested_part else ""
             )
             if builder.current_part is not None:
                 format_anchors.append(
@@ -1059,6 +1694,12 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             )
             continue
 
+        if isinstance(style_kind, int):
+            # A PRn-styled provision with neither Word numbering nor a typed
+            # label: the style says how deep it sits.
+            add_mapped_paragraph(style_kind, text)
+            continue
+
         # Unlabeled content: keep as a level-0 paragraph (never drop).
         add_mapped_paragraph(0, text)
 
@@ -1081,9 +1722,6 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                 (item for item in trailing if _SECTION_RE.match(item)), None
             )
 
-            def _clip(value: str) -> str:
-                return value if len(value) <= 60 else value[:60] + "…"
-
             if next_section is not None:
                 builder.warnings.append(
                     "This file contains more than one SECTION (next: "
@@ -1097,6 +1735,41 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
                     f"not imported (beginning '{_clip(trailing[0])}'). "
                     "Build-a-Spec authors one section at a time."
                 )
+
+    if front_matter_count:
+        builder.warnings.append(
+            f"{front_matter_count} block(s) before the first PART heading — a "
+            "cover page, revision history or table of contents — are kept "
+            "for export exactly as they are and are not part of the "
+            f"editable section (beginning '{_clip(front_matter_lines[0])}')."
+        )
+
+    # A structured section whose body never stated its own identity: the
+    # page header/footer conventionally carries it. Consulted last, and
+    # disclosed, so a stale template footer is checked once rather than
+    # trusted silently. A file with no structure gets no invented header.
+    chrome_lines = _header_footer_text(document)
+    if first_structure is not None and (
+        not builder.section.number or not builder.section.title
+    ):
+        chrome_number, chrome_title = _identity_from_chrome(chrome_lines)
+        if not builder.section.number and chrome_number:
+            builder.section.number = chrome_number
+            header_source = HEADER_SOURCE_CHROME
+            saw_spec_marker = True
+            builder.warnings.append(
+                f"The section number ({chrome_number}) was read from the "
+                "page header/footer — the body carries no SECTION line. "
+                "Check it."
+            )
+        if builder.section.number and not builder.section.title and chrome_title:
+            builder.section.title = chrome_title
+            if not header_source:
+                header_source = HEADER_SOURCE_CHROME
+            builder.warnings.append(
+                f"The section title ('{_clip(chrome_title)}') was read from "
+                "the page header/footer. Check it."
+            )
 
     # Append a FINDABLE reference to every warning that is about a specific
     # element: the display ref the panel and export schedules use plus the
@@ -1154,7 +1827,9 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             if isinstance(child.tag, str)
         ),
         anchors=format_anchors,
-        header_footer_text=_header_footer_text(document),
+        header_footer_text=chrome_lines,
+        front_matter_text=tuple(front_matter_lines),
+        header_source=header_source,
         section_number=builder.section.number,
         section_title=builder.section.title,
     )
@@ -1168,4 +1843,7 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
         skipped_empty_count=skipped_empty,
         source_map=source_map,
         spec_shape_detected=saw_spec_marker,
+        front_matter=tuple(front_matter_lines),
+        header_source=header_source,
+        style_numbering_resolved=style_numbering_used,
     )

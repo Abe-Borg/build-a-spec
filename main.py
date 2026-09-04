@@ -19,6 +19,7 @@ import secrets
 import socket
 import sys
 import tempfile
+from pathlib import Path
 import threading
 import time
 import urllib.parse
@@ -98,6 +99,10 @@ class _BackendRuntime:
     host: str
     port: int
     boot_nonce: str
+    # The per-launch API token. The shell is the one process besides the
+    # window that may call this backend, and "Open in Word" needs the export
+    # route — the same route, guards and all, the window uses.
+    api_token: str = ""
 
 
 def _desired_backend_port() -> int:
@@ -200,6 +205,7 @@ def _start_backend() -> _BackendRuntime:
         host=str(host),
         port=int(port),
         boot_nonce=boot_nonce,
+        api_token=api_token,
     )
     diagnostics.log_startup_banner()
     thread.start()
@@ -274,6 +280,119 @@ def _http_origin(url: str) -> tuple[str, str, int] | None:
     return scheme, hostname.lower(), port
 
 
+_EXPORT_MODES = frozenset({"preserved", "normalized", "source"})
+_OPEN_IN_WORD_FALLBACK_NAME = "Build-a-Spec export.docx"
+
+
+def _filename_from_disposition(value: str) -> str:
+    """The attachment filename an export response names, as a safe basename."""
+    import urllib.parse
+
+    name = ""
+    for part in (value or "").split(";"):
+        part = part.strip()
+        if part.lower().startswith("filename*="):
+            encoded = part.split("=", 1)[1].strip()
+            if "''" in encoded:
+                encoded = encoded.split("''", 1)[1]
+            name = urllib.parse.unquote(encoded)
+            break
+    if not name:
+        for part in (value or "").split(";"):
+            part = part.strip()
+            if part.lower().startswith("filename="):
+                name = part.split("=", 1)[1].strip().strip('"')
+                break
+    name = os.path.basename(name.replace("\\", "/")).strip()
+    name = "".join(ch for ch in name if ch not in '<>:"/\\|?*' and ord(ch) >= 32)
+    if not name or name in {".", ".."}:
+        return _OPEN_IN_WORD_FALLBACK_NAME
+    if not name.lower().endswith(".docx"):
+        name += ".docx"
+    return name
+
+
+def _fetch_backend_bytes(backend: _BackendRuntime, path: str) -> tuple[bytes, str]:
+    """GET one API path from THIS launch's backend with its own token.
+
+    Returns ``(payload, filename)``. Raises ``RuntimeError`` with the server's
+    own message on an error response, so a 409 ("this project has no
+    formatting map") reaches the user in the server's words.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    from backend.app import _DESKTOP_TOKEN_HEADER
+
+    url = f"http://{backend.host}:{backend.port}{path}"
+    request = urllib.request.Request(
+        url,
+        headers={_DESKTOP_TOKEN_HEADER: backend.api_token, "Accept": "*/*"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            payload = response.read()
+            disposition = response.headers.get("Content-Disposition", "")
+    except urllib.error.HTTPError as exc:
+        message = f"The export failed ({exc.code})."
+        try:
+            body = json.loads(exc.read().decode("utf-8", errors="replace"))
+            if isinstance(body, dict) and body.get("error"):
+                message = str(body["error"])
+        except Exception:  # noqa: BLE001 - the status line is the fallback
+            pass
+        raise RuntimeError(message) from exc
+    except (urllib.error.URLError, OSError) as exc:
+        raise RuntimeError("The local server could not be reached.") from exc
+    return payload, _filename_from_disposition(disposition)
+
+
+def _launch_file(path: Path) -> None:
+    """Open ``path`` with the system's default application (Word for .docx)."""
+    opener = getattr(os, "startfile", None)
+    if opener is not None:  # Windows, the primary platform
+        opener(os.fspath(path))
+        return
+    import shutil
+    import subprocess
+
+    for command in ("xdg-open", "open"):
+        executable = shutil.which(command)
+        if executable:
+            subprocess.Popen([executable, os.fspath(path)])
+            return
+    raise RuntimeError("No application is registered to open Word files.")
+
+
+def _write_open_in_word_file(name: str, payload: bytes) -> Path:
+    """Write ``payload`` to a NEW file under the user's temp folder.
+
+    Created atomically with a unique name (``mkstemp``), never derived from a
+    timestamp: two clicks within a second would otherwise collide, and Word
+    holds the first file open — so the second write would fail on Windows,
+    or overwrite the file behind the first Word window where it does not.
+    The export's own filename survives as the prefix, so the Word title bar
+    still reads like the section.
+    """
+    folder = Path(tempfile.gettempdir()) / "BuildASpec"
+    folder.mkdir(parents=True, exist_ok=True)
+    stem, suffix = os.path.splitext(name)
+    handle, raw_path = tempfile.mkstemp(
+        prefix=f"{stem} ", suffix=suffix or ".docx", dir=os.fspath(folder)
+    )
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(payload)
+    except OSError:
+        try:
+            os.unlink(raw_path)
+        except OSError:
+            pass
+        raise
+    return Path(raw_path)
+
+
 class _CloseController:
     """Offer to save progress when the user closes the native window.
 
@@ -320,9 +439,17 @@ class _CloseController:
         "}catch(e){}return false;})()"
     )
 
-    def __init__(self, allowed_origins: tuple[str, ...] | None = None) -> None:
+    def __init__(
+        self,
+        allowed_origins: tuple[str, ...] | None = None,
+        backend: _BackendRuntime | None = None,
+    ) -> None:
         # ``None`` retains the unguarded seam used by the existing unit fakes.
         # The real desktop launcher always supplies an explicit allowlist.
+        # ``backend`` is this launch's own server, for the bridge methods
+        # that call it (Open in Word); absent, those report themselves
+        # unavailable rather than guessing a port.
+        self._backend = backend
         self._allowed_origins = (
             None
             if allowed_origins is None
@@ -471,6 +598,59 @@ class _CloseController:
         if not self._trusted_page():
             return self._save_result(False, error="This page cannot save.")
         return self._save_project_file(force_dialog=True)
+
+    def open_in_word(self, mode: str = "preserved") -> dict[str, Any]:
+        """Export the section and open the file with the system's Word.
+
+        The app cannot render Word's layout in its own panel, and a user who
+        imported an office master wants to see the real thing. This writes
+        the export — formatting-preserving by default — to a fresh file under
+        the user's temp folder and hands it to the default .docx application.
+        It goes through the same HTTP export route the window uses, with this
+        launch's own token, so every guard the route applies (mode, detached
+        state, tutorial scope) applies here too.
+
+        Returns ``{"ok", "error", "path", "name"}``; a failure carries the
+        server's own message.
+        """
+        if not self._trusted_page():
+            return {"ok": False, "error": "This page cannot export.", "path": "", "name": ""}
+        if self._backend is None:
+            return {
+                "ok": False,
+                "error": "Open in Word is available in the desktop app only.",
+                "path": "",
+                "name": "",
+            }
+        mode = str(mode or "preserved")
+        if mode not in _EXPORT_MODES:
+            return {"ok": False, "error": "Unknown export mode.", "path": "", "name": ""}
+        from backend import sessions
+
+        workspace = sessions.get_workspace()
+        if workspace.scope != "original":
+            return {
+                "ok": False,
+                "error": "Return to your project before opening it in Word.",
+                "path": "",
+                "name": "",
+            }
+        try:
+            payload, name = _fetch_backend_bytes(
+                self._backend, f"/api/export/docx?mode={mode}"
+            )
+            target = _write_open_in_word_file(name, payload)
+            _launch_file(target)
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc), "path": "", "name": ""}
+        except OSError as exc:
+            return {
+                "ok": False,
+                "error": f"The export could not be written or opened: {exc}",
+                "path": "",
+                "name": "",
+            }
+        return {"ok": True, "error": "", "path": os.fspath(target), "name": target.name}
 
     def open_external_link(self, url: str) -> bool:
         """Open a URL in the user's default system browser.
@@ -812,7 +992,7 @@ def main() -> None:
         # window-close offers to save unsaved progress first.
         # pywebview leaves js_api injected after in-window navigation. Bind
         # every native bridge method to this launch's frontend origin.
-        close_controller = _CloseController((frontend_base_url,))
+        close_controller = _CloseController((frontend_base_url,), backend=runtime)
         window = webview.create_window(
             settings.APP_NAME,
             url,

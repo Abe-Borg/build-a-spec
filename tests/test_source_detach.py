@@ -231,18 +231,44 @@ def test_detaching_keeps_the_exact_original_downloadable(client, tmp_path):
     assert original.content == source
 
 
-def test_a_detached_document_exports_normalized_by_default(client, tmp_path):
+def test_a_detached_document_exports_with_its_formatting_by_default(
+    client, tmp_path
+):
     """An imported project defaults to source mode; a detached one must not.
 
     Without this the export keeps selecting a mode whose preconditions were
-    just given up, and every download 409s.
+    just given up, and every download 409s. A detached document with its
+    formatting map still present takes the appearance-preserving render —
+    the product's import path — and the payload says so, because the panel
+    cannot infer it: detaching keeps every artifact the flag depends on.
     """
-    _import(client, add_tracked_change(make_fidelity_master(tmp_path)))
+    source = add_tracked_change(make_fidelity_master(tmp_path))
+    _import(client, source)
     assert client.post("/api/doc/detach-source").status_code == 200
+    payload = client.get("/api/doc").json()
+    assert payload["preserved_export_available"] is True
+    assert payload["source_preservation"]["status"] == "detached"
+    assert payload["source_preservation"]["exact_original_available"] is True
 
     export = client.get("/api/export/docx")
     assert export.status_code == 200, export.text
     assert len(export.content) > 0
+    # The firm's own styles part travelled through untouched: that is the
+    # appearance-preserving mode, not the normalized re-render.
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(source)) as archive:
+        original_styles = archive.read("word/styles.xml")
+    with zipfile.ZipFile(io.BytesIO(export.content)) as archive:
+        assert archive.read("word/styles.xml") == original_styles
+
+
+def test_a_project_without_a_formatting_map_says_so_in_the_payload(client):
+    """A from-scratch document has nothing to rebuild; the flag is false."""
+    payload = client.get("/api/doc").json()
+    assert payload["preserved_export_available"] is False
+    assert payload["source_preservation"] is None
 
 
 def test_asking_for_source_export_after_detaching_says_why_it_is_gone(

@@ -49,6 +49,7 @@ IMPORT_REPORT_KEYS = {
     "warnings",
     "tracked_changes_detected",
     "spec_shape_detected",
+    "front_matter",
     "fidelity_notice",
 }
 

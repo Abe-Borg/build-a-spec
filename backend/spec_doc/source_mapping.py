@@ -766,8 +766,27 @@ def _content_type_part_name(value: str) -> str:
     return _resolve_internal_target("", value)
 
 
+def _validate_external_target(target: str) -> str:
+    """An external relationship target, accepted as the opaque string it is.
+
+    Build-a-Spec never resolves, rewrites or audits an external target — a
+    hyperlink to a web page, a mailto, a UNC path — and Word itself writes
+    backslashes and spaces into ``file:///\\\\server\\share`` links. Holding
+    those to internal-target spelling rules froze every office master that
+    linked to a network standard, on a scan whose only job is to find the
+    package's OWN parts. Control characters are still refused: they cannot
+    be a URI in any spelling.
+    """
+    if not isinstance(target, str) or not target.strip():
+        raise ValueError("Malformed OPC relationship target.")
+    target = target.strip()
+    if any(ord(character) < 32 or ord(character) == 127 for character in target):
+        raise ValueError("Malformed OPC relationship target.")
+    return target
+
+
 def _validate_relationship_target_uri(target: str) -> str:
-    """Return one unambiguous URI-reference spelling for any relationship."""
+    """Return one unambiguous URI-reference spelling for an INTERNAL target."""
     if not isinstance(target, str) or not target.strip():
         raise ValueError("Malformed OPC relationship target.")
     target = target.strip()
@@ -815,7 +834,11 @@ def _parse_content_types(archive: zipfile.ZipFile) -> tuple[
         if local == "Override":
             part_name = _content_type_part_name(child.get("PartName"))
             if part_name in overrides:
-                raise ValueError("Duplicate OPC content-type override.")
+                # Some producers repeat a declaration verbatim; only two
+                # declarations that DISAGREE make the part's type ambiguous.
+                if overrides[part_name] != normalized_type:
+                    raise ValueError("Duplicate OPC content-type override.")
+                continue
             overrides[part_name] = normalized_type
         elif local == "Default":
             extension = child.get("Extension")
@@ -827,7 +850,9 @@ def _parse_content_types(archive: zipfile.ZipFile) -> tuple[
                 raise ValueError("Malformed OPC content-type default.")
             extension = extension.strip().casefold()
             if extension in defaults:
-                raise ValueError("Duplicate OPC content-type default.")
+                if defaults[extension] != normalized_type:
+                    raise ValueError("Duplicate OPC content-type default.")
+                continue
             defaults[extension] = normalized_type
         else:
             raise ValueError("Malformed OPC content-types part.")
@@ -875,8 +900,12 @@ def _parse_relationship_part(
         ):
             raise ValueError("Malformed OPC relationship.")
         seen_ids.add(normalized_rel_id)
-        normalized_target = _validate_relationship_target_uri(target)
         external = target_mode.casefold() == "external"
+        normalized_target = (
+            _validate_external_target(target)
+            if external
+            else _validate_relationship_target_uri(target)
+        )
         if not external:
             # Prove every internal target is a safe package path even when the
             # relationship type is not one Build-a-Spec otherwise interprets.
@@ -1386,6 +1415,18 @@ _BLOCKER_REMEDIES = {
         "Remove the digital signature in Word, save, and import again — "
         "editing would invalidate it. Or choose Edit freely to keep working "
         "here."
+    ),
+    "unsafe_relationship_scan": (
+        "This only limits the older byte-exact export. Import the file "
+        "again (Export → Download exact original DOCX, then Import Spec) "
+        "to edit it with its formatting preserved — or choose Edit freely "
+        "to keep working here."
+    ),
+    "unsafe_revision_scan": (
+        "This only limits the older byte-exact export. Import the file "
+        "again (Export → Download exact original DOCX, then Import Spec) "
+        "to edit it with its formatting preserved — or choose Edit freely "
+        "to keep working here."
     ),
 }
 

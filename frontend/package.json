@@ -1,7 +1,7 @@
 {
   "name": "build-a-spec-frontend",
   "private": true,
-  "version": "1.14.0",
+  "version": "1.15.0",
   "license": "SEE LICENSE IN LICENSE",
   "author": {
     "name": "Abraham Borg",
@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "test": "node --test tests/debriefQueue.test.ts tests/sourceCapabilities.test.ts tests/structuralEditing.test.ts tests/qcReport.test.ts tests/qcApi.test.ts tests/qcRemediation.test.ts tests/qcLive.test.ts tests/eventSeqIndex.test.ts tests/latestAnswer.test.ts tests/projectHeading.test.ts tests/researchAgents.test.ts tests/researchLive.test.ts tests/researchStream.test.ts tests/tour.test.ts tests/templateApi.test.ts",
+    "test": "node --test tests/debriefQueue.test.ts tests/sourceCapabilities.test.ts tests/structuralEditing.test.ts tests/qcReport.test.ts tests/qcApi.test.ts tests/qcRemediation.test.ts tests/qcLive.test.ts tests/eventSeqIndex.test.ts tests/latestAnswer.test.ts tests/projectHeading.test.ts tests/researchAgents.test.ts tests/researchLive.test.ts tests/researchStream.test.ts tests/tour.test.ts tests/templateApi.test.ts tests/sessionBundle.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

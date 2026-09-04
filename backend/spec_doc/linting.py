@@ -630,11 +630,11 @@ def lint_document(
                     RULE_STALE_DOCUMENT_IDENTIFIER,
                     "sec",
                     "—",
-                    "A preserved header or footer still reads "
+                    "A preserved header, footer or cover page still reads "
                     f"'{match.group(0)}' while this section is "
-                    f"{section.number}. Headers and footers are carried "
-                    "through from the original file and are not edited "
-                    "here — update them in Word before issuing.",
+                    f"{section.number}. Headers, footers and cover pages "
+                    "are carried through from the original file and are "
+                    "not edited here — update them in Word before issuing.",
                     match.group(0),
                 )
                 break

@@ -51,7 +51,13 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            refuses to bind the replacement session;
                            Developer tools reuses open_external_link
                            for the trace viewer; the pywebview-fallback except
-                           now logs
+                           now logs; js_api open_in_word(mode) fetches
+                           /api/export/docx from this launch's own backend
+                           with its own token (_BackendRuntime.api_token —
+                           same route, same guards), writes a fresh
+                           mkstemp-unique file under <temp>/BuildASpec —
+                           never a timestamp name, Word holds the previous
+                           one open — and os.startfile()s it (v1.15.0)
 backend/
   settings.py              models (claude-sonnet-5 default), effort levels
                            (interview high / research high, dialed back
@@ -473,9 +479,25 @@ backend/
                            reconstruction), status_changes (status-only, no marks),
                            stats; feeds the redline writer + the compare view
   spec_doc/importer.py     [PORT: Spec Critic src/input/extractor.py mechanics]
-                           Accept-All tracked-changes text, content-loss
+                           Accept-All tracked-changes text (text boxes
+                           included, mc:Fallback copies skipped), content-loss
                            warning; native SectionFormat tree builder (labels
-                           OR w:numPr ilvl); keep-everything-warn-loudly.
+                           OR numbering resolved the way Word does — the
+                           paragraph's w:numPr, else its STYLE's through
+                           basedOn chains — OR the CSI style names PRT/ART/
+                           PR1..PR5 as the fallback); keep-everything-warn-
+                           loudly. The section identity is read in the FRONT
+                           MATTER (before the first PART/article heading) and
+                           once — SECTION line / bare header / "Section
+                           Number:" field, then the page header/footer as the
+                           disclosed last resort; a SECTION-shaped line after
+                           structure began is a provision. Front matter is
+                           recorded (ImportResult.front_matter, the report,
+                           the format map) and never modelled. TOC field
+                           ranges are locked "field" blocks. _header_footer_text
+                           reads only parts with their OWN definition —
+                           python-docx's .paragraphs CREATES a missing header
+                           and mutates w:sectPr, which the source map hashes.
                            spec_shape_detected: True iff the parse recognized a
                            SECTION line / PART heading / N.M article (the same
                            three signals it acts on, so the verdict can never
@@ -502,9 +524,14 @@ backend/
                            FormatAnchor (origin body-child index + label kind
                            auto/manual/none + lock reason) + SourceFormatMap
                            (SHA-256-bound to the upload, header/footer text
-                           captured for the stale-identifier lint). Records
-                           WHERE each element came from, never the formatting
-                           itself — the retained bytes ARE the format store
+                           + front-matter text captured for the stale-
+                           identifier lint — preserved_chrome() joins them —
+                           and header_source: line / front_matter / chrome /
+                           ""). One anchor per uid, first wins: from_dict
+                           refuses a duplicate and a refused map made every
+                           project Save a 500. Records WHERE each element
+                           came from, never the formatting itself — the
+                           retained bytes ARE the format store
   spec_doc/source_render.py
                            render_preserving_docx: rebuilds word/document.xml's
                            body from the current tree, cloning each element's
@@ -516,10 +543,16 @@ backend/
                            reads empty and silently takes the rewrite path);
                            edited = w:pPr + dominant w:rPr kept; locked = the
                            origin block verbatim; new = cloned from nearest kin
-                           at its depth; blank spacers travel with the provision
-                           below them; trailing UNANCHORED children survive
-                           (END OF SECTION) while anchored-but-unreached ones
-                           stay deleted
+                           at its depth; UNMODELLED content directly above a
+                           modelled element — blank spacers, but also a cover
+                           page, a TOC, a picture-only or page-break paragraph
+                           — travels with the element below it (a blank is a
+                           paragraph with no text AND no drawing/pict/object/
+                           txbxContent/sdt); trailing UNANCHORED children
+                           survive (END OF SECTION) while anchored-but-
+                           unreached ones stay deleted; header_source
+                           front_matter/chrome synthesizes NO header (the
+                           identity already sits in carried-through content)
   spec_doc/xml_text.py     XML 1.0-safe artifact text: the handful of code points
                            XML cannot carry (C0 controls, lone surrogates)
                            render as VISIBLE \uXXXX escapes rather than being
@@ -7638,6 +7671,147 @@ no obligation beyond keeping a copyright line. Relicensed to **PolyForm Shield
   already distributed can never be revoked for a copy someone already has, so
   this only ever got harder to do.
 - **Not legal advice.** Confirm with an IP attorney before selling licenses.
+
+## Importing an office master actually works — implemented notes (v1.15.0)
+
+Reported (Abraham, 2026-09-03, screenshot): a client's 21 05 00 master
+imported as "SECTION 09 90 00 / PAINTING AND COATING", every heading a flat
+provision A..N under "1.1 IMPORTED CONTENT", every block READ-ONLY behind
+"OPC relationships or content types could not be inspected safely", table
+rows one per paragraph, and "the app changes my fonts on export". He was
+running **1.13.0 — the newest release ever published**; the 1.14.0
+formatting-preserving import (PR #141) merged two hours after 1.13.0 shipped
+and was never tagged (`git tag -l` is empty in a fresh clone; the GitHub
+Releases API is the check). Even on HEAD, three separate defects reproduced
+his complaints. All fixed here; 1.14.0's own work ships with them.
+
+- **The export menu never offered the 1.14.0 export.** `ArtifactPanel`
+  linked `mode=source` (greyed once detached — i.e. on every import) and
+  `mode=normalized` (Times New Roman 11pt, the app's own styles). `mode=
+  preserved` and the bare `/api/export/docx` appeared nowhere in the
+  frontend; the tests passed because they call the bare URL. The payload
+  now carries `preserved_export_available` — ONE derivation
+  (`app._preserved_export_available`, hash cached per (bytes, map) pair)
+  shared with the export route's default-mode selection, so the menu cannot
+  offer what the route refuses — and the menu leads with "Export Word
+  (keeps your formatting)"; the normalized entry is named for what it is
+  ("Export as Build-a-Spec styled Word"); byte-exact stays only while a
+  project still holds that claim. `ImportIntent` (dead since 1.14.0) is
+  gone; `importMaster(file)` always sends `detach=true`.
+- **Numbering is resolved the way Word resolves it** (`_effective_numbering`,
+  `_load_style_numbering`): the paragraph's own `w:numPr`, else the one its
+  paragraph style carries, through `w:basedOn` chains, property by property
+  (a derived style routinely states only a deeper `ilvl` and inherits the
+  definition — `numId` 0 cancels). Office masters keep the whole outline on
+  PRT/ART/PR1–PR4 styles; read direct numbering alone, every heading
+  exposed its bare title, matched nothing, and fell to the depth-0
+  catch-all. The 1.13.0 docstring had deferred `w:pStyle` as "weak
+  evidence"; style-INHERITED numbering is not a style-name heuristic, it is
+  the same numbering signal resolved correctly. The CSI style NAMES
+  (`_CSI_STYLE_KINDS`: PRT/ART/PR1..PR5, matched on id or name after
+  folding separators) are the secondary signal, consulted only when the
+  resolved numbering promotes nothing; a typed text label still wins. A
+  promoted PART keeps the master's own wording (`_TreeBuilder.part(number,
+  title)`; a remapped PART 4 never renames PART 3) so the export finds the
+  heading unchanged rather than rewriting "GENERAL REQUIREMENTS" to
+  "GENERAL".
+- **The section identity is decided in the front matter, once.**
+  `_first_structure_line` finds the first PART/article heading by any
+  recognition path; everything before it is front matter, and that is the
+  only place `_SECTION_RE`, the bare header and the new `Section Number:`
+  field (`_SECTION_NUMBER_FIELD_RE`) are read — the first header found is
+  never overwritten (`header_source` set once). The reported title was a
+  Related Requirements entry whose visible text BEGAN with "Section"
+  because its label lived on the style; under the old any-line, last-wins
+  rule it was the header, it set `saw_spec_marker`, and it appended a
+  second `sec` anchor that `SourceFormatMap.from_dict` refuses — so the
+  import succeeded and **every project Save failed with an internal 500**
+  (`sanitize_format_map` raises a bare ValueError past the route's
+  `ProjectPackageError` handler). `build_format_map` now dedupes (first
+  wins). A file with no structure keeps the historical posture (a header
+  line anywhere, first wins). The cover-page title is the nearest title-like
+  line beside the number field (`_title_like`: 2+ mostly-alphabetic words,
+  no number, no `Label: value` colon, none of the cover-page label words);
+  the page header/footer (`_identity_from_chrome`) is the disclosed last
+  resort, never consulted for a structureless memo. A cover page's identity
+  line may sit in a TEXT BOX (an `image`-locked paragraph): it is read like
+  a cover-page field — recorded, never anchored, the block stays front
+  matter — because rewriting that paragraph on a rename would delete the
+  box (Codex, PR #145; the first cut excluded every locked entry).
+- **Front matter is preserved, not modelled.** Lines land in
+  `ImportResult.front_matter` → `import_report["front_matter"]` (count +
+  bounded lines, optional on legacy reports) → `SourceFormatMap.
+  front_matter_text` → the `stale_document_identifier` lint (which now says
+  "header, footer or cover page") → a FRONT MATTER line in PROJECT CONTEXT
+  (`conversation._front_matter_summary`, baseline-scoped like the
+  unstructured framing) → a collapsed `<details>` strip in the panel. The
+  renderer needed no leading pass: `_emit_leading_blanks` now carries ANY
+  unmodelled content directly above a modelled element (stopping at the
+  nearest anchored one), which is also what keeps a picture-only paragraph
+  in place instead of migrating to the end, and `_is_blank_paragraph`
+  counts a drawing/pict/object/txbxContent/sdt as content. With
+  `header_source` front_matter/chrome, `_render_body` synthesizes no header:
+  the identity already sits in content the export carries verbatim, and a
+  renamed section is a lint finding instead.
+- **`_header_footer_text` mutated the document it inspected.** python-docx's
+  `header.paragraphs` CREATES a header part and a `w:headerReference` in
+  `w:sectPr` when none exists. Harmless while it ran after the source map
+  was built; moving the read ahead of `build_source_body_map` made every
+  import fail `body_anchor_mismatch` on the sectPr hash. It now reads only
+  parts with their own definition (`is_linked_to_previous` is a pure read).
+  An importer must never mutate the package it inspects — this is the
+  second time the rule has bitten (the numbering catalog was the first).
+- **The relationship scan froze packages over external link spelling.**
+  `_validate_relationship_target_uri` rejected a backslash, any whitespace
+  or a bare `%` in EVERY target, and Word writes `file:///\\server\share`
+  for UNC hyperlinks. An external target is never resolved, rewritten or
+  audited by the app; `_validate_external_target` now accepts it as an
+  opaque string (control characters still refused), internal targets keep
+  every check, and an identical repeated content-type `Default`/`Override`
+  is tolerated (only disagreeing ones are ambiguous). The scan only matters
+  to attached scopes now, which still exist: pre-1.14.0 `.baspec` loads and
+  `mode=source`. The tutorial's import scenario now detaches like the panel
+  (`staged.detach_source()`), so a practice copy never sweeps.
+- **The detached document was reported as `blocked`.**
+  `_source_preservation_payload` fell through to "the imported semantic
+  baseline is unavailable" for a document whose readiness is deliberately
+  None; it now reports `status: "detached"` (no frontend consumer read the
+  status; the QC manifest records source-guard facts, not this field).
+- **Text boxes and TOC fields.** `_accept_all_paragraph_text` reads
+  `w:txbxContent` (skipping the `mc:Fallback` duplicate Word writes beside
+  every DrawingML box) — a cover page built from text boxes read as empty
+  and was DROPPED by the trailing sweep. A complex-field range whose
+  `w:instrText` starts with `TOC` locks its paragraphs as `field`
+  (`LOCK_REASONS`, `_LOCK_BLOCKERS` → `complex_paragraph_markup`), so cached
+  entries like "1.1 SUMMARY 3" never mint phantom articles.
+- **Open in Word** (owner ask): `js_api.open_in_word(mode)` in `main.py`.
+  The shell GETs `/api/export/docx?mode=…` from its own backend with the
+  launch token (`_BackendRuntime.api_token`, `X-BuildASpec-Token`) so the
+  route's guards apply unchanged, writes `<temp>/BuildASpec/<name> <mkstemp
+  suffix>.docx` and `os.startfile`s it. The name is minted by `mkstemp`,
+  never from a timestamp (Codex, PR #145): two clicks within a second
+  collided, and Word holds the first file open, so the second write failed
+  on Windows or overwrote the file behind the first Word window elsewhere. Capability `export.open-in-word` on the `export` tour
+  step (three-place edit); rendered only when the bridge exists.
+- **Diagnostics**: the import trace event gains `header_source`,
+  `front_matter_count`, `style_numbering_resolved`, and closed codes for the
+  new warnings (`front_matter_preserved`, `title_from_cover_page`,
+  `identity_from_chrome`, `bare_header_line`, `trailing_content`).
+- **Tests**: `tests/test_import_office_master.py` (16 — the reported
+  document's shape end to end: style chain, CSI names, the cross-reference,
+  first-wins + one anchor + Save 200, the structureless posture, front matter
+  in the tree/report/payload, chrome fallback and its memo-shaped refusal,
+  the TOC field, the text box, the export carrying the cover page verbatim
+  ahead of the section, no synthesized header, the rename lint, the picture
+  keeping its place, the untouched round trip); `test_source_global_blockers`
+  (+4: UNC/space/percent externals, an internal backslash still malformed,
+  identical vs disagreeing duplicate Defaults); `test_close_prompt` (+4:
+  the bridge fetch/write/launch, the server's own refusal, unknown mode /
+  browser session, the Content-Disposition parser); `test_source_detach`
+  (the detached export renamed to what it proves: styles.xml byte-identical,
+  `preserved_export_available` true, status `detached`; a fresh document
+  false/None). Frontend: the capability contract admits `export.open-in-word`
+  (`npm test` 226, `npm run build` clean). Backend deps unchanged.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

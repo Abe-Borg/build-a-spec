@@ -564,3 +564,77 @@ def test_global_blockers_reject_real_source_mutation(
             current=current,
         )
     assert error.value.blocker == expected_blocker
+
+
+# --- The scan reads the package's OWN parts; external links are opaque -------
+
+
+_HYPERLINK_REL = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+)
+
+
+def _with_external_hyperlink(payload: bytes, target: str) -> bytes:
+    relationships = _xml_part(payload, "word/_rels/document.xml.rels")
+    link = etree.SubElement(relationships, f"{{{_REL_NS}}}Relationship")
+    link.set("Id", "rIdExternal1")
+    link.set("Type", _HYPERLINK_REL)
+    link.set("Target", target)
+    link.set("TargetMode", "External")
+    return rewrite_zip_members(
+        payload,
+        replacements={"word/_rels/document.xml.rels": _serialize(relationships)},
+    )
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "file:///\\\\corp\\dfs\\Standards\\Fire Protection\\FP-01.pdf",
+        "https://example.invalid/standards/fire protection.pdf",
+        "https://example.invalid/100%-coverage",
+    ],
+)
+def test_an_external_hyperlink_target_never_freezes_the_package(tmp_path, target):
+    """Word writes backslashes and spaces into file:// links; the app never
+    resolves an external target, so its spelling is not the app's business.
+    Holding it to internal-path rules froze every master that linked to a
+    network standard."""
+    payload = _with_external_hyperlink(make_numbered_island_master(tmp_path), target)
+    blockers = detect_global_source_blockers(payload)
+    assert "unsafe_relationship_scan" not in blockers
+    assert "unsafe_revision_scan" not in blockers
+
+
+def test_an_internal_target_with_a_backslash_is_still_malformed(tmp_path):
+    relationships = _xml_part(
+        make_numbered_island_master(tmp_path), "word/_rels/document.xml.rels"
+    )
+    _add_relationship(relationships, "rIdBad", _HYPERLINK_REL, "media\\image1.png")
+    payload = rewrite_zip_members(
+        make_numbered_island_master(tmp_path),
+        replacements={"word/_rels/document.xml.rels": _serialize(relationships)},
+    )
+    assert "unsafe_relationship_scan" in detect_global_source_blockers(payload)
+
+
+def test_a_repeated_identical_content_type_default_is_not_ambiguous(tmp_path):
+    payload = make_numbered_island_master(tmp_path)
+    content_types = _xml_part(payload, "[Content_Types].xml")
+    existing = next(
+        child for child in content_types if child.get("Extension") == "xml"
+    )
+    duplicate = etree.SubElement(content_types, f"{{{_CT_NS}}}Default")
+    duplicate.set("Extension", "xml")
+    duplicate.set("ContentType", existing.get("ContentType"))
+    tolerant = rewrite_zip_members(
+        payload, replacements={"[Content_Types].xml": _serialize(content_types)}
+    )
+    assert "unsafe_relationship_scan" not in detect_global_source_blockers(tolerant)
+
+    # Two declarations that DISAGREE still make the type ambiguous.
+    duplicate.set("ContentType", "application/x-something-else")
+    ambiguous = rewrite_zip_members(
+        payload, replacements={"[Content_Types].xml": _serialize(content_types)}
+    )
+    assert "unsafe_relationship_scan" in detect_global_source_blockers(ambiguous)

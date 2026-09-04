@@ -156,16 +156,24 @@ def _with_malformed_external_target(payload: bytes, target: str) -> bytes:
 
 def _with_duplicate_content_type_override(payload: bytes) -> bytes:
     content_types = _xml_part(payload, "[Content_Types].xml")
+    # The app-properties part: python-docx neither validates nor needs its
+    # type, so the package still opens and the ambiguity reaches the scan.
+    # (A disagreeing main-document override makes python-docx itself refuse
+    # the file, which would test the wrong layer.)
     document_overrides = [
         child
         for child in content_types
         if isinstance(child.tag, str)
         and _namespace(child.tag) == _CT_NS
         and _local_name(child.tag) == "Override"
-        and child.get("PartName") == "/word/document.xml"
+        and child.get("PartName") == "/docProps/app.xml"
     ]
     assert len(document_overrides) == 1
     duplicate = etree.fromstring(_serialize(document_overrides[0]))
+    # A repeated declaration that AGREES is redundant, not ambiguous (some
+    # producers write one); only a disagreeing pair leaves the part's type
+    # undecidable, which is what this fixture pins.
+    duplicate.set("ContentType", "application/x-disagreeing-properties+xml")
     content_types.append(duplicate)
     return rewrite_zip_members(
         payload,
@@ -184,8 +192,11 @@ def _with_duplicate_content_type_default(payload: bytes) -> bytes:
     ]
     assert defaults
     duplicate = etree.fromstring(_serialize(defaults[0]))
-    # Extension matching is ASCII case-insensitive in the discovery index.
+    # Extension matching is ASCII case-insensitive in the discovery index,
+    # and an identical repeat is tolerated — the disagreeing type is what
+    # makes the declaration ambiguous.
     duplicate.set("Extension", duplicate.get("Extension", "").swapcase())
+    duplicate.set("ContentType", "application/x-disagreeing-default")
     content_types.append(duplicate)
     return rewrite_zip_members(
         payload,
@@ -434,15 +445,22 @@ def test_unsafe_percent_encoding_fails_relationship_discovery(tmp_path, target):
         "https://example.invalid/bad\\path",
     ],
 )
-def test_malformed_external_target_fails_relationship_discovery(
+def test_an_oddly_spelled_external_target_is_opaque_not_a_freeze(
     tmp_path,
     target,
 ):
+    """An external target is never resolved, rewritten or audited by the
+    app, and Word itself writes backslashes and spaces into file:// links;
+    holding one to internal-path spelling rules froze every office master
+    that linked to a network standard. The discovery scan reads the
+    package's OWN parts (the internal-target cases above still fail closed)."""
     source = _with_malformed_external_target(
         make_numbered_island_master(tmp_path),
         target,
     )
-    _assert_pass_through_only_noop(tmp_path, source, "unsafe_relationship_scan")
+    blockers = detect_global_source_blockers(source)
+    assert "unsafe_relationship_scan" not in blockers
+    assert "unsafe_revision_scan" not in blockers
 
 
 @pytest.mark.parametrize(

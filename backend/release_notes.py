@@ -89,6 +89,122 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.15.0",
+        date="2026-09-03",
+        headline="Importing an office master actually works now",
+        summary=(
+            "A real client master used to come in wearing another section's "
+            "title, with every heading dumped as a flat provision under a "
+            "placeholder article, and read-only from end to end — and the "
+            "formatting-preserving export could not even be reached from the "
+            "menu. All of that is fixed: headings whose numbering lives on "
+            "the PRT/ART/PR1 styles are read as headings, the section "
+            "identity comes from the front matter and never from a "
+            "cross-reference, a cover page is kept for export rather than "
+            "turned into provisions, the Export menu leads with your file "
+            "rebuilt around the new content, and Open in Word shows you the "
+            "real thing."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Importing an existing spec",
+                items=(
+                    ReleaseItem(
+                        title="Headings numbered by their styles are headings",
+                        body=(
+                            "Most office masters keep the PART and article "
+                            "outline on their PRT, ART and PR1–PR4 paragraph "
+                            "styles rather than on the paragraphs themselves. "
+                            "Those masters used to arrive as one flat list "
+                            "under a placeholder article; they now arrive "
+                            "with their real parts, articles and nesting. The "
+                            "style names are read as a fallback when a master "
+                            "carries the names without the numbering."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A cross-reference is never the section title",
+                        body=(
+                            "'Section 09 90 00 – Painting and Coating' in a "
+                            "Related Requirements list used to become the "
+                            "document's header. The section number and title "
+                            "are now read from the front matter — a SECTION "
+                            "line, a bare '21 05 00 — TITLE' line, or a cover "
+                            "page's 'Section Number:' field — and the first "
+                            "one found is never overwritten by a later match. "
+                            "When the body states nothing, the page header "
+                            "and footer are consulted and the import notes "
+                            "say so."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Cover pages stay cover pages",
+                        body=(
+                            "A cover page, revision history or table of "
+                            "contents ahead of the section is kept for export "
+                            "exactly as it came in and listed as front matter, "
+                            "not turned into provisions of a placeholder "
+                            "article. Text boxes are read rather than dropped, "
+                            "and a cached table of contents is treated as the "
+                            "Word field it is."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Saving after such an import works",
+                        body=(
+                            "A document with two SECTION-shaped lines used to "
+                            "import fine and then fail every project Save "
+                            "with an internal error. The import now records "
+                            "one header, and a formatting map that cannot be "
+                            "read is reported instead of crashing the save."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A link to a network share no longer freezes "
+                        "the package",
+                        body=(
+                            "The package scan rejected Word's own file:// "
+                            "hyperlinks — backslashes and spaces included — "
+                            "and marked the whole document read-only under "
+                            "'OPC relationships could not be inspected'. "
+                            "External links are now read as the opaque "
+                            "strings they are; the scan still checks every "
+                            "part the package actually contains."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Getting your file back out",
+                items=(
+                    ReleaseItem(
+                        title="Export Word (keeps your formatting) leads the "
+                        "menu",
+                        body=(
+                            "The formatting-preserving export existed but the "
+                            "Export menu never offered it — only the older "
+                            "byte-exact mode, unavailable on every import, "
+                            "and the Build-a-Spec styled re-render, which is "
+                            "why an imported master came back in the app's "
+                            "fonts. The menu now leads with your file rebuilt "
+                            "around the new content, and the styled export "
+                            "is named for what it is."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Open in Word",
+                        body=(
+                            "One click writes the export to a temporary file "
+                            "and opens it in Word, so the real layout can be "
+                            "checked at any point without saving anything "
+                            "first. Desktop app only."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.14.0",
         date="2026-08-21",
         headline="Your master keeps its formatting AND becomes editable",

@@ -243,7 +243,7 @@ function HowToUse({
           },
           {
             t: "Export",
-            d: "Choose the guarantee you need: exact original, a server-approved source-preserving patch, a newly generated normalized DOCX, or a normalized redline. A pass-through-only source permits exact-original download but no Word-body mutation.",
+            d: "Choose the guarantee you need: the exact original; your imported file rebuilt with the new content (headers, footers, fonts, styles and page setup kept); a Build-a-Spec styled DOCX; or a normalized redline. Open in Word writes the rebuilt file to a temporary location and opens it in Word.",
           },
           {
             t: "Save, and keep the good work",
@@ -332,7 +332,7 @@ function Workflows() {
           "Source-preserving controls are enabled per block and operation. Verified simple text edits and bounded numbered-island structure can remain available while headings, tables, fields, hyperlinks, content controls, and complex runs stay read-only; hover a disabled action for the server's reason.",
           "Review status, research provenance, standards, and project metadata remain editable when the imported Word body is pass-through-only.",
           "Send to Final QC.",
-          "Choose the exact-original download for unchanged upload bytes; Export preserved DOCX for a server-approved clone-and-patch; or intentionally choose normalized DOCX / normalized redline for the semantic view.",
+          "Choose the exact-original download for unchanged upload bytes; Export Word (keeps your formatting) to get your file back with the new content; or intentionally choose the Build-a-Spec styled DOCX / normalized redline for the semantic view.",
         ]}
       />
       <Recipe

@@ -434,7 +434,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "bottom",
         title: "An office master is another real on-ramp",
         body:
-          "A DOCX imports only into a blank spec, and there is nothing to choose: the document keeps your firm's formatting — header, footer, fonts, styles, page setup — and is fully editable at the same time, so the assistant can restructure and redraft it freely. Tables, pictures and embedded objects come through as preserved blocks you can move or delete but not retype. The exact package is retained, extraction warnings are dismissible notes, and non-spec files get honest presentation.",
+          "A DOCX imports only into a blank spec, and there is nothing to choose: the document keeps your firm's formatting — header, footer, fonts, styles, page setup — and is fully editable at the same time, so the assistant can restructure and redraft it freely. PART and article headings are read from Word's own numbering and from the CSI paragraph styles (PRT, ART, PR1…), and the section identity from the front matter — a cover page, revision history or table of contents ahead of the section is kept for export exactly as it is rather than turned into provisions. Tables, pictures, embedded objects and Word fields come through as preserved blocks you can move or delete but not retype. The exact package is retained, extraction warnings are dismissible notes, and non-spec files get honest presentation.",
       },
       {
         id: "source-permissions",
@@ -451,7 +451,7 @@ export const TOUR: readonly TourChunk[] = [
         placement: "left",
         title: "Source preservation is proven per operation",
         body:
-          `Imported controls use server-derived edit, delete, insert, and move permissions and fail closed while analysis is pending. Disabled controls state the exact reason. ${SOURCE_CAPABILITY_GUIDANCE} The exact original remains separately downloadable. Edit freely is offered on every source-attached state — a frozen package (tracked changes, macros, an embedded object, enforced protection), the pending analysis, and the ordinary settled master alike — trading the byte-exact export for unrestricted editing while the original stays downloadable. An "Adapt imported draft" action asks the assistant to walk the whole starter against this project in one pass.`,
+          `Every import is editable at once, and the export menu's "Export Word (keeps your formatting)" rebuilds your file with the new content; "Open in Word" does the same into a temporary file and hands it to Word so the real layout can be checked any time. A preserved block's lock chip says why it cannot be retyped, and it can still be moved or deleted. The exact original remains separately downloadable. Projects saved under the older byte-exact contract still show server-derived permissions: ${SOURCE_CAPABILITY_GUIDANCE} There, Edit freely trades the byte-exact export for unrestricted editing. An "Adapt imported draft" action asks the assistant to walk the whole starter against this project in one pass.`,
         details: SOURCE_OUTPUT_GUIDANCE,
       },
     ],
@@ -506,13 +506,17 @@ export const TOUR: readonly TourChunk[] = [
     steps: [
       {
         id: "export",
-        capabilities: ["export.clean", "export.redline-source"],
+        capabilities: [
+          "export.clean",
+          "export.redline-source",
+          "export.open-in-word",
+        ],
         mode: "optional",
         anchor: "export",
         placement: "bottom",
         title: "Choose the output guarantee deliberately",
         body:
-          "Clean DOCX uses automatic Word numbering and includes assumption/open-item schedules. Redline compares committed semantic versions. Imported projects distinguish normalized, proven source-preserving, and exact-original downloads; one is never silently substituted for another.",
+          "For an imported document, Export Word keeps your file's formatting and writes the new content into it, and Open in Word does the same into a temporary file and opens it. The Build-a-Spec styled DOCX uses automatic Word numbering and includes the assumption/open-item schedules. Redline compares committed semantic versions. Imported projects also keep the exact-original download; one output is never silently substituted for another.",
         details: SOURCE_OUTPUT_GUIDANCE,
         optionalReason: "The tour points at the real menu but never downloads anything.",
       },

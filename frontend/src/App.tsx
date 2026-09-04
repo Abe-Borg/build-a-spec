@@ -27,6 +27,7 @@ import type {
   ReleaseNote,
   UpdateCheckPayload,
   UsageSummary,
+  OpenInWordResult,
 } from "./types";
 import {
   applyQc,
@@ -54,7 +55,6 @@ import {
   getSessionBundle,
   getUsage,
   importMaster,
-  type ImportIntent,
   instantiateTemplate,
   uploadReference,
   deleteReference,
@@ -196,6 +196,11 @@ export default function App() {
   // document whose capability report has not arrived.
   const [sourceDetached, setSourceDetached] = useState(false);
   const [preservationReady, setPreservationReady] = useState(false);
+  // Whether the formatting-preserving export can run (server-derived: it
+  // needs the retained original AND its formatting map). Drives the Export
+  // menu's primary entry for an imported document.
+  const [preservedExportAvailable, setPreservedExportAvailable] =
+    useState(false);
   const [sourceCapabilities, setSourceCapabilities] =
     useState<SourceCapabilitiesState | null>(null);
   const [templateOrigin, setTemplateOrigin] = useState<TemplateOrigin | null>(null);
@@ -477,6 +482,7 @@ export default function App() {
         setSourceAvailable(payload.source_available ?? false);
         setSourceDetached(payload.source_detached ?? false);
         setPreservationReady(payload.preservation_ready ?? false);
+    setPreservedExportAvailable(payload.preserved_export_available ?? false);
         setSourceCapabilities(payload.source_capabilities ?? null);
         setTemplateOrigin(payload.template_origin ?? null);
         setFigures(payload.figures ?? []);
@@ -969,8 +975,40 @@ export default function App() {
     [refreshQc, refreshReadiness, replaceQcSnapshot, currentWorkspaceLease],
   );
 
+  /**
+   * Open the section in Word through the native shell: the export is
+   * written to a temporary file and handed to the default .docx app. The
+   * app cannot draw Word's layout in its panel; this is how the real
+   * formatting is seen. Resolves to the shell's result in every case — a
+   * missing bridge (plain browser) is reported, never thrown.
+   */
+  const onOpenInWord = useCallback(
+    async (mode: "preserved" | "normalized"): Promise<OpenInWordResult> => {
+      const api = window.pywebview?.api;
+      if (!api?.open_in_word) {
+        return {
+          ok: false,
+          error: "Open in Word is available in the desktop app only.",
+          path: "",
+          name: "",
+        };
+      }
+      try {
+        return await api.open_in_word(mode);
+      } catch (e) {
+        return {
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+          path: "",
+          name: "",
+        };
+      }
+    },
+    [],
+  );
+
   const onImportMaster = useCallback(
-    async (file: File, intent: ImportIntent) => {
+    async (file: File) => {
       // One upload at a time: the endpoint rejects a second import anyway
       // (the document is no longer blank), and a queued duplicate would only
       // produce a confusing error after a long wait.
@@ -983,7 +1021,7 @@ export default function App() {
       // an upload is a panel action, and the panel reports it (progress line,
       // button label, skeleton sheet, and the error slot below).
       try {
-        const result = await importMaster(file, intent);
+        const result = await importMaster(file);
         if (!applyDocPayload(result)) return;
         // Import advances the original session generation. Keep the full
         // presentation Health object on the same accepted lease immediately
@@ -1675,6 +1713,7 @@ export default function App() {
     source_available?: boolean;
     source_detached?: boolean;
     preservation_ready?: boolean;
+    preserved_export_available?: boolean;
     source_capabilities?: SourceCapabilitiesState | null;
     template_origin?: TemplateOrigin | null;
   }): boolean => {
@@ -1691,6 +1730,7 @@ export default function App() {
     setSourceAvailable(payload.source_available ?? false);
     setSourceDetached(payload.source_detached ?? false);
     setPreservationReady(payload.preservation_ready ?? false);
+    setPreservedExportAvailable(payload.preserved_export_available ?? false);
     setSourceCapabilities(payload.source_capabilities ?? null);
     setTemplateOrigin(payload.template_origin ?? null);
     setFigures(payload.figures ?? []);
@@ -1729,7 +1769,16 @@ export default function App() {
         reference_docs: merged.reference_docs ?? [],
         import_report: merged.import_report ?? null,
         source_available: merged.source_available ?? false,
+        // Forwarded explicitly, like every other source field: the import
+        // tutorial's practice copy arrives detached, and a bundle that
+        // dropped the flag hydrated it as "source-backed, report missing" —
+        // every editing control disabled on the one copy that exists to be
+        // edited (Codex, PR #145). tests/sessionBundle.test.ts pins that
+        // this mapping names every field applyDocPayload accepts.
+        source_detached: merged.source_detached ?? false,
         preservation_ready: merged.preservation_ready ?? false,
+        preserved_export_available:
+          merged.preserved_export_available ?? false,
         source_capabilities: merged.source_capabilities ?? null,
         template_origin: merged.template_origin ?? null,
       });
@@ -2503,6 +2552,8 @@ export default function App() {
           sourceAvailable={sourceAvailable}
           sourceDetached={sourceDetached}
           preservationReady={preservationReady}
+          preservedExportAvailable={preservedExportAvailable}
+          onOpenInWord={onOpenInWord}
           sourceCapabilities={sourceCapabilities}
           templateOrigin={templateOrigin}
           tutorialActive={inProtectedWorkspace}

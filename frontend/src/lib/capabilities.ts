@@ -36,6 +36,7 @@ export const END_USER_CAPABILITIES = [
   "document.detach-source",
   "document.open-items",
   "document.lint",
+  "followups.track",
   "standards.basis",
   "standards.manage",
   "research.profile",

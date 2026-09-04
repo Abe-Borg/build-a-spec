@@ -16,7 +16,12 @@ import {
 } from "./onboardingStorage";
 import { TOUR, TOUR_VERSION } from "./tour";
 
-export type DrawerName = "review" | "research" | "qc" | "openItems";
+export type DrawerName =
+  | "review"
+  | "research"
+  | "qc"
+  | "openItems"
+  | "followups";
 
 export type OnboardingPhase =
   | { kind: "idle" }

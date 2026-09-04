@@ -22,7 +22,7 @@ import {
  * with instructions that no longer match the active scenario. A bump simply
  * discards stale records, which is the correct outcome.
  */
-export const TOUR_VERSION = 5;
+export const TOUR_VERSION = 6;
 
 export interface StarterPrompt {
   label: string;
@@ -97,7 +97,7 @@ export interface TourStep {
   /** Stable data-tour value; blank is permitted only for tutorial chrome. */
   anchor: string;
   resolve?: TourResolver;
-  drawer?: "review" | "research" | "qc" | "openItems";
+  drawer?: "review" | "research" | "qc" | "openItems" | "followups";
   readiness?: TourReadiness;
   title: string;
   body: string;
@@ -290,6 +290,17 @@ export const TOUR: readonly TourChunk[] = [
         title: "Open decisions stay counted",
         body:
           "TBD markers and needs-input blocks collect in a jumpable inventory, remain scheduled in exports, and are one of the readiness checklist's gating conditions. Each entry links to the block that raised it.",
+      },
+      {
+        id: "followups",
+        capabilities: ["followups.track"],
+        mode: "explanatory",
+        anchor: "followups",
+        drawer: "followups",
+        placement: "top",
+        title: "Nothing the assistant needs from you gets lost",
+        body:
+          "Open items above are gaps in the spec. This list is the other half: the questions the assistant raised, the decisions only you can make, and the to-dos either side owes. It keeps them after the chat has scrolled past, marks the ones the draft cannot be right without, and checks each off the moment it is settled — by the assistant when it reads your answer, or by you with the tick. Every reply surfaces one of them, so a decision cannot quietly go missing.",
       },
       {
         id: "lint",
@@ -568,24 +579,19 @@ export const TOUR: readonly TourChunk[] = [
     scenario: "template",
     steps: [
       {
-        id: "template-create",
-        capabilities: ["template.create"],
-        mode: "explanatory",
-        anchor: "save-template",
-        placement: "bottom",
-        title: "Turn this actual spec into a starter",
-        body:
-          "This control creates a named reusable template from the current tutorial spec. An exact copy previews before anything commits, and an AI-generalized version can be requested where available. The preview is server-produced document content, not tour decoration.",
-      },
-      {
         id: "template-use",
-        capabilities: ["template.start", "template.import", "template.manage"],
+        capabilities: [
+          "template.create",
+          "template.start",
+          "template.import",
+          "template.manage",
+        ],
         mode: "explanatory",
         anchor: "templates",
         placement: "bottom",
-        title: "Built-in and personal reusable starters",
+        title: "Reusable starters, created and used in one place",
         body:
-          "A built-in or personal template starts an independent spec; personal templates import and export as files, rename, take a description, and delete behind a confirmation. Missing curated modules are shown rather than silently substituted.",
+          "The template studio is the one door to reusable work. From here a built-in or personal template starts an independent spec; personal templates import and export as files, rename, take a description, and delete behind a confirmation. The same studio turns the spec you have open into a named starter of your own — an exact copy, or an AI-generalized version where available, always previewed as real server-produced content before anything commits. Missing curated modules are shown rather than silently substituted.",
       },
       {
         id: "finish",

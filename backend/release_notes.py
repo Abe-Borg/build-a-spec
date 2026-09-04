@@ -89,6 +89,83 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.16.0",
+        date="2026-09-04",
+        headline="Nothing you were asked quietly scrolls away",
+        summary=(
+            "Questions the assistant raised, decisions only you can make and "
+            "to-dos either side owes now collect in a 'Waiting on you' list "
+            "beside the document, instead of living only in a chat bubble "
+            "you scrolled past. Items check themselves off as they are "
+            "settled — by the assistant when it reads your answer, or by you "
+            "with a tick — and every reply brings one of them back up, so a "
+            "decision cannot go missing between now and issue."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Waiting on you",
+                items=(
+                    ReleaseItem(
+                        title="A list that outlives the conversation",
+                        body=(
+                            "A new panel under Open items tracks what the "
+                            "assistant needs from you. Open items are gaps "
+                            "in the spec — TBD markers and needs-input "
+                            "blocks; this is the other half: the questions "
+                            "and decisions that live in the conversation and "
+                            "used to vanish with it. Items the draft cannot "
+                            "be right without are marked blocking and come "
+                            "first, and each says how many replies ago it "
+                            "was raised."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Things get checked off as work gets done",
+                        body=(
+                            "When you answer a question, the assistant ticks "
+                            "it off in the same reply and says in one line "
+                            "what was settled. You can also tick one off "
+                            "yourself, add a note about what you decided, or "
+                            "reopen one you closed by mistake. Settled items "
+                            "collect under 'Done' rather than disappearing, "
+                            "and they ride the saved project file."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="One item raised per reply, never a list dump",
+                        body=(
+                            "Every turn the assistant brings exactly one "
+                            "waiting item back up — the blocking one, else "
+                            "the oldest — worked into what it was already "
+                            "saying or offered as a one-tap reply chip. If "
+                            "the reply already raised or settled one, it "
+                            "does not pile on a second. The readiness "
+                            "checklist also names anything still waiting, "
+                            "as an advisory line: it will not stop you "
+                            "issuing, it just makes sure you saw it."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Smaller things",
+                items=(
+                    ReleaseItem(
+                        title="One door to the template studio",
+                        body=(
+                            "The document panel's 'Save as Template' button "
+                            "did exactly what Templates in the header "
+                            "already did, so it has been retired. Creating a "
+                            "reusable starter from the spec you have open "
+                            "still lives in the studio, as 'Create from "
+                            "current spec'."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.15.0",
         date="2026-09-03",
         headline="Importing an office master actually works now",

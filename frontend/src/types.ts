@@ -252,6 +252,32 @@ export interface OpenItem {
   label: string;
 }
 
+/**
+ * One thing the model is waiting on the user for.
+ *
+ * Model-authored session state, and deliberately NOT an `OpenItem`: those
+ * are a projection over the document tree ([TBD] markers and needs-input
+ * blocks), while these are conversation-level questions, decisions and
+ * to-dos that live nowhere in the paragraph tree.
+ */
+export interface FollowUp {
+  fid: string;
+  kind: "question" | "decision" | "todo";
+  title: string;
+  detail: string;
+  blocking: boolean;
+  /** Optional element this item is about; enables the jump-to affordance. */
+  element_id: string;
+  status: "open" | "resolved";
+  /** One line saying what was settled; shown on the checked-off row. */
+  resolution: string;
+  resolved_by: "" | "model" | "user";
+  /** Assistant-bubble ordinal at creation — the age clock. */
+  raised_turn: number;
+  created_at: string;
+  resolved_at: string;
+}
+
 /** One deterministic lint finding (advisory, never blocking). */
 export interface LintIssue {
   id: string;
@@ -533,6 +559,8 @@ export interface DocPayload {
   generation: number;
   doc: SpecDoc;
   open_questions: OpenItem[];
+  /** What the model is waiting on the user for; [] when nothing is. */
+  followups: FollowUp[];
   lint: LintIssue[];
   standards: StandardInfo[];
   profile_complete: boolean;
@@ -1625,6 +1653,7 @@ export type StreamEvent =
   | { type: "web_fetch"; url: string }
   | { type: "figure"; figure: Figure }
   | { type: "suggested_prompts"; prompts: string[] }
+  | { type: "followups"; followups: FollowUp[] }
   | { type: "qc_dispositions"; outcomes: Record<string, string> }
   | { type: "doc_patch"; ops: DocOp[]; doc: SpecDoc }
   | { type: "doc_snapshot"; doc: SpecDoc }
@@ -1795,6 +1824,7 @@ export interface DiagnosticsSnapshot {
     figures: number;
     references: number;
     suggested_prompts: number;
+    followups: { open: number; resolved: number };
     turn_active: boolean;
     stop_requested: boolean;
     last_context_tokens: number | null;

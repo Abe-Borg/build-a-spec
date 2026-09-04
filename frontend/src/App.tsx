@@ -10,6 +10,7 @@ import type {
   ImportReport,
   ReferenceDocMeta,
   LintIssue,
+  FollowUp,
   OpenItem,
   QcApplyPreviewBasis,
   QcApplyPreviewResult,
@@ -64,6 +65,7 @@ import {
   resetSession,
   QcStartError,
   startQc,
+  setFollowupStatus,
   startResearch,
   stopChat,
   stopQc,
@@ -141,6 +143,10 @@ export default function App() {
   const detachingRef = useRef(false);
   const [doc, setDoc] = useState<SpecDoc | null>(null);
   const [openItems, setOpenItems] = useState<OpenItem[]>([]);
+  // What the model is waiting on the user for. NOT cleared at turn
+  // start, unlike the reply chips: an item persists until it is
+  // settled, which is the whole point of tracking it.
+  const [followups, setFollowups] = useState<FollowUp[]>([]);
   const [lintIssues, setLintIssues] = useState<LintIssue[]>([]);
   const [standards, setStandards] = useState<StandardInfo[]>([]);
   const [profileComplete, setProfileComplete] = useState(false);
@@ -223,6 +229,7 @@ export default function App() {
     research: 0,
     qc: 0,
     openItems: 0,
+    followups: 0,
   });
   // Consumed once per app launch, and owned here rather than in Chat because
   // the chat pane remounts on a new session (see sessionNonce below) — read
@@ -473,6 +480,7 @@ export default function App() {
         if (!adoptWorkspaceLease(payload)) return;
         setDoc(payload.doc);
         setOpenItems(payload.open_questions);
+        setFollowups(payload.followups ?? []);
         setLintIssues(payload.lint);
         setStandards(payload.standards);
         setProfileComplete(payload.profile_complete);
@@ -1425,6 +1433,11 @@ export default function App() {
           // Live-staged reply chips; the commit-authoritative value re-syncs
           // via refreshDoc on turn_complete (same list) or error (pre-turn).
           setSuggestions(evt.prompts);
+        } else if (evt.type === "followups") {
+          // The tracked question/decision/to-do list after a track_followups
+          // call. Live so a check-off animates as it happens; the committed
+          // value re-syncs through refreshDoc on turn_complete or error.
+          setFollowups(evt.followups);
         } else if (evt.type === "qc_dispositions") {
           // apply_qc_fixes committed dispositions with this turn — pull the
           // fresh finding statuses into the drawer/report immediately.
@@ -1584,6 +1597,31 @@ export default function App() {
     [refreshDoc, currentWorkspaceLease],
   );
 
+  /** Tick a tracked follow-up off, or put it back. Resync on a 409/404. */
+  const setFollowupStatusHandler = useCallback(
+    async (fid: string, status: "open" | "resolved", note?: string) => {
+      const epoch = workspaceEpochRef.current;
+      try {
+        const next = await setFollowupStatus(fid, status, {
+          note,
+          ...currentWorkspaceLease(),
+        });
+        if (workspaceEpochRef.current === epoch) setFollowups(next);
+      } catch {
+        refreshDoc();
+      }
+    },
+    [refreshDoc, currentWorkspaceLease],
+  );
+
+  /** How many assistant bubbles the transcript holds — the same turn ordinal
+   *  the server stamps on a tracked item, so "raised N replies ago" agrees
+   *  with what the model was told. */
+  const assistantBubbleCount = useMemo(
+    () => messages.filter((message) => message.role === "assistant").length,
+    [messages],
+  );
+
   /** The active workspace is a tutorial one, so the session on screen is a
    *  protected practice copy rather than the user's own project. Unknown
    *  health reads as "not protected", matching requestStartTemplate: the
@@ -1615,7 +1653,13 @@ export default function App() {
     // its nonce is non-zero — which a fresh mount evaluates too. Left as they
     // were, every drawer the old session opened would spring open on the new
     // one. Zero is the "nobody has asked" value the effects already guard on.
-    setDrawerNonces({ review: 0, research: 0, qc: 0, openItems: 0 });
+    setDrawerNonces({
+      review: 0,
+      research: 0,
+      qc: 0,
+      openItems: 0,
+      followups: 0,
+    });
     // A composer prefill staged by the old session's review queue. Nonce 0 is
     // what makes the remounted Composer ignore it instead of re-prefilling.
     setPrefill({ text: "", nonce: 0 });
@@ -1639,6 +1683,7 @@ export default function App() {
     setMessages([]);
     setDoc(null);
     setOpenItems([]);
+    setFollowups([]);
     setLintIssues([]);
     setStandards([]);
     setProfileComplete(false);
@@ -1700,6 +1745,7 @@ export default function App() {
     generation?: number;
     doc: SpecDoc;
     open_questions: OpenItem[];
+    followups: FollowUp[];
     lint: LintIssue[];
     standards: StandardInfo[];
     profile_complete: boolean;
@@ -1720,6 +1766,7 @@ export default function App() {
     if (!adoptWorkspaceLease(payload)) return false;
     setDoc(payload.doc);
     setOpenItems(payload.open_questions);
+    setFollowups(payload.followups ?? []);
     setLintIssues(payload.lint);
     setStandards(payload.standards);
     setProfileComplete(payload.profile_complete);
@@ -1758,6 +1805,7 @@ export default function App() {
         generation: merged.generation,
         doc: merged.doc,
         open_questions: merged.open_questions ?? [],
+        followups: merged.followups ?? [],
         lint: merged.lint ?? [],
         standards: merged.standards ?? [],
         profile_complete: merged.profile_complete ?? false,
@@ -2532,6 +2580,9 @@ export default function App() {
           key={`panel-${sessionNonce}`}
           doc={doc}
           openItems={openItems}
+          followups={followups}
+          followupTurn={assistantBubbleCount}
+          onSetFollowupStatus={setFollowupStatusHandler}
           lintIssues={lintIssues}
           standards={standards}
           profileComplete={profileComplete}
@@ -2565,7 +2616,6 @@ export default function App() {
           detaching={detaching}
           onUndo={onUndo}
           onRedo={onRedo}
-          onSaveAsTemplate={openTemplateStudio}
           onEditDoc={onEditDoc}
           onLoadProject={onLoadProject}
           nativeOpenFile={nativeOpenFile}

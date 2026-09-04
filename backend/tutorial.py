@@ -396,7 +396,56 @@ def structural_practice_copy(source: SessionState) -> SessionState:
         ]
     )
     clone.doc.commit_turn()
+    _seed_tutorial_followups(clone, paragraph.uid)
     return clone
+
+
+def _seed_tutorial_followups(clone: SessionState, element_id: str) -> None:
+    """Put three items on the "Waiting on you" panel for the tour to point at.
+
+    The panel renders only when the list is non-empty, so without a fixture
+    the chapter's anchor could never resolve. Bundled and deterministic —
+    like every other tutorial fixture, no model call is involved. One
+    already-settled item is included so the Done section, which is what
+    "checked off" looks like, is on screen too.
+    """
+    clone.followups.apply(
+        {
+            "add": [
+                {
+                    "kind": "decision",
+                    "title": "Confirm the commodity classification for the storage room",
+                    "detail": (
+                        "The density/area basis for PART 2 changes with it."
+                    ),
+                    "blocking": True,
+                    "element_id": element_id,
+                },
+                {
+                    "kind": "question",
+                    "title": "Is the site fed by a dedicated fire main or a shared service?",
+                },
+                {
+                    "kind": "todo",
+                    "title": "Send the owner's insurer datasheet when you have it",
+                },
+            ],
+            "resolve": [],
+        },
+        message_index=1,
+    )
+    clone.followups.apply(
+        {
+            "add": [],
+            "resolve": [
+                {
+                    "id": "fu-3",
+                    "resolution": "Received — FM Global datasheet 8-9 applies.",
+                }
+            ],
+        },
+        message_index=2,
+    )
 
 
 def review_practice_copy(source: SessionState) -> SessionState:

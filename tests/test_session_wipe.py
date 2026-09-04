@@ -60,6 +60,7 @@ _STATE_PROBES = {
     "figures": lambda s: s.figures.to_dict(),
     "references": lambda s: s.references.to_dict(),
     "suggested_prompts": lambda s: list(s.suggested_prompts),
+    "followups": lambda s: s.followups.to_dict(),
     "usage": lambda s: s.usage.snapshot(),
     "last_context_tokens": lambda s: s.last_context_tokens,
     "turn_active": lambda s: s.turn_active,
@@ -129,6 +130,18 @@ def _dirty(session: SessionState) -> None:
     session.import_report = {"filename": "office-master.docx", "warnings": []}
     session.template_origin = {"template_id": "tpl-1", "name": "Starter"}
     session.project_context = "an old project's primer"
+    session.followups.apply(
+        {
+            "add": [
+                {
+                    "kind": "decision",
+                    "title": "Confirm the hazard basis for the old project",
+                }
+            ],
+            "resolve": [],
+        },
+        message_index=1,
+    )
     session.research.profile_result = RequirementsProfile(
         items=[], research_date="2026-07-01"
     )
@@ -251,6 +264,7 @@ def test_reset_through_the_endpoint_wipes_the_live_session():
     assert payload["figures"] == []
     assert payload["reference_docs"] == []
     assert payload["suggested_prompts"] == []
+    assert payload["followups"] == []
     assert payload["import_report"] is None
     assert payload["template_origin"] is None
     assert client.get("/api/usage").json()["totals"] == {}

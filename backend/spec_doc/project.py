@@ -237,6 +237,7 @@ def save_project(
     project_context: str = "",
     figures: dict[str, Any] | None = None,
     suggested_prompts: list[str] | None = None,
+    followups: dict[str, Any] | None = None,
     reference_docs: dict[str, Any] | None = None,
     import_report: dict[str, Any] | None = None,
     source_map: dict[str, Any] | None = None,
@@ -269,6 +270,10 @@ def save_project(
     # empty, which is the common case once a section is finished).
     if suggested_prompts:
         payload["suggested_prompts"] = list(suggested_prompts)
+    # Tracked questions/decisions/to-dos ride the file the same optional way
+    # — the guard is on the inner list so an empty store adds no key.
+    if followups and followups.get("followups"):
+        payload["followups"] = followups
     # Attached reference material is user content: whatever they added must
     # come back when they reopen the project. Same optional shape as figures.
     if reference_docs and reference_docs.get("reference_docs"):
@@ -481,6 +486,10 @@ def load_project(data: Any, session) -> None:
     # Chat-authored figures ride the file too; a malformed block degrades to
     # "no figures" (load() resets then restores) rather than failing the load.
     session.figures.load(data.get("figures"))
+    # Tracked follow-ups restore the same lenient way; ``load()`` resets
+    # first, so a project without them correctly clears any left over from
+    # the session being replaced (load_project never calls session.reset()).
+    session.followups.load(data.get("followups"))
     # Attached reference documents restore the same lenient way. ``load()``
     # resets first, so a project without them correctly clears any left over
     # from the session being replaced.

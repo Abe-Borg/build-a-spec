@@ -1477,6 +1477,14 @@ def snapshot() -> dict[str, Any]:
             "figures": len(session.figures.figures),
             "references": len(session.references.docs),
             "suggested_prompts": len(session.suggested_prompts),
+            "followups": {
+                "open": len(session.followups.open_items()),
+                "resolved": sum(
+                    1
+                    for item in session.followups.items
+                    if item.status == "resolved"
+                ),
+            },
             "turn_active": session.turn_active,
             "stop_requested": session.stop_requested.is_set(),
             "last_context_tokens": session.last_context_tokens,

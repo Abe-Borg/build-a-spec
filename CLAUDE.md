@@ -385,6 +385,35 @@ backend/
                            reused). apply() is all-or-nothing. context_block()
                            renders WAITING ON THE USER, marking the one [NEXT]
                            item the policy tells the model to surface
+  project_facts.py         [v1.17.0] "Project facts": ProjectFact +
+                           ProjectFactStore (the followups blueprint — snapshot
+                           rollback, monotonic pf-N ids never reused,
+                           all-or-nothing apply that SUPERSEDES BEFORE it
+                           records, lenient reset-first load) +
+                           validate_record_payload + RECORD_PROJECT_FACTS_TOOL;
+                           context_block() renders ESTABLISHED PROJECT FACTS
+                           (project → discipline → other sections' coordination
+                           facts → this section; disclosed trim);
+                           project_facts_block(audience=) is the fan-out block
+                           (the reference_context_block shape: one framing, a
+                           research directive and a QC directive, delimiter
+                           neutralization, "" when empty) and
+                           project_facts_manifest_facts fingerprints the
+                           rendered FACT LINES for the QC manifest
+  project_brief.py         [v1.17.0] the .basproject: ProjectBrief +
+                           build_project_brief (pure read; reuses the link's
+                           project_id) / brief_bytes / brief_filename /
+                           parse_brief_json + parse_project_brief (strict
+                           shape, degradable fields warn) /
+                           brief_from_sibling_project (a .baspec loaded into a
+                           THROWAWAY SessionState) / within_reference_cap /
+                           brief_manifest / project_sections_block (the
+                           PROJECT SECTIONS context block). Carries profile,
+                           identity, edition overrides, the research profile,
+                           reference docs (+content_fingerprint), facts (all
+                           statuses) and the section registry — NEVER the
+                           transcript, the document, figures, QC, follow-ups,
+                           source DOCX or suppressed standards
   suggestions.py           [Batch 9] model-driven reply chips: MAX_PROMPTS/
                            MAX_PROMPT_CHARS, SuggestError, validate_prompts (strict,
                            fold-whitespace/dedupe/cap; empty list valid) +
@@ -627,6 +656,15 @@ backend/
                            pure, UNGUARDED _build_chat_request — the resend
                            sanitizer's PDF decoding no longer holds the lock this
                            turn's own stop request needs
+                           v1.17.0 adds SessionState.facts (ProjectFactStore, the
+                           fourth turn-atomic store) + project_link, the
+                           record_project_facts dispatch (appended LAST in
+                           _chat_tools), the ESTABLISHED PROJECT FACTS +
+                           PROJECT SECTIONS splice right after the research
+                           block, the *_project_fact_if_idle panel helpers,
+                           and start_from_brief — the seed transaction
+                           (start_from_template's shape: reset, then install
+                           every carried asset under one lock acquisition)
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -869,6 +907,32 @@ tests/
                            own research_date stamp) and one per QC run (both
                            cached prefixes), plus the deliberate
                            not-in-the-input-manifest decision
+  test_project_facts.py    [v1.17.0] store units (rollback restoring a
+                           supersede, duplicate suppression, the all-or-nothing
+                           batch, supersede-before-record at the cap, caps,
+                           scope/section resolution, load reconciliation,
+                           the block's order/trim/neutralization, the manifest
+                           fingerprint) + the tool through /api/chat, the
+                           panel routes, persistence, unsaved progress, the
+                           stable-prompt vocabulary
+  test_project_brief.py    [v1.17.0] build → bytes → parse round trip, what
+                           never travels, the manifest, refusals vs
+                           degradations, the .baspec shortcut, the seed
+                           transaction (+cap, +template pairing, +unknown
+                           module, +import after seed, +reset), the sections
+                           block, all four routes (export links the session,
+                           inspect touches nothing, start end to end, the
+                           409/413/400 matrix, template pairing, save →
+                           reload → export extends the lineage), and carried
+                           research readiness + the briefed round
+  test_facts_agent_visibility.py
+                           [v1.17.0] the reference-visibility mirror: both
+                           audiences, block 0 of every dimension rendered
+                           once, lens/verifier prefixes (not consolidation),
+                           both QC transports, the manifest fingerprint on
+                           record/edit/supersede, freshness end to end, the
+                           frame escape on both audiences and the trimmed
+                           path, every receiving system prompt's data sentence
   test_session_wipe.py     "New session" leaves nothing of the old one: the
                            FIELD SWEEP (every SessionState field is declared
                            wiped or deliberately kept — a new store fails
@@ -914,6 +978,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `figure` | `figure` | the model created a figure (diagram/schematic/table) via `create_figure` this round — the full serialized `Figure` for inline chat rendering + downloads (Batch 8). Emitted live on the tool dispatch. Source is client-sanitized before render; it lives only in the figure store, never in history/traces/the re-billed doc context |
 | `suggested_prompts` | `prompts` | the model staged up to 5 one-tap reply chips via `suggest_prompts` this round (Batch 8→9), shown above the composer; emitted live on the tool dispatch. Latest-only, committed turn-atomically: a committed turn REPLACES the session's set with what it staged (not calling the tool = clear, which is the wind-down; a failed turn keeps the prior set). Tiny payload — rides committed history verbatim (no elision, no PROJECT CONTEXT stub) |
 | `followups` | `followups` | the model raised or settled tracked items via `track_followups` this round (v1.16.0) — the full "Waiting on you" list, emitted live on the tool dispatch. ACCUMULATING, not latest-only: the store persists across turns, so silence means nothing changed rather than "clear". Turn-atomic through the store's own begin/commit/rollback |
+| `project_facts` | `project_facts` | the model recorded or superseded established project facts via `record_project_facts` this round (v1.17.0) — the full ledger snapshot, emitted live on the tool dispatch. Same accumulating, turn-atomic posture as `followups`; the store also persists into the project file and rides a project brief into the next section |
 | `qc_dispositions` | `outcomes` | apply_qc_fixes committed audit dispositions with this turn (v1.11.0): `{finding_id: applied\|stale\|no_ops\|already_applied\|not_open\|unknown}`. Emitted from the frozen post-commit payload ONLY when the turn commits with staged dispositions — a rolled-back turn never emits it; the frontend refreshes QC state + readiness on it |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
@@ -926,7 +991,8 @@ The frontend switch in `App.tsx#send` is the single place events dispatch.
 Snapshots outside a turn travel over REST, not SSE: `GET /api/doc`,
 `POST /api/doc/undo|redo`, and `POST /api/project/load` all return
 `{doc, open_questions, lint, standards, profile_complete, research_status,
-baseline_index, figures, suggested_prompts, followups}` (load adds `chat`, the rebuilt
+baseline_index, figures, suggested_prompts, followups, project_facts,
+project_link}` (load adds `chat`, the rebuilt
 transcript; `baseline_index` is the imported-master version for the redline
 picker; `suggested_prompts` re-syncs the reply-chip bar, incl. restore-on-error). Patches and snapshots
 always carry the full tree — the frontend never applies ops itself. The
@@ -977,6 +1043,11 @@ now be `superseded` when a NEWER run takes the runner over mid-stream
 (`sse_events` binds to the run token at call time, the QC shape). Every
 event carries the 1-based `round` it belongs to;
 `research_complete` reports the CUMULATIVE `item_count`/`grounded_count`
+plus that round's own counts, and every round record carries `section` —
+the section number of the session that ran it (v1.17.0; serialized only
+when set, so a legacy profile's bytes are untouched). The status payload's
+`coverage` block also carries `carried_from` / `carried_rounds` for a
+section seeded from a project brief. `research_complete` reports
 plus that round's own `round_item_count`/`new_item_count`/
 `repeat_item_count`. The event log is per-round (cleared at each start —
 the accumulated knowledge is in the profile, not the log), and the
@@ -2795,7 +2866,9 @@ No new SSE events, no new deps, no project-format bump.
   `read_reference_doc` `tool_use` ids; `is_error` results are kept — a
   correction the model should learn from is small). The tool description and
   the elision placeholder both say re-reading is expected and cheap to ask
-  for. `READ_REFERENCE_DOC_TOOL` is appended LAST in `_chat_tools()`, after
+  for. `READ_REFERENCE_DOC_TOOL` is appended after `suggest_prompts` in
+  `_chat_tools()` (LAST at the time; `apply_qc_fixes` and then v1.17.0's
+  `record_project_facts` have since taken the tail), after
   `suggest_prompts`, so existing tool bytes stay a stable cached prefix.
 - **Upload path mirrors master import** minus the retention: bounded read,
   the same `inspect_docx_package` safety pass for a `.docx` (same attack
@@ -3275,7 +3348,7 @@ outside the modal.
   with IntersectionObserver scroll-spy rooted on the scroll container, and
   `#id` anchors per section. The rail is presentation only — everything is in
   one scroll, so nothing is hidden behind a click.
-- **The runtime section is the point.** Thirteen `<Runtime>` cards, one per
+- **The runtime section is the point.** Fourteen `<Runtime>` cards, one per
   user-triggered action (a chat turn, full draft, research, Final QC, applying
   a QC fix, master import, reference attach, figures, suggested replies, manual
   editing, export, the tutorial, stop), each answered in the SAME five terms —
@@ -6718,7 +6791,8 @@ chat tool, one new SSE event, two thin endpoints, one env knob
   need a re-run; a clean pass takes the win in three sentences. QC facts
   come from ONE `audit_record_snapshot()` and describe
   `report_for_export_model` — the attempt that just finished.
-- **`apply_qc_fixes` is the fourth chat tool**, appended LAST in
+- **`apply_qc_fixes` is the fourth chat tool**, appended LAST (until
+  v1.17.0's `record_project_facts` took the tail) in
   `_chat_tools()` (cache-prefix rule). Dispatch (`_run_apply_qc_fixes`)
   runs `stage_chat_apply` under the turn's guard: the same eligibility,
   conflict planning (`plan_qc_operation_batch`), and accumulating dry-run
@@ -7270,6 +7344,140 @@ per their own contracts.
   the pending disclosure. Both mechanisms were reverted in place to prove
   them load-bearing: forcing `nominal=False` → 4 red; restoring refuted full
   records → 5 red.
+
+## Project briefs — implemented notes (v1.17.0)
+
+Owner ask (Abraham, 2026-09-04): a project has many sections, and everything
+the first section paid for — research, Final QC, AHJ-adopted code facts,
+client standards and preferences — is lost when the second starts; carry it
+into the next session WITHOUT loading the previous context, which is bloat
+that eats context and compromises results. Design reviewed before any code
+("give me a chance to review"), then "make it happen, I trust your
+judgement". Decisions ratified with him: a separate `.basproject` plus a
+sibling-`.baspec` shortcut; carried research PASSES readiness with a
+disclosure; the paid harvest pass for legacy sessions and the write-back
+merge are documented follow-ups, not built. One new chat tool, one new SSE
+event, seven thin REST routes, no new deps, no new env knobs, no
+project-format bump (two additive `.baspec` keys).
+
+- **The unit of carry is the ASSET, never the context.** Research is
+  project-level by construction (`ResearchDimension.prompt_template` takes
+  only city/state/country/client/discipline, `_mint_item_id` hashes
+  dimension+category+requirement, and `established_facts_for` briefs a later
+  round whenever the recorded project matches field-for-field), so a carried
+  profile is valid in the next section and its first Research press is a
+  briefed round. Every other project-level asset except conversational facts
+  already had a serialization boundary and a bloat-safe context renderer
+  (`SpecSection.to_dict` for profile/identity/overrides, `RequirementsProfile`
+  + `research_context_block`, `ReferenceDocStore` stubs). The transcript and
+  the document are what the owner said not to carry, and the brief's
+  `to_dict` key set is exact and pinned so nothing else can creep in.
+- **Facts are a STORE, because the alternative was a summary.** The one
+  genuine gap was decisions settled in chat ("AHJ confirmed NFPA 13-2022 with
+  amendment 4", "30-minute supply per client standard"), which lived only in
+  bubbles and provisions. `backend/project_facts.py` clones the follow-ups
+  blueprint rather than summarizing the transcript at export time: a model
+  records a fact in the turn that settles it, with scope (`project` /
+  `discipline` / `section`), status (`confirmed` / `assumed`), source kind
+  and ref, and the section that recorded it. `apply()` supersedes BEFORE it
+  records (the follow-ups cap lesson — a batch that retires one and raises
+  its replacement is judged on its final state), and `source_kind="brief"`
+  is accepted on load but offered nowhere: reserved for the deferred
+  write-back. The naming collision was the trap again: `OPEN ITEMS` are
+  paragraph gaps, `WAITING ON THE USER` is what the model has not been told,
+  `ESTABLISHED PROJECT FACTS` is what has been settled — the policy states
+  the boundary so the model files each in the right place.
+- **The context block is capped and grouped, and the fan-out block is the
+  same lines in a different frame.** `render_fact_lines` is ONE renderer
+  (project → discipline → other sections' coordination facts → this
+  section; trim order other-section first, then assumed, then the tail;
+  omission disclosed) feeding the chat block, both fan-out audiences and the
+  manifest fingerprint. The chat block enters PROJECT CONTEXT right after the
+  research block (dynamic only — the cache rule), never the stable prompt,
+  which carries `_PROJECT_FACTS_POLICY` instead. A section-scoped fact
+  recorded by ANOTHER section renders as coordination information the model
+  cross-references ("as specified in Section 21 13 13") and never restates.
+- **Both fan-outs read the facts exactly the way they read attached
+  documents** — rendered ONCE per run into the cached prefix (block 0 of
+  every dimension; the lens prefix after the owner's documents and before
+  the specification; the verifier prefix on both transports, deliberately,
+  because a seat that cannot see what the AHJ confirmed refutes the finding
+  that cites it; NOT the consolidation prefix, which asks a question the
+  facts do not inform). Empty renders nothing, each system prompt's
+  data-classification sentence names `<established_project_facts>`, and a
+  statement cannot close the frame (`neutralize_fact_delimiters`, applied on
+  the trimmed path and in the fingerprint lines too).
+- **The QC manifest fingerprints the rendered fact LINES, not the block.**
+  A later edit to the directive prose must not flip every retained report
+  stale; recording, editing or superseding a fact must. The key is always
+  present, so a report from before v1.17.0 reads stale ONCE after the
+  upgrade (release-noted). Every site that rebuilds the manifest —
+  `matches_inputs`, `qc/apply.matches_current_inputs`,
+  `app._qc_export_current_state`, `tests/fakes.py::audit_grade_qc_result` —
+  passes the facts, because PR #148 already showed what a manifest that
+  describes a review nobody could run looks like.
+- **The seed is one transaction.** `SessionState.start_from_brief` mirrors
+  `start_from_template`: reset, then install every carried asset under one
+  `_turn_state_lock` acquisition. Version 0 of the new document IS the
+  project setup (profile, identity, overrides on an empty body — or on a
+  template's body, whose module wins with a warning when it differs);
+  `research.restore` (status complete, rounds intact); references kept in
+  order while they fit the cap, the rest NAMED as dropped; facts loaded with
+  their pids PRESERVED (superseded links stay valid) and `_next_seq` past
+  them; `project_link` recorded with `seeded_from` and
+  `research_rounds_at_seed`. `adopt_imported` already carries
+  profile/identity/overrides onto an imported tree, so "seed, then import a
+  master" needed nothing. The field sweep in `test_session_wipe.py` made
+  `facts` and `project_link` a decision, not an omission.
+- **Exporting stamps the link, so a project has one id.**
+  `build_project_brief` is a pure read that reuses `link["project_id"]`; the
+  export ROUTE stamps `session.project_link` when it is None, under the
+  guard, before serializing — so exporting twice never mints two ids, the
+  section's own `.baspec` records which project it belongs to, and section
+  2's export upserts its own record beside section 1's (`sections` joined by
+  number; `seeded_from` survives the export).
+- **The routes are the reference-upload and template-import idioms.** Both
+  upload routes are `async def` and parse on `run_in_threadpool`
+  (`_parse_brief_upload`: ZIP magic or JSON `kind == PROJECT_KIND` → sibling
+  project into a throwaway session; else a brief). An oversized brief that is
+  not secretly a giant legacy project is a 413 in the BRIEF's words
+  (`ProjectBriefTooLargeError`), not the package parser's opinion of a file
+  that was never a package. Start refuses inside a tour and while anything
+  runs (`busy_reasons` — a seed installs paid state; it is not a reset) and
+  answers with the same session bundle a template start does. `main.py`'s
+  `save_project_brief` is `save_template` with the `open_in_word` fetch, and
+  `_filename_from_disposition` / `_fetch_backend_bytes` gained keyword
+  defaults (`.docx` stays the default) because the Word helper otherwise
+  saved a brief as `….basproject.docx`.
+- **Carried research passes readiness, out loud.** `_carried_research_note`
+  reads the LINK (`research_rounds_at_seed`), not the round stamps — a
+  pre-1.17 round carries no stamp — and renders "(carried from 21 13 13; 1
+  round(s); last research 2026-08-02). Press Research again for a briefed
+  round on this section." while no round has run here, then "(1 of 2 rounds
+  carried from 21 13 13)" with no nudge once one has. `ResearchRound.section`
+  is LAST in the dataclass (positional construction), serialized only when
+  set (legacy bytes and the QC research fingerprint untouched), stamped by
+  the engine at birth and kept by `append_research_round` when the runner
+  folds the round in without a keyword. Not one request byte changes.
+- **The frontend is the follow-ups panel's sibling.** `ProjectFactsPanel`
+  renders when facts exist OR the session is linked; Add/Edit/Retire go
+  through the same store the model records into and every mutation refreshes
+  readiness AND Final QC (the facts move the stale flag). The Export menu's
+  brief entry confirms with the manifest first; New session's fourth choice
+  reads a brief or a `.baspec`, shows the manifest card, and pairs with a
+  template from the same studio. `project.facts` / `project.brief-export` /
+  `project.brief-start` landed in all three places the contract polices;
+  `TOUR_VERSION` 6 → 7 (a step was added mid-chapter). The trust dossier's
+  fourteenth runtime card exists because a file that carries the full text of
+  attached documents deserves to be described before someone emails it.
+- **Deferred, documented**: write-back ("Update project brief", an
+  append-only id-joined merge — research by `append_research_round`
+  semantics, facts by normalized statement, references by
+  `content_fingerprint`, sections by number; `source_kind="brief"` is
+  reserved for it); the paid harvest pass for legacy `.baspec` sessions
+  (transcript + confirmed provisions + QC dismissal reasons → proposed facts,
+  preview-then-commit like AI-generalize); per-section relevance trimming of
+  the carried research block; a cross-section coordination QC lens.
 
 ## Commands
 

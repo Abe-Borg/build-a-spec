@@ -1,7 +1,7 @@
 {
   "name": "build-a-spec-frontend",
   "private": true,
-  "version": "1.16.0",
+  "version": "1.17.0",
   "license": "SEE LICENSE IN LICENSE",
   "author": {
     "name": "Abraham Borg",

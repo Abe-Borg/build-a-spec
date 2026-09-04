@@ -719,7 +719,8 @@ function Dossier() {
             <>
               One streamed request to Anthropic. If the model decides to use a
               tool — edit the document, create a figure, read an attached
-              reference, run a web lookup — the app executes that tool locally,
+              reference, track or check off something it needs from you, run a
+              web lookup — the app executes that tool locally,
               hands back the result, and the model continues in the same turn.
               Document edits stream into the panel as they are applied, which is
               why you watch the page fill in.
@@ -738,7 +739,8 @@ function Dossier() {
               project-profile fields are still missing, the imported-source
               boundary if any, the grounded research profile if any, the full
               text of every provision with its id and status, the deterministic
-              lint report, the open-items list, a compact digest of the
+              lint report, the open-items list, the list of questions and
+              decisions still waiting on you, a compact digest of the
               retained Final QC findings if a review has run (ids, severity,
               one-line issues, and whether each fix is verified — never the
               full report), and one-line stubs for figures
@@ -1385,8 +1387,9 @@ function Dossier() {
               “Ready to issue” is a checklist with fixed rules: no open items, no
               unreviewed imported or assumed blocks, lint clean, research
               complete, a QC result matching the current document, complete QC
-              coverage, and no open critical findings. It never asks a model
-              whether the section is good.
+              coverage, and no open critical findings. Anything still waiting on
+              you is listed too, but as an advisory line that does not gate the
+              verdict. It never asks a model whether the section is good.
             </>,
           ]}
         />

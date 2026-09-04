@@ -375,6 +375,16 @@ backend/
                            re-billed doc context or tool results (PDF-elision
                            posture) — only id/kind/title do; recurring token cost
                            is negligible regardless of figure count
+  followups.py             [v1.16.0] "Waiting on you": FollowUp + FollowUpStore
+                           (model-authored questions/decisions/to-dos the user
+                           still owes) + validate_track_payload +
+                           TRACK_FOLLOWUPS_TOOL. Turn-atomic via a SNAPSHOT
+                           backup, not FigureStore's high-water mark — a turn
+                           MUTATES items (resolve), so rollback must restore,
+                           and _next_seq deliberately survives it (ids never
+                           reused). apply() is all-or-nothing. context_block()
+                           renders WAITING ON THE USER, marking the one [NEXT]
+                           item the policy tells the model to surface
   suggestions.py           [Batch 9] model-driven reply chips: MAX_PROMPTS/
                            MAX_PROMPT_CHARS, SuggestError, validate_prompts (strict,
                            fold-whitespace/dedupe/cap; empty list valid) +
@@ -820,6 +830,17 @@ tests/
                            token-discipline tool result, rollback on failure,
                            self-correction on a bad payload) + REST (list/CSV/
                            delete/project round-trip)
+  test_followups.py        [v1.16.0] store units (monotonic ids surviving a
+                           rollback, the rollback that restores a RESOLUTION,
+                           duplicate suppression, the all-or-nothing batch,
+                           idempotent resolve, both caps, load reconciling
+                           _next_seq), the tool through /api/chat (SSE event,
+                           compact result + verbatim input, failed turn leaving
+                           the list untouched, unknown id self-correcting),
+                           the context block in the turn but never the cached
+                           prompt and never fossilized, the panel route incl.
+                           the mid-turn 409, persistence, and the advisory
+                           readiness line
   test_suggested_prompts.py [Batch 9] validate_prompts/restore_prompts units
                            (fold/dedupe/cap, empty valid, lenient degrade) +
                            suggest_prompts through /api/chat (SSE event + commit,
@@ -892,6 +913,7 @@ Each frame is `data: <json>\n\n`. Event types:
 | `web_fetch` | `url` | the model fetched a page/document server-side this round — emitted live on the block's completion |
 | `figure` | `figure` | the model created a figure (diagram/schematic/table) via `create_figure` this round — the full serialized `Figure` for inline chat rendering + downloads (Batch 8). Emitted live on the tool dispatch. Source is client-sanitized before render; it lives only in the figure store, never in history/traces/the re-billed doc context |
 | `suggested_prompts` | `prompts` | the model staged up to 5 one-tap reply chips via `suggest_prompts` this round (Batch 8→9), shown above the composer; emitted live on the tool dispatch. Latest-only, committed turn-atomically: a committed turn REPLACES the session's set with what it staged (not calling the tool = clear, which is the wind-down; a failed turn keeps the prior set). Tiny payload — rides committed history verbatim (no elision, no PROJECT CONTEXT stub) |
+| `followups` | `followups` | the model raised or settled tracked items via `track_followups` this round (v1.16.0) — the full "Waiting on you" list, emitted live on the tool dispatch. ACCUMULATING, not latest-only: the store persists across turns, so silence means nothing changed rather than "clear". Turn-atomic through the store's own begin/commit/rollback |
 | `qc_dispositions` | `outcomes` | apply_qc_fixes committed audit dispositions with this turn (v1.11.0): `{finding_id: applied\|stale\|no_ops\|already_applied\|not_open\|unknown}`. Emitted from the frozen post-commit payload ONLY when the turn commits with staged dispositions — a rolled-back turn never emits it; the frontend refreshes QC state + readiness on it |
 | `doc_patch` | `ops`, `doc` | an applied edit batch: ops echo server-assigned element ids (highlighting); `doc` is the authoritative full snapshot (rendering) |
 | `doc_snapshot` | `doc` | committed tree after a doc-changing turn — mid-turn patches carry a pre-commit version pointer; this one is current |
@@ -904,7 +926,7 @@ The frontend switch in `App.tsx#send` is the single place events dispatch.
 Snapshots outside a turn travel over REST, not SSE: `GET /api/doc`,
 `POST /api/doc/undo|redo`, and `POST /api/project/load` all return
 `{doc, open_questions, lint, standards, profile_complete, research_status,
-baseline_index, figures, suggested_prompts}` (load adds `chat`, the rebuilt
+baseline_index, figures, suggested_prompts, followups}` (load adds `chat`, the rebuilt
 transcript; `baseline_index` is the imported-master version for the redline
 picker; `suggested_prompts` re-syncs the reply-chip bar, incl. restore-on-error). Patches and snapshots
 always carry the full tree — the frontend never applies ops itself. The
@@ -6790,6 +6812,125 @@ chat tool, one new SSE event, two thin endpoints, one env knob
   latest-wins, identity on no-change, hold vs drop, epoch death, research
   before qc, bounded fired ledger). Existing pins updated in place: the
   tool-order assertion in test_app.py gained the new last entry.
+
+## "Waiting on you" — implemented notes (v1.16.0)
+
+Reported ask (Abraham): questions the model raises and decisions the user
+must make get missed — "if the user doesn't address them, they will miss
+them/forget to come back. The LLM does a decent job of bringing them up in
+the chat tiles, but not everything and not always." Nothing tracked them: a
+question lived in a chat bubble and, sometimes, a reply chip, and both
+scroll away. One new chat tool, one new SSE event, one thin REST route, one
+new collapsible panel. No new deps, no project-format bump.
+
+- **It is a STORE, not a latest-only set, and that is the whole design.**
+  `suggest_prompts` replaces its list every turn (silence = clear). That
+  rule is exactly wrong here: an item the model forgets to restate must not
+  vanish, since forgetting is the failure this exists to prevent. So the
+  tool is additive-plus-resolving and `FollowUpStore` persists across turns
+  and into the project file.
+- **Turn atomicity needs a SNAPSHOT, not a high-water mark.** `FigureStore`
+  rolls back with `del figures[mark:]` because it is append-only within a
+  turn. Resolving MUTATES an item in place, so `begin_turn` copies the list
+  and `rollback_turn` restores it — the `DocumentStore._turn_backup` shape.
+  `_next_seq` is deliberately NOT restored: a rolled-back id is skipped,
+  never recycled (the document-store rule). Pinned by
+  `test_rollback_restores_a_resolution`, which is red against a mark.
+- **`begin_model_turn_stores` is now three stores** with a third `started`
+  flag unwinding in reverse, and `finalize_model_turn` rolls the third back
+  on the not-committed branch. A store added without both is a store that
+  silently survives a failed turn.
+- **The context block and the policy are two halves that only work
+  together.** The block (dynamic context, headed `WAITING ON THE USER`)
+  makes the list visible every turn and marks the one `[NEXT]` item;
+  `_FOLLOWUP_POLICY` (stable prompt) makes the model act on it. Either
+  alone does nothing — the same posture as the untrusted-reference defence.
+  Reverting either turns a test red.
+- **The naming collision was the real trap.** `_turn_context_text` already
+  emits an `OPEN ITEMS` block, derived by `open_questions()` from the
+  paragraph tree. Calling this one "open items" too would have the model
+  filing paragraph TBDs here and conversation questions there. The header,
+  the panel label, the payload key and the capability id all say
+  *followups* / *Waiting on you*, and the policy states the boundary in the
+  form the model can act on: if the answer changes a provision's WORDS it
+  is a document open item; if it changes what to DO next it belongs here.
+- **`next_to_surface` is deterministic** (oldest blocking open item, else
+  oldest open), so the policy can name it and the behaviour is
+  reproducible. Age is measured in assistant bubbles —
+  `_assistant_bubble_count`, one definition now shared with the figure
+  store's `message_index`, so the two cannot drift.
+- **A panel resolve with no note is DISCLOSED, not papered over.** The
+  checkbox records `PANEL_RESOLUTION` and the context block tells the model
+  the user settled it without saying what they decided, and to ask again
+  only if it still affects the draft. A UI shortcut must never become a
+  decision the model invents around.
+- **`resolve()` is idempotent and `annotate()` exists because of it.**
+  Idempotence is right for the model (restating a settlement costs nothing)
+  and wrong for the panel's "add a note" affordance, which must actually
+  change the record — found by a test, not by reading: the note silently
+  did nothing.
+- **The REST route 409s while `turn_active`**, and that is not cosmetic: a
+  user resolve landing mid-turn would be reverted by that turn's
+  `rollback_turn`, which reads to the user as the checkbox not working.
+  Otherwise it is the `figure_delete` mutation checklist verbatim.
+- **Readiness gets an ADVISORY line** (`followups_clear`). `no_open_items`
+  gates `ready`; an unanswered question does not make the draft wrong the
+  same way, and the model may already have stamped a defensible default. It
+  earns a line because the checklist is the last place anyone looks before
+  issuing. The detail NAMES the blocking item — a count alone is what the
+  tracked list exists to improve on.
+- **The panel renders while the list holds ANY item, open or settled**, not
+  only while something waits, so the last check-off is visible instead of
+  the panel vanishing mid-animation. It auto-expands once, the first time
+  something lands in it (the QCDrawer precedent); a later collapse is the
+  user's and is respected.
+- **`apply()` resolves BEFORE it adds, and the order is load-bearing at the
+  cap** (review finding on PR #147, Codex). The tool tells the model to send
+  both halves in one call, so a batch that settles one item and raises its
+  replacement has to be judged on its FINAL state. Checking capacity against
+  the pre-batch open count deadlocked a saturated tracker — and the refusal
+  said "settle some of them before adding more", which is exactly what the
+  rejected call was doing. The all-or-nothing rollback now spans both halves,
+  so a bad addition puts back anything the same call had already settled.
+- **The check-off animation is driven by a snapshot DIFF**
+  (`lib/followups.justResolvedIds`), not by the click — so a model-side
+  resolve animates identically to a user one. First render reports nothing:
+  a restored project would otherwise replay its whole settled history on
+  load. Two new keyframes, each with its own reduced-motion block
+  immediately after (house rule).
+- **The settling set is added to by one effect and cleared by another**
+  (same review). Driving the clear off `items` stranded ids: the model's
+  resolve arrives as a streamed snapshot, then `turn_complete` installs an
+  authoritative one carrying no new transition, so the effect re-ran, its
+  cleanup cancelled the pending timer, and the early return armed no
+  replacement — leaving the header stuck on "0 waiting · N done" instead of
+  "all N done". Keying the timer to `settling` rather than `items` makes
+  that unrepresentable: a snapshot with nothing newly settled does not touch
+  the timer at all. Not unit-tested — the no-vitest convention stands and
+  the fault is effect scheduling, not a pure function — so the fix is a
+  restructure that removes the class rather than a pin on the instance.
+- **A panel mutation refreshes readiness** (same review). `followups_clear`
+  rides `/api/readiness`, so a check-off that only updated the list left the
+  checklist claiming an item was still waiting until some unrelated action
+  happened to re-derive it. Every other mutation in `App.tsx` already calls
+  `refreshReadiness()`; this one now does too.
+- **The tutorial fixture is required, not decorative.** The panel renders
+  only when non-empty, so `structural_practice_copy` seeds three items (one
+  blocking, one plain, one already settled so the Done section is on
+  screen). Bundled and deterministic — no model call. Deliberately NOT
+  added to `analyze_tutorial_coverage`: the showcase seeds none, so a gap
+  check there would be permanently unresolvable (the figures lesson).
+- **Retired with it: the panel's "Save as Template" button.** It called the
+  same `openTemplateStudio` as the header's Templates button — a duplicate
+  door. `template.create` stays in `capabilities.ts` (NewSessionDialog
+  still declares it), so the retirement is: the three ArtifactPanel lines
+  together (`noUnusedParameters` makes a partial removal unbuildable), the
+  `App.tsx` prop, and the `template-create` tour step MERGED into
+  `template-use` on the surviving `templates` anchor — one door, one step
+  (the `updates.manage` precedent). `tour.test.ts` gained `Header.tsx` to
+  its read list so the surviving anchor is really asserted.
+  **`TOUR_VERSION` 5 → 6**: a step was added mid-chapter and another
+  removed, so stored step indexes no longer mean what they meant.
 
 ## Save asks once, then overwrites — implemented notes
 

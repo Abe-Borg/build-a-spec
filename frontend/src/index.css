@@ -542,3 +542,39 @@ body {
     transition: none !important;
   }
 }
+
+/* "Waiting on you": the check-off. Two run-once animations, retriggered by
+   the class landing on a row the moment a snapshot diff says it moved from
+   open to settled — so a model-side resolve reads the same as a click. */
+.followup-check {
+  animation: followup-check 0.5s ease-out 1;
+}
+@keyframes followup-check {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.25);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .followup-check {
+    animation: none;
+  }
+}
+
+.followup-settle {
+  animation: followup-settle 1s ease-out 1;
+}
+@keyframes followup-settle {
+  from {
+    background-color: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .followup-settle {
+    animation: none;
+  }
+}

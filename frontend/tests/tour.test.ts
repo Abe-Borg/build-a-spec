@@ -45,6 +45,10 @@ const chat = readFileSync(
   new URL("../src/components/Chat.tsx", import.meta.url),
   "utf8",
 );
+const header = readFileSync(
+  new URL("../src/components/Header.tsx", import.meta.url),
+  "utf8",
+);
 const api = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
 const modalShell = readFileSync(
   new URL("../src/components/ModalShell.tsx", import.meta.url),
@@ -500,8 +504,13 @@ test("template paths are active and cover create, preview, import, manage, and s
   assert.doesNotMatch(dialog, /application\/zip/);
   assert.match(dialog, /onStartTemplate\(template\.id\)/);
   assert.match(dialog, /event\.key === "Escape"/);
-  assert.match(artifact, /Save as Template/);
-  assert.match(artifact, /data-tour="save-template"/);
+  // One door to the studio, not two: the document panel's "Save as Template"
+  // was a duplicate of the header's Templates button (both called
+  // openTemplateStudio) and was retired.
+  assert.doesNotMatch(artifact, /Save as Template/);
+  assert.doesNotMatch(artifact, /data-tour="save-template"/);
+  assert.match(header, /data-tour="templates"/);
+  assert.match(app, /onOpenTemplates=\{openTemplateStudio\}/);
   assert.match(settings, /template:\s*"Template creation"/);
   assert.match(specDocument, /template starter/);
   assert.match(specDocument, /seed_block_ids/);

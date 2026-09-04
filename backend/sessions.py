@@ -604,6 +604,7 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         project_context=session.project_context,
         figures=session.figures.to_dict(),
         suggested_prompts=list(session.suggested_prompts),
+        followups=session.followups.to_dict(),
         reference_docs=session.references.to_dict(),
         import_report=session.import_report,
         source_map=source_map_payload,

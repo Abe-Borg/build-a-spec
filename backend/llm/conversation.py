@@ -142,6 +142,13 @@ from ..research.resend_sanitizer import (
 )
 from ..research.schema import build_web_fetch_tool, build_web_search_tool
 from ..runtime_context import date_context_block
+from ..followups import (
+    PANEL_RESOLUTION,
+    TRACK_FOLLOWUPS_TOOL,
+    FollowUpError,
+    FollowUpStore,
+    validate_track_payload,
+)
 from ..suggestions import SUGGEST_PROMPTS_TOOL, SuggestError, validate_prompts
 from ..tracing import capture as _trace
 from ..spec_modules import SpecModule, get_module
@@ -175,9 +182,10 @@ def _chat_tools() -> list[dict[str, Any]]:
     the cached prefix, so anything per-turn here (e.g. a profile-derived
     ``user_location``) would bust the prompt cache for the whole session.
     The model steers search locale through its query text instead.
-    ``suggest_prompts``, ``read_reference_doc``, and then
-    ``apply_qc_fixes`` are appended LAST, in that order, so each addition
-    leaves the existing tool bytes intact as a stable cached prefix.
+    ``suggest_prompts``, ``read_reference_doc``, ``apply_qc_fixes`` and
+    then ``track_followups`` are appended LAST, in that order, so each
+    addition leaves the existing tool bytes intact as a stable cached
+    prefix.
 
     The two web tools come from the shared builders, which pin
     ``allowed_callers: ["direct"]`` (see
@@ -192,6 +200,7 @@ def _chat_tools() -> list[dict[str, Any]]:
         SUGGEST_PROMPTS_TOOL,
         READ_REFERENCE_DOC_TOOL,
         APPLY_QC_FIXES_TOOL,
+        TRACK_FOLLOWUPS_TOOL,
     ]
 
 
@@ -346,6 +355,14 @@ class SessionState:
     # down as the section nears issue-ready. A failed turn leaves it
     # untouched (staging is a turn-local in stream_user_turn, not a store).
     suggested_prompts: list[str] = field(default_factory=list)
+    # What the model is waiting on the user for: questions it asked,
+    # decisions only they can make, to-dos either side owes. Turn-atomic
+    # like the figure store and reset in place for the same reason, but
+    # ACCUMULATING rather than latest-only — an item the model forgets to
+    # restate must not vanish, since forgetting is the failure this exists
+    # to prevent. Distinct from the document's OPEN ITEMS, which are a
+    # projection over the paragraph tree.
+    followups: FollowUpStore = field(default_factory=FollowUpStore)
     # Session-scoped billed-usage meter (WI4). Reset/load clear it.
     usage: UsageLedger = field(default_factory=UsageLedger)
     # Context gauge, not spend (which is why it lives here and not in the
@@ -470,7 +487,7 @@ class SessionState:
             return True
 
     def begin_model_turn_stores(self, token: object, generation: int) -> bool:
-        """Begin both provisional stores if ``token`` is still current."""
+        """Begin every provisional store if ``token`` is still current."""
         with self._turn_state_lock:
             if (
                 self._active_turn_token is not token
@@ -479,12 +496,17 @@ class SessionState:
                 return False
             doc_started = False
             figure_started = False
+            followup_started = False
             try:
                 self.doc.begin_turn()
                 doc_started = True
                 self.figures.begin_turn()
                 figure_started = True
+                self.followups.begin_turn()
+                followup_started = True
             except Exception:
+                if followup_started:
+                    self.followups.rollback_turn()
                 if figure_started:
                     self.figures.rollback_turn()
                 if doc_started:
@@ -500,6 +522,7 @@ class SessionState:
             if not committed:
                 self.doc.rollback_turn()
                 self.figures.rollback_turn()
+                self.followups.rollback_turn()
             self._active_turn_token = None
             self.turn_active = False
             return True
@@ -542,6 +565,35 @@ class SessionState:
             if not self.figures.delete(fid):
                 return "missing", []
             return "deleted", self.figures.snapshot()
+
+    def set_followup_status_if_idle(
+        self,
+        fid: str,
+        status: str,
+        *,
+        note: str = "",
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Tick a tracked item off, or put it back, without crossing a turn.
+
+        Refused while a turn owns the store: a user resolve landing mid-turn
+        would be silently reverted by that turn's ``rollback_turn``, which
+        reads to the user as the checkbox not working.
+        """
+        with self._turn_state_lock:
+            if self.turn_active:
+                return "active", []
+            if self.followups.get(fid) is None:
+                return "missing", []
+            if status == "open":
+                self.followups.reopen(fid)
+            elif self.followups.resolve(
+                fid, note or PANEL_RESOLUTION, by="user"
+            ) == "already" and note:
+                # Already settled and the user is now saying what they
+                # decided — resolve() is idempotent by design, so the note
+                # goes through annotate() or it would silently do nothing.
+                self.followups.annotate(fid, note)
+            return "ok", self.followups.snapshot()
 
     def delete_reference_if_idle(
         self, rid: str
@@ -1436,6 +1488,9 @@ class SessionState:
         # Clear staged chips (commit is generation-guarded, so a zombie
         # turn can't repopulate the fresh session).
         self.suggested_prompts.clear()
+        # Tracked questions/decisions/to-dos belong to the project that was
+        # open. Reset in place for the same reason as the figure store.
+        self.followups.reset()
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()
@@ -1644,6 +1699,19 @@ def _neutralize_context_boundaries(text: str) -> str:
     )
 
 
+def _assistant_bubble_count(history: list[dict[str, Any]]) -> int:
+    """How many assistant bubbles the transcript already holds.
+
+    The turn ordinal: figures stamp it so a reloaded project re-inlines
+    them into the right bubble, and tracked follow-ups stamp it so their
+    age renders as "raised N replies ago". One definition so the two
+    cannot drift.
+    """
+    return sum(
+        1 for entry in chat_transcript(history) if entry["role"] == "assistant"
+    )
+
+
 def _turn_context_text(session: SessionState) -> str:
     """The PROJECT CONTEXT block: everything live, rendered at turn start.
 
@@ -1761,6 +1829,19 @@ def _turn_context_text(session: SessionState) -> str:
                 f"{item.get('label')} (element {item.get('element_id')})"
             )
         parts.append("\n".join(lines))
+    # What the model is waiting on the USER for — model-authored, and
+    # deliberately rendered right after the document's own OPEN ITEMS so
+    # the pair reads as "gaps in the spec, then gaps in what you have been
+    # told". The header says WAITING ON THE USER and never "open items":
+    # conflating the two would have the model filing paragraph TBDs here.
+    try:
+        followup_block = session.followups.context_block(
+            message_index=_assistant_bubble_count(session.history)
+        )
+    except Exception:  # noqa: BLE001 - context assembly must never fail a turn
+        followup_block = ""
+    if followup_block:
+        parts.append(followup_block)
     # Imported blocks are deliberately NOT open items (open_questions counts
     # needs_input and [TBD] only), so on a fresh import the list above is
     # empty while hundreds of blocks still need review — the model had no
@@ -2673,6 +2754,51 @@ def _run_create_figure(
     return result, [{"type": "figure", "figure": figure.to_dict()}]
 
 
+def _run_track_followups(
+    session: SessionState,
+    block: dict[str, Any],
+    *,
+    message_index: int,
+    trace_handle: Any = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Execute one ``track_followups`` tool_use block.
+
+    Writes straight through to ``session.followups`` — the store IS the
+    staging, since ``begin_turn``/``rollback_turn`` already make a turn's
+    writes provisional. A malformed payload or an unknown id becomes an
+    ``is_error`` result echoing the open ids so the model self-corrects (the
+    ``apply_spec_edits`` outline-echo posture), never a turn failure; the
+    store applies the batch all-or-nothing, so a rejected call leaves
+    nothing half-written.
+    """
+    store = session.followups
+    try:
+        payload = validate_track_payload(block.get("input") or {})
+        summary = store.apply(payload, message_index=message_index)
+    except FollowUpError as exc:
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": f"track_followups rejected (nothing was tracked): {exc}",
+                "is_error": True,
+            },
+            [],
+        )
+    _trace.note(
+        trace_handle,
+        f"tracking {summary['waiting']} follow-up(s) after this call",
+    )
+    return (
+        {
+            "type": "tool_result",
+            "tool_use_id": block.get("id"),
+            "content": json.dumps(summary, ensure_ascii=False),
+        },
+        [{"type": "followups", "followups": store.snapshot()}],
+    )
+
+
 def _run_suggest_prompts(
     block: dict[str, Any], trace_handle: Any = None
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -2951,6 +3077,10 @@ def _run_tool(
         )
     if name == "suggest_prompts":
         return _run_suggest_prompts(block, trace_handle)
+    if name == "track_followups":
+        return _run_track_followups(
+            session, block, message_index=message_index, trace_handle=trace_handle
+        )
     if name == "read_reference_doc":
         return _run_read_reference_doc(
             session, block, trace_handle, budget=reference_budget
@@ -3024,7 +3154,9 @@ def stream_user_turn(
     ``web_search``/``web_fetch`` events fire the instant a server-tool call
     completes; ``doc_patch`` follows each applied edit batch and ``figure``
     each created figure; a ``suggested_prompts`` event carries the reply
-    chips the model staged this turn. Then — on success — ``open_questions``
+    chips the model staged this turn, and a ``followups`` event the tracked
+    questions/decisions/to-dos after any ``track_followups`` call. Then — on
+    success — ``open_questions``
     and ``lint`` (if the document changed) and ``turn_complete``, which
     carries the turn's aggregated billed usage.
     ``status`` frames are transient UI hints, never persisted. Any failure
@@ -3071,11 +3203,7 @@ def stream_user_turn(
     # (the transcript merges a turn's assistant text into one bubble, so all
     # of a turn's figures share this index).
     try:
-        message_index = sum(
-            1
-            for entry in chat_transcript(session.history)
-            if entry["role"] == "assistant"
-        )
+        message_index = _assistant_bubble_count(session.history)
     except Exception as exc:  # noqa: BLE001 - startup is transactional
         session.release_model_turn(turn_token)
         yield {"type": "error", "message": f"Unexpected error: {exc}"}
@@ -3485,6 +3613,7 @@ def stream_user_turn(
                 )
                 doc_changed = session.doc.commit_turn()
                 session.figures.commit_turn()
+                session.followups.commit_turn()
                 # Latest-only replace: whatever this turn staged (including
                 # []) becomes the current chip set. Failure paths never reach
                 # this commit block, so the previous list remains untouched.

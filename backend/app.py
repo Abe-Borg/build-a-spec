@@ -399,6 +399,19 @@ class WorkspaceMutationRequest(BaseModel):
     generation: int | None = None
 
 
+class FollowUpStatusRequest(WorkspaceMutationRequest):
+    """Body for ``POST /api/followup/{fid}``.
+
+    ``status`` ticks an item off or puts it back; ``note`` is the optional
+    line the user adds saying what they decided. With no note the store
+    records that it was settled in the panel and the model is told so
+    explicitly, rather than being left to invent the decision.
+    """
+
+    status: str = "resolved"
+    note: str = ""
+
+
 class ResearchStartRequest(WorkspaceMutationRequest):
     """Optional body for ``POST /api/research/start``.
 
@@ -1413,6 +1426,13 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         # refresh all sync the bar one way — a failed turn's refresh returns
         # the untouched pre-turn list, restoring the bar for free.
         "suggested_prompts": list(session.suggested_prompts),
+        # What the model is waiting on the USER for (questions,
+        # decisions, to-dos) — model-authored session state, unlike
+        # "open_questions" above, which is a projection over the
+        # paragraph tree. Rides the payload for the same reason as the
+        # chips: boot, project load, undo/redo and the failed-turn
+        # refresh all resync the panel from this one place.
+        "followups": session.followups.snapshot(),
         # Import honesty/recovery metadata. Native .baspec packages carry the
         # source as a separate binary member; legacy JSON remains source-less.
         "import_report": session.import_report,
@@ -1539,6 +1559,22 @@ def _research_coverage_payload(session: SessionState) -> dict:
     }
 
 
+def _followups_readiness_detail(waiting) -> str:
+    """One line naming what the model is still waiting on the user for.
+
+    Names the blocking item when there is one — a count alone is what the
+    tracked list exists to improve on.
+    """
+    if not waiting:
+        return "Nothing is waiting on you."
+    blocking = [item for item in waiting if item.blocking]
+    lead = blocking[0] if blocking else waiting[0]
+    label = "blocking: " if blocking else ""
+    rest = len(waiting) - 1
+    tail = f" (+{rest} more)" if rest > 0 else ""
+    return f"{len(waiting)} waiting on you — {label}{lead.title}{tail}"
+
+
 def _readiness_payload(
     session,
     *,
@@ -1559,6 +1595,7 @@ def _readiness_payload(
     """
     doc = session.doc.doc
     open_items = open_questions(doc)
+    waiting_followups = session.followups.open_items()
     imported = 0
     assumed = 0
     for _part, _article, p, _depth, _ref in iter_paragraphs(doc):
@@ -1879,6 +1916,19 @@ def _readiness_payload(
             if not open_items
             else f"{len(open_items)} open document item(s) ([TBD]/needs-input).",
             "advisory": False,
+        },
+        {
+            "id": "followups_clear",
+            # Questions and decisions the model is waiting on the user for.
+            # ADVISORY on purpose: an unanswered question does not make the
+            # draft wrong the way an unresolved [TBD] does, and the model may
+            # already have stamped a defensible default. It earns a line here
+            # because the checklist is the last place anyone looks before
+            # issuing — which is exactly when a forgotten decision costs the
+            # most.
+            "ok": not waiting_followups,
+            "detail": _followups_readiness_detail(waiting_followups),
+            "advisory": True,
         },
         {
             "id": "no_imported_left",
@@ -4177,6 +4227,56 @@ def create_app(
                     )
             _trace_capture.app_event("figure_delete", fid=fid, ok=True)
             return JSONResponse({"ok": True, "figures": figures})
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+
+    # --- Waiting on you (tracked follow-ups) --------------------------------
+    #
+    # The model writes this list through the ``track_followups`` chat tool;
+    # this is the user's side of it — ticking an item off, or putting one
+    # back after a mis-click. There is no create route: only the model raises
+    # items, so the panel is a checklist, not an editor.
+
+    @app.post("/api/followup/{fid}")
+    def followup_status(
+        fid: str, body: FollowUpStatusRequest | None = None
+    ) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        status = (body.status if body else "resolved") or "resolved"
+        if status not in ("open", "resolved"):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "status must be 'open' or 'resolved'.",
+                    "code": "bad_status",
+                },
+                status_code=400,
+            )
+        note = (body.note if body else "") or ""
+        try:
+            with sessions.active_write(lease.workspace_id):
+                sessions.workspace_manager().assert_fresh(lease)
+                outcome, followups = session.set_followup_status_if_idle(
+                    fid, status, note=note.strip()
+                )
+                if outcome == "active":
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": "A turn is generating — try again in a moment.",
+                        },
+                        status_code=409,
+                    )
+                if outcome == "missing":
+                    return JSONResponse(
+                        {"ok": False, "error": f"No tracked item {fid!r}."},
+                        status_code=404,
+                    )
+            _trace_capture.app_event("followup", fid=fid, status=status, ok=True)
+            return JSONResponse({"ok": True, "followups": followups})
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
 

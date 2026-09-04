@@ -7,6 +7,7 @@ import type {
   DraftPrerequisiteId,
   EditOp,
   Figure,
+  FollowUp,
   Health,
   ImportResultPayload,
   KeyStatus,
@@ -228,6 +229,33 @@ export async function deleteFigure(
     throw new Error(data.error ?? `delete failed (${resp.status})`);
   }
   return data.figures as Figure[];
+}
+
+/**
+ * Tick a tracked follow-up off, or put it back. 409 while a turn streams
+ * (the turn owns the store, so a resolve landing mid-turn would be rolled
+ * back with it); returns the whole list.
+ */
+export async function setFollowupStatus(
+  fid: string,
+  status: "open" | "resolved",
+  options: { note?: string } & WorkspaceLeaseInput = {},
+): Promise<FollowUp[]> {
+  const resp = await fetch(`/api/followup/${encodeURIComponent(fid)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      status,
+      note: options.note ?? "",
+      workspace_id: options.workspaceId,
+      generation: options.generation,
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `update failed (${resp.status})`);
+  }
+  return data.followups as FollowUp[];
 }
 
 /** URL for a table figure's CSV download (server-rendered, text/csv). */

@@ -8,6 +8,7 @@ import type {
   DraftPrerequisites,
   EditOp,
   FileLoading,
+  FollowUp,
   ImportNotice,
   ImportReport,
   LintIssue,
@@ -29,6 +30,7 @@ import type {
   UsageSummary,
   OpenInWordResult,
 } from "../types";
+import FollowUpsPanel from "./FollowUpsPanel";
 import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
 import QCDrawer from "./QCDrawer";
 import ResearchDrawer from "./ResearchDrawer";
@@ -45,6 +47,14 @@ import Tip from "./Tip";
 interface Props {
   doc: SpecDoc | null;
   openItems: OpenItem[];
+  followups: FollowUp[];
+  /** Assistant-bubble count, for the follow-up age line. */
+  followupTurn: number;
+  onSetFollowupStatus: (
+    fid: string,
+    status: "open" | "resolved",
+    note?: string,
+  ) => void;
   lintIssues: LintIssue[];
   standards: StandardInfo[];
   profileComplete: boolean;
@@ -98,7 +108,6 @@ interface Props {
   detaching?: boolean;
   onUndo: () => void;
   onRedo: () => void;
-  onSaveAsTemplate: () => void;
   onEditDoc: (ops: EditOp[]) => void;
   onLoadProject: (file: File) => void;
   /** Native pywebview Open dialog (Open / Import). Resolves to a File when
@@ -137,6 +146,7 @@ interface Props {
     research: number;
     qc: number;
     openItems: number;
+    followups: number;
   };
 }
 
@@ -284,6 +294,9 @@ const kindDot: Record<OpenItem["kind"], string> = {
 export default function ArtifactPanel({
   doc,
   openItems,
+  followups,
+  followupTurn,
+  onSetFollowupStatus,
   lintIssues,
   standards,
   profileComplete,
@@ -313,7 +326,6 @@ export default function ArtifactPanel({
   detaching = false,
   onUndo,
   onRedo,
-  onSaveAsTemplate,
   onEditDoc,
   onLoadProject,
   nativeOpenFile,
@@ -1022,20 +1034,6 @@ export default function ArtifactPanel({
           </div>
           <button
             className={actionButton}
-            onClick={onSaveAsTemplate}
-            disabled={busy || !hasContent}
-            title={
-              hasContent
-                ? "Open the template studio to turn this spec into a reusable starter"
-                : "Add spec content before creating a template"
-            }
-            data-tour="save-template"
-            data-capability="template.create"
-          >
-            Save as Template
-          </button>
-          <button
-            className={actionButton}
             onClick={handleOpenClick}
             data-capability="project.save-open"
             disabled={busy || !!fileLoading || tutorialActive}
@@ -1487,6 +1485,15 @@ export default function ArtifactPanel({
           )}
         </div>
       )}
+
+      <FollowUpsPanel
+        items={followups}
+        currentTurn={followupTurn}
+        busy={busy}
+        openNonce={drawerNonces?.followups}
+        onSetStatus={onSetFollowupStatus}
+        onJump={scrollToElement}
+      />
 
       <StandardsStrip standards={standards} onEditDoc={onEditDoc} busy={busy} />
       <ReferenceDocumentsStrip

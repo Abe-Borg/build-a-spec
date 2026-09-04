@@ -125,6 +125,53 @@ sheet, a previous project's section, or meeting notes.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
 
+## Shipped in v1.16.0 (Waiting on you — nothing you were asked scrolls away)
+
+**During an interview the model raises questions, surfaces decisions only you
+can make, and accumulates to-dos. Until now none of that was tracked** — it
+lived in a chat bubble and, sometimes, a reply chip, both of which scroll
+away. A new **Waiting on you** panel, directly under Open items, is where it
+lives instead.
+
+- **It is the other half of Open items, not a second copy of them.** Open
+  items are gaps in the SPEC — `[TBD]` markers and needs-input blocks, derived
+  from the document itself. These are gaps in what the model has been TOLD:
+  "the client hasn't said whether the tenant fit-out is in scope" is not a
+  provision, so it could never live in the document tree. The model is told
+  the boundary explicitly: if the answer changes a provision's *words* it goes
+  in the document; if it changes what to *do next* it goes here.
+- **Three kinds, and one flag that means something.** A `question` you were
+  asked, a `decision` only you can make, a `todo` either side owes. `blocking`
+  is reserved for the ones the draft cannot be correct without — those sort
+  first, and over-using the flag is what would make it meaningless.
+- **Items check themselves off as work gets done.** Answer a question in chat
+  and the model settles it in the same turn, recording one line saying what
+  was decided; the row strikes through, ticks, and drops into **Done**. You
+  can also tick one off yourself, add a note about what you decided, or reopen
+  one you closed by mistake. A settled item stays visible rather than
+  vanishing — seeing the list shrink is the point.
+- **When you tick something off with no note, the model is told exactly
+  that** — that you settled it without saying what you decided, and to ask
+  again only if the answer still affects the draft. A shortcut in the UI must
+  not become a decision the model invents around.
+- **One item resurfaced per reply, never a list dump.** Every turn the model
+  brings back exactly one waiting item — the blocking one, else the oldest —
+  worked into what it was already saying, or offered as a one-tap reply chip.
+  If that turn's reply already raised or settled one, it does not pile on a
+  second.
+- **The readiness checklist names anything still waiting**, as an *advisory*
+  line: it does not block issue the way an unresolved `[TBD]` does, but the
+  checklist is the last place anyone looks before a section goes out, which is
+  exactly when a forgotten decision costs the most.
+- The list rides the saved project file, survives undo/redo and reload, and is
+  discarded with the session on New session — like every other thing that
+  belongs to the project rather than the app.
+
+Also in this release: **the document panel's "Save as Template" button is
+gone.** It called the same handler as **Templates** in the header, so it was a
+second door to one room. Creating a starter from the spec you have open is
+still there, as *Create from current spec* inside the studio.
+
 ## Shipped in v1.15.0 (Importing an office master actually works)
 
 **A real client master used to come in wearing another section's title, with

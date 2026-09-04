@@ -272,19 +272,31 @@ class FollowUpStore:
         before_seq = self._next_seq
         added: list[str] = []
         duplicate: list[str] = []
+        resolved: list[str] = []
+        already: list[str] = []
         try:
+            # RESOLUTIONS FIRST, and that order is load-bearing at the cap.
+            # The tool tells the model to send both halves in one call, so a
+            # batch that settles one item and raises its replacement has to
+            # be judged on its final state — checking capacity against the
+            # pre-batch count deadlocked a saturated tracker while telling
+            # it to "settle some of them", which is what it was doing.
+            for entry in payload.get("resolve", []):
+                outcome = self.resolve(
+                    entry["id"], entry["resolution"], by="model"
+                )
+                (already if outcome == "already" else resolved).append(
+                    entry["id"]
+                )
             for entry in payload.get("add", []):
                 item, was_duplicate = self.add(entry, message_index=message_index)
                 (duplicate if was_duplicate else added).append(item.fid)
         except FollowUpError:
+            # The rollback spans both halves — a bad addition must put back
+            # anything this same call had already settled.
             self.items = before
             self._next_seq = before_seq
             raise
-        resolved: list[str] = []
-        already: list[str] = []
-        for entry in payload.get("resolve", []):
-            outcome = self.resolve(entry["id"], entry["resolution"], by="model")
-            (already if outcome == "already" else resolved).append(entry["id"])
         summary: dict[str, Any] = {"waiting": len(self.open_items())}
         if added:
             summary["added"] = added

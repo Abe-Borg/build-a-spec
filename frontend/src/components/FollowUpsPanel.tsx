@@ -70,20 +70,33 @@ export default function FollowUpsPanel({
 
   const { waiting, done } = followupCounts(items);
 
+  // Two effects, deliberately: the first only ADDS, the second only clears.
+  // Driving the clear off `items` instead stranded ids — the model's resolve
+  // arrives as a streamed snapshot, then `turn_complete` installs an
+  // authoritative one that carries no new transition, so the effect re-ran,
+  // its cleanup cancelled the pending timer, and the early return armed no
+  // replacement. Keying the timer to `settling` makes that unrepresentable:
+  // a snapshot with nothing newly settled does not touch it at all.
   useEffect(() => {
     const moved = justResolvedIds(previous.current, items);
     previous.current = items;
     if (moved.size === 0) return;
     setSettling((current) => new Set([...current, ...moved]));
+  }, [items]);
+
+  useEffect(() => {
+    if (settling.size === 0) return;
+    const captured = settling;
     const timer = window.setTimeout(() => {
       setSettling((current) => {
         const next = new Set(current);
-        for (const fid of moved) next.delete(fid);
-        return next;
+        for (const fid of captured) next.delete(fid);
+        // Same set back when nothing changed, so this cannot re-arm itself.
+        return next.size === current.size ? current : next;
       });
     }, 1100);
     return () => window.clearTimeout(timer);
-  }, [items]);
+  }, [settling]);
 
   useEffect(() => {
     if (introduced.current || items.length === 0) return;

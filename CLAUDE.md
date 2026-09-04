@@ -6884,12 +6884,36 @@ new collapsible panel. No new deps, no project-format bump.
   the panel vanishing mid-animation. It auto-expands once, the first time
   something lands in it (the QCDrawer precedent); a later collapse is the
   user's and is respected.
+- **`apply()` resolves BEFORE it adds, and the order is load-bearing at the
+  cap** (review finding on PR #147, Codex). The tool tells the model to send
+  both halves in one call, so a batch that settles one item and raises its
+  replacement has to be judged on its FINAL state. Checking capacity against
+  the pre-batch open count deadlocked a saturated tracker — and the refusal
+  said "settle some of them before adding more", which is exactly what the
+  rejected call was doing. The all-or-nothing rollback now spans both halves,
+  so a bad addition puts back anything the same call had already settled.
 - **The check-off animation is driven by a snapshot DIFF**
   (`lib/followups.justResolvedIds`), not by the click — so a model-side
   resolve animates identically to a user one. First render reports nothing:
   a restored project would otherwise replay its whole settled history on
   load. Two new keyframes, each with its own reduced-motion block
   immediately after (house rule).
+- **The settling set is added to by one effect and cleared by another**
+  (same review). Driving the clear off `items` stranded ids: the model's
+  resolve arrives as a streamed snapshot, then `turn_complete` installs an
+  authoritative one carrying no new transition, so the effect re-ran, its
+  cleanup cancelled the pending timer, and the early return armed no
+  replacement — leaving the header stuck on "0 waiting · N done" instead of
+  "all N done". Keying the timer to `settling` rather than `items` makes
+  that unrepresentable: a snapshot with nothing newly settled does not touch
+  the timer at all. Not unit-tested — the no-vitest convention stands and
+  the fault is effect scheduling, not a pure function — so the fix is a
+  restructure that removes the class rather than a pin on the instance.
+- **A panel mutation refreshes readiness** (same review). `followups_clear`
+  rides `/api/readiness`, so a check-off that only updated the list left the
+  checklist claiming an item was still waiting until some unrelated action
+  happened to re-derive it. Every other mutation in `App.tsx` already calls
+  `refreshReadiness()`; this one now does too.
 - **The tutorial fixture is required, not decorative.** The panel renders
   only when non-empty, so `structural_practice_copy` seeds three items (one
   blocking, one plain, one already settled so the Done section is on

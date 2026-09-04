@@ -1606,12 +1606,17 @@ export default function App() {
           note,
           ...currentWorkspaceLease(),
         });
-        if (workspaceEpochRef.current === epoch) setFollowups(next);
+        if (workspaceEpochRef.current !== epoch) return;
+        setFollowups(next);
+        // The readiness checklist carries `followups_clear`, so a check-off
+        // that did not refresh it left the panel claiming an item was still
+        // waiting until some unrelated action happened to re-derive it.
+        refreshReadiness();
       } catch {
         refreshDoc();
       }
     },
-    [refreshDoc, currentWorkspaceLease],
+    [refreshDoc, refreshReadiness, currentWorkspaceLease],
   );
 
   /** How many assistant bubbles the transcript holds — the same turn ordinal

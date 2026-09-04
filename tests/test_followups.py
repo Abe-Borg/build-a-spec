@@ -201,6 +201,52 @@ def test_the_settled_tail_is_trimmed_oldest_first():
     assert store.items[0].title == "T5"
 
 
+def test_settling_one_and_raising_its_replacement_fits_at_the_cap():
+    """The tool tells the model to send both halves in ONE call, so the cap
+    has to see the batch's final state. Checking capacity before applying
+    the batch's own resolutions deadlocked a saturated tracker — and said
+    "settle some of them before adding more", which is exactly what the
+    rejected call was doing."""
+    store = FollowUpStore()
+    store.apply(
+        {
+            "add": [
+                {"kind": "question", "title": f"Q{n}?"} for n in range(MAX_OPEN)
+            ],
+            "resolve": [],
+        }
+    )
+    summary = store.apply(
+        {
+            "add": [{"kind": "question", "title": "the replacement?"}],
+            "resolve": [{"id": "fu-1", "resolution": "answered"}],
+        }
+    )
+    assert summary["waiting"] == MAX_OPEN
+    assert summary["added"] == [f"fu-{MAX_OPEN + 1}"]
+    assert summary["resolved"] == ["fu-1"]
+
+    # Still a real ceiling: adding without settling anything is refused.
+    with pytest.raises(FollowUpError, match="settle some of them"):
+        store.apply({"add": [{"kind": "question", "title": "one too many?"}],
+                     "resolve": []})
+
+
+def test_a_rejected_batch_rolls_back_its_own_resolutions_too():
+    """All-or-nothing spans BOTH halves: the resolve now runs first, so a
+    later bad addition must put the settled item back."""
+    store = _store("A?", "B?")
+    with pytest.raises(FollowUpError):
+        store.apply(
+            {
+                "add": [{"kind": "nonsense", "title": "C"}],
+                "resolve": [{"id": "fu-1", "resolution": "answered"}],
+            }
+        )
+    assert store.get("fu-1").status == "open"
+    assert store.get("fu-1").resolution == ""
+
+
 def test_an_over_long_title_is_refused_with_its_length():
     store = FollowUpStore()
     with pytest.raises(FollowUpError, match="too long"):

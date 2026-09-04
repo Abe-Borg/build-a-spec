@@ -73,6 +73,7 @@ rollback a genuine failure gets.
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 import threading
@@ -156,6 +157,13 @@ from ..project_facts import (
     ProjectFactStore,
     validate_record_payload,
 )
+from ..project_brief import (
+    ProjectBrief,
+    project_sections_block,
+    within_reference_cap,
+)
+from ..research.engine import RequirementsProfile
+from ..spec_doc.project import sanitize_project_link
 from ..suggestions import SUGGEST_PROMPTS_TOOL, SuggestError, validate_prompts
 from ..tracing import capture as _trace
 from ..spec_modules import SpecModule, get_module
@@ -1630,6 +1638,123 @@ class SessionState:
             }
 
 
+    def start_from_brief(
+        self,
+        brief: ProjectBrief,
+        *,
+        module_id: str,
+        discipline: str,
+        template_section: SpecSection | None = None,
+        template_origin: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Atomically replace this session with a section seeded from a brief.
+
+        The ``start_from_template`` shape, one lock acquisition end to end:
+        reset, then install every carried asset. Version 0 of the new
+        document is the project setup — profile, identity and edition
+        overrides on an empty body (or on the template's body when one is
+        paired, in which case the BRIEF's setup wins: an Exact template may
+        carry another project's profile). Research is restored as the rounds
+        already run, so the first Research press here is round N+1, briefed.
+        References are carried in order up to the session cap; the rest are
+        named in the report rather than silently dropped. Facts keep their
+        pids, so a superseded fact's link to its replacement stays valid.
+
+        Returns the seed report the route hands back — counts and warnings,
+        nothing the model could mistake for instructions.
+        """
+        with self._turn_state_lock:
+            self._reset_while_locked()
+            warnings: list[str] = []
+            module = get_module(module_id)
+            if module_id and module.module_id != module_id:
+                warnings.append(
+                    f"Module {module_id!r} is not installed; using "
+                    f"{module.display_name}."
+                )
+            self.module = module
+            self.discipline = ""
+            self.project_context = ""
+            section = (
+                SpecSection.from_dict(template_section.to_dict())
+                if template_section is not None
+                else SpecSection.empty()
+            )
+            section.project_profile = dict(brief.profile)
+            identity: dict[str, str] = {}
+            if brief.project_type:
+                identity["project_type"] = brief.project_type
+            if discipline:
+                identity["discipline"] = discipline
+            section.project_identity = identity
+            section.edition_overrides = copy.deepcopy(brief.edition_overrides)
+            self.doc.seed_template(section)
+            self.template_origin = dict(template_origin) if template_origin else None
+
+            research_rounds = 0
+            research_items = 0
+            if brief.research_profile is not None:
+                restored = RequirementsProfile.from_dict(brief.research_profile)
+                if restored is None:
+                    warnings.append(
+                        "The research profile could not be read and was not carried."
+                    )
+                else:
+                    self.research.restore(restored)
+                    research_rounds = restored.round_count
+                    research_items = len(restored.items)
+
+            kept, dropped = within_reference_cap(brief.reference_docs)
+            if dropped:
+                warnings.append(
+                    "Reference document(s) not carried (over the session cap): "
+                    + ", ".join(dropped)
+                )
+            max_rid = 0
+            for doc in kept:
+                tail = str(doc.get("rid", "")).split("-")[-1]
+                if tail.isdigit():
+                    max_rid = max(max_rid, int(tail))
+            self.references.load(
+                {
+                    "reference_docs": [
+                        {k: v for k, v in doc.items() if k != "content_fingerprint"}
+                        for doc in kept
+                    ],
+                    "next_seq": max_rid + 1,
+                }
+            )
+            self.facts.load({"project_facts": list(brief.facts)})
+            self.project_link = sanitize_project_link(
+                {
+                    "project_id": brief.project_id,
+                    "name": brief.name,
+                    "brief_updated_at": brief.updated_at,
+                    "seeded_from": [
+                        str(s.get("number", "")) for s in brief.sections if s.get("number")
+                    ],
+                    "research_rounds_at_seed": research_rounds,
+                    "sections": list(brief.sections),
+                }
+            )
+            return {
+                "module_id": module.module_id,
+                "discipline": discipline,
+                "profile_applied": bool(brief.profile),
+                "project_type": brief.project_type,
+                "edition_overrides": len(brief.edition_overrides),
+                "research_restored": research_items > 0 or research_rounds > 0,
+                "research_rounds": research_rounds,
+                "research_items": research_items,
+                "references_restored": len(kept),
+                "references_dropped": dropped,
+                "facts_restored": len(self.facts.items),
+                "sections": len(brief.sections),
+                "template": dict(template_origin) if template_origin else None,
+                "warnings": warnings,
+            }
+
+
 class _SessionInvalidated(RuntimeError):
     """The session was reset/replaced while this turn was still streaming."""
 
@@ -1879,6 +2004,15 @@ def _turn_context_text(session: SessionState) -> str:
         facts_block = ""
     if facts_block:
         parts.append(facts_block)
+    # The other sections of this project, when the session was seeded from
+    # (or exported) a project brief — titles and article names only, never
+    # their provisions, so the model coordinates scope instead of copying.
+    try:
+        sections_block = project_sections_block(session.project_link, doc.number)
+    except Exception:  # noqa: BLE001 - context assembly must never fail a turn
+        sections_block = ""
+    if sections_block:
+        parts.append(sections_block)
     # Without this the outline below reads as a spec with an unset header, and
     # the model reliably "fixes" it by inventing a section number for a file
     # that was never a spec section.

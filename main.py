@@ -61,11 +61,24 @@ _TEMPLATE_OPEN_FILE_TYPES = (
     "All files (*.*)",
 )
 _TEMPLATE_SAVE_FILE_TYPES = _TEMPLATE_OPEN_FILE_TYPES
+# A project brief (.basproject) carries a project into its next section. The
+# Open filter also admits a sibling section's .baspec — the brief can be
+# built straight from that file — so the New-section dialog needs one picker.
+_PROJECT_BRIEF_SAVE_FILE_TYPES = (
+    "Build a Spec project brief (*.basproject)",
+    "All files (*.*)",
+)
+_PROJECT_BRIEF_OPEN_FILE_TYPES = (
+    "Build a Spec project brief or project (*.basproject;*.baspec)",
+    "All files (*.*)",
+)
+_PROJECT_BRIEF_FALLBACK_NAME = "buildaspec-project.basproject"
 _OPEN_FILE_TYPES_BY_KIND = {
     "docx": _DOCX_OPEN_FILE_TYPES,
     "reference": _REFERENCE_OPEN_FILE_TYPES,
     "project": _PROJECT_OPEN_FILE_TYPES,
     "template": _TEMPLATE_OPEN_FILE_TYPES,
+    "project_brief": _PROJECT_BRIEF_OPEN_FILE_TYPES,
 }
 
 
@@ -284,8 +297,18 @@ _EXPORT_MODES = frozenset({"preserved", "normalized", "source"})
 _OPEN_IN_WORD_FALLBACK_NAME = "Build-a-Spec export.docx"
 
 
-def _filename_from_disposition(value: str) -> str:
-    """The attachment filename an export response names, as a safe basename."""
+def _filename_from_disposition(
+    value: str,
+    *,
+    fallback: str = _OPEN_IN_WORD_FALLBACK_NAME,
+    suffix: str = ".docx",
+) -> str:
+    """The attachment filename an export response names, as a safe basename.
+
+    ``fallback`` and ``suffix`` default to the Word export's, so every
+    existing caller is byte-identical; the project-brief bridge passes its
+    own, or a ``.basproject`` would be saved as ``….basproject.docx``.
+    """
     import urllib.parse
 
     name = ""
@@ -306,13 +329,19 @@ def _filename_from_disposition(value: str) -> str:
     name = os.path.basename(name.replace("\\", "/")).strip()
     name = "".join(ch for ch in name if ch not in '<>:"/\\|?*' and ord(ch) >= 32)
     if not name or name in {".", ".."}:
-        return _OPEN_IN_WORD_FALLBACK_NAME
-    if not name.lower().endswith(".docx"):
-        name += ".docx"
+        return fallback
+    if not name.lower().endswith(suffix):
+        name += suffix
     return name
 
 
-def _fetch_backend_bytes(backend: _BackendRuntime, path: str) -> tuple[bytes, str]:
+def _fetch_backend_bytes(
+    backend: _BackendRuntime,
+    path: str,
+    *,
+    fallback_name: str = _OPEN_IN_WORD_FALLBACK_NAME,
+    suffix: str = ".docx",
+) -> tuple[bytes, str]:
     """GET one API path from THIS launch's backend with its own token.
 
     Returns ``(payload, filename)``. Raises ``RuntimeError`` with the server's
@@ -345,7 +374,9 @@ def _fetch_backend_bytes(backend: _BackendRuntime, path: str) -> tuple[bytes, st
         raise RuntimeError(message) from exc
     except (urllib.error.URLError, OSError) as exc:
         raise RuntimeError("The local server could not be reached.") from exc
-    return payload, _filename_from_disposition(disposition)
+    return payload, _filename_from_disposition(
+        disposition, fallback=fallback_name, suffix=suffix
+    )
 
 
 def _launch_file(path: Path) -> None:
@@ -698,6 +729,62 @@ class _CloseController:
         if not self._trusted_page():
             return False
         return self._atomic_write_target(target, payload, prefix=".buildaspec-template-")
+
+    def save_project_brief(self) -> dict[str, Any]:
+        """Export the project brief through a native Save dialog.
+
+        The ``save_template`` shape with the ``open_in_word`` fetch: the
+        bytes come from this launch's own ``GET /api/project/brief`` with the
+        shell's token, so every guard the route applies (scope, a streaming
+        turn) applies here too, and the server's own refusal reaches the
+        user in its words. Returns the ``_save_result`` shape — ``cancelled``
+        is kept apart from ``error`` for the reason that helper states.
+        """
+        if not self._trusted_page():
+            return self._save_result(False, error="This page cannot export.")
+        if self._backend is None:
+            return self._save_result(
+                False,
+                error="Exporting a project brief is available in the desktop app only.",
+            )
+        from backend import sessions
+
+        if sessions.get_workspace().scope != "original":
+            return self._save_result(
+                False,
+                error="Return to your project before exporting a project brief.",
+            )
+        try:
+            payload, name = _fetch_backend_bytes(
+                self._backend,
+                "/api/project/brief",
+                fallback_name=_PROJECT_BRIEF_FALLBACK_NAME,
+                suffix=".basproject",
+            )
+        except RuntimeError as exc:
+            return self._save_result(False, error=str(exc))
+        import webview
+
+        try:
+            target = self._window.create_file_dialog(
+                webview.FileDialog.SAVE,
+                save_filename=name,
+                file_types=_PROJECT_BRIEF_SAVE_FILE_TYPES,
+            )
+        except Exception:  # noqa: BLE001 - a dialog failure is a cancel
+            target = None
+        if not target:
+            return self._save_result(False, cancelled=True)
+        if isinstance(target, (tuple, list)):
+            target = target[0]
+        if not self._trusted_page():
+            return self._save_result(False, error="This page cannot export.")
+        written = os.path.abspath(os.fspath(target))
+        if not self._atomic_write_target(written, payload, prefix=".buildaspec-brief-"):
+            return self._save_result(
+                False, error="The project brief could not be written."
+            )
+        return self._save_result(True, target=written)
 
     def open_file(self, kind: str = "project") -> dict[str, str] | None:
         """Frontend's Open / Import buttons (native shell): show a native

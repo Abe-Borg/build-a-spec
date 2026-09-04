@@ -95,6 +95,11 @@ class ProjectBriefError(ValueError):
     """A file that is not a usable project brief. Reported to the user as a 400."""
 
 
+class ProjectBriefTooLargeError(ProjectBriefError):
+    """A brief past :data:`MAX_PROJECT_BRIEF_BYTES`. Still a ``ProjectBriefError``
+    (every parse-side ``except`` keeps working) but the routes answer 413."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -313,7 +318,7 @@ def parse_brief_json(data: bytes) -> dict[str, Any]:
     """Size-capped, duplicate-key- and NaN-rejecting JSON decode (the
     templates posture, copy-adapted because the messages differ)."""
     if len(data) > MAX_PROJECT_BRIEF_BYTES:
-        raise ProjectBriefError(
+        raise ProjectBriefTooLargeError(
             "The project brief exceeds the "
             f"{MAX_PROJECT_BRIEF_BYTES // (1024 * 1024)} MiB limit."
         )

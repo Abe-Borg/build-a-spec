@@ -594,3 +594,340 @@ def test_the_sections_block_reaches_the_turn_but_never_the_cached_prompt(monkeyp
     assert context.index("PROJECT SECTIONS") < context.index("Current specification document")
     assert "Wet-Pipe Sprinkler Systems" not in json.dumps(request["system"])
     assert "PROJECT SECTIONS" not in json.dumps(sessions.get_session().history)
+
+
+# ---------------------------------------------------------------------------
+# The routes: export, manifest, inspect, start
+# ---------------------------------------------------------------------------
+
+BRIEF_MEDIA_TYPE = "application/vnd.buildaspec.project-brief+json"
+
+
+def _brief_bytes_from_a_rich_section(client: TestClient) -> bytes:
+    """Section 1's brief, exported through the real route, then the session
+    is reset so what follows starts from a blank slate."""
+    _rich_session(client)
+    resp = client.get("/api/project/brief")
+    assert resp.status_code == 200, resp.text
+    sessions.reset_session()
+    return resp.content
+
+
+def _upload(name: str, payload: bytes, media_type: str = BRIEF_MEDIA_TYPE) -> dict:
+    return {"file": (name, payload, media_type)}
+
+
+def test_the_export_route_returns_a_parseable_brief_and_links_the_session():
+    client = _client()
+    session = _rich_session(client)
+    assert session.project_link is None
+
+    resp = client.get("/api/project/brief")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith(BRIEF_MEDIA_TYPE)
+    disposition = resp.headers["content-disposition"]
+    assert "buildaspec-project-client-x-data-center-ashburn-virginia.basproject" in disposition
+    parsed = parse_project_brief(resp.content)
+    assert [f["pid"] for f in parsed.facts] == ["pf-1", "pf-2", "pf-3"]
+    assert parsed.research_profile["rounds"][0]["round_index"] == 1
+    assert [d["rid"] for d in parsed.reference_docs] == ["ref-1"]
+    # Exporting stamps the link: the section file now records its project,
+    # and exporting again re-uses the id instead of minting a second one.
+    link = session.project_link
+    assert link["project_id"] == parsed.project_id
+    assert link["name"] == parsed.name
+    assert link["seeded_from"] == [] and link["research_rounds_at_seed"] == 0
+    assert [s["number"] for s in link["sections"]] == ["21 13 13"]
+    again = parse_project_brief(client.get("/api/project/brief").content)
+    assert again.project_id == parsed.project_id
+    assert client.get("/api/doc").json()["project_link"]["project_id"] == parsed.project_id
+
+
+def test_the_manifest_route_describes_what_this_session_would_export():
+    client = _client()
+    _rich_session(client)
+    resp = client.get("/api/project/brief/manifest")
+    assert resp.status_code == 200, resp.text
+    manifest = resp.json()["manifest"]
+    assert manifest["name"] == "Client X · Data Center · Ashburn, Virginia"
+    assert manifest["facts"] == {"active": 2, "confirmed": 2, "assumed": 0, "superseded": 1}
+    assert [r["title"] for r in manifest["references"]] == ["Owner fire protection standard"]
+    assert manifest["research"]["rounds"] == 1
+    assert [s["number"] for s in manifest["sections"]] == ["21 13 13"]
+    # Describing is not exporting: nothing was stamped.
+    assert sessions.get_session().project_link is None
+
+
+def test_inspect_reads_a_brief_or_a_sibling_project_without_touching_the_session():
+    client = _client()
+    payload = _brief_bytes_from_a_rich_section(client)
+
+    resp = client.post("/api/project/brief/inspect", files=_upload("p.basproject", payload))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["source"] == "brief"
+    assert body["manifest"]["facts"]["active"] == 2
+    assert body["warnings"] == []
+    blank = sessions.get_session()
+    assert blank.doc.doc.is_empty() and blank.facts.items == [] and blank.project_link is None
+
+    # The shortcut: section 1's own .baspec, read the same way.
+    package = sessions.project_package_bytes(_rich_session(client))
+    sessions.reset_session()
+    resp = client.post(
+        "/api/project/brief/inspect",
+        files=_upload("section-1.baspec", package, "application/octet-stream"),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["source"] == "project"
+    assert body["manifest"]["facts"]["active"] == 2
+    assert any("21 13 13" in w for w in body["warnings"]), body["warnings"]
+    assert sessions.get_session().doc.doc.is_empty()
+
+
+def test_inspect_and_start_refuse_what_is_not_a_brief():
+    client = _client()
+    for name, payload in (
+        ("junk.basproject", b"not json"),
+        ("kind.basproject", json.dumps({"kind": "something-else", "format": 1}).encode()),
+    ):
+        for route in ("/api/project/brief/inspect", "/api/project/brief/start"):
+            resp = client.post(route, files=_upload(name, payload))
+            assert resp.status_code == 400, (route, name, resp.text)
+            assert resp.json()["ok"] is False
+    assert sessions.get_session().project_link is None
+
+
+def test_an_oversized_brief_is_a_413_in_its_own_words(monkeypatch):
+    """Past the brief cap the parser's message names the limit; the route
+    must not replace it with the package parser's complaint about a file
+    that was never a project."""
+    import backend.project_brief as brief_module
+
+    monkeypatch.setattr(brief_module, "MAX_PROJECT_BRIEF_BYTES", 4096)
+    client = _client()
+    payload = json.dumps({"kind": PROJECT_BRIEF_KIND, "pad": "x" * 8192}).encode()
+    for route in ("/api/project/brief/inspect", "/api/project/brief/start"):
+        resp = client.post(route, files=_upload("big.basproject", payload))
+        assert resp.status_code == 413, (route, resp.text)
+        assert "limit" in resp.json()["error"]
+
+
+def test_the_start_route_seeds_the_next_section_end_to_end():
+    client = _client()
+    payload = _brief_bytes_from_a_rich_section(client)
+
+    resp = client.post(
+        "/api/project/brief/start",
+        files=_upload("p.basproject", payload),
+        data={"discipline": "Fire Suppression"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    seed = body["seed"]
+    assert seed["source"] == "brief"
+    assert seed["name"] == "Client X · Data Center · Ashburn, Virginia"
+    assert seed["facts_restored"] == 3 and seed["research_rounds"] == 1
+    assert seed["references_restored"] == 1 and seed["references_dropped"] == []
+    assert seed["template"] is None and seed["warnings"] == []
+    bundle = body["session"]
+    assert bundle["chat"] == []
+    assert bundle["workspace_scope"] == "original"
+    assert bundle["project_link"]["project_id"] == seed["project_id"]
+    assert [f["pid"] for f in bundle["project_facts"]] == ["pf-1", "pf-2", "pf-3"]
+    assert bundle["readiness"]["ready"] is False
+
+    doc = client.get("/api/doc").json()
+    assert doc["doc"]["project_profile"] == PROFILE.to_dict()
+    assert doc["doc"]["project_identity"]["discipline"] == "Fire Suppression"
+    assert doc["doc"]["section"] == {"number": "", "title": ""}
+    assert doc["doc"]["parts"][0]["articles"] == []
+    override = next(s for s in doc["standards"] if s["name"] == "NFPA 13")
+    assert override["edition"] == "2022" and override["is_override"] is True
+    assert doc["project_link"]["seeded_from"] == ["21 13 13"]
+    research = client.get("/api/research/status").json()
+    assert research["status"] == "complete"
+    assert [r["round_index"] for r in research["profile"]["rounds"]] == [1]
+    refs = client.get("/api/references").json()["reference_docs"]
+    assert [r["rid"] for r in refs] == ["ref-1"]
+    assert sessions.get_session().history == []
+
+
+def test_the_start_route_takes_the_sibling_project_file_too():
+    client = _client()
+    package = sessions.project_package_bytes(_rich_session(client))
+    sessions.reset_session()
+
+    resp = client.post(
+        "/api/project/brief/start",
+        files=_upload("section-1.baspec", package, "application/octet-stream"),
+    )
+
+    assert resp.status_code == 200, resp.text
+    seed = resp.json()["seed"]
+    assert seed["source"] == "project"
+    assert seed["facts_restored"] == 3 and seed["research_rounds"] == 1
+    assert any("21 13 13" in w for w in seed["warnings"]), seed["warnings"]
+    session = sessions.get_session()
+    assert session.project_link["seeded_from"] == ["21 13 13"]
+    assert session.history == []
+
+
+def test_the_start_route_refuses_while_work_is_running_or_a_tour_is_open():
+    client = _client()
+    payload = _brief_bytes_from_a_rich_section(client)
+    session = sessions.get_session()
+
+    token = session.claim_model_turn()
+    try:
+        resp = client.post("/api/project/brief/start", files=_upload("p.basproject", payload))
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["code"] == "workspace_busy"
+        export = client.get("/api/project/brief")
+        assert export.status_code == 409 and export.json()["code"] == "turn_active"
+    finally:
+        session.release_model_turn(token[0] if isinstance(token, tuple) else token)
+    assert session.project_link is None and session.facts.items == []
+
+    original = sessions.get_workspace()
+    started = client.post(
+        "/api/tutorial/start",
+        json={
+            "request_id": "brief-routes-refuse-in-a-tour",
+            "source": "showcase",
+            "workspace_id": original.workspace_id,
+            "generation": original.generation,
+        },
+    )
+    assert started.status_code == 200, started.text
+    try:
+        for method, route in (
+            ("post", "/api/project/brief/start"),
+            ("get", "/api/project/brief"),
+            ("get", "/api/project/brief/manifest"),
+        ):
+            if method == "post":
+                resp = client.post(route, files=_upload("p.basproject", payload))
+            else:
+                resp = client.get(route)
+            assert resp.status_code == 409, (route, resp.text)
+            assert resp.json()["code"] == "tutorial_active"
+    finally:
+        sessions.reset_session()
+
+
+def test_an_unknown_module_through_the_route_degrades_with_a_warning():
+    client = _client()
+    payload = _brief_bytes_from_a_rich_section(client)
+    resp = client.post(
+        "/api/project/brief/start",
+        files=_upload("p.basproject", payload),
+        data={"module_id": "not-a-module"},
+    )
+    assert resp.status_code == 200, resp.text
+    seed = resp.json()["seed"]
+    assert seed["module_id"] == sessions.get_session().module.module_id
+    assert any("not-a-module" in w for w in seed["warnings"]), seed["warnings"]
+
+
+def test_a_template_pairs_with_the_brief_through_the_route():
+    client = _client()
+    payload = _brief_bytes_from_a_rich_section(client)
+
+    resp = client.post(
+        "/api/project/brief/start",
+        files=_upload("p.basproject", payload),
+        data={"template_id": "curated:hyperscale-fire-starter"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    seed = resp.json()["seed"]
+    assert seed["template"]["template_id"] == "curated:hyperscale-fire-starter"
+    # The template's module wins — its playbook shaped that document — and
+    # the report says so when the brief's newest section disagreed.
+    assert seed["module_id"] == "hyperscale_fire"
+    assert any("template's module" in w for w in seed["warnings"]), seed["warnings"]
+    session = sessions.get_session()
+    doc = session.doc.doc
+    assert doc.has_body_content()  # the template's body …
+    assert doc.project_profile == PROFILE.to_dict()  # … under the brief's setup
+    assert doc.edition_overrides["NFPA 13"]["edition"] == "2022"
+    assert session.doc.index == 0 and len(session.doc.versions) == 1
+    assert session.template_origin["template_id"] == "curated:hyperscale-fire-starter"
+    assert [f.pid for f in session.facts.items] == ["pf-1", "pf-2", "pf-3"]
+
+    sessions.reset_session()
+    missing = client.post(
+        "/api/project/brief/start",
+        files=_upload("p.basproject", payload),
+        data={"template_id": "curated:does-not-exist"},
+    )
+    assert missing.status_code == 404, missing.text
+    assert sessions.get_session().project_link is None
+
+
+def test_a_seeded_section_saves_reloads_and_extends_the_lineage_on_export():
+    client = _client()
+    payload = _brief_bytes_from_a_rich_section(client)
+    started = client.post(
+        "/api/project/brief/start",
+        files=_upload("p.basproject", payload),
+        data={"discipline": "Fire Suppression"},
+    )
+    assert started.status_code == 200, started.text
+    project_id = started.json()["seed"]["project_id"]
+
+    # Work in section 2: name it, draft a little, record a fact here.
+    edit = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": "sec",
+                    "text": "Pre-Action Sprinkler Systems",
+                    "numbering": "21 13 19",
+                },
+                {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+            ]
+        },
+    )
+    assert edit.status_code == 200, edit.text
+    recorded = client.post(
+        "/api/project-facts",
+        json={"statement": "Pre-action systems here are single-interlock.", "scope": "section"},
+    )
+    assert recorded.status_code == 200, recorded.text
+    assert recorded.json()["project_facts"][-1]["recorded_in"] == "21 13 19"
+
+    # Save and reopen: the link and the ledger come back.
+    package = sessions.project_package_bytes(sessions.get_session())
+    sessions.reset_session()
+    loaded = client.post(
+        "/api/project/load-file",
+        files={"file": ("section-2.baspec", package, "application/octet-stream")},
+    )
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["project_link"]["project_id"] == project_id
+    assert loaded.json()["project_link"]["seeded_from"] == ["21 13 13"]
+    assert [f["pid"] for f in loaded.json()["project_facts"]] == ["pf-1", "pf-2", "pf-3", "pf-4"]
+
+    # Exporting from section 2 extends the same project: one id, two
+    # sections, the carried research, all four facts.
+    exported = client.get("/api/project/brief")
+    assert exported.status_code == 200, exported.text
+    brief = parse_project_brief(exported.content)
+    assert brief.project_id == project_id
+    assert [s["number"] for s in brief.sections] == ["21 13 13", "21 13 19"]
+    own = brief.sections[1]
+    assert own["title"] == "Pre-Action Sprinkler Systems"
+    assert own["article_titles"] == ["SUMMARY"] and own["fact_count"] == 1
+    assert [f["pid"] for f in brief.facts] == ["pf-1", "pf-2", "pf-3", "pf-4"]
+    assert brief.facts[3]["recorded_in"] == "21 13 19"
+    assert brief.research_profile["rounds"][0]["round_index"] == 1
+    link = sessions.get_session().project_link
+    assert link["seeded_from"] == ["21 13 13"]  # the export keeps the lineage
+    assert [s["number"] for s in link["sections"]] == ["21 13 13", "21 13 19"]

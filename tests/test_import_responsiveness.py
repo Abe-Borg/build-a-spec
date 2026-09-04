@@ -221,6 +221,77 @@ def test_template_import_does_not_block_concurrent_requests(monkeypatch, tmp_pat
     )
 
 
+def test_project_brief_start_does_not_block_concurrent_requests(monkeypatch):
+    """Starting a section from a brief is the fifth ``async def`` upload path.
+
+    Parsing a brief — or, for the ``.baspec`` shortcut, loading a whole
+    sibling project into a throwaway session — is the same seconds-of-CPU
+    shape as a master parse, and bound by the same rule: a worker thread,
+    never the loop.
+    """
+    from backend.project_brief import brief_bytes, build_project_brief
+
+    entered = threading.Event()
+    release = threading.Event()
+    real_parse = app_module._parse_brief_upload
+
+    def blocking_parse(data: bytes):
+        entered.set()
+        release.wait(_BLOCK_SECONDS)
+        return real_parse(data)
+
+    monkeypatch.setattr(app_module, "_parse_brief_upload", blocking_parse)
+
+    with TestClient(app_module.create_app()) as client:
+        seeded = client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {
+                        "action": "set_project_profile",
+                        "target_id": "sec",
+                        "city": "Ashburn",
+                        "state": "VA",
+                        "country": "USA",
+                        "client": "Client X",
+                    }
+                ]
+            },
+        )
+        assert seeded.status_code == 200, seeded.text
+        payload = brief_bytes(build_project_brief(sessions.get_session(), ready=False))
+        sessions.reset_session()
+        worker_outcome: dict = {}
+
+        def run_start() -> None:
+            worker_outcome["response"] = client.post(
+                "/api/project/brief/start",
+                files={
+                    "file": (
+                        "project.basproject",
+                        payload,
+                        "application/vnd.buildaspec.project-brief+json",
+                    )
+                },
+            )
+
+        worker = threading.Thread(target=run_start, daemon=True)
+        worker.start()
+        assert entered.wait(_BLOCK_SECONDS + 5), "brief parse never started"
+        started = time.perf_counter()
+        health = client.get("/api/health")
+        elapsed = time.perf_counter() - started
+        release.set()
+        worker.join(_BLOCK_SECONDS + 10)
+
+    assert health.status_code == 200
+    assert worker_outcome["response"].status_code == 200, worker_outcome["response"].text
+    assert elapsed < _RESPONSIVE_SECONDS, (
+        f"an unrelated request waited {elapsed:.2f}s for a brief parse — "
+        "the parse is back on the event loop"
+    )
+
+
 def test_project_load_does_not_block_concurrent_requests(monkeypatch):
     """The same guarantee for opening a project (it re-parses the master)."""
     real_stage = app_module._stage_project_load

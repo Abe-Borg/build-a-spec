@@ -70,6 +70,7 @@ When ``frontend/dist`` exists (production / packaged), it is served at
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -161,6 +162,19 @@ from .spec_doc.docx_export import (
     export_filename,
     redline_filename,
 )
+from .project_brief import (
+    PROJECT_BRIEF_MEDIA_TYPE,
+    ProjectBrief,
+    ProjectBriefError,
+    ProjectBriefTooLargeError,
+    brief_bytes,
+    brief_filename,
+    brief_from_sibling_project,
+    brief_manifest,
+    build_project_brief,
+    parse_brief_json,
+    parse_project_brief,
+)
 from .project_facts import ProjectFactError
 from .reference_docs import ReferenceDocError, prepare_reference_text
 from .reference_extract import (
@@ -175,7 +189,12 @@ from .spec_doc.importer import (
     parse_master_docx,
 )
 from .spec_doc.model import SpecSection, iter_paragraphs
-from .spec_doc.project import chat_transcript, load_project
+from .spec_doc.project import (
+    PROJECT_KIND,
+    chat_transcript,
+    load_project,
+    sanitize_project_link,
+)
 from .spec_doc.project_package import (
     PACKAGE_MEDIA_TYPE,
     ProjectPackageError,
@@ -679,6 +698,34 @@ def _prepare_master_import(
     finally:
         temp_path.unlink(missing_ok=True)
     return result, report, source_context
+
+
+def _parse_brief_upload(data: bytes) -> tuple[ProjectBrief, str]:
+    """Parse a project-brief upload — the blocking half, worker thread only.
+
+    Accepts a ``.basproject`` OR a sibling section's ``.baspec`` (the
+    shortcut: the brief is built from that section's own file), sniffed by
+    the ZIP magic and then by the JSON ``kind``. Returns ``(brief, source)``
+    with ``source`` one of ``"brief"`` / ``"project"``. Raises the
+    ``ProjectBriefError`` / ``ProjectPackageError`` / ``ValueError`` family
+    the routes map to a 400, and ``ProjectPackageTooLargeError`` to a 413.
+    """
+    if data.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        return brief_from_sibling_project(data), "project"
+    try:
+        parsed = parse_brief_json(data)
+    except ProjectBriefTooLargeError as too_large:
+        # Past the brief cap but under the package ceiling: a large legacy
+        # JSON project is the only thing that can still be. When it is not
+        # one either, the brief's own message (the MiB figure) is the
+        # honest answer, not the package parser's.
+        try:
+            return brief_from_sibling_project(data), "project"
+        except (ProjectPackageError, ValueError):
+            raise too_large from None
+    if parsed.get("kind") == PROJECT_KIND:
+        return brief_from_sibling_project(data), "project"
+    return parse_project_brief(data), "brief"
 
 
 def _prepare_reference_upload(
@@ -6061,6 +6108,260 @@ def create_app(
             media_type=PACKAGE_MEDIA_TYPE,
             headers=_attachment_headers(filename),
         )
+
+    # --- Project briefs (carry a project into its next section) -----------
+    #
+    # A brief is the structured, deliberately partial handoff between the
+    # sections of one project (backend/project_brief.py): profile, identity,
+    # edition overrides, the research profile, attached references, the
+    # facts ledger, the section registry — never the conversation or the
+    # document. Export builds it from this session; inspect reads an upload
+    # without touching the session; start seeds a fresh session from it.
+    # The .baspec shortcut rides the same two upload routes, sniffed by kind.
+
+    def _brief_scope_refusal() -> JSONResponse | None:
+        if sessions.get_workspace().scope == "original":
+            return None
+        return _coded_error_response(
+            {
+                "ok": False,
+                "code": "tutorial_active",
+                "error": (
+                    "A tutorial workspace is active. End the tour to return to "
+                    "your project before working with a project brief."
+                ),
+            },
+            status_code=409,
+        )
+
+    def _build_brief_locked(session: SessionState) -> ProjectBrief:
+        """Build this session's brief under the caller's guard, stamping the
+        project link so exporting twice never mints two project ids and the
+        section file records which project it belongs to."""
+        ready = bool(_readiness_payload(session)["ready"])
+        brief = build_project_brief(session, ready=ready)
+        previous = session.project_link if isinstance(session.project_link, dict) else {}
+        session.project_link = sanitize_project_link(
+            {
+                "project_id": brief.project_id,
+                "name": brief.name,
+                "brief_updated_at": brief.updated_at,
+                "seeded_from": list(previous.get("seeded_from", []) or []),
+                "research_rounds_at_seed": int(
+                    previous.get("research_rounds_at_seed", 0) or 0
+                ),
+                "sections": list(brief.sections),
+            }
+        )
+        return brief
+
+    @app.get("/api/project/brief")
+    def project_brief_export() -> Response:
+        refusal = _brief_scope_refusal()
+        if refusal is not None:
+            return refusal
+        session = sessions.get_session()
+        with session.session_state_guard():
+            if session.turn_active:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "code": "turn_active",
+                        "error": (
+                            "Wait for the current reply to finish before "
+                            "exporting a project brief."
+                        ),
+                    },
+                    status_code=409,
+                )
+            brief = _build_brief_locked(session)
+        try:
+            payload = brief_bytes(brief)
+        except ProjectBriefError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+        _trace_capture.app_event(
+            "project_brief",
+            action="export",
+            project_id=brief.project_id,
+            sections=len(brief.sections),
+            facts=len(brief.facts),
+            references=len(brief.reference_docs),
+            research_items=len((brief.research_profile or {}).get("items", []) or []),
+            bytes=len(payload),
+        )
+        return Response(
+            content=payload,
+            media_type=PROJECT_BRIEF_MEDIA_TYPE,
+            headers=_attachment_headers(brief_filename(brief)),
+        )
+
+    @app.get("/api/project/brief/manifest")
+    def project_brief_manifest() -> JSONResponse:
+        """What THIS session would export — for the confirm modal."""
+        refusal = _brief_scope_refusal()
+        if refusal is not None:
+            return refusal
+        session = sessions.get_session()
+        with session.session_state_guard():
+            ready = bool(_readiness_payload(session)["ready"])
+            brief = build_project_brief(session, ready=ready)
+        return JSONResponse({"ok": True, "manifest": brief_manifest(brief)})
+
+    @app.post("/api/project/brief/inspect")
+    async def project_brief_inspect(file: UploadFile) -> JSONResponse:
+        """Read an uploaded brief (or sibling section) without touching the
+        session — the New-section dialog's preview."""
+        try:
+            data = await read_project_upload_bounded(file)
+        except ProjectPackageTooLargeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+        try:
+            # The event-loop rule: parsing (and, for a .baspec, loading it into
+            # a throwaway session) is CPU that must not run on the loop.
+            brief, source = await run_in_threadpool(_parse_brief_upload, data)
+        except (ProjectPackageTooLargeError, ProjectBriefTooLargeError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+        except (ProjectBriefError, ProjectPackageError, ValueError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        _trace_capture.app_event("project_brief", action="inspect", source=source, ok=True)
+        return JSONResponse(
+            {
+                "ok": True,
+                "source": source,
+                "manifest": brief_manifest(brief),
+                "warnings": list(brief.warnings),
+            }
+        )
+
+    @app.post("/api/project/brief/start")
+    async def project_brief_start(
+        file: UploadFile,
+        module_id: str = Form(""),
+        discipline: str = Form(""),
+        template_id: str = Form(""),
+    ) -> JSONResponse:
+        """Seed a fresh session from a brief: the next section of the project.
+
+        Refuses outside the original workspace and while anything is running
+        (a chat turn, research, Final QC) — unlike reset, which invalidates a
+        turn, a seed installs paid state and must not race one. The whole
+        seed is one transaction on the session (``start_from_brief``); the
+        parse and the template lookup happen first, on a worker thread.
+        """
+        refusal = _brief_scope_refusal()
+        if refusal is not None:
+            return refusal
+        entry_lease = sessions.get_workspace()
+        session = entry_lease.session
+        entry_generation = session.generation
+        busy = sessions.busy_reasons(session)
+        if busy:
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "workspace_busy",
+                    "error": (
+                        "Wait for the current work to finish before starting a "
+                        f"new section ({', '.join(busy)} still running)."
+                    ),
+                },
+                status_code=409,
+            )
+        try:
+            data = await read_project_upload_bounded(file)
+        except ProjectPackageTooLargeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+        try:
+            brief, source = await run_in_threadpool(_parse_brief_upload, data)
+        except (ProjectPackageTooLargeError, ProjectBriefTooLargeError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+        except (ProjectBriefError, ProjectPackageError, ValueError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+        newest = brief.newest_section or {}
+        chosen_module = module_id.strip() or str(newest.get("module_id") or "")
+        chosen_discipline = " ".join(discipline.split()) or str(
+            newest.get("discipline") or ""
+        )
+        template_section: SpecSection | None = None
+        template_origin: dict[str, Any] | None = None
+        extra_warnings: list[str] = []
+        wanted_template = template_id.strip()
+        if wanted_template:
+            try:
+                template, _source = await run_in_threadpool(
+                    get_template_catalog().get, wanted_template
+                )
+            except TemplateError as exc:
+                return _template_error(exc)
+            template_section = SpecSection.from_dict(copy.deepcopy(template["document"]))
+            template_origin = {
+                "template_id": template["id"],
+                "name": template["name"],
+                "seed_block_ids": [
+                    p.uid for _part, _article, p, _depth, _ref in iter_paragraphs(template_section)
+                ],
+            }
+            template_module = str(template.get("module_id") or "")
+            if template_module:
+                if chosen_module and template_module != chosen_module:
+                    extra_warnings.append(
+                        f"The template's module ({template_module}) was used "
+                        f"instead of the brief's ({chosen_module}): the "
+                        "template's playbook shaped that document."
+                    )
+                chosen_module = template_module
+            if not chosen_discipline:
+                chosen_discipline = str(
+                    (template_section.project_identity or {}).get("discipline", "") or ""
+                )
+        try:
+            with sessions.active_write(entry_lease.workspace_id):
+                with session.session_state_guard():
+                    sessions.workspace_manager().assert_active(entry_lease)
+                    if session.generation != entry_generation:
+                        return _stale_tutorial_response()
+                    busy = sessions.busy_reasons(session)
+                    if busy:
+                        return _coded_error_response(
+                            {
+                                "ok": False,
+                                "code": "workspace_busy",
+                                "error": (
+                                    "Wait for the current work to finish before "
+                                    f"starting a new section ({', '.join(busy)} "
+                                    "still running)."
+                                ),
+                            },
+                            status_code=409,
+                        )
+                    seed = session.start_from_brief(
+                        brief,
+                        module_id=chosen_module,
+                        discipline=chosen_discipline,
+                        template_section=template_section,
+                        template_origin=template_origin,
+                    )
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+        seed["warnings"] = list(brief.warnings) + extra_warnings + list(seed["warnings"])
+        seed["source"] = source
+        seed["project_id"] = brief.project_id
+        seed["name"] = brief.name
+        _trace_capture.app_event(
+            "project_brief",
+            action="start",
+            source=source,
+            project_id=brief.project_id,
+            module_id=seed["module_id"],
+            template=bool(template_origin),
+            research_rounds=seed["research_rounds"],
+            references=seed["references_restored"],
+            facts=seed["facts_restored"],
+            ok=True,
+        )
+        bundle = await run_in_threadpool(_session_bundle, sessions.get_workspace())
+        return JSONResponse({"ok": True, "seed": seed, "session": bundle})
 
     @app.post("/api/project/load")
     def project_load(body: dict[str, Any]) -> JSONResponse:

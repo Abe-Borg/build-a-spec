@@ -19,10 +19,20 @@ to emit it subject-first, cited, and small enough to attach.
    the bracket text.
 2. Optionally append one of the [discipline add-ons](#discipline-add-ons) below.
 3. Run it against the drawing set in drawing-analyzer.
-4. Save the output as `.md` or `.txt`.
-5. In Build-a-Spec: **Attach reference** in the document panel. It becomes
-   background the assistant reads on request — never spec content, never edited,
-   never in lint, compare, Final QC, readiness, or an export.
+4. Save the output as `.txt`. Build-a-Spec accepts `.docx`, `.pdf`, `.txt`,
+   `.xml` and `.csv` as reference documents — **not `.md`**, so a file saved
+   with that extension is refused at upload. The markdown formatting the prompt
+   produces is perfectly fine *inside* a `.txt`: it is the extension that is
+   checked, and the headings and tables read cleanly as plain text.
+5. In Build-a-Spec: **Attach reference** in the document panel.
+
+**What the attachment is, exactly.** It stays background and never becomes spec
+content: it is not added to the section, never edited, and no lint finding,
+compare view, readiness check, QC finding or export is ever raised *against* it.
+Its **text**, though, is deliberately put in front of the agents — the assistant
+reads it on request, and the research fan-out and every Final QC lens and
+verifier seat receive it automatically in their cached prefix. That is the point
+of attaching it, and it is why the length target below matters.
 
 ## Why the prompt is shaped this way
 
@@ -113,7 +123,9 @@ CONFLICTS rather than twice as fact.
    A line with no citation is not usable; do not write one.
 
 2. QUOTE WHAT CARRIES WEIGHT. Reproduce verbatim, in quotation marks: code and
-   standard citations including edition/year, listing and approval requirements
+   standard citations exactly as printed — with the edition or year when one is
+   printed, and without inventing one when it is not (rule 3) — listing and
+   approval requirements
    ("UL listed and FM approved"), manufacturer names and model numbers, numeric
    design criteria, and any drawing note you are handing over as spec input.
    Do not paraphrase these, do not normalize units, do not round numbers, do not
@@ -127,7 +139,11 @@ CONFLICTS rather than twice as fact.
    edition for the one the drawings cite: record what is cited, and if it is not
    the current published edition, note that in CONFLICTS as an observation
    (the jurisdiction may have adopted an earlier edition on purpose — that is
-   the spec writer's call, not yours).
+   the spec writer's call, not yours). A standard cited with NO edition at all
+   ("NFPA 13", "ASHRAE 62.1") is recorded exactly as printed with its edition
+   marked NOT SHOWN, and repeated in Section 12 — never completed from your own
+   knowledge. The specification has to state an edition; the drawings have not,
+   and that gap is the finding.
 
 4. DECLARE TRUNCATION. If a schedule or list is too large to reproduce, give the
    row count, the distinct types, and the full range of values, and say you did
@@ -163,9 +179,12 @@ occupied-building constraints, alternates and options. Scope boundaries change
 spec text as much as scope does.
 
 ## 3. REGULATORY AND CONTRACTUAL BASIS
-- Every code and standard cited anywhere in the set, verbatim, WITH EDITION/YEAR
-  and where it was cited. Include model codes, referenced standards, local
-  amendments, and owner/corporate standards documents named on the drawings.
+- Every code and standard cited anywhere in the set, verbatim and exactly as
+  printed, and where it was cited. Give the edition/year where the drawings
+  print one and "edition NOT SHOWN" where they do not — the bare citation is
+  still recorded, and the missing edition is repeated in Section 12. Include
+  model codes, referenced standards, local amendments, and owner/corporate
+  standards documents named on the drawings.
 - Authority having jurisdiction, and any AHJ-specific requirement or approval
   condition shown.
 - Insurer or underwriter requirements (e.g. FM Global data sheets by number),
@@ -240,7 +259,8 @@ published edition, as an observation for the spec writer to confirm.
 Everything the specification will have to state that the drawings do not
 establish. Group by the section it affects. Be specific: not "insulation
 unclear" but "insulation thickness for chilled water 2-1/2 in. and larger is
-not scheduled." This section is the point of the report; do not thin it out.
+not scheduled." Every standard whose edition was NOT SHOWN belongs here too.
+This section is the point of the report; do not thin it out.
 
 === LENGTH ===
 
@@ -331,7 +351,10 @@ and durations.
   the current edition silently is the failure mode this avoids — the
   jurisdiction may have adopted an earlier one on purpose, and the specification
   has to say which and why. (Build-a-Spec takes the same position: an edition is
-  recorded with a stated basis, or it is not recorded.)
+  recorded with a stated basis, or it is not recorded.) A standard cited with no
+  edition at all is recorded bare and flagged as a gap — that is one of the most
+  common real findings in a set, and inventing a year to fill it is the single
+  worst thing this report could do.
 - **One drawing set, one attachment.** If you have several sets (a bid set and an
   addendum, or two buildings), run the prompt per set and attach each output
   separately with its set name in the filename. The reference budget is

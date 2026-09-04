@@ -180,6 +180,9 @@ def matches_current_inputs(
             # replacing one makes a retained report stale exactly the way a
             # document edit does.
             reference_docs=list(session.references.docs),
+            # So are the established facts: every lens and seat read them,
+            # and a supersede after the run changes what was reviewed.
+            project_facts=list(session.facts.active()),
         )
     )
 

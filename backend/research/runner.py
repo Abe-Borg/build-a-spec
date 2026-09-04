@@ -204,10 +204,15 @@ class ResearchRunner:
         dimension_ids: Sequence[str] | None = None,
         reference_docs: Sequence[Any] | None = None,
         section_label: str = "",
+        project_facts: Sequence[Any] | None = None,
         on_settled: Callable[[], None] | None = None,
         usage_sink: Callable[[dict], None] | None = None,
     ) -> bool:
         """Kick off the fan-out on a daemon thread. False if already running.
+
+        ``project_facts`` are the session's active established facts; they
+        are briefed to every dimension beside the attached documents and
+        snapshotted here for the same reason those are.
 
         ``section_label`` is the section number of the session pressing
         Research; it is stamped on the round record so a section seeded
@@ -270,6 +275,7 @@ class ResearchRunner:
             # next one, not to workers already briefed and already paying for
             # a cached prefix built without it.
             briefing_docs = list(reference_docs or [])
+            briefing_facts = list(project_facts or [])
             section = " ".join(section_label.split())
             cancel_event = threading.Event()
             self._cancel_event = cancel_event
@@ -338,6 +344,7 @@ class ResearchRunner:
                     established=established,
                     reference_docs=briefing_docs,
                     section_label=section,
+                    project_facts=briefing_facts,
                     event_sink=_sink,
                     should_stop=cancel_event.is_set,
                 )

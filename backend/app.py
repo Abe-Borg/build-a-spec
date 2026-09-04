@@ -1240,6 +1240,7 @@ def _qc_export_current_state(
         consolidation_enabled=settings.QC_CONSOLIDATION,
         batch_verification=settings.QC_BATCH_VERIFICATION,
         reference_docs=list(session.references.docs),
+        project_facts=list(session.facts.active()),
     )
     matches = _qc_matches_current_inputs(
         session, result, source_guard=source_guard
@@ -5159,6 +5160,7 @@ def create_app(
                 # Snapshot the list under the guard we already hold: the
                 # round is briefed on what was attached when it started.
                 reference_docs=list(session.references.docs),
+                project_facts=list(session.facts.active()),
                 section_label=section_label,
                 usage_sink=lambda u, g=run_generation: (
                     session.add_usage_if_current(g, "research", u)
@@ -5383,6 +5385,7 @@ def create_app(
                 # Snapshot under the guard we already hold: the review is
                 # run against what was attached when it started.
                 reference_docs=list(session.references.docs),
+                project_facts=list(session.facts.active()),
                 remembered_dismissed=remembered,
                 usage_sink=lambda cat, u, g=run_generation: (
                     session.add_usage_if_current(g, cat, u)

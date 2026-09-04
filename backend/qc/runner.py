@@ -117,6 +117,7 @@ class QCRunner:
         discipline: str = "",
         source_guard: QCSourceGuard | None = None,
         reference_docs: Sequence[Any] | None = None,
+        project_facts: Sequence[Any] | None = None,
         remembered_dismissed: set[str] | dict[str, dict[str, Any]] | None = None,
         on_settled: Callable[[], None] | None = None,
         usage_sink: Callable[[str, dict], None] | None = None,
@@ -138,6 +139,7 @@ class QCRunner:
             # to lenses already briefed against a cached prefix built without
             # it.
             briefing_docs = list(reference_docs or [])
+            briefing_facts = list(project_facts or [])
             cancel_event = threading.Event()
             self._cancel_event = cancel_event
             run_token = object()
@@ -205,6 +207,7 @@ class QCRunner:
                     discipline=discipline,
                     source_guard=source_guard,
                     reference_docs=briefing_docs,
+                    project_facts=briefing_facts,
                     remembered_dismissed=remembered_dismissed,
                     run_id=run_id,
                     event_sink=_sink,

@@ -1308,24 +1308,22 @@ _QC_OPS_SOURCE_LABELS: dict[str, str] = {
 }
 
 
-def _qc_render_candidate_origins(document, origins: list[dict]) -> None:
-    """The 'Original lens claims' subsection for a multi-origin candidate.
 
-    One line per origin. The canonical claim above already restates the
-    shared defect, so each origin contributes its identity, severity, title
-    and evidence references; the full submitted claim text, source lists and
+def _qc_render_candidate_origins(document, origins: list[dict]) -> None:
+    """The original lens claims a consolidated candidate was built from.
+
+    One line per origin: lens, its own severity, its own title, and whether it
+    proposed its own operations. The canonical claim above already restates
+    the shared defect, and the full submitted claim text, source lists and
     per-origin operation payloads are retained verbatim in the JSON export.
+
+    The subsection heading and its explanatory paragraph are gone: the
+    paragraph was 47 words of identical prose on every consolidated candidate,
+    and it explains a mechanism, which belongs once in the methodology section
+    and in the consolidation record — not once per finding.
     """
     if len(origins) < 2:
         return
-    _qc_heading(document, "Original Lens Claims", 3)
-    document.add_paragraph(
-        f"{len(origins)} independent lens claims were consolidated into this "
-        "single candidate and adjudicated by one verifier panel, because one "
-        "fix would dispose of all of them. Every original claim is retained "
-        "verbatim in the run record (JSON export); each is identified below "
-        "with its own severity and evidence."
-    )
     for index, origin in enumerate(origins, start=1):
         severity = xml_safe_upper(str(origin.get("severity") or "not recorded"))
         parts = [
@@ -1349,12 +1347,9 @@ def _qc_render_candidate_origins(document, origins: list[dict]) -> None:
         ]
         if ops:
             detail.append(f"proposed its own {len(ops)}-operation fix")
-        origin_id = str(origin.get("origin_id") or "").strip()
-        if origin_id:
-            detail.append(origin_id)
         if detail:
             parts.append(f" [{'; '.join(detail)}]")
-        _qc_add_label(document, f"Origin {index}", "".join(parts))
+        _qc_add_label(document, f"Original claim {index}", "".join(parts))
 
 
 def _qc_legacy_schema(document) -> bool:
@@ -2635,41 +2630,52 @@ def _qc_render_executive_queue(
     )
 
 
-def _qc_render_manifest(
-    document, manifest: object, *, title: str = "Input Manifest"
-) -> None:
-    _qc_heading(document, title, 2)
+
+def _qc_manifest_label(key: str) -> str:
+    return xml_safe_title(str(key).replace("_", " ").strip())
+
+
+def _qc_manifest_changes(before: object, after: object) -> list[str]:
+    """Which material inputs differ between the run and export-time manifests."""
+    left = _qc_dict(before)
+    right = _qc_dict(after)
+    if not left or not right:
+        return []
+    changed: list[str] = []
+    for key in sorted(set(left) | set(right)):
+        if key not in left:
+            changed.append(f"{_qc_manifest_label(key)} (added since the run)")
+        elif key not in right:
+            changed.append(f"{_qc_manifest_label(key)} (no longer recorded)")
+        elif _qc_json(left[key]) != _qc_json(right[key]):
+            changed.append(_qc_manifest_label(key))
+    return changed
+
+
+def _qc_render_manifest_pointer(document, manifest: object) -> None:
+    """Name the inputs this run was fixed to, without dumping their JSON.
+
+    The manifest used to render as raw JSON pasted into prose paragraphs —
+    truncated mid-object by Word's own layout, so it was neither readable nor
+    parseable, and it repeated facts the identity lines above already state in
+    English (research coverage, reference documents, model, effort). The
+    fingerprints above are what actually bind this report to those inputs; the
+    JSON export is where a tool reads them.
+    """
     if not isinstance(manifest, dict) or not manifest:
         document.add_paragraph(
             "No structured input manifest was persisted. This is expected for "
             "legacy schema results; document-only identity may still be available."
         )
         return
-    for key, value in manifest.items():
-        label = xml_safe_title(str(key).replace("_", " ").strip())
-        if isinstance(value, dict):
-            _qc_add_label(document, label, _qc_json(value))
-        elif isinstance(value, list):
-            if not value:
-                _qc_add_label(document, label, "[]")
-                continue
-            heading = document.add_paragraph()
-            head_run = heading.add_run(f"{label}:")
-            _qc_set_run_font(head_run, color=_QC_DARK_BLUE, bold=True)
-            num_id = _qc_new_list_numbering(document, "bullet")
-            for entry in value:
-                p = document.add_paragraph()
-                _qc_apply_numbering(p, num_id)
-                if isinstance(entry, str) and _qc_is_safe_http_url(entry):
-                    _qc_add_hyperlink(p, entry, entry)
-                else:
-                    p.add_run(
-                        _qc_json(entry)
-                        if isinstance(entry, (dict, list))
-                        else _qc_text(entry)
-                    )
-        else:
-            _qc_add_label(document, label, value)
+    _qc_add_label(
+        document,
+        "Inputs fixed by the manifest",
+        ", ".join(_qc_manifest_label(key) for key in manifest)
+        + ". The complete manifest, including every fingerprint and the full "
+        "lens configuration, is reproduced losslessly in the JSON export; the "
+        "input fingerprint above is computed over it.",
+    )
 
 
 def _qc_render_identity(
@@ -2763,7 +2769,7 @@ def _qc_render_identity(
     ]
     for label, value in identities:
         _qc_add_label(document, label, value)
-    _qc_render_manifest(document, qc_result.get("input_manifest"))
+    _qc_render_manifest_pointer(document, qc_result.get("input_manifest"))
 
 
 def _qc_render_export_current_state(
@@ -2796,31 +2802,48 @@ def _qc_render_export_current_state(
             str(attempt.get("error") or "See the preserved execution records."),
             accent=_QC_CAUTION,
         )
-    values = [
+    # Only the facts that can differ from the identity section above, plus
+    # every abnormal one. Content-addressed fingerprints, a "None recorded"
+    # error and a "stale: yes" that merely negates the line above it are all
+    # in the JSON export, where a tool can compare them.
+    values: list[tuple[str, object]] = [
         ("Export generated", state.get("generated_at")),
-        ("Selected report run ID", report_run_id or "Not recorded"),
-        (
-            "Selected report execution status",
-            qc_result.get("execution_status") or "Not recorded",
-        ),
         ("Active document version", qc_version_label(state.get("document_version"))),
-        ("Active document fingerprint", state.get("document_fingerprint")),
-        ("Active full-input fingerprint", state.get("current_input_fingerprint")),
-        ("Report matches all active inputs", state.get("report_matches_current_inputs")),
-        ("Report stale at export", state.get("stale")),
         (
-            "Input verification pending at export",
-            state.get("input_verification_pending"),
+            "Report matches all active inputs",
+            state.get("report_matches_current_inputs"),
         ),
         ("Runner status", runner.get("status")),
-        ("Runner error", runner.get("error") or "None recorded"),
-        ("Latest attempt run ID", attempt_run_id or "Not recorded"),
         ("Latest attempt status", attempt_status),
-        ("Latest attempt started", attempt.get("started_at")),
-        ("Latest attempt finished", attempt.get("finished_at")),
-        ("Latest attempt error", attempt.get("error") or "None recorded"),
-        ("Latest attempt report available", attempt.get("report_available")),
+        (
+            "Latest attempt window",
+            f"{_qc_text(attempt.get('started_at'))} to "
+            f"{_qc_text(attempt.get('finished_at'))}",
+        ),
     ]
+    if attempt_run_id and attempt_run_id != report_run_id:
+        values.insert(1, ("Latest attempt run ID", attempt_run_id))
+    if _qc_dict(state.get("last_successful_report")) or (
+        attempt_run_id and attempt_run_id != report_run_id
+    ):
+        values.insert(
+            1, ("Selected report run ID", report_run_id or "Not recorded")
+        )
+        values.insert(
+            2,
+            (
+                "Selected report execution status",
+                qc_result.get("execution_status") or "Not recorded",
+            ),
+        )
+    if state.get("input_verification_pending"):
+        values.append(("Input verification pending at export", True))
+    if runner.get("error"):
+        values.append(("Runner error", runner.get("error")))
+    if attempt.get("error"):
+        values.append(("Latest attempt error", attempt.get("error")))
+    if "report_available" in attempt and not attempt.get("report_available"):
+        values.append(("Latest attempt report available", False))
     for label, value in values:
         _qc_add_label(document, label, value)
 
@@ -2845,19 +2868,14 @@ def _qc_render_export_current_state(
                 "Retained successful execution status",
                 retained.get("execution_status") or "Not recorded",
             ),
-            ("Retained successful start", retained.get("started_at")),
-            ("Retained successful finish", retained.get("finished_at")),
+            (
+                "Retained successful window",
+                f"{_qc_text(retained.get('started_at'))} to "
+                f"{_qc_text(retained.get('finished_at'))}",
+            ),
             (
                 "Retained reviewed document version",
                 qc_version_label(retained.get("version_index")),
-            ),
-            (
-                "Retained reviewed document fingerprint",
-                retained.get("version_fingerprint"),
-            ),
-            (
-                "Retained full-input fingerprint",
-                retained.get("input_fingerprint"),
             ),
             ("Retained report summary", retained.get("summary")),
         ]
@@ -2898,11 +2916,24 @@ def _qc_render_export_current_state(
                 for check in checks
             ],
         )
-    _qc_render_manifest(
-        document,
-        state.get("current_input_manifest"),
-        title="Current Input Manifest at Export",
+    changed = _qc_manifest_changes(
+        qc_result.get("input_manifest"), state.get("current_input_manifest")
     )
+    if changed:
+        _qc_add_label(
+            document,
+            "Inputs that changed since the run",
+            ", ".join(changed)
+            + ". Compare the two manifests in the JSON export for the field-"
+            "level difference.",
+            color=_QC_CAUTION,
+        )
+    elif state.get("current_input_manifest"):
+        _qc_add_label(
+            document,
+            "Inputs that changed since the run",
+            "None — every recorded material input still matches this run.",
+        )
 
 
 def _qc_render_methodology(document, qc_result: dict) -> None:
@@ -2945,7 +2976,10 @@ def _qc_render_methodology(document, qc_result: dict) -> None:
                 "challenged twice. Grouping is confined to candidates sharing a "
                 "write scope, every original claim is retained verbatim in the "
                 "record, and any failure of the grouping step falls back to one "
-                "panel per original candidate.",
+                "panel per original candidate. A consolidated candidate lists its "
+                "original claims by lens and severity beneath its own claim; each "
+                "original's full submitted text, sources and operation payload "
+                "ride the JSON export.",
             ),
             (
                 "Adversarial verification",
@@ -2960,9 +2994,25 @@ def _qc_render_methodology(document, qc_result: dict) -> None:
                 "Operation validation and disposition",
                 "Proposed edits are recorded in full with semantic and mechanical "
                 "validation kept distinct. Only semantically approved operations "
-                "proceed to deterministic and source-preservation validation. Open, "
-                "applied, dismissed, substantively refuted, and infrastructure-"
-                "inconclusive outcomes remain distinct.",
+                "proceed to deterministic and source-preservation validation. The "
+                "pipeline does not dry-run the operations of a candidate that was "
+                "substantively refuted, disputed by its panel, or left without a "
+                "complete verifier panel: for those, a false mechanical-validity "
+                "field is an absence of evaluation, not a finding of invalidity. "
+                "Open, applied, dismissed, substantively refuted, and "
+                "infrastructure-inconclusive outcomes remain distinct.",
+            ),
+            (
+                "How to read a candidate record",
+                "A candidate whose panel was unanimous, whose fix every seat "
+                "approved and whose dry run passed carries one Panel line saying "
+                "so. Every labelled line it replaces — the outcome, the required "
+                "panel and threshold, the seat-by-seat table, the fix-adequacy "
+                "vote, the semantic decision and its reason, the validation "
+                "status and its detail — returns in full the moment any of them "
+                "would disagree with the others: a seat that did not complete, a "
+                "split or majority-threshold panel, a rejected or unevaluated "
+                "fix, or a dry run that did not pass.",
             ),
         ],
     )
@@ -2991,6 +3041,31 @@ def _qc_render_usage_values(document, usage: object, *, label: str) -> None:
             for key, value in values.items()
         ),
     )
+
+
+
+def _qc_lens_telemetry_line(lens: dict) -> str:
+    """Billed tokens and estimated cost for one lens, in one line.
+
+    The full per-category breakdown (cache reads and writes, thinking tokens,
+    web-tool requests) is reconciled against the run totals in the Usage
+    section and preserved per lens in the JSON export. Repeating it here as a
+    labelled semicolon list restated numbers nobody adds up in this position.
+    """
+    parts: list[str] = []
+    usage = lens.get("usage_totals")
+    if isinstance(usage, dict):
+        tokens = sum(
+            int(value)
+            for key, value in usage.items()
+            if key.endswith("_tokens") and isinstance(value, int)
+        )
+        if tokens:
+            parts.append(f"{tokens:,} billed tokens")
+    cost = lens.get("estimated_cost_usd")
+    if isinstance(cost, (int, float)):
+        parts.append(f"${float(cost):,.2f} estimated")
+    return " · ".join(parts) or "No usage or cost was persisted for this lens."
 
 
 def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> None:
@@ -3070,11 +3145,13 @@ def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> N
             lens.get("retrieved_sources"), lens.get("attempted_sources")
         ),
     )
-    _qc_render_usage_values(document, lens.get("usage_totals"), label="Lens usage")
+    # The token breakdown and its dollar figure fold into one line: the
+    # Usage section reconciles both against the run totals, which is the only
+    # place the arithmetic can be checked. The two request counts keep their
+    # exact labels -- the run total states that it is the sum of these
+    # records, so this is the vocabulary that reconciliation is written in.
     _qc_add_label(
-        document,
-        "Estimated lens cost (USD)",
-        lens.get("estimated_cost_usd", "Not recorded"),
+        document, "Recorded work", _qc_lens_telemetry_line(lens)
     )
     _qc_add_label(
         document,
@@ -3115,7 +3192,17 @@ def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> N
                 accent=_QC_RISK,
             )
     if checks:
-        rows: list[list[object]] = []
+        # One row per check, carrying its own note. The note used to be a
+        # separate labelled paragraph below the table ("Check 7: …"), so a
+        # reader matched numbers between a grid and a list of nineteen
+        # paragraphs to learn what a single check found.
+        table = document.add_table(rows=1, cols=4)
+        table.style = "Table Grid"
+        for cell, label in zip(
+            table.rows[0].cells,
+            ("#", "Outcome", "Reviewed check", "What it found"),
+        ):
+            cell.text = label
         for check_index, check in enumerate(checks, start=1):
             outcome = xml_safe_upper(str(check.get("outcome") or "not_recorded"))
             check_name = str(check.get("check") or "Unnamed check")
@@ -3124,22 +3211,24 @@ def _qc_render_lens(document, lens: dict, index: int, findings: list[dict]) -> N
             )
             if elements:
                 check_name = f"{check_name} — {elements}"
-            rows.append([check_index, outcome, check_name])
-        _qc_add_table(
-            document, ["#", "Outcome", "Reviewed check"], rows, [720, 1440, 7200]
-        )
-        for check_index, check in enumerate(checks, start=1):
             notes = str(check.get("notes") or "").strip()
             refs = [
                 _qc_source_ref_text(document, value)
                 for value in _qc_list(check.get("source_urls"))
             ]
             deduped = list(dict.fromkeys(text for text in refs if text))
-            if notes or deduped:
-                value = notes or "No note recorded"
-                if deduped:
-                    value = f"{value} [sources: {', '.join(deduped)}]"
-                _qc_add_label(document, f"Check {check_index}", value)
+            if deduped:
+                notes = (
+                    f"{notes or 'No note recorded'} "
+                    f"[sources: {', '.join(deduped)}]"
+                )
+            cells = table.add_row().cells
+            cells[0].text = str(check_index)
+            cells[1].text = outcome
+            _qc_digest_cell(cells[2], "", check_name)
+            _qc_digest_cell(cells[3], "", notes)
+        _qc_table_geometry(table, [500, 1100, 3480, 4280])
+        for check_index, check in enumerate(checks, start=1):
             for record in _qc_list(check.get("source_checks")):
                 if not isinstance(record, dict) or "accepted" not in record:
                     continue
@@ -3231,46 +3320,168 @@ def _qc_seat_label(verdict: dict, index: int) -> object:
     return reviewer_index if reviewer_index not in (None, "", 0) else index
 
 
-def _qc_render_panel(
-    document, verdicts: list[dict], *, candidate_kind: str
-) -> None:
-    """One seat table plus per-side representative notes.
 
-    A unanimous panel's three verdict notes are near-verbatim restatements
-    of one another, so the table carries every seat's vote/severity/fix
-    verdict while prose is printed once per vote side — the first completed
-    seat of each side speaks for it. A disputed candidate is the exception:
-    the disagreement IS the content, so every completed seat's note prints.
+def _qc_seat_tally(verdicts: list[dict]) -> dict[str, object]:
+    """Every fact the adjudication line needs, counted once."""
+    uphold, refute, failed, total = _qc_vote_counts(verdicts)
+    completed = [
+        item
+        for item in verdicts
+        if str(item.get("status") or "completed").lower() == "completed"
+    ]
+    adequacy = [item for item in completed if "ops_adequate" in item]
+    approved = sum(1 for item in adequacy if item.get("ops_adequate") is True)
+    revised = sum(
+        1 for item in verdicts if str(item.get("revised_severity") or "").strip()
+    )
+    return {
+        "revised": revised,
+        "uphold": uphold,
+        "refute": refute,
+        "failed": failed,
+        "total": total,
+        "completed": len(completed),
+        "adequacy": len(adequacy),
+        "approved": approved,
+    }
+
+
+def _qc_adjudication_line(
+    finding: dict,
+    tally: dict[str, object],
+    *,
+    candidate_kind: str,
+    semantic_schema: bool,
+) -> tuple[str, bool]:
+    """One sentence for a nominal candidate; ``False`` when it must expand.
+
+    A unanimous, semantically approved, dry-run-valid survivor used to state
+    the same verdict eleven times: in the heading severity, its own Severity
+    line, the outcome, the required panel, the persisted tally, a seat table
+    of identical rows, the fix-adequacy vote, the semantic status, the
+    semantic reason, the validation status and the validation detail. None of
+    those is wrong; together they are one fact wearing eleven hats. This
+    renders that fact once and returns ``nominal=False`` the moment anything
+    is off-pattern — a seat that did not complete, a legacy majority
+    threshold, a rejected or unevaluated fix, an invalid dry run — so the
+    exceptional case still gets every labelled line it always had.
+    """
+    panel_size = finding.get("verification_panel_size")
+    threshold = finding.get("verification_threshold")
+    total = int(tally["total"])
+    if tally["failed"] or not total:
+        return "", False
+    if tally["revised"]:
+        # A revised severity is recorded per seat and appears nowhere else.
+        return "", False
+    if panel_size in (None, "", 0) or int(panel_size) != total:
+        return "", False
+    if threshold in (None, "", 0) or int(threshold) != total:
+        return "", False
+    if not semantic_schema:
+        return "", False
+
+    semantic = str(finding.get("ops_semantic_status") or "").strip().lower()
+    has_ops = any(
+        isinstance(item, dict) for item in _qc_list(finding.get("proposed_ops"))
+    )
+
+    if candidate_kind == "surviving":
+        if int(tally["uphold"]) != total or semantic != "approved":
+            return "", False
+        if has_ops and (
+            finding.get("ops_valid") is not True
+            or str(finding.get("ops_invalid_reason") or "").strip()
+        ):
+            return "", False
+        if has_ops and int(tally["approved"]) != int(tally["adequacy"]):
+            return "", False
+        line = f"{total} of {total} seats upheld"
+        if has_ops:
+            line += " · fix approved by every seat · dry run valid"
+        else:
+            line += " · advisory, no mechanical fix proposed"
+        return line, True
+
+    if candidate_kind == "refuted":
+        if int(tally["refute"]) != total or semantic == "approved":
+            return "", False
+        line = f"0 of {total} seats upheld ({total} refuted)"
+        if has_ops:
+            line += " · fix not evaluated"
+        return line, True
+
+    if candidate_kind == "disputed":
+        if int(tally["uphold"]) + int(tally["refute"]) != total:
+            return "", False
+        if semantic == "approved":
+            return "", False
+        line = (
+            f"split {tally['uphold']} uphold / {tally['refute']} refute of "
+            f"{total} seats · fix not evaluated, must not be applied from "
+            "this record"
+        )
+        return line, True
+
+    return "", False
+
+
+
+def _qc_render_panel(
+    document,
+    verdicts: list[dict],
+    *,
+    candidate_kind: str,
+    show_table: bool = True,
+) -> None:
+    """Per-side representative notes, and a seat table only when it says something.
+
+    A unanimous panel's rows are identical — ``COMPLETED | UPHOLD | — |
+    APPROVED`` repeated two or three times — and the adjudication line above
+    already carries that count, so ``show_table`` is False for a nominal
+    candidate. It stays True whenever a seat disagreed, failed, revised a
+    severity or split from its panel: those rows are the record.
+
+    Notes are printed once per vote side (the first completed seat of a side
+    speaks for it), because a unanimous panel's notes are near-verbatim
+    restatements of one another. A disputed candidate is the exception — the
+    disagreement IS the content, so every completed seat's note prints.
     Failed or cancelled seats always surface loudly with their error, and a
     refuting seat's citation evidence always prints with its validation
-    result. Per-seat billing, telemetry lists, and the remaining notes live
-    in the JSON export.
+    result. Per-seat billing and the remaining notes live in the JSON export.
     """
-    rows: list[list[object]] = []
-    for index, verdict in enumerate(verdicts, start=1):
-        status = xml_safe_upper(str(verdict.get("status") or "completed"))
-        if "upholds" in verdict:
-            vote = "UPHOLD" if verdict.get("upholds") is True else "REFUTE"
-        else:
-            vote = "—"
-        severity = verdict.get("revised_severity") or "—"
-        if "ops_adequate" in verdict:
-            fix = (
-                "APPROVED"
-                if verdict.get("ops_adequate") is True
-                else "NOT APPROVED"
+    if show_table:
+        rows: list[list[object]] = []
+        for index, verdict in enumerate(verdicts, start=1):
+            status = xml_safe_upper(str(verdict.get("status") or "completed"))
+            if "upholds" in verdict:
+                vote = "UPHOLD" if verdict.get("upholds") is True else "REFUTE"
+            else:
+                vote = "—"
+            severity = verdict.get("revised_severity") or "—"
+            if "ops_adequate" in verdict:
+                fix = (
+                    "APPROVED"
+                    if verdict.get("ops_adequate") is True
+                    else "NOT APPROVED"
+                )
+            else:
+                fix = "—"
+            rows.append(
+                [
+                    f"Seat {_qc_seat_label(verdict, index)}",
+                    status,
+                    vote,
+                    severity,
+                    fix,
+                ]
             )
-        else:
-            fix = "—"
-        rows.append(
-            [f"Seat {_qc_seat_label(verdict, index)}", status, vote, severity, fix]
+        _qc_add_table(
+            document,
+            ["Seat", "Status", "Vote", "Revised severity", "Fix adequate"],
+            rows,
+            [1440, 1800, 1440, 2340, 2340],
         )
-    _qc_add_table(
-        document,
-        ["Seat", "Status", "Vote", "Revised severity", "Fix adequate"],
-        rows,
-        [1440, 1800, 1440, 2340, 2340],
-    )
 
     completed = [
         (index, verdict)
@@ -3413,10 +3624,25 @@ def _qc_operation_lines(operation: dict) -> tuple[str, str]:
     return header, str(operation.get("text") or "")
 
 
+
 def _qc_render_ops(
-    document, finding: dict, *, candidate_kind: str = "surviving"
+    document,
+    finding: dict,
+    *,
+    candidate_kind: str = "surviving",
+    nominal: bool = False,
 ) -> None:
-    _qc_heading(document, "Proposed Operations and Validation", 3)
+    """The proposed edit, and the validation lines a nominal record does not need.
+
+    ``nominal`` is the adjudication line's verdict: the panel was unanimous,
+    the fix was semantically approved and the dry run passed. In that case the
+    operation text is the only thing left worth printing — the five status
+    lines it used to carry ("Proposed fix adequate", "Semantic fix decision",
+    the semantic reason, "Operation validation", the validation detail) all
+    restate what one line above already said. Anything off-pattern renders
+    them in full, because then they disagree with each other and the reader
+    needs to see which.
+    """
     has_operations = any(
         isinstance(item, dict)
         for item in _qc_list(finding.get("proposed_ops"))
@@ -3428,7 +3654,12 @@ def _qc_render_ops(
         and str(verdict.get("status") or "completed").lower() == "completed"
         and "ops_adequate" in verdict
     ]
-    if candidate_kind == "surviving" and adequacy_votes and has_operations:
+    if (
+        not nominal
+        and candidate_kind == "surviving"
+        and adequacy_votes
+        and has_operations
+    ):
         approved = sum(
             1 for verdict in adequacy_votes if verdict.get("ops_adequate") is True
         )
@@ -3447,6 +3678,8 @@ def _qc_render_ops(
     ops_source = str(finding.get("ops_source") or "").strip().lower()
     if ops_source and ops_source != "original":
         # Only says something a single-lens candidate does not already say.
+        # The full explanation of each provenance state lives once in the
+        # methodology section; this is the state, not a re-teaching of it.
         _qc_add_label(
             document,
             "Operation provenance",
@@ -3462,7 +3695,9 @@ def _qc_render_ops(
     semantic_reason = str(
         finding.get("ops_semantic_reason") or ""
     ).strip()
-    if semantic_schema:
+    if nominal:
+        pass
+    elif semantic_schema:
         _qc_add_label(
             document,
             "Semantic fix decision",
@@ -3500,61 +3735,37 @@ def _qc_render_ops(
         if isinstance(item, dict)
     ]
     if not operations:
-        document.add_paragraph(
-            "No mechanical edit operation was proposed. The finding is advisory or "
-            "requires human-authored correction."
-        )
-        if candidate_kind == "inconclusive":
-            validation = (
-                "NOT EVALUATED - CANDIDATE INFRASTRUCTURE-INCONCLUSIVE"
+        if not nominal:
+            document.add_paragraph(
+                "No mechanical edit operation was proposed. The finding is "
+                "advisory or requires human-authored correction."
             )
-        elif candidate_kind == "refuted":
-            validation = "NOT EVALUATED - CANDIDATE REFUTED"
-        elif candidate_kind == "disputed":
-            validation = "NOT EVALUATED - CANDIDATE DISPUTED"
-        else:
-            validation = "Not applicable - no operation proposed"
-        _qc_add_label(document, "Operation validation", validation)
+            _qc_add_label(
+                document,
+                "Operation validation",
+                "NOT EVALUATED - CANDIDATE DISPUTED"
+                if candidate_kind == "disputed"
+                else "Not applicable - no operation proposed",
+            )
         return
-    if candidate_kind in {"refuted", "inconclusive"}:
-        _qc_add_label(
-            document,
-            "Proposed operations",
-            f"{len(operations)} operation(s) recorded. The candidate is not "
-            "actionable, so the payload is not itemized here; the exact "
-            "operations are preserved in the JSON export.",
-        )
-    else:
-        for index, operation in enumerate(operations, start=1):
-            header, text = _qc_operation_lines(operation)
-            p = document.add_paragraph()
-            p.paragraph_format.keep_with_next = True
-            run = p.add_run(
-                f"Operation {index} of {len(operations)} — {header}"
-            )
-            _qc_set_run_font(run, color=_QC_DARK_BLUE, bold=True)
-            if text:
-                op = document.add_paragraph(style="QC Operation")
-                op.add_run(text)
+    for index, operation in enumerate(operations, start=1):
+        header, text = _qc_operation_lines(operation)
+        p = document.add_paragraph()
+        p.paragraph_format.keep_with_next = True
+        run = p.add_run(f"Operation {index} of {len(operations)} — {header}")
+        _qc_set_run_font(run, color=_QC_DARK_BLUE, bold=True)
+        if text:
+            op = document.add_paragraph(style="QC Operation")
+            op.add_run(text)
     valid = finding.get("ops_valid")
+    if nominal:
+        return
     if candidate_kind != "surviving":
-        kind_label = {
-            "inconclusive": "INFRASTRUCTURE-INCONCLUSIVE",
-            "disputed": "DISPUTED",
-        }.get(candidate_kind, "REFUTED")
         _qc_add_label(
             document,
             "Operation validation",
-            f"NOT EVALUATED - CANDIDATE {kind_label}",
+            "NOT EVALUATED - CANDIDATE DISPUTED",
             color=_QC_MUTED,
-        )
-        _qc_add_label(
-            document,
-            "Validation detail",
-            "The pipeline does not dry-run proposed operations for candidates "
-            "that are substantively refuted, disputed by their panel, or lack "
-            "a complete verifier panel. A false ops_valid default is not an "
-            "invalidity finding for these operations.",
         )
         return
     if not semantic_schema:
@@ -3592,39 +3803,42 @@ def _qc_render_ops(
         color=_QC_POSITIVE if valid is True else _QC_RISK,
     )
     detail = finding.get("ops_invalid_reason")
-    if not detail:
-        detail = (
-            "All proposed operations passed the saved validation."
-            if valid
-            else "No validation reason was persisted."
-        )
-    _qc_add_label(document, "Validation detail", detail)
+    if detail:
+        _qc_add_label(document, "Validation detail", detail)
+
 
 
 def _qc_render_disposition(
-    document, finding: dict, *, candidate_kind: str = "surviving"
+    document,
+    finding: dict,
+    *,
+    candidate_kind: str = "surviving",
 ) -> None:
-    _qc_heading(document, "Disposition Record", 3)
-    if candidate_kind != "surviving":
-        outcome_label = {
-            "inconclusive": (
-                "INCONCLUSIVE - REQUIRED VERIFIER COVERAGE DID NOT COMPLETE"
-            ),
-            "disputed": (
-                "DISPUTED - PANEL COMPLETED WITHOUT AGREEMENT; "
-                "AWAITING HUMAN DISPOSITION"
-            ),
-        }.get(candidate_kind, "REFUTED - NOT A SURVIVING FINDING")
-        _qc_add_label(document, "QC outcome", outcome_label)
+    """What has been done about this candidate, in one line where possible.
+
+    A disposition event's document fingerprint is a 64-character hex string
+    that no Word reader can act on; the version it names is the part that
+    means something ("applied at v22"). The fingerprint stays in the JSON
+    export, where a tool can compare it.
+    """
+    if candidate_kind == "disputed":
+        status = str(finding.get("status") or "").strip()
         _qc_add_label(
             document,
-            "Recorded finding status field",
-            finding.get("status") or "Not recorded",
+            "Disposition",
+            "DISPUTED - PANEL COMPLETED WITHOUT AGREEMENT; AWAITING HUMAN "
+            "DISPOSITION"
+            + (
+                f" (recorded status: {status})"
+                if status and status != "open"
+                else ""
+            ),
+            color=_QC_CAUTION,
         )
     else:
         _qc_add_label(
             document,
-            "Current disposition",
+            "Disposition",
             xml_safe_upper(str(finding.get("status") or "open")),
         )
     if finding.get("dismiss_reason"):
@@ -3637,16 +3851,28 @@ def _qc_render_disposition(
         if isinstance(item, dict)
     ]
     for index, event in enumerate(events, start=1):
-        parts = [
-            f"{key}: {_qc_json(value) if isinstance(value, (dict, list)) else _qc_text(value)}"
-            for key, value in event.items()
-            if value not in (None, "", [], {})
-        ]
+        parts: list[str] = []
+        for key, value in event.items():
+            if value in (None, "", [], {}):
+                continue
+            if key.endswith("fingerprint"):
+                continue
+            if key == "document_version":
+                parts.append(f"at {qc_version_label(value)}")
+                continue
+            if key == "at":
+                parts.append(str(value)[:10])
+                continue
+            parts.append(
+                f"{key}: "
+                f"{_qc_json(value) if isinstance(value, (dict, list)) else _qc_text(value)}"
+            )
         _qc_add_label(
             document,
             f"Disposition event {index}",
-            "; ".join(parts) or "Empty event record",
+            " · ".join(parts) or "Empty event record",
         )
+
 
 
 def _render_memo_finding(
@@ -3657,6 +3883,21 @@ def _render_memo_finding(
     candidate_kind: str = "surviving",
     origins: list[dict] | None = None,
 ) -> None:
+    """One candidate record: claim, evidence, verdict, fix, disposition.
+
+    ``candidate_kind`` is ``surviving`` or ``disputed`` — the two collections
+    a human can still act on. Refuted and infrastructure-inconclusive
+    candidates render through ``_qc_render_candidate_digest`` instead.
+
+    The identity facts (finding id, originating lens, element anchor,
+    reviewed reference, severity) were five labelled lines restating what the
+    heading and one location line already carry, so they are one line now.
+    The subsection headings went with them: after the adjudication collapse
+    below, "Evidence and Grounding" and "Verification Record" each governed a
+    single line, and a heading over one line is furniture. The record is one
+    block under its H2, which is also what makes Word's navigation pane
+    usable — 33 findings instead of 33 findings and 138 headings inside them.
+    """
     legacy = _qc_legacy_schema(document)
     origins = origins or []
     severity = xml_safe_upper(
@@ -3665,9 +3906,29 @@ def _render_memo_finding(
     title = str(finding.get("title") or "Untitled finding")
     prefix = f"{ordinal} | " if ordinal else ""
     _qc_heading(document, f"{prefix}{severity} | {title}", 2)
-    _qc_add_label(
-        document, "Finding ID", finding.get("finding_id") or "Not recorded"
+
+    identity: list[str] = []
+    element_id = str(finding.get("element_id") or "").strip()
+    unresolved = (
+        not legacy
+        and "element_resolved" in finding
+        and not bool(finding.get("element_resolved"))
     )
+    if legacy:
+        identity.append(
+            f"{element_id or 'Section-level finding'} · legacy record; "
+            "reviewed reference not recorded"
+        )
+    else:
+        reviewed_ref = str(finding.get("reviewed_ref") or "").strip()
+        if reviewed_ref and element_id:
+            identity.append(f"{reviewed_ref} ({element_id})")
+        else:
+            identity.append(reviewed_ref or element_id or "Section-level finding")
+        if "element_resolved" not in finding:
+            identity.append("anchor resolution not recorded")
+        elif unresolved:
+            identity.append("ANCHOR NOT RESOLVED")
     if len(origins) > 1:
         lenses = sorted(
             {
@@ -3676,41 +3937,27 @@ def _render_memo_finding(
                 if origin.get("lens_id")
             }
         )
-        _qc_add_label(
-            document,
-            "Originating lenses",
-            f"{', '.join(lenses) or 'Not recorded'} "
-            f"({len(origins)} consolidated claims)",
+        identity.append(
+            f"{len(origins)} consolidated claims"
+            + (f" ({', '.join(lenses)})" if lenses else "")
         )
     else:
-        _qc_add_label(
-            document,
-            "Originating lens",
-            finding.get("lens_id") or "Not recorded",
-        )
-    location_parts = [finding.get("element_id") or "Section-level finding"]
+        identity.append(str(finding.get("lens_id") or "lens not recorded"))
     if legacy:
-        location_parts.append("legacy record; reviewed reference not recorded")
+        identity.append("original severity not separately recorded")
     else:
-        if finding.get("reviewed_ref"):
-            location_parts.append(f"reviewed ref {finding.get('reviewed_ref')}")
-        if "element_resolved" in finding:
-            location_parts.append(
-                "anchor resolved"
-                if bool(finding.get("element_resolved"))
-                else "ANCHOR NOT RESOLVED"
-            )
-        else:
-            location_parts.append("anchor resolution not recorded")
-    unresolved = (
-        not legacy
-        and "element_resolved" in finding
-        and not bool(finding.get("element_resolved"))
-    )
+        original = str(
+            finding.get("original_severity") or finding.get("severity") or ""
+        )
+        final_severity = str(finding.get("severity") or "")
+        if original and original != final_severity:
+            identity.append(f"submitted as {original}")
+    if finding.get("finding_id"):
+        identity.append(str(finding.get("finding_id")))
     _qc_add_label(
         document,
         "Location",
-        " · ".join(str(part) for part in location_parts),
+        " · ".join(identity),
         color=_QC_RISK if unresolved else None,
     )
     if unresolved:
@@ -3722,19 +3969,6 @@ def _render_memo_finding(
             "reviewer identifies the intended provision from the issue text.",
             accent=_QC_RISK,
         )
-    final_severity = str(finding.get("severity") or "not recorded")
-    if legacy:
-        severity_value = f"{final_severity} (original not separately recorded)"
-    else:
-        original = str(
-            finding.get("original_severity") or finding.get("severity") or ""
-        )
-        severity_value = (
-            final_severity
-            if not original or original == final_severity
-            else f"{final_severity} (submitted as {original})"
-        )
-    _qc_add_label(document, "Severity", severity_value)
     _qc_add_label(
         document,
         "Exact reviewed text",
@@ -3769,32 +4003,35 @@ def _render_memo_finding(
             )
     _qc_render_candidate_origins(document, origins)
 
-    _qc_heading(document, "Evidence and Grounding", 3)
     grounded = bool(finding.get("grounded"))
-    _qc_add_label(document, "Grounded", "Yes" if grounded else "No")
-    _qc_source_refs_line(
-        document,
-        "Accepted sources",
-        finding.get("accepted_sources"),
-        empty=(
-            "No source was recorded as accepted for this finding."
-            if grounded
-            else None
-        ),
-    )
-    accepted_urls = {
-        _qc_source_url(value)
-        for value in _qc_list(finding.get("accepted_sources"))
-    }
-    _qc_source_refs_line(
-        document,
-        "Cited but not accepted",
-        [
-            value
-            for value in _qc_list(finding.get("source_urls"))
-            if _qc_source_url(value) not in accepted_urls
-        ],
-    )
+    accepted = _qc_list(finding.get("accepted_sources"))
+    accepted_urls = {_qc_source_url(value) for value in accepted}
+    cited_only = [
+        value
+        for value in _qc_list(finding.get("source_urls"))
+        if _qc_source_url(value) not in accepted_urls
+    ]
+    if grounded or accepted or cited_only:
+        _qc_source_refs_line(
+            document,
+            "Evidence, accepted" if grounded else "Evidence, cited not accepted",
+            accepted if grounded else cited_only,
+            empty=(
+                "grounded, but no source was recorded as accepted"
+                if grounded
+                else None
+            ),
+        )
+        if grounded and cited_only:
+            _qc_source_refs_line(
+                document, "Evidence, cited not accepted", cited_only
+            )
+    else:
+        _qc_add_label(
+            document,
+            "Evidence",
+            "Not grounded — no cited source was retrieved and matched.",
+        )
     for record in _qc_list(finding.get("source_checks")):
         if not isinstance(record, dict) or "accepted" not in record:
             continue
@@ -3808,57 +4045,74 @@ def _render_memo_finding(
             color=_QC_RISK,
         )
 
-    _qc_heading(document, "Verification Record", 3)
     persisted_outcome = str(finding.get("verification_outcome") or "").strip()
-    if candidate_kind == "inconclusive":
-        outcome = "infrastructure-inconclusive"
-    elif candidate_kind == "refuted":
-        outcome = "refuted"
-    else:
-        outcome = persisted_outcome or "upheld (derived from survivor collection)"
-    threshold = finding.get("verification_threshold")
-    _qc_add_label(document, "Verification outcome", outcome)
-    if persisted_outcome and persisted_outcome.lower() != outcome.lower():
-        _qc_add_label(
-            document,
-            "Persisted legacy outcome label",
-            persisted_outcome,
-        )
-        document.add_paragraph(
-            "The label above is retained for record fidelity. This report classifies "
-            "the candidate from its collection and verifier-seat evidence; legacy "
-            "default-refuted records with incomplete seats are infrastructure-"
-            "inconclusive, not substantive refutations."
-        )
-    panel_size = finding.get("verification_panel_size")
-    _qc_add_label(
-        document,
-        "Required panel",
-        f"{panel_size if panel_size not in (None, '', 0) else 'Not recorded'} "
-        "seat(s) · uphold threshold "
-        f"{threshold if threshold not in (None, '', 0) else 'not recorded'}",
-    )
+    outcome = persisted_outcome or "upheld (derived from survivor collection)"
     verdicts = [
         item
         for item in _qc_list(finding.get("verdicts"))
         if isinstance(item, dict)
     ]
-    uphold, refute_votes, failed, total = _qc_vote_counts(verdicts)
-    _qc_add_label(
-        document,
-        "Persisted panel record",
-        f"{uphold} uphold; {refute_votes} refute; {failed} failed or cancelled; "
-        f"{total} reviewer record(s)",
+    tally = _qc_seat_tally(verdicts)
+    semantic_schema = _qc_has_semantic_fix_review(document)
+    mismatched_label = bool(
+        persisted_outcome and persisted_outcome.lower() != outcome.lower()
     )
+    line, nominal = _qc_adjudication_line(
+        finding,
+        tally,
+        candidate_kind=candidate_kind,
+        semantic_schema=semantic_schema,
+    )
+    if mismatched_label:
+        nominal = False
+    if nominal:
+        _qc_add_label(document, "Panel", line)
+    else:
+        _qc_add_label(document, "Verification outcome", outcome)
+        if mismatched_label:
+            _qc_add_label(
+                document,
+                "Persisted legacy outcome label",
+                persisted_outcome,
+            )
+            document.add_paragraph(
+                "The label above is retained for record fidelity. This report "
+                "classifies the candidate from its collection and verifier-seat "
+                "evidence; legacy default-refuted records with incomplete seats "
+                "are infrastructure-inconclusive, not substantive refutations."
+            )
+        panel_size = finding.get("verification_panel_size")
+        threshold = finding.get("verification_threshold")
+        _qc_add_label(
+            document,
+            "Required panel",
+            f"{panel_size if panel_size not in (None, '', 0) else 'Not recorded'} "
+            "seat(s) · uphold threshold "
+            f"{threshold if threshold not in (None, '', 0) else 'not recorded'}",
+        )
+        _qc_add_label(
+            document,
+            "Persisted panel record",
+            f"{tally['uphold']} uphold; {tally['refute']} refute; "
+            f"{tally['failed']} failed or cancelled; "
+            f"{tally['total']} reviewer record(s)",
+        )
     if not verdicts:
         document.add_paragraph(
             "No individual verifier records were persisted. This is a legacy audit "
             "limitation; collection membership records the outcome but not each vote."
         )
     else:
-        _qc_render_panel(document, verdicts, candidate_kind=candidate_kind)
+        _qc_render_panel(
+            document,
+            verdicts,
+            candidate_kind=candidate_kind,
+            show_table=not nominal or candidate_kind == "disputed",
+        )
 
-    _qc_render_ops(document, finding, candidate_kind=candidate_kind)
+    _qc_render_ops(
+        document, finding, candidate_kind=candidate_kind, nominal=nominal
+    )
     _qc_render_disposition(document, finding, candidate_kind=candidate_kind)
 
 
@@ -4002,6 +4256,189 @@ def _qc_render_consolidation(document, qc_result: dict) -> None:
         )
 
 
+
+def _qc_digest_cell(cell, lead: str, body: str = "") -> None:
+    """A table cell whose first line names the thing and the rest explains it.
+
+    ``body`` may carry newlines; each becomes its own paragraph, because a
+    newline inside one Word run renders as nothing at all.
+    """
+    p = cell.paragraphs[0]
+    p.text = ""
+    # Size is deliberately not set here: ``_qc_table_geometry`` normalizes
+    # every run in every cell afterwards, and it leaves bold alone.
+    if lead:
+        _qc_set_run_font(p.add_run(lead), color=_QC_INK, bold=True)
+    for index, chunk in enumerate(str(body).split("\n") if body else []):
+        if not chunk:
+            continue
+        target = p if (index == 0 and not lead) else cell.add_paragraph()
+        _qc_set_run_font(target.add_run(chunk), color=_QC_INK)
+
+
+def _qc_candidate_digest_rows(
+    document, candidates: list[dict], prefix: str, *, kind: str
+) -> list[dict[str, object]]:
+    """Per candidate: the claim, the panel count, and why it did not survive."""
+    rows: list[dict[str, object]] = []
+    for index, finding in enumerate(candidates, start=1):
+        verdicts = [
+            item
+            for item in _qc_list(finding.get("verdicts"))
+            if isinstance(item, dict)
+        ]
+        tally = _qc_seat_tally(verdicts)
+        completed = [
+            item
+            for item in verdicts
+            if str(item.get("status") or "completed").lower() == "completed"
+        ]
+        if kind == "inconclusive":
+            panel = (
+                f"{tally['completed']} of "
+                f"{finding.get('verification_panel_size') or tally['total']} "
+                "seats completed"
+            )
+            basis_parts = [
+                f"Seat {_qc_seat_label(item, position)} "
+                f"{xml_safe_upper(str(item.get('status') or 'not recorded'))}: "
+                f"{item.get('error') or 'no error text was persisted'}"
+                for position, item in enumerate(verdicts, start=1)
+                if str(item.get("status") or "completed").lower() != "completed"
+            ]
+            basis = " · ".join(basis_parts) or (
+                "The required verifier coverage did not complete; no "
+                "substantive refutation was reached."
+            )
+            # This report classifies a candidate from its collection and seat
+            # evidence, so a legacy record whose own label disagrees says both
+            # — the classification that governs, and the label it carries.
+            persisted = str(finding.get("verification_outcome") or "").strip()
+            disclosure = ["Verification outcome: infrastructure-inconclusive"]
+            if persisted and persisted.lower() != "inconclusive":
+                disclosure.append(
+                    f"Persisted legacy outcome label: {persisted}. Retained "
+                    "for record fidelity; a legacy default-refuted record "
+                    "with incomplete seats is infrastructure-inconclusive, "
+                    "not a substantive refutation."
+                )
+            basis = "\n".join([*disclosure, basis])
+        else:
+            panel = f"{tally['uphold']} of {tally['total']} seats upheld"
+            refuting = [
+                item for item in completed if item.get("upholds") is False
+            ]
+            note = next(
+                (
+                    str(item.get("note") or "").strip()
+                    for item in refuting
+                    if str(item.get("note") or "").strip()
+                ),
+                "",
+            )
+            basis = note or "No refutation note was persisted."
+            evidence: list[str] = []
+            for item in refuting:
+                for record in _qc_list(item.get("refutation_evidence")):
+                    if not isinstance(record, dict):
+                        continue
+                    if str(record.get("kind") or "") == "document_ref":
+                        claim = f"document ref {record.get('reference') or '?'}"
+                    else:
+                        claim = _qc_source_ref_text(document, record.get("url"))
+                    if record.get("validated") is True:
+                        text = f"{claim} — validated"
+                    else:
+                        reason = str(record.get("reason") or "").strip()
+                        text = f"{claim} — NOT validated" + (
+                            f" ({reason})" if reason else ""
+                        )
+                    if text not in evidence:
+                        evidence.append(text)
+            if evidence:
+                basis = f"{basis} [Refutation evidence: {'; '.join(evidence)}]"
+        element_id = str(finding.get("element_id") or "").strip()
+        reviewed_ref = str(finding.get("reviewed_ref") or "").strip()
+        location = " ".join(
+            part for part in (reviewed_ref, f"({element_id})" if element_id else "")
+            if part
+        ) or "Section-level"
+        ops = [
+            item
+            for item in _qc_list(finding.get("proposed_ops"))
+            if isinstance(item, dict)
+        ]
+        rows.append(
+            {
+                "ordinal": f"{prefix}-{index:03d}",
+                "severity": xml_safe_upper(
+                    str(finding.get("severity") or "not recorded")
+                ),
+                "location": location,
+                "lens": str(finding.get("lens_id") or "lens not recorded"),
+                "title": str(finding.get("title") or "Untitled claim"),
+                "issue": str(finding.get("issue") or "No issue text recorded."),
+                "rationale": str(finding.get("rationale") or ""),
+                "panel": panel,
+                "basis": basis,
+                "ops": len(ops),
+                "finding": finding,
+            }
+        )
+    return rows
+
+
+
+def _qc_render_candidate_digest(
+    document, candidates: list[dict], prefix: str, *, kind: str
+) -> None:
+    """A non-actionable register as one table instead of full records.
+
+    A refuted or infrastructure-inconclusive candidate cannot be applied, so
+    the memo's job for it is different from a survivor's: name it, state the
+    claim well enough for a human to second-guess the panel, say what the
+    panel did, and say on what basis. It is not dropped and it is not
+    silently summarized — the row carries the claim and the issue in full,
+    the section header points at the lossless JSON export for the seat ledger
+    and the operation payload, and evidence cited in a refutation still
+    resolves in Appendix B.
+
+    Ordinal, severity and location stack inside the first cell rather than
+    taking three columns of a 6.5-inch page: the two prose columns are what
+    the reader is here for and they need the width.
+    """
+    rows = _qc_candidate_digest_rows(document, candidates, prefix, kind=kind)
+    headers = [
+        "Candidate",
+        "Claim and issue",
+        "Panel",
+        "Why not upheld" if kind != "inconclusive" else "What did not complete",
+    ]
+    table = document.add_table(rows=1, cols=len(headers))
+    table.style = "Table Grid"
+    for cell, label in zip(table.rows[0].cells, headers):
+        cell.text = label
+    for row in rows:
+        cells = table.add_row().cells
+        _qc_digest_cell(
+            cells[0],
+            f"{row['ordinal']} · {row['severity']}",
+            f"{row['location']}\n{row['lens']}",
+        )
+        claim_body = str(row["issue"])
+        if row["rationale"]:
+            claim_body = f"{claim_body}\n{row['rationale']}"
+        _qc_digest_cell(cells[1], str(row["title"]), claim_body)
+        panel = str(row["panel"])
+        _qc_digest_cell(
+            cells[2],
+            panel,
+            f"{row['ops']} operation(s) not evaluated" if row["ops"] else "",
+        )
+        _qc_digest_cell(cells[3], "", str(row["basis"]))
+    _qc_table_geometry(table, [1300, 3500, 1360, 3200])
+
+
 def _qc_render_surviving_findings(document, qc_result: dict) -> None:
     document.add_page_break()
     _qc_heading(document, "Complete Surviving Findings Register", 1)
@@ -4021,12 +4458,14 @@ def _qc_render_surviving_findings(document, qc_result: dict) -> None:
         )
         return
     document.add_paragraph(
-        "Each surviving finding appears with its identity, full issue and "
-        "rationale, evidence references (resolved in Appendix B), every "
-        "verifier seat's vote with representative notes, the proposed fix, "
-        "validation result, and saved disposition. The complete seat-by-seat "
-        "record — every note, telemetry list, and per-seat billing counter — "
-        "is preserved in the JSON export."
+        "Each surviving finding appears with its identity, exact reviewed "
+        "text, full issue and rationale, evidence references (resolved in "
+        "Appendix B), the panel's adjudication, a representative note from "
+        "each side that voted, the proposed fix in full, and its saved "
+        "disposition. A panel that split, failed a seat, or rejected the fix "
+        "expands into its seat-by-seat table and every labelled validation "
+        "line. The complete record — every seat's note, telemetry list and "
+        "per-seat billing counter — is preserved in the JSON export."
     )
     for counter, finding in enumerate(_qc_ordered_survivors(qc_result), start=1):
         _render_memo_finding(
@@ -4038,9 +4477,10 @@ def _qc_render_surviving_findings(document, qc_result: dict) -> None:
         )
 
 
+
 def _qc_render_refuted_appendix(document, qc_result: dict) -> None:
     document.add_page_break()
-    _qc_heading(document, "Appendix A: Complete Refuted Candidate Register", 1)
+    _qc_heading(document, "Appendix A: Refuted Candidate Register", 1)
     refuted = _qc_substantively_refuted(qc_result)
     if not refuted:
         document.add_paragraph(
@@ -4048,20 +4488,18 @@ def _qc_render_refuted_appendix(document, qc_result: dict) -> None:
         )
         return
     document.add_paragraph(
-        "These candidates were raised during lens review but did not meet the saved "
-        "verification outcome. Each is retained for transparency — claim, "
-        "evidence, panel votes, and refutation basis — and is not a surviving "
-        "QC finding. Their proposed operations are not actionable and are "
-        "preserved in the JSON export rather than itemized here."
+        "These candidates were raised during lens review and the verifier "
+        "panel did not uphold them. None is a surviving QC finding and none "
+        "is actionable, so each is recorded here as its claim in full — the "
+        "issue it asserted and the rationale it asserted it on — beside what "
+        "the panel decided and the basis it decided on, which is what it "
+        "takes to second-guess the panel without reading the run record. The "
+        "seat-by-seat ledger, source lists and proposed operations for every "
+        "row are preserved in the JSON export."
     )
-    for index, finding in enumerate(_sorted_by_severity(refuted), start=1):
-        _render_memo_finding(
-            document,
-            finding,
-            ordinal=f"RF-{index:03d}",
-            candidate_kind="refuted",
-            origins=qc_origins_for(qc_result, finding),
-        )
+    _qc_render_candidate_digest(
+        document, _sorted_by_severity(refuted), "RF", kind="refuted"
+    )
 
 
 def _qc_render_disputed_appendix(document, qc_result: dict) -> None:
@@ -4093,6 +4531,7 @@ def _qc_render_disputed_appendix(document, qc_result: dict) -> None:
         )
 
 
+
 def _qc_render_inconclusive_appendix(document, qc_result: dict) -> None:
     document.add_page_break()
     _qc_heading(
@@ -4109,21 +4548,17 @@ def _qc_render_inconclusive_appendix(document, qc_result: dict) -> None:
         )
         return
     document.add_paragraph(
-        "These candidates did not receive every required completed verifier seat. "
-        "They are neither surviving findings nor substantive refutations. Each "
-        "seat's outcome and error is shown below so a reviewer can trace paid "
-        "work and decide whether to rerun; full seat records and proposed "
-        "operations ride the JSON export. Their operations were not validated "
-        "and must not be applied from this record."
+        "These candidates did not receive every required completed verifier "
+        "seat. They are neither surviving findings nor substantive "
+        "refutations, and their operations were not validated and must not be "
+        "applied from this record. Each row names the claim and the seat that "
+        "did not complete, so a reviewer can trace paid work and decide "
+        "whether to rerun; the full seat records and proposed operations ride "
+        "the JSON export."
     )
-    for index, finding in enumerate(_sorted_by_severity(candidates), start=1):
-        _render_memo_finding(
-            document,
-            finding,
-            ordinal=f"IC-{index:03d}",
-            candidate_kind="inconclusive",
-            origins=qc_origins_for(qc_result, finding),
-        )
+    _qc_render_candidate_digest(
+        document, _sorted_by_severity(candidates), "IC", kind="inconclusive"
+    )
 
 
 def _qc_source_strings(value: object) -> list[str]:
@@ -4211,26 +4646,21 @@ def _qc_evidence_register(
         ):
             if not isinstance(finding, dict):
                 continue
-            ordinal = ordinal_map.get(id(finding)) or f"{prefix}-{index:03d}"
-            reference = (
-                f"{ordinal} {finding.get('finding_id') or ''}".strip()
-            )
+            reference = ordinal_map.get(id(finding)) or f"{prefix}-{index:03d}"
             add(finding.get("accepted_sources"), "accepted", reference)
             add(finding.get("source_urls"), "model cited", reference)
             add(finding.get("source_checks"), "finding grounding", reference)
-            for verdict_index, verdict in enumerate(
-                _qc_list(finding.get("verdicts")), start=1
-            ):
+            for verdict in _qc_list(finding.get("verdicts")):
                 if isinstance(verdict, dict):
                     add(
                         verdict.get("retrieved_sources"),
                         "verifier retrieved",
-                        f"{reference} verifier {verdict_index}",
+                        reference,
                     )
                     add(
                         verdict.get("attempted_sources"),
                         "verifier billed attempt",
-                        f"{reference} verifier {verdict_index}",
+                        reference,
                     )
                     # A refuting seat may cite a URL it never retrieved —
                     # the retained-and-marked case the v4 evidence gate
@@ -4241,7 +4671,7 @@ def _qc_evidence_register(
                     add(
                         verdict.get("refutation_evidence"),
                         "refutation citation",
-                        f"{reference} verifier {verdict_index}",
+                        reference,
                     )
     add(qc_result.get("input_manifest"), "input manifest", "Run input")
     return list(entries.values())
@@ -4264,6 +4694,28 @@ def _qc_memo_evidence_entries(document, qc_result: dict) -> list[dict[str, objec
             },
         )
     return entries
+
+
+
+_QC_EVIDENCE_REFERENCE_CAP = 8
+
+
+def _qc_reference_summary(references: object) -> str:
+    """Who cited this URL, capped so one popular source cannot fill a page.
+
+    A source retrieved by four lenses and thirty verifier seats used to print
+    every one of those citations, hashes and seat numbers included. The
+    register exists to resolve a URL, not to re-derive the run: the first few
+    citers locate it and the JSON export carries the complete mapping.
+    """
+    values = [str(value) for value in _qc_list(references) if str(value)]
+    if len(values) <= _QC_EVIDENCE_REFERENCE_CAP:
+        return "; ".join(values)
+    shown = values[:_QC_EVIDENCE_REFERENCE_CAP]
+    return (
+        "; ".join(shown)
+        + f"; +{len(values) - _QC_EVIDENCE_REFERENCE_CAP} more (JSON export)"
+    )
 
 
 def _qc_render_evidence_register(document, qc_result: dict) -> None:
@@ -4304,7 +4756,7 @@ def _qc_render_evidence_register(document, qc_result: dict) -> None:
         if not _qc_is_safe_http_url(source):
             note = source_p.add_run(" (not linked: failed HTTP(S) safety checks)")
             _qc_set_run_font(note, size=9, color=_QC_MUTED, italic=True)
-        cells[3].text = "; ".join(entry["references"])
+        cells[3].text = _qc_reference_summary(entry["references"])
     _qc_table_geometry(table, [720, 1440, 4320, 2880])
     note = document.add_paragraph(style="QC Table Citation")
     note.add_run(

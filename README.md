@@ -167,6 +167,44 @@ lives instead.
   discarded with the session on New session — like every other thing that
   belongs to the project rather than the app.
 
+**Also in this release: the Final QC Word report lost about half its length
+without losing a finding.** A real 49-candidate export measured 43,678 words
+across 1,745 paragraphs (~95 pages), and classifying every paragraph put
+roughly half of it in packaging rather than content.
+
+- **One verdict, stated once.** A candidate whose panel was unanimous, whose
+  fix every reviewer approved and whose dry run passed used to say so eleven
+  times — in the heading severity, its own severity line, the outcome, the
+  required panel, a table of identical reviewer rows, the fix vote, the
+  semantic decision, its reason, the validation status and its detail. It now
+  reads `Panel: 3 of 3 seats upheld · fix approved by every seat · dry run
+  valid`. Every one of those lines returns the moment the record stops
+  agreeing with itself: a reviewer who did not finish, a split panel, a
+  revised severity, a rejected fix, a dry run that did not pass, or a legacy
+  majority threshold. That condition is what makes the collapse safe, and it
+  is pinned in both directions.
+- **Refuted candidates are a table, not a chapter.** A candidate the panel
+  rejected cannot be applied, so it is one row: the claim, the issue and
+  rationale it asserted *in full*, the panel's vote, and the basis it was
+  rejected on — enough to second-guess the panel. Candidates whose reviewers
+  never finished name the seat that failed and its error. Candidates the panel
+  **split** on keep the whole record, seat table included: you have to decide
+  those, and the disagreement is the content.
+- **Nothing that only a machine can read.** Per-finding content hashes,
+  64-character document fingerprints, per-origin ids, and two raw JSON input
+  manifests pasted into paragraphs (and cut off mid-object by Word's own
+  layout) are gone. The export-time section now answers the question those
+  manifests were there for — *which inputs changed since the run* — and the
+  evidence register cites each source once instead of reprinting the URL,
+  its content hash and its seat number at every mention.
+- **The JSON download is unchanged and still lossless**, and the report says
+  so wherever it summarizes. The in-app report modal is likewise unchanged —
+  it is the no-truncation surface by contract.
+- **The budget is a test now.** A fixture reproduces the reported run's shape
+  from bundled parts and holds the render under 1,000 paragraphs and 34,000
+  words, then pins each mechanism by name, so a change that quietly
+  reintroduces per-record scaffolding fails in CI rather than in your inbox.
+
 Also in this release: **the document panel's "Save as Template" button is
 gone.** It called the same handler as **Templates** in the header, so it was a
 second door to one room. Creating a starter from the spec you have open is

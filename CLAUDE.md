@@ -7133,6 +7133,127 @@ operation payloads to counted pointers ("handle it", 2026-08-19).
   `test_qc_consolidation.py`'s origin-evidence test now reads tables too
   and additionally pins that the origin URL appears ONLY in the register.
 
+## The memo says each thing once — implemented notes (v1.16.0)
+
+Reported again (Abraham, 2026-09-04, with a real 21 05 00 export): the Final
+QC `.docx` is "stupid big". Measured: **43,678 words across 1,745 paragraphs,
+58 tables and 487 table rows (~95 pages)** for 49 candidates — so v1.10.0's
+condensation held (it is not the 68k-word transcript any more) and the
+document was still half packaging. Classifying every paragraph: ~21,800 words
+of irreplaceable content (issue, rationale, reviewed text, the fix payload,
+verdict and fix-review notes, lens check notes) against ~21,800 of
+scaffolding, repetition, machine identifiers and restated status. Owner
+decisions (2026-09-04): trim **and** demote the non-actionable registers;
+keep the per-lens reviewed-check notes, Appendix B, and the verifier
+query/source lines; drop the two JSON manifests. Word only — the JSON export
+stays lossless and `QCReportModal` stays the no-truncation on-screen surface,
+per their own contracts.
+
+- **One verdict was wearing eleven hats.** A unanimous, semantically
+  approved, dry-run-valid survivor stated the same fact in the heading
+  severity, its own `Severity` line, `Verification outcome`, `Required
+  panel`, `Persisted panel record`, a seat table of identical rows,
+  `Proposed fix adequate`, `Semantic fix decision`, `Semantic decision
+  detail`, `Operation validation` and `Validation detail`. None of them is
+  wrong; together they are furniture. `_qc_adjudication_line` renders it as
+  `Panel: 3 of 3 seats upheld · fix approved by every seat · dry run valid`.
+- **The collapse is conditional, and the condition is the safety argument.**
+  `nominal` is False — every labelled line and the seat table return — when
+  ANY seat did not complete, a seat recorded a `revised_severity` (a fact
+  recorded nowhere but the table), the persisted panel size or threshold
+  disagrees with the seat count (so a legacy v3 majority record keeps its own
+  rendering rather than being restated under a rule nobody applied to it),
+  the schema predates semantic fix review, the semantic status is not
+  `approved`, the dry run did not pass or carries a reason, or the persisted
+  outcome label disagrees with the collection. Pinned both ways by
+  `test_a_nominal_panel_states_its_verdict_once_and_an_odd_one_expands`,
+  which mutates one fact at a time and requires the full rendering back.
+- **A dispute always keeps its seat table**, even though it is nominal: the
+  disagreement IS the record. `show_table = not nominal or candidate_kind ==
+  "disputed"` — the two decisions are separate, and conflating them either
+  hides the split or drags five restated status lines back with it.
+- **Refuted and infrastructure-inconclusive candidates are a digest table**
+  (`_qc_render_candidate_digest`), one row each: ordinal/severity/location
+  and lens stacked in the first cell, the claim's title **plus its issue and
+  rationale in full**, the panel count, and the basis — a representative
+  refuting note with its refutation-evidence validation, or the failed seat
+  and its error. Nothing is dropped and nothing is silently summarized: a
+  human can still second-guess the panel from the row, and the seat ledger,
+  source lists and operation payloads ride the JSON export, which the section
+  header names. The rationale is in the row because the first cut left it out
+  and `test_detailed_docx_preserves_key_sections_findings_evidence_and_votes`
+  caught it — a claim you cannot judge is not retained, it is filed.
+- **That made the non-actionable branches of the full-record path dead, so
+  they are gone.** `_render_memo_finding` now takes `surviving` or `disputed`
+  only. Leaving `refuted`/`inconclusive` behind would be code claiming to
+  render something nothing calls, and a half-working path for whoever
+  re-enables it.
+- **A legacy `default_refuted` record still discloses both labels.** The
+  digest row for an inconclusive candidate whose persisted outcome disagrees
+  with its classification carries `Verification outcome:
+  infrastructure-inconclusive` and `Persisted legacy outcome label:
+  default_refuted` verbatim, so the pre-existing contract assertions hold
+  unchanged — which is the strongest available evidence that the demotion
+  lost nothing.
+- **~6,000 words were exactly-repeated strings.** 90 distinct paragraphs
+  repeated 7,082 words' worth where saying each once costs 1,129. The three
+  worst moved to Methodology: the 37-word "the pipeline does not dry-run…"
+  rule (15×), the 47-word consolidation explainer (6×, now also naming where
+  the original claims live), and the operation-provenance paragraph (12×,
+  which keeps its one-line state). Methodology gained a "How to read a
+  candidate record" step naming exactly what the Panel line replaces and when
+  each line returns.
+- **Machine identifiers left the Word memo.** Per-finding `Finding ID` folded
+  into the one identity line; `Severity` went with it (the heading carries it,
+  and a changed original still says "submitted as low"); disposition events
+  drop the 64-character `document_fingerprint` and keep the version
+  (`applied · 2026-09-04 · at v22 (stored index 21)`); the evidence register's
+  references lost the per-finding content hash and the seat number and cap at
+  8 with a JSON pointer; consolidation origins lost their `qco-…` ids.
+- **The two JSON manifests are replaced by the question they were there to
+  answer.** They rendered as raw JSON in prose paragraphs, cut off mid-object
+  by Word's own layout — neither readable nor parseable — and repeated facts
+  the identity lines already state in English.
+  `_qc_render_manifest_pointer` names the inputs the run was fixed to;
+  `_qc_manifest_changes` diffs the run manifest against the export-time one
+  and says **which inputs changed**, which is what a stale report's reader
+  actually wants. `_qc_render_manifest` is deleted.
+- **Two things stayed because they are contracts, not clutter.** The per-lens
+  `Client API requests (streaming calls, including retries and pause_turn
+  continuations)` and `Final model responses received` labels are Chunk 5.3's
+  reconciliation vocabulary — the run total states it is the sum of these
+  records — so only the token dump and its dollar figure folded into one
+  `Recorded work` line. And `Selected report run ID` / `Selected report
+  execution status` return whenever the document carries a second run (a
+  retained prior success, or a latest attempt that is not this report), which
+  is exactly when naming the selected one earns its place.
+- **`Input verification pending at export` is a disclosure, so it renders
+  only when pending.** A settled export saying "No" was stating a
+  non-condition; `test_the_qc_report_download_never_waits_out_the_permission_
+  sweep` now asserts its absence, which is the same claim.
+- **Reviewed checks are one row each.** The numbered grid plus nineteen
+  separate `Check 7:` paragraphs became a four-column table whose last column
+  is what the check found — 95 fewer paragraphs on a five-lens run, and one
+  check is one row instead of a number matched across two places.
+- **The budget is now a test, because that is what stops it coming back.**
+  `test_the_memo_stays_a_memo_at_production_scale` builds the reported run's
+  shape from bundled parts (33 surviving / 10 refuted / 6 disputed, five
+  lenses × nineteen checks, no model call) and holds the render under 1,000
+  paragraphs, 460 table rows and 34,000 words, then pins the three mechanisms
+  by name so a regression says which one it broke. Measured on that fixture:
+  **40,291 → 32,213 words (−20%), 1,742 → 1,184 paragraphs (−32%), 58 → 10
+  tables**. Raising a ceiling is a decision, not a fix.
+- **What is left is content.** Surviving findings are 48% of the document at
+  ~470 words each, of which ~390 is issue, rationale, reviewed text, the fix
+  payload and the two notes. The next honest saving is not in the renderer.
+- **Tests**: 2 new (`test_a_nominal_panel_states_its_verdict_once_and_an_odd_
+  one_expands`, `test_the_memo_stays_a_memo_at_production_scale` with its
+  `_production_shaped_report` fixture), 7 updated in place where they pinned
+  the pre-condensation layout, and one in `test_import_responsiveness.py` for
+  the pending disclosure. Both mechanisms were reverted in place to prove
+  them load-bearing: forcing `nominal=False` → 4 red; restoring refuted full
+  records → 5 red.
+
 ## Commands
 
 ```

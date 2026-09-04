@@ -965,7 +965,11 @@ function Dossier() {
               of every material input, each lens’s exact search queries and
               retrieved sources, every verifier seat and vote, token usage,
               estimated cost, and a limitations list derived from recorded facts —
-              downloads as a Word report and as JSON. When the run finishes,
+              downloads as JSON. The Word report is the readable memo over that
+              same record: every finding, claim, reviewer note, proposed fix and
+              limitation, with what a panel agreed on stated once instead of a
+              dozen times, and the full seat-by-seat ledger left to the JSON,
+              which it names where it condenses. When the run finishes,
               the chat automatically sends itself{" "}
               <b className="text-ink">one ordinary debrief turn</b> — visible,
               billed like any turn, switchable off — that summarizes the

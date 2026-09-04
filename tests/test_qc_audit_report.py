@@ -731,11 +731,11 @@ def test_detailed_docx_preserves_key_sections_findings_evidence_and_votes() -> N
         "FINAL QC AUDIT REPORT",
         "Executive Status",
         "Run and Input Identity",
-        "Input Manifest",
+        "Inputs fixed by the manifest",
         "Methodology and Interpretation",
         "Lens-by-Lens Audit Trail",
         "Complete Surviving Findings Register",
-        "Appendix A: Complete Refuted Candidate Register",
+        "Appendix A: Refuted Candidate Register",
         "Appendix B: Evidence Register",
         "Usage, Requests, and Estimated Cost",
         "Limitations",
@@ -760,11 +760,13 @@ def test_detailed_docx_preserves_key_sections_findings_evidence_and_votes() -> N
     assert "The text is objectively measurable." in text
     assert "Reviewed with the project engineer" in text
     assert "replace" in text
-    assert "Semantic fix decision: APPROVED" in text
-    assert "Proposed fix adequate: APPROVED" in text
+    # A nominal panel states its adjudication once. The facts the five
+    # labelled lines used to carry -- seat count, unanimity, fix approval and
+    # the passing dry run -- are all in it.
+    assert "3 of 3 seats upheld · fix approved by every seat · dry run valid" in text
     assert "The replacement fully resolves the recorded edition conflict." in text
-    assert "3 reviewer record(s)" in text
-    assert "2 reviewer record(s)" in text
+    # The refuted candidate's panel is counted in its digest row.
+    assert "0 of 2 seats upheld" in text
 
 
 def test_the_word_memo_condenses_panels_and_telemetry_without_omitting() -> None:
@@ -774,10 +776,15 @@ def test_the_word_memo_condenses_panels_and_telemetry_without_omitting() -> None
     rendered a full per-seat dossier: near-verbatim verdict notes three
     times over, four "No X record was persisted" lines per seat, per-seat
     billing counters, and every URL reprinted at each mention (5.2 prints
-    per unique URL). The condensed memo keeps every fact reachable — seat
-    votes in a table, one representative note per vote side, URLs resolved
-    once in Appendix B and cited by E-number — with the complete record in
-    the JSON export. This test pins each mechanism.
+    per unique URL). The condensed memo keeps every fact reachable — one
+    representative note per vote side, URLs resolved once in Appendix B and
+    cited by E-number — with the complete record in the JSON export. This
+    test pins each mechanism.
+
+    The seat table this test originally required moved behind a condition
+    rather than going away: a nominal panel states its count in one line and
+    an off-nominal one still renders every row. Both directions are pinned
+    in ``test_a_nominal_panel_states_its_verdict_once_and_an_odd_one_expands``.
     """
     store, result = _rich_audit_result()
     document = Document(
@@ -786,9 +793,10 @@ def test_the_word_memo_condenses_panels_and_telemetry_without_omitting() -> None
     paragraphs = "\n".join(p.text for p in document.paragraphs)
     text = _document_text(document)
 
-    # Every seat is still accounted for — as a table row with its vote.
-    assert "Fix adequate" in text
-    assert "UPHOLD" in text and "REFUTE" in text
+    # Every seat is still accounted for — counted in one adjudication line,
+    # because on this payload every panel was unanimous and every fix passed.
+    assert "3 of 3 seats upheld · fix approved by every seat · dry run valid" in text
+    assert "0 of 2 seats upheld" in text
 
     # One representative note per vote side, not one per seat: the first
     # upholding seat speaks for the unanimous panel and the later seats'
@@ -824,6 +832,73 @@ def test_the_word_memo_condenses_panels_and_telemetry_without_omitting() -> None
     # whose payload actually carries refuted operations.)
     assert "Comply with the recorded edition of NFPA 13." in text
     assert '"action": "replace"' not in text
+
+
+def test_a_nominal_panel_states_its_verdict_once_and_an_odd_one_expands() -> None:
+    """The collapse is conditional, and the condition is what makes it safe.
+
+    A unanimous panel whose fix every seat approved and whose dry run passed
+    said so eleven times: the heading severity, its own Severity line, the
+    outcome, the required panel and threshold, a seat table of identical
+    rows, the fix-adequacy vote, the semantic status, the semantic reason,
+    the validation status and the validation detail. One line carries it now
+    — and every one of those lines returns the moment the record stops
+    agreeing with itself, which is exactly when a reader needs to see which
+    part disagrees.
+    """
+    RESTATEMENTS = (
+        "Verification outcome:",
+        "Required panel:",
+        "Persisted panel record:",
+        "Proposed fix adequate:",
+        "Semantic fix decision:",
+        "Semantic decision detail:",
+        "Operation validation:",
+    )
+    store, result = _rich_audit_result()
+
+    def memo_text(payload: dict) -> str:
+        return _document_text(
+            Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=False)))
+        )
+
+    nominal = memo_text(copy.deepcopy(result.to_dict()))
+    assert "3 of 3 seats upheld · fix approved by every seat · dry run valid" in nominal
+    for restated in RESTATEMENTS:
+        assert restated not in nominal
+    # No seat table is rendered for a panel whose rows would be identical.
+    assert "Fix adequate" not in nominal
+    # The fix text itself is untouched by any of this.
+    assert "Comply with the recorded edition of NFPA 13." in nominal
+
+    # Four independent ways for a record to stop agreeing with itself. Each
+    # one alone must bring back the full labelled rendering and the table.
+    for mutate in (
+        # a seat that never returned a verdict
+        lambda f: f["verdicts"][1].update({"status": "failed", "error": "gone"}),
+        # a seat that revised the severity — recorded nowhere but the table
+        lambda f: f["verdicts"][1].update({"revised_severity": "low"}),
+        # a fix the panel did not approve
+        lambda f: f.update({"ops_semantic_status": "rejected"}),
+        # a dry run that did not pass
+        lambda f: f.update({"ops_valid": False}),
+    ):
+        payload = copy.deepcopy(result.to_dict())
+        mutate(payload["findings"][0])
+        expanded = memo_text(payload)
+        assert "3 of 3 seats upheld" not in expanded
+        for restated in RESTATEMENTS:
+            assert restated in expanded
+        assert "Fix adequate" in expanded
+
+    # A legacy majority threshold is not the current unanimous rule, so a v3
+    # record keeps every line it was written with rather than being restated
+    # under a rule nobody applied to it.
+    legacy = copy.deepcopy(result.to_dict())
+    legacy["findings"][0]["verification_threshold"] = 2
+    legacy_text = memo_text(legacy)
+    assert "3 of 3 seats upheld" not in legacy_text
+    assert "uphold threshold 2" in legacy_text
 
 
 def test_disputed_candidates_reach_the_register_and_their_own_heading() -> None:
@@ -929,13 +1004,16 @@ def test_disputed_candidates_reach_the_register_and_their_own_heading() -> None:
         if value.startswith("Why disputed:")
     )
     assert heading_index < why_index
-    assert "NOT EVALUATED - CANDIDATE DISPUTED" in text
+    # A dispute always keeps its seat table -- the disagreement is the record
+    # -- and its fix is named unapplicable beside the split.
+    assert "Fix adequate" in text
+    assert "must not be applied from this record" in text
+    assert "AWAITING HUMAN DISPOSITION" in text
 
-    # A refuted candidate's operations are counted with a pointer to the
-    # JSON export, never itemized as applicable-looking edit text.
-    assert "1 operation(s) recorded" in text
+    # A refuted candidate's operations are counted in its digest row with a
+    # pointer to the JSON export, never itemized as applicable-looking text.
+    assert "1 operation(s) not evaluated" in text
     assert "Never-applied refuted operation text." not in text
-    assert "NOT EVALUATED - CANDIDATE REFUTED" in text
 
 
 def test_docx_export_time_qc_controls_cannot_present_a_complete_signoff() -> None:
@@ -2270,6 +2348,7 @@ def test_the_word_report_gives_disputed_candidates_their_own_appendix() -> None:
     assert "Contested edition reference" in text
     # It is named as awaiting a human, never as a resolved outcome.
     assert "DISPUTED - PANEL COMPLETED WITHOUT AGREEMENT" in text
+    assert "AWAITING HUMAN DISPOSITION" in text
     # And the under-evidenced reason is spelled out rather than left a token.
     assert "no refuting reviewer cited evidence" in text
     # Its operations are shown but explicitly not actionable.
@@ -2418,7 +2497,11 @@ def test_infrastructure_failed_verification_is_structurally_inconclusive() -> No
     memo_text = _document_text(memo)
     assert "Appendix A2: Infrastructure-Inconclusive Candidate Register" in memo_text
     assert "Infrastructure-inconclusive candidate" in memo_text
-    assert "NOT EVALUATED - CANDIDATE INFRASTRUCTURE-INCONCLUSIVE" in memo_text
+    # The digest row names the seat that did not complete and carries its
+    # error, which is what the labelled "NOT EVALUATED" line used to say.
+    assert "seats completed" in memo_text
+    assert "must not be applied from this record" in memo_text
+    assert "Seat 2 FAILED" in memo_text
     assert "neither surviving findings nor substantive refutations" in memo_text
 
     # Historical records used ``default_refuted`` for an incomplete panel.
@@ -2442,6 +2525,250 @@ def test_infrastructure_failed_verification_is_structurally_inconclusive() -> No
         f"Refuted finding {candidate.finding_id} has incomplete verifier "
         "status(es): failed."
     ) not in legacy_text
+
+
+# ---------------------------------------------------------------------------
+# The memo stays a memo at production scale
+# ---------------------------------------------------------------------------
+
+
+_SCALE_PROSE = (
+    "The paragraph asserts a requirement that the recorded standard edition "
+    "does not support, and the surrounding provisions do not reconcile the "
+    "departure, so a bidder cannot price the work without an assumption. "
+)
+
+
+def _scale_text(words: int) -> str:
+    """Filler of roughly ``words`` words, so the budget measures layout."""
+    return (_SCALE_PROSE * (words // 24 + 1))[: words * 6].strip()
+
+
+def _scale_seat(index: int, upholds: bool) -> dict:
+    return {
+        "reviewer_index": index,
+        "status": "completed",
+        "upholds": upholds,
+        "revised_severity": "",
+        "note": _scale_text(90),
+        "ops_adequate": upholds,
+        "ops_note": _scale_text(45),
+        "refutation_evidence": (
+            []
+            if upholds
+            else [
+                {
+                    "kind": "document_ref",
+                    "reference": "pt1.a1.p1",
+                    "validated": True,
+                }
+            ]
+        ),
+        "search_queries": [f"query {index} against the governing standard"],
+        "retrieved_sources": [{"url": f"https://example.test/seat-{index}"}],
+        "attempted_search_queries": [],
+        "attempted_sources": [],
+        "usage_totals": {"input_tokens": 200, "output_tokens": 4000},
+        "estimated_cost_usd": 0.42,
+        "api_request_count": 1,
+        "model_response_count": 1,
+        "error": "",
+    }
+
+
+def _scale_candidate(base: dict, number: int, kind: str, severity: str) -> dict:
+    finding = copy.deepcopy(base)
+    size = 3 if severity in ("critical", "high") else 2
+    finding.update(
+        {
+            "finding_id": f"qc-{number:012x}",
+            "title": f"Candidate {number}: {_scale_text(11)}",
+            "issue": _scale_text(66),
+            "rationale": _scale_text(67),
+            "reviewed_text": _scale_text(42),
+            "severity": severity,
+            "original_severity": severity,
+            "element_id": f"pt1.a{number % 20 + 1}.p{number % 7 + 1}",
+            "reviewed_ref": f"1.{number % 20 + 1}.{'ABCDEFG'[number % 7]}",
+            "element_resolved": True,
+            "grounded": number % 3 == 0,
+            "source_urls": [f"https://example.test/src-{number}"],
+            "accepted_sources": [],
+            "source_checks": [],
+            "candidate_origins": [],
+            "ops_source": "original",
+            "status": "open",
+            "disposition_events": [],
+            "verification_panel_size": size,
+            "verification_threshold": size,
+            "verification_rule": "final-qc/4-unanimous-uphold",
+            "proposed_ops": [
+                {
+                    "action": "replace",
+                    "target_id": f"pt1.a{number % 20 + 1}.p{number % 7 + 1}",
+                    "text": _scale_text(80),
+                    "status": "assumed",
+                }
+            ],
+        }
+    )
+    if kind == "surviving":
+        finding.update(
+            {
+                "verdicts": [_scale_seat(i, True) for i in range(1, size + 1)],
+                "verification_outcome": "upheld",
+                "ops_semantic_status": "approved",
+                "ops_semantic_reason": f"All {size} seat(s) upheld and approved.",
+                "ops_valid": True,
+                "ops_invalid_reason": "",
+            }
+        )
+    elif kind == "refuted":
+        finding.update(
+            {
+                "verdicts": [_scale_seat(i, False) for i in range(1, size + 1)],
+                "verification_outcome": "refuted",
+                "ops_semantic_status": "not_evaluated",
+                "ops_semantic_reason": "Not upheld, so operations were not read.",
+                "ops_valid": False,
+            }
+        )
+    else:
+        finding.update(
+            {
+                "verdicts": [_scale_seat(1, False), _scale_seat(2, True)],
+                "verification_panel_size": 2,
+                "verification_threshold": 2,
+                "verification_outcome": "disputed",
+                "dispute_reason": "split_panel",
+                "ops_semantic_status": "not_evaluated",
+                "ops_semantic_reason": "Not upheld, so operations were not read.",
+                "ops_valid": False,
+            }
+        )
+    return finding
+
+
+def _production_shaped_report() -> tuple[DocumentStore, dict]:
+    """The reported 21 05 00 run's shape, from bundled parts.
+
+    33 surviving, 10 refuted and 6 disputed candidates; five lenses with
+    nineteen reviewed checks each. No model call — every record is dict
+    surgery on the hermetic fixture, so this measures layout and nothing else.
+    """
+    store, result = _rich_audit_result()
+    payload = result.to_dict()
+    base = copy.deepcopy(payload["findings"][0])
+    payload["findings"] = [
+        _scale_candidate(base, index, "surviving", severity)
+        for index, severity in enumerate(
+            ["high"] + ["medium"] * 21 + ["low"] * 11, start=1
+        )
+    ]
+    payload["refuted"] = [
+        _scale_candidate(base, 100 + index, "refuted", severity)
+        for index, severity in enumerate(["medium"] * 4 + ["low"] * 6, start=1)
+    ]
+    payload["disputed"] = [
+        _scale_candidate(base, 200 + index, "disputed", severity)
+        for index, severity in enumerate(["medium"] * 3 + ["low"] * 3, start=1)
+    ]
+    payload["inconclusive"] = []
+    payload["consolidation"] = {}
+    lens_base = copy.deepcopy(payload["lens_statuses"][0])
+    lenses = []
+    for position, lens_id in enumerate(
+        [status.lens_id for status in QC_LENSES], start=1
+    ):
+        lens = copy.deepcopy(lens_base)
+        lens.update(
+            {
+                "lens_id": lens_id,
+                "title": lens_id.replace("_", " ").title(),
+                "status": "completed",
+                "summary": _scale_text(90),
+                "brief": _scale_text(55),
+                "finding_count": 12,
+                "grounded_count": 5,
+                "reviewed_checks": [
+                    {
+                        "check": _scale_text(14),
+                        "outcome": "passed" if index % 3 else "finding",
+                        "notes": _scale_text(38),
+                        "element_ids": [f"pt1.a{index}.p1"],
+                        "source_urls": [
+                            f"https://example.test/lens-{position}-{index}"
+                        ],
+                        "source_checks": [],
+                    }
+                    for index in range(1, 20)
+                ],
+                "search_queries": [_scale_text(12) for _ in range(5)],
+                "retrieved_sources": [
+                    {"url": f"https://example.test/lens-{position}-ret-{index}"}
+                    for index in range(1, 12)
+                ],
+                "attempted_search_queries": [],
+                "attempted_sources": [],
+                "usage_totals": {"input_tokens": 198, "output_tokens": 32264},
+                "estimated_cost_usd": 2.06,
+                "api_request_count": 1,
+                "model_response_count": 1,
+            }
+        )
+        lenses.append(lens)
+    payload["lens_statuses"] = lenses
+    return store, payload
+
+
+def test_the_memo_stays_a_memo_at_production_scale() -> None:
+    """A 49-candidate run must not render a 95-page document.
+
+    The reported 21 05 00 export ran 43,678 words across 1,745 paragraphs
+    and 487 table rows — about half of it packaging rather than content: one
+    verdict restated eleven times per candidate, ~6,000 words of exactly
+    repeated boilerplate, machine fingerprints and content hashes no Word
+    reader can act on, two truncated JSON manifests, and refuted candidates
+    rendered as full records although nothing can be done with one.
+
+    This fixture reproduces that shape from bundled parts and holds the
+    result to a budget. The ceilings sit just above the measured render, so
+    a change that quietly reintroduces per-record scaffolding fails here
+    rather than in someone's inbox. Raising one is a decision, not a fix:
+    the honest way to spend more lines is to add content, and content
+    changes the numerator these ratios are measured against.
+    """
+    store, payload = _production_shaped_report()
+    document = Document(io.BytesIO(build_qc_memo(payload, store.doc, stale=True)))
+    paragraphs = [p for p in document.paragraphs if p.text.strip()]
+    table_rows = sum(len(table.rows) for table in document.tables)
+    words = sum(len(p.text.split()) for p in document.paragraphs) + sum(
+        len(cell.text.split())
+        for table in document.tables
+        for row in table.rows
+        for cell in row.cells
+    )
+
+    assert len(paragraphs) < 1000, (
+        f"{len(paragraphs)} paragraphs — the pre-condensation render was "
+        "1,745 and page count follows lines, not words"
+    )
+    assert table_rows < 460, f"{table_rows} table rows"
+    assert words < 34_000, (
+        f"{words} words — the pre-condensation render was 43,678"
+    )
+
+    # The three mechanisms that hold the budget, each pinned directly so a
+    # regression names itself instead of only moving a total.
+    text = _document_text(document)
+    # 1. A unanimous panel states its verdict once, with no seat table.
+    assert "3 of 3 seats upheld · fix approved by every seat · dry run valid" in text
+    assert "Semantic decision detail:" not in text
+    # 2. Refuted candidates are one table, not ten records.
+    assert sum(1 for p in paragraphs if p.text.startswith("RF-")) == 0
+    assert "0 of 2 seats upheld" in text
+    # 3. Disputed candidates keep their full record — they need a decision.
+    assert sum(1 for p in paragraphs if p.text.startswith("DP-")) == 6
 
 
 # ---------------------------------------------------------------------------

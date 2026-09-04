@@ -203,10 +203,16 @@ class ResearchRunner:
         discipline: str = "",
         dimension_ids: Sequence[str] | None = None,
         reference_docs: Sequence[Any] | None = None,
+        section_label: str = "",
         on_settled: Callable[[], None] | None = None,
         usage_sink: Callable[[dict], None] | None = None,
     ) -> bool:
         """Kick off the fan-out on a daemon thread. False if already running.
+
+        ``section_label`` is the section number of the session pressing
+        Research; it is stamped on the round record so a section seeded
+        from a project brief can tell the rounds it ran from the ones it
+        was handed. Captured under the lock beside the round number.
 
         ``dimension_ids`` scopes the round to a subset of the module's
         declared dimensions (``None`` runs them all). The accumulated
@@ -264,6 +270,7 @@ class ResearchRunner:
             # next one, not to workers already briefed and already paying for
             # a cached prefix built without it.
             briefing_docs = list(reference_docs or [])
+            section = " ".join(section_label.split())
             cancel_event = threading.Event()
             self._cancel_event = cancel_event
             run_token = object()
@@ -330,6 +337,7 @@ class ResearchRunner:
                     dimension_ids=dimension_ids,
                     established=established,
                     reference_docs=briefing_docs,
+                    section_label=section,
                     event_sink=_sink,
                     should_stop=cancel_event.is_set,
                 )
@@ -723,6 +731,7 @@ def _profile_view(profile: RequirementsProfile) -> dict[str, Any]:
                 ],
                 "new_items": r.new_items,
                 "repeat_items": r.repeat_items,
+                **({"section": r.section} if r.section else {}),
             }
             for r in profile.rounds
         ],

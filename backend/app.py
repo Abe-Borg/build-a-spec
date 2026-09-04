@@ -134,6 +134,7 @@ from .llm.prompts import (
 )
 from .project_profile import ProjectProfile
 from .research.engine import (
+    RequirementsProfile,
     research_coverage,
     research_manifest_facts,
     validate_research_facts,
@@ -1610,6 +1611,7 @@ def _research_readiness(session: SessionState) -> tuple[bool, str]:
             f"({len(coverage.completed)} of {coverage.total} dimensions "
             "completed). Press Research again to retry.",
         )
+    carried, nudge = _carried_research_note(session, profile)
     optional_gaps = coverage.optional_gaps
     if optional_gaps:
         named = "; ".join(
@@ -1623,9 +1625,57 @@ def _research_readiness(session: SessionState) -> tuple[bool, str]:
         return (
             True,
             f"Requirements research complete for {len(coverage.completed)} of "
-            f"{coverage.total} dimensions. Absent optional coverage: {named}.",
+            f"{coverage.total} dimensions{carried}. Absent optional coverage: "
+            f"{named}.{nudge}",
         )
-    return True, "Requirements research complete."
+    return True, f"Requirements research complete{carried}.{nudge}"
+
+
+def _carried_research(session: SessionState) -> tuple[list[str], int]:
+    """``(source sections, carried round count)`` for a section seeded from
+    a project brief — ``([], 0)`` for any other session.
+
+    The link is the authority, not the round stamps: a round run before
+    rounds recorded their section carries no stamp, and the seed recorded
+    how many rounds it installed. Plain attribute reads (the readiness /
+    ``_doc_payload`` posture).
+    """
+    link = session.project_link if isinstance(session.project_link, dict) else None
+    if not link:
+        return [], 0
+    at_seed = int(link.get("research_rounds_at_seed", 0) or 0)
+    if at_seed <= 0:
+        return [], 0
+    sources = [str(s) for s in (link.get("seeded_from") or []) if str(s).strip()]
+    return sources, at_seed
+
+
+def _carried_research_note(
+    session: SessionState, profile: RequirementsProfile
+) -> tuple[str, str]:
+    """The readiness disclosure for research a section did not run itself.
+
+    Carried research PASSES readiness (owner decision, 2026-09-04: research
+    is project-level, and the rounds were paid for) — but never silently.
+    Returns ``(parenthetical, nudge)``: the parenthetical names the source
+    sections and the rounds; the nudge to press Research again renders
+    only while NO round has run in this section, because that press is a
+    briefed round (``established_facts_for``), and once one has run the
+    ordinary detail returns with just the carried count. Both are ``""``
+    for a session that carried nothing.
+    """
+    sources, at_seed = _carried_research(session)
+    if not sources or at_seed <= 0:
+        return "", ""
+    total = profile.round_count
+    named = ", ".join(sources)
+    if total <= at_seed:
+        return (
+            f" (carried from {named}; {total} round(s); last research "
+            f"{profile.research_date or 'unknown'})",
+            " Press Research again for a briefed round on this section.",
+        )
+    return f" ({min(at_seed, total)} of {total} rounds carried from {named})", ""
 
 
 RESEARCH_SCOPE_ALL = "all"
@@ -1648,6 +1698,7 @@ def _research_coverage_payload(session: SessionState) -> dict:
     coverage = research_coverage(
         session.module, session.research.profile_result
     )
+    carried_from, carried_rounds = _carried_research(session)
     return {
         "total": coverage.total,
         "completed": list(coverage.completed),
@@ -1659,6 +1710,11 @@ def _research_coverage_payload(session: SessionState) -> dict:
             }
             for gap in coverage.gaps
         ],
+        # Which sections' research this session inherited, and how many of
+        # the profile's rounds came with it — so the drawer labels carried
+        # rounds without re-deriving the seed from the profile.
+        "carried_from": carried_from,
+        "carried_rounds": carried_rounds,
     }
 
 
@@ -5009,6 +5065,10 @@ def create_app(
             module = session.module
             discipline = effective_discipline(session)
             profile_data = dict(session.doc.doc.project_profile)
+            # The round is stamped with the section that ran it (a section
+            # seeded from a project brief tells carried rounds from its
+            # own by this). Read under the same guard as the profile.
+            section_label = " ".join(session.doc.doc.number.split())
         profile = ProjectProfile.from_dict(profile_data)
         if profile is None or not profile.is_complete():
             return JSONResponse(
@@ -5099,6 +5159,7 @@ def create_app(
                 # Snapshot the list under the guard we already hold: the
                 # round is briefed on what was attached when it started.
                 reference_docs=list(session.references.docs),
+                section_label=section_label,
                 usage_sink=lambda u, g=run_generation: (
                     session.add_usage_if_current(g, "research", u)
                 ),

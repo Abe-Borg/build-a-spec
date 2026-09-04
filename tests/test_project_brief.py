@@ -931,3 +931,126 @@ def test_a_seeded_section_saves_reloads_and_extends_the_lineage_on_export():
     link = sessions.get_session().project_link
     assert link["seeded_from"] == ["21 13 13"]  # the export keeps the lineage
     assert [s["number"] for s in link["sections"]] == ["21 13 13", "21 13 19"]
+
+
+# ---------------------------------------------------------------------------
+# Carried research: readiness passes, discloses, and the next press is briefed
+# ---------------------------------------------------------------------------
+
+
+def _complete_research() -> RequirementsProfile:
+    """Section 1's research with EVERY declared dimension completed, so the
+    readiness gate has nothing to fail on but the carry itself."""
+    from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
+
+    fresh = RequirementsProfile(
+        items=[_item("r-1", "Loudoun County adopted the 2021 VCC.")],
+        dimension_statuses=[
+            DimensionStatus(
+                dimension_id=d.dimension_id,
+                status="completed",
+                title=d.title,
+                item_count=1 if d.dimension_id == "governing_codes" else 0,
+                grounded_count=1 if d.dimension_id == "governing_codes" else 0,
+            )
+            for d in HYPERSCALE_FIRE.research_dimensions
+        ],
+        research_date="2026-08-02",
+        project=PROFILE.to_dict(),
+    )
+    return append_research_round(None, fresh)
+
+
+def _research_check(client: TestClient) -> dict:
+    checks = {c["id"]: c for c in client.get("/api/readiness").json()["checks"]}
+    return checks["research_complete"]
+
+
+def test_carried_research_passes_readiness_with_the_disclosure_and_the_next_round_is_briefed(
+    monkeypatch,
+):
+    from tests.fakes import SequencedFakeClient, user_text
+    from tests.test_research_api import _patch_research_client, _wait_terminal
+    from tests.test_research_engine import DIM_KEYS
+    from tests.test_research_rounds import _scripts_for_rounds
+
+    client = _client()
+    section_one = _rich_session(client)
+    section_one.research.restore(_complete_research())
+    # Section 1 ran its own research: exporting a brief links it, and the
+    # link says nothing was carried — so the ordinary detail stands.
+    exported = client.get("/api/project/brief")
+    assert exported.status_code == 200, exported.text
+    assert _research_check(client)["detail"] == "Requirements research complete."
+    coverage = client.get("/api/research/status").json()["coverage"]
+    assert coverage["carried_from"] == [] and coverage["carried_rounds"] == 0
+    sessions.reset_session()
+
+    # Section 2, seeded from the brief on the fire module (its dimension
+    # messages are what the scripted fan-out below routes on).
+    started = client.post(
+        "/api/project/brief/start",
+        files=_upload("p.basproject", exported.content),
+        data={"module_id": "hyperscale_fire"},
+    )
+    assert started.status_code == 200, started.text
+    check = _research_check(client)
+    assert check["ok"] is True
+    assert check["detail"] == (
+        "Requirements research complete (carried from 21 13 13; 1 round(s); "
+        "last research 2026-08-02). Press Research again for a briefed round "
+        "on this section."
+    )
+    coverage = client.get("/api/research/status").json()["coverage"]
+    assert coverage["carried_from"] == ["21 13 13"] and coverage["carried_rounds"] == 1
+
+    # Name the section, then press Research: the round is stamped with THIS
+    # section, briefed on what section 1 established, and the readiness
+    # detail returns to the ordinary text with just the carried count.
+    named = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": "sec",
+                    "text": "Pre-Action Sprinkler Systems",
+                    "numbering": "21 13 19",
+                }
+            ]
+        },
+    )
+    assert named.status_code == 200, named.text
+    fake = SequencedFakeClient(_scripts_for_rounds({}))
+    _patch_research_client(monkeypatch, fake)
+    resp = client.post("/api/research/start")
+    assert resp.status_code == 200, resp.text
+    snapshot = _wait_terminal(client, timeout_s=10.0)
+    assert snapshot["status"] == "complete", snapshot.get("error")
+    rounds = snapshot["profile"]["rounds"]
+    assert [r["round_index"] for r in rounds] == [1, 2]
+    assert "section" not in rounds[0]  # carried from a section-1 export
+    assert rounds[1]["section"] == "21 13 19"
+    governing = next(
+        user_text(r["messages"])
+        for r in fake.requests
+        if DIM_KEYS["governing_codes"] in user_text(r["messages"])
+    )
+    assert "<already_established>" in governing
+    assert "Loudoun County adopted the 2021 VCC." in governing
+    check = _research_check(client)
+    assert check["ok"] is True
+    assert check["detail"] == "Requirements research complete (1 of 2 rounds carried from 21 13 13)."
+    coverage = client.get("/api/research/status").json()["coverage"]
+    assert coverage["carried_from"] == ["21 13 13"] and coverage["carried_rounds"] == 1
+    # The carried round survives the save/reopen a real section goes through.
+    package = sessions.project_package_bytes(sessions.get_session())
+    sessions.reset_session()
+    loaded = client.post(
+        "/api/project/load-file",
+        files={"file": ("section-2.baspec", package, "application/octet-stream")},
+    )
+    assert loaded.status_code == 200, loaded.text
+    assert _research_check(client)["detail"] == (
+        "Requirements research complete (1 of 2 rounds carried from 21 13 13)."
+    )

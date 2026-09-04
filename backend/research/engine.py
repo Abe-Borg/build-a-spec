@@ -608,6 +608,15 @@ class ResearchRound:
     dimension_statuses: list[DimensionStatus] = field(default_factory=list)
     new_items: int = 0
     repeat_items: int = 0
+    # The section number of the session that ran this round ("" when the
+    # round predates the stamp, or the section had no number yet). Research
+    # is project-level by construction, so a profile carried into the next
+    # section through a project brief keeps every round — and this is what
+    # lets that section say which rounds were run HERE and which were
+    # carried. Serialized only when non-empty, so a legacy profile's bytes
+    # (and the QC research fingerprint over them) are untouched. Last, so
+    # positional construction keeps working.
+    section: str = ""
 
     @property
     def completed_dimensions(self) -> int:
@@ -790,6 +799,7 @@ class RequirementsProfile:
                     ],
                     "new_items": r.new_items,
                     "repeat_items": r.repeat_items,
+                    **({"section": r.section} if r.section else {}),
                 }
                 for r in self.rounds
             ],
@@ -845,6 +855,7 @@ class RequirementsProfile:
                     ),
                     new_items=int(raw.get("new_items", 0) or 0),
                     repeat_items=int(raw.get("repeat_items", 0) or 0),
+                    section=" ".join(str(raw.get("section", "") or "").split()),
                 )
             )
         if not rounds:
@@ -1079,7 +1090,10 @@ def _accumulate_statuses(
 
 
 def append_research_round(
-    previous: "RequirementsProfile | None", fresh: RequirementsProfile
+    previous: "RequirementsProfile | None",
+    fresh: RequirementsProfile,
+    *,
+    section: str = "",
 ) -> RequirementsProfile:
     """Fold a just-completed run into the session's accumulated profile.
 
@@ -1098,9 +1112,19 @@ def append_research_round(
 
     ``previous`` of ``None`` (the first round of a session) returns
     ``fresh`` renumbered as round 1.
+
+    ``section`` stamps the round record with the section number of the
+    session that ran it. The record is REBUILT here from ``fresh`` (the
+    round index is renumbered, the statuses copied), so a stamp already on
+    ``fresh``'s own round — the engine stamps a fan-out's profile at birth
+    — is carried over when the caller passes none; that is what lets the
+    runner's adopt path stay ``append_research_round(previous, result)``.
     """
     round_index = (previous.round_count + 1) if previous is not None else 1
     date = fresh.research_date
+    section = " ".join(section.split()) or (
+        fresh.rounds[-1].section if fresh.rounds else ""
+    )
     prior_items = list(previous.items) if previous is not None else []
     prior_statuses = (
         list(previous.dimension_statuses) if previous is not None else []
@@ -1136,6 +1160,7 @@ def append_research_round(
         dimension_statuses=round_statuses,
         new_items=len(added),
         repeat_items=len(confirmed),
+        section=section,
     )
     return RequirementsProfile(
         items=items,
@@ -2108,10 +2133,15 @@ def run_requirements_research(
     dimension_ids: Iterable[str] | None = None,
     established: "RequirementsProfile | None" = None,
     reference_docs: list[ReferenceDoc] | None = None,
+    section_label: str = "",
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> RequirementsProfile:
     """Run the selected module research dimensions in parallel; merge them.
+
+    ``section_label`` is the section number of the session running this
+    round, recorded on the round (``ResearchRound.section``) and nowhere in
+    any request — research is project-level, so it changes no prompt byte.
 
     ``dimension_ids`` scopes the round to a subset of the module's declared
     dimensions (``None`` runs them all — the historical contract). A later
@@ -2297,6 +2327,7 @@ def run_requirements_research(
             research_date=research_date,
             project=profile.to_dict(),
         ),
+        section=section_label,
     )
 
 

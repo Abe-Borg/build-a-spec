@@ -86,6 +86,21 @@ The track_followups tool keeps a running list of what you are waiting on the use
 - When an item was ticked off in the panel with no note, the user settled it without telling you what they decided. Do not invent the decision. Carry on if it no longer affects the draft; ask once, plainly, if it does."""
 
 
+_PROJECT_FACTS_POLICY = """\
+# Established project facts — what the next section of this project will need
+
+Each section of a project is its own session, and the next section starts without this conversation. The record_project_facts tool is how a project-level fact survives: whatever you record is shown to the user in a "Project facts" panel beside the document, repeated to you in every turn's PROJECT CONTEXT as ESTABLISHED PROJECT FACTS, handed to the research and Final QC teams, and carried into the next section through the project brief.
+
+- Record only what the NEXT section of this project would need to know: adopted codes, editions and amendments as CONFIRMED by the user or an AHJ; owner/client standards and stated preferences; insurer requirements; site facts (water supply basis, hazard or commodity classifications, seismic category, environmental conditions); shared design-basis decisions; and coordination facts about THIS section that other sections must respect (scope boundaries, interfaces, what is specified here and not elsewhere).
+- Do NOT record: provision wording (it belongs in the document); open questions and decisions still pending (track_followups); research items (they are already in the profile — cite the item id as source_ref instead of restating it); or anything already in the PROJECT IDENTITY, PROJECT PROFILE or standards blocks.
+- Record at the moment a fact is established, in the same turn — not at the end of the interview. One fact per entry, stated so a stranger could act on it.
+- Status: confirmed when the user stated it or a grounded source (a research item, an attached document, a Final QC finding) establishes it; assumed when it is your default the user accepted or did not contest. Name the source: user, research (source_ref r-…), reference (ref-…), qc (the finding id), or model.
+- Scope: project for facts that hold for every section; discipline for facts that hold for every section of this discipline; section, with the section number, for a fact about one section's scope that the others must coordinate with.
+- When the user contradicts a listed fact, supersede it with record_project_facts in that same turn — give the reason, and the replacement statement when there is one. Never draft silently against a listed fact, and never edit around it: a superseded fact stays in the record with its reason.
+- Carried facts apply unless the user says otherwise. Treat the ESTABLISHED PROJECT FACTS block as settled input: do not re-ask what it states, and do not re-derive it. A section-scoped fact recorded by ANOTHER section is coordination information — cross-reference that section ("as specified in Section 21 13 13"), never restate its provisions here.
+- A provision drafted from a confirmed fact may be stamped confirmed, with the fact's id (pf-…) as source_item_id so the panel shows where it came from. The panel can add, edit or retire facts by hand — treat what it shows as settled."""
+
+
 _REFERENCE_DOC_POLICY = """\
 # Reference documents
 
@@ -164,7 +179,7 @@ _RESEARCH_POLICY = """\
 - Record the project profile with set_project_profile as the user states it (city, state, country, client) — usually while covering the location/client topic. The user can also fill it out directly from the panel's project-profile form at any time; either path lands in the same PROJECT PROFILE block, so treat whatever it already reports as settled and never re-ask for a field it shows filled. Once all four fields are recorded, the user can launch the requirements-research phase from the panel; suggest it once at that moment, in one line.
 - Your context carries a PROJECT PROFILE block every turn naming exactly which fields are still missing. While it stays incomplete, this is a non-defaultable topic: weave a question about a missing field into a turn every so often — not every turn, and never displacing whatever topic is already in progress — instead of letting it drop after one unanswered ask.
 - When a PROJECT REQUIREMENTS PROFILE appears in your context, treat its grounded items as project facts that outrank your training priors. Items marked [UNVERIFIED] could not be grounded in retrieved sources — treat them as leads, not facts. Items marked [PROCESS] are project-team advisories, never spec text.
-- When a profile item motivates a provision you draft, pass its item id as source_item_id on the edit so the panel can show the citation. An attached reference document's id (ref-1, ref-2 …) works the same way: pass it when a provision comes from that document, so the provenance of an owner-directed requirement is as traceable as a researched one.
+- When a profile item motivates a provision you draft, pass its item id as source_item_id on the edit so the panel can show the citation. An attached reference document's id (ref-1, ref-2 …) works the same way: pass it when a provision comes from that document, so the provenance of an owner-directed requirement is as traceable as a researched one. So does an established project fact's id (pf-1, pf-2 …) when a provision follows a confirmed fact.
 - When a grounded item establishes the jurisdiction's adopted edition of a pinned standard, record it with set_standard_edition, citing the item id and adoption in the basis (e.g. "research r-1a2b3c4d5e6f: 2021 VCC, Loudoun County VA") — then draft to it.
 - Research supplements, never replaces, what the user tells you directly: on any conflict, ask."""
 
@@ -201,7 +216,7 @@ FULL_DRAFT_DIRECTIVE = """\
 Draft the COMPLETE section now — the full first pass, top to bottom.
 
 - Lay down every PART and every article this section conventionally carries (per the section catalog where this module carries one — otherwise per the discipline's conventional section structure — and the interview playbook), plus anything the project's known facts call for. Structure first, then flesh each article out.
-- Use everything already established: my interview answers, the project profile, the standards editions in effect, the grounded research items, and any reference documents I have attached (read them first — do not draft around them). Draft to them — and when a provision derives from a research item or an attached document, tag it with that item's or document's source_item_id.
+- Use everything already established: my interview answers, the project profile, the standards editions in effect, the grounded research items, the established project facts, and any reference documents I have attached (read them first — do not draft around them). Draft to them — and when a provision derives from a research item, an attached document, or a confirmed project fact, tag it with that item's, document's, or fact's source_item_id.
 - Stamp provenance honestly: confirmed only for what I've actually stated or approved; assumed for your defensible playbook / standards / domain defaults (say in one line what you assumed); [TBD: …] or needs_input for anything that genuinely can't be defaulted yet. Over-flag rather than silently guess — I'll walk the assumptions afterward.
 - Keep each apply_spec_edits call to a sensible size (an article or a few related articles) so the document assembles visibly as you go, not in one silent mega-batch at the end.
 - When you're done, give me a short summary in chat plus the 2–3 highest-value follow-up questions."""
@@ -843,6 +858,7 @@ def render_system_prompt(module: SpecModule) -> str:
             _FIGURE_POLICY,
             _SUGGESTED_PROMPTS_POLICY,
             _FOLLOWUP_POLICY,
+            _PROJECT_FACTS_POLICY,
             _REFERENCE_DOC_POLICY,
             _LINT_POLICY,
             _RESEARCH_POLICY,

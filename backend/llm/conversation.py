@@ -141,13 +141,20 @@ from ..research.resend_sanitizer import (
     sanitize_messages_for_resend,
 )
 from ..research.schema import build_web_fetch_tool, build_web_search_tool
-from ..runtime_context import date_context_block
+from ..runtime_context import current_date_iso, date_context_block
 from ..followups import (
     PANEL_RESOLUTION,
     TRACK_FOLLOWUPS_TOOL,
     FollowUpError,
     FollowUpStore,
     validate_track_payload,
+)
+from ..project_facts import (
+    PANEL_SUPERSEDE_REASON,
+    RECORD_PROJECT_FACTS_TOOL,
+    ProjectFactError,
+    ProjectFactStore,
+    validate_record_payload,
 )
 from ..suggestions import SUGGEST_PROMPTS_TOOL, SuggestError, validate_prompts
 from ..tracing import capture as _trace
@@ -182,10 +189,10 @@ def _chat_tools() -> list[dict[str, Any]]:
     the cached prefix, so anything per-turn here (e.g. a profile-derived
     ``user_location``) would bust the prompt cache for the whole session.
     The model steers search locale through its query text instead.
-    ``suggest_prompts``, ``read_reference_doc``, ``apply_qc_fixes`` and
-    then ``track_followups`` are appended LAST, in that order, so each
-    addition leaves the existing tool bytes intact as a stable cached
-    prefix.
+    ``suggest_prompts``, ``read_reference_doc``, ``apply_qc_fixes``,
+    ``track_followups`` and then ``record_project_facts`` are appended
+    LAST, in that order, so each addition leaves the existing tool bytes
+    intact as a stable cached prefix.
 
     The two web tools come from the shared builders, which pin
     ``allowed_callers: ["direct"]`` (see
@@ -201,6 +208,7 @@ def _chat_tools() -> list[dict[str, Any]]:
         READ_REFERENCE_DOC_TOOL,
         APPLY_QC_FIXES_TOOL,
         TRACK_FOLLOWUPS_TOOL,
+        RECORD_PROJECT_FACTS_TOOL,
     ]
 
 
@@ -325,6 +333,14 @@ class SessionState:
     # template content is reviewable starter material, but never enables the
     # source-preserving export/edit path.
     template_origin: dict[str, Any] | None = None
+    # Which project this section belongs to (v1.17.0): set when a session is
+    # seeded from a project brief, or exports one. Carries the project id and
+    # name, the sections the brief listed (the PROJECT SECTIONS context block
+    # renders them), and how many research rounds arrived with the seed —
+    # what readiness reads to say the research was carried rather than run
+    # here. Sanitized on load like template_origin; never a source of
+    # authority, and never a reason to trust a file more.
+    project_link: dict[str, Any] | None = None
     generation: int = 0
     module: SpecModule = field(default_factory=lambda: get_module(None))
     # Legacy session-level discipline, meaningful only with an open-catalog
@@ -363,6 +379,14 @@ class SessionState:
     # to prevent. Distinct from the document's OPEN ITEMS, which are a
     # projection over the paragraph tree.
     followups: FollowUpStore = field(default_factory=FollowUpStore)
+    # Established project facts (v1.17.0): what the project SETTLED that the
+    # next section of the same project would need — carried between sections
+    # through the project brief. Turn-atomic and ACCUMULATING like the
+    # follow-ups store (a turn can supersede a fact in place, so rollback is
+    # a snapshot restore), reset in place for the same reason as the figure
+    # store. Distinct from OPEN ITEMS (a projection over the tree) and from
+    # WAITING ON THE USER (things not yet settled).
+    facts: ProjectFactStore = field(default_factory=ProjectFactStore)
     # Session-scoped billed-usage meter (WI4). Reset/load clear it.
     usage: UsageLedger = field(default_factory=UsageLedger)
     # Context gauge, not spend (which is why it lives here and not in the
@@ -497,6 +521,7 @@ class SessionState:
             doc_started = False
             figure_started = False
             followup_started = False
+            facts_started = False
             try:
                 self.doc.begin_turn()
                 doc_started = True
@@ -504,7 +529,11 @@ class SessionState:
                 figure_started = True
                 self.followups.begin_turn()
                 followup_started = True
+                self.facts.begin_turn()
+                facts_started = True
             except Exception:
+                if facts_started:
+                    self.facts.rollback_turn()
                 if followup_started:
                     self.followups.rollback_turn()
                 if figure_started:
@@ -523,6 +552,7 @@ class SessionState:
                 self.doc.rollback_turn()
                 self.figures.rollback_turn()
                 self.followups.rollback_turn()
+                self.facts.rollback_turn()
             self._active_turn_token = None
             self.turn_active = False
             return True
@@ -594,6 +624,67 @@ class SessionState:
                 # goes through annotate() or it would silently do nothing.
                 self.followups.annotate(fid, note)
             return "ok", self.followups.snapshot()
+
+    # -- project facts (the panel's side of the ledger) ----------------------
+    #
+    # Same posture as the follow-ups panel: refused while a turn owns the
+    # store, because that turn's rollback would silently revert the user's
+    # edit. ``ProjectFactError`` propagates so the route can answer 400 with
+    # the store's own message.
+
+    def _facts_stamp(self) -> tuple[str, str]:
+        return (" ".join(self.doc.doc.number.split()), current_date_iso())
+
+    def add_project_fact_if_idle(
+        self, payload: dict[str, Any]
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Record a fact the user typed into the panel (source: the user)."""
+        with self._turn_state_lock:
+            if self.turn_active:
+                return "active", []
+            recorded_in, recorded_at = self._facts_stamp()
+            self.facts.record(
+                payload,
+                recorded_in=recorded_in,
+                recorded_at=recorded_at,
+                default_source_kind="user",
+            )
+            return "ok", self.facts.snapshot()
+
+    def update_project_fact_if_idle(
+        self, pid: str, changes: dict[str, Any]
+    ) -> tuple[str, list[dict[str, Any]]]:
+        with self._turn_state_lock:
+            if self.turn_active:
+                return "active", []
+            outcome = self.facts.update(pid, changes)
+            if outcome == "missing":
+                return "missing", []
+            return "ok", self.facts.snapshot()
+
+    def supersede_project_fact_if_idle(
+        self,
+        pid: str,
+        reason: str,
+        *,
+        replacement: dict[str, Any] | None = None,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Retire a fact from the panel, with the user's reason (or the
+        disclosed default when they gave none)."""
+        with self._turn_state_lock:
+            if self.turn_active:
+                return "active", []
+            recorded_in, recorded_at = self._facts_stamp()
+            outcome, _new = self.facts.supersede(
+                pid,
+                reason or PANEL_SUPERSEDE_REASON,
+                replacement=replacement,
+                recorded_in=recorded_in,
+                recorded_at=recorded_at,
+            )
+            if outcome == "missing":
+                return "missing", []
+            return "ok", self.facts.snapshot()
 
     def delete_reference_if_idle(
         self, rid: str
@@ -1470,6 +1561,9 @@ class SessionState:
         self._capability_warm_next = None
         self.import_report = None
         self.template_origin = None
+        # A project link describes the project the OUTGOING section belonged
+        # to. A fresh session belongs to none until it is seeded or exported.
+        self.project_link = None
         # Per-project priming text does not survive a reset (see the field
         # comment). Module and discipline are kept; this is not.
         self.project_context = ""
@@ -1491,6 +1585,9 @@ class SessionState:
         # Tracked questions/decisions/to-dos belong to the project that was
         # open. Reset in place for the same reason as the figure store.
         self.followups.reset()
+        # Established project facts belong to the project that was open —
+        # they carry through a project brief, never through a reset.
+        self.facts.reset()
         # The meter answers "what has THIS session spent" — a fresh session
         # starts at zero (the trace remains the permanent record).
         self.usage.reset()
@@ -1772,6 +1869,16 @@ def _turn_context_text(session: SessionState) -> str:
     if research_profile is not None:
         block, _dropped = research_context_block(research_profile)
         parts.append(block)
+    # Established project facts sit right after the research profile — both
+    # are "what is already known" — and BEFORE the document, so the model
+    # reads the project's settled inputs before the provisions that should
+    # follow them. Headed ESTABLISHED PROJECT FACTS, never "open items".
+    try:
+        facts_block = session.facts.context_block(current_section=doc.number)
+    except Exception:  # noqa: BLE001 - context assembly must never fail a turn
+        facts_block = ""
+    if facts_block:
+        parts.append(facts_block)
     # Without this the outline below reads as a spec with an unset header, and
     # the model reliably "fixes" it by inventing a section number for a file
     # that was never a spec section.
@@ -2799,6 +2906,55 @@ def _run_track_followups(
     )
 
 
+def _run_record_project_facts(
+    session: SessionState,
+    block: dict[str, Any],
+    *,
+    trace_handle: Any = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Execute one ``record_project_facts`` tool_use block.
+
+    The ``track_followups`` shape exactly: the store IS the staging (its
+    ``begin_turn``/``rollback_turn`` make a turn's writes provisional), a
+    malformed payload or an unknown id becomes an ``is_error`` result naming
+    the active ids so the model self-corrects, and the batch is applied all
+    or nothing. Every fact is stamped with the section that recorded it and
+    the local date — the provenance a carried fact still shows in the next
+    section.
+    """
+    store = session.facts
+    recorded_in = " ".join(session.doc.doc.number.split())
+    try:
+        payload = validate_record_payload(block.get("input") or {})
+        summary = store.apply(
+            payload, recorded_in=recorded_in, recorded_at=current_date_iso()
+        )
+    except ProjectFactError as exc:
+        return (
+            {
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": (
+                    f"record_project_facts rejected (nothing was recorded): {exc}"
+                ),
+                "is_error": True,
+            },
+            [],
+        )
+    _trace.note(
+        trace_handle,
+        f"{summary['active']} active project fact(s) after this call",
+    )
+    return (
+        {
+            "type": "tool_result",
+            "tool_use_id": block.get("id"),
+            "content": json.dumps(summary, ensure_ascii=False),
+        },
+        [{"type": "project_facts", "project_facts": store.snapshot()}],
+    )
+
+
 def _run_suggest_prompts(
     block: dict[str, Any], trace_handle: Any = None
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -3081,6 +3237,8 @@ def _run_tool(
         return _run_track_followups(
             session, block, message_index=message_index, trace_handle=trace_handle
         )
+    if name == "record_project_facts":
+        return _run_record_project_facts(session, block, trace_handle=trace_handle)
     if name == "read_reference_doc":
         return _run_read_reference_doc(
             session, block, trace_handle, budget=reference_budget
@@ -3614,6 +3772,7 @@ def stream_user_turn(
                 doc_changed = session.doc.commit_turn()
                 session.figures.commit_turn()
                 session.followups.commit_turn()
+                session.facts.commit_turn()
                 # Latest-only replace: whatever this turn staged (including
                 # []) becomes the current chip set. Failure paths never reach
                 # this commit block, so the previous list remains untouched.

@@ -161,6 +161,7 @@ from .spec_doc.docx_export import (
     export_filename,
     redline_filename,
 )
+from .project_facts import ProjectFactError
 from .reference_docs import ReferenceDocError, prepare_reference_text
 from .reference_extract import (
     extract_reference_document,
@@ -397,6 +398,45 @@ class EditDocRequest(BaseModel):
 class WorkspaceMutationRequest(BaseModel):
     workspace_id: int | None = None
     generation: int | None = None
+
+
+class ProjectFactCreateRequest(WorkspaceMutationRequest):
+    """Body for ``POST /api/project-facts`` — a fact the user types in."""
+
+    statement: str = ""
+    detail: str = ""
+    scope: str = "project"
+    section: str = ""
+    status: str = "confirmed"
+    source_ref: str = ""
+
+
+class ProjectFactUpdateRequest(WorkspaceMutationRequest):
+    """Body for ``PATCH /api/project-facts/{pid}`` — only the fields sent change."""
+
+    statement: str | None = None
+    detail: str | None = None
+    scope: str | None = None
+    section: str | None = None
+    status: str | None = None
+    source_ref: str | None = None
+
+
+class ProjectFactSupersedeRequest(WorkspaceMutationRequest):
+    """Body for ``POST /api/project-facts/{pid}/supersede``.
+
+    ``reason`` is the user's one line on what changed (the store records a
+    disclosed default when it is blank); ``statement`` and its companions
+    describe the replacement fact, when there is one.
+    """
+
+    reason: str = ""
+    statement: str = ""
+    detail: str = ""
+    scope: str = ""
+    section: str = ""
+    status: str = ""
+    source_ref: str = ""
 
 
 class FollowUpStatusRequest(WorkspaceMutationRequest):
@@ -1445,6 +1485,10 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         # chips: boot, project load, undo/redo and the failed-turn
         # refresh all resync the panel from this one place.
         "followups": session.followups.snapshot(),
+        # Established project facts (v1.17.0) and the project this section
+        # belongs to. Same one-way resync posture as the two lists above.
+        "project_facts": session.facts.snapshot(),
+        "project_link": session.project_link,
         # Import honesty/recovery metadata. Native .baspec packages carry the
         # source as a separate binary member; legacy JSON remains source-less.
         "import_report": session.import_report,
@@ -4289,6 +4333,146 @@ def create_app(
                     )
             _trace_capture.app_event("followup", fid=fid, status=status, ok=True)
             return JSONResponse({"ok": True, "followups": followups})
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+
+    # --- Project facts (the user's side of the ledger) ----------------------
+    #
+    # The model writes the ledger through the ``record_project_facts`` chat
+    # tool; these are the user's affordances — add a fact by hand, correct
+    # one, retire one with a reason. Unlike the follow-ups panel there IS a
+    # create route: "I know the AHJ adopted the 2021 code" is exactly the
+    # kind of thing a user types in before the interview reaches it.
+
+    def _fact_outcome_response(
+        outcome: str, pid: str, facts: list[dict[str, Any]]
+    ) -> JSONResponse:
+        if outcome == "active":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A turn is generating — try again in a moment.",
+                },
+                status_code=409,
+            )
+        if outcome == "missing":
+            return JSONResponse(
+                {"ok": False, "error": f"No project fact {pid!r}."},
+                status_code=404,
+            )
+        return JSONResponse({"ok": True, "project_facts": facts})
+
+    def _invalid_fact_response(exc: Exception) -> JSONResponse:
+        return JSONResponse(
+            {"ok": False, "error": str(exc), "code": "invalid_fact"},
+            status_code=400,
+        )
+
+    @app.post("/api/project-facts")
+    def project_fact_create(
+        body: ProjectFactCreateRequest | None = None,
+    ) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        payload = {
+            "statement": body.statement if body else "",
+            "detail": body.detail if body else "",
+            "scope": (body.scope if body else "") or "project",
+            "section": body.section if body else "",
+            "status": (body.status if body else "") or "confirmed",
+            "source_ref": body.source_ref if body else "",
+        }
+        try:
+            with sessions.active_write(lease.workspace_id):
+                sessions.workspace_manager().assert_fresh(lease)
+                try:
+                    outcome, facts = session.add_project_fact_if_idle(payload)
+                except ProjectFactError as exc:
+                    return _invalid_fact_response(exc)
+                response = _fact_outcome_response(outcome, "", facts)
+            if outcome == "ok":
+                _trace_capture.app_event(
+                    "project_fact", action="add", pid=facts[-1]["pid"], ok=True
+                )
+            return response
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+
+    @app.patch("/api/project-facts/{pid}")
+    def project_fact_update(
+        pid: str, body: ProjectFactUpdateRequest | None = None
+    ) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        changes = {
+            key: value
+            for key, value in (body.model_dump() if body else {}).items()
+            if key not in ("workspace_id", "generation") and value is not None
+        }
+        try:
+            with sessions.active_write(lease.workspace_id):
+                sessions.workspace_manager().assert_fresh(lease)
+                try:
+                    outcome, facts = session.update_project_fact_if_idle(pid, changes)
+                except ProjectFactError as exc:
+                    return _invalid_fact_response(exc)
+                response = _fact_outcome_response(outcome, pid, facts)
+            if outcome == "ok":
+                _trace_capture.app_event(
+                    "project_fact", action="update", pid=pid, ok=True
+                )
+            return response
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+
+    @app.post("/api/project-facts/{pid}/supersede")
+    def project_fact_supersede(
+        pid: str, body: ProjectFactSupersedeRequest | None = None
+    ) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        reason = ((body.reason if body else "") or "").strip()
+        replacement: dict[str, Any] | None = None
+        if body and body.statement.strip():
+            replacement = {
+                key: value
+                for key, value in (
+                    ("statement", body.statement),
+                    ("detail", body.detail),
+                    ("scope", body.scope),
+                    ("section", body.section),
+                    ("status", body.status),
+                    ("source_ref", body.source_ref),
+                )
+                if value
+            }
+            # A replacement the user typed is the user's word.
+            replacement.setdefault("source_kind", "user")
+        try:
+            with sessions.active_write(lease.workspace_id):
+                sessions.workspace_manager().assert_fresh(lease)
+                try:
+                    outcome, facts = session.supersede_project_fact_if_idle(
+                        pid, reason, replacement=replacement
+                    )
+                except ProjectFactError as exc:
+                    return _invalid_fact_response(exc)
+                response = _fact_outcome_response(outcome, pid, facts)
+            if outcome == "ok":
+                _trace_capture.app_event(
+                    "project_fact",
+                    action="supersede",
+                    pid=pid,
+                    replaced=replacement is not None,
+                    ok=True,
+                )
+            return response
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
 

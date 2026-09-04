@@ -1485,6 +1485,17 @@ def snapshot() -> dict[str, Any]:
                     if item.status == "resolved"
                 ),
             },
+            "project_facts": {
+                "active": len(session.facts.active()),
+                "superseded": sum(
+                    1 for item in session.facts.items if not item.active
+                ),
+            },
+            "project_link": (
+                session.project_link.get("project_id", "")
+                if isinstance(session.project_link, dict)
+                else ""
+            ),
             "turn_active": session.turn_active,
             "stop_requested": session.stop_requested.is_set(),
             "last_context_tokens": session.last_context_tokens,

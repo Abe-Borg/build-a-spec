@@ -520,3 +520,359 @@ def test_the_tool_schema_is_lenient_and_version_static():
     assert "brief" not in json.dumps(schema)
     for phrase in ("track_followups", "source_ref", "at most once per turn", "pf-"):
         assert phrase in tool["description"]
+
+
+# ---------------------------------------------------------------------------
+# The tool through /api/chat
+# ---------------------------------------------------------------------------
+
+
+def test_recording_a_fact_streams_it_and_commits(monkeypatch):
+    client = _client()
+    _patch_client(
+        monkeypatch,
+        _facts_turn(
+            {
+                "record": [
+                    {
+                        "statement": "Data halls are Ordinary Hazard Group 2.",
+                        "status": "confirmed",
+                        "source_kind": "user",
+                    }
+                ]
+            }
+        ),
+    )
+    resp = client.post("/api/chat", json={"message": "Data halls are OH2."})
+    events = _parse_sse(resp.text)
+
+    recorded = [e for e in events if e["type"] == "project_facts"]
+    assert len(recorded) == 1
+    assert [f["statement"] for f in recorded[0]["project_facts"]] == [
+        "Data halls are Ordinary Hazard Group 2."
+    ]
+    assert events[-1]["type"] == "turn_complete"
+
+    session = sessions.get_session()
+    fact = session.facts.get("pf-1")
+    assert fact is not None and fact.status == "confirmed"
+    # Stamped with the section (none yet — the doc is unnamed) and the date.
+    assert fact.recorded_in == ""
+    assert len(fact.recorded_at) == 10 and fact.recorded_at[4] == "-"
+    payload = client.get("/api/doc").json()
+    assert payload["project_facts"][0]["source_kind"] == "user"
+    assert payload["project_link"] is None
+
+
+def test_the_tool_result_is_compact_and_the_input_rides_history(monkeypatch):
+    """Token discipline: the result echoes counts; the payload is small
+    enough to ride committed history verbatim (the track_followups posture)."""
+    client = _client()
+    fake = _facts_turn({"record": [{"statement": "Fire main is dedicated."}]})
+    _patch_client(monkeypatch, fake)
+    client.post("/api/chat", json={"message": "hi"})
+
+    history = sessions.get_session().history
+    results = [
+        block
+        for message in history
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict) and block.get("type") == "tool_result"
+    ]
+    assert json.loads(results[-1]["content"]) == {"active": 1, "recorded": ["pf-1"]}
+    uses = [
+        block
+        for message in history
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict) and block.get("type") == "tool_use"
+    ]
+    assert uses[-1]["input"]["record"][0]["statement"] == "Fire main is dedicated."
+
+
+def test_a_failed_turn_leaves_the_ledger_untouched(monkeypatch):
+    client = _client()
+    _patch_client(monkeypatch, _facts_turn({"record": [{"statement": "Kept."}]}))
+    client.post("/api/chat", json={"message": "hi"})
+    assert [f.pid for f in sessions.get_session().facts.items] == ["pf-1"]
+
+    # Second turn: supersedes pf-1 and records a replacement, then dies.
+    fake = FakeClient(
+        [
+            tool_turn(
+                ["Updating. "],
+                {
+                    "supersede": [
+                        {"id": "pf-1", "reason": "changed", "statement": "Replaced."}
+                    ]
+                },
+                tool_id="toolu_pf2",
+                name="record_project_facts",
+            ),
+            RuntimeError("boom"),
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+    resp = client.post("/api/chat", json={"message": "change it"})
+    events = _parse_sse(resp.text)
+    # The event streamed live (the supersede happened provisionally)...
+    assert any(e["type"] == "project_facts" for e in events)
+    assert events[-1]["type"] == "error"
+    # ...and the rollback put the fact back exactly as it was.
+    session = sessions.get_session()
+    assert [f.pid for f in session.facts.items] == ["pf-1"]
+    assert session.facts.get("pf-1").status == "assumed"
+    assert session.facts.get("pf-1").supersede_reason == ""
+
+
+def test_an_unknown_id_is_correctable_not_a_turn_failure(monkeypatch):
+    client = _client()
+    fake = FakeClient(
+        [
+            tool_turn(
+                ["Retiring. "],
+                {"supersede": [{"id": "pf-42", "reason": "gone"}]},
+                tool_id="toolu_pf",
+                name="record_project_facts",
+            ),
+            text_turn(["Never mind."]),
+        ]
+    )
+    _patch_client(monkeypatch, fake)
+    resp = client.post("/api/chat", json={"message": "hi"})
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "turn_complete"
+    assert not any(e["type"] == "project_facts" for e in events)
+    results = [
+        block
+        for message in sessions.get_session().history
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict) and block.get("type") == "tool_result"
+    ]
+    assert results[-1]["is_error"] is True
+    assert "pf-42" in results[-1]["content"]
+    assert "Active facts: none" in results[-1]["content"]
+
+
+def test_the_block_reaches_the_turn_but_never_the_cached_prompt(monkeypatch):
+    client = _client()
+    _patch_client(
+        monkeypatch,
+        _facts_turn(
+            {
+                "record": [
+                    {
+                        "statement": "Loudoun County adopted the 2021 VCC.",
+                        "status": "confirmed",
+                        "source_kind": "user",
+                    }
+                ]
+            }
+        ),
+    )
+    client.post("/api/chat", json={"message": "The county adopted the 2021 VCC."})
+
+    fake = FakeClient([text_turn(["ok"])])
+    _patch_client(monkeypatch, fake)
+    client.post("/api/chat", json={"message": "next"})
+    request = fake.messages.last_request
+    from tests.fakes import request_context_text
+
+    context = request_context_text(request)
+    assert "ESTABLISHED PROJECT FACTS" in context
+    assert "pf-1 [project, confirmed] Loudoun County adopted the 2021 VCC." in context
+    # After the research profile (absent here) and BEFORE the document.
+    assert context.index("ESTABLISHED PROJECT FACTS") < context.index(
+        "Current specification document"
+    )
+    system = json.dumps(request["system"])
+    # The policy names the block and example ids; the FACT itself must never
+    # reach the cached prompt.
+    assert "Loudoun County adopted" not in system
+    assert "[project, confirmed]" not in system
+
+
+def test_the_block_never_fossilizes_into_history(monkeypatch):
+    client = _client()
+    _patch_client(monkeypatch, _facts_turn({"record": [{"statement": "A fact."}]}))
+    client.post("/api/chat", json={"message": "hi"})
+    _patch_client(monkeypatch, FakeClient([text_turn(["ok"])]))
+    client.post("/api/chat", json={"message": "next"})
+    assert "ESTABLISHED PROJECT FACTS" not in json.dumps(sessions.get_session().history)
+
+
+# ---------------------------------------------------------------------------
+# The panel routes
+# ---------------------------------------------------------------------------
+
+
+def test_the_user_can_add_edit_and_retire_a_fact_by_hand():
+    client = _client()
+    resp = client.post(
+        "/api/project-facts",
+        json={"statement": "The AHJ adopted the 2021 VCC.", "status": "confirmed"},
+    )
+    assert resp.status_code == 200, resp.text
+    facts = resp.json()["project_facts"]
+    assert facts == [
+        {
+            **facts[0],
+            "pid": "pf-1",
+            "source_kind": "user",
+            "scope": "project",
+            "status": "confirmed",
+        }
+    ]
+
+    resp = client.patch(
+        "/api/project-facts/pf-1",
+        json={"statement": "The AHJ adopted the 2021 VCC with local amendments.", "status": "assumed"},
+    )
+    assert resp.status_code == 200, resp.text
+    edited = resp.json()["project_facts"][0]
+    assert edited["statement"].endswith("local amendments.")
+    assert edited["status"] == "assumed"
+
+    resp = client.post(
+        "/api/project-facts/pf-1/supersede",
+        json={"reason": "", "statement": "The AHJ adopted the 2024 VCC."},
+    )
+    assert resp.status_code == 200, resp.text
+    facts = resp.json()["project_facts"]
+    assert facts[0]["status"] == "superseded"
+    assert facts[0]["supersede_reason"] == "Retired in the panel."
+    assert facts[0]["superseded_by"] == "pf-2"
+    assert facts[1]["statement"] == "The AHJ adopted the 2024 VCC."
+    assert facts[1]["source_kind"] == "user"
+
+    resp = client.post("/api/project-facts/pf-2/supersede", json={"reason": "moot"})
+    assert resp.status_code == 200
+    assert all(f["status"] == "superseded" for f in resp.json()["project_facts"])
+
+
+def test_the_routes_refuse_bad_input_and_unknown_ids():
+    client = _client()
+    assert client.post("/api/project-facts", json={"statement": ""}).status_code == 400
+    assert client.post("/api/project-facts", json={"statement": "x", "scope": "campus"}).json()["code"] == "invalid_fact"
+    assert client.patch("/api/project-facts/pf-9", json={"detail": "x"}).status_code == 404
+    assert client.post("/api/project-facts/pf-9/supersede", json={"reason": "x"}).status_code == 404
+    client.post("/api/project-facts", json={"statement": "Real."})
+    assert client.patch("/api/project-facts/pf-1", json={"statement": ""}).status_code == 400
+
+
+def test_a_panel_edit_is_refused_while_a_turn_owns_the_store(monkeypatch):
+    """Otherwise the turn's rollback would silently revert it, which reads to
+    the user as the button not working."""
+    client = _client()
+    client.post("/api/project-facts", json={"statement": "Real."})
+    session = sessions.get_session()
+    token = session.claim_model_turn()
+    try:
+        assert client.post("/api/project-facts", json={"statement": "Another."}).status_code == 409
+        assert client.patch("/api/project-facts/pf-1", json={"detail": "x"}).status_code == 409
+        assert client.post("/api/project-facts/pf-1/supersede", json={"reason": "x"}).status_code == 409
+    finally:
+        session.release_model_turn(token[0] if isinstance(token, tuple) else token)
+    assert session.facts.get("pf-1").status == "confirmed"
+
+
+# ---------------------------------------------------------------------------
+# Persistence, unsaved-progress, and the vocabulary
+# ---------------------------------------------------------------------------
+
+
+def test_facts_survive_project_save_and_load(monkeypatch):
+    client = _client()
+    _patch_client(
+        monkeypatch,
+        _facts_turn(
+            {
+                "record": [
+                    {"statement": "Kept as is.", "status": "confirmed", "source_kind": "user"},
+                    {"statement": "Will be retired."},
+                ]
+            }
+        ),
+    )
+    client.post("/api/chat", json={"message": "hi"})
+    client.post("/api/project-facts/pf-2/supersede", json={"reason": "moot"})
+    sessions.get_session().project_link = {
+        "project_id": "b" * 32,
+        "name": "Campus X",
+        "brief_updated_at": "2026-09-04T00:00:00+00:00",
+        "seeded_from": ["21 13 13"],
+        "research_rounds_at_seed": 0,
+        "sections": [{"number": "21 13 13", "title": "Wet-Pipe", "article_titles": ["SUMMARY"]}],
+    }
+
+    project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
+    assert len(project["project_facts"]["project_facts"]) == 2
+    assert project["project_link"]["name"] == "Campus X"
+    assert project["project_link"]["sections"][0]["article_titles"] == ["SUMMARY"]
+
+    sessions.reset_session()
+    assert client.get("/api/doc").json()["project_facts"] == []
+
+    loaded = client.post("/api/project/load", json=project)
+    assert loaded.status_code == 200
+    restored = loaded.json()["project_facts"]
+    assert [(f["pid"], f["status"]) for f in restored] == [
+        ("pf-1", "confirmed"),
+        ("pf-2", "superseded"),
+    ]
+    assert restored[1]["supersede_reason"] == "moot"
+    assert loaded.json()["project_link"]["project_id"] == "b" * 32
+    # Ids keep counting from where the restored list left off.
+    fact, _ = sessions.get_session().facts.record(
+        {"statement": "x"}, recorded_in="", recorded_at=""
+    )
+    assert fact.pid == "pf-3"
+
+
+def test_an_empty_ledger_is_omitted_and_a_bad_link_degrades():
+    project = sessions.project_payload(sessions.get_session())
+    assert "project_facts" not in project
+    assert "project_link" not in project
+    client = _client()
+    project = json.loads(json.dumps(project))
+    project["project_link"] = {"project_id": "", "bogus": 1}
+    assert client.post("/api/project/load", json=project).status_code == 200
+    assert sessions.get_session().project_link is None
+
+
+def test_a_hand_added_fact_counts_as_unsaved_progress():
+    client = _client()
+    assert client.get("/api/session/unsaved").json()["unsaved"] is False
+    client.post("/api/project-facts", json={"statement": "Real."})
+    assert client.get("/api/session/unsaved").json()["unsaved"] is True
+
+
+def test_the_stable_prompt_and_the_vocabulary_carry_the_facts():
+    from backend.llm.prompts import render_system_prompt
+    from backend.qc.schema import QC_LENSES
+    from backend.spec_doc.model import APPLY_SPEC_EDITS_TOOL
+    from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
+
+    prompt = render_system_prompt(HYPERSCALE_FIRE)
+    assert "record_project_facts" in prompt
+    assert "ESTABLISHED PROJECT FACTS" in prompt
+    assert "supersede" in prompt
+    assert "pf-" in prompt
+    # The boundary against the other two lists, in the form the model acts on.
+    assert "track_followups" in prompt
+    assert "pf-..." in APPLY_SPEC_EDITS_TOOL["description"]
+    provenance = next(l for l in QC_LENSES if l.lens_id == "provenance_hygiene")
+    assert "pf-" in provenance.brief
+
+
+def test_the_diagnostics_snapshot_counts_facts_without_their_text():
+    client = _client()
+    client.post("/api/project-facts", json={"statement": "The secret sauce fact."})
+    client.post("/api/project-facts/pf-1/supersede", json={"reason": "moot"})
+    client.post("/api/project-facts", json={"statement": "Another."})
+    snap = client.get("/api/diagnostics").json()
+    session_block = json.dumps(snap["session"])
+    assert '"project_facts": {"active": 1, "superseded": 1}' in session_block
+    assert "secret sauce" not in json.dumps(snap)

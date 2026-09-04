@@ -124,6 +124,15 @@ sheet, a previous project's section, or meeting notes.
   standard still offers to save before you start over.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
+- **Turning a drawing set into an attachment.** A drawing-set analysis
+  written for drawing QC is the wrong input for a specification — it is
+  enormous and most of it is fixed by editing a drawing, not a spec.
+  `docs/drawing_analyzer_extraction_prompt.md` is a ready prompt for a
+  drawing-analysis tool that extracts only the spec-driving content —
+  codes and editions cited, design criteria, equipment schedules,
+  materials, fire ratings, execution and submittal requirements, and the
+  gaps the specification will have to fill — sized to the reference
+  budget and cited sheet by sheet.
 
 ## Shipped in v1.15.0 (Importing an office master actually works)
 

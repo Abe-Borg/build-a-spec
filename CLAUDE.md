@@ -767,6 +767,13 @@ frontend/src/
                            streaming, click sends via onSend; .prompt-chip-in
                            rise-in, reduced-motion-gated)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
+docs/drawing_analyzer_extraction_prompt.md
+                           the prompt for an external drawing-analysis tool:
+                           drawings → spec-relevant context, subject-ordered,
+                           cited, sized to REFERENCE_CONTEXT_MAX_TOKENS (25k —
+                           what actually reaches the research/QC fan-outs, not
+                           the 100k attach cap). Output is attached as an
+                           ordinary reference document; no code depends on it
 tests/
   conftest.py              hermetic env + fresh session per test
   fakes.py                 scripted fake streaming client (text + tool_use turns)

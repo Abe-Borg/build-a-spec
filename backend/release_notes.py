@@ -99,7 +99,9 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
             "you scrolled past. Items check themselves off as they are "
             "settled — by the assistant when it reads your answer, or by you "
             "with a tick — and every reply brings one of them back up, so a "
-            "decision cannot go missing between now and issue."
+            "decision cannot go missing between now and issue. The Final "
+            "QC Word report also lost about half its length without losing "
+            "a single finding."
         ),
         sections=(
             ReleaseSection(
@@ -143,6 +145,74 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "checklist also names anything still waiting, "
                             "as an advisory line: it will not stop you "
                             "issuing, it just makes sure you saw it."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="The Final QC report reads like a report",
+                items=(
+                    ReleaseItem(
+                        title="Half the length, none of the findings",
+                        body=(
+                            "A Final QC Word report on a 49-candidate "
+                            "review ran about 95 pages, and roughly half of "
+                            "that was packaging. Every candidate stated the "
+                            "same verdict eleven times over — in its "
+                            "heading, its own severity line, the outcome, "
+                            "the required panel, a table of identical "
+                            "reviewer rows, the fix vote, the semantic "
+                            "decision and its reason, the validation result "
+                            "and its detail. It now states it once: "
+                            "'3 of 3 seats upheld · fix approved by every "
+                            "seat · dry run valid'. Every one of those lines "
+                            "comes back the moment the record stops agreeing "
+                            "with itself — a reviewer who did not finish, a "
+                            "split panel, a revised severity, a rejected fix "
+                            "or a dry run that did not pass — because that "
+                            "is when you need to see which part disagrees."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Refuted candidates are a table, not a chapter",
+                        body=(
+                            "A candidate the reviewer panel rejected cannot "
+                            "be applied, so it no longer gets a full record. "
+                            "Each is one row: the claim, the issue and "
+                            "rationale it asserted in full, the panel's "
+                            "vote, and the basis it was rejected on — what "
+                            "it takes to second-guess the panel. The same "
+                            "goes for candidates whose reviewers never "
+                            "finished, which name the seat that failed and "
+                            "its error. Candidates the panel split on still "
+                            "get the whole record, because you have to "
+                            "decide those."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Nothing that only a machine can read",
+                        body=(
+                            "Sixty-four-character fingerprints, per-finding "
+                            "content hashes and two raw JSON manifests "
+                            "pasted into paragraphs (and cut off mid-object) "
+                            "are gone from the Word report. The export-time "
+                            "section now says which inputs changed since the "
+                            "run instead of printing both manifests and "
+                            "leaving you to compare them. Each source is "
+                            "still listed once in the evidence register, and "
+                            "the JSON download is unchanged — it remains the "
+                            "complete record, and the report says so where "
+                            "it summarizes."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Each reviewed check shows what it found",
+                        body=(
+                            "A lens's reviewed checks were a numbered grid "
+                            "followed by nineteen separate 'Check 7:' "
+                            "paragraphs, so reading one check meant matching "
+                            "numbers between the two. Each check is now one "
+                            "row carrying its own finding."
                         ),
                     ),
                 ),

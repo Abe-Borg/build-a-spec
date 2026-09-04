@@ -217,7 +217,12 @@ def test_every_origin_claim_reaches_the_serialized_and_rendered_report():
         for row in table.rows
         for cell in row.cells
     )
-    assert "Original Lens Claims" in paragraphs
+    # The subsection heading and its 47-word explainer moved to the
+    # methodology section, where they are said once instead of once per
+    # consolidated candidate; each original claim keeps its own line.
+    assert "Original claim 1:" in paragraphs
+    assert "Original claim 2:" in paragraphs
+    assert "Original Lens Claims" not in paragraphs
     for claim in ("Access omitted from execution", "No clearance provision"):
         assert claim in paragraphs
     # The origin's evidence is cited by register number inline and resolved

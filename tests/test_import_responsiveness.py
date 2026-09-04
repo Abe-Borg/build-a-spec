@@ -687,7 +687,13 @@ def test_the_qc_report_download_never_waits_out_the_permission_sweep(monkeypatch
                 io.BytesIO(client.get("/api/qc/export").content)
             ).paragraphs
         ]
-        assert "Input verification pending at export: No" in texts
+        # The pending disclosure is a disclosure, so it renders only while
+        # there is something to disclose; a settled export says nothing about
+        # a condition that does not apply to it.
+        assert not any(
+            text.startswith("Input verification pending at export")
+            for text in texts
+        )
         assert not any(
             "verification was still in progress" in text for text in texts
         )

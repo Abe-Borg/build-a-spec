@@ -397,7 +397,60 @@ def structural_practice_copy(source: SessionState) -> SessionState:
     )
     clone.doc.commit_turn()
     _seed_tutorial_followups(clone, paragraph.uid)
+    _seed_tutorial_project_facts(clone)
     return clone
+
+
+def _seed_tutorial_project_facts(clone: SessionState) -> None:
+    """Put three facts on the "Project facts" panel for the tour to point at.
+
+    The panel renders only while the ledger holds a fact (or the session is
+    linked to a project), so without a fixture the chapter's anchor could
+    never resolve — the follow-ups lesson. One fact per group the panel
+    draws: a project-wide confirmed one, a discipline-wide assumed one, and
+    a section-scoped one recorded by ANOTHER section, so the coordination
+    group is on screen too. Bundled and deterministic — no model call —
+    and deliberately NOT part of ``analyze_tutorial_coverage``: the
+    showcase seeds none, so a gap check there could never be satisfied.
+    """
+    clone.facts.apply(
+        {
+            "record": [
+                {
+                    "statement": (
+                        "Loudoun County has adopted the 2021 Virginia "
+                        "Construction Code; NFPA 13-2022 governs by reference."
+                    ),
+                    "detail": "Confirmed by the county fire marshal's office.",
+                    "scope": "project",
+                    "status": "confirmed",
+                    "source_kind": "user",
+                },
+                {
+                    "statement": (
+                        "Water supply basis: municipal supply with a fire "
+                        "pump; no on-site storage tank."
+                    ),
+                    "scope": "discipline",
+                    "status": "assumed",
+                    "source_kind": "model",
+                },
+                {
+                    "statement": (
+                        "Fire pumps and controllers are specified in "
+                        "Section 21 30 00, not here."
+                    ),
+                    "scope": "section",
+                    "section": "21 30 00",
+                    "status": "confirmed",
+                    "source_kind": "user",
+                },
+            ],
+            "supersede": [],
+        },
+        recorded_in="21 13 13",
+        recorded_at="2026-08-01",
+    )
 
 
 def _seed_tutorial_followups(clone: SessionState, element_id: str) -> None:

@@ -1105,3 +1105,26 @@ def test_an_unmapped_chapter_name_does_not_silently_start_a_practice_fixture():
                 "generation": scenario["generation"],
             },
         ).json()["session"]
+
+
+def test_structural_practice_seeds_one_project_fact_per_panel_group_and_the_showcase_none():
+    """The Project facts panel renders only while the ledger holds a fact,
+    so the chapter's anchor needs a fixture — one fact per group the panel
+    draws, so every group is on screen. Bundled and deterministic; and
+    deliberately not a coverage gap, since the showcase seeds none."""
+    tutorial = build_showcase_session()
+    assert tutorial.facts.items == []
+    scenario = structural_practice_copy(tutorial)
+    facts = scenario.facts.items
+    assert [(f.pid, f.scope, f.status) for f in facts] == [
+        ("pf-1", "project", "confirmed"),
+        ("pf-2", "discipline", "assumed"),
+        ("pf-3", "section", "confirmed"),
+    ]
+    assert facts[2].section == "21 30 00" and facts[2].recorded_in == "21 13 13"
+    assert all(f.active for f in facts)
+    # Deterministic: a second build is the same fixture, and the tutorial
+    # session it was built from is untouched.
+    again = structural_practice_copy(tutorial)
+    assert [f.to_dict() for f in again.facts.items] == [f.to_dict() for f in facts]
+    assert tutorial.facts.items == []

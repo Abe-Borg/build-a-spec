@@ -61,6 +61,8 @@ _STATE_PROBES = {
     "references": lambda s: s.references.to_dict(),
     "suggested_prompts": lambda s: list(s.suggested_prompts),
     "followups": lambda s: s.followups.to_dict(),
+    "facts": lambda s: s.facts.to_dict(),
+    "project_link": lambda s: s.project_link,
     "usage": lambda s: s.usage.snapshot(),
     "last_context_tokens": lambda s: s.last_context_tokens,
     "turn_active": lambda s: s.turn_active,
@@ -142,6 +144,28 @@ def _dirty(session: SessionState) -> None:
         },
         message_index=1,
     )
+    session.facts.apply(
+        {
+            "record": [
+                {
+                    "statement": "The old project's data halls were OH2.",
+                    "status": "confirmed",
+                    "source_kind": "user",
+                }
+            ],
+            "supersede": [],
+        },
+        recorded_in="21 13 13",
+        recorded_at="2026-09-04",
+    )
+    session.project_link = {
+        "project_id": "a" * 32,
+        "name": "The previous project",
+        "brief_updated_at": "2026-09-04T00:00:00+00:00",
+        "seeded_from": ["21 13 13"],
+        "research_rounds_at_seed": 1,
+        "sections": [],
+    }
     session.research.profile_result = RequirementsProfile(
         items=[], research_date="2026-07-01"
     )
@@ -265,6 +289,8 @@ def test_reset_through_the_endpoint_wipes_the_live_session():
     assert payload["reference_docs"] == []
     assert payload["suggested_prompts"] == []
     assert payload["followups"] == []
+    assert payload["project_facts"] == []
+    assert payload["project_link"] is None
     assert payload["import_report"] is None
     assert payload["template_origin"] is None
     assert client.get("/api/usage").json()["totals"] == {}

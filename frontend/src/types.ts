@@ -278,6 +278,144 @@ export interface FollowUp {
   resolved_at: string;
 }
 
+/**
+ * One established project fact (v1.17.0): a project-level input recorded so
+ * the NEXT section of the same project starts knowing it — an adopted
+ * edition as confirmed by the authority, an owner standard, the water-supply
+ * basis, a coordination fact about one section's scope. Server-owned
+ * (`backend/project_facts.py`); `pf-N` ids are minted there and never reused.
+ * Retiring one keeps it in the record (`superseded`, with the reason).
+ */
+export interface ProjectFact {
+  pid: string;
+  statement: string;
+  detail: string;
+  /** How far it reaches: every section, every section of this discipline,
+   *  or one section other sections coordinate with. */
+  scope: "project" | "discipline" | "section";
+  /** The section a section-scoped fact is about ("" for wider scopes). */
+  section: string;
+  /** The discipline a discipline-scoped fact is bound to — the recording
+   *  session's, set server-side ("" for other scopes, or when that session
+   *  had no discipline recorded). */
+  discipline: string;
+  status: "confirmed" | "assumed" | "superseded";
+  source_kind: "user" | "research" | "reference" | "qc" | "model" | "brief";
+  /** A research item id, an attached document id, or a QC finding id. */
+  source_ref: string;
+  /** Section number of the session that recorded it. */
+  recorded_in: string;
+  recorded_at: string;
+  superseded_by: string;
+  supersede_reason: string;
+}
+
+/** One section of a project, as its brief's registry records it. */
+export interface SectionRecord {
+  number: string;
+  title: string;
+  module_id: string;
+  discipline: string;
+  article_titles: string[];
+  ready: boolean;
+  exported_at: string;
+  file_name: string;
+  fact_count: number;
+  research_rounds: number;
+}
+
+/**
+ * This session's place in its project: set when it exports a brief, or when
+ * it was seeded from one. Null for a session that has done neither. The
+ * server owns it (`SessionState.project_link`); it rides the .baspec.
+ */
+export interface ProjectLink {
+  project_id: string;
+  name: string;
+  brief_updated_at: string;
+  /** Section numbers this session was seeded from ([] for an export-only link). */
+  seeded_from: string[];
+  /** Research rounds the seed installed — the "carried" count. */
+  research_rounds_at_seed: number;
+  sections: SectionRecord[];
+}
+
+/** What a project brief holds, as the manifest/inspect routes describe it. */
+export interface ProjectBriefManifest {
+  project_id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  app_version: string;
+  profile: {
+    line: string;
+    complete: boolean;
+    city?: string;
+    state?: string;
+    country?: string;
+    client?: string;
+  };
+  project_type: string;
+  module_id: string;
+  module_available: boolean;
+  discipline: string;
+  edition_overrides: { count: number; standards: string[] };
+  research: {
+    items: number;
+    grounded: number;
+    rounds: number;
+    dimensions_completed: number;
+    dimensions_recorded: number;
+    dimensions_declared: number | null;
+    last_research_date: string;
+    /** Sections whose sessions ran the rounds (stamped rounds only). */
+    sections: string[];
+  } | null;
+  references: {
+    rid: string;
+    title: string;
+    kind: string;
+    token_count: number;
+    truncated: boolean;
+    /** False when the attachment cap would drop it at the seed. */
+    carried: boolean;
+  }[];
+  reference_tokens: number;
+  facts: { active: number; confirmed: number; assumed: number; superseded: number };
+  sections: SectionRecord[];
+  warnings: string[];
+}
+
+/** `POST /api/project/brief/inspect` — a brief, or a sibling .baspec the
+ *  brief was built from, read without touching the session. */
+export interface ProjectBriefInspection {
+  source: "brief" | "project";
+  manifest: ProjectBriefManifest;
+  warnings: string[];
+}
+
+/** What `POST /api/project/brief/start` installed. */
+export interface SeedReport {
+  module_id: string;
+  discipline: string;
+  profile_applied: boolean;
+  project_type: string;
+  edition_overrides: number;
+  research_restored: boolean;
+  research_rounds: number;
+  research_items: number;
+  references_restored: number;
+  /** Titles dropped at the attachment cap, in order. */
+  references_dropped: string[];
+  facts_restored: number;
+  sections: number;
+  template: { template_id: string; name: string } | null;
+  warnings: string[];
+  source: "brief" | "project";
+  project_id: string;
+  name: string;
+}
+
 /** One deterministic lint finding (advisory, never blocking). */
 export interface LintIssue {
   id: string;
@@ -561,6 +699,11 @@ export interface DocPayload {
   open_questions: OpenItem[];
   /** What the model is waiting on the user for; [] when nothing is. */
   followups: FollowUp[];
+  /** Established project facts (v1.17.0); [] when none recorded. */
+  project_facts: ProjectFact[];
+  /** This session's project link; null when it neither exported a brief
+   *  nor was seeded from one. */
+  project_link: ProjectLink | null;
   lint: LintIssue[];
   standards: StandardInfo[];
   profile_complete: boolean;
@@ -763,6 +906,9 @@ export interface ResearchRoundView {
   dimension_statuses: ResearchDimensionView[];
   new_items: number;
   repeat_items: number;
+  /** Section number of the session that ran the round (v1.17.0). Absent
+   *  on rounds recorded before the stamp existed. */
+  section?: string;
 }
 
 export interface ResearchProfileView {
@@ -794,6 +940,12 @@ export interface ResearchCoverageView {
   total: number;
   completed: string[];
   gaps: ResearchCoverageGap[];
+  /** Sections whose research this session inherited through a project
+   *  brief ([] when none) and how many of the profile's rounds came with
+   *  it. Server-derived from the project link — the drawer labels, never
+   *  re-derives. */
+  carried_from?: string[];
+  carried_rounds?: number;
 }
 
 /** Which declared dimensions a round runs. `gaps` is resolved server-side
@@ -1654,6 +1806,7 @@ export type StreamEvent =
   | { type: "figure"; figure: Figure }
   | { type: "suggested_prompts"; prompts: string[] }
   | { type: "followups"; followups: FollowUp[] }
+  | { type: "project_facts"; project_facts: ProjectFact[] }
   | { type: "qc_dispositions"; outcomes: Record<string, string> }
   | { type: "doc_patch"; ops: DocOp[]; doc: SpecDoc }
   | { type: "doc_snapshot"; doc: SpecDoc }
@@ -1825,6 +1978,9 @@ export interface DiagnosticsSnapshot {
     references: number;
     suggested_prompts: number;
     followups: { open: number; resolved: number };
+    project_facts?: { active: number; superseded: number };
+    /** The linked project's id, or null (never the brief's contents). */
+    project_link?: string | null;
     turn_active: boolean;
     stop_requested: boolean;
     last_context_tokens: number | null;
@@ -1994,10 +2150,15 @@ declare global {
          *  path. Resolves to the file's name + base64 bytes, or null when the
          *  dialog was cancelled. `kind` picks the file filter. */
         open_file?: (
-          kind: "project" | "docx" | "reference" | "template",
+          kind: "project" | "docx" | "reference" | "template" | "project_brief",
         ) => Promise<{ name: string; data_b64: string } | null>;
         /** Native Save dialog for a portable reusable starter. */
         save_template?: (templateId: string) => Promise<boolean>;
+        /** Native Save dialog for the project brief (.basproject). Fetched
+         *  from this launch's own backend with the shell's token, so the
+         *  route's refusals (a streaming turn, a tour) come back in its own
+         *  words; `cancelled` stays apart from `error`, as for Save. */
+        save_project_brief?: () => Promise<SaveProjectResult>;
         /** Opens a URL in the user's default system browser instead of
          *  navigating the app window itself. Resolves true if a browser was
          *  launched; false for a rejected (non-http/https) or malformed URL.

@@ -347,6 +347,20 @@ export default function ResearchDrawer({
   // fresh session every area is a "gap" and "retry" would just be the first
   // round wearing a different label.
   const retryable = rounds > 0 && gaps.length > 0;
+  // Research carried from another section of the same project — a session
+  // seeded from a project brief. Server-derived beside the coverage join
+  // (the seed recorded how many rounds it installed); the drawer labels and
+  // never re-derives it from the profile.
+  const carriedFrom = research?.coverage?.carried_from ?? [];
+  const carriedRounds = research?.coverage?.carried_rounds ?? 0;
+  const carriedOnly =
+    carriedFrom.length > 0 && rounds > 0 && rounds <= carriedRounds;
+  const carriedBrief =
+    carriedFrom.length > 0
+      ? ` ${Math.min(carriedRounds, rounds)} of the ${rounds} round(s) so far ${
+          Math.min(carriedRounds, rounds) === 1 ? "was" : "were"
+        } carried from section ${carriedFrom.join(", ")} through the project brief; the next round is briefed on all of it and researches only what is new, changed, or wrong for this section.`
+      : "";
 
   // Attached documents are sent to every dimension, so they are part of what
   // a round costs and part of what it will look for. Said where the user is
@@ -366,7 +380,7 @@ export default function ResearchDrawer({
       : busy
         ? "Finish the current turn first."
         : rounds > 0
-          ? `Run a full round over all ${research?.coverage?.total ?? 0} research areas (uses your API key). It ADDS to the ${items.length} finding(s) you already have — nothing is replaced, a requirement found again is confirmed in place, and each agent is told what this session already established so it looks for what is new, changed, or wrong.${referenceBrief}`
+          ? `Run a full round over all ${research?.coverage?.total ?? 0} research areas (uses your API key). It ADDS to the ${items.length} finding(s) you already have — nothing is replaced, a requirement found again is confirmed in place, and each agent is told what this session already established so it looks for what is new, changed, or wrong.${carriedBrief}${referenceBrief}`
           : `Run grounded web research for this jurisdiction, AHJ, and client (uses your API key).${referenceBrief}`;
   const startLabel = running
     ? board.total > 0
@@ -375,7 +389,9 @@ export default function ResearchDrawer({
     : retryable
       ? "Re-run all areas"
       : rounds > 0
-        ? `Research again (round ${rounds + 1})`
+        ? carriedOnly
+          ? `Research again (round ${rounds + 1}, briefed)`
+          : `Research again (round ${rounds + 1})`
         : "Research requirements";
   // The full round is the quiet option whenever a targeted retry exists —
   // it is the more expensive of the two and rarely the one that is wanted.
@@ -417,6 +433,8 @@ export default function ResearchDrawer({
             {statusLabel[status]}
             {rounds > 0 && ` · ${grounded}/${items.length} grounded`}
             {rounds > 1 && ` over ${rounds} rounds`}
+            {carriedFrom.length > 0 &&
+              ` · carried from ${carriedFrom.join(", ")}`}
             {running && board.total > 0 && (
               <span className="status-shimmer">
                 {` · ${board.doneCount}/${board.total} agents · ${board.totalSearches} searches · ${board.totalFetches} sources`}

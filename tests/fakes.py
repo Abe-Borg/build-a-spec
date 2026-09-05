@@ -69,6 +69,8 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         # fixture pinned to the other one would read as stale to every
         # freshness check and never reach the guard it exists to exercise.
         consolidation_enabled=settings.QC_CONSOLIDATION,
+        # Every input the freshness check rebuilds with (the PR #148 lesson).
+        project_facts=list(session.facts.active()),
     )
     lens_ids = {lens.lens_id for lens in QC_LENSES}
     default_lens_id = "coordination_consistency"

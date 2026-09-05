@@ -56,6 +56,7 @@ class ValidatedProjectData:
     source_map: dict[str, Any] | None
     format_map: dict[str, Any] | None
     template_origin: dict[str, Any] | None
+    project_link: dict[str, Any] | None = None
 
 
 def _sanitize_map_json(value: Any, label: str) -> dict[str, Any] | None:
@@ -222,6 +223,7 @@ def validate_project_data(data: Any) -> ValidatedProjectData:
         # before the export trusts a single origin index.
         format_map=sanitize_format_map(data.get("format_map")),
         template_origin=sanitize_template_origin(data.get("template_origin")),
+        project_link=sanitize_project_link(data.get("project_link")),
     )
 
 
@@ -243,6 +245,8 @@ def save_project(
     source_map: dict[str, Any] | None = None,
     format_map: dict[str, Any] | None = None,
     template_origin: dict[str, Any] | None = None,
+    project_facts: dict[str, Any] | None = None,
+    project_link: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -274,6 +278,11 @@ def save_project(
     # — the guard is on the inner list so an empty store adds no key.
     if followups and followups.get("followups"):
         payload["followups"] = followups
+    # Established project facts ride the file the same optional way — the
+    # guard is on the inner list so an empty ledger adds no key. Superseded
+    # facts travel too: they are the audit trail behind the active ones.
+    if project_facts and project_facts.get("project_facts"):
+        payload["project_facts"] = project_facts
     # Attached reference material is user content: whatever they added must
     # come back when they reopen the project. Same optional shape as figures.
     if reference_docs and reference_docs.get("reference_docs"):
@@ -297,7 +306,110 @@ def save_project(
     safe_template_origin = sanitize_template_origin(template_origin)
     if safe_template_origin is not None:
         payload["template_origin"] = safe_template_origin
+    safe_project_link = sanitize_project_link(project_link)
+    if safe_project_link is not None:
+        payload["project_link"] = safe_project_link
     return payload
+
+
+_PROJECT_LINK_KEYS = {
+    "project_id",
+    "name",
+    "brief_updated_at",
+    "seeded_from",
+    "research_rounds_at_seed",
+    "sections",
+}
+_SECTION_RECORD_KEYS = {
+    "number",
+    "title",
+    "module_id",
+    "discipline",
+    "article_titles",
+    "ready",
+    "exported_at",
+    "file_name",
+    "fact_count",
+    "research_rounds",
+}
+MAX_LINK_SECTIONS = 200
+MAX_LINK_ARTICLE_TITLES = 40
+
+
+def _link_str(value: Any, limit: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:limit]
+
+
+def _link_int(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return min(value, 10_000)
+
+
+def sanitize_section_record(value: Any) -> dict[str, Any] | None:
+    """One sibling-section record of a project link, or None when malformed."""
+    if not isinstance(value, dict):
+        return None
+    if set(value) - _SECTION_RECORD_KEYS:
+        return None
+    number = _link_str(value.get("number"), 40)
+    if not number:
+        return None
+    titles = value.get("article_titles") or []
+    if not isinstance(titles, list):
+        return None
+    return {
+        "number": number,
+        "title": _link_str(value.get("title"), 160),
+        "module_id": _link_str(value.get("module_id"), 80),
+        "discipline": _link_str(value.get("discipline"), 80),
+        "article_titles": [
+            _link_str(title, 160)
+            for title in titles[:MAX_LINK_ARTICLE_TITLES]
+            if isinstance(title, str) and title.strip()
+        ],
+        "ready": value.get("ready") is True,
+        "exported_at": _link_str(value.get("exported_at"), 40),
+        "file_name": _link_str(value.get("file_name"), 240),
+        "fact_count": _link_int(value.get("fact_count")),
+        "research_rounds": _link_int(value.get("research_rounds")),
+    }
+
+
+def sanitize_project_link(value: Any) -> dict[str, Any] | None:
+    """Validate the optional project-brief link (v1.17.0).
+
+    The ``template_origin`` posture: a bounded, source-less provenance marker
+    that survives save/load. Malformed input degrades to ``None`` rather than
+    failing the load — a project whose link is garbage is still a project,
+    it just no longer knows which brief it came from.
+    """
+    if value in (None, {}):
+        return None
+    if not isinstance(value, dict) or set(value) - _PROJECT_LINK_KEYS:
+        return None
+    project_id = _link_str(value.get("project_id"), 64)
+    if not project_id:
+        return None
+    seeded = value.get("seeded_from") or []
+    sections = value.get("sections") or []
+    if not isinstance(seeded, list) or not isinstance(sections, list):
+        return None
+    records = [sanitize_section_record(entry) for entry in sections[:MAX_LINK_SECTIONS]]
+    return {
+        "project_id": project_id,
+        "name": _link_str(value.get("name"), 160),
+        "brief_updated_at": _link_str(value.get("brief_updated_at"), 40),
+        "seeded_from": [
+            _link_str(number, 40)
+            for number in seeded[:MAX_LINK_SECTIONS]
+            if isinstance(number, str) and number.strip()
+        ],
+        "research_rounds_at_seed": _link_int(value.get("research_rounds_at_seed")),
+        "sections": [record for record in records if record is not None],
+    }
 
 
 def sanitize_template_origin(value: Any) -> dict[str, Any] | None:
@@ -490,6 +602,10 @@ def load_project(data: Any, session) -> None:
     # first, so a project without them correctly clears any left over from
     # the session being replaced (load_project never calls session.reset()).
     session.followups.load(data.get("followups"))
+    # Established project facts restore the same lenient way, for the same
+    # reason: a project without them must clear the ones left over from the
+    # session being replaced.
+    session.facts.load(data.get("project_facts"))
     # Attached reference documents restore the same lenient way. ``load()``
     # resets first, so a project without them correctly clears any left over
     # from the session being replaced.
@@ -540,6 +656,9 @@ def load_project(data: Any, session) -> None:
         session._capability_warm_next = None
     session.import_report = restored_import_report
     session.template_origin = staged.template_origin
+    # Assigned unconditionally, like template_origin: loading over a live
+    # session must not inherit the previous session's project link.
+    session.project_link = staged.project_link
     # Keep the assignment conditional so format-1 compatibility callers with
     # an older/lightweight session object continue to load unchanged.
     if hasattr(session, "source_docx_map"):

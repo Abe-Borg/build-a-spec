@@ -125,6 +125,73 @@ sheet, a previous project's section, or meeting notes.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
 
+## Shipped in v1.17.0 (Project briefs — the next section starts where the last one left off)
+
+**A project has many sections, and each one used to begin from nothing.** The
+profile typed in again, the research paid for again (a round is dollars and
+half an hour), the owner's standard attached again, and everything the AHJ or
+the client had settled re-established from memory — or missed. The alternative
+nobody wants is loading the previous section's whole session: the transcript
+and the document are exactly the bloat that eats context and degrades results.
+So the handoff is a **project brief**, a deliberately partial file.
+
+- **What travels, and what deliberately does not.** A `.basproject` carries
+  the project profile and type, the recorded edition overrides with their
+  stated bases, the whole research profile (every round), the attached
+  reference documents (their full text), the established project facts
+  (retired ones included, with reasons), and a registry of the sections
+  drafted so far. It never carries the conversation, the document, figures,
+  the Final QC report or its dismissals, the "Waiting on you" list, or an
+  imported Word source. Excluded standards are a per-section scope decision
+  and stay behind too. The confirm dialog lists what will travel before the
+  file is written.
+- **Start the next section from it — or from the previous section's
+  `.baspec` directly.** New session → *New section in an existing project*
+  reads either file (the brief is built from a project file on the fly),
+  shows a manifest card, and seeds a fresh session in one transaction: version
+  0 is the project setup on an empty page, research reads complete, the
+  references and facts are in their panels. Start blank, pair the brief with a
+  template (the template's body under the project's setup), or import an
+  office master afterwards — the setup survives all three.
+- **Research is briefed, not re-run.** Research is project-level by
+  construction (its inputs are city, state, country, client, discipline), so
+  the carried profile is valid in the new section and the readiness checklist
+  passes it, saying which section it came from. The first Research press
+  there is a *briefed* round: every agent is told what the project already
+  established and looks only for what is new, changed, or wrong. Rounds now
+  record which section ran them, and the findings report labels them.
+- **Project facts: the one asset that had no home.** Adopted editions as
+  confirmed by the AHJ, owner and insurer requirements, site facts, shared
+  design decisions, and what another section specifies used to live only in
+  chat bubbles and provisions. A new **Project facts** panel records them as
+  they are settled — by the model in the same reply, or by you by hand —
+  grouped project-wide / discipline-wide / one section's coordination fact,
+  marked confirmed or assumed with their source. A discipline-wide fact is
+  bound to the discipline that recorded it, so a fire-suppression fact read
+  from an electrical section of the same project shows as another
+  discipline's coordination information, never as that section's own input.
+  They ride every turn's
+  context, and contradicting one makes the model retire it with a reason
+  rather than draft around it. This is not Open items (gaps in the spec) and
+  not Waiting on you (gaps in what the model has been told); it is what has
+  been *settled*.
+- **The research and Final QC teams read the facts too.** Both fan-outs are
+  briefed with them the way they are briefed with attached documents: a
+  researcher does not re-derive a listed fact and reports one its sources
+  contradict as its most valuable item; a reviewer treats a provision that
+  follows a confirmed fact as supported and one that contradicts a fact as a
+  finding. The facts are a hashed Final QC input, so a report retained from
+  before this update reads stale once, and retiring a fact afterwards does
+  the same — exactly like editing the document.
+- **The file is sensitive.** A brief holds the full text of your attached
+  documents and every recorded fact. It is written and read locally — no
+  request is made either way — but share it as deliberately as a project
+  file.
+- **Deferred, on purpose.** Writing a seeded section's additions back into
+  the brief it came from (an append-only merge), a paid harvest pass that
+  proposes facts from a legacy section's transcript, and per-section trimming
+  of the carried research block are documented follow-ups, not built.
+
 ## Shipped in v1.16.0 (Waiting on you — nothing you were asked scrolls away)
 
 **During an interview the model raises questions, surfaces decisions only you

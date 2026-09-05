@@ -144,8 +144,11 @@ QC_LENSES: tuple[QCLens, ...] = (
             "blocks not yet reviewed; provisions whose source_item_id points "
             "at an [UNVERIFIED] research item, at an attached document "
             "(ref-...) whose text does not actually support the provision, "
-            "or at an id that exists in neither. Do NOT propose mass status "
-            "upgrades — flag the specific blocks that need a human decision."
+            "at an established project fact (pf-...) that has been "
+            "superseded or does not say what the provision says, or at an "
+            "id that exists in none of those sets. Do NOT propose mass "
+            "status upgrades — flag the specific blocks that need a human "
+            "decision."
         ),
     ),
 )

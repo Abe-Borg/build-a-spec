@@ -444,7 +444,7 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                 />
                 <Row
                   name="Contents"
-                  value={`${sess.history_len} history messages · ${sess.figures} figures · ${sess.references} references · ${sess.suggested_prompts} suggested prompts · ${sess.followups?.open ?? 0} waiting on you`}
+                  value={`${sess.history_len} history messages · ${sess.figures} figures · ${sess.references} references · ${sess.suggested_prompts} suggested prompts · ${sess.followups?.open ?? 0} waiting on you · ${sess.project_facts?.active ?? 0} project facts`}
                 />
                 <Row
                   name="Flags"

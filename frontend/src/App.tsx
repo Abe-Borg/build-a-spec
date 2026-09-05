@@ -11,6 +11,8 @@ import type {
   ReferenceDocMeta,
   LintIssue,
   FollowUp,
+  ProjectFact,
+  ProjectLink,
   OpenItem,
   QcApplyPreviewBasis,
   QcApplyPreviewResult,
@@ -66,6 +68,11 @@ import {
   QcStartError,
   startQc,
   setFollowupStatus,
+  addProjectFact,
+  updateProjectFact,
+  supersedeProjectFact,
+  startFromProjectBrief,
+  downloadProjectBrief,
   startResearch,
   stopChat,
   stopQc,
@@ -75,6 +82,7 @@ import {
   streamResearch,
   undoDoc,
 } from "./lib/api";
+import type { ProjectFactInput } from "./lib/api";
 import { createLatestAnswer } from "./lib/latestAnswer";
 import {
   emptyDebriefQueue,
@@ -147,6 +155,12 @@ export default function App() {
   // start, unlike the reply chips: an item persists until it is
   // settled, which is the whole point of tracking it.
   const [followups, setFollowups] = useState<FollowUp[]>([]);
+  // Established project facts and this session's place in its project
+  // (v1.17.0). Like the follow-ups, never cleared at turn start: the ledger
+  // persists until a fact is retired, which is the whole point of it.
+  const [projectFacts, setProjectFacts] = useState<ProjectFact[]>([]);
+  const [projectLink, setProjectLink] = useState<ProjectLink | null>(null);
+  const [briefStarting, setBriefStarting] = useState(false);
   const [lintIssues, setLintIssues] = useState<LintIssue[]>([]);
   const [standards, setStandards] = useState<StandardInfo[]>([]);
   const [profileComplete, setProfileComplete] = useState(false);
@@ -230,6 +244,7 @@ export default function App() {
     qc: 0,
     openItems: 0,
     followups: 0,
+    projectFacts: 0,
   });
   // Consumed once per app launch, and owned here rather than in Chat because
   // the chat pane remounts on a new session (see sessionNonce below) — read
@@ -257,6 +272,12 @@ export default function App() {
     | { kind: "new-session" }
     | { kind: "open-project"; file: File }
     | { kind: "start-template"; templateId: string }
+    | {
+        kind: "start-brief";
+        file: File;
+        discipline?: string;
+        templateId?: string;
+      }
     | null
   >(null);
   // A file upload in flight (master import / project open). Reading, parsing
@@ -481,6 +502,8 @@ export default function App() {
         setDoc(payload.doc);
         setOpenItems(payload.open_questions);
         setFollowups(payload.followups ?? []);
+        setProjectFacts(payload.project_facts ?? []);
+        setProjectLink(payload.project_link ?? null);
         setLintIssues(payload.lint);
         setStandards(payload.standards);
         setProfileComplete(payload.profile_complete);
@@ -1438,6 +1461,11 @@ export default function App() {
           // call. Live so a check-off animates as it happens; the committed
           // value re-syncs through refreshDoc on turn_complete or error.
           setFollowups(evt.followups);
+        } else if (evt.type === "project_facts") {
+          // The facts ledger after a record_project_facts call — live, so a
+          // retire animates as it happens; the committed value re-syncs
+          // through refreshDoc on turn_complete or error.
+          setProjectFacts(evt.project_facts);
         } else if (evt.type === "qc_dispositions") {
           // apply_qc_fixes committed dispositions with this turn — pull the
           // fresh finding statuses into the drawer/report immediately.
@@ -1619,6 +1647,49 @@ export default function App() {
     [refreshDoc, refreshReadiness, currentWorkspaceLease],
   );
 
+  /** One shape for the panel's three fact mutations: adopt the returned
+   *  ledger, then refresh readiness AND Final QC — the facts are QC inputs
+   *  (the manifest fingerprints them), so a change flips a retained review
+   *  stale, and both checklists compare against it. Resolves to the server's
+   *  reason on failure so the panel can show it beside the form instead of
+   *  silently dropping what the user typed; a 409/404 also resyncs. */
+  const projectFactMutation = useCallback(
+    async (mutate: () => Promise<ProjectFact[]>): Promise<string | null> => {
+      const epoch = workspaceEpochRef.current;
+      try {
+        const next = await mutate();
+        if (workspaceEpochRef.current !== epoch) return null;
+        setProjectFacts(next);
+        refreshReadiness();
+        refreshQc();
+        return null;
+      } catch (error) {
+        refreshDoc();
+        return error instanceof Error ? error.message : String(error);
+      }
+    },
+    [refreshDoc, refreshReadiness, refreshQc],
+  );
+  const addProjectFactHandler = useCallback(
+    (fact: ProjectFactInput) =>
+      projectFactMutation(() => addProjectFact(fact, currentWorkspaceLease())),
+    [projectFactMutation, currentWorkspaceLease],
+  );
+  const updateProjectFactHandler = useCallback(
+    (pid: string, changes: Partial<ProjectFactInput>) =>
+      projectFactMutation(() =>
+        updateProjectFact(pid, changes, currentWorkspaceLease()),
+      ),
+    [projectFactMutation, currentWorkspaceLease],
+  );
+  const supersedeProjectFactHandler = useCallback(
+    (pid: string, reason: string, replacement?: ProjectFactInput) =>
+      projectFactMutation(() =>
+        supersedeProjectFact(pid, { reason, replacement }, currentWorkspaceLease()),
+      ),
+    [projectFactMutation, currentWorkspaceLease],
+  );
+
   /** How many assistant bubbles the transcript holds — the same turn ordinal
    *  the server stamps on a tracked item, so "raised N replies ago" agrees
    *  with what the model was told. */
@@ -1664,6 +1735,7 @@ export default function App() {
       qc: 0,
       openItems: 0,
       followups: 0,
+      projectFacts: 0,
     });
     // A composer prefill staged by the old session's review queue. Nonce 0 is
     // what makes the remounted Composer ignore it instead of re-prefilling.
@@ -1689,6 +1761,8 @@ export default function App() {
     setDoc(null);
     setOpenItems([]);
     setFollowups([]);
+    setProjectFacts([]);
+    setProjectLink(null);
     setLintIssues([]);
     setStandards([]);
     setProfileComplete(false);
@@ -1751,6 +1825,8 @@ export default function App() {
     doc: SpecDoc;
     open_questions: OpenItem[];
     followups: FollowUp[];
+    project_facts?: ProjectFact[];
+    project_link?: ProjectLink | null;
     lint: LintIssue[];
     standards: StandardInfo[];
     profile_complete: boolean;
@@ -1772,6 +1848,8 @@ export default function App() {
     setDoc(payload.doc);
     setOpenItems(payload.open_questions);
     setFollowups(payload.followups ?? []);
+    setProjectFacts(payload.project_facts ?? []);
+    setProjectLink(payload.project_link ?? null);
     setLintIssues(payload.lint);
     setStandards(payload.standards);
     setProfileComplete(payload.profile_complete);
@@ -1811,6 +1889,8 @@ export default function App() {
         doc: merged.doc,
         open_questions: merged.open_questions ?? [],
         followups: merged.followups ?? [],
+        project_facts: merged.project_facts ?? [],
+        project_link: merged.project_link ?? null,
         lint: merged.lint ?? [],
         standards: merged.standards ?? [],
         profile_complete: merged.profile_complete ?? false,
@@ -2067,6 +2147,41 @@ export default function App() {
    *  session-replacing action behind it. */
   const onSaveProject = (saveAs?: boolean) => saveProjectFile({ saveAs });
 
+  /** Export the project brief: the native Save dialog when the shell offers
+   *  it, else a browser download. Never establishes a save target — a brief
+   *  is the handoff to the project's next section, not this session's file.
+   *  The shell's refusals (a streaming turn, a tour) come back in its own
+   *  words, same as Save. */
+  const saveProjectBrief = async (): Promise<SaveOutcome> => {
+    const api = window.pywebview?.api;
+    if (api?.save_project_brief) {
+      try {
+        const result = await api.save_project_brief();
+        return {
+          ok: !!result?.ok,
+          cancelled: !!result?.cancelled,
+          error: result?.error ?? "",
+        };
+      } catch {
+        return {
+          ok: false,
+          cancelled: false,
+          error: "The project brief could not be saved.",
+        };
+      }
+    }
+    try {
+      await downloadProjectBrief();
+      return { ok: true, cancelled: false, error: "" };
+    } catch (e) {
+      return {
+        ok: false,
+        cancelled: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  };
+
   /** Does the session hold work worth saving? Authoritative server check
    *  (same predicate as the close prompt), with a local fallback if it fails. */
   const isUnsaved = async (): Promise<boolean> => {
@@ -2133,6 +2248,85 @@ export default function App() {
     }
   };
 
+  /** Seed the next section of a project from its brief (or a sibling
+   *  section's .baspec). Mirrors doInstantiateTemplate: one server
+   *  transaction, the session bundle applied, the panes discarded, and a
+   *  terse chat marker saying what was carried — the note is the one place
+   *  a user sees the seed's counts without opening the panels. */
+  async function doStartFromBrief(
+    file: File,
+    opts: { discipline?: string; templateId?: string } = {},
+  ) {
+    if (briefStarting) return;
+    setBriefStarting(true);
+    try {
+      const session = await startFromProjectBrief(file, opts);
+      if (!applySessionBundle(session)) return;
+      discardPaneState();
+      onboardingRef.current?.syncSessionIdentity(session);
+      const seed = session.seed;
+      const from = session.project_link?.seeded_from ?? [];
+      addNote(
+        `Started the next section from project brief “${seed.name}”` +
+          (from.length ? ` (section ${from.join(", ")})` : "") +
+          `: carried the project profile, ${seed.edition_overrides} recorded edition${
+            seed.edition_overrides === 1 ? "" : "s"
+          }, ${seed.research_rounds} research round${
+            seed.research_rounds === 1 ? "" : "s"
+          } (${seed.research_items} finding${seed.research_items === 1 ? "" : "s"}), ${
+            seed.references_restored
+          } reference document${seed.references_restored === 1 ? "" : "s"}, and ${
+            seed.facts_restored
+          } project fact${seed.facts_restored === 1 ? "" : "s"}.` +
+          (seed.template ? ` The document body comes from the template “${seed.template.name}”.` : "") +
+          " Tell me which section this is and I will draft from what the project already knows.",
+      );
+      const lines = [
+        ...seed.warnings,
+        ...(seed.references_dropped.length
+          ? [
+              `Not carried (past the attachment cap): ${seed.references_dropped.join(", ")}`,
+            ]
+          : []),
+      ];
+      if (lines.length) {
+        setImportNotice({
+          tone: "warn",
+          name: "Project brief",
+          title: "Started with notes from the brief",
+          lines,
+        });
+      }
+      setNewSessionOpen(false);
+      setTemplatesOnly(false);
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: newId(),
+          role: "assistant",
+          text: `Could not start from that project brief: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          error: true,
+        },
+      ]);
+    } finally {
+      setBriefStarting(false);
+    }
+  }
+
+  const requestStartFromBrief = async (
+    file: File,
+    opts: { discipline?: string; templateId?: string } = {},
+  ) => {
+    if (await isUnsaved()) {
+      setSaveGate({ kind: "start-brief", file, ...opts });
+    } else {
+      void doStartFromBrief(file, opts);
+    }
+  };
+
   const openTemplateStudio = () => {
     setTemplatesOnly(true);
     setNewSessionOpen(true);
@@ -2144,7 +2338,14 @@ export default function App() {
       setTemplatesOnly(false);
       setNewSessionOpen(true);
     } else if (gate.kind === "open-project") void doLoadProject(gate.file);
-    else void doInstantiateTemplate(gate.templateId);
+    else if (gate.kind === "start-template") {
+      void doInstantiateTemplate(gate.templateId);
+    } else {
+      void doStartFromBrief(gate.file, {
+        discipline: gate.discipline,
+        templateId: gate.templateId,
+      });
+    }
   };
 
   const onGateSave = async () => {
@@ -2268,7 +2469,7 @@ export default function App() {
    * where the input works normally.
    */
   const nativeOpenFile = async (
-    kind: "project" | "docx" | "reference" | "template",
+    kind: "project" | "docx" | "reference" | "template" | "project_brief",
   ): Promise<File | null | undefined> => {
     const api = window.pywebview?.api;
     if (!api?.open_file) return undefined; // browser/dev → HTML input
@@ -2421,7 +2622,7 @@ export default function App() {
       />
       <NewSessionDialog
         open={newSessionOpen}
-        busy={busy || templateStarting}
+        busy={busy || templateStarting || briefStarting}
         hasContent={hasContent}
         templatesOnly={templatesOnly}
         onCancel={() => {
@@ -2431,6 +2632,8 @@ export default function App() {
         onBlankSlate={() => void startBlankSession()}
         onStartTemplate={(templateId) => void requestStartTemplate(templateId)}
         openTemplateFile={() => nativeOpenFile("template")}
+        onStartBrief={(file, opts) => void requestStartFromBrief(file, opts)}
+        openBriefFile={() => nativeOpenFile("project_brief")}
       />
       {/* Closing (✕ / backdrop) any tour popup confirms here first, so the
           guided tour is never dismissed by accident. Elevated above the
@@ -2543,7 +2746,9 @@ export default function App() {
             ? "Open a different project?"
             : saveGate?.kind === "start-template"
               ? "Start from this template?"
-              : "Start a new session?"
+              : saveGate?.kind === "start-brief"
+                ? "Start the next section of the project?"
+                : "Start a new session?"
         }
         body="You have unsaved work in this session. Save it to a project file first, or continue without saving — this can't be undone."
         saveLabel={
@@ -2588,6 +2793,12 @@ export default function App() {
           followups={followups}
           followupTurn={assistantBubbleCount}
           onSetFollowupStatus={setFollowupStatusHandler}
+          projectFacts={projectFacts}
+          projectLink={projectLink}
+          onAddProjectFact={addProjectFactHandler}
+          onUpdateProjectFact={updateProjectFactHandler}
+          onSupersedeProjectFact={supersedeProjectFactHandler}
+          onExportProjectBrief={saveProjectBrief}
           lintIssues={lintIssues}
           standards={standards}
           profileComplete={profileComplete}

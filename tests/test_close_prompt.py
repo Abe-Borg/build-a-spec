@@ -192,6 +192,7 @@ def test_untrusted_page_cannot_use_any_public_native_bridge(monkeypatch):
     assert controller.save_project()["ok"] is False
     assert controller.save_project_as()["ok"] is False
     assert controller.save_template("personal:" + "a" * 32) is False
+    assert controller.save_project_brief()["ok"] is False
     assert controller.open_file("project") is None
     assert controller.open_external_link("https://example.com/") is False
 
@@ -665,6 +666,8 @@ def test_native_file_filters_are_pywebview_valid():
         main._REFERENCE_OPEN_FILE_TYPES,
         main._TEMPLATE_OPEN_FILE_TYPES,
         main._TEMPLATE_SAVE_FILE_TYPES,
+        main._PROJECT_BRIEF_OPEN_FILE_TYPES,
+        main._PROJECT_BRIEF_SAVE_FILE_TYPES,
     ):
         for entry in group:
             assert re.match(_PYWEBVIEW_FILE_FILTER, entry), (
@@ -773,3 +776,145 @@ def test_filename_from_disposition_prefers_the_encoded_form():
     assert main._filename_from_disposition('attachment; filename="plain.docx"') == "plain.docx"
     assert main._filename_from_disposition("") == main._OPEN_IN_WORD_FALLBACK_NAME
     assert main._filename_from_disposition('attachment; filename="../x/evil"') == "evil.docx"
+
+
+# --- Project brief (native save) ----------------------------------------------
+
+
+def test_save_project_brief_writes_the_fetched_bytes_through_a_native_dialog(
+    monkeypatch, tmp_path
+):
+    """The bridge fetches the brief from its own backend with the shell's
+    token and writes exactly those bytes where the Save dialog points."""
+    _fake_webview(monkeypatch)
+    fetched: list[tuple[str, dict]] = []
+
+    def fake_fetch(backend, path, **kwargs):
+        assert backend.api_token == "token"
+        fetched.append((path, kwargs))
+        return b'{"kind": "buildaspec-project-brief"}', "buildaspec-project-client-x.basproject"
+
+    monkeypatch.setattr(main, "_fetch_backend_bytes", fake_fetch)
+    target = tmp_path / "chosen.basproject"
+    window = _FakeWindow(dialog_path=str(target))
+    controller = main._CloseController(None, backend=_fake_backend())
+    controller._bind(window)
+
+    result = controller.save_project_brief()
+
+    assert result["ok"] is True, result
+    assert result["cancelled"] is False and result["error"] == ""
+    assert result["target"] == str(target)
+    assert target.read_bytes() == b'{"kind": "buildaspec-project-brief"}'
+    assert fetched == [
+        (
+            "/api/project/brief",
+            {"fallback_name": main._PROJECT_BRIEF_FALLBACK_NAME, "suffix": ".basproject"},
+        )
+    ]
+    (_, kwargs), = window.dialog_calls
+    assert kwargs["save_filename"] == "buildaspec-project-client-x.basproject"
+    joined = " ".join(kwargs["file_types"])
+    assert ".basproject" in joined and ".baspec" not in joined
+    assert not list(tmp_path.glob(".buildaspec-brief-*"))  # no temp file left behind
+
+
+def test_save_project_brief_cancelled_dialog_is_a_cancel_not_an_error(monkeypatch):
+    _fake_webview(monkeypatch)
+    monkeypatch.setattr(
+        main, "_fetch_backend_bytes", lambda b, p, **kw: (b"{}", "x.basproject")
+    )
+    window = _FakeWindow(dialog_path=None)
+    controller = main._CloseController(None, backend=_fake_backend())
+    controller._bind(window)
+
+    result = controller.save_project_brief()
+
+    assert result == main._CloseController._save_result(False, cancelled=True)
+    assert result["cancelled"] is True and result["error"] == ""
+
+
+def test_save_project_brief_reports_the_servers_own_refusal(monkeypatch):
+    """A 409 from the route (a streaming turn, a tour) reaches the user in
+    the server's words, and no dialog opens for a file that will not come."""
+    _fake_webview(monkeypatch)
+
+    def failing_fetch(backend, path, **kwargs):
+        raise RuntimeError("Wait for the current reply to finish before exporting a project brief.")
+
+    monkeypatch.setattr(main, "_fetch_backend_bytes", failing_fetch)
+    window = _FakeWindow(dialog_path="/never/asked.basproject")
+    controller = main._CloseController(None, backend=_fake_backend())
+    controller._bind(window)
+
+    result = controller.save_project_brief()
+
+    assert result["ok"] is False and result["cancelled"] is False
+    assert "current reply" in result["error"]
+    assert window.dialog_calls == []
+
+
+def test_save_project_brief_refuses_a_browser_session_and_a_tour(monkeypatch):
+    no_backend = main._CloseController(None)
+    result = no_backend.save_project_brief()
+    assert result["ok"] is False and "desktop app" in result["error"]
+
+    from backend import sessions
+
+    _fake_webview(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "_fetch_backend_bytes",
+        lambda b, p, **kw: (_ for _ in ()).throw(AssertionError("must not fetch")),
+    )
+    window = _FakeWindow(dialog_path="/never/asked.basproject")
+    controller = main._CloseController(None, backend=_fake_backend())
+    controller._bind(window)
+    sessions.workspace_manager().begin_tutorial(request_id="brief-save-in-a-tour")
+    try:
+        result = controller.save_project_brief()
+    finally:
+        sessions.reset_session()
+    assert result["ok"] is False and result["cancelled"] is False
+    assert "Return to your project" in result["error"]
+    assert window.dialog_calls == []
+
+
+def test_open_file_project_brief_filter_offers_a_brief_or_a_sibling_project(
+    tmp_path, monkeypatch
+):
+    _fake_webview(monkeypatch)
+    target = tmp_path / "project.basproject"
+    target.write_bytes(b"{}")
+    window = _FakeWindow(dialog_path=str(target))
+    controller = _controller_with(window)
+
+    result = controller.open_file("project_brief")
+
+    assert result is not None and result["name"] == "project.basproject"
+    (_, kwargs), = window.dialog_calls
+    joined = " ".join(kwargs.get("file_types", ()))
+    assert ".basproject" in joined and ".baspec" in joined
+    assert ".bastemplate" not in joined
+
+
+def test_the_disposition_helper_keeps_a_brief_a_brief_and_word_a_docx():
+    """The keyword defaults are what keep ``open_in_word`` byte-identical:
+    without them a ``.basproject`` would have been saved as ``….basproject.docx``."""
+    assert (
+        main._filename_from_disposition(
+            'attachment; filename="buildaspec-project-x.basproject"',
+            fallback=main._PROJECT_BRIEF_FALLBACK_NAME,
+            suffix=".basproject",
+        )
+        == "buildaspec-project-x.basproject"
+    )
+    assert (
+        main._filename_from_disposition(
+            "", fallback=main._PROJECT_BRIEF_FALLBACK_NAME, suffix=".basproject"
+        )
+        == main._PROJECT_BRIEF_FALLBACK_NAME
+    )
+    # The Word default is untouched — and it is why the keyword exists.
+    assert main._filename_from_disposition('attachment; filename="x.basproject"') == "x.basproject.docx"
+    assert main._filename_from_disposition("") == main._OPEN_IN_WORD_FALLBACK_NAME

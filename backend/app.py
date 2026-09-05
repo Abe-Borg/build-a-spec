@@ -70,6 +70,7 @@ When ``frontend/dist`` exists (production / packaged), it is served at
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -133,6 +134,7 @@ from .llm.prompts import (
 )
 from .project_profile import ProjectProfile
 from .research.engine import (
+    RequirementsProfile,
     research_coverage,
     research_manifest_facts,
     validate_research_facts,
@@ -161,6 +163,20 @@ from .spec_doc.docx_export import (
     export_filename,
     redline_filename,
 )
+from .project_brief import (
+    PROJECT_BRIEF_MEDIA_TYPE,
+    ProjectBrief,
+    ProjectBriefError,
+    ProjectBriefTooLargeError,
+    brief_bytes,
+    brief_filename,
+    brief_from_sibling_project,
+    brief_manifest,
+    build_project_brief,
+    parse_brief_json,
+    parse_project_brief,
+)
+from .project_facts import ProjectFactError
 from .reference_docs import ReferenceDocError, prepare_reference_text
 from .reference_extract import (
     extract_reference_document,
@@ -174,7 +190,12 @@ from .spec_doc.importer import (
     parse_master_docx,
 )
 from .spec_doc.model import SpecSection, iter_paragraphs
-from .spec_doc.project import chat_transcript, load_project
+from .spec_doc.project import (
+    PROJECT_KIND,
+    chat_transcript,
+    load_project,
+    sanitize_project_link,
+)
 from .spec_doc.project_package import (
     PACKAGE_MEDIA_TYPE,
     ProjectPackageError,
@@ -397,6 +418,45 @@ class EditDocRequest(BaseModel):
 class WorkspaceMutationRequest(BaseModel):
     workspace_id: int | None = None
     generation: int | None = None
+
+
+class ProjectFactCreateRequest(WorkspaceMutationRequest):
+    """Body for ``POST /api/project-facts`` — a fact the user types in."""
+
+    statement: str = ""
+    detail: str = ""
+    scope: str = "project"
+    section: str = ""
+    status: str = "confirmed"
+    source_ref: str = ""
+
+
+class ProjectFactUpdateRequest(WorkspaceMutationRequest):
+    """Body for ``PATCH /api/project-facts/{pid}`` — only the fields sent change."""
+
+    statement: str | None = None
+    detail: str | None = None
+    scope: str | None = None
+    section: str | None = None
+    status: str | None = None
+    source_ref: str | None = None
+
+
+class ProjectFactSupersedeRequest(WorkspaceMutationRequest):
+    """Body for ``POST /api/project-facts/{pid}/supersede``.
+
+    ``reason`` is the user's one line on what changed (the store records a
+    disclosed default when it is blank); ``statement`` and its companions
+    describe the replacement fact, when there is one.
+    """
+
+    reason: str = ""
+    statement: str = ""
+    detail: str = ""
+    scope: str = ""
+    section: str = ""
+    status: str = ""
+    source_ref: str = ""
 
 
 class FollowUpStatusRequest(WorkspaceMutationRequest):
@@ -639,6 +699,34 @@ def _prepare_master_import(
     finally:
         temp_path.unlink(missing_ok=True)
     return result, report, source_context
+
+
+def _parse_brief_upload(data: bytes) -> tuple[ProjectBrief, str]:
+    """Parse a project-brief upload — the blocking half, worker thread only.
+
+    Accepts a ``.basproject`` OR a sibling section's ``.baspec`` (the
+    shortcut: the brief is built from that section's own file), sniffed by
+    the ZIP magic and then by the JSON ``kind``. Returns ``(brief, source)``
+    with ``source`` one of ``"brief"`` / ``"project"``. Raises the
+    ``ProjectBriefError`` / ``ProjectPackageError`` / ``ValueError`` family
+    the routes map to a 400, and ``ProjectPackageTooLargeError`` to a 413.
+    """
+    if data.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        return brief_from_sibling_project(data), "project"
+    try:
+        parsed = parse_brief_json(data)
+    except ProjectBriefTooLargeError as too_large:
+        # Past the brief cap but under the package ceiling: a large legacy
+        # JSON project is the only thing that can still be. When it is not
+        # one either, the brief's own message (the MiB figure) is the
+        # honest answer, not the package parser's.
+        try:
+            return brief_from_sibling_project(data), "project"
+        except (ProjectPackageError, ValueError):
+            raise too_large from None
+    if parsed.get("kind") == PROJECT_KIND:
+        return brief_from_sibling_project(data), "project"
+    return parse_project_brief(data), "brief"
 
 
 def _prepare_reference_upload(
@@ -1152,6 +1240,7 @@ def _qc_export_current_state(
         consolidation_enabled=settings.QC_CONSOLIDATION,
         batch_verification=settings.QC_BATCH_VERIFICATION,
         reference_docs=list(session.references.docs),
+        project_facts=list(session.facts.active()),
     )
     matches = _qc_matches_current_inputs(
         session, result, source_guard=source_guard
@@ -1445,6 +1534,10 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         # chips: boot, project load, undo/redo and the failed-turn
         # refresh all resync the panel from this one place.
         "followups": session.followups.snapshot(),
+        # Established project facts (v1.17.0) and the project this section
+        # belongs to. Same one-way resync posture as the two lists above.
+        "project_facts": session.facts.snapshot(),
+        "project_link": session.project_link,
         # Import honesty/recovery metadata. Native .baspec packages carry the
         # source as a separate binary member; legacy JSON remains source-less.
         "import_report": session.import_report,
@@ -1519,6 +1612,7 @@ def _research_readiness(session: SessionState) -> tuple[bool, str]:
             f"({len(coverage.completed)} of {coverage.total} dimensions "
             "completed). Press Research again to retry.",
         )
+    carried, nudge = _carried_research_note(session, profile)
     optional_gaps = coverage.optional_gaps
     if optional_gaps:
         named = "; ".join(
@@ -1532,9 +1626,57 @@ def _research_readiness(session: SessionState) -> tuple[bool, str]:
         return (
             True,
             f"Requirements research complete for {len(coverage.completed)} of "
-            f"{coverage.total} dimensions. Absent optional coverage: {named}.",
+            f"{coverage.total} dimensions{carried}. Absent optional coverage: "
+            f"{named}.{nudge}",
         )
-    return True, "Requirements research complete."
+    return True, f"Requirements research complete{carried}.{nudge}"
+
+
+def _carried_research(session: SessionState) -> tuple[list[str], int]:
+    """``(source sections, carried round count)`` for a section seeded from
+    a project brief — ``([], 0)`` for any other session.
+
+    The link is the authority, not the round stamps: a round run before
+    rounds recorded their section carries no stamp, and the seed recorded
+    how many rounds it installed. Plain attribute reads (the readiness /
+    ``_doc_payload`` posture).
+    """
+    link = session.project_link if isinstance(session.project_link, dict) else None
+    if not link:
+        return [], 0
+    at_seed = int(link.get("research_rounds_at_seed", 0) or 0)
+    if at_seed <= 0:
+        return [], 0
+    sources = [str(s) for s in (link.get("seeded_from") or []) if str(s).strip()]
+    return sources, at_seed
+
+
+def _carried_research_note(
+    session: SessionState, profile: RequirementsProfile
+) -> tuple[str, str]:
+    """The readiness disclosure for research a section did not run itself.
+
+    Carried research PASSES readiness (owner decision, 2026-09-04: research
+    is project-level, and the rounds were paid for) — but never silently.
+    Returns ``(parenthetical, nudge)``: the parenthetical names the source
+    sections and the rounds; the nudge to press Research again renders
+    only while NO round has run in this section, because that press is a
+    briefed round (``established_facts_for``), and once one has run the
+    ordinary detail returns with just the carried count. Both are ``""``
+    for a session that carried nothing.
+    """
+    sources, at_seed = _carried_research(session)
+    if not sources or at_seed <= 0:
+        return "", ""
+    total = profile.round_count
+    named = ", ".join(sources)
+    if total <= at_seed:
+        return (
+            f" (carried from {named}; {total} round(s); last research "
+            f"{profile.research_date or 'unknown'})",
+            " Press Research again for a briefed round on this section.",
+        )
+    return f" ({min(at_seed, total)} of {total} rounds carried from {named})", ""
 
 
 RESEARCH_SCOPE_ALL = "all"
@@ -1557,6 +1699,7 @@ def _research_coverage_payload(session: SessionState) -> dict:
     coverage = research_coverage(
         session.module, session.research.profile_result
     )
+    carried_from, carried_rounds = _carried_research(session)
     return {
         "total": coverage.total,
         "completed": list(coverage.completed),
@@ -1568,6 +1711,11 @@ def _research_coverage_payload(session: SessionState) -> dict:
             }
             for gap in coverage.gaps
         ],
+        # Which sections' research this session inherited, and how many of
+        # the profile's rounds came with it — so the drawer labels carried
+        # rounds without re-deriving the seed from the profile.
+        "carried_from": carried_from,
+        "carried_rounds": carried_rounds,
     }
 
 
@@ -4292,6 +4440,146 @@ def create_app(
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
 
+    # --- Project facts (the user's side of the ledger) ----------------------
+    #
+    # The model writes the ledger through the ``record_project_facts`` chat
+    # tool; these are the user's affordances — add a fact by hand, correct
+    # one, retire one with a reason. Unlike the follow-ups panel there IS a
+    # create route: "I know the AHJ adopted the 2021 code" is exactly the
+    # kind of thing a user types in before the interview reaches it.
+
+    def _fact_outcome_response(
+        outcome: str, pid: str, facts: list[dict[str, Any]]
+    ) -> JSONResponse:
+        if outcome == "active":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "A turn is generating — try again in a moment.",
+                },
+                status_code=409,
+            )
+        if outcome == "missing":
+            return JSONResponse(
+                {"ok": False, "error": f"No project fact {pid!r}."},
+                status_code=404,
+            )
+        return JSONResponse({"ok": True, "project_facts": facts})
+
+    def _invalid_fact_response(exc: Exception) -> JSONResponse:
+        return JSONResponse(
+            {"ok": False, "error": str(exc), "code": "invalid_fact"},
+            status_code=400,
+        )
+
+    @app.post("/api/project-facts")
+    def project_fact_create(
+        body: ProjectFactCreateRequest | None = None,
+    ) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        payload = {
+            "statement": body.statement if body else "",
+            "detail": body.detail if body else "",
+            "scope": (body.scope if body else "") or "project",
+            "section": body.section if body else "",
+            "status": (body.status if body else "") or "confirmed",
+            "source_ref": body.source_ref if body else "",
+        }
+        try:
+            with sessions.active_write(lease.workspace_id):
+                sessions.workspace_manager().assert_fresh(lease)
+                try:
+                    outcome, facts = session.add_project_fact_if_idle(payload)
+                except ProjectFactError as exc:
+                    return _invalid_fact_response(exc)
+                response = _fact_outcome_response(outcome, "", facts)
+            if outcome == "ok":
+                _trace_capture.app_event(
+                    "project_fact", action="add", pid=facts[-1]["pid"], ok=True
+                )
+            return response
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+
+    @app.patch("/api/project-facts/{pid}")
+    def project_fact_update(
+        pid: str, body: ProjectFactUpdateRequest | None = None
+    ) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        changes = {
+            key: value
+            for key, value in (body.model_dump() if body else {}).items()
+            if key not in ("workspace_id", "generation") and value is not None
+        }
+        try:
+            with sessions.active_write(lease.workspace_id):
+                sessions.workspace_manager().assert_fresh(lease)
+                try:
+                    outcome, facts = session.update_project_fact_if_idle(pid, changes)
+                except ProjectFactError as exc:
+                    return _invalid_fact_response(exc)
+                response = _fact_outcome_response(outcome, pid, facts)
+            if outcome == "ok":
+                _trace_capture.app_event(
+                    "project_fact", action="update", pid=pid, ok=True
+                )
+            return response
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+
+    @app.post("/api/project-facts/{pid}/supersede")
+    def project_fact_supersede(
+        pid: str, body: ProjectFactSupersedeRequest | None = None
+    ) -> JSONResponse:
+        lease = sessions.get_workspace()
+        if not _mutation_lease_matches(lease, body):
+            return _stale_tutorial_response()
+        session = lease.session
+        reason = ((body.reason if body else "") or "").strip()
+        replacement: dict[str, Any] | None = None
+        if body and body.statement.strip():
+            replacement = {
+                key: value
+                for key, value in (
+                    ("statement", body.statement),
+                    ("detail", body.detail),
+                    ("scope", body.scope),
+                    ("section", body.section),
+                    ("status", body.status),
+                    ("source_ref", body.source_ref),
+                )
+                if value
+            }
+            # A replacement the user typed is the user's word.
+            replacement.setdefault("source_kind", "user")
+        try:
+            with sessions.active_write(lease.workspace_id):
+                sessions.workspace_manager().assert_fresh(lease)
+                try:
+                    outcome, facts = session.supersede_project_fact_if_idle(
+                        pid, reason, replacement=replacement
+                    )
+                except ProjectFactError as exc:
+                    return _invalid_fact_response(exc)
+                response = _fact_outcome_response(outcome, pid, facts)
+            if outcome == "ok":
+                _trace_capture.app_event(
+                    "project_fact",
+                    action="supersede",
+                    pid=pid,
+                    replaced=replacement is not None,
+                    ok=True,
+                )
+            return response
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+
     # --- Reference documents ------------------------------------------------
 
     @app.get("/api/references")
@@ -4778,6 +5066,10 @@ def create_app(
             module = session.module
             discipline = effective_discipline(session)
             profile_data = dict(session.doc.doc.project_profile)
+            # The round is stamped with the section that ran it (a section
+            # seeded from a project brief tells carried rounds from its
+            # own by this). Read under the same guard as the profile.
+            section_label = " ".join(session.doc.doc.number.split())
         profile = ProjectProfile.from_dict(profile_data)
         if profile is None or not profile.is_complete():
             return JSONResponse(
@@ -4868,6 +5160,8 @@ def create_app(
                 # Snapshot the list under the guard we already hold: the
                 # round is briefed on what was attached when it started.
                 reference_docs=list(session.references.docs),
+                project_facts=list(session.facts.active()),
+                section_label=section_label,
                 usage_sink=lambda u, g=run_generation: (
                     session.add_usage_if_current(g, "research", u)
                 ),
@@ -5091,6 +5385,7 @@ def create_app(
                 # Snapshot under the guard we already hold: the review is
                 # run against what was attached when it started.
                 reference_docs=list(session.references.docs),
+                project_facts=list(session.facts.active()),
                 remembered_dismissed=remembered,
                 usage_sink=lambda cat, u, g=run_generation: (
                     session.add_usage_if_current(g, cat, u)
@@ -5877,6 +6172,260 @@ def create_app(
             media_type=PACKAGE_MEDIA_TYPE,
             headers=_attachment_headers(filename),
         )
+
+    # --- Project briefs (carry a project into its next section) -----------
+    #
+    # A brief is the structured, deliberately partial handoff between the
+    # sections of one project (backend/project_brief.py): profile, identity,
+    # edition overrides, the research profile, attached references, the
+    # facts ledger, the section registry — never the conversation or the
+    # document. Export builds it from this session; inspect reads an upload
+    # without touching the session; start seeds a fresh session from it.
+    # The .baspec shortcut rides the same two upload routes, sniffed by kind.
+
+    def _brief_scope_refusal() -> JSONResponse | None:
+        if sessions.get_workspace().scope == "original":
+            return None
+        return _coded_error_response(
+            {
+                "ok": False,
+                "code": "tutorial_active",
+                "error": (
+                    "A tutorial workspace is active. End the tour to return to "
+                    "your project before working with a project brief."
+                ),
+            },
+            status_code=409,
+        )
+
+    def _build_brief_locked(session: SessionState) -> ProjectBrief:
+        """Build this session's brief under the caller's guard, stamping the
+        project link so exporting twice never mints two project ids and the
+        section file records which project it belongs to."""
+        ready = bool(_readiness_payload(session)["ready"])
+        brief = build_project_brief(session, ready=ready)
+        previous = session.project_link if isinstance(session.project_link, dict) else {}
+        session.project_link = sanitize_project_link(
+            {
+                "project_id": brief.project_id,
+                "name": brief.name,
+                "brief_updated_at": brief.updated_at,
+                "seeded_from": list(previous.get("seeded_from", []) or []),
+                "research_rounds_at_seed": int(
+                    previous.get("research_rounds_at_seed", 0) or 0
+                ),
+                "sections": list(brief.sections),
+            }
+        )
+        return brief
+
+    @app.get("/api/project/brief")
+    def project_brief_export() -> Response:
+        refusal = _brief_scope_refusal()
+        if refusal is not None:
+            return refusal
+        session = sessions.get_session()
+        with session.session_state_guard():
+            if session.turn_active:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "code": "turn_active",
+                        "error": (
+                            "Wait for the current reply to finish before "
+                            "exporting a project brief."
+                        ),
+                    },
+                    status_code=409,
+                )
+            brief = _build_brief_locked(session)
+        try:
+            payload = brief_bytes(brief)
+        except ProjectBriefError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+        _trace_capture.app_event(
+            "project_brief",
+            action="export",
+            project_id=brief.project_id,
+            sections=len(brief.sections),
+            facts=len(brief.facts),
+            references=len(brief.reference_docs),
+            research_items=len((brief.research_profile or {}).get("items", []) or []),
+            bytes=len(payload),
+        )
+        return Response(
+            content=payload,
+            media_type=PROJECT_BRIEF_MEDIA_TYPE,
+            headers=_attachment_headers(brief_filename(brief)),
+        )
+
+    @app.get("/api/project/brief/manifest")
+    def project_brief_manifest() -> JSONResponse:
+        """What THIS session would export — for the confirm modal."""
+        refusal = _brief_scope_refusal()
+        if refusal is not None:
+            return refusal
+        session = sessions.get_session()
+        with session.session_state_guard():
+            ready = bool(_readiness_payload(session)["ready"])
+            brief = build_project_brief(session, ready=ready)
+        return JSONResponse({"ok": True, "manifest": brief_manifest(brief)})
+
+    @app.post("/api/project/brief/inspect")
+    async def project_brief_inspect(file: UploadFile) -> JSONResponse:
+        """Read an uploaded brief (or sibling section) without touching the
+        session — the New-section dialog's preview."""
+        try:
+            data = await read_project_upload_bounded(file)
+        except ProjectPackageTooLargeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+        try:
+            # The event-loop rule: parsing (and, for a .baspec, loading it into
+            # a throwaway session) is CPU that must not run on the loop.
+            brief, source = await run_in_threadpool(_parse_brief_upload, data)
+        except (ProjectPackageTooLargeError, ProjectBriefTooLargeError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+        except (ProjectBriefError, ProjectPackageError, ValueError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        _trace_capture.app_event("project_brief", action="inspect", source=source, ok=True)
+        return JSONResponse(
+            {
+                "ok": True,
+                "source": source,
+                "manifest": brief_manifest(brief),
+                "warnings": list(brief.warnings),
+            }
+        )
+
+    @app.post("/api/project/brief/start")
+    async def project_brief_start(
+        file: UploadFile,
+        module_id: str = Form(""),
+        discipline: str = Form(""),
+        template_id: str = Form(""),
+    ) -> JSONResponse:
+        """Seed a fresh session from a brief: the next section of the project.
+
+        Refuses outside the original workspace and while anything is running
+        (a chat turn, research, Final QC) — unlike reset, which invalidates a
+        turn, a seed installs paid state and must not race one. The whole
+        seed is one transaction on the session (``start_from_brief``); the
+        parse and the template lookup happen first, on a worker thread.
+        """
+        refusal = _brief_scope_refusal()
+        if refusal is not None:
+            return refusal
+        entry_lease = sessions.get_workspace()
+        session = entry_lease.session
+        entry_generation = session.generation
+        busy = sessions.busy_reasons(session)
+        if busy:
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "workspace_busy",
+                    "error": (
+                        "Wait for the current work to finish before starting a "
+                        f"new section ({', '.join(busy)} still running)."
+                    ),
+                },
+                status_code=409,
+            )
+        try:
+            data = await read_project_upload_bounded(file)
+        except ProjectPackageTooLargeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+        try:
+            brief, source = await run_in_threadpool(_parse_brief_upload, data)
+        except (ProjectPackageTooLargeError, ProjectBriefTooLargeError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+        except (ProjectBriefError, ProjectPackageError, ValueError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+        newest = brief.newest_section or {}
+        chosen_module = module_id.strip() or str(newest.get("module_id") or "")
+        chosen_discipline = " ".join(discipline.split()) or str(
+            newest.get("discipline") or ""
+        )
+        template_section: SpecSection | None = None
+        template_origin: dict[str, Any] | None = None
+        extra_warnings: list[str] = []
+        wanted_template = template_id.strip()
+        if wanted_template:
+            try:
+                template, _source = await run_in_threadpool(
+                    get_template_catalog().get, wanted_template
+                )
+            except TemplateError as exc:
+                return _template_error(exc)
+            template_section = SpecSection.from_dict(copy.deepcopy(template["document"]))
+            template_origin = {
+                "template_id": template["id"],
+                "name": template["name"],
+                "seed_block_ids": [
+                    p.uid for _part, _article, p, _depth, _ref in iter_paragraphs(template_section)
+                ],
+            }
+            template_module = str(template.get("module_id") or "")
+            if template_module:
+                if chosen_module and template_module != chosen_module:
+                    extra_warnings.append(
+                        f"The template's module ({template_module}) was used "
+                        f"instead of the brief's ({chosen_module}): the "
+                        "template's playbook shaped that document."
+                    )
+                chosen_module = template_module
+            if not chosen_discipline:
+                chosen_discipline = str(
+                    (template_section.project_identity or {}).get("discipline", "") or ""
+                )
+        try:
+            with sessions.active_write(entry_lease.workspace_id):
+                with session.session_state_guard():
+                    sessions.workspace_manager().assert_active(entry_lease)
+                    if session.generation != entry_generation:
+                        return _stale_tutorial_response()
+                    busy = sessions.busy_reasons(session)
+                    if busy:
+                        return _coded_error_response(
+                            {
+                                "ok": False,
+                                "code": "workspace_busy",
+                                "error": (
+                                    "Wait for the current work to finish before "
+                                    f"starting a new section ({', '.join(busy)} "
+                                    "still running)."
+                                ),
+                            },
+                            status_code=409,
+                        )
+                    seed = session.start_from_brief(
+                        brief,
+                        module_id=chosen_module,
+                        discipline=chosen_discipline,
+                        template_section=template_section,
+                        template_origin=template_origin,
+                    )
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+        seed["warnings"] = list(brief.warnings) + extra_warnings + list(seed["warnings"])
+        seed["source"] = source
+        seed["project_id"] = brief.project_id
+        seed["name"] = brief.name
+        _trace_capture.app_event(
+            "project_brief",
+            action="start",
+            source=source,
+            project_id=brief.project_id,
+            module_id=seed["module_id"],
+            template=bool(template_origin),
+            research_rounds=seed["research_rounds"],
+            references=seed["references_restored"],
+            facts=seed["facts_restored"],
+            ok=True,
+        )
+        bundle = await run_in_threadpool(_session_bundle, sessions.get_workspace())
+        return JSONResponse({"ok": True, "seed": seed, "session": bundle})
 
     @app.post("/api/project/load")
     def project_load(body: dict[str, Any]) -> JSONResponse:

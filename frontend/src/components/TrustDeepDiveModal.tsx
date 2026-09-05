@@ -692,6 +692,14 @@ function Dossier() {
               the app made. They are written to your machine only.
             </>,
             <>
+              <b className="text-ink">Project briefs.</b> A{" "}
+              <code className="text-ink">.basproject</code> is written locally
+              when you export one and read locally when the next section starts
+              from it; no request is made either way. It carries the full text
+              of your attached reference documents and every recorded project
+              fact, so treat it as sensitive project data.
+            </>,
+            <>
               <b className="text-ink">Telemetry, analytics, crash reports, usage
               statistics, licence checks.</b> There are none. The interface loads
               no scripts, fonts, or images from the internet.
@@ -740,11 +748,14 @@ function Dossier() {
               boundary if any, the grounded research profile if any, the full
               text of every provision with its id and status, the deterministic
               lint report, the open-items list, the list of questions and
-              decisions still waiting on you, a compact digest of the
-              retained Final QC findings if a review has run (ids, severity,
-              one-line issues, and whether each fix is verified — never the
-              full report), and one-line stubs for figures
-              and reference documents — never their contents.
+              decisions still waiting on you, the established project facts
+              recorded for this project (statement, reach, status and where
+              each was recorded — and, for a section started from a project
+              brief, the list of the project's other sections), a compact
+              digest of the retained Final QC findings if a review has run
+              (ids, severity, one-line issues, and whether each fix is
+              verified — never the full report), and one-line stubs for
+              figures and reference documents — never their contents.
             </>
           }
           model="Claude Sonnet 5, effort “high”."
@@ -838,9 +849,13 @@ function Dossier() {
               <b className="text-ink">reference documents you have attached</b>{" "}
               are sent in full as well, so an agent researches whether what
               your owner requires is actually permitted here rather than
-              re-deriving what the attached document already says. Your draft
-              section is <b className="text-ink">not</b> sent — research looks
-              outward, at the jurisdiction, not at your text.
+              re-deriving what the attached document already says. So are the{" "}
+              <b className="text-ink">established project facts</b> the team has
+              recorded, with an instruction to spend no searches re-deriving
+              them and to report a listed fact its sources contradict as the
+              most valuable item it can return. Your draft section is{" "}
+              <b className="text-ink">not</b> sent — research looks outward,
+              at the jurisdiction, not at your text.
             </>
           }
           model="Claude Sonnet 5, effort “high” — four concurrent long-running conversations."
@@ -925,12 +940,17 @@ function Dossier() {
               Today’s date, the full document rendering, the standards editions
               in effect, the grounded research profile, any{" "}
               <b className="text-ink">reference documents you have attached</b>{" "}
-              in full, the discipline, and each lens’s brief. Then, per
+              in full, the{" "}
+              <b className="text-ink">established project facts</b> (as inputs
+              the team recorded — a provision that follows a confirmed fact is
+              not a defect for lacking web support, one that contradicts a fact
+              is a finding), the discipline, and each lens’s brief. Then, per
               finding, the finding itself plus the document context the
               verifier needs — the verifier seats get the attached documents
-              too, so a reviewer asked to refute “this contradicts the owner’s
-              standard” can actually read the standard instead of dismissing it
-              for want of evidence.
+              and the facts too, so a reviewer asked to refute “this contradicts
+              the owner’s standard” or “this is not what the authority
+              confirmed” can actually read the record instead of dismissing the
+              finding for want of evidence.
             </>
           }
           model={
@@ -1277,6 +1297,44 @@ function Dossier() {
               and for free; a call already in flight finishes and its result is
               thrown away. Money already committed to those calls is still
               counted in the meter, because it was really spent.
+            </>
+          }
+        />
+
+        <Runtime
+          n={14}
+          title="Exporting or starting from a project brief"
+          trigger="Export → Export project brief; or New session → New section in an existing project."
+          runs={
+            <>
+              Local serialization and parsing only. Exporting writes a{" "}
+              <b className="text-ink">.basproject</b> holding the project-level
+              assets this section paid for: the project profile and type, the
+              recorded edition overrides with their stated bases, every research
+              round, the attached reference documents, the established project
+              facts (retired ones included, with their reasons), and a registry
+              of the sections drafted so far. Starting from one seeds a fresh
+              session with exactly those assets in one transaction — version 0
+              of the new document is the project setup on an empty page — and
+              the readiness checklist says research was carried rather than run
+              here. A sibling section’s <b className="text-ink">.baspec</b> can
+              stand in for the brief; it is read into a throwaway copy and never
+              becomes the session.
+            </>
+          }
+          sent="Nothing. No network call is made."
+          model="None."
+          bounds={
+            <>
+              What does not travel is the point: the conversation, the document,
+              figures, the Final QC report and its dismissals, the questions
+              waiting on you, and any imported Word source stay with the section
+              that made them. Excluded standards are a per-section scope
+              decision and do not carry either. Reference documents are carried
+              in order while they fit the attachment cap; anything past it is
+              named as dropped rather than silently lost. A brief carries the
+              full text of those documents and every recorded fact, so it is
+              sensitive project data — share it deliberately.
             </>
           }
         />

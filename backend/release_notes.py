@@ -89,6 +89,179 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.17.0",
+        date="2026-09-04",
+        headline="The next section starts where the last one left off",
+        summary=(
+            "A project has many sections, and until now each one began from "
+            "nothing: the profile typed in again, the research paid for "
+            "again, the owner's standard attached again, and everything the "
+            "authority or the client had settled re-established from memory. "
+            "A section can now export a project brief — its profile, "
+            "editions, research, attached references and the facts the "
+            "project has established, never the conversation or the "
+            "document — and the next section starts from it. Facts the "
+            "project settles are recorded in a new panel as they are "
+            "settled, and the research and Final QC teams are briefed with "
+            "them."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Project briefs",
+                items=(
+                    ReleaseItem(
+                        title="Export what the next section needs, not the chat",
+                        body=(
+                            "Export → Export project brief writes a "
+                            ".basproject holding the project profile and "
+                            "type, the recorded edition overrides with their "
+                            "stated bases, every research round, the attached "
+                            "reference documents, the established project "
+                            "facts, and a registry of the sections drafted so "
+                            "far. It deliberately leaves behind the "
+                            "conversation, the document, figures, the Final "
+                            "QC report and any imported Word source: those "
+                            "belong to the section that made them, and "
+                            "carrying them would only bloat the next one. "
+                            "Excluded standards are a per-section scope "
+                            "decision and stay behind too. The confirm dialog "
+                            "lists exactly what will travel before anything is "
+                            "written."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Start the next section from it",
+                        body=(
+                            "New session → New section in an existing project "
+                            "takes the brief — or a finished section's .baspec "
+                            "directly, the brief is built from it — shows a "
+                            "manifest card of what it holds, and seeds a fresh "
+                            "session: the profile filled in, the editions on "
+                            "the standards strip, the references attached, "
+                            "the facts in their panel, and research already "
+                            "complete. Start with a blank page or pair the "
+                            "brief with a template (the template's body under "
+                            "the project's setup), and import an office master "
+                            "afterwards if the section starts from one. "
+                            "Section 2's own facts are recorded as you go, so "
+                            "section 3 starts further along still."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The file is sensitive, and the app says so",
+                        body=(
+                            "A brief carries the full text of your attached "
+                            "reference documents and every recorded fact. It "
+                            "is written and read on your machine only — no "
+                            "request is made either way — but share it as "
+                            "deliberately as you would the project file."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Project facts",
+                items=(
+                    ReleaseItem(
+                        title="What the project settles is recorded, not remembered",
+                        body=(
+                            "A new Project facts panel under 'Waiting on you' "
+                            "holds what the project has established: the "
+                            "edition the authority confirmed, an owner or "
+                            "insurer requirement, the water-supply basis, a "
+                            "hazard classification, what another section "
+                            "specifies. The assistant records a fact in the "
+                            "same reply that settles it, grouped by how far "
+                            "it reaches — project-wide, discipline-wide, or "
+                            "one section's coordination fact — and marked "
+                            "confirmed or assumed with where it came from. A "
+                            "discipline-wide fact is bound to the discipline "
+                            "that recorded it, so a fire-suppression fact read "
+                            "from an electrical section of the same project is "
+                            "shown as another discipline's, never as your own."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Retire a fact; never draft around it",
+                        body=(
+                            "Contradict a listed fact and the assistant "
+                            "supersedes it in the same turn, with the reason "
+                            "and the replacement; you can add, edit or retire "
+                            "facts by hand in the panel. A retired fact stays "
+                            "in the record with its reason. Carried facts "
+                            "apply unless you say otherwise, and a provision "
+                            "drafted from a confirmed fact can cite it as its "
+                            "source, the way research items and attached "
+                            "documents already are."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Research and Final QC read the facts",
+                items=(
+                    ReleaseItem(
+                        title="Research is briefed, not repeated",
+                        body=(
+                            "A section started from a brief has its "
+                            "research already; the readiness checklist passes "
+                            "it and says which section it was carried from. "
+                            "The first Research press in the new section is a "
+                            "briefed round — every agent is told what the "
+                            "project already established and the facts the "
+                            "team recorded, spends its searches on the outside "
+                            "world, and reports a listed fact its sources "
+                            "contradict as the most valuable thing it can "
+                            "find. Each round now records which section ran "
+                            "it, and the findings report says so."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Final QC judges against the record",
+                        body=(
+                            "Every lens and every verifier seat is briefed "
+                            "with the established facts: a provision that "
+                            "follows a confirmed fact is not a defect for "
+                            "lacking web support, a provision that contradicts "
+                            "one is a finding, and the facts' own wording is "
+                            "never under review. Because the facts are now a "
+                            "review input, a Final QC report retained from "
+                            "before this update reads as stale once — run "
+                            "Final QC again to refresh it — and recording, "
+                            "editing or retiring a fact afterwards does the "
+                            "same, exactly as editing the document does."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Smaller things",
+                items=(
+                    ReleaseItem(
+                        title="A freshly seeded section counts as work",
+                        body=(
+                            "Right after starting from a brief the session "
+                            "already holds carried research, references and "
+                            "facts, so New session and Open project offer to "
+                            "save it first — the same gate every other "
+                            "session with work in it gets."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="The tour has a Project facts chapter step",
+                        body=(
+                            "The document chapter now points at the facts "
+                            "panel with a bundled fixture, so you see one fact "
+                            "of each kind without spending anything. An "
+                            "in-progress tour restarts from the beginning "
+                            "after this update."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.16.0",
         date="2026-09-04",
         headline="Nothing you were asked quietly scrolls away",

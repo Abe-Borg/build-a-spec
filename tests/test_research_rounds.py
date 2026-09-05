@@ -1523,3 +1523,84 @@ def test_the_runner_briefs_a_later_round_on_what_the_session_established():
         if DIM_KEYS["ahj_requirements"] in user_text(r["messages"])
     )
     assert "<already_established>" not in ahj_brief
+
+
+# ---------------------------------------------------------------------------
+# A round records the section that ran it (project briefs, v1.17.0)
+# ---------------------------------------------------------------------------
+
+
+def test_a_round_records_the_section_that_ran_it_and_a_legacy_round_does_not():
+    """The stamp survives serialization; an unstamped round's bytes are
+    untouched (so is the QC research fingerprint over them); and the
+    runner's adopt path — ``append_research_round(previous, result)`` with
+    no keyword — carries the stamp the engine put on ``result`` at birth."""
+    first = append_research_round(
+        None, _round(items=[_ritem("r-a", "Rule A.")], date="2026-09-01"), section="21 13 13"
+    )
+    assert first.rounds[0].section == "21 13 13"
+    assert first.to_dict()["rounds"][0]["section"] == "21 13 13"
+    restored = RequirementsProfile.from_dict(json.loads(json.dumps(first.to_dict())))
+    assert restored is not None and restored.rounds[0].section == "21 13 13"
+
+    # No stamp, no key: a legacy-shaped round serializes exactly as before.
+    second = append_research_round(
+        first, _round(items=[_ritem("r-b", "Rule B.")], date="2026-09-02")
+    )
+    assert second.rounds[1].section == ""
+    assert "section" not in second.to_dict()["rounds"][1]
+    assert set(second.to_dict()["rounds"][1]) == {
+        "round_index", "research_date", "dimension_statuses", "new_items", "repeat_items",
+    }
+
+    # The engine stamps a fan-out's profile at birth; the runner then folds
+    # that whole profile in with no keyword, and the stamp must survive
+    # the rebuild of the round record.
+    fresh = append_research_round(
+        None, _round(items=[_ritem("r-c", "Rule C.")], date="2026-09-03"), section="21 13 19"
+    )
+    merged = append_research_round(second, fresh)
+    assert merged.rounds[-1].round_index == 3
+    assert merged.rounds[-1].section == "21 13 19"
+    # An explicit keyword wins over the stamp on ``fresh``.
+    assert append_research_round(second, fresh, section="21 13 16").rounds[-1].section == "21 13 16"
+    # Whitespace in a section number is folded, never trusted.
+    assert append_research_round(None, fresh, section="  21  13   19 ").rounds[0].section == "21 13 19"
+
+
+def test_the_runner_stamps_the_round_with_the_section_it_was_given():
+    client = SequencedFakeClient(
+        _scripts_for_rounds(
+            {
+                "governing_codes": research_response(
+                    items=[_item("Rule A.", ["https://a.gov"])],
+                    searched_urls=["https://a.gov"],
+                )
+            },
+            {},
+        )
+    )
+    runner = ResearchRunner()
+    settled = threading.Event()
+    assert runner.start(
+        module=HYPERSCALE_FIRE,
+        project_profile=PROFILE,
+        client=client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        section_label="  21 13 13 ",
+        on_settled=settled.set,
+    )
+    assert settled.wait(timeout=10)
+    assert runner.status == "complete"
+    assert runner.profile_result.rounds[0].section == "21 13 13"
+    view = runner.snapshot()["profile"]["rounds"]
+    assert view[0]["section"] == "21 13 13"
+
+    # A start without a label (every pre-1.17 caller) stamps nothing and the
+    # drawer's view carries no key for that round.
+    _run_round(runner, client, None)
+    assert runner.profile_result.rounds[1].section == ""
+    assert "section" not in runner.snapshot()["profile"]["rounds"][1]
+    # No request byte changed for the stamp — research is project-level.
+    assert all("21 13 13" not in user_text(r["messages"]) for r in client.requests)

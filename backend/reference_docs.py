@@ -95,6 +95,20 @@ def prepare_reference_text(text: str) -> tuple[str, int, bool]:
     return body, total, truncated
 
 
+# The longest body ``prepare_reference_text`` can store: the cap plus the
+# marker it appends. The marker's ``{total}`` is the upload's own character
+# count, bounded by the upload read limit, so a 16-digit figure covers any
+# real value. A stored body past this was never prepared by this app.
+MAX_STORED_TEXT_CHARS = MAX_TEXT_CHARS + len(
+    TRUNCATION_MARKER.format(kept=MAX_TEXT_CHARS, total=10**15)
+)
+# No real document tokenizes to fewer than one token per this many
+# characters (English prose runs 3.5-4.5; flattened tables and page markers
+# stay well under 8), so a recorded count below the floor cannot describe
+# the body it rides with.
+MAX_CHARS_PER_TOKEN = 8
+
+
 def _legacy_token_reservation(text: str) -> int:
     """Conservatively reserve quota for a pre-token-count project attachment.
 
@@ -112,6 +126,50 @@ def _legacy_token_reservation(text: str) -> int:
 
 class ReferenceDocError(ValueError):
     """A rejected reference-document operation."""
+
+
+def rebound_reference_doc(doc: "ReferenceDoc") -> list[str]:
+    """Re-impose the storage bounds on a record read back from a file.
+
+    A serialized record is a CLAIM about text the store never prepared. The
+    app's own exports always satisfy the bounds, so a legitimate record comes
+    back untouched — but a ``.baspec`` or ``.basproject`` is a file people
+    hand-edit and share, and every downstream cap reads the recorded
+    ``token_count`` rather than the text: the attachment ceiling, the brief's
+    carry cap, and the fan-out block's water-filling allocation, whose slice
+    is sized from the document's own chars-per-token ratio. A body past
+    ``MAX_TEXT_CHARS`` with a tiny count would sail through each of them and
+    land in every research worker's and verifier seat's prompt whole.
+
+    So: a body longer than ``prepare_reference_text`` can produce is re-run
+    through it (text already truncated at export keeps its marker — it is
+    within the bound), and a count that cannot describe its body takes the
+    legacy reservation, the deliberately high offline allowance, instead of
+    being believed. Mutates ``doc`` in place and returns the warnings —
+    empty when nothing changed. Raises :class:`ReferenceDocError` for a body
+    that is blank once bounded, which the callers drop as malformed.
+    """
+    warnings: list[str] = []
+    label = doc.title or doc.rid
+    if len(doc.text) > MAX_STORED_TEXT_CHARS:
+        body, total, _truncated = prepare_reference_text(doc.text)
+        doc.text = body
+        doc.char_count = max(int(doc.char_count or 0), total)
+        doc.truncated = True
+        warnings.append(
+            f"Reference document {label!r} carried more text than this app "
+            f"stores; it was truncated at {MAX_TEXT_CHARS:,} characters."
+        )
+    floor = len(doc.text) // MAX_CHARS_PER_TOKEN
+    if doc.token_count < floor:
+        claimed = doc.token_count
+        doc.token_count = _legacy_token_reservation(doc.text)
+        warnings.append(
+            f"Reference document {label!r} recorded a token count "
+            f"({claimed:,}) that cannot describe its text; it is reserved at "
+            f"{doc.token_count:,} tokens instead."
+        )
+    return warnings
 
 
 class TurnReferenceBudget:
@@ -366,6 +424,10 @@ class ReferenceDocStore:
                 continue
             try:
                 doc = ReferenceDoc.from_dict(entry)
+                # A file is a claim, not a preparation: re-impose the bounds
+                # (silently here — the project brief's parser is the surface
+                # that reports them; a legitimate record is untouched).
+                rebound_reference_doc(doc)
             except (ValueError, KeyError, TypeError):
                 continue
             restored.append(doc)

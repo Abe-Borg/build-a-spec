@@ -21,7 +21,8 @@ export type DrawerName =
   | "research"
   | "qc"
   | "openItems"
-  | "followups";
+  | "followups"
+  | "projectFacts";
 
 export type OnboardingPhase =
   | { kind: "idle" }

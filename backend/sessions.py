@@ -531,6 +531,9 @@ def has_unsaved_progress(session: SessionState) -> bool:
         or not session.doc.doc.is_empty()
         or bool(session.figures.figures)
         or bool(session.references.docs)
+        # A project fact can be the only work in a session: the user typed
+        # one into the panel, or a seeded section arrived carrying them.
+        or bool(session.facts.items)
         or session.import_report is not None
         or session.source_docx_bytes is not None
     )
@@ -610,6 +613,8 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         source_map=source_map_payload,
         format_map=format_map_payload,
         template_origin=session.template_origin,
+        project_facts=session.facts.to_dict(),
+        project_link=session.project_link,
     )
 
 

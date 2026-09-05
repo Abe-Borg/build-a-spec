@@ -419,3 +419,116 @@ def test_a_retained_report_reads_stale_once_a_fact_it_reviewed_against_changes()
     resp = client.post("/api/project-facts/pf-1/supersede", json={"reason": "Withdrawn."})
     assert resp.status_code == 200, resp.text
     assert matches_current_inputs(session, result, block=True) is False
+
+
+# ---------------------------------------------------------------------------
+# Discipline binding reaches both fan-outs (caught in review on PR #149, Codex)
+# ---------------------------------------------------------------------------
+
+ELECTRICAL_FACT = "Releasing panels sit on the life-safety branch."
+
+
+def _discipline_facts() -> list[ProjectFact]:
+    store = ProjectFactStore()
+    store.record(
+        {"statement": OWNER_FACT, "scope": "discipline", "status": "confirmed"},
+        recorded_in="21 13 13",
+        recorded_at="2026-09-04",
+        discipline="Fire Suppression",
+    )
+    store.record(
+        {"statement": ELECTRICAL_FACT, "scope": "discipline", "status": "confirmed"},
+        recorded_in="26 05 00",
+        recorded_at="2026-09-04",
+        discipline="Electrical",
+    )
+    return list(store.active())
+
+
+def _other_disciplines_after_own(block: str) -> None:
+    assert "Discipline-wide (Fire Suppression):" in block
+    assert (
+        block.index(OWNER_FACT)
+        < block.index("Facts recorded by OTHER disciplines")
+        < block.index(ELECTRICAL_FACT)
+    )
+
+
+def test_the_research_round_files_another_disciplines_facts_as_coordination_information():
+    """The round's own discipline decides which discipline-wide facts are
+    its inputs; a workers' brief that called an electrical fact "discipline-
+    wide" in a fire-suppression round would have it re-derived as fire
+    suppression's own."""
+    client = SequencedFakeClient(_scripts())
+    run_requirements_research(
+        HYPERSCALE_FIRE,
+        PROFILE,
+        client,
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        discipline="Fire Suppression",
+        section_label="21 13 19",
+        project_facts=_discipline_facts(),
+    )
+    for req in client.requests:
+        _other_disciplines_after_own(req["messages"][0]["content"][0]["text"])
+
+
+def test_the_qc_prefixes_file_them_the_same_way_and_the_manifest_reads_the_runs_discipline():
+    block = project_facts_block(
+        _discipline_facts(),
+        audience="qc",
+        current_section="21 13 13",
+        current_discipline="Fire Suppression",
+    )
+    _other_disciplines_after_own(_lens_shared_prefix(_section(), HYPERSCALE_FIRE, None, project_facts=block))
+    _other_disciplines_after_own(_verifier_shared_prefix("<rendered section>", project_facts=block))
+    # The manifest fingerprints the grouping the reviewers actually read —
+    # rendered for the run's own section and discipline, not a bare render.
+    manifest = build_qc_input_manifest(
+        _section(),
+        None,
+        HYPERSCALE_FIRE,
+        version_index=0,
+        discipline="Fire Suppression",
+        model=settings.QC_MODEL,
+        max_tokens=1024,
+        project_facts=_discipline_facts(),
+    )
+    assert manifest["project_facts"] == project_facts_manifest_facts(
+        _discipline_facts(), current_section="21 13 13", current_discipline="Fire Suppression"
+    )
+    assert manifest["project_facts"]["count"] == 2
+
+
+def test_a_qc_run_threads_its_discipline_into_every_seats_facts():
+    from backend.qc.engine import run_final_qc
+    from backend.spec_modules import DEFAULT_MODULE
+    from tests.test_qc_batch_verification import _one_finding_scripts, _store as _qc_store
+
+    client = SequencedFakeClient(_one_finding_scripts())
+    store = _qc_store()
+    run_final_qc(
+        store.doc,
+        None,
+        DEFAULT_MODULE,
+        client,
+        model=settings.QC_MODEL,
+        max_tokens=4096,
+        version_index=store.index,
+        started_at="2026-09-04T10:00:00-07:00",
+        finished_at="2026-09-04T10:01:00-07:00",
+        run_id="qc-facts-discipline-test",
+        batch_verification=False,
+        discipline="Fire Suppression",
+        project_facts=_discipline_facts(),
+    )
+    carrying = [
+        block["text"]
+        for params in client.requests
+        for block in (params["messages"][0]["content"] if isinstance(params["messages"][0]["content"], list) else [])
+        if OWNER_FACT in block.get("text", "")
+    ]
+    assert len(carrying) >= 7
+    for text in carrying:
+        _other_disciplines_after_own(text)

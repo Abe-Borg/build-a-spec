@@ -51,7 +51,13 @@ from typing import Any
 from . import settings
 from .project_facts import ProjectFact
 from .project_profile import ProjectProfile
-from .reference_docs import MAX_REFERENCE_DOCS, MAX_REFERENCE_TOKENS, ReferenceDoc
+from .reference_docs import (
+    MAX_REFERENCE_DOCS,
+    MAX_REFERENCE_TOKENS,
+    ReferenceDoc,
+    ReferenceDocError,
+    rebound_reference_doc,
+)
 from .research.engine import RequirementsProfile
 from .spec_doc.project import (
     MAX_LINK_SECTIONS,
@@ -154,8 +160,14 @@ class ProjectBrief:
 
     @property
     def newest_section(self) -> dict[str, Any] | None:
-        """The section record that exported this brief last (the list is
-        upserted in export order, so the newest is the last entry)."""
+        """The section record that exported this brief last.
+
+        The registry is kept in EXPORT order: ``build_project_brief`` removes a
+        section's earlier record and appends the fresh one, so a re-export of
+        section 1 after section 2 makes section 1 the newest again — which is
+        what the seed's module/discipline defaults and the manifest read from
+        here mean by "newest".
+        """
         return self.sections[-1] if self.sections else None
 
 
@@ -181,9 +193,18 @@ def section_record(session: Any, *, ready: bool, exported_at: str) -> dict[str, 
     identity = getattr(doc, "project_identity", {}) or {}
     profile = session.research.profile_result
     rounds = list(getattr(profile, "rounds", []) or []) if profile is not None else []
-    own_rounds = [
-        r for r in rounds if getattr(r, "section", "") == number and number
-    ]
+    # The rounds THIS section ran are the ones appended since it was seeded:
+    # a seeded session's link records how many rounds it inherited, rounds
+    # only ever append (a failed or stopped round is never adopted), and a
+    # session never seeded inherited none. Counting by the per-round section
+    # stamp instead would misattribute in both directions — a seeded section
+    # that has not researched yet would claim the carried rounds through the
+    # legacy "no stamp matches, count them all" fallback, and a section
+    # renumbered mid-project would disown the rounds it ran under its old
+    # number. Pre-1.17 rounds carry no stamp at all, and this needs none.
+    link = session.project_link if isinstance(session.project_link, dict) else None
+    carried = int((link or {}).get("research_rounds_at_seed", 0) or 0)
+    own_round_count = max(0, len(rounds) - max(0, carried))
     record = {
         "number": number or "(unnumbered)",
         "title": " ".join((doc.title or "").split())[:160],
@@ -196,9 +217,7 @@ def section_record(session: Any, *, ready: bool, exported_at: str) -> dict[str, 
         "fact_count": sum(
             1 for f in session.facts.active() if f.recorded_in == number
         ),
-        "research_rounds": (
-            len(own_rounds) if own_rounds else (len(rounds) if profile is not None else 0)
-        ),
+        "research_rounds": own_round_count,
     }
     return sanitize_section_record(record) or record
 
@@ -222,7 +241,10 @@ def build_project_brief(session: Any, *, ready: bool) -> ProjectBrief:
     The caller holds ``session_state_guard()`` so the snapshot is coherent;
     nothing here writes. A session already linked to a project keeps that
     project's id and folds the link's section registry in, upserting its own
-    record by number.
+    record by number — REMOVED from its old position and appended, so the
+    registry stays in export order and ``newest_section`` (the last entry) is
+    always the section that exported last. Replacing it in place would leave
+    a stale section "newest" whenever an earlier section re-exports.
     """
     now = _now()
     doc = session.doc.doc
@@ -241,16 +263,13 @@ def build_project_brief(session: Any, *, ready: bool) -> ProjectBrief:
         entry["content_fingerprint"] = _fingerprint(ref.text)
         references.append(entry)
 
-    sections = [dict(s) for s in (link or {}).get("sections", []) or []]
     own = section_record(session, ready=ready, exported_at=now)
-    replaced = False
-    for index, existing in enumerate(sections):
-        if existing.get("number") == own["number"]:
-            sections[index] = own
-            replaced = True
-            break
-    if not replaced:
-        sections.append(own)
+    sections = [
+        dict(s)
+        for s in (link or {}).get("sections", []) or []
+        if s.get("number") != own["number"]
+    ]
+    sections.append(own)
     sections = sections[-MAX_LINK_SECTIONS:]
 
     created = min(
@@ -410,10 +429,23 @@ def parse_project_brief(data: bytes) -> ProjectBrief:
         except (KeyError, ValueError, TypeError):
             warnings.append("A malformed reference document entry was dropped.")
             continue
+        # The fingerprint is checked against the text AS WRITTEN, before the
+        # bounds are re-imposed: a legitimate export always matches, and a
+        # body this app would have truncated can only have been edited in.
+        claimed = entry.get("content_fingerprint")
+        written_fingerprint = _fingerprint(doc.text)
+        # A serialized record is a claim about text the store never prepared
+        # (a hand-edited brief can carry a body past MAX_TEXT_CHARS under a
+        # tiny token count, and the carry cap and both fan-out allocations
+        # read the COUNT). Re-impose the bounds, and say so.
+        try:
+            warnings.extend(rebound_reference_doc(doc))
+        except ReferenceDocError:
+            warnings.append("A malformed reference document entry was dropped.")
+            continue
         record = doc.to_dict()
         record["content_fingerprint"] = _fingerprint(doc.text)
-        claimed = entry.get("content_fingerprint")
-        if isinstance(claimed, str) and claimed and claimed != record["content_fingerprint"]:
+        if isinstance(claimed, str) and claimed and claimed != written_fingerprint:
             warnings.append(
                 f"Reference document {doc.title!r} does not match its recorded "
                 "fingerprint; its text was edited after export."

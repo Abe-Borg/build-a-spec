@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .figures import FIGURE_KINDS, FigureError
-from .llm.conversation import SessionState
+from .llm.conversation import SessionState, effective_discipline
 from .reference_extract import extract_reference_document
 from .spec_doc.docx_export import build_docx
 from .spec_doc.model import SpecSection, iter_paragraphs
@@ -450,6 +450,9 @@ def _seed_tutorial_project_facts(clone: SessionState) -> None:
         },
         recorded_in="21 13 13",
         recorded_at="2026-08-01",
+        # Binds the discipline-scoped fact to the showcase's own discipline,
+        # so the panel's group header carries a name in the tour.
+        discipline=effective_discipline(clone),
     )
 
 

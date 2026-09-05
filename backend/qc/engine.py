@@ -5423,8 +5423,14 @@ def build_qc_input_manifest(
         # fingerprint over the rendered fact LINES (never the block's
         # directive prose). Recording, editing or superseding one changes
         # the review's inputs; the key is always present, so a report from
-        # before facts existed reads stale once after the upgrade.
-        "project_facts": project_facts_manifest_facts(project_facts),
+        # before facts existed reads stale once after the upgrade. Rendered
+        # for this run's section and discipline — the grouping the lenses
+        # and seats actually read (both already hash in their own right).
+        "project_facts": project_facts_manifest_facts(
+            project_facts,
+            current_section=section.number,
+            current_discipline=discipline,
+        ),
         "module": {
             "module_id": module.module_id,
             "display_name": module.display_name,
@@ -5770,9 +5776,14 @@ def run_final_qc(
     # whole block across ~40 calls.
     reference_block = reference_context_block(reference_docs, audience="qc")
     # Same once-per-run rule for the established facts: both cached prefixes
-    # carry them, so one rendering is what keeps the two lineages intact.
+    # carry them, so one rendering is what keeps the two lineages intact. The
+    # discipline is what files another discipline's facts as coordination
+    # information rather than as inputs this section drafted to.
     facts_block = project_facts_block(
-        project_facts, audience="qc", current_section=section.number
+        project_facts,
+        audience="qc",
+        current_section=section.number,
+        current_discipline=discipline,
     )
     input_manifest = build_qc_input_manifest(
         section,

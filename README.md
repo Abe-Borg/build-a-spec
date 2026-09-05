@@ -166,7 +166,11 @@ So the handoff is a **project brief**, a deliberately partial file.
   chat bubbles and provisions. A new **Project facts** panel records them as
   they are settled — by the model in the same reply, or by you by hand —
   grouped project-wide / discipline-wide / one section's coordination fact,
-  marked confirmed or assumed with their source. They ride every turn's
+  marked confirmed or assumed with their source. A discipline-wide fact is
+  bound to the discipline that recorded it, so a fire-suppression fact read
+  from an electrical section of the same project shows as another
+  discipline's coordination information, never as that section's own input.
+  They ride every turn's
   context, and contradicting one makes the model retire it with a reason
   rather than draft around it. This is not Open items (gaps in the spec) and
   not Waiting on you (gaps in what the model has been told); it is what has

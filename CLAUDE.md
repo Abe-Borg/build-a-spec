@@ -392,8 +392,16 @@ backend/
                            records, lenient reset-first load) +
                            validate_record_payload + RECORD_PROJECT_FACTS_TOOL;
                            context_block() renders ESTABLISHED PROJECT FACTS
-                           (project → discipline → other sections' coordination
-                           facts → this section; disclosed trim);
+                           (project → this discipline → OTHER disciplines'
+                           coordination facts → other sections' → this
+                           section; disclosed trim). A discipline-scoped fact
+                           is BOUND to the recording session's discipline
+                           (ProjectFact.discipline, set by record()/update()
+                           from effective_discipline, never by the payload) —
+                           render_fact_lines takes current_discipline and
+                           files a NAMED, DIFFERENT discipline's facts as
+                           coordination information; unbound or no current
+                           discipline stays discipline-wide;
                            project_facts_block(audience=) is the fan-out block
                            (the reference_context_block shape: one framing, a
                            research directive and a QC directive, delimiter
@@ -424,7 +432,12 @@ backend/
                            and never edits: ReferenceDoc (+ kind) + ReferenceDocStore
                            (monotonic ids, loud truncation at MAX_TEXT_CHARS,
                            body-free metadata()/context_stubs(), lenient project
-                           load) + READ_REFERENCE_DOC_TOOL. NOT turn-atomic (they
+                           load that RE-IMPOSES the storage bounds —
+                           rebound_reference_doc: a body past
+                           MAX_STORED_TEXT_CHARS is re-prepared, a token_count
+                           below len/MAX_CHARS_PER_TOKEN takes the legacy
+                           reservation; the brief parser reports the same
+                           warnings) + READ_REFERENCE_DOC_TOOL. NOT turn-atomic (they
                            arrive over REST, not in a turn) — reset in place only.
                            The body never enters PROJECT CONTEXT and is elided
                            from committed history (PDF posture); the model re-reads
@@ -7389,14 +7402,65 @@ project-format bump (two additive `.baspec` keys).
   the boundary so the model files each in the right place.
 - **The context block is capped and grouped, and the fan-out block is the
   same lines in a different frame.** `render_fact_lines` is ONE renderer
-  (project → discipline → other sections' coordination facts → this
-  section; trim order other-section first, then assumed, then the tail;
-  omission disclosed) feeding the chat block, both fan-out audiences and the
+  (project → this discipline → other disciplines' coordination facts →
+  other sections' coordination facts → this section; trim order the two
+  coordination groups first, then assumed, then the tail; omission
+  disclosed) feeding the chat block, both fan-out audiences and the
   manifest fingerprint. The chat block enters PROJECT CONTEXT right after the
   research block (dynamic only — the cache rule), never the stable prompt,
   which carries `_PROJECT_FACTS_POLICY` instead. A section-scoped fact
   recorded by ANOTHER section renders as coordination information the model
   cross-references ("as specified in Section 21 13 13") and never restates.
+- **"Discipline-wide" is bound to ONE discipline** (caught in review on PR
+  #149, Codex). The first cut stored no discipline on a discipline-scoped
+  fact and rendered every one of them as "Discipline-wide" for whichever
+  section was reading — so a fire-suppression fact carried into an
+  electrical section of the same project read as electrical's own input.
+  `ProjectFact.discipline` is now stamped at `record()` / `update()` from
+  the session's `effective_discipline` (the tool payload cannot name one:
+  the tool records THIS discipline's facts), and every renderer takes
+  `current_discipline` — `context_block` from `_turn_context_text`,
+  `project_facts_block` from the research round's and the QC run's own
+  `discipline` argument, and `project_facts_manifest_facts` from
+  `build_qc_input_manifest`'s section + discipline, so the fingerprint
+  describes the grouping the seats actually read (both were hashed inputs
+  already, so no new staleness trigger). The decision rule is deliberately
+  narrow: only a NAMED, DIFFERENT discipline (compared through
+  `discipline_key`, whitespace- and case-folded) moves a fact to the
+  "Facts recorded by OTHER disciplines" coordination group; an unbound fact
+  (the recording session had no discipline) or a session with no discipline
+  of its own stays discipline-wide, because nothing proves it foreign and
+  guessing would hide an input. A replacement binds to the superseding
+  session's discipline when it has one, else inherits; a panel edit that
+  moves a fact INTO discipline scope binds it, one that edits another
+  discipline's fact leaves the binding alone. `lib/projectFacts.ts` mirrors
+  the rule (`otherDisciplines` group) so the panel and the block agree.
+- **Three brief defects from the same review, fixed in place.** (1)
+  `build_project_brief` upserted this section's record by REPLACING it in
+  place, so `newest_section` (the LAST entry, which the seed's module/
+  discipline defaults and the manifest read) pointed at a stale section
+  whenever an earlier section re-exported; it now removes and appends, so
+  the registry stays in export order. (2) `section_record.research_rounds`
+  counted rounds stamped with this section, falling back to ALL rounds when
+  none matched — so a seeded section exporting before it had researched
+  claimed the carried rounds as its own. The count is now the rounds
+  appended since the seed (`len(rounds) - link.research_rounds_at_seed`):
+  rounds only ever append, a never-seeded session inherited none, and it
+  needs no stamp — which also survives a section renumbered mid-project
+  and rounds run before the section had a number. (3) `parse_project_brief`
+  trusted a reference record's `text` and `token_count`, and every cap
+  downstream — `within_reference_cap`, the fan-outs' water-filling
+  allocation, whose slice is sized from the document's own chars-per-token
+  ratio — reads the COUNT; a hand-edited brief carrying a body past
+  `MAX_TEXT_CHARS` under a count of 1 would have landed in every worker's
+  and seat's prompt whole. `reference_docs.rebound_reference_doc` re-runs
+  `prepare_reference_text` on a body longer than that function can produce
+  (text truncated honestly at export keeps its marker — it is within
+  `MAX_STORED_TEXT_CHARS`) and gives a count below one token per
+  `MAX_CHARS_PER_TOKEN` (8) characters the legacy reservation instead of
+  belief; the parser reports both as warnings and `ReferenceDocStore.load`
+  applies the same helper silently, since a `.baspec` is the same class of
+  file. A legitimate record is byte-identical through either path.
 - **Both fan-outs read the facts exactly the way they read attached
   documents** — rendered ONCE per run into the cached prefix (block 0 of
   every dimension; the lens prefix after the owner's documents and before

@@ -1654,6 +1654,7 @@ export default function ArtifactPanel({
         items={projectFacts}
         link={projectLink}
         currentSection={doc?.section.number ?? ""}
+        currentDiscipline={doc?.project_identity?.discipline ?? ""}
         busy={busy}
         openNonce={drawerNonces?.projectFacts}
         onAdd={onAddProjectFact}

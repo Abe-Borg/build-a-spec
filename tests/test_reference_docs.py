@@ -1099,3 +1099,40 @@ def test_the_policy_is_in_the_stable_prompt_and_the_data_is_not():
     assert BODY_MARKER not in stable
     # Whereas the live list does reach the model — through PROJECT CONTEXT.
     assert "acme.docx" in _turn_context_text(session)
+
+
+def test_a_project_file_record_is_re_bounded_on_load():
+    """A ``.baspec`` is a claim about text the store never prepared (caught in
+    review on PR #149, Codex, for the project brief — the loader is the same
+    class of surface): a body past the storage cap under a tiny count is
+    truncated and reserved, and a legitimate record comes back untouched."""
+    from backend.reference_docs import (
+        MAX_STORED_TEXT_CHARS,
+        ReferenceDoc,
+        rebound_reference_doc,
+    )
+
+    store = ReferenceDocStore()
+    store.add(filename="honest.txt", text="honest body " * 10, block_count=1, token_count=30)
+    honest = store.docs[0].to_dict()
+    forged = {
+        **honest,
+        "rid": "ref-2",
+        "title": "Forged",
+        "text": "x" * (MAX_STORED_TEXT_CHARS + 1),
+        "token_count": 1,
+    }
+    store.load({"reference_docs": [honest, forged], "next_seq": 3})
+    assert store.docs[0].to_dict() == honest
+    doc = store.docs[1]
+    assert len(doc.text) <= MAX_STORED_TEXT_CHARS and doc.truncated
+    assert doc.char_count == MAX_STORED_TEXT_CHARS + 1
+    assert doc.token_count == MAX_REFERENCE_TOKENS
+    # A count that cannot describe its body is reserved, not believed — a
+    # zero is exactly a record reopening as free.
+    zero = ReferenceDoc.from_dict({**honest, "rid": "ref-3", "token_count": 0})
+    warnings = rebound_reference_doc(zero)
+    assert zero.token_count > len(zero.text) and len(warnings) == 1
+    # Blank once bounded is malformed, and the loader drops it.
+    store.load({"reference_docs": [{**honest, "text": " " * (MAX_STORED_TEXT_CHARS + 1)}]})
+    assert store.docs == []

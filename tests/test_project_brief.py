@@ -29,6 +29,8 @@ from backend.project_brief import (
     build_project_brief,
     parse_project_brief,
     project_sections_block,
+    section_record,
+    within_reference_cap,
 )
 from backend.project_profile import ProjectProfile
 from backend.reference_docs import MAX_REFERENCE_TOKENS
@@ -1054,3 +1056,149 @@ def test_carried_research_passes_readiness_with_the_disclosure_and_the_next_roun
     assert _research_check(client)["detail"] == (
         "Requirements research complete (1 of 2 rounds carried from 21 13 13)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Review findings on PR #149 (Codex)
+# ---------------------------------------------------------------------------
+
+
+def test_a_re_export_moves_this_section_to_the_end_of_the_registry():
+    """``newest_section`` is the LAST entry, so the upsert has to remove and
+    append: replacing in place left a stale section "newest" whenever an
+    earlier section re-exported, and the seed defaults and the manifest read
+    module and discipline from it."""
+    client = _client()
+    session = _rich_session(client)
+    session.project_link = {
+        "project_id": "c" * 32,
+        "name": "Campus X",
+        "brief_updated_at": "2026-09-01T00:00:00+00:00",
+        "seeded_from": [],
+        "research_rounds_at_seed": 0,
+        "sections": [
+            {"number": "21 13 13", "title": "old title", "article_titles": []},
+            {
+                "number": "21 30 00",
+                "title": "Fire Pumps",
+                "article_titles": ["SUMMARY"],
+                "discipline": "Plumbing",
+                "module_id": "generic",
+            },
+        ],
+    }
+    brief = build_project_brief(session, ready=False)
+    assert [s["number"] for s in brief.sections] == ["21 30 00", "21 13 13"]
+    assert brief.newest_section["title"] == "Wet-Pipe Sprinkler Systems"
+    manifest = brief_manifest(brief)
+    assert manifest["discipline"] == "Fire Suppression"  # this section's, not Plumbing
+    assert manifest["module_id"] == session.module.module_id
+    # A brief that has travelled: the sibling section's record survives intact.
+    parsed = parse_project_brief(brief_bytes(brief))
+    assert parsed.sections[0]["discipline"] == "Plumbing"
+    assert parsed.newest_section["number"] == "21 13 13"
+
+
+def test_a_seeded_section_claims_only_the_rounds_it_ran():
+    """The rounds a section ran are the ones appended since its seed. A
+    section that never seeded owns every round it holds, stamps or not; a
+    seeded section owns none until it presses Research — a stamp-matching
+    count with an all-rounds fallback claimed the carried rounds as its own
+    the moment it exported before researching."""
+    client = _client()
+    session = _rich_session(client)
+    stamp = "2026-09-05T00:00:00+00:00"
+    assert section_record(session, ready=False, exported_at=stamp)["research_rounds"] == 1
+
+    session.project_link = {
+        "project_id": "c" * 32,
+        "name": "Campus X",
+        "brief_updated_at": "2026-09-01T00:00:00+00:00",
+        "seeded_from": ["21 05 00"],
+        "research_rounds_at_seed": 1,
+        "sections": [{"number": "21 05 00", "title": "Common Work Results", "research_rounds": 1}],
+    }
+    own = section_record(session, ready=False, exported_at=stamp)
+    assert own["research_rounds"] == 0
+    brief = build_project_brief(session, ready=False)
+    assert {s["number"]: s["research_rounds"] for s in brief.sections} == {
+        "21 05 00": 1,
+        "21 13 13": 0,
+    }
+    # A round run here counts — whatever it was stamped with, since the
+    # section may have been renumbered since (or had no number yet).
+    session.research.restore(
+        append_research_round(session.research.profile_result, _research(), section="21 13 19")
+    )
+    assert section_record(session, ready=False, exported_at=stamp)["research_rounds"] == 1
+
+
+def test_a_brief_reference_is_re_bounded_on_parse_and_the_carry_cap_reads_the_bound():
+    """A serialized record is a claim about text the store never prepared. A
+    hand-edited brief carrying a body past the storage cap under a token
+    count of 1 would have sailed through the carry cap and into every
+    research worker's and verifier seat's prompt whole."""
+    from backend.reference_docs import MAX_STORED_TEXT_CHARS, MAX_TEXT_CHARS, prepare_reference_text
+
+    data = _minimal_brief()
+    forged_text = "x" * (MAX_STORED_TEXT_CHARS + 10)
+    honest_text = "The owner requires 30 minutes of water supply. " * 20
+    data["reference_docs"] = [
+        {
+            "rid": "ref-1",
+            "filename": "forged.txt",
+            "title": "Forged",
+            "text": forged_text,
+            "char_count": len(forged_text),
+            "block_count": 1,
+            "kind": "txt",
+            "token_count": 1,
+        },
+        {
+            "rid": "ref-2",
+            "filename": "honest.txt",
+            "title": "Honest",
+            "text": honest_text,
+            "char_count": len(honest_text),
+            "block_count": 1,
+            "kind": "txt",
+            "token_count": 250,
+        },
+    ]
+    brief = parse_project_brief(json.dumps(data).encode())
+    forged, honest = brief.reference_docs
+    assert len(forged["text"]) <= MAX_STORED_TEXT_CHARS
+    assert forged["text"].startswith("x" * MAX_TEXT_CHARS) and "truncated at" in forged["text"]
+    assert forged["truncated"] is True and forged["char_count"] == len(forged_text)
+    assert forged["token_count"] == MAX_REFERENCE_TOKENS  # the legacy reservation, capped
+    assert honest["text"] == honest_text and honest["token_count"] == 250
+    assert honest["truncated"] is False
+    joined = " ".join(brief.warnings)
+    assert "more text than this app stores" in joined
+    assert "cannot describe its text" in joined
+    assert "Honest" not in joined
+    # The carry cap now sees the reservation: the forged document fills it alone.
+    kept, dropped = within_reference_cap(brief.reference_docs)
+    assert [d["rid"] for d in kept] == ["ref-1"] and dropped == ["Honest"]
+    assert any("Honest" in w for w in brief_manifest(brief)["warnings"])
+
+    # A document this app truncated at export keeps its marker untouched.
+    body, total, truncated = prepare_reference_text("y" * (MAX_TEXT_CHARS + 500))
+    assert truncated
+    data["reference_docs"] = [
+        {
+            "rid": "ref-1",
+            "filename": "big.txt",
+            "title": "Big",
+            "text": body,
+            "char_count": total,
+            "block_count": 1,
+            "kind": "txt",
+            "token_count": MAX_TEXT_CHARS // 4,
+            "truncated": True,
+        }
+    ]
+    brief = parse_project_brief(json.dumps(data).encode())
+    assert brief.reference_docs[0]["text"] == body
+    assert brief.reference_docs[0]["token_count"] == MAX_TEXT_CHARS // 4
+    assert brief.warnings == []

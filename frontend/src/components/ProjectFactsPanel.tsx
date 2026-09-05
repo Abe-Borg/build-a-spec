@@ -74,6 +74,7 @@ const statusChip: Record<ActiveStatus, string> = {
 const GROUP_LABELS = {
   project: "Project-wide",
   discipline: "Discipline-wide",
+  otherDisciplines: "Coordination facts from other disciplines",
   other: "Coordination facts from other sections",
   own: "This section",
 } as const;
@@ -83,6 +84,7 @@ function FactForm({
   setDraft,
   busy,
   submitLabel,
+  currentDiscipline,
   onSubmit,
   onCancel,
 }: {
@@ -90,6 +92,8 @@ function FactForm({
   setDraft: (draft: FactDraft) => void;
   busy: boolean;
   submitLabel: string;
+  /** What a discipline-scoped fact will be bound to (the server decides). */
+  currentDiscipline: string;
   onSubmit: () => void;
   onCancel: () => void;
 }) {
@@ -134,6 +138,16 @@ function FactForm({
           <option value="discipline">discipline-wide</option>
           <option value="section">one section</option>
         </select>
+        {draft.scope === "discipline" && (
+          <span
+            className="text-[10px] text-ink-faint"
+            title="A discipline-wide fact is bound to this session's discipline; other disciplines' sections read it as coordination information"
+          >
+            {currentDiscipline
+              ? `applies to ${currentDiscipline}`
+              : "no discipline recorded for this section — the fact will not be bound to one"}
+          </span>
+        )}
         {draft.scope === "section" && (
           <input
             className="w-24 rounded border border-edge bg-bg px-1 py-0.5 text-[10px] text-ink"
@@ -175,6 +189,7 @@ export default function ProjectFactsPanel({
   items,
   link,
   currentSection,
+  currentDiscipline,
   busy,
   openNonce,
   onAdd,
@@ -185,6 +200,9 @@ export default function ProjectFactsPanel({
   link: ProjectLink | null;
   /** The document's section number, for the "this section" group. */
   currentSection: string;
+  /** The document's discipline: names the discipline-wide group and files
+   *  another discipline's facts as coordination information. */
+  currentDiscipline: string;
   busy: boolean;
   openNonce?: number;
   /** Each resolves to null on success, or the server's reason to show. */
@@ -216,7 +234,7 @@ export default function ProjectFactsPanel({
   const introduced = useRef(false);
 
   const counts = factCounts(items);
-  const groups = groupProjectFacts(items, currentSection);
+  const groups = groupProjectFacts(items, currentSection, currentDiscipline);
 
   // Two effects, deliberately (the FollowUpsPanel lesson): the first only
   // ADDS to the settling set, the second only clears it, keyed to itself.
@@ -300,6 +318,7 @@ export default function ProjectFactsPanel({
             setDraft={setEditDraft}
             busy={busy}
             submitLabel="Save"
+            currentDiscipline={currentDiscipline}
             onSubmit={() => void submitEdit(fact.pid)}
             onCancel={() => setEditing(null)}
           />
@@ -406,7 +425,9 @@ export default function ProjectFactsPanel({
     const label =
       key === "own" && currentSection
         ? `${GROUP_LABELS.own} (${currentSection})`
-        : GROUP_LABELS[key];
+        : key === "discipline" && currentDiscipline
+          ? `${GROUP_LABELS.discipline} (${currentDiscipline})`
+          : GROUP_LABELS[key];
     return (
       <div key={key} className="mt-1">
         <span className="block px-1 text-[10px] font-medium uppercase tracking-wide text-ink-faint">
@@ -455,6 +476,7 @@ export default function ProjectFactsPanel({
           <div className="max-h-64 overflow-y-auto">
             {renderGroup("project", groups.project)}
             {renderGroup("discipline", groups.discipline)}
+            {renderGroup("otherDisciplines", groups.otherDisciplines)}
             {renderGroup("other", groups.other)}
             {renderGroup("own", groups.own)}
             {counts.active === 0 && !adding && (
@@ -471,6 +493,7 @@ export default function ProjectFactsPanel({
               setDraft={setDraft}
               busy={busy}
               submitLabel="Record"
+              currentDiscipline={currentDiscipline}
               onSubmit={() => void submitAdd()}
               onCancel={() => {
                 setAdding(false);

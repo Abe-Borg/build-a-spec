@@ -12,8 +12,13 @@ import type { ProjectFact } from "../types";
 export interface ProjectFactGroups {
   /** Facts that hold for every section of the project. */
   project: ProjectFact[];
-  /** Facts that hold for every section of this discipline. */
+  /** Facts that hold for every section of this discipline (or of a
+   *  discipline nothing proves foreign: an unbound fact, or a session with
+   *  no discipline of its own to compare against). */
   discipline: ProjectFact[];
+  /** Discipline-wide facts recorded by ANOTHER discipline of the project —
+   *  coordination information, never inputs this section drafts to. */
+  otherDisciplines: ProjectFact[];
   /** Coordination facts recorded about OTHER sections of the project. */
   other: ProjectFact[];
   /** Section-scoped facts about the section on screen. */
@@ -23,6 +28,11 @@ export interface ProjectFactGroups {
 }
 
 const normalize = (value: string) => value.split(/\s+/).filter(Boolean).join(" ");
+
+/** How two discipline names compare: whitespace-folded and case-folded, the
+ *  server's `discipline_key`. Anything beyond spelling is the user's naming
+ *  and is shown, not guessed at. */
+const disciplineKey = (value: string) => normalize(value || "").toLowerCase();
 
 /** The numeric tail of a `pf-N` id — the recording order. */
 export function factSeq(pid: string): number {
@@ -41,19 +51,24 @@ function byStatusThenSeq(a: ProjectFact, b: ProjectFact): number {
  *
  * A section-scoped fact belongs to "this section" only when its section
  * number matches the document's; with no section number yet, every
- * section-scoped fact is coordination information from elsewhere — the
- * same rule `ProjectFactStore.context_block` applies server-side, so the
- * panel and the PROJECT CONTEXT block can never disagree about a fact's
- * group.
+ * section-scoped fact is coordination information from elsewhere. A
+ * discipline-scoped fact is another discipline's only when BOTH names are
+ * known and differ — an unbound fact, or a session with no discipline of its
+ * own, stays discipline-wide because nothing proves it foreign. The same
+ * rules `ProjectFactStore.context_block` applies server-side, so the panel
+ * and the PROJECT CONTEXT block can never disagree about a fact's group.
  */
 export function groupProjectFacts(
   items: readonly ProjectFact[],
   currentSection: string,
+  currentDiscipline = "",
 ): ProjectFactGroups {
   const current = normalize(currentSection || "");
+  const discipline = disciplineKey(currentDiscipline);
   const groups: ProjectFactGroups = {
     project: [],
     discipline: [],
+    otherDisciplines: [],
     other: [],
     own: [],
     superseded: [],
@@ -62,7 +77,9 @@ export function groupProjectFacts(
     if (fact.status === "superseded") {
       groups.superseded.push(fact);
     } else if (fact.scope === "discipline") {
-      groups.discipline.push(fact);
+      const bound = disciplineKey(fact.discipline || "");
+      if (bound && discipline && bound !== discipline) groups.otherDisciplines.push(fact);
+      else groups.discipline.push(fact);
     } else if (fact.scope === "section") {
       const section = normalize(fact.section || "");
       if (current && section === current) groups.own.push(fact);
@@ -73,6 +90,7 @@ export function groupProjectFacts(
   }
   groups.project.sort(byStatusThenSeq);
   groups.discipline.sort(byStatusThenSeq);
+  groups.otherDisciplines.sort(byStatusThenSeq);
   groups.other.sort(byStatusThenSeq);
   groups.own.sort(byStatusThenSeq);
   groups.superseded.sort((a, b) => factSeq(b.pid) - factSeq(a.pid));
@@ -123,7 +141,11 @@ export function justSupersededIds(
 /** "project · confirmed · recorded in 21 13 13" — the row's provenance line. */
 export function factProvenance(fact: ProjectFact): string {
   const scope =
-    fact.scope === "section" && fact.section ? `section ${fact.section}` : fact.scope;
+    fact.scope === "section" && fact.section
+      ? `section ${fact.section}`
+      : fact.scope === "discipline" && fact.discipline
+        ? `discipline ${fact.discipline}`
+        : fact.scope;
   const parts = [scope, fact.status];
   if (fact.recorded_in) parts.push(`recorded in ${fact.recorded_in}`);
   if (fact.source_kind && fact.source_kind !== "model") {

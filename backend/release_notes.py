@@ -174,7 +174,11 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "same reply that settles it, grouped by how far "
                             "it reaches — project-wide, discipline-wide, or "
                             "one section's coordination fact — and marked "
-                            "confirmed or assumed with where it came from."
+                            "confirmed or assumed with where it came from. A "
+                            "discipline-wide fact is bound to the discipline "
+                            "that recorded it, so a fire-suppression fact read "
+                            "from an electrical section of the same project is "
+                            "shown as another discipline's, never as your own."
                         ),
                     ),
                     ReleaseItem(

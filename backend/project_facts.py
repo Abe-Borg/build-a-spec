@@ -73,6 +73,9 @@ MAX_DETAIL_CHARS = 600
 MAX_REASON_CHARS = 300
 MAX_SOURCE_REF_CHARS = 120
 MAX_SECTION_CHARS = 40
+# The discipline a discipline-scoped fact is bound to (the recording session's
+# ``effective_discipline``); the same bound ``project_identity`` gives it.
+MAX_DISCIPLINE_CHARS = 80
 # Estimated tokens (len // 4, the engine convention). The chat block is
 # re-billed every turn; the fan-out block leads a cached prefix and is paid
 # once per run, so it may carry a little more.
@@ -114,8 +117,14 @@ class ProjectFact:
     """One settled, project-level fact.
 
     ``scope`` says where it applies: ``project`` (every section), ``discipline``
-    (every section of this discipline) or ``section`` (a coordination fact
-    about ONE section, whose number is in ``section``). ``status`` is
+    (every section of ONE discipline, named in ``discipline`` — bound at record
+    time to the recording session's discipline, never chosen by the model, so
+    a fire-suppression fact carried into an electrical section of the same
+    project reads as another discipline's information rather than as this
+    one's) or ``section`` (a coordination fact about ONE section, whose number
+    is in ``section``). An empty ``discipline`` on a discipline-scoped fact
+    means the recording session had none; it renders unbound rather than
+    being guessed. ``status`` is
     ``confirmed`` when the user stated it or a grounded source establishes
     it, ``assumed`` when it is an accepted default, ``superseded`` once it is
     contradicted — with ``supersede_reason`` and, when a replacement was
@@ -129,6 +138,7 @@ class ProjectFact:
     detail: str = ""
     scope: str = "project"
     section: str = ""
+    discipline: str = ""
     status: str = "confirmed"
     source_kind: str = "user"
     source_ref: str = ""
@@ -148,6 +158,7 @@ class ProjectFact:
             "detail": self.detail,
             "scope": self.scope,
             "section": self.section,
+            "discipline": self.discipline,
             "status": self.status,
             "source_kind": self.source_kind,
             "source_ref": self.source_ref,
@@ -180,6 +191,11 @@ class ProjectFact:
             detail=" ".join(str(data.get("detail", "") or "").split())[:MAX_DETAIL_CHARS],
             scope=scope,
             section=" ".join(str(data.get("section", "") or "").split())[:MAX_SECTION_CHARS],
+            discipline=(
+                " ".join(str(data.get("discipline", "") or "").split())[:MAX_DISCIPLINE_CHARS]
+                if scope == "discipline"
+                else ""
+            ),
             status=status,
             source_kind=source_kind,
             source_ref=" ".join(str(data.get("source_ref", "") or "").split())[
@@ -249,6 +265,7 @@ class ProjectFactStore:
         recorded_in: str,
         recorded_at: str,
         default_source_kind: str = "model",
+        discipline: str = "",
     ) -> tuple[ProjectFact, bool]:
         """Record one fact. Returns ``(fact, was_duplicate)``.
 
@@ -256,6 +273,10 @@ class ProjectFactStore:
         the model restating something already recorded must not double the
         ledger. A statement matching a SUPERSEDED fact records a new one: the
         fact genuinely came back, and the old record keeps its reason.
+
+        ``discipline`` is the recording session's; a discipline-scoped fact is
+        BOUND to it here, and the payload cannot name one — the tool records
+        this discipline's facts, not another's.
         """
         if not isinstance(payload, dict):
             raise ProjectFactError(
@@ -280,6 +301,11 @@ class ProjectFactStore:
             section = section or _clean_str(recorded_in, MAX_SECTION_CHARS, "section")
         else:
             section = ""
+        bound_discipline = (
+            _clean_str(discipline, MAX_DISCIPLINE_CHARS, "discipline")
+            if scope == "discipline"
+            else ""
+        )
         status = payload.get("status") or "assumed"
         if status not in FACT_TOOL_STATUSES:
             raise ProjectFactError(
@@ -309,6 +335,7 @@ class ProjectFactStore:
             detail=_clean_str(payload.get("detail"), MAX_DETAIL_CHARS, "detail"),
             scope=str(scope),
             section=section,
+            discipline=bound_discipline,
             status=str(status),
             source_kind=str(source_kind),
             source_ref=_clean_str(
@@ -329,6 +356,7 @@ class ProjectFactStore:
         replacement: dict[str, Any] | None = None,
         recorded_in: str = "",
         recorded_at: str = "",
+        discipline: str = "",
     ) -> tuple[str, ProjectFact | None]:
         """Retire one fact. Returns ``(outcome, replacement_fact)``.
 
@@ -369,6 +397,9 @@ class ProjectFactStore:
                 recorded_in=recorded_in or before.recorded_in,
                 recorded_at=recorded_at or before.recorded_at,
                 default_source_kind=before.source_kind,
+                # The replacement is the superseding session's statement, so
+                # it binds to THAT discipline when known, else inherits.
+                discipline=discipline or before.discipline,
             )
         except ProjectFactError:
             fact.status = before.status
@@ -385,6 +416,7 @@ class ProjectFactStore:
         recorded_in: str,
         recorded_at: str,
         default_source_kind: str = "model",
+        discipline: str = "",
     ) -> dict[str, Any]:
         """Apply one validated ``record_project_facts`` batch, all or nothing.
 
@@ -420,6 +452,7 @@ class ProjectFactStore:
                     replacement=entry.get("replacement"),
                     recorded_in=recorded_in,
                     recorded_at=recorded_at,
+                    discipline=discipline,
                 )
                 (already if outcome == "already" else superseded).append(entry["id"])
                 if new_fact is not None:
@@ -430,6 +463,7 @@ class ProjectFactStore:
                     recorded_in=recorded_in,
                     recorded_at=recorded_at,
                     default_source_kind=default_source_kind,
+                    discipline=discipline,
                 )
                 (duplicate if was_duplicate else recorded).append(fact.pid)
         except ProjectFactError:
@@ -449,12 +483,17 @@ class ProjectFactStore:
             summary["already_superseded"] = already
         return summary
 
-    def update(self, pid: str, changes: dict[str, Any]) -> str:
+    def update(
+        self, pid: str, changes: dict[str, Any], *, discipline: str = ""
+    ) -> str:
         """Edit an active fact in place (the panel's affordance).
 
         Returns ``ok`` / ``missing``. A superseded fact is history and stays
         read-only; a statement that would duplicate another active fact is
-        refused. The pid never changes — the document may cite it.
+        refused. The pid never changes — the document may cite it. A fact
+        moved INTO discipline scope binds to ``discipline`` (the editing
+        session's); one already bound keeps its discipline, because editing
+        another discipline's fact does not make it this discipline's.
         """
         fact = self.get(pid)
         if fact is None:
@@ -508,10 +547,17 @@ class ProjectFactStore:
             candidate.section = candidate.section or fact.recorded_in
         else:
             candidate.section = ""
+        if candidate.scope == "discipline":
+            candidate.discipline = fact.discipline or _clean_str(
+                discipline, MAX_DISCIPLINE_CHARS, "discipline"
+            )
+        else:
+            candidate.discipline = ""
         fact.statement = candidate.statement
         fact.detail = candidate.detail
         fact.scope = candidate.scope
         fact.section = candidate.section
+        fact.discipline = candidate.discipline
         fact.status = candidate.status
         fact.source_kind = candidate.source_kind
         fact.source_ref = candidate.source_ref
@@ -531,11 +577,16 @@ class ProjectFactStore:
     def snapshot(self) -> list[dict[str, Any]]:
         return [item.to_dict() for item in self.items]
 
-    def context_block(self, *, current_section: str = "") -> str:
+    def context_block(
+        self, *, current_section: str = "", current_discipline: str = ""
+    ) -> str:
         """The ESTABLISHED PROJECT FACTS block for this turn's PROJECT CONTEXT.
 
         Empty store (or only superseded facts) renders ``""`` so a session
         with nothing recorded builds a byte-identical request.
+        ``current_discipline`` is the session's effective discipline: the
+        discipline-scoped facts of any OTHER discipline render as
+        coordination information, never as this discipline's own.
         """
         facts = self.active()
         if not facts:
@@ -543,6 +594,7 @@ class ProjectFactStore:
         lines, omitted = render_fact_lines(
             facts,
             current_section=current_section,
+            current_discipline=current_discipline,
             max_tokens=FACTS_CONTEXT_MAX_TOKENS,
         )
         out = [
@@ -615,29 +667,62 @@ def _seq_of(item: ProjectFact) -> int:
 
 _GROUP_PROJECT = 0
 _GROUP_DISCIPLINE = 1
-_GROUP_OTHER_SECTION = 2
-_GROUP_THIS_SECTION = 3
+_GROUP_OTHER_DISCIPLINE = 2
+_GROUP_OTHER_SECTION = 3
+_GROUP_THIS_SECTION = 4
+# The two coordination groups: facts about OTHER disciplines' and OTHER
+# sections' scope. They trim first and are labelled as information, never as
+# inputs this section drafts to.
+_COORDINATION_GROUPS = (_GROUP_OTHER_DISCIPLINE, _GROUP_OTHER_SECTION)
 
 
 def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
-def _group_of(fact: ProjectFact, current_section: str) -> int:
+def discipline_key(value: str) -> str:
+    """How two discipline names are compared: whitespace-folded, case-folded.
+
+    Disciplines are free text on ``project_identity``, so "Fire Suppression"
+    and "fire suppression" are one discipline; anything beyond spelling is
+    the user's naming, and a mismatch is disclosed (the other name is
+    rendered) rather than guessed at.
+    """
+    return " ".join((value or "").split()).casefold()
+
+
+def _group_of(fact: ProjectFact, current_section: str, current_discipline: str) -> int:
     if fact.scope == "project":
         return _GROUP_PROJECT
     if fact.scope == "discipline":
+        # Unbound (the recording session had no discipline) or no discipline
+        # here to compare against: nothing proves the fact foreign, so it
+        # stays discipline-wide. Only a NAMED, DIFFERENT discipline moves it.
+        if (
+            fact.discipline
+            and current_discipline
+            and discipline_key(fact.discipline) != discipline_key(current_discipline)
+        ):
+            return _GROUP_OTHER_DISCIPLINE
         return _GROUP_DISCIPLINE
     if current_section and fact.section == current_section:
         return _GROUP_THIS_SECTION
     return _GROUP_OTHER_SECTION
 
 
-def _group_header(group: int, current_section: str) -> str:
+def _group_header(group: int, current_section: str, current_discipline: str) -> str:
     if group == _GROUP_PROJECT:
         return "Project-wide:"
     if group == _GROUP_DISCIPLINE:
+        if current_discipline:
+            return f"Discipline-wide ({current_discipline}):"
         return "Discipline-wide:"
+    if group == _GROUP_OTHER_DISCIPLINE:
+        return (
+            "Facts recorded by OTHER disciplines of this project (information "
+            "about their scope — coordinate with it; never a basis for this "
+            "section's provisions):"
+        )
     if group == _GROUP_OTHER_SECTION:
         return (
             "Coordination facts recorded by OTHER sections of this project "
@@ -650,6 +735,8 @@ def fact_label(fact: ProjectFact) -> str:
     """The bracketed scope label a rendered fact line carries."""
     if fact.scope == "section":
         return f"section {fact.section}" if fact.section else "section"
+    if fact.scope == "discipline":
+        return f"discipline {fact.discipline}" if fact.discipline else "discipline"
     return fact.scope
 
 
@@ -681,25 +768,28 @@ def render_fact_lines(
     facts: Sequence[ProjectFact],
     *,
     current_section: str = "",
+    current_discipline: str = "",
     max_tokens: int = FACTS_CONTEXT_MAX_TOKENS,
     escape: Callable[[str], str] | None = None,
 ) -> tuple[list[str], int]:
     """The grouped fact lines, trimmed to a token estimate. ``(lines, omitted)``.
 
-    Order: project-wide (confirmed, then assumed) → discipline-wide →
-    coordination facts from OTHER sections → this section's own. That order
-    is also the trim priority in reverse of usefulness: under the cap,
-    other-section coordination facts go first, then assumed facts, then the
-    tail — so the confirmed project-wide facts, the ones re-deriving would
-    cost the most, are the last to leave. Superseded facts never render.
-    Deterministic, so the same store always renders the same block.
+    Order: project-wide (confirmed, then assumed) → this discipline's →
+    OTHER disciplines' (coordination) → coordination facts from OTHER
+    sections → this section's own. That order is also the trim priority in
+    reverse of usefulness: under the cap, the two coordination groups go
+    first, then assumed facts, then the tail — so the confirmed project-wide
+    facts, the ones re-deriving would cost the most, are the last to leave.
+    Superseded facts never render. Deterministic, so the same store always
+    renders the same block.
     """
     esc = escape or (lambda text: text)
     current = " ".join((current_section or "").split())
+    discipline = " ".join((current_discipline or "").split())
     ordered = sorted(
         (f for f in facts if f.active),
         key=lambda f: (
-            _group_of(f, current),
+            _group_of(f, current, discipline),
             0 if f.status == "confirmed" else 1,
             _seq_of(f),
         ),
@@ -708,7 +798,11 @@ def render_fact_lines(
     for fact in ordered:
         rendered = _render_one(fact, esc)
         entries.append(
-            (_group_of(fact, current), rendered, _estimate_tokens("\n".join(rendered)))
+            (
+                _group_of(fact, current, discipline),
+                rendered,
+                _estimate_tokens("\n".join(rendered)),
+            )
         )
     kept = list(range(len(entries)))
     total = sum(entry[2] for entry in entries) + 40
@@ -716,7 +810,7 @@ def render_fact_lines(
     def _drop_rank(index: int) -> tuple[int, int]:
         group, _lines, _cost = entries[index]
         fact = ordered[index]
-        if group == _GROUP_OTHER_SECTION:
+        if group in _COORDINATION_GROUPS:
             rank = 0
         elif fact.status == "assumed":
             rank = 1
@@ -737,7 +831,7 @@ def render_fact_lines(
     for index in kept:
         group, rendered, _cost = entries[index]
         if group != last_group:
-            lines.append(_group_header(group, current))
+            lines.append(_group_header(group, current, esc(discipline)))
             last_group = group
         lines.extend(rendered)
     return lines, omitted
@@ -815,6 +909,7 @@ def project_facts_block(
     *,
     audience: str,
     current_section: str = "",
+    current_discipline: str = "",
     max_tokens: int = FACTS_FANOUT_MAX_TOKENS,
 ) -> str:
     """The established facts, for one fan-out — rendered ONCE per run.
@@ -823,6 +918,8 @@ def project_facts_block(
     follows the shared framing. Empty (no active facts) renders ``""`` so a
     session without facts builds a request byte-identical to the one this
     app has always sent — the ``reference_context_block`` posture.
+    ``current_section`` / ``current_discipline`` are the run's own, so the
+    grouping the workers read matches the one the chat model reads.
     """
     active = [f for f in (facts or []) if f.active]
     if not active:
@@ -831,6 +928,7 @@ def project_facts_block(
     lines, omitted = render_fact_lines(
         active,
         current_section=current_section,
+        current_discipline=current_discipline,
         max_tokens=max_tokens,
         escape=neutralize_fact_delimiters,
     )
@@ -844,6 +942,9 @@ def project_facts_block(
 
 def project_facts_manifest_facts(
     facts: Iterable[ProjectFact] | None,
+    *,
+    current_section: str = "",
+    current_discipline: str = "",
 ) -> dict[str, Any]:
     """What a Final QC run reviewed against, for the hashed input manifest.
 
@@ -851,14 +952,26 @@ def project_facts_manifest_facts(
     fan-out's own escaped form — never the block's directive prose, so a
     later edit to that wording cannot flip every retained report stale. The
     key is always present, which makes a report from before facts existed
-    read stale once: the reviewers' inputs really did change.
+    read stale once: the reviewers' inputs really did change. Rendered for
+    the run's own section and discipline, so the fingerprint describes the
+    grouping the lenses and seats actually read (both are hashed manifest
+    inputs in their own right already, so this adds no new staleness
+    trigger).
     """
     active = [f for f in (facts or []) if f.active]
     lines, _omitted = render_fact_lines(
-        active, max_tokens=10**9, escape=neutralize_fact_delimiters
+        active,
+        current_section=current_section,
+        current_discipline=current_discipline,
+        max_tokens=10**9,
+        escape=neutralize_fact_delimiters,
     )
     _trimmed_lines, omitted = render_fact_lines(
-        active, max_tokens=FACTS_FANOUT_MAX_TOKENS, escape=neutralize_fact_delimiters
+        active,
+        current_section=current_section,
+        current_discipline=current_discipline,
+        max_tokens=FACTS_FANOUT_MAX_TOKENS,
+        escape=neutralize_fact_delimiters,
     )
     return {
         "count": len(active),
@@ -934,8 +1047,9 @@ _FACT_FIELD_PROPERTIES: dict[str, Any] = {
         "enum": list(FACT_SCOPES),
         "description": (
             "project = holds for every section; discipline = every section of "
-            "this discipline; section = a coordination fact about one section "
-            "(give its number in 'section'). Defaults to project."
+            "THIS session's discipline (the fact is bound to it automatically); "
+            "section = a coordination fact about one section (give its number "
+            "in 'section'). Defaults to project."
         ),
     },
     "section": {
@@ -994,8 +1108,10 @@ RECORD_PROJECT_FACTS_TOOL: dict[str, Any] = {
         "status: confirmed when the user stated it or a grounded source "
         "establishes it; assumed when it is your default the user accepted. "
         "scope: project (every section), discipline (every section of this "
-        "discipline), or section (one section's coordination fact — give the "
-        "section number). source_kind names where it came from; source_ref "
+        "session's discipline — bound to it automatically, so another "
+        "discipline's sections read it as coordination information), or "
+        "section (one section's coordination fact — give the section number). "
+        "source_kind names where it came from; source_ref "
         "carries the research item id (r-...), the attached document id "
         "(ref-...), or the Final QC finding id.\n\n"
         "Supersede an existing fact (by its pf- id) the moment the user contradicts it: give the "

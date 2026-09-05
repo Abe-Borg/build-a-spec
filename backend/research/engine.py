@@ -2248,10 +2248,14 @@ def run_requirements_research(
     reference_block = reference_context_block(
         reference_docs, audience="research"
     )
-    # Same once-per-round rule, same cached prefix. The section label tells
-    # the block which section-scoped facts are this section's own.
+    # Same once-per-round rule, same cached prefix. The section label and the
+    # discipline tell the block which facts are this section's own and which
+    # are another discipline's coordination information.
     facts_block = project_facts_block(
-        project_facts, audience="research", current_section=section_label
+        project_facts,
+        audience="research",
+        current_section=section_label,
+        current_discipline=discipline,
     )
 
     outcomes: dict[str, _DimensionOutcome] = {}

@@ -295,6 +295,10 @@ export interface ProjectFact {
   scope: "project" | "discipline" | "section";
   /** The section a section-scoped fact is about ("" for wider scopes). */
   section: string;
+  /** The discipline a discipline-scoped fact is bound to — the recording
+   *  session's, set server-side ("" for other scopes, or when that session
+   *  had no discipline recorded). */
+  discipline: string;
   status: "confirmed" | "assumed" | "superseded";
   source_kind: "user" | "research" | "reference" | "qc" | "model" | "brief";
   /** A research item id, an attached document id, or a QC finding id. */

@@ -876,3 +876,246 @@ def test_the_diagnostics_snapshot_counts_facts_without_their_text():
     session_block = json.dumps(snap["session"])
     assert '"project_facts": {"active": 1, "superseded": 1}' in session_block
     assert "secret sauce" not in json.dumps(snap)
+
+
+# ---------------------------------------------------------------------------
+# Discipline binding (caught in review on PR #149, Codex)
+# ---------------------------------------------------------------------------
+
+
+def test_a_discipline_scoped_fact_binds_to_the_recording_session_not_the_payload():
+    """"Discipline-wide" has to mean ONE discipline. The recording session's
+    discipline is stamped on the fact; the payload cannot name another, and
+    the other scopes never carry one."""
+    store = ProjectFactStore()
+    fact, _ = store.record(
+        {
+            "statement": "Pre-action in every data hall.",
+            "scope": "discipline",
+            "discipline": "Plumbing",  # ignored — the tool records THIS discipline's facts
+        },
+        recorded_in="21 13 13",
+        recorded_at="2026-09-04",
+        discipline="Fire Suppression",
+    )
+    assert fact.discipline == "Fire Suppression"
+    project, _ = store.record(
+        {"statement": "Project fact."},
+        recorded_in="21 13 13",
+        recorded_at="d",
+        discipline="Fire Suppression",
+    )
+    section, _ = store.record(
+        {"statement": "Section fact.", "scope": "section"},
+        recorded_in="21 13 13",
+        recorded_at="d",
+        discipline="Fire Suppression",
+    )
+    assert project.discipline == "" and section.discipline == ""
+    unbound, _ = store.record(
+        {"statement": "Unbound discipline fact.", "scope": "discipline"},
+        recorded_in="21 13 13",
+        recorded_at="d",
+    )
+    assert unbound.discipline == ""
+    # Persisted, read back, and never carried by a non-discipline scope.
+    assert fact.to_dict()["discipline"] == "Fire Suppression"
+    assert ProjectFact.from_dict(fact.to_dict()).discipline == "Fire Suppression"
+    assert ProjectFact.from_dict({**project.to_dict(), "discipline": "Stray"}).discipline == ""
+    reloaded = ProjectFactStore()
+    reloaded.load(store.to_dict())
+    assert [f.discipline for f in reloaded.items] == ["Fire Suppression", "", "", ""]
+
+
+def test_another_disciplines_facts_render_as_coordination_information():
+    store = ProjectFactStore()
+    store.record(
+        {"statement": "Pre-action in every data hall.", "scope": "discipline", "status": "confirmed"},
+        recorded_in="21 13 13",
+        recorded_at="2026-09-04",
+        discipline="Fire Suppression",
+    )
+    store.record(
+        {
+            "statement": "Releasing panels sit on the life-safety branch.",
+            "scope": "discipline",
+            "status": "confirmed",
+        },
+        recorded_in="26 05 00",
+        recorded_at="2026-09-04",
+        discipline="Electrical",
+    )
+    store.record(
+        {"statement": "Unbound discipline fact.", "scope": "discipline"},
+        recorded_in="21 13 13",
+        recorded_at="2026-09-04",
+    )
+
+    block = store.context_block(current_section="21 13 16", current_discipline="Fire Suppression")
+    lines = block.splitlines()
+    own = lines.index("Discipline-wide (Fire Suppression):")
+    other = next(
+        i for i, l in enumerate(lines) if l.startswith("Facts recorded by OTHER disciplines")
+    )
+    pf1 = next(i for i, l in enumerate(lines) if l.startswith("- pf-1 [discipline Fire Suppression, confirmed]"))
+    pf2 = next(i for i, l in enumerate(lines) if l.startswith("- pf-2 [discipline Electrical, confirmed]"))
+    pf3 = next(i for i, l in enumerate(lines) if l.startswith("- pf-3 [discipline, assumed]"))
+    assert own < pf1 < other < pf2
+    assert own < pf3 < other  # unbound: nothing proves it foreign, so it stays discipline-wide
+    assert "never a basis for this section's provisions" in lines[other]
+
+    # Spelling never splits a discipline; a different NAME is shown, not guessed at.
+    folded = store.context_block(
+        current_section="21 13 16", current_discipline="  fire   SUPPRESSION "
+    )
+    assert folded.index("pf-1") < folded.index("Facts recorded by OTHER disciplines") < folded.index("pf-2")
+    # From the electrical side, the fire-suppression fact is the foreign one.
+    flipped = store.context_block(current_section="26 05 00", current_discipline="Electrical")
+    assert (
+        flipped.index("Discipline-wide (Electrical):")
+        < flipped.index("pf-2")
+        < flipped.index("Facts recorded by OTHER disciplines")
+        < flipped.index("pf-1")
+    )
+    # No discipline here to compare against: every discipline fact stays put.
+    blank = store.context_block(current_section="21 13 16")
+    assert "Facts recorded by OTHER disciplines" not in blank
+    assert "Discipline-wide:" in blank and "Discipline-wide (" not in blank
+
+
+def test_other_disciplines_facts_trim_first_with_the_other_coordination_facts():
+    facts = [
+        ProjectFact(pid="pf-1", statement="Confirmed project fact " + "x" * 200, status="confirmed"),
+        ProjectFact(
+            pid="pf-2",
+            statement="Own discipline fact " + "y" * 200,
+            scope="discipline",
+            discipline="Fire Suppression",
+            status="confirmed",
+        ),
+        ProjectFact(
+            pid="pf-3",
+            statement="Other discipline fact " + "z" * 200,
+            scope="discipline",
+            discipline="Electrical",
+            status="confirmed",
+        ),
+    ]
+    lines, omitted = render_fact_lines(
+        facts, current_section="21 13 13", current_discipline="Fire Suppression", max_tokens=180
+    )
+    joined = "\n".join(lines)
+    assert omitted == 1
+    assert "pf-3" not in joined and "pf-2" in joined and "pf-1" in joined
+
+
+def test_update_binds_a_fact_moved_into_discipline_scope_and_keeps_an_existing_binding():
+    store = ProjectFactStore()
+    store.record({"statement": "Was project-wide."}, recorded_in="21 13 13", recorded_at="d")
+    store.record(
+        {"statement": "Fire fact.", "scope": "discipline"},
+        recorded_in="21 13 13",
+        recorded_at="d",
+        discipline="Fire Suppression",
+    )
+    # Moved INTO discipline scope by an Electrical session: bound to Electrical.
+    assert store.update("pf-1", {"scope": "discipline"}, discipline="Electrical") == "ok"
+    assert store.get("pf-1").discipline == "Electrical"
+    # Editing another discipline's fact does not make it this discipline's.
+    assert store.update("pf-2", {"statement": "Fire fact, reworded."}, discipline="Electrical") == "ok"
+    assert store.get("pf-2").discipline == "Fire Suppression"
+    # Leaving discipline scope clears the binding.
+    assert store.update("pf-2", {"scope": "project"}, discipline="Electrical") == "ok"
+    assert store.get("pf-2").discipline == ""
+
+
+def test_a_replacement_binds_to_the_superseding_session_or_inherits():
+    store = ProjectFactStore()
+    store.record(
+        {"statement": "Old fire fact.", "scope": "discipline"},
+        recorded_in="21 13 13",
+        recorded_at="d",
+        discipline="Fire Suppression",
+    )
+    outcome, new = store.supersede(
+        "pf-1",
+        "changed",
+        replacement={"statement": "New fire fact."},
+        recorded_in="21 13 16",
+        recorded_at="d",
+        discipline="Fire Protection",
+    )
+    assert outcome == "superseded" and new is not None
+    assert new.discipline == "Fire Protection"
+    # A superseding session with no discipline of its own inherits the binding.
+    outcome, newer = store.supersede(
+        "pf-2", "changed again", replacement={"statement": "Newest fire fact."},
+        recorded_in="21 13 16", recorded_at="d",
+    )
+    assert newer is not None and newer.discipline == "Fire Protection"
+
+
+def test_the_tool_and_the_panel_bind_discipline_facts_to_the_sessions_discipline(monkeypatch):
+    client = _client()
+    resp = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {"action": "set_project_identity", "target_id": "sec", "discipline": "Fire Suppression"},
+                {"action": "replace", "target_id": "sec", "text": "Wet-Pipe", "numbering": "21 13 13"},
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    _patch_client(
+        monkeypatch,
+        _facts_turn(
+            {
+                "record": [
+                    {
+                        "statement": "Pre-action in every data hall.",
+                        "scope": "discipline",
+                        "status": "confirmed",
+                        "source_kind": "user",
+                    }
+                ]
+            }
+        ),
+    )
+    resp = client.post("/api/chat", json={"message": "Every data hall gets pre-action."})
+    [recorded] = [e for e in _parse_sse(resp.text) if e["type"] == "project_facts"]
+    assert recorded["project_facts"][0]["discipline"] == "Fire Suppression"
+
+    resp = client.post(
+        "/api/project-facts",
+        json={"statement": "Panel-added discipline fact.", "scope": "discipline"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["project_facts"][1]["discipline"] == "Fire Suppression"
+    # A fact carried in from another discipline reads as coordination
+    # information in this session's context, under a header naming THIS one.
+    session = sessions.get_session()
+    session.facts.record(
+        {"statement": "Releasing panels sit on the life-safety branch.", "scope": "discipline"},
+        recorded_in="26 05 00",
+        recorded_at="2026-09-04",
+        discipline="Electrical",
+    )
+    fake = FakeClient([text_turn(["ok"])])
+    _patch_client(monkeypatch, fake)
+    client.post("/api/chat", json={"message": "next"})
+    from tests.fakes import request_context_text
+
+    context = request_context_text(fake.messages.last_request)
+    assert "Discipline-wide (Fire Suppression):" in context
+    assert (
+        context.index("Pre-action in every data hall.")
+        < context.index("Facts recorded by OTHER disciplines")
+        < context.index("Releasing panels sit on the life-safety branch.")
+    )
+    payload = client.get("/api/doc").json()
+    assert [f["discipline"] for f in payload["project_facts"]] == [
+        "Fire Suppression",
+        "Fire Suppression",
+        "Electrical",
+    ]

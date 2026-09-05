@@ -1122,6 +1122,9 @@ def test_structural_practice_seeds_one_project_fact_per_panel_group_and_the_show
         ("pf-3", "section", "confirmed"),
     ]
     assert facts[2].section == "21 30 00" and facts[2].recorded_in == "21 13 13"
+    # The discipline-wide fact is bound to the showcase's own discipline, so
+    # the panel's group header carries a name in the tour.
+    assert facts[1].discipline == "General Requirements"
     assert all(f.active for f in facts)
     # Deterministic: a second build is the same fixture, and the tutorial
     # session it was built from is untouched.

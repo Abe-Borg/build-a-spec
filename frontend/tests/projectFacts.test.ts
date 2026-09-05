@@ -16,6 +16,7 @@ function fact(overrides: Partial<ProjectFact> & { pid: string }): ProjectFact {
     detail: "",
     scope: "project",
     section: "",
+    discipline: "",
     status: "confirmed",
     source_kind: "user",
     source_ref: "",
@@ -97,4 +98,34 @@ test("the provenance line names reach, status, recording section and a non-model
     factProvenance(fact({ pid: "pf-2", scope: "section", section: "21 30 00", source_kind: "model", recorded_in: "" })),
     "section 21 30 00 · confirmed",
   );
+});
+
+test("a discipline-wide fact is another discipline's only when both names are known and differ", () => {
+  const items = [
+    fact({ pid: "pf-1", scope: "discipline", discipline: "Fire Suppression" }),
+    fact({ pid: "pf-2", scope: "discipline", discipline: "Electrical", recorded_in: "26 05 00" }),
+    // Unbound: the recording session had no discipline of its own.
+    fact({ pid: "pf-3", scope: "discipline" }),
+  ];
+  const fire = groupProjectFacts(items, "21 13 16", "Fire Suppression");
+  assert.deepEqual(fire.discipline.map((f) => f.pid), ["pf-1", "pf-3"]);
+  assert.deepEqual(fire.otherDisciplines.map((f) => f.pid), ["pf-2"]);
+  // Spelling never splits a discipline.
+  assert.deepEqual(
+    groupProjectFacts(items, "", "  fire   SUPPRESSION ").otherDisciplines.map((f) => f.pid),
+    ["pf-2"],
+  );
+  // From the electrical side, the fire-suppression fact is the foreign one.
+  const electrical = groupProjectFacts(items, "26 05 00", "Electrical");
+  assert.deepEqual(electrical.discipline.map((f) => f.pid), ["pf-2", "pf-3"]);
+  assert.deepEqual(electrical.otherDisciplines.map((f) => f.pid), ["pf-1"]);
+  // No discipline on screen: nothing proves a fact foreign.
+  const blank = groupProjectFacts(items, "21 13 16");
+  assert.deepEqual(blank.discipline.map((f) => f.pid), ["pf-1", "pf-2", "pf-3"]);
+  assert.deepEqual(blank.otherDisciplines, []);
+  assert.equal(
+    factProvenance(items[0]),
+    "discipline Fire Suppression · confirmed · recorded in 21 13 13 · source: user",
+  );
+  assert.equal(factProvenance(items[2]), "discipline · confirmed · recorded in 21 13 13 · source: user");
 });

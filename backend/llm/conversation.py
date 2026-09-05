@@ -656,6 +656,7 @@ class SessionState:
                 recorded_in=recorded_in,
                 recorded_at=recorded_at,
                 default_source_kind="user",
+                discipline=effective_discipline(self),
             )
             return "ok", self.facts.snapshot()
 
@@ -665,7 +666,9 @@ class SessionState:
         with self._turn_state_lock:
             if self.turn_active:
                 return "active", []
-            outcome = self.facts.update(pid, changes)
+            outcome = self.facts.update(
+                pid, changes, discipline=effective_discipline(self)
+            )
             if outcome == "missing":
                 return "missing", []
             return "ok", self.facts.snapshot()
@@ -689,6 +692,7 @@ class SessionState:
                 replacement=replacement,
                 recorded_in=recorded_in,
                 recorded_at=recorded_at,
+                discipline=effective_discipline(self),
             )
             if outcome == "missing":
                 return "missing", []
@@ -1997,9 +2001,14 @@ def _turn_context_text(session: SessionState) -> str:
     # Established project facts sit right after the research profile — both
     # are "what is already known" — and BEFORE the document, so the model
     # reads the project's settled inputs before the provisions that should
-    # follow them. Headed ESTABLISHED PROJECT FACTS, never "open items".
+    # follow them. Headed ESTABLISHED PROJECT FACTS, never "open items". The
+    # discipline is what tells another discipline's facts apart from this
+    # one's — they render as coordination information, not as inputs here.
     try:
-        facts_block = session.facts.context_block(current_section=doc.number)
+        facts_block = session.facts.context_block(
+            current_section=doc.number,
+            current_discipline=effective_discipline(session),
+        )
     except Exception:  # noqa: BLE001 - context assembly must never fail a turn
         facts_block = ""
     if facts_block:
@@ -3054,14 +3063,19 @@ def _run_record_project_facts(
     the active ids so the model self-corrects, and the batch is applied all
     or nothing. Every fact is stamped with the section that recorded it and
     the local date — the provenance a carried fact still shows in the next
-    section.
+    section — and a discipline-scoped fact is bound to this session's
+    discipline, which is what lets the next section tell its own
+    discipline's facts from another's.
     """
     store = session.facts
     recorded_in = " ".join(session.doc.doc.number.split())
     try:
         payload = validate_record_payload(block.get("input") or {})
         summary = store.apply(
-            payload, recorded_in=recorded_in, recorded_at=current_date_iso()
+            payload,
+            recorded_in=recorded_in,
+            recorded_at=current_date_iso(),
+            discipline=effective_discipline(session),
         )
     except ProjectFactError as exc:
         return (

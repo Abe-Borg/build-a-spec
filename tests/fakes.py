@@ -481,6 +481,30 @@ def _container_of(turn: SimpleNamespace) -> dict:
     return {} if container is None else {"container": container}
 
 
+def _stop_details(refusal_category: str | None) -> dict:
+    """The optional ``refusal_category=`` kwarg, as response attributes.
+
+    The provider populates ``stop_details`` only when ``stop_reason`` is
+    ``refusal``, and its ``category`` can be null even then — so absent means
+    "no category named", which is a real shape a refusal arrives in, not a
+    broken fixture. Attached only when supplied, the ``container`` posture,
+    so every existing fixture stays byte-for-byte what it was.
+    """
+    if refusal_category is None:
+        return {}
+    return {
+        "stop_details": SimpleNamespace(
+            type="refusal", category=refusal_category, explanation=""
+        )
+    }
+
+
+def _stop_details_of(turn: SimpleNamespace) -> dict:
+    """Carry a scripted turn's stop_details onto a rebuilt final message."""
+    details = getattr(turn, "stop_details", None)
+    return {} if details is None else {"stop_details": details}
+
+
 def raw_turn(
     content: list[SimpleNamespace],
     *,
@@ -490,6 +514,7 @@ def raw_turn(
     container: str | None = None,
     usage: SimpleNamespace | None = None,
     snapshot_usage: SimpleNamespace | None = None,
+    refusal_category: str | None = None,
 ) -> SimpleNamespace:
     """A scripted response with arbitrary content blocks (thinking,
     server tools, pause_turn shapes) for the chat loop's fake client.
@@ -499,13 +524,16 @@ def raw_turn(
     a provider continuation container id (see :func:`_container`).
     ``snapshot_usage`` scripts what ``current_message_snapshot`` reports
     when a turn is stopped mid-stream, which is normally a much smaller
-    placeholder than the final message's count."""
+    placeholder than the final message's count. ``refusal_category`` scripts
+    the ``stop_details`` a declined turn carries (see :func:`_stop_details`);
+    pair it with ``stop_reason="refusal"``."""
     turn = SimpleNamespace(
         chunks=list(chunks or []),
         content=list(content),
         stop_reason=stop_reason,
         events=events,
         **_container(container),
+        **_stop_details(refusal_category),
     )
     # Attached only when supplied, like ``container``: ``SequencedFakeClient``
     # routes on ``hasattr(turn, "usage")`` to pick its stream context, so an
@@ -570,6 +598,7 @@ class _FakeStreamCtx:
             stop_reason=self._turn.stop_reason,
             usage=getattr(self._turn, "usage", None),
             **_container_of(self._turn),
+            **_stop_details_of(self._turn),
         )
 
     @property
@@ -761,6 +790,7 @@ def research_response(
     tokens: dict[str, int] | None = None,
     tool_name: str = "submit_requirements_research",
     container: str | None = None,
+    refusal_category: str | None = None,
 ) -> SimpleNamespace:
     """A terminal research response: search results + the output tool call.
 
@@ -813,6 +843,7 @@ def research_response(
             **(tokens or {}),
         ),
         **_container(container),
+        **_stop_details(refusal_category),
     )
 
 
@@ -862,6 +893,7 @@ def qc_findings_response(
     fetches: int = 0,
     tokens: dict[str, int] | None = None,
     container: str | None = None,
+    refusal_category: str | None = None,
 ) -> SimpleNamespace:
     """A terminal Final-QC lens response: search results + submit_qc_findings.
 
@@ -906,6 +938,7 @@ def qc_findings_response(
             **(tokens or {}),
         ),
         **_container(container),
+        **_stop_details(refusal_category),
     )
 
 
@@ -921,6 +954,7 @@ def qc_verdict_response(
     stop_reason: str = "tool_use",
     tokens: dict[str, int] | None = None,
     container: str | None = None,
+    refusal_category: str | None = None,
 ) -> SimpleNamespace:
     """A Final-QC verifier response: a submit_qc_verdict tool call.
 
@@ -956,6 +990,7 @@ def qc_verdict_response(
         stop_reason=stop_reason,
         usage=usage(**(tokens or {})),
         **_container(container),
+        **_stop_details(refusal_category),
     )
 
 
@@ -1221,6 +1256,7 @@ class _FakeBatches:
                 stop_reason=turn.stop_reason,
                 usage=getattr(turn, "usage", None),
                 **_container_of(turn),
+                **_stop_details_of(turn),
             )
             results.append(
                 SimpleNamespace(

@@ -65,11 +65,14 @@ from ..research.engine import (
     research_manifest_facts,
 )
 from ..research.grounding import (
+    REFUSAL_KIND,
     STOP_CLASS_COMPLETE,
     STOP_CLASS_PAUSE,
+    STOP_CLASS_REFUSED,
     classify_stop_reason,
     collect_search_evidence_detailed,
     normalize_url,
+    refusal_category,
     response_container_id,
     validate_cited_sources,
 )
@@ -3107,6 +3110,29 @@ class _CallResult:
     failure_class: str = ""
 
 
+def _refusal_error(response: Any) -> str:
+    """The message a declined lens, seat, or grouping call is recorded under.
+
+    One definition because both transports have to say the same thing: the
+    streamed path and the batched path are meant to differ in transport
+    only, and a reviewer comparing two runs must not find a refusal
+    described one way in one and another way in the other.
+
+    The recorded outcome stays a FAILED call either way, which is what keeps
+    the safety property intact: a declined lens or seat leaves the run
+    partial and readiness blocked, exactly as any other failed call does. A
+    refusal must never read as "reviewed and found clean".
+    """
+    category = refusal_category(response)
+    return (
+        "The model's safety classifier declined this review call"
+        + (f" (category: {category})" if category else "")
+        + ". This is a decision about the request's content rather than a "
+        "transient failure, so re-running it unchanged will land the same "
+        "way; the affected coverage is recorded as incomplete."
+    )
+
+
 def _response_text(response: Any) -> str:
     chunks: list[str] = []
     for block in getattr(response, "content", None) or []:
@@ -3498,6 +3524,15 @@ def _run_streaming_call(
                     )
                     messages = sanitize_messages_for_resend(messages)
                     continue
+                if stop_class == STOP_CLASS_REFUSED:
+                    return _CallResult(
+                        None,
+                        all_responses,
+                        [*billed, *all_responses],
+                        _refusal_error(response),
+                        api_request_count,
+                        REFUSAL_KIND,
+                    )
                 return _CallResult(
                     None,
                     all_responses,
@@ -5290,6 +5325,12 @@ def _apply_batch_item(
             [*state.messages, {"role": "assistant", "content": response.content}]
         )
         state.continuations += 1
+        return
+    if stop_class == STOP_CLASS_REFUSED:
+        # Terminal, and deliberately not retried: the batch round loop exists
+        # to carry continuations and transient failures forward, and a
+        # content decision is neither.
+        state.settle(_refusal_error(response), REFUSAL_KIND)
         return
     state.settle(
         "QC response incomplete (stop_reason: "

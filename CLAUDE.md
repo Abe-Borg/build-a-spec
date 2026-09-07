@@ -8364,6 +8364,109 @@ his complaints. All fixed here; 1.14.0's own work ships with them.
   false/None). Frontend: the capability contract admits `export.open-in-word`
   (`npm test` 226, `npm run build` clean). Backend deps unchanged.
 
+## A refusal is not a truncation — implemented notes
+
+Found by a prompt-optimization audit of every Claude API call site (the
+review found the integration otherwise current: adaptive thinking with
+per-phase effort, the caching architecture and its TTL-ordering pin,
+`strict: true` output tools, `allowed_callers: ["direct"]` re-verified
+against live docs, the two-layer untrusted-attachment defence, and no
+pressure-language or JSON-forcing scaffolds anywhere). The one real gap
+was on the response side: **nothing in the app had ever looked for
+`stop_reason == "refusal"`,** and a grep confirmed zero occurrences of it
+or of `stop_details` outside unrelated app-level uses of the word.
+
+- **The models this app runs can decline a request, and it does not raise.**
+  Sonnet 5 (interview, research, the template pass) and Opus 5 (Final QC)
+  both run safety classifiers that can return a normal HTTP 200 carrying
+  `stop_reason: "refusal"` and a `stop_details` category — and when the
+  classifier fires before any output, an EMPTY `content` array. Anthropic's
+  own guidance is explicit that a caller must branch on `stop_reason`
+  before reading content. The domain gives this real surface area rather
+  than being theoretical: clean-agent chemistry, hazmat classification, and
+  the generic module's security / access-control / surveillance disciplines
+  are exactly the benign-adjacent categories the documentation names as
+  occasional false-positive triggers.
+- **`classify_stop_reason` gained a fourth class rather than each caller
+  gaining a check.** `research/grounding.py` already owned "what does this
+  stop_reason mean" for both fan-outs, so `STOP_CLASS_REFUSED` goes there
+  and a fifth consumer inherits it for free — the one-derivation rule this
+  file keeps everywhere else. Safe by construction: every existing consumer
+  is an `if complete / if pause / else`, so a new class lands in the same
+  terminal `else` it always did, and no test bound to the constants.
+  `STOP_CLASS_INCOMPLETE` narrows in meaning; it does not change behavior
+  for anything that already reached it.
+- **Classification reads `stop_reason`, never `stop_details`.** That object
+  is informational and is documented as possibly absent even on a genuine
+  refusal, so branching on it would miss real ones. `refusal_category()` is
+  a separate, fully defensive read (duck-typed over SDK objects and dicts,
+  `""` for absent/null/non-string) whose blank means "no category named" —
+  never "not a refusal", which the caller has already decided.
+- **The category is bounded, the kind is closed — and the split is the
+  point.** A category is provider text from an OPEN set that reaches a
+  drawer, a chat transcript, and a QC report's error line, so
+  `refusal_category` strips it to one plain alphanumeric token capped at 40
+  chars. The telemetry token stays a closed-vocabulary constant
+  (`grounding.REFUSAL_KIND`), which research files as
+  `DIMENSION_ERROR_REFUSAL` (now a real member of `DIMENSION_ERROR_KINDS`,
+  so `sanitized_error_kind` keeps it instead of degrading it to
+  `unrecognized`) and Final QC as a `_CallResult.failure_class` — a field
+  that already existed and was simply never set on this branch. **One
+  string literal**, shared, because a bundle that spells it two ways
+  answers half the question.
+- **Terminal everywhere, and it already was.** Each engine's refusal branch
+  `return`s rather than falling into the retry loop, which is correct and
+  needed no change: a decision about the request's content earns the same
+  answer on the identical request, so retrying only spends money. What
+  changed is the label, not the control flow. The research test pins this
+  by scripting exactly ONE turn for the declined dimension — a retry would
+  exhaust the script and raise.
+- **Four call sites, four registers, one meaning.** Chat writes a bracketed
+  placeholder in the existing `[Generation stopped by user.]` idiom (the
+  empty-content case is the whole of what the user sees, and "cut off"
+  invited them to resend the identical message); research and QC each
+  build theirs from one helper per engine so the streamed and batched
+  transports cannot drift; the template pass raises a `TemplateError`
+  naming the decline and pointing at Exact, instead of the "malformed
+  content" wording that would send the user round the same loop. Message
+  wording differs by audience on purpose — what is shared is the
+  classification and the category read, which is where drift would matter.
+- **A refused lens or seat stays a FAILED call, deliberately.** That is what
+  keeps the existing safety property: incomplete coverage leaves the run
+  partial and readiness blocked, and a refused seat still makes its
+  candidate `inconclusive` (infrastructure silence is never evidence for or
+  against a finding). A refusal must never read as "reviewed and clean".
+- **Chat also emits a `chat_refusal` app_event.** The round's own trace
+  event already carried the raw `stop_reason`; the activity feed and
+  support bundle are where an operator looks first, and they carried
+  nothing. Emitted outside `owned_model_turn_guard`, per the standing rule
+  that `app_event`'s lazy first-call file I/O must not run under that lock.
+- **No new route, event type, payload key, or dependency**, and no frontend
+  change: the runner-level `error_kind` the frontend types as
+  `"auth_error" | ""` is a different, narrower field (derived from an
+  exception attribute), and `failure_class` is engine-internal and never
+  serialized. Both were checked rather than assumed.
+- **Tests**: `tests/test_refusal_handling.py` (14) — the classifier's fourth
+  class plus every other class unchanged, the category read across both
+  response shapes and its bounding, a declined dimension named and NOT
+  retried, a truncated one still reading `incomplete_response` (the new
+  branch narrows the catch-all rather than swallowing it), the kind
+  surviving the telemetry projection, a declined lens leaving coverage
+  incomplete, both verification transports describing a refused SEAT
+  identically (a refused *lens* would exercise phase 1, which always
+  streams — the test asserts `client.batches.created` matches the flag so
+  it cannot pass by comparing streaming against itself), chat's declined
+  message with and without a category, a truncated chat turn still saying
+  "cut off", a mid-stream decline keeping the partial text it was billed
+  for, and the template pass. `tests/fakes.py` gains `refusal_category=` on
+  `raw_turn`/`research_response`/`qc_findings_response`/
+  `qc_verdict_response`, attached ONLY when supplied (the `container`
+  convention), so every existing fixture stays byte-identical. Each of the
+  four mechanisms was reverted in place to prove it load-bearing: research
+  → 2 red, QC (streaming + batched together) → 2 red, the batched branch
+  alone → 1 red, chat → 2 red, template → 1 red. Full suite 1887 passed,
+  9 skipped.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

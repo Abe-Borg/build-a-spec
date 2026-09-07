@@ -133,7 +133,7 @@ from ..qc.apply import (
 )
 from ..qc.context import qc_review_context_block
 from ..research import ResearchRunner, research_context_block
-from ..research.grounding import response_container_id
+from ..research.grounding import refusal_category, response_container_id
 from .server_tool_pairing import (
     without_unpaired_server_tool_uses as _without_unpaired_server_tool_uses,
 )
@@ -3816,11 +3816,36 @@ def stream_user_turn(
                 # invalid, so it's dropped. An empty/whitespace-only text
                 # block left over from a stop clicked before any real content
                 # arrived is dropped too, rather than committing blank text.
-                fallback = (
-                    "[Generation stopped by user.]"
-                    if stop_reason == "user_stop"
-                    else "[Response was cut off before completion.]"
-                )
+                #
+                # A refusal is its own case and must not borrow the truncation
+                # wording. The models this app runs can decline a turn
+                # outright — a normal 200 with stop_reason "refusal", nothing
+                # raised — and a classifier decline typically arrives with an
+                # EMPTY content array, so the fallback below is exactly what
+                # the user would see. Telling them the reply was "cut off"
+                # invites them to resend the identical message, which earns
+                # the identical answer; rewording is what actually helps.
+                if stop_reason == "refusal":
+                    category = refusal_category(final)
+                    fallback = (
+                        "[The model declined to answer this turn"
+                        + (f" (safety review: {category})" if category else "")
+                        + ". This was a decision about the request's content, "
+                        "not an error — rephrasing it is more likely to help "
+                        "than sending it again unchanged.]"
+                    )
+                    # The activity feed and support bundle are where an
+                    # operator looks first; the round's own trace event
+                    # already carries the raw stop_reason, but not this.
+                    _trace.app_event(
+                        "chat_refusal",
+                        round=_round,
+                        category=category,
+                    )
+                elif stop_reason == "user_stop":
+                    fallback = "[Generation stopped by user.]"
+                else:
+                    fallback = "[Response was cut off before completion.]"
                 content = [
                     b
                     for b in content

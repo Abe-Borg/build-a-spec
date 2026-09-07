@@ -30,6 +30,11 @@ import time
 from typing import Any
 
 from ..research.engine import RequirementsProfile, ResearchItem
+from ..research.grounding import (
+    STOP_CLASS_REFUSED,
+    classify_stop_reason,
+    refusal_category,
+)
 from ..research.retry_policy import (
     DEFAULT_REALTIME_RETRY_POLICY,
     classify_exception,
@@ -534,6 +539,26 @@ def run_compliance_audit(
             getattr(response, "usage", None)
         ).items():
             usage_totals[key] = usage_totals.get(key, 0) + value
+        if classify_stop_reason(getattr(response, "stop_reason", None)) == (
+            STOP_CLASS_REFUSED
+        ):
+            # Checked before the parse, and terminal by construction (this
+            # raises rather than falling into the retry branch): a safety
+            # classifier's decision is about the content of the request, so
+            # the identical request earns the identical answer. The audit is
+            # superseded by the QC lenses but its endpoint is still
+            # registered, so without this it would be the one call site left
+            # reporting a decline as an unparseable payload.
+            category = refusal_category(response)
+            raise ComplianceAuditError(
+                "The compliance audit was declined by the model's safety "
+                "classifier"
+                + (f" (category: {category})" if category else "")
+                + ". This is a decision about the request's content, not a "
+                "transient failure — running the same audit again is not "
+                "what changes it.",
+                usage_totals=usage_totals,
+            )
         payload, parse_source = _parse_audit_payload(response)
         if payload is None:
             stop_reason = getattr(response, "stop_reason", None)

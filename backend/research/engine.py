@@ -56,12 +56,15 @@ from ..runtime_context import (
 from ..spec_modules import ResearchDimension, SpecModule
 from ..usage_ledger import usage_to_dict
 from .grounding import (
+    REFUSAL_KIND,
     STOP_CLASS_COMPLETE,
     STOP_CLASS_PAUSE,
+    STOP_CLASS_REFUSED,
     classify_stop_reason,
     collect_fetch_evidence_detailed,
     collect_search_evidence_detailed,
     dedupe_searched_sources,
+    refusal_category,
     response_container_id,
     validate_cited_sources,
     web_fetch_count,
@@ -213,6 +216,15 @@ DIMENSION_ERROR_AUTH = "auth"
 DIMENSION_ERROR_CANCELLED = "cancelled"
 DIMENSION_ERROR_BUDGET = "budget_ceiling"
 DIMENSION_ERROR_INCOMPLETE = "incomplete_response"
+# A safety classifier declined the request outright. Distinct from
+# ``incomplete_response`` because the two need different answers: a truncated
+# turn is worth retrying, a declined one is a content decision that will land
+# the same way until the brief is reworded. Keeping them in one bucket also
+# made a real pattern of refusals invisible in a support bundle, which is
+# exactly what this closed vocabulary exists to prevent. The token itself is
+# shared with Final QC (``grounding.REFUSAL_KIND``) so one bundle reads the
+# same word whichever fan-out wrote it.
+DIMENSION_ERROR_REFUSAL = REFUSAL_KIND
 DIMENSION_ERROR_NO_PAYLOAD = "no_payload"
 DIMENSION_ERROR_EXHAUSTED = "retries_exhausted"
 # What a project file said that this build does not recognize. Distinct from
@@ -228,6 +240,7 @@ DIMENSION_ERROR_KINDS: tuple[str, ...] = (
     DIMENSION_ERROR_CANCELLED,
     DIMENSION_ERROR_BUDGET,
     DIMENSION_ERROR_INCOMPLETE,
+    DIMENSION_ERROR_REFUSAL,
     DIMENSION_ERROR_NO_PAYLOAD,
     DIMENSION_ERROR_EXHAUSTED,
     DIMENSION_ERROR_UNRECOGNIZED,
@@ -2007,6 +2020,28 @@ def _run_dimension(
                     )
                     messages = sanitize_messages_for_resend(messages)
                     continue
+                if stop_class == STOP_CLASS_REFUSED:
+                    # A safety classifier declined the brief. Terminal by
+                    # construction (this returns rather than looping back
+                    # into the retry branch), and correctly so: the decision
+                    # is about the content of the request, so the identical
+                    # request earns the identical answer. Named rather than
+                    # folded into the incomplete bucket below so the drawer
+                    # tells the user what would actually change the outcome,
+                    # and so a support bundle can tell a declined dimension
+                    # from a truncated one.
+                    category = refusal_category(response)
+                    return _failed(
+                        "Research for this area was declined by the model's "
+                        "safety classifier"
+                        + (f" (category: {category})" if category else "")
+                        + ". This is a decision about the request's content, "
+                        "not a transient failure — rewording the project "
+                        "profile or discipline is what changes it; running "
+                        "the same round again is not.",
+                        kind=DIMENSION_ERROR_REFUSAL,
+                        responses=[*billed_responses, *all_responses],
+                    )
                 return _failed(
                     "Research response incomplete (stop_reason: "
                     f"{getattr(response, 'stop_reason', None)}).",

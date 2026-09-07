@@ -257,6 +257,24 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "after this update."
                         ),
                     ),
+                    ReleaseItem(
+                        title="A declined request now says it was declined",
+                        body=(
+                            "The model can occasionally decline a request on "
+                            "content grounds — a safety review, which benign "
+                            "work sometimes trips. That used to read as "
+                            "'Response was cut off before completion', which "
+                            "invited you to send the same message again and "
+                            "get the same answer. Chat now says the turn was "
+                            "declined and that rewording is what helps; a "
+                            "declined research area and a declined Final QC "
+                            "call say the same in their own panels and are "
+                            "recorded as declined rather than as an unknown "
+                            "failure. Nothing is retried automatically, "
+                            "because re-sending an unchanged request cannot "
+                            "change a decision about its content."
+                        ),
+                    ),
                 ),
             ),
         ),

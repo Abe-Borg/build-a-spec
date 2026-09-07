@@ -139,6 +139,7 @@ from .research.engine import (
     research_manifest_facts,
     validate_research_facts,
 )
+from .research.grounding import refusal_category
 from .research.schema import extract_tool_use_block
 from .qc.engine import (
     DISPUTE_REASON_INSUFFICIENT_EVIDENCE,
@@ -2354,6 +2355,20 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
     except MissingApiKeyError:
         raise
     session.usage.add("template", getattr(response, "usage", None), count_turn=True)
+    # A declined turn returns a normal 200 with no tool block at all, so
+    # without this it reads as "the model returned malformed content" — the
+    # one wording guaranteed to send the user round the same loop again.
+    # Checked before the payload read, because there is nothing to read.
+    if getattr(response, "stop_reason", None) == "refusal":
+        category = refusal_category(response)
+        raise TemplateError(
+            "The model's safety classifier declined to generalize this "
+            "section"
+            + (f" (category: {category})" if category else "")
+            + ". Nothing was saved. This is about the content of the "
+            "section rather than a transient failure, so use Exact to "
+            "snapshot it verbatim instead."
+        )
     # The payload rides a ``tool_use`` block the API has already parsed, so
     # there is no prose to fence-strip and no ``json.loads`` to fail. A turn
     # that answered in text instead simply has no block, which lands on the

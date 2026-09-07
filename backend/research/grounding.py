@@ -386,13 +386,75 @@ def response_container_id(message) -> str:
 
 STOP_CLASS_COMPLETE = "complete"
 STOP_CLASS_PAUSE = "pause"
+STOP_CLASS_REFUSED = "refused"
 STOP_CLASS_INCOMPLETE = "incomplete"
+
+# The telemetry token a declined turn is recorded under, shared by both
+# fan-outs so a support bundle reads the same word whichever one produced it
+# (research files it as a ``DimensionStatus.error_kind``, Final QC as a
+# ``_CallResult.failure_class``). One definition because a drifted spelling
+# is a bundle that answers half the question.
+REFUSAL_KIND = "refusal"
 
 
 def classify_stop_reason(stop_reason) -> str:
-    """``end_turn``/``tool_use`` → complete; ``pause_turn`` → pause; else incomplete."""
+    """``end_turn``/``tool_use`` → complete; ``pause_turn`` → pause;
+    ``refusal`` → refused; else incomplete.
+
+    ``refused`` is its own class because a safety classifier declining the
+    request is a DIFFERENT outcome from a truncated one, and every caller
+    that folds the two together tells the user something false. The models
+    this app runs (Sonnet 5 for the interview and research, Opus 5 for Final
+    QC) return a declined turn as a normal HTTP 200 with
+    ``stop_reason: "refusal"`` — no exception is raised, so nothing else in
+    the stack notices. It is also not transient: the retry machinery cannot
+    fix it, and every caller here treats this class as terminal.
+
+    Classification is by ``stop_reason`` alone, never by the presence of
+    ``stop_details`` — that object is informational and may be absent even on
+    a genuine refusal (see :func:`refusal_category`).
+    """
     if stop_reason in ("end_turn", "tool_use"):
         return STOP_CLASS_COMPLETE
     if stop_reason == "pause_turn":
         return STOP_CLASS_PAUSE
+    if stop_reason == "refusal":
+        return STOP_CLASS_REFUSED
     return STOP_CLASS_INCOMPLETE
+
+
+# A category is provider text from an OPEN set (``cyber``, ``bio``, … and
+# values that do not exist yet), so it is bounded here rather than trusted:
+# it reaches a drawer, a chat transcript, and a QC report's error line. The
+# closed telemetry token stays the caller's own kind — this only ever
+# decorates the human-readable message.
+_REFUSAL_CATEGORY_MAX_CHARS = 40
+
+
+def refusal_category(message) -> str:
+    """The declared safety category of a refused turn, or ``""``.
+
+    ``stop_details`` is populated only when ``stop_reason`` is ``refusal``,
+    and its ``category`` can be null even then, so every read here is
+    defensive and absence is an ordinary answer rather than an error. Blank
+    means "the provider named no category", which callers render as a
+    refusal without one rather than as no refusal.
+
+    Duck-typed over SDK objects and plain dicts, like everything else here.
+    """
+    details = getattr(message, "stop_details", None)
+    if details is None and isinstance(message, dict):
+        details = message.get("stop_details")
+    if details is None:
+        return ""
+    value = getattr(details, "category", None)
+    if value is None and isinstance(details, dict):
+        value = details.get("category")
+    if not isinstance(value, str):
+        return ""
+    # Keep it to one plain token: the provider's own values are short slugs,
+    # and anything else has no business reaching a Word report verbatim.
+    cleaned = "".join(
+        ch for ch in value.strip() if ch.isalnum() or ch in "-_ "
+    ).strip()
+    return cleaned[:_REFUSAL_CATEGORY_MAX_CHARS]

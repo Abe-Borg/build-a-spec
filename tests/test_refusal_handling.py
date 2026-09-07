@@ -402,6 +402,57 @@ def test_a_declined_generalize_pass_is_not_reported_as_malformed_content(
     assert "Exact" in str(excinfo.value)
 
 
+def test_a_declined_compliance_audit_is_not_reported_as_an_unparseable_payload():
+    """The deprecated audit is still a registered endpoint, so it is still a
+    landing point for a refusal.
+
+    Its endpoints were retained when the QC lenses superseded it, and the
+    runtime-date work threaded the date through it for the same reason: a
+    surface a user can still reach must not be the one left misreporting.
+    A decline carries no tool block, so the old code reached the generic
+    "no parseable payload" raise and named the stop_reason as trivia.
+    """
+    from backend.compliance.checker import (
+        ComplianceAuditError,
+        run_compliance_audit,
+    )
+    from backend.spec_modules import DEFAULT_MODULE
+    from tests.fakes import usage
+    from tests.test_compliance import (
+        _GROUNDED,
+        _ScriptedAuditClient,
+        _profile_with,
+    )
+
+    declined = SimpleNamespace(
+        content=[],
+        stop_reason="refusal",
+        stop_details=SimpleNamespace(type="refusal", category="cyber"),
+        usage=usage(input=1234, output=56),
+    )
+    client = _ScriptedAuditClient([declined])
+    with pytest.raises(ComplianceAuditError, match="declined") as excinfo:
+        run_compliance_audit(
+            sessions.get_session().doc.doc,
+            _profile_with([_GROUNDED]),
+            DEFAULT_MODULE,
+            client,
+            model="claude-sonnet-5",
+            max_tokens=2048,
+        )
+    message = str(excinfo.value)
+    assert "cyber" in message
+    assert "no parseable payload" not in message
+    # Terminal, not retried: one request, not the policy's full allowance.
+    assert client.requests == 1
+    # The paid response still bills — the receipt rides the error, exactly
+    # as it does for a paid-but-unparseable one.
+    assert excinfo.value.usage_totals == {
+        "input_tokens": 1234,
+        "output_tokens": 56,
+    }
+
+
 def test_the_endpoint_surface_is_untouched_by_this_change():
     """No route, event type, or payload key was added — this is response
     handling only. A smoke check that the app still builds and answers."""

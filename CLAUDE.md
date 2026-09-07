@@ -8421,7 +8421,7 @@ or of `stop_details` outside unrelated app-level uses of the word.
   changed is the label, not the control flow. The research test pins this
   by scripting exactly ONE turn for the declined dimension — a retry would
   exhaust the script and raise.
-- **Four call sites, four registers, one meaning.** Chat writes a bracketed
+- **Five call sites, five registers, one meaning.** Chat writes a bracketed
   placeholder in the existing `[Generation stopped by user.]` idiom (the
   empty-content case is the whole of what the user sees, and "cut off"
   invited them to resend the identical message); research and QC each
@@ -8431,6 +8431,21 @@ or of `stop_details` outside unrelated app-level uses of the word.
   content" wording that would send the user round the same loop. Message
   wording differs by audience on purpose — what is shared is the
   classification and the category read, which is where drift would matter.
+- **The deprecated compliance audit is the fifth, and it is a call site
+  because its endpoint is still registered** (caught in review on PR #150,
+  Codex). `POST /api/audit/start` remains reachable, and
+  `run_compliance_audit` classified nothing at all: it parsed
+  unconditionally and named the stop reason only as trivia inside "The
+  audit produced no parseable payload (stop_reason: refusal)" — so the one
+  surface fixed nowhere else would have been the one still calling a
+  decline a parse failure. Same reasoning, and the same precedent, as the
+  runtime-date work threading `date_context_block` through it. The check
+  sits AFTER the usage fold (a refused response is billed, and
+  `ComplianceAuditError` already carries the receipt) and BEFORE the parse,
+  matching both fan-outs, where a refusal never reaches a parser. It is
+  deliberately the only stop-reason branch added there: the audit still
+  parses a `max_tokens` response whose tool block completed, and narrowing
+  that to COMPLETE-only would be a behavior change this is not.
 - **A refused lens or seat stays a FAILED call, deliberately.** That is what
   keeps the existing safety property: incomplete coverage leaves the run
   partial and readiness blocked, and a refused seat still makes its
@@ -8446,7 +8461,7 @@ or of `stop_details` outside unrelated app-level uses of the word.
   `"auth_error" | ""` is a different, narrower field (derived from an
   exception attribute), and `failure_class` is engine-internal and never
   serialized. Both were checked rather than assumed.
-- **Tests**: `tests/test_refusal_handling.py` (14) — the classifier's fourth
+- **Tests**: `tests/test_refusal_handling.py` (15) — the classifier's fourth
   class plus every other class unchanged, the category read across both
   response shapes and its bounding, a declined dimension named and NOT
   retried, a truncated one still reading `incomplete_response` (the new
@@ -8458,14 +8473,19 @@ or of `stop_details` outside unrelated app-level uses of the word.
   it cannot pass by comparing streaming against itself), chat's declined
   message with and without a category, a truncated chat turn still saying
   "cut off", a mid-stream decline keeping the partial text it was billed
-  for, and the template pass. `tests/fakes.py` gains `refusal_category=` on
+  for, the template pass, and the audit (declined, not retried, still
+  billed, and provably not the old parse-failure wording) — reusing
+  `test_compliance.py`'s own scripted client, the way the template case
+  reuses `test_templates.py`'s fixtures, so the two suites cannot drift on
+  what an audit response looks like. `tests/fakes.py` gains
+  `refusal_category=` on
   `raw_turn`/`research_response`/`qc_findings_response`/
   `qc_verdict_response`, attached ONLY when supplied (the `container`
   convention), so every existing fixture stays byte-identical. Each of the
-  four mechanisms was reverted in place to prove it load-bearing: research
+  five mechanisms was reverted in place to prove it load-bearing: research
   → 2 red, QC (streaming + batched together) → 2 red, the batched branch
-  alone → 1 red, chat → 2 red, template → 1 red. Full suite 1887 passed,
-  9 skipped.
+  alone → 1 red, chat → 2 red, template → 1 red, the audit → 1 red. Full
+  suite 1888 passed, 9 skipped.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

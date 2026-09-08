@@ -1467,6 +1467,8 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_UPDATE_URL` | GitHub latest | Override the update-manifest URL. |
 | `BUILD_A_SPEC_DISABLE_UPDATE_CHECK` | off | Truthy disables update checks entirely. |
 
+Every integer knob is clamped to a floor — `1` unless noted; `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` floors at `60` and `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET` at `2` — and a value below it, or one that is not an integer, is corrected (to the floor, or to the default) with a warning in the activity log rather than taken silently. A zero-seat Final QC panel would have "upheld" every finding it never read, which is the case the floor exists for.
+
 ## Testing
 
 Hermetic by default — no API key, no network. `tests/conftest.py` injects a placeholder key; API-touching tests monkeypatch a fake streaming client (the same convention as Spec Critic's suite).

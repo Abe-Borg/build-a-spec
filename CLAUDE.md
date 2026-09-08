@@ -8829,6 +8829,73 @@ dep, no new env knob, no project-format change, no frontend change.
   found); B1 alone → 1, B3 alone → 1, A5 alone → 1, B4 alone (commit back
   on the loop) → 1, with the probe reporting a 5.01s wait.
 
+## Every integer knob has a floor, and the dead code is gone — implemented notes
+
+Batch 5 of the 2026-09-02 program diagnosis. One behavior change and a
+hygiene sweep. No new endpoint, no new SSE event, no new dep, no new env
+knob, no project-format change.
+
+- **`_int_env(name, default, *, minimum=None)` clamps and complains.** The
+  helper used to parse and fall back to the default on garbage — nothing
+  else. Five knobs wrapped their own `max(N, …)` and thirteen were bare,
+  and the bare list included the one that mattered:
+  `BUILD_A_SPEC_QC_VERIFIERS_STANDARD=0` built a ZERO-seat verifier panel,
+  and `panel_outcome` reads `upholds == size` as **upheld** — every finding
+  verified by nobody, unanimously. A zero token ceiling is a 400 on every
+  request; a zero port is not the fixed port Vite proxies to. Every call
+  site now passes `minimum=` (1 everywhere except the folded wrappers:
+  `QC_BATCH_MAX_WAIT_SECONDS` 60, `QC_CONSOLIDATION_MAX_BUCKET` 2 — the
+  same values, one mechanism), and a value under it is CLAMPED to it, not
+  dropped to the default, because that is what the five wrappers already
+  did and folding them in had to be behavior-preserving. Both corrections
+  log a WARNING on `buildaspec.settings` (the `_cache_ttl_env` posture:
+  silently correcting an override leaves an operator believing it took
+  effect). An unset or blank knob is the default and says nothing.
+- **The contract is pinned by an `ast` walk, not a list.** `tests/test_
+  settings.py::test_every_shipped_knob_declares_a_floor` parses
+  `settings.py` and fails on any `_int_env(` call without `minimum=`, so
+  the next knob added bare fails the suite rather than shipping at value
+  zero. The reload pin (the `test_qc_phase_effort` try/finally
+  `importlib.reload` idiom) checks the shipped floors end to end — the
+  dangerous bare one and the folded wrappers together — and the unit tests
+  cover verbatim, unset, garbage, clamp, at-the-floor-is-quiet and
+  `minimum=None` passing a negative through (the contract for a future knob
+  that wants none). Revert matrix: the clamp → 2 red, one knob left bare →
+  2 red (the walk and the reload), a folded wrapper losing its floor → 1.
+- **`MODEL_OPUS_48` is not dead, and now says why it is there.** It is a
+  default nowhere and reachable only through the model env overrides; it
+  stays in `PRICING` and the strict-capable list so an override on it is
+  priced and its output tools stay strict — the "a new QC model must land
+  in both" rule, stated at the constant.
+- **Fourteen symbols and one import with zero references, deleted** (each
+  re-verified by a repo-wide grep before and after): `qc/engine.py`'s
+  `profile_payload` (an unused local in `build_qc_input_manifest`);
+  `SessionState.source_export_readiness` and the `source_patch_readiness`
+  import that only it used; `events_since` on both runners (SSE reads the
+  log through `sse_events`); `ResearchCoverage.missing_required` (readiness
+  took `required_gaps` and never asked; the Chunk 3.2 prose above still
+  names it, as history); `DraftPrerequisites.missing_labels` (`to_dict`
+  labels its own records); `StandardsBasis.code_year`;
+  `source_patch._read_document_xml` (`_read_document_xml_and_inventory`
+  superseded it and is what tests patch by name);
+  `TemplateCatalog._iter_personal` (`list()` re-implemented the walk
+  inline) and `reset_template_catalog_for_tests` (no test ever called
+  it); `diagnostics._add_file_if_present` (the sanitized-JSONL sibling is
+  the live one); `recorder.bind_to_current_context` (the thread-local span
+  stack it served was removed in the diagnostics batch) and
+  `Recorder.is_deep` (`capture_level` is what is read); the second
+  `from urllib.parse import urlsplit` in `docx_export.py` (`json` in that
+  block is a single, live import — it stays). Frontend:
+  `reconcileQcSnapshot` / `reconcileResearchSnapshot` (`.snapshot`
+  wrappers only their own tests called — those tests now call the
+  `…Update` variants they were wrapping, so the reconcile behavior they
+  pin is untouched) and `api.getFigures` (no caller; figures ride every
+  doc payload). `noUnusedLocals` does not police exports, which is how
+  three of these lived on; `npm test` + `npm run build` are the check.
+- **Tests**: `tests/test_settings.py` (7, new). Backend suite 1910 → 1917;
+  `npm test` 247 (the re-pointed tests still counted); `npm run build`
+  clean; both release gates pass.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

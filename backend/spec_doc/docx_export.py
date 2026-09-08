@@ -544,7 +544,6 @@ def _render_redline_body(
 # ---------------------------------------------------------------------------
 
 import json
-from urllib.parse import urlsplit
 
 from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT

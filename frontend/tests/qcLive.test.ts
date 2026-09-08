@@ -7,7 +7,6 @@ import {
   isQcStopSettling,
   mergeQcEvent,
   qcRecapDisposition,
-  reconcileQcSnapshot,
   reconcileQcSnapshotUpdate,
 } from "../src/lib/qcLive.ts";
 import type { QcEvent, QcSnapshot } from "../src/types.ts";
@@ -266,7 +265,7 @@ test("QC snapshot reconciliation preserves same-run live frames and replaces ano
     error: "",
     events: [started(), { type: "lens_started", seq: 1, lens_id: "code_compliance" }],
   };
-  const reconciled = reconcileQcSnapshot(previous, staleFetch);
+  const reconciled = reconcileQcSnapshotUpdate(previous, staleFetch).snapshot;
   assert.equal(reconciled.status, "complete");
   assert.deepEqual(reconciled.events.map((event) => event.seq), [0, 1, 2]);
 
@@ -275,7 +274,7 @@ test("QC snapshot reconciliation preserves same-run live frames and replaces ano
     error: "",
     events: [started("run-2")],
   };
-  assert.deepEqual(reconcileQcSnapshot(previous, nextRun), nextRun);
+  assert.deepEqual(reconcileQcSnapshotUpdate(previous, nextRun).snapshot, nextRun);
 });
 
 test("same-run stale reconciliation rejects stale report and attempt fields wholesale", () => {
@@ -325,7 +324,7 @@ test("same-run stale reconciliation rejects stale report and attempt fields whol
       report_available: false,
     },
   };
-  const reconciled = reconcileQcSnapshot(previous, fetched);
+  const reconciled = reconcileQcSnapshotUpdate(previous, fetched).snapshot;
   assert.equal(reconciled, previous);
   assert.equal(reconciled.report, currentReport);
   assert.equal(reconciled.latest_attempt?.status, "complete");
@@ -395,7 +394,7 @@ test("QC snapshot reconciliation retains settlement until its terminal frame", (
     events: [started(), { type: "qc_failed", seq: 1, error: "Stopped" }],
   };
   const fetched: QcSnapshot = { ...previous, settling: false };
-  assert.equal(reconcileQcSnapshot(previous, fetched).settling, true);
+  assert.equal(reconcileQcSnapshotUpdate(previous, fetched).snapshot.settling, true);
   const settled: QcSnapshot = {
     ...fetched,
     events: [
@@ -403,7 +402,7 @@ test("QC snapshot reconciliation retains settlement until its terminal frame", (
       { type: "qc_attempt_settled", seq: 2, run_id: "run-1", status: "cancelled" },
     ],
   };
-  assert.equal(reconcileQcSnapshot(previous, settled).settling, false);
+  assert.equal(reconcileQcSnapshotUpdate(previous, settled).snapshot.settling, false);
 });
 
 test("stop settlement is a terminal state, never an ordinary run", () => {
@@ -468,7 +467,7 @@ test("a running snapshot clears an erroneous prior settling bit", () => {
   const fetched: QcSnapshot = { ...previous, settling: false };
   // Settlement is sticky only for a TERMINAL stopped attempt — otherwise one
   // bad bit would latch the drawer into stop language for the session.
-  assert.equal(reconcileQcSnapshot(previous, fetched).settling, false);
+  assert.equal(reconcileQcSnapshotUpdate(previous, fetched).snapshot.settling, false);
 });
 
 test("a normal completion drops a stale running settling bit", () => {
@@ -490,7 +489,7 @@ test("a normal completion drops a stale running settling bit", () => {
       settling: false,
       events: [started(), { type: "qc_complete", seq: 1 }],
     };
-    const merged = reconcileQcSnapshot(previous, fetched);
+    const merged = reconcileQcSnapshotUpdate(previous, fetched).snapshot;
     assert.equal(merged.settling, false, terminal);
     assert.equal(isQcStopSettling(merged), false, terminal);
     assert.equal(isQcActiveSnapshot(merged), false, terminal);

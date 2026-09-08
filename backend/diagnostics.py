@@ -2268,43 +2268,6 @@ def unlink_quietly(path: Path) -> None:
         pass
 
 
-def _add_file_if_present(
-    zf: zipfile.ZipFile,
-    path: Path,
-    arcname: str,
-    *,
-    coverage: str = "full_bounded_file",
-) -> dict[str, Any] | None:
-    try:
-        if path.is_symlink() or not path.is_file():
-            return None
-        before = path.stat()
-        zf.write(path, arcname)
-        copied_size = zf.getinfo(arcname).file_size
-        try:
-            after = path.stat()
-        except OSError:
-            after = None
-        changed = (
-            after is None
-            or before.st_size != after.st_size
-            or before.st_mtime_ns != after.st_mtime_ns
-        )
-        final_size = after.st_size if after is not None else before.st_size
-        return {
-            "path": arcname,
-            "coverage": coverage,
-            "source_size_bytes": final_size,
-            "source_size_at_copy_start_bytes": before.st_size,
-            "included_bytes": copied_size,
-            "source_changed_while_copying": changed,
-            "truncated": copied_size < final_size,
-        }
-    except OSError:
-        pass
-    return None
-
-
 def _add_sanitized_jsonl_file_if_present(
     zf: zipfile.ZipFile,
     path: Path,

@@ -5472,7 +5472,6 @@ def build_qc_input_manifest(
     completeness/compliance reviewers would see. The manifest is persisted in
     the report and hashed for server-authoritative staleness checks.
     """
-    profile_payload = profile.to_dict() if profile is not None else None
     standards_render = _render_standards(module, section)
     source_summary = (
         source_guard.capability_summary if source_guard is not None else ""

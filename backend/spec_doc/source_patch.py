@@ -707,18 +707,6 @@ def _has_non_whitespace_direct_character_data(element) -> bool:
     )
 
 
-def _read_document_xml(source_bytes: bytes) -> bytes:
-    try:
-        with zipfile.ZipFile(BytesIO(source_bytes), "r") as archive:
-            return archive.read(_DOCUMENT_PART)
-    except (KeyError, zipfile.BadZipFile, RuntimeError) as exc:
-        raise SourcePatchError(
-            "source",
-            "unsafe_package",
-            "the source DOCX main document part could not be read",
-        ) from exc
-
-
 def _read_document_xml_and_inventory(
     source_bytes: bytes,
 ) -> tuple[bytes, tuple[SourcePackageMemberInventory, ...]]:

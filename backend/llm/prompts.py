@@ -300,9 +300,6 @@ class DraftPrerequisites:
         """True when a full-section draft has its minimum anchor facts."""
         return not self.missing
 
-    def missing_labels(self) -> tuple[str, ...]:
-        return tuple(_DRAFT_PREREQUISITE_LABELS[key] for key in self.missing)
-
     def to_dict(self) -> dict[str, Any]:
         """Serialize for ``_doc_payload`` and the draft endpoint.
 

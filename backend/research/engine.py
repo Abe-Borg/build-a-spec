@@ -414,11 +414,6 @@ class ResearchCoverage:
     def optional_gaps(self) -> tuple[CoverageGap, ...]:
         return tuple(gap for gap in self.gaps if not gap.required)
 
-    @property
-    def missing_required(self) -> tuple[CoverageGap, ...]:
-        """Required dimensions with no status record at all."""
-        return tuple(gap for gap in self.required_gaps if not gap.recorded)
-
 
 def research_coverage(
     module: SpecModule, profile: "RequirementsProfile | None"

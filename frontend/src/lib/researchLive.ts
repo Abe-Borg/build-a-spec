@@ -320,10 +320,3 @@ export function reconcileResearchSnapshotUpdate(
     },
   };
 }
-
-export function reconcileResearchSnapshot(
-  previous: ResearchSnapshot | null,
-  fetched: ResearchSnapshot,
-): ResearchSnapshot {
-  return reconcileResearchSnapshotUpdate(previous, fetched).snapshot;
-}

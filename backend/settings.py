@@ -23,6 +23,11 @@ VERSION = "1.17.0"
 # --- Models -----------------------------------------------------------------
 
 MODEL_SONNET_5 = "claude-sonnet-5"
+# Opus 4.8 is not a default anywhere; it is reachable only through the model
+# env overrides (BUILD_A_SPEC_QC_MODEL / _RESEARCH_MODEL / _INTERVIEW_MODEL)
+# and stays in PRICING and the strict-capable model list so an override on
+# it is priced and its output tools stay strict (a model in one table and
+# not the other is metered at the wrong rate or degrades to lenient tools).
 MODEL_OPUS_48 = "claude-opus-4-8"
 MODEL_FABLE_5 = "claude-fable-5"
 # "Final QC" runs on Opus 5 — the one place a model other than Sonnet 5
@@ -39,11 +44,42 @@ INTERVIEW_MODEL = (
 )
 
 
-def _int_env(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, "").strip() or default)
-    except ValueError:
-        return default
+def _int_env(name: str, default: int, *, minimum: int | None = None) -> int:
+    """An integer knob, clamped to ``minimum`` with a loud complaint.
+
+    Every numeric setting has a value below which the app stops working
+    rather than working differently — a zero-seat verifier panel "upholds"
+    every finding it never looked at, a zero token ceiling is a 400 on every
+    request, a zero port is not the fixed port Vite proxies to — so a value
+    under the floor is corrected to the floor, and an unparseable one falls
+    back to the default. Both are logged: silently correcting an override
+    leaves an operator believing it took effect (the ``_cache_ttl_env``
+    posture). Every call site in this module passes ``minimum``; a test
+    walks the file to keep it that way.
+    """
+    raw = os.environ.get(name, "").strip()
+    value = default
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            logging.getLogger("buildaspec.settings").warning(
+                "%s=%r is not an integer; using the default %d.",
+                name,
+                raw,
+                default,
+            )
+            value = default
+    if minimum is not None and value < minimum:
+        logging.getLogger("buildaspec.settings").warning(
+            "%s=%d is below its floor of %d; using %d.",
+            name,
+            value,
+            minimum,
+            minimum,
+        )
+        value = minimum
+    return value
 
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -69,11 +105,9 @@ MODEL_MAX_OUTPUT_TOKENS = 128_000
 # a model fact, not a tuning knob — the env override exists ONLY to pair
 # with a BUILD_A_SPEC_INTERVIEW_MODEL override whose window differs (e.g.
 # Haiku 4.5 is 200k).
-MODEL_CONTEXT_WINDOW = _int_env("BUILD_A_SPEC_CONTEXT_WINDOW", 1_000_000)
+MODEL_CONTEXT_WINDOW = _int_env("BUILD_A_SPEC_CONTEXT_WINDOW", 1_000_000, minimum=1)
 
-INTERVIEW_MAX_TOKENS = _int_env(
-    "BUILD_A_SPEC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS
-)
+INTERVIEW_MAX_TOKENS = _int_env("BUILD_A_SPEC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)
 
 # --- Adaptive thinking / effort ---------------------------------------------
 
@@ -124,8 +158,8 @@ THINKING_DISPLAY = _display_env("BUILD_A_SPEC_THINKING_DISPLAY", "summarized")
 # Per-request allowances for the interview loop's web_search / web_fetch
 # server tools. They renew every continuation round — per-call runaway
 # guards, not a session budget.
-CHAT_MAX_SEARCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_SEARCHES", 8)
-CHAT_MAX_FETCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_FETCHES", 4)
+CHAT_MAX_SEARCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_SEARCHES", 8, minimum=1)
+CHAT_MAX_FETCHES = _int_env("BUILD_A_SPEC_CHAT_MAX_FETCHES", 4, minimum=1)
 
 # Whether a completed research round / Final QC run auto-sends one debrief
 # chat turn (the model briefs the user on the findings and asks whether to
@@ -140,9 +174,7 @@ RESEARCH_MODEL = (
     os.environ.get("BUILD_A_SPEC_RESEARCH_MODEL", "").strip()
     or MODEL_SONNET_5
 )
-RESEARCH_MAX_TOKENS = _int_env(
-    "BUILD_A_SPEC_RESEARCH_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS
-)
+RESEARCH_MAX_TOKENS = _int_env("BUILD_A_SPEC_RESEARCH_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)
 RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "high")
 
 # --- Final QC (the pre-issue review pass, on Opus 5) -------------------------
@@ -157,7 +189,7 @@ RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "high")
 # reasoning depth compounded across the whole fan-out, and thinking bills as
 # output. Same reasoning that dialed RESEARCH_EFFORT back at four calls.
 QC_MODEL = os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip() or MODEL_OPUS_5
-QC_MAX_TOKENS = _int_env("BUILD_A_SPEC_QC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS)
+QC_MAX_TOKENS = _int_env("BUILD_A_SPEC_QC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)
 QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "high")
 
 # Effort is now set PER PHASE, because the two phases are not the same kind of
@@ -190,7 +222,7 @@ QC_VERIFIER_EFFORT = _effort_env(
 # pool with verifiers). Phase 2 is ~35 of a run's ~40 calls, so this is what
 # sets its wall clock. Opus 5 draws on its own rate-limit bucket rather than
 # the Opus 4.x pool, so raise this only against measured ITPM/OTPM headroom.
-QC_MAX_WORKERS = max(1, _int_env("BUILD_A_SPEC_QC_MAX_WORKERS", 8))
+QC_MAX_WORKERS = _int_env("BUILD_A_SPEC_QC_MAX_WORKERS", 8, minimum=1)
 
 # Adversarial verification panel sizes. Medium/low findings face
 # QC_VERIFIERS_STANDARD refuters; critical/high face QC_VERIFIERS_CRITICAL.
@@ -200,8 +232,8 @@ QC_MAX_WORKERS = max(1, _int_env("BUILD_A_SPEC_QC_MAX_WORKERS", 8))
 # therefore increases scrutiny — under the old strict-majority rule the
 # extra critical seat bought leniency instead (2-of-3 passed where a
 # 2-seat panel needed 2-of-2).
-QC_VERIFIERS_STANDARD = _int_env("BUILD_A_SPEC_QC_VERIFIERS_STANDARD", 2)
-QC_VERIFIERS_CRITICAL = _int_env("BUILD_A_SPEC_QC_VERIFIERS_CRITICAL", 3)
+QC_VERIFIERS_STANDARD = _int_env("BUILD_A_SPEC_QC_VERIFIERS_STANDARD", 2, minimum=1)
+QC_VERIFIERS_CRITICAL = _int_env("BUILD_A_SPEC_QC_VERIFIERS_CRITICAL", 3, minimum=1)
 
 # --- Batched verification (phase 2 on the Message Batches API) ---------------
 
@@ -226,15 +258,11 @@ QC_VERIFIERS_CRITICAL = _int_env("BUILD_A_SPEC_QC_VERIFIERS_CRITICAL", 3)
 QC_BATCH_VERIFICATION = _bool_env("BUILD_A_SPEC_QC_BATCH_VERIFICATION", True)
 # Poll interval while a verification batch is in flight. Also the granularity
 # at which a user Stop is noticed, so it is seconds, not minutes.
-QC_BATCH_POLL_SECONDS = max(
-    1, _int_env("BUILD_A_SPEC_QC_BATCH_POLL_SECONDS", 5)
-)
+QC_BATCH_POLL_SECONDS = _int_env("BUILD_A_SPEC_QC_BATCH_POLL_SECONDS", 5, minimum=1)
 # Total wall-clock ceiling across every round of one verification phase.
 # Two hours: the provider targets an hour for a whole batch, and a phase can
 # need a second round for pause_turn continuations and retries.
-QC_BATCH_MAX_WAIT_SECONDS = max(
-    60, _int_env("BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS", 7200)
-)
+QC_BATCH_MAX_WAIT_SECONDS = _int_env("BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS", 7200, minimum=60)
 # Rounds of batch submission within one verification phase. A round exists to
 # carry pause_turn continuations and retryable failures forward, and rounds
 # are SHARED — round N carries every seat that still needs work — so the
@@ -245,7 +273,7 @@ QC_BATCH_MAX_WAIT_SECONDS = max(
 # dropped from its panel. Note it can bite before a pathological seat has
 # spent its full per-seat QC_MAX_CONTINUATIONS x retry budget; that is
 # deliberate, and 20 is far above anything a real verifier seat reaches.
-QC_BATCH_MAX_ROUNDS = max(1, _int_env("BUILD_A_SPEC_QC_BATCH_MAX_ROUNDS", 20))
+QC_BATCH_MAX_ROUNDS = _int_env("BUILD_A_SPEC_QC_BATCH_MAX_ROUNDS", 20, minimum=1)
 
 # Cross-lens candidate consolidation (Chunk 5.2): near-duplicate findings
 # raised by different lenses about the SAME defect at the same element share
@@ -260,17 +288,15 @@ QC_CONSOLIDATION = _bool_env("BUILD_A_SPEC_QC_CONSOLIDATION", True)
 # audit record (never silently truncated), because asking one call to
 # partition an enormous candidate set is where a grouping mistake stops being
 # recoverable by the strict validator.
-QC_CONSOLIDATION_MAX_BUCKET = max(
-    2, _int_env("BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET", 25)
-)
+QC_CONSOLIDATION_MAX_BUCKET = _int_env("BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET", 25, minimum=2)
 
 # Per-call web allowances (runaway guards, not budgets — env-overridable).
 # The code-compliance lens gets the big search allowance to check standards'
 # actual current content; the other lenses and verifiers get the small one.
-QC_MAX_SEARCHES_COMPLIANCE = _int_env("BUILD_A_SPEC_QC_MAX_SEARCHES_COMPLIANCE", 24)
-QC_MAX_SEARCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_SEARCHES_LENS", 8)
-QC_MAX_FETCHES_COMPLIANCE = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_COMPLIANCE", 8)
-QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4)
+QC_MAX_SEARCHES_COMPLIANCE = _int_env("BUILD_A_SPEC_QC_MAX_SEARCHES_COMPLIANCE", 24, minimum=1)
+QC_MAX_SEARCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_SEARCHES_LENS", 8, minimum=1)
+QC_MAX_FETCHES_COMPLIANCE = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_COMPLIANCE", 8, minimum=1)
+QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4, minimum=1)
 
 # --- Pricing (WI4 cost meter) -----------------------------------------------
 
@@ -420,7 +446,7 @@ CHAT_CACHE_TTL = _cache_ttl_env(
 # --- Server -----------------------------------------------------------------
 
 HOST = "127.0.0.1"
-PORT = _int_env("BUILD_A_SPEC_PORT", 8756)
+PORT = _int_env("BUILD_A_SPEC_PORT", 8756, minimum=1)
 
 # Vite dev server (used by main.py when BUILD_A_SPEC_DEV=1).
 DEV_FRONTEND_URL = "http://localhost:5173"

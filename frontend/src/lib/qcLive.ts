@@ -508,13 +508,6 @@ export function reconcileQcSnapshotUpdate(
   };
 }
 
-export function reconcileQcSnapshot(
-  previous: QcSnapshot | null,
-  fetched: QcSnapshot,
-): QcSnapshot {
-  return reconcileQcSnapshotUpdate(previous, fetched).snapshot;
-}
-
 /**
  * Stop settlement: a TERMINAL attempt whose already-paid in-flight work is
  * still attaching itself.

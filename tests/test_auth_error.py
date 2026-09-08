@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from backend import sessions, settings
 from backend.app import create_app
 from backend.llm.client import AUTH_ERROR_MESSAGE
-from backend.qc.engine import QCFanoutError, run_final_qc
+from backend.qc.engine import QCFanoutError
 from backend.qc.runner import QCRunner, STATUS_FAILED as QC_STATUS_FAILED
 from backend.research.engine import ResearchFanoutError, run_requirements_research
 from backend.research.runner import ResearchRunner, STATUS_FAILED as RESEARCH_STATUS_FAILED

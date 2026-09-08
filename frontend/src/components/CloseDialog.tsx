@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useRef } from "react";
+import { useDialogFocus } from "../lib/dialogFocus";
 
 interface Props {
   open: boolean;
@@ -38,15 +39,11 @@ export default function CloseDialog({
   saveLabel = "Save & close",
   discardLabel = "Close without saving",
 }: Props) {
-  // Escape cancels the close (safest — never lose work on a stray keypress).
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onCancel]);
+  // Escape cancels the close (safest — never lose work on a stray keypress);
+  // initial focus is Save, the old autoFocus target. Through the one hook.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const saveRef = useRef<HTMLButtonElement>(null);
+  useDialogFocus(open, panelRef, saveRef, onCancel);
 
   if (!open) return null;
 
@@ -59,6 +56,7 @@ export default function CloseDialog({
       aria-label={title}
     >
       <div
+        ref={panelRef}
         className="w-full max-w-md rounded-2xl border border-edge bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -82,8 +80,8 @@ export default function CloseDialog({
             {discardLabel}
           </button>
           <button
+            ref={saveRef}
             onClick={onSave}
-            autoFocus
             className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
           >
             {saveLabel}

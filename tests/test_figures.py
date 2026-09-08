@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from backend import sessions
 from backend.app import create_app
-from backend.figures import Figure, FigureError, FigureStore
+from backend.figures import FigureError, FigureStore
 from tests.fakes import FakeClient, text_turn, tool_turn
 
 
@@ -405,6 +405,5 @@ def test_figures_survive_project_save_and_load(monkeypatch):
 
 
 def test_empty_figure_store_is_omitted_from_the_project_file():
-    client = _client()
     project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert "figures" not in project  # no key when there is nothing to save

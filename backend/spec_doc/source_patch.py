@@ -1716,7 +1716,9 @@ def _build_numbered_islands(
         pending: list[_NumberedMember] = []
         raw_islands: list[tuple[_NumberedMember, ...]] = []
 
-        def finish() -> None:
+        def finish(
+            *, raw_islands: list[tuple[_NumberedMember, ...]] = raw_islands
+        ) -> None:
             nonlocal pending
             if not pending:
                 return

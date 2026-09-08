@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { RefObject } from "react";
+import { dialogStack } from "./dialogStack.ts";
 
 const FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -22,8 +23,14 @@ function focusableElements(container: HTMLElement): HTMLElement[] {
 }
 
 /**
- * Practical modal keyboard behavior shared by the QC report and dismissal
- * dialogs: initial focus, Escape, Tab containment, and focus restoration.
+ * Practical modal keyboard behavior shared by every dialog in the app: initial
+ * focus, Escape, Tab containment, and focus restoration.
+ *
+ * ONE Escape mechanism. Every dialog listens on `document`, calls
+ * `preventDefault()` before closing (the "already handled" signal the guided
+ * tour's window listener reads), and enters the shared `dialogStack` — only
+ * the topmost dialog acts on Escape or Tab, so a dialog stacked over another
+ * closes alone whichever listener happened to register first.
  */
 export function useDialogFocus(
   open: boolean,
@@ -32,6 +39,7 @@ export function useDialogFocus(
   onClose: () => void,
   restoreFallbackRef?: RefObject<HTMLElement>,
 ): void {
+  const token = useRef<object>({}).current;
   const latestClose = useRef(onClose);
   useEffect(() => {
     latestClose.current = onClose;
@@ -52,6 +60,9 @@ export function useDialogFocus(
     });
 
     const onKeyDown = (event: KeyboardEvent) => {
+      // A dialog above this one already took the key, or is the one that
+      // should: both are "not ours".
+      if (event.defaultPrevented || !dialogStack.isTop(token)) return;
       const container = containerRef.current;
       if (!container) return;
       if (event.key === "Escape") {
@@ -82,12 +93,16 @@ export function useDialogFocus(
       }
     };
 
+    // Enter the stack in the SAME effect that registers the listener, so
+    // stack order is listener order, and leave it in the same cleanup.
+    const leave = dialogStack.enter(token);
     document.addEventListener("keydown", onKeyDown);
     return () => {
+      leave();
       window.cancelAnimationFrame(focusFrame);
       document.removeEventListener("keydown", onKeyDown);
       if (previouslyFocused?.isConnected) previouslyFocused.focus();
       else restoreFallbackRef?.current?.focus();
     };
-  }, [open, containerRef, initialFocusRef, restoreFallbackRef]);
+  }, [open, containerRef, initialFocusRef, restoreFallbackRef, token]);
 }

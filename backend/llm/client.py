@@ -1,9 +1,12 @@
 """Anthropic client factory.
 
-One place constructs the SDK client so tests can monkeypatch a fake and a
-later phase can layer capability config / retries the way Spec Critic's
-``api_config.py`` does. The client is rebuilt when the stored key changes
-(saving a key through the UI takes effect without a restart).
+One place constructs the SDK client so tests can monkeypatch a fake. The
+client is rebuilt when the stored key changes (saving a key through the UI
+takes effect without a restart). The SDK's transport knobs — its own request
+retries and the per-request timeout — are passed explicitly from
+``settings`` (``SDK_MAX_RETRIES`` / ``API_TIMEOUT_SECONDS``) rather than
+left to the SDK's silent defaults, and both constructors share the one
+``_client_options()`` so the probe client cannot drift from the live one.
 """
 from __future__ import annotations
 
@@ -11,6 +14,7 @@ import threading
 
 import anthropic
 
+from .. import settings
 from ..api_key_store import load_api_key
 
 
@@ -26,6 +30,24 @@ AUTH_ERROR_MESSAGE = "Your Anthropic API key is invalid or has expired."
 def is_authentication_error(exc: BaseException) -> bool:
     """True for a 401 from the Anthropic API (bad/expired/revoked key)."""
     return isinstance(exc, anthropic.AuthenticationError)
+
+
+# The SDK's default connect timeout. Kept separate from the configurable
+# read timeout on purpose: ``timeout=<number>`` would apply the read value
+# to connecting as well, so a black-holed TCP connect would sit for the
+# whole read budget (ten minutes by default) before the SDK's first retry.
+_CONNECT_TIMEOUT_SECONDS = 5.0
+
+
+def _client_options() -> dict:
+    """Transport kwargs for every client this module builds, read at call
+    time so a changed setting takes effect on the next rebuild."""
+    return {
+        "max_retries": settings.SDK_MAX_RETRIES,
+        "timeout": anthropic.Timeout(
+            float(settings.API_TIMEOUT_SECONDS), connect=_CONNECT_TIMEOUT_SECONDS
+        ),
+    }
 
 
 _lock = threading.Lock()
@@ -44,7 +66,7 @@ def get_client() -> anthropic.Anthropic:
         )
     with _lock:
         if _cached_client is None or key != _cached_key:
-            _cached_client = anthropic.Anthropic(api_key=key)
+            _cached_client = anthropic.Anthropic(api_key=key, **_client_options())
             _cached_key = key
         return _cached_client
 
@@ -65,4 +87,4 @@ def build_probe_client(api_key: str) -> anthropic.Anthropic:
     can. Kept out of the per-key cache so testing a bad key never poisons
     the live client.
     """
-    return anthropic.Anthropic(api_key=api_key)
+    return anthropic.Anthropic(api_key=api_key, **_client_options())

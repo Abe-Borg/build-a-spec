@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Health, UpdateCheckPayload } from "../types";
 import { TOUR } from "../lib/tour";
 import {
@@ -6,6 +6,7 @@ import {
   SOURCE_OUTPUT_GUIDANCE,
 } from "../lib/sourceOutputGuidance";
 import TrustDeepDiveModal from "./TrustDeepDiveModal";
+import { useDialogFocus } from "../lib/dialogFocus";
 
 /** The five info dialogs reachable from the header help nav. */
 export type HelpTopic =
@@ -779,26 +780,13 @@ export default function HelpModal({
     if (topic !== "why-trust-it") setDeepDive(false);
   }, [topic]);
 
-  // Close on Escape while open — but yield to the dossier while it is up, so
-  // one Escape closes one dialog. Two guards, because one is not enough:
-  //
-  //  - `deepDive` keeps this listener off entirely while the child dialog owns
-  //    the keyboard. That is the intent.
-  //  - `defaultPrevented` handles the race that intent alone misses. The
-  //    dossier's handler is on `document`, ours is on `window`, and React
-  //    flushes its close synchronously inside that native handler — so this
-  //    effect has already re-run and re-attached by the time the SAME keydown
-  //    finishes bubbling, and would close the help dialog too. The dossier
-  //    calls preventDefault() before closing, so "already handled" is the
-  //    reliable signal.
-  useEffect(() => {
-    if (!topic || deepDive) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [topic, deepDive, onClose]);
+  // Escape, Tab containment and focus restoration through the one hook every
+  // dialog uses. The dossier stacks over this dialog and uses the same hook;
+  // the shared dialog stack is what makes one Escape close only the topmost
+  // of the two, whichever listener registered first — the hand-rolled
+  // window listener this replaced needed two guards to get the same answer.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(Boolean(topic), panelRef, panelRef, onClose);
 
   if (!topic) return null;
 
@@ -812,7 +800,9 @@ export default function HelpModal({
       aria-label={TITLES[topic]}
     >
       <div
-        className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl"
+        ref={panelRef}
+        tabIndex={-1}
+        className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl outline-none"
         onClick={(e) => e.stopPropagation()}
         data-capability="help.topics"
       >

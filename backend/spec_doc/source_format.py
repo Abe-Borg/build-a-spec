@@ -205,8 +205,10 @@ class SourceFormatMap:
             seen.add(anchor.uid)
         try:
             count = int(data.get("body_child_count", 0))
-        except (TypeError, ValueError):
-            raise ValueError("source format map requires a body child count")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "source format map requires a body child count"
+            ) from exc
         raw_chrome = data.get("header_footer_text")
         chrome = (
             tuple(str(item) for item in raw_chrome if isinstance(item, str))

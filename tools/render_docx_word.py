@@ -20,7 +20,6 @@ import re
 import secrets
 import shutil
 import subprocess
-import sys
 import tempfile
 from typing import Protocol, Sequence
 

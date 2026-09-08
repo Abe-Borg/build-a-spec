@@ -59,7 +59,11 @@ export default function Chat({
   tutorialUpdated = false,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
+  // The bubble wrapper only exists in the populated branch, so the observer
+  // below re-attaches when the chat flips between empty and populated.
+  const empty = messages.length === 0;
 
   // Stay pinned to the bottom on new messages unless the user scrolled up.
   // The suggestions bar appearing/growing shrinks the scroll viewport, so
@@ -72,17 +76,26 @@ export default function Chat({
   }, [messages, suggestions]);
 
   // While a turn streams, the smoothed text grows between message updates
-  // (via requestAnimationFrame inside the bubble), so follow the bottom on
-  // every frame — but only while pinned, never yanking scroll from a reader.
+  // (via requestAnimationFrame inside the bubble). Follow the bottom when the
+  // content actually GROWS — a ResizeObserver fires after layout, only on a
+  // size change — rather than reading scrollHeight and writing scrollTop on
+  // every animation frame for the whole turn, which forced a layout per frame
+  // even when nothing had moved. Observing the scroll container too re-pins
+  // when the viewport shrinks (the suggestion bar appearing); a figure that
+  // finishes rendering after the turn ends is covered as well, which the old
+  // busy-gated loop missed. Only while pinned, never yanking scroll from a
+  // reader. Without ResizeObserver the commit-time effect above still pins.
   useEffect(() => {
-    if (!busy) return;
-    let raf = requestAnimationFrame(function follow() {
-      const el = scrollRef.current;
-      if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
-      raf = requestAnimationFrame(follow);
+    if (typeof ResizeObserver === "undefined") return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      if (pinnedRef.current) el.scrollTop = el.scrollHeight;
     });
-    return () => cancelAnimationFrame(raf);
-  }, [busy]);
+    observer.observe(el);
+    if (contentRef.current) observer.observe(contentRef.current);
+    return () => observer.disconnect();
+  }, [empty]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -167,6 +180,7 @@ export default function Chat({
           </div>
         ) : (
           <div
+            ref={contentRef}
             className="mx-auto flex max-w-3xl flex-col gap-5"
             data-capability="figure.create"
           >

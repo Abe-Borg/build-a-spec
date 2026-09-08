@@ -258,7 +258,9 @@ def _render_clean_body(document, section: SpecSection) -> None:
                 f"{part.number}.{a_idx + 1}\t{xml_safe_upper(article.title)}"
             ).bold = True
 
-            def walk(paragraphs, depth: int) -> None:
+            def walk(
+                paragraphs, depth: int, *, article_num_id: int = article_num_id
+            ) -> None:
                 for para in paragraphs:
                     provision = document.add_paragraph(para.text)
                     provision.paragraph_format.space_after = Pt(6)
@@ -1475,7 +1477,7 @@ def _qc_numbering_abstracts(document) -> dict[str, int]:
         abstract.append(lvl)
         numbering.append(abstract)
         abstract_ids[kind] = abstract_id
-    setattr(document, "_qc_list_abstracts", abstract_ids)
+    document._qc_list_abstracts = abstract_ids
     return abstract_ids
 
 
@@ -4786,15 +4788,11 @@ def _qc_memo_evidence_entries(document, qc_result: dict) -> list[dict[str, objec
         entries = _qc_evidence_register(
             qc_result, getattr(document, "_qc_ordinals", None)
         )
-        setattr(document, "_qc_evidence_entries", entries)
-        setattr(
-            document,
-            "_qc_evidence_ids",
-            {
-                str(entry["source"]): f"E-{index:03d}"
-                for index, entry in enumerate(entries, start=1)
-            },
-        )
+        document._qc_evidence_entries = entries
+        document._qc_evidence_ids = {
+            str(entry["source"]): f"E-{index:03d}"
+            for index, entry in enumerate(entries, start=1)
+        }
     return entries
 
 
@@ -5240,12 +5238,12 @@ def build_qc_memo(qc_result: dict, section: SpecSection, *, stale: bool) -> byte
         schema_version = int(qc_result.get("schema_version", 1) or 1)
     except (TypeError, ValueError):
         schema_version = 1
-    setattr(document, "_qc_schema_version", schema_version)
+    document._qc_schema_version = schema_version
     # One ordinal assignment and one evidence sweep feed the whole build:
     # candidate headings, the register's "Referenced by" column, and every
     # inline E-number citation come from the same two maps, so they cannot
     # disagree with each other.
-    setattr(document, "_qc_ordinals", _qc_candidate_ordinals(qc_result))
+    document._qc_ordinals = _qc_candidate_ordinals(qc_result)
     _qc_memo_evidence_entries(document, qc_result)
     _style_base(document)
     _qc_configure_styles(document)

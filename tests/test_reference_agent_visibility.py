@@ -37,13 +37,12 @@ from backend.reference_docs import (
     reference_manifest_facts,
 )
 from backend.research.engine import (
-    RequirementsProfile,
     build_dimension_user_message,
     run_requirements_research,
 )
 from backend.spec_doc.model import SpecSection
 from backend.spec_modules.hyperscale_fire import HYPERSCALE_FIRE
-from tests.fakes import SequencedFakeClient, research_response, user_text
+from tests.fakes import SequencedFakeClient, user_text
 from tests.test_research_engine import DIM_KEYS, PROFILE, _scripts
 
 OWNER_TEXT = "OWNER STANDARD 4.3: pre-action systems in every data hall."
@@ -428,7 +427,6 @@ def test_both_qc_transports_put_the_documents_in_front_of_every_seat(batch):
     one.
     """
     from backend.qc.engine import run_final_qc
-    from backend.spec_doc.model import DocumentStore
     from backend.spec_modules import DEFAULT_MODULE
     from tests.test_qc_batch_verification import _one_finding_scripts, _store as _qc_store
 

@@ -31,11 +31,16 @@ function AttachedFigures({
   );
 }
 
+/** One plugin array for every ReactMarkdown in this file: an inline `[remarkGfm]`
+ *  is a fresh array per render, which reads as a changed prop to anything that
+ *  compares it. */
+const REMARK_PLUGINS = [remarkGfm];
+
 /** Memoized markdown for the settled prefix — re-parses only when the prefix
  *  grows past another paragraph break, not on every animation frame. */
 const StablePrefix = memo(function StablePrefix({ text }: { text: string }) {
   if (!text) return null;
-  return <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>;
+  return <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{text}</ReactMarkdown>;
 });
 
 /** Collapsible adaptive-thinking summary, muted + italic, distinct from the
@@ -76,7 +81,7 @@ function ThinkingBlock({
   );
 }
 
-export default function MessageBubble({
+function MessageBubble({
   msg,
   figuresById,
   onDeleteFigure,
@@ -148,7 +153,7 @@ export default function MessageBubble({
   return (
     <div className="md text-[0.925rem]">
       {msg.thinking && <ThinkingBlock text={msg.thinking} autoExpand={false} />}
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>
         {msg.text || "…"}
       </ReactMarkdown>
       <AttachedFigures
@@ -159,3 +164,12 @@ export default function MessageBubble({
     </div>
   );
 }
+
+/**
+ * Memoized on purpose, and effective on purpose: Chat passes only pass-through
+ * props (`figuresById` is a useMemo, `onDeleteFigure` a useCallback in App), and
+ * every streaming update copy-replaces ONLY the last message object — so a
+ * delta re-renders one bubble instead of every bubble on every one of App's
+ * state cells. `tests/chatPerf.test.ts` pins the three props that keep it so.
+ */
+export default memo(MessageBubble);

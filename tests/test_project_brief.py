@@ -20,7 +20,6 @@ from backend.llm.conversation import SessionState
 from backend.project_brief import (
     MAX_PROJECT_BRIEF_BYTES,
     PROJECT_BRIEF_KIND,
-    ProjectBrief,
     ProjectBriefError,
     brief_bytes,
     brief_filename,

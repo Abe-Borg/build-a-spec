@@ -40,7 +40,6 @@ from backend.spec_doc.docx_export import (
     QC_GROUNDING_METHODOLOGY_NOTE,
     _qc_manifest_changes,
     qc_pre_remediation_state,
-    qc_signoff_state,
     QC_REQUEST_METHODOLOGY_NOTE,
     build_docx,
     build_qc_memo,

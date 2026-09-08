@@ -4,7 +4,8 @@
  * choices) reuse the exact same shell. Behavior unchanged: z-[70],
  * backdrop click closes, title + ✕ header, optional `wide`.
  */
-import { type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
+import { useDialogFocus } from "../lib/dialogFocus";
 
 /**
  * The app's standard modal shell (SettingsPanel/HelpModal conventions).
@@ -13,20 +14,32 @@ import { type ReactNode } from "react";
  * tell its OWN modal apart from one stacked over it — see the guided tour's
  * Escape handling in OnboardingOverlay. Purely an identifier; it changes
  * nothing for a consumer that omits it.
+ *
+ * Keyboard: `useDialogFocus` (Escape, Tab containment, focus restoration —
+ * the same hook every other dialog uses). Escape calls `onEscape` when given,
+ * else `onClose`; a consumer whose Escape means "go back a level first" (the
+ * New-session dialog's template browser) passes the former. Initial focus
+ * lands on the panel itself, not a button, so Enter does nothing a stray
+ * keypress would regret.
  */
 export function ModalShell({
   title,
   onClose,
+  onEscape,
   children,
   wide,
   marker,
 }: {
   title: string;
   onClose: () => void;
+  onEscape?: () => void;
   children: ReactNode;
   wide?: boolean;
   marker?: string;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Always open: every consumer renders the shell conditionally.
+  useDialogFocus(true, panelRef, panelRef, onEscape ?? onClose);
   return (
     <div
       className="fixed inset-0 z-[70] flex items-start justify-center bg-black/50 p-6 pt-24"
@@ -36,8 +49,10 @@ export function ModalShell({
       data-dialog={marker}
     >
       <div
+        ref={panelRef}
+        tabIndex={-1}
         className={
-          "w-full rounded-2xl border border-edge bg-surface shadow-2xl " +
+          "w-full rounded-2xl border border-edge bg-surface shadow-2xl outline-none " +
           (wide ? "max-w-lg" : "max-w-md")
         }
         onClick={(e) => e.stopPropagation()}

@@ -331,7 +331,6 @@ def test_suggestions_survive_project_save_and_load(monkeypatch):
 
 
 def test_empty_suggestions_omitted_from_the_project_file():
-    client = _client()
     project = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     assert "suggested_prompts" not in project  # no key when there is nothing to save
 

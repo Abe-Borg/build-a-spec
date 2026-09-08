@@ -750,7 +750,6 @@ def test_the_shipped_budget_stops_two_maximal_documents_in_one_turn():
 
 def test_the_turn_budget_is_per_turn_not_per_session():
     """A refusal must not poison later turns — each gets a fresh allowance."""
-    client = TestClient(create_app())
     session = sessions.get_session()
     session.references.add(
         filename="big.docx", text="x" * (MAX_TEXT_CHARS - 1), block_count=1

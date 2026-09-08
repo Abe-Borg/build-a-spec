@@ -8,7 +8,8 @@
  * read-through view. Read-only — the same profile is already in the chat
  * model's per-turn context, so nothing here mutates the spec.
  */
-import { useEffect } from "react";
+import { useRef } from "react";
+import { useDialogFocus } from "../lib/dialogFocus";
 import type {
   ResearchDimensionView,
   ResearchItemView,
@@ -235,14 +236,10 @@ function DimensionSection({
 }
 
 export default function ResearchReportModal({ open, profile, onClose }: Props) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Gated on the profile too: the render below returns null without one, and
+  // a dialog that is not on screen must not sit on top of the dialog stack.
+  useDialogFocus(open && Boolean(profile), panelRef, panelRef, onClose);
 
   if (!open || !profile) return null;
 
@@ -271,7 +268,9 @@ export default function ResearchReportModal({ open, profile, onClose }: Props) {
       aria-label="Research findings report"
     >
       <div
-        className="flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl"
+        ref={panelRef}
+        tabIndex={-1}
+        className="flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header: title + summary + close */}

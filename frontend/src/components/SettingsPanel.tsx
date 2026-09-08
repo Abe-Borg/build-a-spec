@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyStatus, UsageSummary } from "../types";
 import {
   deleteKey,
@@ -7,6 +7,7 @@ import {
   testKey,
 } from "../lib/api";
 import DeveloperToolsModal from "./DeveloperToolsModal";
+import { useDialogFocus } from "../lib/dialogFocus";
 
 interface Props {
   open: boolean;
@@ -210,6 +211,13 @@ export default function SettingsPanel({
     }
   }, [open, refreshStatus]);
 
+  // Escape, Tab containment and focus restoration through the one hook every
+  // dialog uses — Settings had none of them (nor a dialog role). Developer
+  // tools and What's new stack above it as later commits, so the shared
+  // dialog stack hands Escape to whichever is on top.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(open, panelRef, panelRef, onClose);
+
   if (!open) return null;
 
   const envLocked = status?.env_locked === true;
@@ -295,9 +303,14 @@ export default function SettingsPanel({
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-6 pt-16"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Settings"
     >
       <div
-        className="w-full max-w-lg overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl"
+        ref={panelRef}
+        tabIndex={-1}
+        className="w-full max-w-lg overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl outline-none"
         onClick={(e) => e.stopPropagation()}
         data-capability="session.api-key"
       >

@@ -117,7 +117,6 @@ from ..spec_doc.source_patch import (
     SourcePatchError,
     blocked_source_edit_capabilities,
     source_capability_summary,
-    source_patch_readiness,
     validate_source_map_identity,
     validate_source_transition,
 )
@@ -1440,50 +1439,6 @@ class SessionState:
                 analyzed,
                 blocker="output_validation_failed",
             )
-
-    def source_export_readiness(self) -> dict[str, object]:
-        """Current source-patch capability for API/UI integration."""
-        baseline_index = self.doc.baseline_index
-        if (
-            baseline_index is None
-            or not 0 <= baseline_index < len(self.doc.versions)
-        ):
-            return {
-                "ready": False,
-                "no_op": False,
-                "changed_uids": [],
-                "blockers": [
-                    {
-                        "uid": "source",
-                        "blocker": "baseline_unavailable",
-                        "message": "the imported semantic baseline is unavailable",
-                    }
-                ],
-            }
-        baseline = SpecSection.from_dict(self.doc.versions[baseline_index])
-        try:
-            context = self.ensure_source_patch_context(baseline=baseline)
-        except SourcePatchError as exc:
-            return {
-                "ready": False,
-                "no_op": False,
-                "changed_uids": [],
-                "blockers": [
-                    {
-                        "uid": exc.uid,
-                        "blocker": exc.blocker,
-                        "message": exc.detail,
-                    }
-                ],
-                "mutation_blockers": [],
-            }
-        return source_patch_readiness(
-            source_bytes=self.source_docx_bytes,
-            source_map=self.source_docx_map,
-            baseline=baseline,
-            current=self.doc.doc,
-            context=context,
-        ).to_dict()
 
     def reset(
         self,

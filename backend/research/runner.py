@@ -186,10 +186,6 @@ class ResearchRunner:
                 mirror(event)
             return True
 
-    def events_since(self, seq: int) -> list[dict[str, Any]]:
-        with self._lock:
-            return list(self.events[seq:])
-
     # -- lifecycle -----------------------------------------------------------
 
     def start(

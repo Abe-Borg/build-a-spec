@@ -125,12 +125,6 @@ class StandardsBasis:
     standards: tuple[StandardEdition, ...] = field(default_factory=tuple)
     unpinned: bool = False
 
-    def code_year(self, key: str) -> str:
-        for code in self.base_codes:
-            if code.key == key:
-                return code.year
-        return ""
-
     def standard(self, name: str) -> StandardEdition | None:
         """Return the pinned edition for ``name`` (case-insensitive) or None."""
         canonical = normalize_standard_name(name)

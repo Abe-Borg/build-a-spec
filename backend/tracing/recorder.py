@@ -56,22 +56,6 @@ def current_span() -> SpanHandle | None:
     return _CURRENT_SPAN.get()
 
 
-def bind_to_current_context(fn):
-    """Wrap ``fn`` to run in a snapshot of the current context.
-
-    ``ThreadPoolExecutor.submit`` does not propagate contextvars — wrap
-    submitted callables so workers see the submitter's span.
-    """
-    ctx = contextvars.copy_context()
-
-    def wrapper(*args, **kwargs):
-        return ctx.run(fn, *args, **kwargs)
-
-    wrapper.__name__ = getattr(fn, "__name__", "wrapped")
-    wrapper.__doc__ = getattr(fn, "__doc__", None)
-    return wrapper
-
-
 _SHUTDOWN_SENTINEL = object()
 
 
@@ -210,10 +194,6 @@ class TraceRecorder:
     @property
     def capture_level(self) -> str:
         return self._capture_level
-
-    @property
-    def is_deep(self) -> bool:
-        return self._capture_level == LEVEL_DEEP
 
     def writer_health(self) -> dict[str, Any]:
         """Return a bounded in-memory recorder-health snapshot."""

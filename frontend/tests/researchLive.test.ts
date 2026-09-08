@@ -7,7 +7,6 @@ import {
   isResearchActiveSnapshot,
   maxResearchEventSeq,
   mergeResearchEvent,
-  reconcileResearchSnapshot,
   reconcileResearchSnapshotUpdate,
   researchSnapshotRound,
 } from "../src/lib/researchLive.ts";
@@ -400,7 +399,7 @@ test("a round-less snapshot on either side adopts the fetch", () => {
     events: [],
     profile: profile(1),
   };
-  assert.equal(reconcileResearchSnapshot(local, fetched), fetched);
+  assert.equal(reconcileResearchSnapshotUpdate(local, fetched).snapshot, fetched);
 });
 
 test("a shorter same-round log from ANOTHER workspace still reads as stale", () => {

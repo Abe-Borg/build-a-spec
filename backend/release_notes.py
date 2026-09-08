@@ -351,6 +351,19 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "projects still load and export."
                         ),
                     ),
+                    ReleaseItem(
+                        title="A settings value of zero can no longer switch a safety off",
+                        body=(
+                            "Every numeric setting now has a floor. Setting "
+                            "the Final QC verifier count to zero used to build "
+                            "review panels with no seats — and a panel nobody "
+                            "sat on counted as unanimous approval of every "
+                            "finding; a zero token ceiling or port simply "
+                            "broke the app. A value below the floor, or one "
+                            "that is not a number, is now corrected and noted "
+                            "in the activity log instead of taken silently."
+                        ),
+                    ),
                 ),
             ),
         ),

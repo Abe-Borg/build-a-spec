@@ -348,23 +348,6 @@ class TemplateCatalog:
             for path in sorted(self.curated_root.glob(f"*{TEMPLATE_EXTENSION}"))
         ]
 
-    def _iter_personal(self) -> tuple[list[dict[str, Any]], int]:
-        templates: list[dict[str, Any]] = []
-        invalid = 0
-        for path in sorted(self.personal_root.glob(f"*{TEMPLATE_EXTENSION}")):
-            try:
-                if path.is_symlink():
-                    raise TemplateError("Symbolic link.")
-                template = canonical_template(
-                    _parse_json_bytes(_read_path_bytes(path)), expected_source="personal"
-                )
-                if self._personal_path(template["id"]) != path:
-                    raise TemplateError("Template id does not match its filename.")
-                templates.append(template)
-            except (OSError, TemplateError):
-                invalid += 1
-        return templates, invalid
-
     def list(self) -> TemplateList:
         with self._lock:
             curated = list(self._iter_curated())
@@ -703,9 +686,3 @@ def get_template_catalog() -> TemplateCatalog:
         if _CATALOG is None:
             _CATALOG = TemplateCatalog()
         return _CATALOG
-
-
-def reset_template_catalog_for_tests() -> None:
-    global _CATALOG
-    with _CATALOG_LOCK:
-        _CATALOG = None

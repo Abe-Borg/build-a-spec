@@ -8545,7 +8545,19 @@ Final QC result stays current through this.
   round-top check reuses the one `ceiling_message` string the poll loop
   now reads too, and emits `timeout` without a `batch_id`, since there is
   no batch yet.
-- **Tests**: 5 in `tests/test_qc_batch_verification.py` under "The phase
+- **A retry needs a round to run in** (caught in review on PR #151, Codex).
+  Refused on the LAST allowed round — at once under
+  `BUILD_A_SPEC_QC_BATCH_MAX_ROUNDS=1`, or after enough continuations with
+  the default 20 — the first cut still queued the retry, slept the backoff,
+  and `continue`d off the end of the `for`, where the loop's tail blamed the
+  round ceiling; a Stop cutting that sleep short therefore read as a ceiling
+  breach, not a cancellation, because the top-of-loop check it relied on
+  never ran. `no_round_left` now joins the non-retryable and all-exhausted
+  conditions: the seats fail with the refusal itself, no sleep, no retry
+  frames promising a round that will not come. That is also what makes
+  "the top of the loop decides" above a sound design rather than a hope —
+  an interrupted wait is now guaranteed a next iteration to be settled in.
+- **Tests**: 6 in `tests/test_qc_batch_verification.py` under "The phase
   cannot hang" — the seat-vs-round key (three pause rounds, then a 429:
   `waits == [5.0]`, both retry frames say `backoff_s: 5.0, attempt: 1`),
   the cap binding under a monkeypatched policy, a Stop landing in the first
@@ -8554,11 +8566,14 @@ Final QC result stays current through this.
   so a regression fails fast rather than hanging for the ceiling), and the
   between-rounds ceiling (a fake `time.monotonic` that jumps 100,000s after
   the first submission: one batch created, `timeout` on round 2, the paused
-  seat failed with the ceiling message, its partner still completed). Every
-  mechanism was reverted in place to prove it load-bearing: the full revert
-  → 5 red; round-keyed backoff → 1; cap removed → 1; plain `time.sleep` →
-  3 (the two wait-recording tests fall with it, and that run really sleeps
-  66s); empty id unchecked → 1; round-top deadline removed → 1.
+  seat failed with the ceiling message, its partner still completed), and
+  the last-round refusal (`QC_BATCH_MAX_ROUNDS=1`, `time.sleep` patched to
+  raise: no submission, no retry frame, seats failed with the refusal and
+  never the round ceiling). Every mechanism was reverted in place to prove
+  it load-bearing: the full revert → 5 red; round-keyed backoff → 1; cap
+  removed → 1; plain `time.sleep` → 3 (the two wait-recording tests fall
+  with it, and that run really sleeps 66s); empty id unchecked → 1;
+  round-top deadline removed → 1; the last-round guard → 1.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

@@ -5191,7 +5191,13 @@ def _run_batch_calls(
             exhausted = [
                 key for key in pending if states[key].attempt >= attempts - 1
             ]
-            if not retryable or len(exhausted) == len(pending):
+            # A retry needs a round to run in. Refused on the last round,
+            # the seats fail with the refusal itself — never a backoff
+            # slept for nothing and then the loop's tail blaming the round
+            # ceiling (and, if a Stop cut that sleep short, calling a
+            # cancellation a ceiling breach; caught in review on PR #151).
+            no_round_left = round_index + 1 >= max_rounds
+            if not retryable or len(exhausted) == len(pending) or no_round_left:
                 settle_all(pending, message, failure_class.value)
                 emit("failed", round=round_index + 1, error=message)
                 return results()
@@ -5220,7 +5226,8 @@ def _run_batch_calls(
                     }
                 )
             # Cut short by a Stop or the ceiling; the top of the loop
-            # decides which and settles the seats accordingly.
+            # decides which and settles the seats accordingly. A next
+            # iteration always exists here — no_round_left returned above.
             _sleep_interruptibly(backoff, should_stop=should_stop, deadline=deadline)
             continue
 

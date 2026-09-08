@@ -843,3 +843,38 @@ def test_the_round_loop_honours_the_wall_clock_ceiling_between_rounds(
     cut_off = [v for v in seats if v.status == "failed"]
     assert len(cut_off) == 1 and "wall-clock ceiling" in cut_off[0].error
     assert [v.status for v in seats if v is not cut_off[0]] == ["completed"]
+
+
+
+def test_a_refusal_with_no_round_left_fails_with_the_refusal_not_a_sleep(
+    monkeypatch,
+):
+    """A retry needs a round to run in (caught in review on PR #151, Codex).
+
+    Refused on the last allowed round, the old branch queued a retry, slept
+    the backoff for nothing, and let the loop's tail blame the round
+    ceiling — and a Stop landing in that sleep read as a ceiling breach
+    rather than a cancellation. The seats now fail with the refusal itself,
+    at once.
+    """
+    monkeypatch.setattr(settings, "QC_BATCH_MAX_ROUNDS", 1)
+    monkeypatch.setattr(engine.time, "sleep", _never_sleep)
+    client = SequencedFakeClient(_one_finding_scripts())
+    _refuse_submissions(client, on_calls={1})
+    events: list[dict] = []
+    result = _run(client, events=events)
+
+    assert client.batches.created == []
+    assert [e for e in events if e["type"] == "verifier_retry"] == []
+    failed = [
+        e
+        for e in events
+        if e["type"] == "verification_batch" and e["status"] == "failed"
+    ]
+    assert len(failed) == 1 and "RateLimitError" in failed[0]["error"]
+    seats = result.inconclusive[0].verdicts
+    assert all(
+        v.status == "failed" and "RateLimitError" in v.error for v in seats
+    )
+    assert not any("round ceiling" in v.error for v in seats)
+    assert result.execution_status == "partial"

@@ -466,6 +466,11 @@ export default function ReviewDrawer({
   confirmPartRef.current = confirmPart;
   const [holdingPart, setHoldingPart] = useState(false);
   const holdPartTimer = useRef(0);
+  // The article hold's twin (see the effect beside `holdTimer`): a drawer
+  // unmounted mid-hold — New session, Open project, the tour — must not let
+  // the timer fire into confirmPart, which is a REAL bulk set_status round
+  // trip for a whole PART against a document the user just replaced.
+  useEffect(() => () => window.clearTimeout(holdPartTimer.current), []);
   // The PART hold earns its slot only when it does more than the article
   // hold beside it: ≥2 outstanding entries spread across ≥2 articles.
   const partHoldVisible =

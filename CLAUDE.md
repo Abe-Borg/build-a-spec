@@ -8988,6 +8988,125 @@ event, no dep, no backend edit.
   a body `fetch` has already aborted (a no-op either way), so it is parity
   with `streamResearch`, not a mechanism — the abort itself is fetch's.
 
+## Stranded frontend state recovers — implemented notes
+
+Batch 7 of the 2026-09-02 program diagnosis. Four defects of one class —
+**state that a failure strands** — each fixed with the pattern the codebase
+already used next door. Frontend + docs only: no route, no SSE event, no
+dep, no backend change.
+
+- **A `busy` flag released only on the happy path** (`SettingsPanel.tsx`).
+  `test()` awaited `testKey` outside any try, and `saveAfterTest()` awaited
+  it outside the try that wrapped only `saveApiKey`. The trap is that
+  `testKey` never THROWS on a plain non-2xx (it returns `{ok: false}`), so
+  the only way that await rejects is a backend that is gone or a 200 whose
+  body is not JSON — and on exactly that path `setBusy(false)` never ran.
+  The panel is an early `return null` while closed, not an unmount, so the
+  stranded flag kept every control disabled and the Save button reading
+  "Working…" for the rest of the app's life, across close and reopen. All
+  three handlers now fence their awaits with `finally { setBusy(false) }`,
+  and a rejected request renders under its own label — `Could not test the
+  key: …` / `Could not remove the key: …` (`TestResult.label`, default "Key
+  rejected") — because a network failure reported as a rejected key sends
+  the user to rotate a key that was fine. **Deliberately NOT done:
+  `setBusy(false)` in the open-reset effect.** With every await fenced,
+  `busy` is true only while a request is genuinely in flight, and clearing
+  it on reopen would UNLOCK the controls mid-request — a second Save during
+  a save is the double submit the flag exists to prevent.
+- **A timer with no unmount cleanup** (`ReviewDrawer.tsx`). The article
+  hold had `useEffect(() => () => window.clearTimeout(holdTimer.current),
+  [])`; the PART hold, added later, did not. A drawer unmounted mid-hold —
+  New session, Open project, the tour — let the timer fire into
+  `confirmPartRef.current()`, which is `runEdit(partStatusOps)`: a REAL bulk
+  `set_status` round trip for a whole PART against the document the user
+  had just replaced, plus four `setState`s on an unmounted component. The
+  twin effect sits beside the ref it clears rather than folded into the
+  article one, which would read the ref 250 lines before its declaration.
+- **A poll whose failure blanked the screen** (`App.tsx`, `lib/
+  latestAnswer.ts`). `refreshReadiness` and `refreshUsage` `setX(null)` in
+  their `.catch`, while `refreshQc` / `refreshResearch` deliberately keep
+  last-good and the house rule is written beside them. `/api/usage` fires
+  on EVERY QC milestone, racing `turn_complete` and the follower's finally;
+  one dropped poll flipped the spend pill to "—", hid the context gauge and
+  made Settings claim "No spend recorded yet this session". `/api/readiness`
+  fires from the capability-sweep chain concurrently with every mutation;
+  one dropped poll removed the whole Issue-readiness card and read a ready
+  section as "not yet reviewed". Neither had a rank guard, so two in-flight
+  successes could also land out of order. Both now ride the update check's
+  latch: `LatestAnswer<T>` gains `drop(rank)` — claim the rank, apply
+  nothing — so a failed poll is an answer for ORDERING (an older success
+  still in flight can no longer land on top of it, the documented "a failure
+  is an answer too" rule) but not for the SCREEN. Same module, same
+  counters; no second primitive. `clearSessionState`'s deliberate
+  `setReadiness(null)` / `setUsage(null)` are untouched and pinned as such —
+  a new session is not a dropped poll.
+- **Spec exports were bare `<a download>` links** (`ArtifactPanel.tsx`,
+  `lib/api.ts`, `lib/useDownloads.ts`, `lib/saveBlob.ts`). Seven of them —
+  no failure mode a user can see, which `useQcReportDownloads` had already
+  described and fixed for the QC reports only. The anchor-click save block
+  was copy-pasted FOUR times (project file, project brief, QC report,
+  figure downloads) and two copies had drifted on the filename regex.
+  `saveBlob` is now the one save; `downloadAttachment(url, fallbackName,
+  label)` is the one fetch-then-save (JSON `error` on a non-OK response,
+  else `<label> failed (<status>)`; `filenameFromDisposition` stops at `;`
+  as well as `"`, so a trailing `filename*=` parameter never rides into the
+  name); `downloadQcReport`, `downloadProjectBrief` and `downloadProjectFile`
+  are wrappers over it. **The one knowing behavior change**: a refused
+  project-file download now surfaces the server's message instead of a bare
+  `save failed (N)`; no test pinned the old text. `useDownloads<K>()` is
+  `useQcReportDownloads`'s state machine with the fetch injected — `busy` is
+  the KEY of the download in flight, not a boolean, so a surface with seven
+  controls can label the one that was clicked while `busy !== null` locks
+  all; the QC hook keeps its `(format, runId)` signature over it, so the two
+  report surfaces are untouched. The seven anchors are `<button>`s through
+  `exportDocxUrl(...)` / `ORIGINAL_UPLOAD_URL`; #4 keeps
+  `data-capability="import.source-output"` verbatim (the tour contract
+  scrapes it), and the wrapper's `data-tour="export"` / `export.clean` and
+  the dropdown's `export.redline-source` are untouched. **The menu closes on
+  click, so the busy state lives on the Export TRIGGER** (`Preparing…`,
+  disabled — the Open-in-Word precedent) and the failure in a dismissible
+  strip beside Open in Word's (`Export failed — …`, `data-testid=
+  "export-error"`); an inline error inside a menu that just closed shows
+  nothing.
+- **What's-new says when it cannot load — on the click, not at launch.**
+  `openReleaseNotes` (Settings → What's new, a deliberate click) routes its
+  failure to the panel's notice strip through `ImportNotice.title`, which
+  exists for exactly this (otherwise the heading reads "Import failed — ").
+  The launch check stays silent by design: a cosmetic modal must never
+  trouble a launch, and the Settings button is its retry.
+- **Tests: +13, `npm test` 251 → 264.** `latestAnswer.test.ts` (+2: a
+  dropped poll keeps the last-good answer and still outranks an older one
+  in flight; a drop after a newer answer changes nothing).
+  `downloads.test.ts` (new, 7): the filename parse (quoted, unquoted, a
+  trailing RFC 5987 parameter, absent → fallback); a refused download
+  surfacing the server's message; a non-JSON body → the labelled status
+  fallback; the URL builder's five shapes; the project-file wrapper's new
+  message and its tutorial scope; the SUCCESS path under a minimal DOM shim
+  (`URL.createObjectURL`/`revokeObjectURL` stubbed, a `document` with
+  `createElement` + `body.appendChild`, `t.mock.timers` for the deferred
+  revoke — the first DOM shim in the suite; `qcApi.test.ts` had documented
+  why none existed); and a text-level pin that the panel has no
+  `<a … download>` element left (an element carries `href`; the comments
+  naming the defect do not — the first cut matched its own comment) and
+  still declares `import.source-output`. `strandedState.test.ts` (new, 4,
+  source-level because none of these components has a DOM harness): every
+  Settings handler releases `busy` in a `finally` and awaits nothing
+  outside its try; the failure labels; both hold timers cleared on unmount;
+  `refreshReadiness`/`refreshUsage` carrying `next`/`accept`/`drop` and no
+  `setX(null)`, with `clearSessionState`'s deliberate nulls still present.
+- **Revert matrix**, each mechanism reverted in place: `test()`'s `finally`
+  dropped → 2 red (the release pin and the label pin, since the label went
+  with it); the PART cleanup dropped → 1; `drop` removed from the latch →
+  2 red + 2 `tsc` errors; `setUsage(null)` restored → 1; the JSON parse
+  removed from `downloadAttachment` → 4 red (two here, two in
+  `qcApi.test.ts`, since the QC wrapper now shares it); the filename regex
+  reverted to `[^"]+` → 1; one anchor restored → 1, with the capability
+  contract still green (the capability survives the shape, as intended).
+  `useDownloads`'s own `finally` has no unit — hooks have no harness — so
+  `tsc` polices the wiring and the manual-QA rows in
+  `docs/RELEASE_WINDOWS.md` ("State that must recover") police the
+  behavior. Recorded honestly.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

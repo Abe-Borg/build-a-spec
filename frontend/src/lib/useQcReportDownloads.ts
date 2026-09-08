@@ -8,10 +8,14 @@
  * especially in the native shell. Routing the click through
  * `downloadQcReport` shows a preparing state while the artifact is fetched
  * and surfaces the server's exact error message beside the button.
+ *
+ * The state machine itself is `useDownloads`, shared with the Export menu;
+ * this keeps the report surfaces' `(format, runId)` signature.
  */
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 
 import { downloadQcReport } from "./api";
+import { useDownloads } from "./useDownloads";
 
 export type QcReportFormat = "docx" | "json";
 
@@ -20,21 +24,12 @@ export function useQcReportDownloads(): {
   error: string;
   download: (format: QcReportFormat, runId: unknown) => Promise<void>;
 } {
-  const [busy, setBusy] = useState<QcReportFormat | null>(null);
-  const [error, setError] = useState("");
+  const downloads = useDownloads<QcReportFormat>();
+  const run = downloads.download;
   const download = useCallback(
-    async (format: QcReportFormat, runId: unknown) => {
-      setBusy(format);
-      setError("");
-      try {
-        await downloadQcReport(format, runId);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(null);
-      }
-    },
-    [],
+    (format: QcReportFormat, runId: unknown) =>
+      run(format, () => downloadQcReport(format, runId)),
+    [run],
   );
-  return { busy, error, download };
+  return { busy: downloads.busy, error: downloads.error, download };
 }

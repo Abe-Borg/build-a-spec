@@ -20,6 +20,14 @@ export interface LatestAnswer<T> {
   next(): number;
   /** Apply `value` only if no newer request has already answered. */
   accept(rank: number, value: T, apply: (value: T) => void): boolean;
+  /**
+   * Record that the request answered with nothing to apply — a dropped
+   * poll. It still claims its rank, so an OLDER request still in flight can
+   * no longer land on top of it; the value on screen stays what it was.
+   * That is the readiness/usage posture: a failure is an answer for
+   * ordering, not for the screen.
+   */
+  drop(rank: number): boolean;
 }
 
 export function createLatestAnswer<T>(): LatestAnswer<T> {
@@ -33,6 +41,11 @@ export function createLatestAnswer<T>(): LatestAnswer<T> {
       if (rank < applied) return false;
       applied = rank;
       apply(value);
+      return true;
+    },
+    drop(rank) {
+      if (rank < applied) return false;
+      applied = rank;
       return true;
     },
   };

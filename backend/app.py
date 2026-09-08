@@ -377,6 +377,12 @@ def _workspace_diagnostic_state() -> dict[str, Any] | None:
         return None
 
 
+_RESEARCH_TURN_ACTIVE_ERROR = (
+    "A model turn is streaming — let it finish before starting "
+    "requirements research."
+)
+
+
 def _coded_error_response(
     payload: dict[str, Any], *, status_code: int
 ) -> JSONResponse:
@@ -2609,7 +2615,6 @@ def create_app(
             ("POST", "/api/project/load-file"),
             ("POST", "/api/research/start"),
             ("POST", "/api/research/stop"),
-            ("POST", "/api/audit/start"),
             ("POST", "/api/qc/start"),
             ("POST", "/api/qc/stop"),
             ("POST", "/api/qc/apply/preview"),
@@ -3968,15 +3973,26 @@ def create_app(
                         )
                     session.doc.begin_turn()
                     edit_error = ""
+                    committed = False
                     try:
                         applied = session.apply_doc_edits(body.ops)
                     except SpecEditError as exc:
-                        session.doc.rollback_turn()
                         edit_error = str(exc)
                         payload = None
                     else:
                         session.doc.commit_turn()
+                        committed = True
                         payload = _doc_payload(session, workspace=lease)
+                    finally:
+                        # ONE rollback path, and it runs on every exit that
+                        # did not commit — the rejected batch above, but
+                        # also an unexpected exception on its way to the
+                        # catch-all 500. Left open, the stale backup would
+                        # be restored by the NEXT begin_turn (a chat turn or
+                        # another edit), silently undoing whatever landed in
+                        # between. rollback_turn is a no-op once committed.
+                        if not committed:
+                            session.doc.rollback_turn()
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
         actions = sorted(
@@ -5124,6 +5140,18 @@ def create_app(
             return _stale_tutorial_response()
         session = lease.session
         with session.session_state_guard():
+            # The round reads the project profile and the section number
+            # under this guard, and a streaming turn may be recording
+            # exactly those (set_project_profile / set_project_identity)
+            # — the same reason qc_start and draft_full refuse mid-turn.
+            if session.turn_active:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": _RESEARCH_TURN_ACTIVE_ERROR,
+                    },
+                    status_code=409,
+                )
             if session.qc.status == "running":
                 return JSONResponse(
                     {
@@ -5221,6 +5249,17 @@ def create_app(
                     },
                     status_code=409,
                 )
+            # get_client() ran between the two guards, so a turn can have
+            # claimed the session in the gap: the last look before the
+            # runner starts (the install route's pre-spawn re-check).
+            if session.turn_active:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": _RESEARCH_TURN_ACTIVE_ERROR,
+                    },
+                    status_code=409,
+                )
             started = runner.start(
                 module=module,
                 project_profile=profile,
@@ -5305,68 +5344,27 @@ def create_app(
 
     @app.post("/api/audit/start")
     def audit_start() -> JSONResponse:
-        session = sessions.get_session()
-        # Capture every session-derived input beside its owning runner and
-        # generation. A reset after this point abandons the old runner and its
-        # generation-bound usage sink instead of feeding old inputs into the
-        # fresh session.
-        with session.session_state_guard():
-            profile = session.research.profile_result
-            snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
-            module = session.module
-            discipline = effective_discipline(session)
-            version_index = session.doc.index
-            run_generation = session.generation
-            runner = session.audit
-        if profile is None:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "Run the requirements research first — the "
-                    "audit evaluates the draft against the researched "
-                    "profile.",
-                },
-                status_code=400,
-            )
-        if snapshot.is_empty():
-            return JSONResponse(
-                {"ok": False, "error": "There is no draft to audit yet."},
-                status_code=400,
-            )
-        try:
-            client = get_client()
-        except MissingApiKeyError as exc:
-            return JSONResponse(
-                {"ok": False, "error": str(exc)}, status_code=400
-            )
-        with session.session_state_guard():
-            if session.generation != run_generation or session.audit is not runner:
-                return JSONResponse(
-                    {
-                        "ok": False,
-                        "error": "The session changed while the audit was starting.",
-                    },
-                    status_code=409,
-                )
-            started = runner.start(
-                section=snapshot,
-                profile=profile,
-                module=module,
-                client=client,
-                model=settings.RESEARCH_MODEL,
-                max_tokens=settings.RESEARCH_MAX_TOKENS,
-                version_index=version_index,
-                discipline=discipline,
-                usage_sink=lambda u, g=run_generation: (
-                    session.add_usage_if_current(g, "audit", u)
-                ),
-            )
-        if not started:
-            return JSONResponse(
-                {"ok": False, "error": "An audit is already running."},
-                status_code=409,
-            )
-        return JSONResponse({"ok": True})
+        """Retired: the Final QC lenses supersede the compliance audit.
+
+        The frontend stopped calling this in Batch 4 (v0.9.0) and every gate
+        the QC/research start routes grew since (lease, turn_active, the
+        running-run 409s) was never added here — so the one way to reach it
+        was a hand-made request that ran a paid model call past every guard
+        the UI honours. A 410 says so. ``GET /api/audit/status``, the
+        runner's restore path and the persisted ``audit_result`` are
+        untouched: a retained audit still loads, exports and reads back.
+        """
+        return _coded_error_response(
+            {
+                "ok": False,
+                "code": "audit_retired",
+                "error": "The compliance audit is retired — Final QC's "
+                "code_compliance and completeness lenses supersede it. "
+                "Retained audit results still load, export and read back "
+                "from GET /api/audit/status.",
+            },
+            status_code=410,
+        )
 
     @app.get("/api/audit/status")
     def audit_status() -> dict:
@@ -6588,38 +6586,55 @@ def create_app(
         # The same semantic payload was fully staged above, so these writes
         # are the commit point. A rejected package never reaches them.
         session = entry_lease.session
-        with session.session_state_guard():
-            try:
-                sessions.workspace_manager().assert_active(entry_lease)
-            except sessions.WorkspaceConflictError:
-                return _coded_error_response(
-                    {
-                        "ok": False,
-                        "code": "stale_workspace",
-                        "error": "The workspace changed while the project was being read.",
-                    },
-                    status_code=409,
+
+        def _commit_load() -> JSONResponse | None:
+            """The commit, on a worker thread, under ONE guard.
+
+            ``load_project`` re-parses every retained document version (and
+            the QC result, the research profile, references and figures)
+            before adopting any of it — O(versions × document) of CPU that
+            used to run on the event loop, so opening a large project froze
+            every other request for as long as it took. The lease re-check
+            and the generation check stay inside the same critical section
+            as the writes they protect; only the thread changed.
+            """
+            with session.session_state_guard():
+                try:
+                    sessions.workspace_manager().assert_active(entry_lease)
+                except sessions.WorkspaceConflictError:
+                    return _coded_error_response(
+                        {
+                            "ok": False,
+                            "code": "stale_workspace",
+                            "error": "The workspace changed while the project was being read.",
+                        },
+                        status_code=409,
+                    )
+                if session.generation != entry_generation:
+                    return _coded_error_response(
+                        {
+                            "ok": False,
+                            "code": "stale_workspace",
+                            "error": "The session was replaced while the project "
+                            "was being read — open it again from the current "
+                            "session.",
+                        },
+                        status_code=409,
+                    )
+                load_project(parsed.project, session)
+                session.source_docx_bytes = parsed.source_docx_bytes
+                session.source_docx_filename = (
+                    parsed.source_docx_filename if parsed.source_docx_bytes else ""
                 )
-            if session.generation != entry_generation:
-                return _coded_error_response(
-                    {
-                        "ok": False,
-                        "code": "stale_workspace",
-                        "error": "The session was replaced while the project "
-                        "was being read — open it again from the current "
-                        "session.",
-                    },
-                    status_code=409,
+                session.source_docx_map = typed_map
+                session.source_patch_context = (
+                    source_context if parsed.source_docx_bytes is not None else None
                 )
-            load_project(parsed.project, session)
-            session.source_docx_bytes = parsed.source_docx_bytes
-            session.source_docx_filename = (
-                parsed.source_docx_filename if parsed.source_docx_bytes else ""
-            )
-            session.source_docx_map = typed_map
-            session.source_patch_context = (
-                source_context if parsed.source_docx_bytes is not None else None
-            )
+            return None
+
+        refusal = await run_in_threadpool(_commit_load)
+        if refusal is not None:
+            return refusal
         _trace_capture.app_event(
             "project_load",
             mode="package",

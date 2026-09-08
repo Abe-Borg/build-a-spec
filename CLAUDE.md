@@ -8743,6 +8743,92 @@ bytes a save writes are what they were.
   opaque line, writes nothing, and leaves an ERROR record carrying the
   cause in `caplog`. Each mechanism reverted in place → its own red.
 
+## Endpoint gates agree with each other — implemented notes
+
+Batch 4 of the 2026-09-02 program diagnosis. Three start/edit routes had
+drifted apart in what they refuse, and one `async def` handler still did its
+heaviest work on the event loop. No new endpoint, no new SSE event, no new
+dep, no new env knob, no project-format change, no frontend change.
+
+- **`research_start` refuses while a turn streams, like its two siblings.**
+  `qc_start` and `draft_full` have always returned a 409 on
+  `session.turn_active`; `research_start` gated only on a running Final QC.
+  The round reads the project profile and the section number under its
+  first guard, and a streaming turn may be recording exactly those
+  (`set_project_profile` / `set_project_identity`) — so a round started
+  mid-turn was briefed on a project the reply was still describing. The
+  check sits in BOTH guarded blocks: the first is the ordinary refusal, the
+  second is the last look before `runner.start`, because `get_client()`
+  runs between them and a turn can claim the session in that gap (the
+  install route's pre-spawn re-check, Batch 2). One message constant
+  (`_RESEARCH_TURN_ACTIVE_ERROR`) so the two cannot drift; the same plain
+  `{ok, error}` shape every other research_start error uses. The test
+  patches a research client whose scripts must never be consumed, so a gate
+  that let the fan-out start fails on the request log, not only on the
+  status code — and it re-sends the identical request once the turn is
+  over, so the gate is proven to be the ONLY thing refusing.
+- **`edit_doc` rolls back on every non-committing exit.** The route
+  caught `SpecEditError` only. Anything else on its way to the catch-all
+  500 — bare `ValueError`s exist in `model.py`, and the lease can raise
+  `WorkspaceConflictError` inside the block — left `_turn_backup` set.
+  `begin_turn` self-heals an abandoned backup by RESTORING it, which is
+  right for a crashed chat turn and exactly wrong here: the next
+  `begin_turn` (a chat turn or another edit) would roll the document back
+  to the stale snapshot, silently undoing whatever landed in between. A
+  `committed` flag and one `finally` is the whole fix; the explicit
+  rollback in the `except` went with it (one mechanism, one path), which
+  is safe because `rollback_turn` is a no-op once `_turn_backup` is None.
+  The test raises `RuntimeError` from a patched `apply_doc_edits`
+  (`raise_server_exceptions=False`, the diagnostics idiom), asserts the
+  500 left no open turn and an unchanged document, then commits a real
+  edit and checks it added exactly ONE version — a stale backup would show
+  as the extra rollback.
+- **`POST /api/audit/start` is retired with a 410** (owner decision 2 of
+  the diagnosis review). The frontend stopped calling it in Batch 4
+  (v0.9.0), and every gate the research/QC start routes grew since — the
+  workspace lease, `turn_active`, the running-run 409s — was never added
+  here, so the one way to reach it was a hand-made request that ran a paid
+  model call past every guard the buttons honour. It answers
+  `{ok: false, code: "audit_retired"}` through `_coded_error_response` and
+  is out of the `_lease_slow_session_operations` allowlist (a 410 does
+  nothing worth leasing). What stays, on purpose: `GET /api/audit/status`,
+  `AuditRunner` and its `restore`, `compliance/checker.py`, the persisted
+  `audit_result` load/export path and the audit closing in `build_docx` —
+  a retained audit in an old project still loads, exports and reads back,
+  and `test_compliance.py` now drives `session.audit.start(...)` directly
+  (a local `_start_audit` reproducing the route's capture verbatim) so
+  every one of those round-trip assertions is unchanged. The route's
+  no-research 400 went with the route; nothing else in that file moved.
+- **`project_load_file` commits on a worker, under ONE guard.** Staging
+  and the payload were threadpooled long ago; the commit — `assert_active`,
+  the generation check, `load_project`, the four source-artifact
+  assignments — still ran on the loop. `load_project` re-parses EVERY
+  retained version with `SpecSection.from_dict` (`DocumentStore.load`
+  validates all before adopting any), plus the QC result, the research
+  profile, references and figures: O(versions × document) of CPU on the
+  one thread every other request needs, on the one `async def` in the app
+  where the event-loop rule was not yet honoured end to end. The block is
+  now a local `_commit_load()` that takes `session_state_guard()` itself
+  and runs through `run_in_threadpool`; the lease re-check and the
+  generation check stay in the same critical section as the writes, so
+  only the thread changed. **The test had to hold the RIGHT call**: the
+  first draft blocked `load_project` unconditionally and passed against
+  the bug, because staging replays the same payload into a throwaway
+  session on a worker thread FIRST — the block fired there, the health
+  probe answered, and the commit-phase call sailed through with the
+  release already set. It now blocks only the call whose `session` is the
+  live one; against the reverted code the probe waits the full
+  `_BLOCK_SECONDS`.
+- **Tests**: 4 new — `test_research_api.py` (the gate and its release),
+  `test_manual_edit.py` (no open turn, one version), `test_compliance.py`
+  (the 410 plus the status route still answering; the two lifecycle tests
+  re-pointed at the runner), `test_import_responsiveness.py` (the commit
+  off the loop). Every mechanism was reverted in place to prove it
+  load-bearing: the full HEAD `app.py` → 3 red (B4's first-draft test was
+  the one that stayed green, which is how the staging-call hole above was
+  found); B1 alone → 1, B3 alone → 1, A5 alone → 1, B4 alone (commit back
+  on the loop) → 1, with the probe reporting a 5.01s wait.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

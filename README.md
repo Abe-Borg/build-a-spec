@@ -204,6 +204,17 @@ So the handoff is a **project brief**, a deliberately partial file.
   answers 409 `workspace_busy`, `tutorial_active`, `unsaved_progress` or
   `install_in_progress`; `{"acknowledge_unsaved": true}` is the caller's
   promise that the prompt was shown).
+- **Four controls now agree about when they will run.** Research refuses to
+  start while a reply is streaming (`POST /api/research/start` → 409, the
+  way Final QC and Draft full section always have — a round begun mid-turn
+  could read a project profile the reply was still recording). A manual edit
+  that fails for an unexpected reason no longer leaves the document half-open
+  for the next action to quietly undo. Opening a large project no longer
+  freezes the app while the file loads (the commit runs off the event loop,
+  under the same guard). And `POST /api/audit/start`, which the app stopped
+  calling in 0.9.0, answers 410 `audit_retired` instead of running a paid
+  review past every guard the buttons honour — audits saved in old projects
+  still load and export.
 
 ## Shipped in v1.16.0 (Waiting on you — nothing you were asked scrolls away)
 
@@ -934,7 +945,11 @@ actions.
 - **Migration note:** the QC `code_compliance` + `completeness` lenses
   supersede the Phase 5 compliance audit. The audit button is retired from the
   UI (the Research drawer keeps research only); the `/api/audit/*` endpoints
-  and runner remain (deprecated) so nothing breaks.
+  and runner remain (deprecated) so nothing breaks. Since v1.17.0 that is
+  `GET /api/audit/status` and the runner's restore path only: `POST
+  /api/audit/start` answers 410 `audit_retired` rather than running a paid
+  review past the gates the buttons honour, and a retained audit in an old
+  project still loads and exports.
 
 Shipped in v0.8.0 (Batch 3: full-section draft + the review queue) and still
 current — **two on-ramps, one review surface.** Whether a section starts from a blank
@@ -1169,7 +1184,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/research/start|status|stream,
                          /api/qc/start|status|stream|apply|dismiss|export +
                          /api/qc/export.json,
-                         /api/readiness, /api/audit/* (deprecated),
+                         /api/readiness, /api/audit/status (deprecated;
+                         POST /api/audit/start answers 410 since v1.17.0),
                          /api/templates (+preview/import/{id}/export/
                          {id}/instantiate),
                          /api/tutorial/status|start|scenario/*|restore,

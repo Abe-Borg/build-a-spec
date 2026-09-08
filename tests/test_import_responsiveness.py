@@ -1139,3 +1139,60 @@ def test_project_save_does_not_hold_the_turn_lock_while_it_packages(monkeypatch)
         f"a request needing the turn-state lock waited {elapsed:.2f}s for a "
         "project package — the save is holding the lock across it again"
     )
+
+
+def test_a_project_commit_never_runs_on_the_event_loop(monkeypatch):
+    """Batch 4: the COMMIT half of opening a project is off the loop too.
+
+    Staging was moved to a worker long ago, but ``load_project`` — which
+    re-parses every retained document version before adopting any of it —
+    still ran on the event loop under the session guard. A blocked commit
+    must leave an unrelated request answering; it did not.
+    """
+    real_load = app_module.load_project
+    entered = threading.Event()
+    release = threading.Event()
+    live: dict = {}
+
+    def blocking_load(data, session):
+        # Staging replays the same payload into a THROWAWAY session on a
+        # worker thread first; only the call against the live session is
+        # the commit, and that is the call this test holds.
+        if session is live.get("session"):
+            entered.set()
+            release.wait(_BLOCK_SECONDS)
+        return real_load(data, session)
+
+    monkeypatch.setattr(app_module, "load_project", blocking_load)
+
+    with TestClient(app_module.create_app()) as client:
+        live["session"] = sessions.get_session()
+        saved = client.get("/api/project/save")
+        assert saved.status_code == 200
+        worker_outcome: dict = {}
+
+        def run_load() -> None:
+            worker_outcome["response"] = client.post(
+                "/api/project/load-file",
+                files={
+                    "file": ("session.baspec", saved.content, "application/zip")
+                },
+            )
+
+        worker = threading.Thread(target=run_load, daemon=True)
+        worker.start()
+        assert entered.wait(_BLOCK_SECONDS + 5), "the commit never started"
+        started = time.perf_counter()
+        health = client.get("/api/health")
+        elapsed = time.perf_counter() - started
+        release.set()
+        worker.join(_BLOCK_SECONDS + 10)
+
+    assert health.status_code == 200
+    assert worker_outcome["response"].status_code == 200, worker_outcome[
+        "response"
+    ].text
+    assert elapsed < _RESPONSIVE_SECONDS, (
+        f"an unrelated request waited {elapsed:.2f}s for the project commit — "
+        "load_project is back on the event loop"
+    )

@@ -8892,9 +8892,36 @@ knob, no project-format change.
   pin is untouched) and `api.getFigures` (no caller; figures ride every
   doc payload). `noUnusedLocals` does not police exports, which is how
   three of these lived on; `npm test` + `npm run build` are the check.
-- **Tests**: `tests/test_settings.py` (7, new). Backend suite 1910 → 1917;
-  `npm test` 247 (the re-pointed tests still counted); `npm run build`
-  clean; both release gates pass.
+- **A correction emitted before the log opens is held, then replayed**
+  (caught in review on PR #155, Codex). `settings` is imported at the top
+  of `main.py`, the activity-log handler is attached inside `main()`, and
+  `init_logging` is file-only by design — so every one of these warnings
+  (and the pre-existing `_cache_ttl_env` one) reached only
+  `logging.lastResort`: stderr, which the windowed build points at devnull
+  or has not even created yet. The README's "with a warning in the activity
+  log" was false in the packaged app. `settings` now installs a
+  `_StartupLogBuffer` on its own logger at import — re-installed by handler
+  NAME, because `importlib.reload` mints a new class object and an
+  `isinstance` check would let the previous import's buffer pile up beside
+  the new one — and `init_logging` calls `settings.flush_startup_log()` on
+  its success path only, outside the handler's own try/except (a replay
+  failure must never read as an init failure) and before the banner, so the
+  records land under their original import-time stamps ahead of it.
+  Detach-before-replay is what makes the flush idempotent and lets later
+  warnings go straight through. While nothing at all is configured the
+  buffer ALSO mirrors through `lastResort`, so a dev shell or a packaging
+  script that never initializes logging sees exactly what it saw before —
+  without that, the fix would swallow on the console what it rescues in the
+  file. Disabled or failed logging leaves the buffer alone: the mirror
+  already fired, and a replay to lastResort would double-print. Three
+  tests (held and replayed once with the timestamp surviving, exactly one
+  buffer across reloads, and the end-to-end file check in
+  `test_diagnostics.py`); revert matrix: the replay call → 1 red, the
+  buffer → 3, the name-based removal → 2.
+- **Tests**: `tests/test_settings.py` (9, new) + 1 in
+  `tests/test_diagnostics.py`. Backend suite 1910 → 1920; `npm test` 247
+  (the re-pointed tests still counted); `npm run build` clean; both release
+  gates pass.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

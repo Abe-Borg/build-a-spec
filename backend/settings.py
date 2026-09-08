@@ -44,6 +44,102 @@ INTERVIEW_MODEL = (
 )
 
 
+# --- Startup log buffer -----------------------------------------------------
+#
+# This module is imported before ``diagnostics.init_logging()`` has attached
+# the activity-log handler (``main.py`` imports settings at the top; the
+# handler is attached inside ``main()``), so a warning emitted here — an
+# unparseable knob, a below-floor clamp, an unsupported cache TTL — would
+# otherwise reach only ``logging.lastResort``: stderr, which the windowed
+# build points at devnull or has not even created yet. The buffer holds those
+# records until ``init_logging`` replays them through ``flush_startup_log``,
+# each with its original timestamp. While NO handler is configured anywhere,
+# a record is ALSO mirrored through lastResort, so a script that imports
+# settings and never initializes logging (a dev shell, the packaging tools)
+# still sees exactly what it saw before this buffer existed.
+
+_LOGGER_NAME = "buildaspec.settings"
+_STARTUP_BUFFER_NAME = "buildaspec.settings.startup-buffer"
+_STARTUP_BUFFER_CAP = 64  # bounded by the number of knobs, not by traffic
+
+
+class _StartupLogBuffer(logging.Handler):
+    """Hold this module's records until durable logging exists."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.NOTSET)
+        self.set_name(_STARTUP_BUFFER_NAME)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if len(self.records) < _STARTUP_BUFFER_CAP:
+            self.records.append(record)
+        # Nothing configured anywhere: keep today's console behaviour. The
+        # stdlib would have handed this record to lastResort had no handler
+        # been attached at all. ``sys.stderr`` may be None in a windowed
+        # build before ``main._ensure_std_streams`` runs, so never raise.
+        root = logging.getLogger()
+        if not root.handlers and logging.lastResort is not None:
+            try:
+                logging.lastResort.handle(record)
+            except Exception:  # noqa: BLE001 — a warning must never sink the import
+                pass
+
+    def drain(self) -> list[logging.LogRecord]:
+        held, self.records = self.records, []
+        return held
+
+
+def _startup_buffers() -> list[logging.Handler]:
+    logger = logging.getLogger(_LOGGER_NAME)
+    return [h for h in logger.handlers if h.get_name() == _STARTUP_BUFFER_NAME]
+
+
+def _install_startup_buffer() -> _StartupLogBuffer:
+    """Attach ONE buffer, however many times this module is (re)imported.
+
+    Matched by handler NAME, not ``isinstance``: ``importlib.reload`` mints a
+    fresh class object, so a buffer left by the previous import would not be
+    an instance of the new one and would pile up beside it.
+    """
+    logger = logging.getLogger(_LOGGER_NAME)
+    for stale in _startup_buffers():
+        logger.removeHandler(stale)
+    buffer = _StartupLogBuffer()
+    logger.addHandler(buffer)
+    return buffer
+
+
+def pending_startup_records() -> int:
+    """How many records are held for replay (0 once flushed)."""
+    return sum(len(getattr(h, "records", ())) for h in _startup_buffers())
+
+
+def flush_startup_log() -> int:
+    """Replay held records into whatever logging is configured NOW.
+
+    Called by ``diagnostics.init_logging()`` once the activity-log handler is
+    attached. The buffer is detached FIRST, so a replayed record cannot land
+    back in it and later warnings go straight through; each record keeps its
+    original ``created`` time, and the file handler's context filter stamps
+    it at handle time like any other. Idempotent: a second call returns 0.
+    """
+    logger = logging.getLogger(_LOGGER_NAME)
+    buffers = _startup_buffers()
+    for buffer in buffers:
+        logger.removeHandler(buffer)
+    replayed = 0
+    for buffer in buffers:
+        drain = getattr(buffer, "drain", None)
+        for record in drain() if drain is not None else []:
+            logging.getLogger(record.name).handle(record)
+            replayed += 1
+    return replayed
+
+
+_install_startup_buffer()
+
+
 def _int_env(name: str, default: int, *, minimum: int | None = None) -> int:
     """An integer knob, clamped to ``minimum`` with a loud complaint.
 
@@ -63,7 +159,7 @@ def _int_env(name: str, default: int, *, minimum: int | None = None) -> int:
         try:
             value = int(raw)
         except ValueError:
-            logging.getLogger("buildaspec.settings").warning(
+            logging.getLogger(_LOGGER_NAME).warning(
                 "%s=%r is not an integer; using the default %d.",
                 name,
                 raw,
@@ -71,7 +167,7 @@ def _int_env(name: str, default: int, *, minimum: int | None = None) -> int:
             )
             value = default
     if minimum is not None and value < minimum:
-        logging.getLogger("buildaspec.settings").warning(
+        logging.getLogger(_LOGGER_NAME).warning(
             "%s=%d is below its floor of %d; using %d.",
             name,
             value,
@@ -429,7 +525,7 @@ def _cache_ttl_env(name: str, default: str) -> str:
         return default
     if raw in SUPPORTED_CACHE_TTLS:
         return raw
-    logging.getLogger("buildaspec.settings").warning(
+    logging.getLogger(_LOGGER_NAME).warning(
         "%s=%r is not a supported prompt-cache TTL (%s); using %r.",
         name,
         raw,

@@ -7,6 +7,7 @@ import type {
   QcResultView,
   QcSnapshot,
   QcVerdict,
+  UsageSummary,
 } from "../types";
 
 /**
@@ -2125,4 +2126,34 @@ export function qcReportLimitations(
     );
   }
   return limitations;
+}
+
+/**
+ * The session-meter categories one Final QC pass bills into.
+ *
+ * Two, not one. The verification phase is submitted through the Message
+ * Batches API by default, where the provider prices every token class at half
+ * — and the ledger prices a bucket by category, so a discounted token needs
+ * its own bucket (one bucket could only ever carry one of the two rates).
+ * That phase is roughly nine calls in ten, so a surface reading only `qc`
+ * under-reports the pass by most of its cost.
+ */
+export const QC_SPEND_CATEGORIES = ["qc", "qc_batched"] as const;
+
+/**
+ * This session's Final QC spend, streamed and batched phases together.
+ *
+ * Deliberately excludes interview, research, audit and template spend: the
+ * question is what Final QC has cost, not what the session has. An absent or
+ * non-finite entry reads as zero, so a meter that has not recorded a category
+ * yet renders `$0.00` rather than `NaN`. Distinct from a retained report's
+ * own `estimated_cost_usd`, which prices ONE run rather than the session.
+ */
+export function qcSessionCost(usage: UsageSummary | null | undefined): number {
+  const byCategory = usage?.estimated_cost_usd?.by_category;
+  if (!byCategory || typeof byCategory !== "object") return 0;
+  return QC_SPEND_CATEGORIES.reduce(
+    (sum, category) => sum + (finiteNumber(byCategory[category]) ?? 0),
+    0,
+  );
 }

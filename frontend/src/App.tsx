@@ -326,9 +326,12 @@ export default function App() {
   // never read a React state value that has not committed yet.
   const researchSnapshotRef = useRef<ResearchSnapshot | null>(null);
   const researchRefreshGenerationRef = useRef(0);
-  // The in-flight research stream, so a workspace transition can release the
-  // connection instead of leaving a second reader racing the new one.
+  // The in-flight research and Final QC streams, so a workspace transition
+  // can release each connection instead of leaving a second reader racing
+  // the new one. Both followers reconnect on their own, so an unaborted
+  // stream is not merely a leak: it keeps following the OLD workspace's run.
   const researchStreamRef = useRef<AbortController | null>(null);
+  const qcStreamRef = useRef<AbortController | null>(null);
   const onboardingRef = useRef<OnboardingApi | null>(null);
   // Every whole-session/tutorial transition advances this epoch. Read calls
   // and streams captured against an older workspace must never repaint the
@@ -385,6 +388,7 @@ export default function App() {
   const advanceWorkspaceEpoch = useCallback(() => {
     workspaceEpochRef.current += 1;
     researchStreamRef.current?.abort();
+    qcStreamRef.current?.abort();
     replaceResearchSnapshot(null);
     // A debrief describes the outgoing workspace; none may survive into the
     // next one — and the fired ledger resets with it, so a loaded project's
@@ -766,13 +770,15 @@ export default function App() {
     if (qcFollowRef.current) return;
     qcFollowRef.current = true;
     const epoch = workspaceEpochRef.current;
+    const controller = new AbortController();
+    qcStreamRef.current = controller;
     try {
       let reconnect = true;
       while (reconnect && workspaceEpochRef.current === epoch) {
         reconnect = false;
         let streamStatus: string | undefined;
         try {
-          for await (const event of streamQc()) {
+          for await (const event of streamQc(controller.signal)) {
             if (event.type === "stream_end") {
               streamStatus = event.status;
               continue;
@@ -803,6 +809,7 @@ export default function App() {
 
         if (
           workspaceEpochRef.current !== epoch ||
+          controller.signal.aborted ||
           streamStatus === "superseded" ||
           streamStatus === "complete" ||
           streamStatus === "failed"
@@ -826,6 +833,9 @@ export default function App() {
         }
       }
     } finally {
+      if (qcStreamRef.current === controller) {
+        qcStreamRef.current = null;
+      }
       qcFollowRef.current = false;
       refreshQc();
       refreshReadiness();
@@ -1788,7 +1798,8 @@ export default function App() {
    *  the old project's findings sitting there indefinitely.
    */
   const clearSessionState = () => {
-    // Cuts loose the research stream and snapshot bound to the old workspace.
+    // Cuts loose the research and Final QC streams and the research snapshot
+    // bound to the old workspace.
     advanceWorkspaceEpoch();
     discardPaneState();
     setMessages([]);

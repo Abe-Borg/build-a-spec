@@ -8923,6 +8923,71 @@ knob, no project-format change.
   (the re-pointed tests still counted); `npm run build` clean; both release
   gates pass.
 
+## The Final QC follower lets go on a workspace swap — implemented notes
+
+Batch 6 of the 2026-09-02 program diagnosis. The research follower gained an
+`AbortController` in the reconnect work ("Research follower reconnect"
+above), and that section recorded the gap it left: "QC's follower still
+relies on its epoch check plus a `break`; giving it the same abort is a
+separate change." This is that change. Frontend only: no route, no SSE
+event, no dep, no backend edit.
+
+- **The epoch `break` alone was not enough, and the reason is the reconnect
+  loop.** `followQc` checked `workspaceEpochRef` per frame and broke out,
+  which unwinds the generator; `readSse`'s `finally` then cancels the
+  reader. But nothing aborted the RESPONSE the browser was holding open on
+  `/api/qc/stream`, and the `getQcStatus()` probe the loop runs after a
+  transport close could already be in flight for the OLD workspace. Every
+  session, project and tutorial transition goes through
+  `advanceWorkspaceEpoch`, which aborted `researchStreamRef` and nothing
+  else — so a new session started mid-run left the Review Room's follower
+  with a live line to the outgoing run. `streamQc` took no signal at all.
+- **Four edits, every one a mirror of the research follower.** `streamQc`
+  (`lib/api.ts`) takes `signal?: AbortSignal` and hands it to both `fetch`
+  and `readSse`, the `streamResearch` contract verbatim; `App.tsx` gains
+  `qcStreamRef` beside `researchStreamRef`, `advanceWorkspaceEpoch` aborts
+  it on the line after the research one, and `followQc` creates the
+  controller after capturing the epoch, passes `controller.signal`, adds
+  `controller.signal.aborted` to its terminal check (so an aborted stream
+  never enters the status probe), and clears the ref in `finally` only when
+  it still holds ITS controller — a successor follower's ref must survive a
+  predecessor's unwinding. No call-site change: `onStartQc` and the resume
+  effect are symmetric with research's.
+- **The SSE fetch stub moved to `frontend/tests/sseStub.ts`**, shared by
+  `researchStream.test.ts` and the new `qcStream.test.ts`. This is the
+  `eventSeqIndex.ts` exception to copy-don't-import: one correctness-
+  critical primitive (a body that never closes, so a leak cannot pass by
+  accident; abort wired to the pending read, because that wiring IS the
+  behavior under test), whose two copies would be byte-identical and whose
+  drift a duplicate test would not notice. Imported with the `.ts`
+  extension Node's resolver needs.
+- **`App.tsx` has no DOM harness, so the wiring is pinned at the source
+  level** — the `tour.test.ts` / `sessionBundle.test.ts` idiom. The fourth
+  test slices `advanceWorkspaceEpoch` and `followQc` out of the file text
+  and asserts both aborts, the controller store, `streamQc(controller
+  .signal)`, the aborted check and the clear-if-still-mine. The three pure
+  stream tests prove `streamQc` honours a signal; only this one proves the
+  app USES it, which is the whole batch. `npm run build` (tsc) polices the
+  ref/controller plumbing.
+- **Deliberately NOT done: a `QcStreamEndStatus` type + `classifyQcStreamEnd`.**
+  `followQc` compares bare strings (`"superseded"` / `"complete"` /
+  `"failed"`) against an untyped `let streamStatus: string`, where research
+  has the exhaustive `never`-armed classifier that makes a new sentinel
+  status a type error. Real hygiene, its own change.
+- **Tests**: `frontend/tests/qcStream.test.ts` (4 — the signal reaching
+  `fetch`, an abort ending the stream after exactly the frames seen, a
+  plain `break` still releasing the body, and the source-level wiring pin);
+  `researchStream.test.ts` re-pointed at the shared stub, its three tests
+  untouched; `package.json`'s explicit `node --test` list gains the file.
+  `npm test` 247 → 251. Revert matrix: the fetch `signal` → the whole file
+  red (the signal test fails its assertion, and the abort test hangs on a
+  body nothing will ever close — Node reports the pending promise and
+  cancels it and the two tests after it); the `advanceWorkspaceEpoch` abort
+  → 1 red; the `controller.signal` pass → 1 red. The `readSse` signal → 0
+  red, and honestly so: `readSse` uses it only to skip `reader.cancel()` on
+  a body `fetch` has already aborted (a no-op either way), so it is parity
+  with `streamResearch`, not a mechanism — the abort itself is fetch's.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

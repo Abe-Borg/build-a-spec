@@ -1164,11 +1164,21 @@ export async function getQcStatus(): Promise<QcSnapshot> {
   return resp.json();
 }
 
-/** Follow the active/last QC run's SSE stream until it closes. */
-export async function* streamQc(): AsyncGenerator<QcEvent> {
-  const resp = await fetch("/api/qc/stream");
+/**
+ * Follow the active/last QC run's SSE stream until it closes.
+ *
+ * `signal` aborts the underlying response so a workspace transition releases
+ * the connection immediately — the same contract as `streamResearch`.
+ * Breaking out of the `for await` alone does not: it unwinds this generator
+ * and `readSse` cancels the reader, but nothing aborts the response the
+ * browser is still holding open.
+ */
+export async function* streamQc(
+  signal?: AbortSignal,
+): AsyncGenerator<QcEvent> {
+  const resp = await fetch("/api/qc/stream", { signal });
   if (!resp.ok || !resp.body) return;
-  yield* readSse<QcEvent>(resp);
+  yield* readSse<QcEvent>(resp, signal);
 }
 
 /** Apply accepted findings' fixes as one undoable version. */

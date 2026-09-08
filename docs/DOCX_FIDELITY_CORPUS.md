@@ -21,7 +21,7 @@ application-specific ZIP/package output is the evidence under test. To
 materialize the complete resolved corpus locally:
 
 ```powershell
-& '.\venv\Scripts\python.exe' -m tests.docx_corpus .\artifacts\docx-corpus
+& '.\.venv\Scripts\python.exe' -m tests.docx_corpus .\artifacts\docx-corpus
 ```
 
 The output directory receives every `.docx` plus a resolved `manifest.json`

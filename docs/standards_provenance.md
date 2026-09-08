@@ -68,8 +68,13 @@ NFPA 291-2025 (ANSI webstore, Amazon).
 - Owner-invoked standards (NFPA 75/76) are pinned at current editions;
   they are commonly invoked by hyperscaler programs rather than mandated
   by code — keep them pinned so REFERENCES articles cite real editions.
+- NFPA 22 is the oldest pin in the table (2023, confirmed 2026-07 with no
+  newer edition found). On the ~3-year cycle above it is the next NFPA
+  standard due to move; re-verify it first at the next pin review, and
+  do not treat this note as a change — the pin stays 2023 until a newer
+  edition is confirmed with a receipt row here.
 
-## The generic module (Batch 8) pins nothing — by design
+## The generic module (Batch 10) pins nothing — by design
 
 `spec_modules/generic.py` (`generic-unpinned` basis) deliberately carries
 ZERO pinned editions, so it has no receipts here and never will. Every

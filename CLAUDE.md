@@ -629,6 +629,56 @@ backend/
                            project.py change); Batch 9 adds an optional
                            suggested_prompts key (omitted when empty;
                            restore_prompts on load, assigned unconditionally)
+  spec_doc/project_package.py
+                           the .baspec container: a small versioned ZIP
+                           (manifest.json + project.json + the retained
+                           source DOCX bytes) so an imported master travels
+                           as the exact bytes validated at import; the
+                           source binding is asserted on load
+  spec_doc/raw_zip.py      strict raw-record ZIP cloning for the byte-exact
+                           source export: indexes the immutable upload,
+                           copies every unchanged local record verbatim,
+                           rebuilds one member + the central-directory
+                           offsets; ambiguous layouts are mutation blockers
+  spec_doc/source_audit.py memory-bounded package-preservation checks on the
+                           DECOMPRESSED contract (raw-record fidelity is
+                           raw_zip's job) — unrelated members are never
+                           materialized in memory
+  spec_doc/source_mapping.py
+                           immutable anchors from the semantic tree back to
+                           the imported DOCX (kept OUTSIDE SpecSection: they
+                           describe the source package, never LLM-authorable
+                           content); source_blocker_message / _remedy own
+                           the denial prose the UI renders verbatim
+  spec_doc/source_package.py
+                           bounded upload handling + defensive OOXML/ZIP
+                           inspection (inspect_docx_package): the ONE
+                           boundary in front of every OOXML consumer, so a
+                           hostile container is rejected before a parser
+                           sees it
+  spec_doc/source_patch.py the fail-closed byte-exact export (4,043 lines —
+                           the most safety-critical subsystem in the repo):
+                           a no-op returns the exact bytes, a safe text edit
+                           replaces only an anchored w:t, and a bounded
+                           add/delete/reorder surface lives inside one
+                           Word-numbered island; source_edit_capabilities
+                           derives the per-element permission report by
+                           probing the real gate — still O(n²) per element,
+                           the residual future work. Reached only by a
+                           project still inside the pre-1.14.0 attached scope
+  spec_doc/word_numbering.py
+                           deterministic Word automatic numbering for the
+                           NORMALIZED export only (single-token lvlTexts —
+                           which is what keeps the importer's PART/article
+                           numbering grammar from ever matching the app's
+                           own output); never imported by a preserving path
+  spec_doc/xml_lexical.py  strict lexical byte indexing for source-preserving
+                           XML edits: recomputes byte locality from the
+                           immutable source XML per mutation, and a byte
+                           scanner + an Expat namespace parse must agree
+                           with lxml before any offset is trusted (typed
+                           XmlLexicalError misses; O(1) lookups since the
+                           upload-responsiveness batch)
   llm/server_tool_pairing.py
                            the use/result pairing invariant: turn-wide,
                            copy-on-write, duck-typed over dicts + SDK blocks.
@@ -753,6 +803,87 @@ frontend/src/
                            (default-src none), canvas SVG→PNG, SVG/CSV blob
                            downloads — the render-time sanitization boundary for
                            model-authored markup (never inline into the bridge DOM)
+  lib/clientLog.ts         [diagnostics] the frontend error collector:
+                           window error/unhandledrejection + wrapped
+                           console.error/warn → POST /api/diagnostics/
+                           client-event via keepalive fetch, never api.ts
+                           (a reporter must not throw or recurse); per-kind
+                           throttle + a 40/session cap
+  lib/debriefQueue.ts      [v1.11.0] the completion-debrief queue's pure
+                           state: remember-on-terminal-frame vs
+                           flush-when-allowed, latest-wins per kind, fired-
+                           token dedupe across SSE replay, the hold/drop rules
+  lib/desktopSecurity.ts   [v1.9.0] per-launch auth for the loopback API: the
+                           boot nonce from the URL fragment is exchanged once
+                           at POST /api/bootstrap for an in-memory header
+                           token held in a closure (never exported, logged,
+                           persisted, or put back in a URL)
+  lib/dialogFocus.ts       useDialogFocus: focus containment + Escape for the
+                           dialogs that use it (the QC dialogs, the trust
+                           dossier, developer tools); preventDefault before
+                           closing — the "already handled" signal the
+                           stacked-Escape guards read
+  lib/externalLinks.ts     one capture-phase document listener routing every
+                           external <a> to the system browser through the
+                           open_external_link js_api bridge — the pywebview
+                           window must never navigate itself away
+  lib/followups.ts         [v1.16.0] pure helpers for "Waiting on you":
+                           justResolvedIds, the snapshot DIFF that drives the
+                           check-off animation for model and user resolves
+                           alike (a first render reports nothing)
+  lib/latestAnswer.ts      createLatestAnswer<T>: newest-REQUEST-wins for
+                           state two callers race to write (next/accept/
+                           drop — a dropped poll claims its rank for ordering
+                           and applies nothing); the update check, the
+                           readiness and the usage refreshers ride it
+  lib/projectFacts.ts      [v1.17.0] pure helpers for the Project facts
+                           panel: the grouping the panel and the model's
+                           context block both promise, incl. the
+                           otherDisciplines coordination group
+  lib/projectHeading.ts    projectDiscipline (versioned identity, the legacy
+                           session field as a load fallback) +
+                           formatProjectHeading ("Discipline · Project Type ·
+                           City, Region", never country)
+  lib/qcRemediation.ts     pure helpers for the compact remediation queue
+                           (buckets, safe-fix vs advisory ordering); the
+                           backend stays the authority on applicability
+  lib/researchAgents.ts    the research board's shared vocabulary + pure
+                           folds (foldResearchBoard for the per-dimension
+                           cards, foldAgentDetail for the uncapped timeline
+                           behind AgentActivityModal) so a card and its
+                           modal cannot disagree
+  lib/researchLive.ts      research's live-state layer — the qcLive.ts
+                           sibling: mergeResearchEvent (run-aware reset),
+                           reconcileResearchSnapshotUpdate (watermark, not
+                           length), classifyResearchStreamEnd (closed union)
+  lib/saveBlob.ts          the ONE anchor-click save (deferred 1s revoke);
+                           figures.downloadBlob delegates to it
+  lib/sourceCapabilities.ts
+                           thin client for the server-owned imported-DOCX
+                           capability contract: translates op wire names,
+                           fails closed on a missing report/element/entry,
+                           never adds client prose to a denial;
+                           sourceCapabilitiesExpected takes source_detached
+                           as a REQUIRED parameter
+  lib/sourceChip.ts        the ◆ provenance chip's tooltip — one definition
+                           for SpecDocument and ReviewDrawer; kind from the
+                           id prefix, and the ref- test runs first (r- is a
+                           prefix of it)
+  lib/sourceOutputGuidance.ts
+                           SOURCE_OUTPUT_GUIDANCE: the user-facing
+                           definitions of the export contracts, shared by
+                           Help, onboarding and the trust dossier so the
+                           promises read identically everywhere
+  lib/structuralEditing.ts submitExclusiveEdit (the one manual-edit slot) +
+                           the move/indent position helpers the panel's
+                           reorder controls and drag-and-drop share;
+                           MAX_PARAGRAPH_LEVELS
+  lib/useDownloads.ts      [v1.17.0] useDownloads<K>: busy(key)/error state
+                           for a group of fetch-then-save downloads (busy is
+                           the KEY in flight, so one control can label itself
+                           while all of them lock); useQcReportDownloads.ts
+                           is its six-line (format, runId) wrapper for the
+                           two Final QC report surfaces
   components/*             Chat (Batch 6 starter chips in the empty state) /
                            MessageBubble (smoothing + thinking block; renders a
                            ChatMessage.note as a compact centered event marker) /
@@ -827,6 +958,21 @@ frontend/src/
                            accent pills, hidden when empty, disabled while
                            streaming, click sends via onSend; .prompt-chip-in
                            rise-in, reduced-motion-gated)
+  components/* (cont.)     AgentActivityModal (the full per-agent research
+                           feed behind a board card — a pure fold over the
+                           same event log the board reads) /
+                           DeveloperToolsModal (Settings → Developer tools:
+                           environment, session state, activity, log tail,
+                           trace runs, the bundle; a SIBLING of the settings
+                           backdrop) / FollowUpsPanel (v1.16.0 "Waiting on
+                           you") / ProjectFactsPanel (v1.17.0 "Project
+                           facts") / HelpModal (the five help topics + the
+                           About footer, which states the license to every
+                           user) / TrustDeepDiveModal (the "I'm not
+                           convinced" dossier — fourteen runtime cards; a
+                           contract, every number real) / Tip (a hover
+                           tooltip that works on a DISABLED control — a
+                           native title never fires on a disabled button)
 docs/standards_provenance.md  receipts for every pinned edition (keep current!)
 tests/
   conftest.py              hermetic env + fresh session per test
@@ -9106,6 +9252,192 @@ dep, no backend change.
   `tsc` polices the wiring and the manual-QA rows in
   `docs/RELEASE_WINDOWS.md` ("State that must recover") police the
   behavior. Recorded honestly.
+
+## The copy and the docs describe the code that ships — implemented notes
+
+Batch 8 of the 2026-09-02 program diagnosis, and the last of the default
+scope. Every item here is a claim a user-facing surface or a doc made that
+the code no longer supported — re-verified by three read-only passes over
+the `faf4531` tree before a line changed — plus the PINS that keep each
+corrected claim true. No route, no SSE event, no dep, no env knob, no
+behavior change; the one behavior-adjacent edit is a docstring. Because the
+prose in this file is append-only, the corrections to EARLIER sections are
+recorded here rather than made in place; a reader who finds one of the
+stale sentences below should treat this section as the errata.
+
+- **The retired v3 verification rule outlived the code in SIX places.** The
+  live rule is `final-qc/4` (`qc/engine.panel_outcome`, "Final QC v4 panel
+  outcomes" above): every seat upholds → upheld; refuters outnumber
+  upholders → refuted; anything else → **disputed**; a critical/high
+  refutation additionally needs one validated citation. Help's "QC findings
+  are adversarially verified" card still said "a tie goes to the refuters"
+  and did not know the word disputed; the trust dossier's limitation card
+  said "surviving three refuters" (panels are 2 or 3) and offered only the
+  refuted ones to disagree with; the report modal's methodology said
+  "the complete panel's majority" and its bucket list and counts
+  description named three outcomes; and the Word memo's methodology said
+  "the completed panel's majority" while its counts citation named three
+  buckets too — so Chunk 5.3's contract that the two projections never
+  teach different meanings was being kept by both teaching the same wrong
+  one. The dossier's OWN stage-2 paragraph had the correct wording since
+  Chunk 5.1 and is what every site now echoes.
+- **The pin reads the panel sizes off `settings.py`, because the copy
+  quotes them.** `frontend/tests/verificationCopy.test.ts` extracts
+  `QC_VERIFIERS_CRITICAL` / `_STANDARD` by regex, maps them to number
+  words, and asserts each of the three copy sites names "three for critical
+  and high" and "two for medium and low" (on folded whitespace — JSX wraps
+  prose), says "disputed" and "every seat upholds", and matches none of
+  `tie goes | panel's majority | surviving three refuters`. A change to a
+  panel size therefore fails the copy that quotes it, which is the
+  dossier's "every number is real" contract enforced rather than promised.
+- **One sentence, two projections, one test.** The rule sentence the memo
+  renders and the modal states are byte-identical, and
+  `tests/test_qc_audit_report.py::test_the_memo_methodology_states_the_v4_
+  rule_the_report_modal_states` pins the SAME literal against the rendered
+  Word memo AND the modal's source — a Python test reading a `.tsx` file,
+  the `test_packaging` precedent — so the two cannot drift apart without one
+  test going red. The frontend test carries the literal too, for the
+  reader who only runs `npm test`.
+- **README said `v1.7.0` on its first line for ten releases**, and nothing
+  could have noticed: the release gate compared `settings.py` to
+  `package.json` and stopped there. `check_release_version.py` now reads the
+  `**vX.Y.Z**` off the README's first five lines (the body legitimately
+  names every past version in its "Shipped in" history; only the headline
+  must name the CURRENT one), so `test_version_consistency_gate` and the
+  release workflow both refuse a bump that forgets it. The runbook's step 1
+  names it as the third bump site. Also corrected in README, as false claims
+  rather than trims: "Node 20+" (CI pins 22, and `npm test` cannot run on
+  20 — type stripping), the runbook's undotted `venv\Scripts` (setup creates
+  `.venv`; the same slip lived in `RELEASE_WINDOWS.md`, `DOCX_FIDELITY.md`,
+  `DOCX_FIDELITY_CORPUS.md` and `DOCX_RENDERER_WINDOWS.md`, all fixed), and
+  the Batch 5 floors sentence, which was FALSE for the six trace/log
+  retention ceilings in the same table — they floor at 0 through
+  `_env_nonnegative_int`, where `0` means "this ceiling is off" — and now
+  scopes itself to `backend/settings.py` and names the exception.
+- **Added, never removed, in README**: a "Since v1.14.0" paragraph under
+  the fidelity table (whose rows still describe a pre-1.14.0 `.baspec`
+  truthfully and now say so); ten Configuration rows for the knobs the code
+  reads and the table never named — the whole batched-verification and
+  per-phase-effort surface, `CONTEXT_WINDOW`, `TEMPLATE_EFFORT`,
+  `UPDATE_STATE_PATH`, and `AUTO_DEBRIEF`, which fires a **billed** model
+  turn without a click and deserved a row more than any of them; and the
+  twenty-one routes the Architecture block omitted, the entire v1.17.0
+  project-brief and project-facts surface among them.
+- **`tests/test_docs_consistency.py` is the durable half.** Four pins: every
+  `BUILD_A_SPEC_*` literal under `backend/` + `main.py` must appear in README
+  as a WHOLE name (the first revert-proof of this test passed with the row
+  renamed to `…_AUTO_DEBRIEF_ROW_GONE`, because `in` is a substring test —
+  so the check is a bounded regex now, and that proof is recorded below);
+  the Node major CI pins is the one README and the runbook name, and no
+  other; no invoking doc names an undotted venv; and the runbook matches
+  none of `import intent dialog | Preserve original formatting | permission
+  sweep`. `tools/` and `packaging/` knobs (the DOCX renderer harness,
+  `SELFCHECK_OUT`) are deliberately outside the knob scan — developer and
+  CI switches, not the user-facing table.
+- **The release runbook told a tester to verify three things v1.14.0
+  removed.** The "frozen package names its cause" row, the import-intent
+  dialog row and the pending-permission-sweep row were unperformable for two
+  releases. The subsection is retitled "Imported specs (v1.9.0, reworked
+  v1.14.0–v1.15.0)" and describes the live contract: every import lands
+  detached and editable at once, a previously-frozen master imports
+  editable, *Export Word (keeps your formatting)* and *Open in Word*, and —
+  as its own row — a `.baspec` saved before v1.14.0 still showing *Edit
+  freely* with its one-way dialog. The numbering and multi-section rows are
+  verbatim. `--boot-check` joins the smoke-test section (the workflow has
+  run it since the None-stdout crash; the runbook never mentioned it), and
+  the two `0.9.0` examples (`installer.iss` and the runbook's ISCC line)
+  read `X.Y.Z`.
+- **`app_entry.py` documented two headless flags and dispatched three.**
+  `--boot-check` — the one check that catches a windowed-mode boot crash —
+  was in `main()` and in `release.yml` but not in the module docstring.
+  `test_packaging.py::test_app_entry_documents_every_headless_flag` regexes
+  the `"--…" in args` dispatches out of the source and requires each in the
+  docstring (via `ast.get_docstring`) AND in the workflow, so the next flag
+  cannot land half-documented. The license test's docstring now says "six of
+  the seven surfaces" and names `test_pyinstaller_spec_bundles_the_license`
+  as the seventh's pin, reconciling it with the "Seven surfaces" bullet
+  above without a new assertion on a comment.
+- **Release notes: one honest item for two things v1.15.0 shipped
+  unannounced** — the PolyForm Shield relicense (PR #144) and the Sonnet 5
+  pricing correction (PR #142, $3/$15 → the permanent $2/$10). Both landed
+  before v1.15.0 was tagged and its entry is frozen, so the item lives in
+  the unreleased 1.17.0 entry and is phrased "since 1.15.0" rather than
+  back-dated. Decided with Abraham (default decision 4 of the program).
+- **`standards_provenance.md`**: the generic module is Batch 10, not Batch 8
+  (this file, README and the code all say 10); and NFPA 22 — the oldest pin
+  in the table, 2023, confirmed 2026-07 — gets a Maintenance bullet naming
+  it as the next standard due on the ~3-year cycle. **No pin changed**; the
+  bullet says so itself.
+- **Errata for earlier sections of this file** (append-only, so recorded
+  here): (1) "Onboarding is frontend-only and adds no REST or SSE surface"
+  (under the event protocol) predates the server-owned tutorial — it owns
+  `/api/tutorial/*` and per-chapter scenarios; the Batch 6 banner, the
+  guided-tutorial section and the figures section each already say so, and
+  this is the one place a reader finds all three pointed at. (2)
+  `anthropic>=0.117` ("Sonnet unleashed") — `requirements.txt` pins
+  `anthropic>=1.0,<2`. (3) "ThreadPoolExecutor cap 4" (Batch 4) — the cap is
+  `settings.QC_MAX_WORKERS`, default 8 since v1.8.0. (4) "Seven surfaces
+  carry the license claim" vs the test's "six" — reconciled above. (5)
+  "never hold `_turn_state_lock` across a sweep" (chat responsiveness) and
+  `SessionState.source_edit_capabilities`'s docstring "so no lock is ever
+  held across a sweep" — `app._settle_source_capabilities` has always
+  conceded that a body change landing between the settle and the guard
+  "just costs one more sweep behind the lock"; the docstring now says the
+  sweep NORMALLY runs unlocked and names that window and the function that
+  explains it. (6) The Layout block named 9 of 17 `spec_doc` modules and
+  none of 18 `lib` modules or 7 components; the additive entries above fill
+  every gap (`source_patch.py`, 4,043 lines and the most safety-critical
+  subsystem in the repo, was named only in prose).
+- **Tests: +6 backend (1920 → 1926), +4 frontend (264 → 268).** Revert
+  matrix, each mechanism reverted in place and its own pin run: Help's v3
+  copy restored → `verificationCopy` 2 red; the memo sentence back to
+  "panel's majority" → the audit-report test red; the README headline back
+  to v1.7.0 → the gate test red; the `AUTO_DEBRIEF` row removed → the knob
+  test red (and, honestly, the FIRST proof passed — the row had been renamed
+  to a superstring, which `in` accepted; the test was hardened to a
+  whole-name regex and re-proved both ways); `Node 20+` restored → red; an
+  undotted venv restored → red; `--boot-check` dropped from the docstring →
+  red; "permission sweep" inserted into `tour.ts` → `tour.test.ts` 1 red;
+  the intent-dialog row restored → the runbook test red; the modal's rule
+  sentence reworded away from the memo's → the audit-report test red AND
+  `verificationCopy`'s third test red.
+- **Deliberately not done.** No route pin for the README Architecture block
+  (its `|` / `(+…)` shorthand makes a literal check fragile; the knob pin is
+  the durable one). `docs/plans/**` keeps its undotted `venv\Scripts` — those
+  are historical plan files, not runbooks. `QC_VERIFIER_EFFORT` is
+  documented, not re-baselined. Batch 9 (ruff in CI, `React.memo`, the
+  hand-rolled dialogs) stays off unless Abraham asks.
+- **Two Codex findings on PR #159, both real, both fixed.** (1) "A
+  majority refuting kills it" is not the whole rule: `panel_outcome` returns
+  `disputed` for a critical/high candidate whose refuting seats supplied no
+  validated citation — so the Help card taught "refuted" where the report
+  and readiness escalate to a human. The card (and the dossier's limitation
+  card, for parity) now states the evidence gate, and `verificationCopy`
+  requires "validated citation" on every site. (2) The two REPORT
+  projections — the Word methodology and the modal's — stated the shipped
+  panel sizes as fixed facts, while `BUILD_A_SPEC_QC_VERIFIERS_*` makes
+  them configurable and the engine persists both the run's configuration
+  (`input_manifest.configuration.verifiers_critical` / `_standard`) and
+  each candidate's `verification_panel_size`. A report from a run under an
+  override therefore carried a false methodology. `docx_export.
+  qc_panel_size_phrase` and its mirror `qcReport.qcPanelSizePhrase` derive
+  the phrase from the record: the manifest configuration first (the same
+  authority `QCResult._expected_verifier_panel_size` consults), the
+  per-finding sizes across all four raw collections when the manifest
+  predates the keys ("three or four (recorded per finding)" when they
+  disagree), and an explicit "a seat count this report did not record"
+  when neither exists — disclosed, never guessed. The distinction the pin
+  now draws is the one that matters: Help and the dossier describe the APP
+  as shipped and keep quoting `settings.py`; the report modal describes ONE
+  RUN and must call `qcPanelSizePhrase(report)` and hard-code no number
+  (asserted both ways). Tests: +4 frontend (272), +1 backend (1927 —
+  overridden manifest, legacy fallback, blanked record, mixed sizes).
+  Revert matrix: the Help clause dropped → `verificationCopy` 1 red; the
+  memo back to the literal → the new backend test red; the modal back to
+  the literal → `verificationCopy` 1 red. One knock-on: the new docstring
+  names the `BUILD_A_SPEC_QC_VERIFIERS_*` family, and the knob scan read
+  that glob prefix as a knob — it now skips a trailing-underscore match,
+  because a family mention in prose is not something README owes a row.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

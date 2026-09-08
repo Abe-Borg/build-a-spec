@@ -1569,6 +1569,83 @@ export interface QcConsolidationSummary {
  * hashed manifest, never from the presence of the record — an absent record
  * is exactly what has to be distinguishable from a run that never grouped.
  */
+const PANEL_COUNT_WORDS = [
+  "zero", "one", "two", "three", "four", "five",
+  "six", "seven", "eight", "nine", "ten",
+];
+
+function panelCountWord(count: number): string {
+  return Number.isInteger(count) && count >= 0 && count < PANEL_COUNT_WORDS.length
+    ? PANEL_COUNT_WORDS[count]
+    : String(count);
+}
+
+function configuredPanelSize(
+  configuration: Record<string, unknown>,
+  key: string,
+): number {
+  const value = configuration[key];
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : 0;
+}
+
+function recordedPanelSizes(result: QcReportResult, critical: boolean): number[] {
+  const sizes = new Set<number>();
+  const collections: unknown[] = [
+    result.findings,
+    result.refuted,
+    result.disputed,
+    result.inconclusive,
+  ];
+  for (const collection of collections) {
+    if (!Array.isArray(collection)) continue;
+    for (const candidate of collection as QcReportFinding[]) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const severity = normalizeSeverity(candidate.original_severity || candidate.severity);
+      const isCritical = severity === "critical" || severity === "high";
+      if (isCritical !== critical) continue;
+      const size = finiteNumber(candidate.verification_panel_size);
+      if (size === undefined || !Number.isInteger(size) || size < 1) continue;
+      sizes.add(size);
+    }
+  }
+  return [...sizes].sort((a, b) => a - b);
+}
+
+function describePanelSize(configured: number, recorded: number[]): string {
+  if (configured) return panelCountWord(configured);
+  if (recorded.length === 1) return panelCountWord(recorded[0]);
+  if (recorded.length > 1) {
+    return `${recorded.map(panelCountWord).join(" or ")} (recorded per finding)`;
+  }
+  return "a seat count this report did not record";
+}
+
+/**
+ * The panel sizes THIS run used, in the methodology's own words.
+ *
+ * Panel sizes are configurable (`BUILD_A_SPEC_QC_VERIFIERS_*`), so a
+ * methodology that states the shipped defaults describes a run that may
+ * never have happened. The run's manifest configuration is authoritative; a
+ * manifest that predates the keys falls back to the sizes persisted per
+ * finding; a report with neither says so rather than guessing. Mirrors
+ * `docx_export.qc_panel_size_phrase` so the two projections cannot disagree.
+ */
+export function qcPanelSizePhrase(
+  rawResult: QcResultView | QcReportResult,
+): string {
+  const result = resultFields(rawResult);
+  const configuration = manifestRecord(result.input_manifest, "configuration");
+  const critical = describePanelSize(
+    configuredPanelSize(configuration, "verifiers_critical"),
+    recordedPanelSizes(result, true),
+  );
+  const standard = describePanelSize(
+    configuredPanelSize(configuration, "verifiers_standard"),
+    recordedPanelSizes(result, false),
+  );
+  return `${critical} for critical and high findings, ${standard} for medium and low`;
+}
+
 export function qcConsolidationSummary(
   rawResult: QcResultView | QcReportResult,
 ): QcConsolidationSummary {

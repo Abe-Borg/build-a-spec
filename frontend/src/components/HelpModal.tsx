@@ -493,7 +493,7 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
           },
           {
             t: "QC findings are adversarially verified",
-            d: "Every candidate finding faces a panel of independent Opus 5 refuters. A tie goes to the refuters, so plausible-but-wrong noise never reaches you — only real, actionable defects survive. Refuted findings stay in the report rather than being quietly deleted.",
+            d: "Every candidate finding faces a panel of independent Opus 5 refuters — three for critical and high findings, two for medium and low. A finding survives only when every seat upholds it. A majority refuting kills it — except that a critical or high finding is only refuted when at least one refuting seat backs the refutation with a validated citation. Anything else — a split panel, or a critical/high refutation no seat could cite evidence for — is recorded as disputed and blocks issue readiness until you adjudicate it yourself. Refuted and disputed findings stay in the report rather than being quietly deleted.",
           },
           {
             t: "The checks that gate a section aren’t model output",

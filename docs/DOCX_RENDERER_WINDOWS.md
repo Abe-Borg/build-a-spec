@@ -20,7 +20,7 @@ $env:BUILD_A_SPEC_RENDER_EXTRA_PATH = 'C:\path\to\LibreOffice\program'
 Then run the visual tests normally:
 
 ```powershell
-& .\venv\Scripts\python.exe -m pytest -q tests\test_docx_visual_regression.py
+& .\.venv\Scripts\python.exe -m pytest -q tests\test_docx_visual_regression.py
 ```
 
 The wrapper preserves every canonical CLI argument. It changes only a soffice
@@ -39,7 +39,7 @@ the bundled `pdf2image`/Pillow stack for PNG output:
 $env:BUILD_A_SPEC_DOCX_RENDERER = (Resolve-Path .\tools\render_docx_word.py).Path
 $env:BUILD_A_SPEC_RENDER_PYTHON = 'C:\path\to\bundled\python.exe'
 $env:BUILD_A_SPEC_WORD_EXECUTABLE = 'C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE'
-& .\venv\Scripts\python.exe -m pytest -q tests\test_docx_visual_regression.py
+& .\.venv\Scripts\python.exe -m pytest -q tests\test_docx_visual_regression.py
 ```
 
 The automation bridge runs Windows PowerShell in STA mode with no visible

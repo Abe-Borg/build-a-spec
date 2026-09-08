@@ -10,6 +10,7 @@ no build tools required.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -76,7 +77,11 @@ def test_pyinstaller_spec_bundles_the_license():
 
 
 def test_every_surface_states_the_same_license():
-    """The license claim lives in six places and they must not drift.
+    """Six of the seven license surfaces, pinned so they cannot drift.
+
+    The seventh — the bundled copy in the PyInstaller output — is pinned by
+    ``test_pyinstaller_spec_bundles_the_license`` above, so between the two
+    tests every surface CLAUDE.md lists is asserted.
 
     Relicensed MIT -> PolyForm Shield 1.0.0 on 2026-08-28. The one that is
     easiest to miss is HelpModal's About footer, because it is the only copy
@@ -151,6 +156,28 @@ def test_installer_gates_webview2_on_the_bootstrapper_being_present():
     assert "MicrosoftEdgeWebview2Setup.exe" in iss
     assert "#ifdef HaveWebView2" in iss
     assert "IsWebView2RuntimeInstalled" in iss
+
+
+def test_app_entry_documents_every_headless_flag():
+    """The frozen exe's headless flags are how the release workflow
+    smoke-tests a build it cannot open a window on. `--boot-check` landed
+    in `main()` and in release.yml but not in the module docstring, which
+    kept saying "two flags" — so a reader of app_entry.py would not know the
+    boot check existed, let alone that it is the one that catches
+    windowed-mode crashes. Every flag `main()` handles must be documented
+    where the flags are explained AND exercised by the workflow."""
+    import ast
+
+    source = (PKG / "app_entry.py").read_text(encoding="utf-8")
+    flags = sorted(set(re.findall(r'"(--[a-z-]+)" in args', source)))
+    assert flags, "app_entry.main() no longer dispatches on any headless flag"
+    docstring = ast.get_docstring(ast.parse(source)) or ""
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    for flag in flags:
+        assert flag in docstring, f"app_entry.py's docstring does not describe {flag}"
+        assert f"'{flag}'" in release, f"release.yml never runs {flag}"
 
 
 def test_release_and_ci_workflows_exist():

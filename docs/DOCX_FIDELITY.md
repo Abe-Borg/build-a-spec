@@ -707,12 +707,12 @@ and report exactly which renderer/version was exercised; do not imply visual
 verification that did not occur.
 
 ```powershell
-& '.\venv\Scripts\python.exe' -m pytest -q -p no:cacheprovider
+& '.\.venv\Scripts\python.exe' -m pytest -q -p no:cacheprovider
 Push-Location .\frontend
 npm test
 npm run build
 Pop-Location
-& '.\venv\Scripts\python.exe' -m tests.docx_corpus .\artifacts\docx-corpus
+& '.\.venv\Scripts\python.exe' -m tests.docx_corpus .\artifacts\docx-corpus
 ```
 
 The required result is not that every fixture becomes editable. The required

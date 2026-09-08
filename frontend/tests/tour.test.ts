@@ -527,6 +527,19 @@ test("help can restart the full tutorial or jump to any named chapter", () => {
   assert.match(app, /onboarding\.startAtChapter\(chapterId\)/);
 });
 
+test("the tour does not describe the retired import contract", () => {
+  // The permission sweep, the pending analysis it left behind, the import
+  // intent dialog and its "Preserve original formatting" choice were all
+  // removed with the v1.14.0 always-detached import. The source-permissions
+  // step was rewritten for it; this keeps the manifest from re-learning the
+  // old vocabulary. Anchored phrases, not bare words — `spending` and
+  // `intentionally` are legitimate tour copy.
+  assert.doesNotMatch(
+    tour,
+    /permission sweep|analysis is pending|pending analysis|import intent dialog|Preserve original formatting/i,
+  );
+});
+
 test("the enrichment surface is gone with the source choice", () => {
   // The showcase satisfies coverage by construction (pinned in the backend
   // suite), so no route, stream, or UI may reintroduce an enrichment pass.

@@ -2,13 +2,17 @@
 
 Cloned from Claude-Spec-Critic ``packaging/windows/app_entry.py``.
 PyInstaller freezes a *script*, so this thin wrapper calls the app's
-``main``. Two headless flags let the release workflow smoke-test the
+``main``. Three headless flags let the release workflow smoke-test the
 frozen executable without opening a window:
 
     BuildASpec.exe --version     print the version and exit
     BuildASpec.exe --selfcheck   import the heavy modules — proving
                                  PyInstaller bundled every hidden import —
                                  and exit 0 (non-zero on any import error)
+    BuildASpec.exe --boot-check  start the backend headless the way the app
+                                 does, confirm /api/health answers, and exit
+                                 0 — the check a pure import cannot make
+                                 (a windowed-mode boot crash)
 
 The build is windowed (``console=False``), so ``sys.stdout`` may be
 ``None``; ``_emit`` also writes to the file named by

@@ -109,12 +109,12 @@ Before tagging, verify the contract in
 [DOCX_FIDELITY.md](DOCX_FIDELITY.md), not only that a DOCX opens. At minimum:
 
 ```powershell
-& '.\venv\Scripts\python.exe' -m pytest -q -p no:cacheprovider
+& '.\.venv\Scripts\python.exe' -m pytest -q -p no:cacheprovider
 Push-Location .\frontend
 npm test
 npm run build
 Pop-Location
-& '.\venv\Scripts\python.exe' -m tests.docx_corpus .\artifacts\docx-corpus
+& '.\.venv\Scripts\python.exe' -m tests.docx_corpus .\artifacts\docx-corpus
 ```
 
 The backend gate includes exact-original/no-op, source patch locality,
@@ -281,36 +281,37 @@ invisible to CI and expensive to the user.
       **Reject All** yields the master; word-level edits read cleanly; deleted
       paragraphs collapse on accept.
 
-### Imported specs and Edit freely (v1.9.0)
+### Imported specs (v1.9.0, reworked v1.14.0–v1.15.0)
 
-- [ ] **Edit freely** on a real office master: import, confirm the one-way
-      dialog, then edit a heading and add an article — the things source mode
-      refuses. Export is a normal Build-a-Spec `.docx`; *Download original
-      upload* still returns the upload **byte-identical**; *Redline vs master*
-      still works. Save, reopen the `.baspec`, and confirm it loads with the
-      decision intact.
-- [ ] A **frozen** package — tracked changes, macros, an embedded object, or
-      Restrict Editing — names its cause and remedy in the panel rather than
-      going silently read-only. Tracked changes is the one to try: the import
-      shows the accepted text, so it looks clean while still being locked.
+- [ ] Import a real office master: it lands **detached and editable at
+      once** — edit a heading and add an article with no dialog, no
+      waiting, and no "pending" strip. *Export Word (keeps your formatting)*
+      leads the Export menu and round-trips the master's fonts, headers and
+      footers with the edits in place; *Open in Word* opens that export;
+      *Download original upload* still returns the upload **byte-identical**;
+      *Redline vs master* still works. Save, reopen the `.baspec`, and
+      confirm it loads still editable.
+- [ ] A master that used to freeze — tracked changes, macros, an embedded
+      object, or Restrict Editing — imports **editable** rather than
+      read-only. Tracked changes is the one to try: the import shows the
+      accepted text and warns that it did.
 - [ ] A master whose numbering **starts one level in**: sibling articles
       arrive as siblings, with no invented `IMPORTED CONTENT` article.
       An **auto-numbered** master (Word multilevel list — the article
       headings' visible text is just the title) arrives with its PARTs and
       articles recognized as real structure, `spec_shape_detected` true,
       and no "not a spec section" banner.
-- [ ] The **import intent dialog**: "Use as a starting point" lands a fully
-      editable document immediately (header edit + add article work, no
-      permission sweep), while "Preserve original formatting" behaves as
-      the frozen/pending rows above describe. Both keep *Download original
-      upload* byte-identical and *Redline vs master* working.
+- [ ] A `.baspec` saved **before v1.14.0** still opens under the byte-exact
+      contract it was saved under: the panel shows **Edit freely** with its
+      one-way dialog; confirming it unlocks heading edits and add-article
+      with the original still downloadable byte-identical and *Redline vs
+      master* still working. Save, reopen, and confirm the decision stuck.
 - [ ] A **combined multi-section** file: only the first SECTION imports,
       and the import notes name the next section and the dropped block
       count instead of discarding them silently.
-- [ ] A large master (1,000+ paragraphs): the app stays responsive while the
-      permission sweep runs, and the panel says "pending" rather than
-      "read-only". The sweep is still quadratic by design decision — this
-      confirms nothing *waits* on it.
+- [ ] A large master (1,000+ paragraphs) imports without freezing the app
+      and is editable the moment it lands — nothing runs after the import
+      any more, so nothing can be waited on.
 
 ### Attachments, figures and templates (v1.1.0–v1.4.0)
 
@@ -376,7 +377,7 @@ code shape, and these rows guard the behavior. Stop the backend process
 
 ### 0. One-time setup
 
-- Python 3.11+ and Node 20+ installed.
+- Python 3.11+ and Node 22+ installed (`npm test` needs Node's type stripping; 20 cannot parse the `.ts` tests).
 - [Inno Setup 6](https://jrsoftware.org/isinfo.php) installed (`ISCC.exe`
   on PATH, or use its full path).
 - `pip install pyinstaller` in the build venv (build-time only — it is
@@ -389,11 +390,13 @@ code shape, and these rows guard the behavior. Stop the backend process
 ### 1. Version bump + consistency gate
 
 1. Bump `VERSION` in `backend/settings.py` **and** `version` in
-   `frontend/package.json` (then `npm install --package-lock-only`).
+   `frontend/package.json` (then `npm install --package-lock-only`) **and**
+   the `**vX.Y.Z**` headline on `README.md`'s first prose line — the gate
+   below checks all three.
 2. Gate:
 
    ```bat
-   python packaging\windows\check_release_version.py --tag v0.9.0
+   python packaging\windows\check_release_version.py --tag vX.Y.Z
    ```
 
 ### 2. Build
@@ -419,14 +422,19 @@ Output: `dist\BuildASpec\` (one-folder app).
 ```bat
 dist\BuildASpec\BuildASpec.exe --version
 dist\BuildASpec\BuildASpec.exe --selfcheck
+dist\BuildASpec\BuildASpec.exe --boot-check
 ```
 
 `--selfcheck` imports the FastAPI surface, the research engine, the
 compliance checker, the updater, the docx importer, and pywebview, and
-verifies the bundled frontend is present — exit 0 required. (The build is
-windowed, so set `BUILD_A_SPEC_SELFCHECK_OUT=selfcheck.txt` to capture
-output to a file if the console shows nothing.) Then launch it plainly
-once and click through: chat turn, import, export.
+verifies the bundled frontend is present — exit 0 required. `--boot-check`
+then starts the backend headless exactly the way the app does and waits for
+`/api/health` — the check a pure import cannot make, which is what catches a
+windowed-mode boot crash (set `BUILD_A_SPEC_DISABLE_UPDATE_CHECK=1` first,
+as the workflow does). (The build is windowed, so set
+`BUILD_A_SPEC_SELFCHECK_OUT=selfcheck.txt` to capture output to a file if
+the console shows nothing.) Then launch it plainly once and click through:
+chat turn, import, export.
 
 ### 4. Installer
 
@@ -440,7 +448,7 @@ curl -L -o packaging\windows\MicrosoftEdgeWebview2Setup.exe "https://go.microsof
 Then compile:
 
 ```bat
-ISCC /DMyAppVersion=0.9.0 packaging\windows\installer.iss
+ISCC /DMyAppVersion=X.Y.Z packaging\windows\installer.iss
 ```
 
 Output: `dist\installer\BuildASpecSetup.exe`. Install it on a clean

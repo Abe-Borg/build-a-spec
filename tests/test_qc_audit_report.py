@@ -13,6 +13,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 from docx import Document
@@ -35,6 +36,7 @@ from backend.qc.runner import QCRunner
 from backend.qc.schema import QC_FINDINGS_SCHEMA, QC_LENSES, normalize_findings
 from backend.research.engine import DimensionStatus, RequirementsProfile, ResearchItem
 from backend.spec_doc.docx_export import (
+    qc_panel_size_phrase,
     QC_GROUNDING_METHODOLOGY_NOTE,
     _qc_manifest_changes,
     qc_pre_remediation_state,
@@ -3773,3 +3775,88 @@ def test_the_word_executive_layer_lists_one_blocker_per_defect():
     # The annex's full checklist still shows the alias; only the executive
     # blocker list excludes it.
     assert "qc_audit_complete" in text
+
+
+# The one sentence both Final QC methodology projections state verbatim. The
+# frontend suite (frontend/tests/verificationCopy.test.ts) carries the same
+# literal; the Chunk 5.3 contract is that the Word memo and the report modal
+# never teach different meanings, and the v3 "panel's majority" wording had
+# outlived the final-qc/4 rule in both.
+V4_RULE_SENTENCE = (
+    "A finding survives only when every seat upholds it, is refuted when the "
+    "refuting seats outnumber the upholding ones, and is disputed otherwise; "
+    "a critical or high refutation additionally needs at least one validated "
+    "citation."
+)
+
+
+def test_the_memo_methodology_states_the_v4_rule_the_report_modal_states() -> None:
+    """The Word memo's methodology must describe the adjudication rule the
+    engine actually runs (final-qc/4), name every outcome bucket including
+    disputed, and say it in the same words as the on-screen report."""
+    store, result = _rich_audit_result()
+    payload = build_qc_memo(result.to_dict(), store.doc, stale=False)
+    text = _document_text(Document(io.BytesIO(payload)))
+
+    assert V4_RULE_SENTENCE in text
+    assert "panel's majority" not in text
+    assert "three for critical and high findings, two for medium and low" in text
+    assert (
+        "Surviving, disputed, refuted, and infrastructure-inconclusive "
+        "candidates are mutually exclusive."
+    ) in text
+
+    modal = (
+        Path(__file__).resolve().parents[1]
+        / "frontend"
+        / "src"
+        / "components"
+        / "QCReportModal.tsx"
+    ).read_text(encoding="utf-8")
+    assert V4_RULE_SENTENCE in modal, (
+        "the report modal's methodology drifted from the Word memo's rule sentence"
+    )
+    assert "panel's majority" not in modal
+
+
+def test_the_memo_methodology_states_the_panel_sizes_the_run_recorded() -> None:
+    """A run under `BUILD_A_SPEC_QC_VERIFIERS_*` overrides must not be
+    described as a three-and-two-seat review (Codex, PR #159). The manifest's
+    configuration is the run's authority; a manifest that predates the keys
+    falls back to the sizes persisted per finding; neither → disclosed."""
+    store, result = _rich_audit_result()
+
+    overridden = copy.deepcopy(result.to_dict())
+    overridden["input_manifest"]["configuration"]["verifiers_critical"] = 5
+    overridden["input_manifest"]["configuration"]["verifiers_standard"] = 1
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(overridden, store.doc, stale=False)))
+    )
+    assert "five for critical and high findings, one for medium and low" in text
+    assert "three for critical and high findings" not in text
+
+    legacy = copy.deepcopy(result.to_dict())
+    legacy["input_manifest"]["configuration"].pop("verifiers_critical")
+    legacy["input_manifest"]["configuration"].pop("verifiers_standard")
+    # The fixture's high finding faced 3 seats and its medium refuted candidate
+    # 2, so the per-finding record still reproduces the run's sizes.
+    assert qc_panel_size_phrase(legacy) == (
+        "three for critical and high findings, two for medium and low"
+    )
+
+    for collection in ("findings", "refuted", "disputed", "inconclusive"):
+        for candidate in legacy.get(collection) or []:
+            candidate["verification_panel_size"] = 0
+    assert qc_panel_size_phrase(legacy) == (
+        "a seat count this report did not record for critical and high "
+        "findings, a seat count this report did not record for medium and low"
+    )
+
+    mixed = copy.deepcopy(result.to_dict())
+    mixed["input_manifest"]["configuration"].pop("verifiers_critical")
+    mixed["findings"].append(
+        {**copy.deepcopy(mixed["findings"][0]), "verification_panel_size": 4}
+    )
+    assert qc_panel_size_phrase(mixed).startswith(
+        "three or four (recorded per finding) for critical and high findings"
+    )

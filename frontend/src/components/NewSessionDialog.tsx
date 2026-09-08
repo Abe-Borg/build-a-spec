@@ -209,23 +209,6 @@ export default function NewSessionDialog({
     void refresh();
   }, [open, templatesOnly, refresh]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        previewRunRef.current += 1;
-        if (view !== (templatesOnly ? "browse" : "start")) {
-          setView(templatesOnly ? "browse" : "start");
-          setSelected(null);
-          setConfirmDelete(false);
-          setBrief(null);
-        } else onCancel();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onCancel, templatesOnly, view]);
-
   if (!open) return null;
 
   const run = async (task: () => Promise<void>) => {
@@ -308,6 +291,19 @@ export default function NewSessionDialog({
       onClose={() => {
         previewRunRef.current += 1;
         onCancel();
+      }}
+      // Escape goes back a level first (a preview or the manage view returns
+      // to the list), and closes only from the list — the shell's own hook
+      // delivers the key; this is what it means here.
+      onEscape={() => {
+        previewRunRef.current += 1;
+        const home: View = templatesOnly ? "browse" : "start";
+        if (view !== home) {
+          setView(home);
+          setSelected(null);
+          setConfirmDelete(false);
+          setBrief(null);
+        } else onCancel();
       }}
       wide
     >

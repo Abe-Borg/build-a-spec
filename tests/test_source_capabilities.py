@@ -26,7 +26,6 @@ from backend.qc.engine import (
     _lens_shared_prefix,
     _validate_ops,
 )
-from backend.qc.schema import QC_LENSES
 import backend.spec_doc.source_patch as source_patch_module
 from backend.spec_doc.importer import parse_master_docx
 from backend.spec_doc.model import SpecSection, apply_edits

@@ -2052,8 +2052,9 @@ function DismissQCModal({
  * Pre-flight confirmation for a Final QC pass. A run is expensive (Opus 5,
  * dozens of calls) and slow (minutes), so this dialog states plainly what the
  * pass does, why it
- * costs, and why it takes a while, and makes the user opt in. Mirrors the
- * SettingsPanel overlay pattern (backdrop click / ✕ / Escape all cancel).
+ * costs, and why it takes a while, and makes the user opt in. Backdrop click,
+ * ✕ and Escape all cancel; keyboard handling through `useDialogFocus` like
+ * every other dialog.
  */
 function ConfirmQCModal({
   isRerun,
@@ -2093,13 +2094,10 @@ function ConfirmQCModal({
     setScopeMismatchAcknowledged(false);
   }, [compatibilityKey]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
+  // Mounted only while open (`confirmOpen &&` at the call site), so the
+  // dialog is always open from the hook's point of view.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(true, panelRef, panelRef, onCancel);
 
   const sectionLabel =
     "text-[11px] font-semibold tracking-wide text-ink-faint uppercase";
@@ -2112,9 +2110,12 @@ function ConfirmQCModal({
       onClick={onCancel}
       role="dialog"
       aria-modal="true"
+      aria-label={isRerun ? "Re-run Final QC?" : "Run Final QC?"}
     >
       <div
-        className="w-full max-w-lg overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl"
+        ref={panelRef}
+        tabIndex={-1}
+        className="w-full max-w-lg overflow-hidden rounded-2xl border border-edge bg-surface shadow-2xl outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-edge px-5 py-3">

@@ -571,7 +571,12 @@ def iter_paragraphs(
             number = f"{part.number}.{a_idx + 1}"
 
             def walk(
-                paragraphs: list[Paragraph], depth: int, prefix: str
+                paragraphs: list[Paragraph],
+                depth: int,
+                prefix: str,
+                *,
+                part: Part = part,
+                article: Article = article,
             ) -> Iterator[tuple[Part, Article, Paragraph, int, str]]:
                 for i, p in enumerate(paragraphs):
                     label = _paragraph_label(depth, i).rstrip(".)")

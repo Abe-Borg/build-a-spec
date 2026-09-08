@@ -16,7 +16,6 @@ of the evidence.
 from __future__ import annotations
 
 import io
-from pathlib import Path
 
 import pytest
 from docx import Document

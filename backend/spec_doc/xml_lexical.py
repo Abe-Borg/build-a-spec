@@ -808,7 +808,12 @@ def _scanner(document_xml: bytes, bom: bytes) -> _ScanResult:
         external_namespaces: dict[str, str] = {}
 
         def require_external_prefix(
-            lexical_name: bytes, *, attribute: bool
+            lexical_name: bytes,
+            *,
+            attribute: bool,
+            namespaces: dict[str, str] = namespaces,
+            local_namespaces: dict[str, str] = local_namespaces,
+            external_namespaces: dict[str, str] = external_namespaces,
         ) -> None:
             prefix, _local = _qname_parts(lexical_name)
             if attribute and not prefix:

@@ -180,6 +180,29 @@ def test_app_entry_documents_every_headless_flag():
         assert f"'{flag}'" in release, f"release.yml never runs {flag}"
 
 
+def test_ci_lints_before_it_tests():
+    """The lint gate is a CI step, and it runs BEFORE pytest — a dangling
+    import should fail in seconds, not after the whole suite. The step and
+    the config it reads are both pinned: a `ruff.toml` that stops selecting
+    the bug-catching families is a gate that lets everything through."""
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    lint = ci.find("ruff check")
+    tests = ci.find("python -m pytest")
+    assert lint >= 0, "ci.yml has no ruff step"
+    assert tests >= 0, "ci.yml has no pytest step"
+    assert lint < tests, "the ruff step must run before pytest"
+    config = (REPO_ROOT / "ruff.toml").read_text(encoding="utf-8")
+    selected = re.search(r"^select\s*=\s*\[([^\]]*)\]", config, re.M)
+    assert selected, "ruff.toml declares no rule selection"
+    families = set(re.findall(r'"([A-Z0-9]+)"', selected.group(1)))
+    assert {"F", "B", "E9"} <= families, families
+    assert "ruff==" in (REPO_ROOT / "requirements.txt").read_text(
+        encoding="utf-8"
+    ), "ruff is not pinned in requirements.txt, so CI cannot run the gate"
+
+
 def test_release_and_ci_workflows_exist():
     workflows = REPO_ROOT / ".github" / "workflows"
     assert (workflows / "release.yml").is_file()

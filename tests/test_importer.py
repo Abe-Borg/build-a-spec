@@ -445,7 +445,6 @@ def test_import_result_is_integrity_clean(tmp_path):
 def test_import_endpoint_gates_and_gap_adapt_context(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
-    from backend import sessions
     from backend.app import create_app
     from tests.fakes import FakeClient, request_context_text, text_turn
 

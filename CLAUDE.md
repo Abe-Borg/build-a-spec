@@ -59,7 +59,9 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            never a timestamp name, Word holds the previous
                            one open — and os.startfile()s it (v1.15.0)
 backend/
-  settings.py              models (claude-sonnet-5 default), effort levels
+  settings.py              models (claude-sonnet-5 default), SDK transport
+                           (SDK_MAX_RETRIES / API_TIMEOUT_SECONDS — the SDK's
+                           own defaults made explicit, Batch 9), effort levels
                            (interview high / research high, dialed back
                            2026-07-28 from xhigh — cost; Final QC's is now
                            PER PHASE — QC_LENS_EFFORT high / QC_VERIFIER_EFFORT
@@ -822,7 +824,17 @@ frontend/src/
                            dialogs that use it (the QC dialogs, the trust
                            dossier, developer tools); preventDefault before
                            closing — the "already handled" signal the
-                           stacked-Escape guards read
+                           stacked-Escape guards read. Since Batch 9 EVERY
+                           aria-modal dialog uses it (ModalShell, Settings,
+                           Help, Confirm, Close, the research report, the
+                           Final-QC launch confirm), and it acts only from
+                           the top of the dialog stack
+  lib/dialogStack.ts       [Batch 9] the open-dialog stack, pure and React-
+                           free: enter(token) → leave; isTop(token). Document
+                           keydown listeners fire in registration order —
+                           parent first — so without it two hook dialogs
+                           would both close on one Escape; removal is by
+                           identity, never a blind pop
   lib/externalLinks.ts     one capture-phase document listener routing every
                            external <a> to the system browser through the
                            open_external_link js_api bridge — the pywebview
@@ -7693,6 +7705,7 @@ project-format bump (two additive `.baspec` keys).
 
 ```
 .venv/bin/python -m pytest -q          # backend suite (Windows: .venv\Scripts\python)
+.venv/bin/python -m ruff check .       # lint gate: pyflakes + bugbear + syntax (ruff.toml); CI runs it before pytest
 cd frontend && npm test                # node --test: the capability/tour contract + units
 cd frontend && npm run dev             # UI hot reload (with BUILD_A_SPEC_DEV=1 backend)
 cd frontend && npm run build           # tsc --noEmit && vite build -> dist/
@@ -9438,6 +9451,172 @@ stale sentences below should treat this section as the errata.
   names the `BUILD_A_SPEC_QC_VERIFIERS_*` family, and the knob scan read
   that glob prefix as a knob — it now skips a trailing-underscore match,
   because a family mention in prose is not something README owes a row.
+
+## The lint gate, one Escape, and a chat that stops working per frame — implemented notes
+
+Batch 9 of the 2026-09-02 program diagnosis (re-judged 2026-09-07), the
+optional tooling-and-perf batch, run on Abraham's word after Batches 1–8
+merged. Five parts, one PR: a lint gate in CI, the SDK's transport knobs made
+explicit, `React.memo` on the message bubble, the chat's follow-bottom loop
+replaced by a `ResizeObserver`, and every dialog moved onto `useDialogFocus`
+with a dialog STACK so stacked dialogs cannot both close on one Escape. No new
+route, no SSE event, no runtime dependency (ruff is a dev dependency beside
+pytest), two new env knobs with unchanged defaults.
+
+- **The lint gate runs only the families that catch bugs.** `ruff.toml`
+  selects pyflakes (F), flake8-bugbear (B) and syntax/IO errors (E9) — no
+  style rules, no formatter — and `ci.yml`'s backend job runs `ruff check .`
+  between the version gate and pytest, so a dangling import fails in
+  seconds rather than after the suite. `tests/test_lint_gate.py` runs the
+  same check under pytest wherever the pinned `ruff` wheel is installed (it
+  SKIPS, and says so, in a venv without it): a plain `pytest -q` reports the
+  red a PR would, and `release.yml` — which has no lint step — gets the
+  gate through the suite it already runs. The wheel ships
+  `ruff/__main__.py`, so `python -m ruff` is the portable spelling. Ruff is
+  pinned EXACTLY (`ruff==0.15.8`) because a minor can add rules to the
+  selected families and turn CI red on an unrelated PR;
+  `test_ci_lints_before_it_tests` pins the step order, the rule selection
+  and the pin.
+- **Two rules are configured away, for stated reasons, and one is
+  whitelisted rather than ignored.** B905 (`zip()` without `strict=`) had 34
+  hits, most in the export/patch code: `strict=False` at every site proves
+  nothing, and `strict=True` is a behavior change at each of them, so the
+  rule is ignored and each site is a decision for whoever next touches it.
+  B008's two hits were FastAPI's `Body(default=None)`; `extend-immutable-calls`
+  names the framework's parameter constructors, which keeps B008 live for a
+  genuine mutable default (verified: removing the setting brings both hits
+  back).
+- **The 58 findings that remained were fixed, not silenced.** The 26 B023s
+  were six closures, each defined inside a loop and consumed within the same
+  iteration (`qc/engine.consume_pending`, `docx_export.walk`,
+  `importer.add_mapped_paragraph`, `model.iter_paragraphs.walk`,
+  `source_patch.finish`, `xml_lexical.require_external_prefix`); each now
+  binds the loop variable as a **keyword-only default on the def**, which
+  captures the value late binding would have read anyway, touches no call
+  site, and removes the hazard by construction. Each was checked before the
+  edit: none is stored or returned past its iteration, no captured name is
+  rebound after the def, the two recursive ones get the same defaults on
+  their recursive calls, and `model.py`'s generator is exhausted by `yield
+  from` before the outer loop advances. `finish()` keeps its `nonlocal
+  pending` — that name IS rebound, which is why ruff never flagged it. No
+  `noqa` and no per-file ignore, which would have blinded B023 in the five
+  largest files. The rest: 18 unused imports deleted (all in `tests/` and
+  `tools/`; none was a re-export — checked against `docx_corpus.__all__`
+  and its importers), five unused `client = _client()` bindings dropped
+  (`create_app()` touches no session state and a `TestClient` outside a
+  `with` runs no lifespan, so nothing relied on the construction), five
+  `setattr(document, "_qc_…", v)` made plain assignments, two unused loop
+  variables underscored, one `raise … from exc`, and one real F821 — a
+  string annotation naming an import that lived inside the function body.
+- **The SDK's retries and timeout are explicit, and deliberately
+  unchanged.** `llm/client.py` built both clients with the SDK's silent
+  defaults; `settings.SDK_MAX_RETRIES` (2) and `API_TIMEOUT_SECONDS` (600)
+  now pass through one `_client_options()` into both constructors, so the
+  probe client cannot drift from the live one. The multiplication the
+  diagnosis called "retry stacking" — a fan-out attempt is up to
+  `1 + SDK_MAX_RETRIES` requests, under a 3-attempt app policy — is real
+  and bounded, and it stays: the SDK's retries are the ones that honor the
+  provider's `retry-after`, which the app policy's fixed `5·2ⁿ` backoff does
+  not, so zeroing them under eight concurrent QC seats would trade a
+  bounded worst case for lost rate-limit etiquette. That is a decision for
+  real run telemetry. **The timeout is an `anthropic.Timeout`, never a bare
+  number.** `timeout=600` would apply to CONNECT as well, replacing the
+  SDK's 5 s connect timeout — a black-holed connect would then sit for ten
+  minutes before the first retry — and this SDK vendors `httpx2`, so an
+  `httpx.Timeout` raises. `_CONNECT_TIMEOUT_SECONDS` stays the SDK's 5 s
+  beside the configurable read one; `tests/test_client.py` asserts
+  `timeout.connect == 5.0` on every client and that the knobs are read at
+  build time (construction makes no network call).
+- **`React.memo(MessageBubble)` is effective, not merely harmless, and a
+  test says why.** Chat hands the bubble three pass-through props;
+  `figuresById` is a `useMemo` and `onDeleteFigure` a `useCallback` in App,
+  and every streaming update (`appendToLast`, `updateLast`,
+  `attachFigureToLast`, `appendThinkingToLast`) copy-replaces ONLY the last
+  message object. So a delta re-renders one bubble instead of every bubble
+  on every one of App's ~40 state cells. The memo dies silently the day
+  someone inlines one of those props, which is what
+  `tests/chatPerf.test.ts` pins — along with the one `REMARK_PLUGINS`
+  array that replaced two inline `[remarkGfm]` literals.
+- **The chat follows the bottom when content grows, not every frame.**
+  `Chat.tsx` ran a `requestAnimationFrame` loop for the whole turn, reading
+  `scrollHeight` and writing `scrollTop` per frame while pinned — a forced
+  layout per frame on top of the per-bubble rAF `useSmoothText` already
+  runs. A `ResizeObserver` on the scroll container and on the bubble wrapper
+  fires after layout, before paint, only when a size changed — a smoothed
+  line wrapping, a figure rendering, the suggestion bar shrinking the
+  viewport — so nothing the loop caught is lost, idle frames cost nothing,
+  and growth after `busy` flips false (a mermaid figure finishing) is now
+  covered too. The wrapper already existed (`data-capability="figure.create"`),
+  so no element was added and the tour test's `messages.length === 0` slice
+  is byte-untouched; the effect keys on `empty`, not `busy`, because the
+  wrapper exists only in the populated branch. The 80 px reader hand-off and
+  the commit-time `[messages, suggestions]` pin are unchanged; without
+  `ResizeObserver` the commit pin alone runs.
+- **One Escape mechanism, and a stack.** Six dialogs listened for Escape on
+  `window` with no `preventDefault` and no focus containment
+  (`ConfirmDialog`, `HelpModal`, `ResearchReportModal`, `CloseDialog`,
+  `NewSessionDialog`, `QCDrawer`'s `ConfirmQCModal`), `ModalShell` had no
+  Escape at all, and `SettingsPanel` had neither a dialog role nor any
+  keyboard handling — so Escape with Settings open during the tour opened
+  the end-tour confirmation instead. All of them now use `useDialogFocus`.
+  That alone would have introduced a bug: every hook listens on `document`,
+  and document listeners fire in REGISTRATION order — the PARENT's first —
+  so Help + the dossier, Settings + Developer tools, or the tour's checkpoint
+  + the elevated end-tour confirm would each close BOTH on one Escape.
+  `lib/dialogStack.ts` (pure, React-free, unit-tested) is the fix: each hook
+  enters the stack in the same effect that registers its listener and acts
+  only from the top, for Escape AND Tab, independent of listener order and
+  of React's synchronous flush (the race the old HelpModal comment
+  documented and guarded twice). Removal is by identity, never a blind pop,
+  so an out-of-order unmount cannot remove someone else's dialog. Every
+  parent/child pair mounts in separate commits (the dossier is gated on
+  `deepDive`, Developer tools on `devToolsOpen`); the one same-commit case —
+  Settings closing as it opens What's-new — is correct because React runs
+  passive cleanups before mounts, so Settings leaves before What's-new
+  enters. The hook also returns early on `event.defaultPrevented`.
+- **What each migrated dialog focuses first is chosen, not defaulted.**
+  `ConfirmDialog` and `CloseDialog` keep their old `autoFocus` targets
+  (Cancel while the confirm is disabled, else Confirm; Save) as
+  `initialFocusRef`. `ModalShell`, Help, the research report, the Final-QC
+  launch confirm and Settings focus the PANEL itself (`tabIndex={-1}`,
+  `outline-none`), so Enter does nothing a stray keypress would regret — the
+  first focusable in each is the ✕, and focusing it would have made Enter
+  close the dialog, or end the tour from its checkpoint.
+- **`ModalShell` gained `onEscape`, because Escape does not always mean
+  close.** `NewSessionDialog`'s Escape goes back a level first (a template
+  preview returns to the list) and closes only from the list; that logic
+  moved from its own window listener into the prop, and the shell's hook
+  delivers the key. Where the tour's finishing card passes a no-op close,
+  Escape is a no-op too — the ending already running offers no way out. The
+  checkpoint's `onClose={ob.requestEnd}` fires ONCE: the hook's
+  `preventDefault` makes the tour's window listener yield. `ArtifactPanel`'s
+  project-brief confirm is the shell's third consumer and simply gained
+  Escape and containment. `anotherDialogOwnsEscape()` and the tour's
+  `defaultPrevented` guard stay byte-identical — the tour never assumes the
+  stack, and a future bare listener is still caught.
+- **Knowing test change.** `tour.test.ts` pinned NewSessionDialog by
+  `event.key === "Escape"`; the intent (Escape still works there) is
+  unchanged, so the assertion became `onEscape={` on the dialog plus
+  `useDialogFocus(` on the shell.
+- **Left as noted, deliberately.** The render-phase `ref.current =` writes
+  (`App.tsx` `onboardingRef`, `useOnboarding.ts`, `ReviewDrawer.tsx`,
+  `useSmoothText.ts`) are the "latest ref" idiom, harmless under React 18's
+  synchronous rendering and a question for the React 19 move; the
+  incremental QC fold waits for a profile of a real run; ESLint has no
+  config and the four `eslint-disable` comments in `App.tsx` are inert.
+- **Tests**: backend +6 (`test_lint_gate.py` 1, `test_packaging.py` 1,
+  `test_client.py` 4; `test_settings.py`'s knob inventory floor 18 → 20),
+  frontend +12 (`chatPerf.test.ts` 2, `dialogStack.test.ts` 5,
+  `dialogs.test.ts` 5), one re-pointed. `ruff check .` 58 → 0. Revert
+  matrix, each mechanism reverted in place → its own pin red: the ci.yml
+  step → `test_ci_lints_before_it_tests`; an unused import restored →
+  `test_the_tree_is_ruff_clean`; the `Timeout` replaced by a bare number →
+  `test_client` (connect == read); a knob's README row removed → the
+  docs-consistency knob test; `memo(` removed → `chatPerf`; the rAF loop
+  restored → `chatPerf`; the `isTop` gate removed from the hook →
+  `dialogs.test.ts`; a window listener restored → `dialogs.test.ts`;
+  `leave` popping blindly → `dialogStack.test.ts`; NewSessionDialog's
+  `onEscape` dropped → the re-pointed `tour.test.ts`.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

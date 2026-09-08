@@ -41,6 +41,13 @@ jobs:
       - name: Version consistency gate
         run: python packaging/windows/check_release_version.py
 
+      # The lint gate: pyflakes + bugbear + syntax errors (ruff.toml). Runs
+      # ahead of the suite so a dangling import fails in seconds, not after
+      # the whole run. tests/test_lint_gate.py runs the same check under
+      # pytest wherever the wheel is installed.
+      - name: Lint (ruff)
+        run: ruff check .
+
       - name: Run tests
         run: python -m pytest -q
 

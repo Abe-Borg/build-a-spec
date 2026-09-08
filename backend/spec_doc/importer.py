@@ -1314,6 +1314,12 @@ def parse_master_docx(filepath: str | Path) -> ImportResult:
             *,
             numbered: bool = False,
             manual_label: bool = False,
+            # The loop's own values, bound at definition: the closure is
+            # called only inside the iteration that defined it, so these
+            # defaults are exactly what late binding would have read.
+            line_no: int = line_no,
+            entry: _BodyTextEntry = entry,
+            raw_text: str = raw_text,
         ) -> None:
             # `depth` is a raw ``w:numPr`` indent level for a numbered
             # paragraph and an absolute depth for a manual label ("A." is

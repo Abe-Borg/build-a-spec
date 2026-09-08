@@ -1,0 +1,30 @@
+# The lint gate (Batch 9 of the 2026-09-02 program diagnosis). Only the rule
+# families that catch real bugs run: pyflakes (F), flake8-bugbear (B) and
+# syntax/IO errors (E9). Style is not policed here, and there is no formatter.
+# CI runs `ruff check .` before pytest; tests/test_lint_gate.py runs it again
+# under pytest wherever the ruff wheel is installed, so a local `pytest -q`
+# reports the same red a PR would.
+target-version = "py311"
+
+[lint]
+select = ["F", "B", "E9"]
+# B905 (`zip()` without `strict=`) is a per-site correctness decision in the
+# export/patch code (docx_export, source_patch, raw_zip, xml_lexical, ...):
+# `strict=False` at 34 sites is noise that proves nothing, and `strict=True`
+# is a behavior change at each of them. Reviewed per site when that code is
+# next touched, not annotated wholesale for a linter.
+ignore = ["B905"]
+
+[lint.flake8-bugbear]
+# FastAPI's parameter defaults (`body = Body(default=None)`) are the
+# framework's own idiom, not a mutable-default bug; whitelisting the calls
+# keeps B008 live for a genuine one.
+extend-immutable-calls = [
+  "fastapi.Body",
+  "fastapi.Depends",
+  "fastapi.File",
+  "fastapi.Form",
+  "fastapi.Header",
+  "fastapi.Path",
+  "fastapi.Query",
+]

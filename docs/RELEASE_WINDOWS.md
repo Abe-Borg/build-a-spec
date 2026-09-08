@@ -109,6 +109,7 @@ Before tagging, verify the contract in
 [DOCX_FIDELITY.md](DOCX_FIDELITY.md), not only that a DOCX opens. At minimum:
 
 ```powershell
+& '.\.venv\Scripts\python.exe' -m ruff check .
 & '.\.venv\Scripts\python.exe' -m pytest -q -p no:cacheprovider
 Push-Location .\frontend
 npm test
@@ -370,6 +371,22 @@ code shape, and these rows guard the behavior. Stop the backend process
 - [ ] **Settings → What's new** with the backend stopped: a *What's new
       could not be loaded* notice appears in the document panel instead of
       nothing happening.
+- [ ] **One Escape, one dialog** (v1.17.0, the dialog stack): open Help →
+      *Why trust it?* → *I'm not convinced*, press Escape — only the dossier
+      closes and Help stays; open Settings → *Developer tools*, press Escape —
+      only Developer tools closes. Escape in Settings alone closes it (it had
+      no keyboard handling before), and Tab stays inside every open dialog.
+      In the tour's between-chapters card press Escape, then Escape again on
+      the *End the guided tour?* confirmation — the confirmation closes and
+      the tour continues. In New session → *Start from a template*, Escape
+      inside a template preview returns to the list first; a second Escape
+      closes the dialog.
+- [ ] **A long reply stays smooth**: ask for something that streams for a
+      minute and scroll up mid-stream — the view must not yank back to the
+      bottom while you read, and scrolling back within ~80 px of the bottom
+      re-pins it. The chat no longer re-measures itself every animation
+      frame, so an idle stream should show no steady CPU draw in Task
+      Manager beyond the streaming text itself.
 
 ---
 

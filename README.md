@@ -1453,6 +1453,8 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the system block and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at 0.1×. The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
 | `BUILD_A_SPEC_CHAT_MAX_SEARCHES` | `8` | Interview web_search allowance per continuation round. |
 | `BUILD_A_SPEC_CHAT_MAX_FETCHES` | `4` | Interview web_fetch allowance per continuation round. |
+| `BUILD_A_SPEC_SDK_MAX_RETRIES` | `2` | The Anthropic SDK's own request retries (429 / 5xx / connection errors, honoring `retry-after`) — the SDK's default, made explicit. Research and Final QC add their own 3-attempt policy on top, so one fan-out call is bounded by 3 × (1 + this) requests; the SDK's share is the one that behaves under rate limiting, so leave it unless real run telemetry says otherwise. Floor 0. |
+| `BUILD_A_SPEC_API_TIMEOUT_SECONDS` | `600` | Per-request read/write timeout for every model call (a streaming reply counts between chunks). The connect timeout stays the SDK's 5 s regardless. Floor 30. |
 | `BUILD_A_SPEC_AUTO_DEBRIEF` | `1` | When research or Final QC completes, the app sends itself a debrief chat turn — a real, **billed** model turn with no click behind it — in which the model summarizes the findings and asks whether to proceed. `0` lets completions land silently in the panels; the debrief endpoints stay callable. |
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
@@ -1501,7 +1503,14 @@ Hermetic by default — no API key, no network. `tests/conftest.py` injects a pl
 
 ```
 .venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m ruff check .
 ```
+
+The second line is the lint gate (`ruff.toml`: pyflakes, flake8-bugbear and
+syntax errors — no style rules). CI runs it before pytest, and
+`tests/test_lint_gate.py` runs it again under pytest wherever the pinned
+`ruff` wheel from `requirements.txt` is installed, so a plain `pytest -q`
+reports the same red a PR would.
 
 The live Final QC suite uses scripted streams to cover activity/search/fetch
 relay, retries and malformed frames; complete and empty candidate rosters;

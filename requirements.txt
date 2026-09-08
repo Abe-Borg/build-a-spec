@@ -16,3 +16,6 @@ keyring>=25
 # Development / tests
 pytest>=8
 httpx>=0.28
+# The lint gate (ruff.toml). Pinned exactly: a ruff minor can add rules to
+# the selected families and turn CI red on an unrelated PR.
+ruff==0.15.8

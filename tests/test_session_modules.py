@@ -296,7 +296,6 @@ def test_legacy_file_without_module_id_loads_the_fire_module():
     # only module that then existed — the fire module. It must still load there,
     # not silently switch to the now-neutral generic default. A present-but-
     # unknown id, by contrast, degrades to the default (tested separately).
-    client = _client()
     saved = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     saved.pop("module_id", None)
     session = sessions.get_session()
@@ -307,7 +306,6 @@ def test_legacy_file_without_module_id_loads_the_fire_module():
 def test_load_enforces_the_open_catalog_invariant():
     # A (hand-edited or future-build) file pairing a curated module with a
     # discipline loads with the discipline cleared, never kept silently.
-    client = _client()
     saved = json.loads(json.dumps(sessions.project_payload(sessions.get_session())))
     saved["module_id"] = "hyperscale_fire"
     saved["discipline"] = "Electrical"

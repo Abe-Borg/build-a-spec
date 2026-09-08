@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -24,7 +25,6 @@ from tests.fakes import (
     tool_turn,
 )
 from tests.test_research_api import (
-    _parse_sse,
     _patch_chat_client,
     _patch_research_client,
     _record_profile,
@@ -485,10 +485,8 @@ def test_audit_user_message_carries_discipline_only_when_stated():
 # ---------------------------------------------------------------------------
 
 
-def _unparseable_response(tokens: "SimpleNamespace"):
+def _unparseable_response(tokens: SimpleNamespace):
     """A completed — therefore billed — response no parser can use."""
-    from types import SimpleNamespace
-
     return SimpleNamespace(
         content=[SimpleNamespace(type="text", text="I have thoughts, no JSON.")],
         stop_reason="end_turn",

@@ -26,10 +26,7 @@ from typing import Any, Callable
 
 from docx import Document
 from docx.enum.section import WD_ORIENT, WD_SECTION
-from docx.enum.style import WD_STYLE_TYPE
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Inches
 from lxml import etree
 
 from tests.docx_fidelity_helpers import (

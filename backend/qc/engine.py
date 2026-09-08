@@ -3688,7 +3688,14 @@ def _collect_call_activity(
 
         pending_fetches: list[tuple[str, str]] = []
 
-        def consume_pending(tool_use_id: str) -> str:
+        def consume_pending(
+            tool_use_id: str,
+            *,
+            # Bound per iteration on purpose: the closure is consumed inside
+            # the response it was defined for, and the default pins the list
+            # it would have read anyway (no late binding to worry about).
+            pending_fetches: list[tuple[str, str]] = pending_fetches,
+        ) -> str:
             if tool_use_id:
                 for pending_index, (pending_id, pending_url) in enumerate(
                     pending_fetches
@@ -6158,7 +6165,7 @@ def run_final_qc(
     event_sink({"type": "verify_progress", "done": 0, "total": total})
     if raw_findings:
         tasks: list[tuple[int, int]] = []
-        for i, (lens, finding) in enumerate(raw_findings):
+        for i, (_lens, finding) in enumerate(raw_findings):
             for j in range(_panel_size(finding["severity"])):
                 tasks.append((i, j))
         remaining = {

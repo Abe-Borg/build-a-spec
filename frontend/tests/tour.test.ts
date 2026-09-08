@@ -503,7 +503,10 @@ test("template paths are active and cover create, preview, import, manage, and s
   assert.match(dialog, /application\/vnd\.buildaspec\.template\+json/);
   assert.doesNotMatch(dialog, /application\/zip/);
   assert.match(dialog, /onStartTemplate\(template\.id\)/);
-  assert.match(dialog, /event\.key === "Escape"/);
+  // Escape still works in the dialog — through the shell's shared hook now,
+  // with the dialog supplying what the key means (back a level, then close).
+  assert.match(dialog, /onEscape=\{/);
+  assert.match(modalShell, /useDialogFocus\(/);
   // One door to the studio, not two: the document panel's "Save as Template"
   // was a duplicate of the header's Templates button (both called
   // openTemplateStudio) and was retired.

@@ -672,7 +672,7 @@ def test_load_rejects_integrity_violations():
 
     def too_deep(snap):  # nesting beyond A./1./a./1)
         p = snap["parts"][0]["articles"][0]["paragraphs"][0]
-        for i in range(4):
+        for _ in range(4):
             child = {
                 "id": f"{p['id']}.p1",
                 "label": "1.",

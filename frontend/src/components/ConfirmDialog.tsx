@@ -1,4 +1,5 @@
-import { useEffect, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
+import { useDialogFocus } from "../lib/dialogFocus";
 
 interface Props {
   open: boolean;
@@ -16,8 +17,9 @@ interface Props {
 }
 
 /**
- * Small, generic "are you sure" dialog — backdrop click / Escape both cancel,
- * matching CloseDialog's pattern. Used for confirmations whose body is a
+ * Small, generic "are you sure" dialog — backdrop click / Escape both cancel
+ * (Escape, Tab containment and initial focus through `useDialogFocus`, like
+ * every other dialog), matching CloseDialog's pattern. Used for confirmations whose body is a
  * sentence or two (stopping research/QC); the more elaborate Final-QC launch
  * confirmation stays its own purpose-built modal.
  */
@@ -33,14 +35,14 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
 }: Props) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onCancel]);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Initial focus is the button a stray Enter should hit: Cancel while the
+  // confirm is disabled, else the confirm itself (the old autoFocus targets).
+  // ONE ref object, attached to whichever button that is — swapping ref
+  // identities would re-run the hook's effect mid-dialog and lose the
+  // element focus should return to on close.
+  const initialRef = useRef<HTMLButtonElement>(null);
+  useDialogFocus(open, panelRef, initialRef, onCancel);
 
   if (!open) return null;
 
@@ -56,6 +58,7 @@ export default function ConfirmDialog({
       aria-label={title}
     >
       <div
+        ref={panelRef}
         className="w-full max-w-md rounded-2xl border border-edge bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -67,15 +70,15 @@ export default function ConfirmDialog({
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-edge px-6 py-3">
           <button
+            ref={confirmDisabled ? initialRef : undefined}
             onClick={onCancel}
-            autoFocus={confirmDisabled}
             className="rounded-lg px-3 py-1.5 text-sm text-ink-dim transition-colors hover:text-ink"
           >
             {cancelLabel}
           </button>
           <button
+            ref={confirmDisabled ? undefined : initialRef}
             onClick={onConfirm}
-            autoFocus={!confirmDisabled}
             disabled={confirmDisabled}
             className={`rounded-lg px-3 py-1.5 text-sm font-medium text-white transition-colors ${
               danger

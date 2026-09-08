@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from backend import sessions
 from backend.app import create_app
 from backend.qc.context import qc_review_context_block
-from backend.qc.engine import QCFinding, QCResult, qc_version_fingerprint
+from backend.qc.engine import QCFinding, QCResult
 from tests.fakes import (
     FakeClient,
     audit_grade_qc_result,

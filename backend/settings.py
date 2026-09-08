@@ -205,6 +205,29 @@ MODEL_CONTEXT_WINDOW = _int_env("BUILD_A_SPEC_CONTEXT_WINDOW", 1_000_000, minimu
 
 INTERVIEW_MAX_TOKENS = _int_env("BUILD_A_SPEC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)
 
+# --- SDK transport ------------------------------------------------------------
+
+# The Anthropic SDK's own request retries and timeout, made explicit (they
+# were the SDK's silent defaults until Batch 9 of the 2026-09-02 program
+# diagnosis; both defaults are the SDK's, VERIFIED against anthropic 1.4.0).
+# The SDK retries a request on 429 / 5xx / connection errors BEFORE the app
+# ever sees an exception, honoring the provider's retry-after header — which
+# the fan-outs' own retry policy (research/retry_policy.py: 3 attempts,
+# 5·2^n s) does not. So a research dimension or a QC seat can cost up to
+# ``RetryPolicy.max_attempts × (1 + SDK_MAX_RETRIES)`` requests under a
+# persistent outage: bounded, deliberate, and the SDK's share is the half
+# that behaves well under rate limiting. Zeroing it here would remove that
+# etiquette from eight concurrent seats; that is a decision to make on real
+# run telemetry, not a default.
+SDK_MAX_RETRIES = _int_env("BUILD_A_SPEC_SDK_MAX_RETRIES", 2, minimum=0)
+
+# Read/write/pool timeout per request, in seconds. The CONNECT timeout is
+# not this value: llm/client.py keeps the SDK's 5 s connect timeout beside
+# it, because a bare number passed to the SDK applies to connecting too,
+# and a black-holed connect would then wait this long before the first
+# retry. Streaming reads count between chunks, so a long reply is fine.
+API_TIMEOUT_SECONDS = _int_env("BUILD_A_SPEC_API_TIMEOUT_SECONDS", 600, minimum=30)
+
 # --- Adaptive thinking / effort ---------------------------------------------
 
 # Sonnet 5 runs adaptive thinking by default; requests state it explicitly

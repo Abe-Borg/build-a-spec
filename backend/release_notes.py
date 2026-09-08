@@ -410,6 +410,26 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "high."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Escape closes every dialog, and long replies stay smooth",
+                        body=(
+                            "Every dialog — Settings included, which had no "
+                            "keyboard handling at all — now closes on Escape, "
+                            "keeps Tab inside it, and hands focus back where "
+                            "it came from; with two dialogs open (Help and "
+                            "its trust dossier, Settings and Developer tools) "
+                            "one Escape closes only the top one. A long "
+                            "streaming reply no longer re-renders the whole "
+                            "conversation on every word or re-measures the "
+                            "chat on every animation frame: it follows the "
+                            "bottom only when the text actually grows, and "
+                            "still lets go the moment you scroll up to read. "
+                            "Under the hood, the API request timeout and the "
+                            "SDK's retry count are now explicit settings "
+                            "(unchanged defaults), and a lint gate runs on "
+                            "every change."
+                        ),
+                    ),
                 ),
             ),
         ),

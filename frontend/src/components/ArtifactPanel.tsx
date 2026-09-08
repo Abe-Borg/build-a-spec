@@ -36,8 +36,14 @@ import type {
 import FollowUpsPanel from "./FollowUpsPanel";
 import ProjectFactsPanel from "./ProjectFactsPanel";
 import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
-import { projectBriefManifest } from "../lib/api";
+import {
+  ORIGINAL_UPLOAD_URL,
+  downloadAttachment,
+  exportDocxUrl,
+  projectBriefManifest,
+} from "../lib/api";
 import type { ProjectFactInput } from "../lib/api";
+import { useDownloads } from "../lib/useDownloads";
 import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
 import QCDrawer from "./QCDrawer";
 import ResearchDrawer from "./ResearchDrawer";
@@ -50,6 +56,16 @@ import {
 } from "../lib/sourceCapabilities";
 import { reviewCounts } from "../lib/reviewQueue";
 import Tip from "./Tip";
+
+/** The Export menu's downloads, keyed for the busy state. */
+type ExportKey =
+  | "preserved"
+  | "source"
+  | "normalized"
+  | "clean"
+  | "original"
+  | "redline-master"
+  | "redline-version";
 
 interface Props {
   doc: SpecDoc | null;
@@ -492,6 +508,21 @@ export default function ArtifactPanel({
   // as a broken button).
   const [openInWordBusy, setOpenInWordBusy] = useState(false);
   const [openInWordError, setOpenInWordError] = useState("");
+  // The specification exports: fetch-then-save, never a bare `<a download>`
+  // (which has no failure mode a user can see — in the shell a refused or
+  // dropped download is a click that does nothing). The menu closes on the
+  // click, so the busy state lives on the Export trigger and a failure in a
+  // dismissible strip beside Open in Word's.
+  const exports = useDownloads<ExportKey>();
+  const runExport = (key: ExportKey, url: string, fallbackName: string) => {
+    setExportMenuOpen(false);
+    void exports.download(key, () =>
+      downloadAttachment(url, fallbackName, "Export"),
+    );
+  };
+  const exportsBusy = exports.busy !== null;
+  const exportItem =
+    "block w-full px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink disabled:opacity-50";
   // Export project brief: a confirm modal that first shows what THIS session
   // would export (the manifest route), then hands the write to the host —
   // native Save dialog or download. A refusal is the server's own message.
@@ -945,13 +976,19 @@ export default function ArtifactPanel({
             <button
               className={
                 actionButton +
-                (hasContent && !busy ? "" : " pointer-events-none opacity-40")
+                (hasContent && !busy && !exportsBusy
+                  ? ""
+                  : " pointer-events-none opacity-40")
               }
               onClick={() => setExportMenuOpen((open) => !open)}
-              disabled={!hasContent || busy}
-              title="Export the section as .docx"
+              disabled={!hasContent || busy || exportsBusy}
+              title={
+                exportsBusy
+                  ? "Preparing the export…"
+                  : "Export the section as .docx"
+              }
             >
-              Export ▾
+              {exportsBusy ? "Preparing…" : "Export ▾"}
             </button>
             {exportMenuOpen && (
               <div
@@ -971,15 +1008,21 @@ export default function ArtifactPanel({
                         re-render, so a user who imported a master to keep
                         its formatting got the app's fonts back. */}
                     {preservedExportAvailable ? (
-                      <a
-                        className="block px-3 py-1.5 font-medium text-accent hover:bg-surface hover:text-accent-hover"
-                        href="/api/export/docx?mode=preserved"
-                        download
-                        onClick={() => setExportMenuOpen(false)}
+                      <button
+                        type="button"
+                        className="block w-full px-3 py-1.5 text-left font-medium text-accent hover:bg-surface hover:text-accent-hover disabled:opacity-50"
+                        onClick={() =>
+                          runExport(
+                            "preserved",
+                            exportDocxUrl({ mode: "preserved" }),
+                            "specification.docx",
+                          )
+                        }
+                        disabled={exportsBusy}
                         title="Your original Word file rebuilt with the current content: headers, footers, fonts, styles, numbering and page setup are kept, untouched provisions are copied exactly, and tables and pictures come through as they were"
                       >
                         Export Word (keeps your formatting)
-                      </a>
+                      </button>
                     ) : (
                       <span
                         className="block cursor-default px-3 py-1.5 text-ink-faint"
@@ -1006,36 +1049,54 @@ export default function ArtifactPanel({
                       </button>
                     )}
                     {preservationReady && (
-                      <a
-                        className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
-                        href="/api/export/docx?mode=source"
-                        download
-                        onClick={() => setExportMenuOpen(false)}
+                      <button
+                        type="button"
+                        className={exportItem}
+                        onClick={() =>
+                          runExport(
+                            "source",
+                            exportDocxUrl({ mode: "source" }),
+                            "specification.docx",
+                          )
+                        }
+                        disabled={exportsBusy}
                         title="The older byte-exact contract: clone the original DOCX and apply only verified body edits. Offered only while this project still holds that claim."
                       >
                         Export byte-exact original with edits
-                      </a>
+                      </button>
                     )}
-                    <a
-                      className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
-                      href="/api/export/docx?mode=normalized"
-                      download
-                      onClick={() => setExportMenuOpen(false)}
+                    <button
+                      type="button"
+                      className={exportItem}
+                      onClick={() =>
+                        runExport(
+                          "normalized",
+                          exportDocxUrl({ mode: "normalized" }),
+                          "specification.docx",
+                        )
+                      }
+                      disabled={exportsBusy}
                       title="A new DOCX in Build-a-Spec's own styles and fonts, with automatic numbering and the assumptions / open-items schedules; your original's formatting is not used"
                     >
                       Export as Build-a-Spec styled Word
-                    </a>
+                    </button>
                     {sourceAvailable ? (
-                      <a
-                        className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
-                        href="/api/import/original"
-                        download
-                        onClick={() => setExportMenuOpen(false)}
+                      <button
+                        type="button"
+                        className={exportItem}
+                        onClick={() =>
+                          runExport(
+                            "original",
+                            ORIGINAL_UPLOAD_URL,
+                            "original-upload.docx",
+                          )
+                        }
+                        disabled={exportsBusy}
                         title="Download the exact DOCX package that was imported, unchanged"
                         data-capability="import.source-output"
                       >
                         Download exact original DOCX
-                      </a>
+                      </button>
                     ) : (
                       <span
                         className="block cursor-default px-3 py-1.5 text-ink-faint"
@@ -1047,15 +1108,21 @@ export default function ArtifactPanel({
                   </>
                 ) : (
                   <>
-                    <a
-                      className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
-                      href="/api/export/docx?mode=normalized"
-                      download
-                      onClick={() => setExportMenuOpen(false)}
+                    <button
+                      type="button"
+                      className={exportItem}
+                      onClick={() =>
+                        runExport(
+                          "clean",
+                          exportDocxUrl({ mode: "normalized" }),
+                          "specification.docx",
+                        )
+                      }
+                      disabled={exportsBusy}
                       title="Generate a clean DOCX with the assumptions / open-items schedules"
                     >
                       Export clean
-                    </a>
+                    </button>
                     {hasNativeBridge && onOpenInWord && (
                       <button
                         className="block w-full px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink disabled:opacity-50"
@@ -1071,15 +1138,21 @@ export default function ArtifactPanel({
                   </>
                 )}
                 {baselineIndex !== null ? (
-                  <a
-                    className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
-                    href="/api/export/docx?redline=master"
-                    download
-                    onClick={() => setExportMenuOpen(false)}
+                  <button
+                    type="button"
+                    className={exportItem}
+                    onClick={() =>
+                      runExport(
+                        "redline-master",
+                        exportDocxUrl({ redline: "master" }),
+                        "specification - REDLINE.docx",
+                      )
+                    }
+                    disabled={exportsBusy}
                     title="Tracked changes over the normalized provision text; this is not a redline of the original DOCX package"
                   >
                     Redline of extracted provisions
-                  </a>
+                  </button>
                 ) : (
                   <span
                     className="block cursor-default px-3 py-1.5 text-ink-faint"
@@ -1089,15 +1162,21 @@ export default function ArtifactPanel({
                   </span>
                 )}
                 {compareMode && compareBase !== null ? (
-                  <a
-                    className="block px-3 py-1.5 text-ink-dim hover:bg-surface hover:text-ink"
-                    href={`/api/export/docx?redline=version&base=${compareBase}`}
-                    download
-                    onClick={() => setExportMenuOpen(false)}
+                  <button
+                    type="button"
+                    className={exportItem}
+                    onClick={() =>
+                      runExport(
+                        "redline-version",
+                        exportDocxUrl({ redline: "version", base: compareBase }),
+                        "specification - REDLINE.docx",
+                      )
+                    }
+                    disabled={exportsBusy}
                     title="Tracked-changes .docx vs the version selected in compare mode"
                   >
                     Redline vs version…
-                  </a>
+                  </button>
                 ) : (
                   <span
                     className="block cursor-default px-3 py-1.5 text-ink-faint"
@@ -1356,6 +1435,25 @@ export default function ArtifactPanel({
           <button
             className="shrink-0 text-[11px] text-ink-faint hover:text-ink"
             onClick={onDismissImportNotice}
+            title="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {exports.error && (
+        <div
+          className="flex items-start justify-between gap-3 border-b border-warn/40 bg-warn/10 px-5 py-2 text-[11px]"
+          role="alert"
+          data-testid="export-error"
+        >
+          <span className="min-w-0 text-warn">
+            Export failed — {exports.error}
+          </span>
+          <button
+            className="shrink-0 text-[11px] text-ink-faint hover:text-ink"
+            onClick={exports.clearError}
             title="Dismiss"
           >
             ✕

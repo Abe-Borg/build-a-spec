@@ -182,6 +182,14 @@ export default function App() {
   // and lives in a ref because the loser can resolve before React commits
   // the winner. Its rule is pinned in tests/latestAnswer.test.ts.
   const updateAnswers = useRef(createLatestAnswer<UpdateCheckPayload | null>());
+  // The readiness and usage polls have many callers (every mutation, every
+  // QC milestone, the capability sweep, a turn's end) and nothing serializes
+  // them, so two in-flight answers can land out of order — and a dropped
+  // poll used to blank the checklist and the spend pill outright. Same
+  // latch: newest REQUEST wins, and a failure claims its rank without
+  // touching the screen (`drop`), so the last-good answer stays up.
+  const readinessAnswers = useRef(createLatestAnswer<ReadinessPayload>());
+  const usageAnswers = useRef(createLatestAnswer<UsageSummary>());
   // The install request outlives the download; the ref is the double-submit
   // guard (a state update may not commit before a second click lands).
   const [installing, setInstalling] = useState(false);
@@ -572,23 +580,38 @@ export default function App() {
 
   const refreshReadiness = useCallback(() => {
     const epoch = workspaceEpochRef.current;
+    const gate = readinessAnswers.current;
+    const rank = gate.next();
     getReadiness()
       .then((value) => {
-        if (workspaceEpochRef.current === epoch) setReadiness(value);
+        if (workspaceEpochRef.current !== epoch) return;
+        gate.accept(rank, value, setReadiness);
       })
       .catch(() => {
-        if (workspaceEpochRef.current === epoch) setReadiness(null);
+        // A dropped poll keeps the last-good checklist on screen (the
+        // refreshQc posture — nulling it hid the whole Issue-readiness card
+        // and read a ready section as "not yet reviewed"). It still claims
+        // its rank, so an older answer still in flight cannot land on top.
+        if (workspaceEpochRef.current !== epoch) return;
+        gate.drop(rank);
       });
   }, []);
 
   const refreshUsage = useCallback(() => {
     const epoch = workspaceEpochRef.current;
+    const gate = usageAnswers.current;
+    const rank = gate.next();
     getUsage()
       .then((value) => {
-        if (workspaceEpochRef.current === epoch) setUsage(value);
+        if (workspaceEpochRef.current !== epoch) return;
+        gate.accept(rank, value, setUsage);
       })
       .catch(() => {
-        if (workspaceEpochRef.current === epoch) setUsage(null);
+        // Same posture: one dropped /api/usage poll (fired on every QC
+        // milestone) used to flip the spend pill to "—", hide the context
+        // gauge and make Settings claim no spend this session.
+        if (workspaceEpochRef.current !== epoch) return;
+        gate.drop(rank);
       });
   }, []);
 
@@ -661,11 +684,24 @@ export default function App() {
   // native window — one delegated listener covers every renderer.
   useEffect(() => installExternalLinkHandler(), []);
 
-  /** Settings → "What's new": this version's notes, seen or not. */
+  /**
+   * Settings → "What's new": this version's notes, seen or not. This is a
+   * deliberate click, so a failure says so in the panel's notice strip
+   * rather than doing nothing (a click that does nothing reads as a broken
+   * button). The launch check above stays silent on purpose: a cosmetic
+   * modal must never trouble a launch, and this button is its retry.
+   */
   const openReleaseNotes = useCallback(() => {
     getReleaseNotes(true)
       .then((payload) => setWhatsNew(payload.entries))
-      .catch(() => {});
+      .catch((e: unknown) => {
+        setImportNotice({
+          tone: "error",
+          name: "",
+          title: "What's new could not be loaded",
+          lines: [e instanceof Error ? e.message : String(e)],
+        });
+      });
   }, []);
 
   /**

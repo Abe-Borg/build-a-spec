@@ -376,6 +376,24 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "outgoing run and could keep reconnecting to it."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Buttons that could get stuck now recover",
+                        body=(
+                            "Settings' Test and Save key buttons come back "
+                            "after a request that never reached the app "
+                            "(and say so, instead of reporting the key as "
+                            "rejected). The Export menu's downloads show "
+                            "Preparing… and, when one fails, say why — a "
+                            "refused or dropped download used to be a click "
+                            "that did nothing. The header's spend figure and "
+                            "the Issue-readiness checklist keep their last "
+                            "values across one dropped poll rather than "
+                            "blanking. Settings → What's new says when it "
+                            "cannot load. And a press-and-hold on a PART "
+                            "confirm no longer fires into a session you have "
+                            "since replaced."
+                        ),
+                    ),
                 ),
             ),
         ),

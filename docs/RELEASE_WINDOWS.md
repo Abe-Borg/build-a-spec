@@ -340,6 +340,36 @@ invisible to CI and expensive to the user.
       what it truncated, and contains **no** key material.
 - [ ] The trace viewer opens from Developer tools and renders with no network.
 
+### State that must recover (v1.17.0)
+
+None of these have a DOM harness; the source-level pins in
+`frontend/tests/strandedState.test.ts` and `downloads.test.ts` guard the
+code shape, and these rows guard the behavior. Stop the backend process
+(leave the window open) for each.
+
+- [ ] **Settings → Test key / Save** with the backend stopped: the buttons
+      come back (no permanent "Working…") and the message reads *Could not
+      test the key: …*, not *Key rejected*. Restart the backend and Test
+      again — it works without reopening Settings.
+- [ ] **Review walk, PART hold**: press-and-hold the *confirm this part*
+      button on a PART with outstanding blocks in two articles and, mid-hold,
+      press New session. Nothing lands in the new session and nothing errors
+      — the timer used to fire a bulk confirm into the document you had just
+      replaced.
+- [ ] **Dropped polls**: with spend on the meter and a readiness card
+      showing, stop the backend and click around the panel. The header's
+      spend figure, the context gauge and the Issue-readiness card keep their
+      last values (they used to blank to "—", vanish, and read "not yet
+      reviewed"); restart the backend and they refresh on the next poll.
+- [ ] **Export menu** with the backend stopped: the trigger reads
+      *Preparing…* and then an *Export failed —* strip names the reason,
+      dismissible with ✕. With it running, every entry still downloads under
+      the server's filename and *Download exact original DOCX* is
+      byte-identical to the upload.
+- [ ] **Settings → What's new** with the backend stopped: a *What's new
+      could not be loaded* notice appears in the document panel instead of
+      nothing happening.
+
 ---
 
 ## Manual release (on a Windows machine)

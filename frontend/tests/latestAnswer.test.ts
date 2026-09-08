@@ -47,6 +47,43 @@ test("a failure is an answer too — a stale one is still dropped", () => {
   assert.deepEqual(seen, ["UPDATE_AVAILABLE"]);
 });
 
+test("a dropped poll keeps the last-good answer but still outranks an older one in flight", () => {
+  // The readiness/usage case: a poll that fails must not blank the screen,
+  // and an OLDER poll that resolves late must not overwrite what the newer
+  // request would have said either.
+  const gate = createLatestAnswer<string>();
+  const seen: string[] = [];
+  const apply = (v: string) => seen.push(v);
+
+  const first = gate.next();
+  gate.accept(first, "ready", apply);
+  const older = gate.next();
+  const newer = gate.next();
+  // The newer poll drops out (backend gone for a moment) — nothing applied.
+  assert.equal(gate.drop(newer), true);
+  // The older poll's late success is stale and is refused.
+  assert.equal(gate.accept(older, "not ready", apply), false);
+  // A poll issued after the drop applies as normal.
+  assert.equal(gate.accept(gate.next(), "ready again", apply), true);
+
+  assert.deepEqual(seen, ["ready", "ready again"]);
+});
+
+test("a drop after a newer answer changes nothing", () => {
+  const gate = createLatestAnswer<string>();
+  const seen: string[] = [];
+  const apply = (v: string) => seen.push(v);
+
+  const older = gate.next();
+  const newer = gate.next();
+  assert.equal(gate.accept(newer, "fresh", apply), true);
+  assert.equal(gate.drop(older), false);
+  // The newer answer still stands and later requests still win.
+  assert.equal(gate.accept(gate.next(), "fresher", apply), true);
+
+  assert.deepEqual(seen, ["fresh", "fresher"]);
+});
+
 test("each request answers once and later requests keep winning", () => {
   const gate = createLatestAnswer<number>();
   const seen: number[] = [];

@@ -43,6 +43,80 @@ import type {
 // sources and Node's resolver needs a real extension on a value import
 // (see lib/eventSeqIndex.ts).
 import { qcReportExportUrl } from "./qcReport.ts";
+import { saveBlob } from "./saveBlob.ts";
+
+// --- Downloads -------------------------------------------------------------
+
+/**
+ * The filename a `Content-Disposition: attachment; filename="…"` header
+ * names, or `fallback` when the header is absent or unparseable. Stops at
+ * `;` as well as `"`, so a trailing `filename*=UTF-8''…` parameter never
+ * rides into the name (one of the copy-pasted download paths forgot the
+ * `;`, which is how the copies had drifted apart).
+ */
+export function filenameFromDisposition(
+  header: string | null,
+  fallback: string,
+): string {
+  const match = /filename="?([^";]+)"?/.exec(header ?? "");
+  const name = match?.[1]?.trim();
+  return name || fallback;
+}
+
+/**
+ * Fetch an attachment the server streams and hand it to the browser's save
+ * path — the ONE fetch-then-save. A bare `<a download>` gives no feedback
+ * at all when the server answers 409 or 500, or when the backend is simply
+ * gone: in the native shell the click just looks dead. Fetching first means
+ * the failure's exact server message can be shown beside the control and a
+ * preparing state can be rendered while the bytes stream.
+ *
+ * A non-OK response rejects with the JSON body's `error` when there is one,
+ * else `<label> failed (<status>)`. The server names the file via
+ * Content-Disposition; `fallbackName` is used only when it does not.
+ */
+export async function downloadAttachment(
+  url: string,
+  fallbackName: string,
+  label = "download",
+): Promise<void> {
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    let message = "";
+    try {
+      const data = await resp.json();
+      message = typeof data?.error === "string" ? data.error : "";
+    } catch {
+      // A non-JSON failure body still gets the status-code fallback.
+    }
+    throw new Error(message || `${label} failed (${resp.status})`);
+  }
+  const blob = await resp.blob();
+  saveBlob(
+    blob,
+    filenameFromDisposition(resp.headers.get("Content-Disposition"), fallbackName),
+  );
+}
+
+/** The specification export routes the Export menu offers. */
+export type ExportDocxQuery =
+  | { mode: "preserved" | "source" | "normalized" }
+  | { redline: "master" }
+  | { redline: "version"; base: number };
+
+/** URL for one `.docx` export of the specification. */
+export function exportDocxUrl(query: ExportDocxQuery): string {
+  if ("mode" in query) {
+    return `/api/export/docx?mode=${encodeURIComponent(query.mode)}`;
+  }
+  if (query.redline === "master") return "/api/export/docx?redline=master";
+  return `/api/export/docx?redline=version&base=${encodeURIComponent(
+    String(query.base),
+  )}`;
+}
+
+/** The exact DOCX package that was imported, unchanged. */
+export const ORIGINAL_UPLOAD_URL = "/api/import/original";
 
 export async function getHealth(): Promise<Health> {
   const resp = await fetch("/api/health");
@@ -404,31 +478,11 @@ export async function startFromProjectBrief(
  * server's exact message instead of a download that silently never comes.
  */
 export async function downloadProjectBrief(): Promise<void> {
-  const resp = await fetch("/api/project/brief");
-  if (!resp.ok) {
-    let message = "";
-    try {
-      const data = await resp.json();
-      message = typeof data?.error === "string" ? data.error : "";
-    } catch {
-      // A non-JSON failure body still gets the status-code fallback.
-    }
-    throw new Error(message || `project brief export failed (${resp.status})`);
-  }
-  const blob = await resp.blob();
-  const cd = resp.headers.get("Content-Disposition") ?? "";
-  const match = /filename="?([^";]+)"?/.exec(cd);
-  const filename = match?.[1] ?? "buildaspec-project.basproject";
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Deferred revocation, same as downloadProjectFile: revoking synchronously
-  // after click() can cancel the download.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  await downloadAttachment(
+    "/api/project/brief",
+    "buildaspec-project.basproject",
+    "project brief export",
+  );
 }
 
 /** URL for a table figure's CSV download (server-rendered, text/csv). */
@@ -555,30 +609,17 @@ export async function loadProjectFile(file: File): Promise<ProjectLoadResult> {
  * Save. The payload is fetched (awaited) BEFORE the caller proceeds to
  * reset/load, so a fast reset can't race the save and capture an
  * already-cleared session. The server names the file via Content-Disposition.
+ * A refusal surfaces the server's own message (it used to be a bare
+ * `save failed (N)`).
  */
 export async function downloadProjectFile(
   scope?: "tutorial",
 ): Promise<void> {
-  const resp = await fetch(
+  await downloadAttachment(
     scope ? `/api/project/save?scope=${scope}` : "/api/project/save",
+    "buildaspec-project.json",
+    "save",
   );
-  if (!resp.ok) throw new Error(`save failed (${resp.status})`);
-  const blob = await resp.blob();
-  const cd = resp.headers.get("Content-Disposition") ?? "";
-  const match = /filename="?([^"]+)"?/.exec(cd);
-  const filename = match?.[1] ?? "buildaspec-project.json";
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Defer revocation: some browsers consume the object URL asynchronously, so
-  // revoking synchronously after click() can cancel the download — which would
-  // let the caller reset/load and lose the session with no saved file. Mirrors
-  // downloadBlob() in lib/figures.ts.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** Read SSE frames off a fetch Response body and yield parsed JSON. */
@@ -1230,8 +1271,8 @@ export async function previewQcApply(
  * them. A bare `<a download>` gives no feedback at all when the server
  * answers 409 (report selection changed) or 500 — in the native shell the
  * click just looks dead. Fetch first so an error's exact server message can
- * be shown beside the button, then hand the bytes to the same anchor-click
- * save `downloadProjectFile` uses. The server names the file via
+ * be shown beside the button, then hand the bytes to the one anchor-click
+ * save (`downloadAttachment`). The server names the file via
  * Content-Disposition; `runId` pins the request to the report identity shown
  * in the snapshot (the server rejects a changed selection).
  */
@@ -1239,32 +1280,11 @@ export async function downloadQcReport(
   format: "docx" | "json",
   runId: unknown,
 ): Promise<void> {
-  const resp = await fetch(qcReportExportUrl(format, runId));
-  if (!resp.ok) {
-    let message = "";
-    try {
-      const data = await resp.json();
-      message = typeof data?.error === "string" ? data.error : "";
-    } catch {
-      // A non-JSON failure body still gets the status-code fallback.
-    }
-    throw new Error(message || `QC report download failed (${resp.status})`);
-  }
-  const blob = await resp.blob();
-  const cd = resp.headers.get("Content-Disposition") ?? "";
-  const match = /filename="?([^";]+)"?/.exec(cd);
-  const filename =
-    match?.[1] ?? (format === "json" ? "final-qc-report.json" : "final-qc-report.docx");
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Deferred revocation, same as downloadProjectFile / lib/figures.downloadBlob:
-  // revoking synchronously after click() can cancel the download.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  await downloadAttachment(
+    qcReportExportUrl(format, runId),
+    format === "json" ? "final-qc-report.json" : "final-qc-report.docx",
+    "QC report download",
+  );
 }
 
 /** Dismiss a finding (remembered across re-runs). */

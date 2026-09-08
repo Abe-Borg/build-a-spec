@@ -170,7 +170,15 @@ const SOURCE_LABEL: Record<KeyStatus["source"], string> = {
   none: "Not configured",
 };
 
-type TestResult = { ok: boolean; error?: string } | null;
+/**
+ * `label` is the prefix a failure renders under (default "Key rejected"): a
+ * request that never reached the backend is not a rejected key, and saying
+ * so is what lets the user tell the two apart.
+ */
+type TestResult = { ok: boolean; error?: string; label?: string } | null;
+
+const errorText = (e: unknown): string =>
+  e instanceof Error ? e.message : String(e);
 
 export default function SettingsPanel({
   open,
@@ -206,12 +214,27 @@ export default function SettingsPanel({
 
   const envLocked = status?.env_locked === true;
 
+  // Every await below is fenced by a `finally` that releases `busy`. The
+  // panel is an early `return null` while closed, not an unmount, so a
+  // `busy` stranded by a rejected request (the backend gone, a non-JSON
+  // reply — `testKey` never throws on a plain non-2xx) would keep every
+  // control disabled and the Save button reading "Working…" for the rest
+  // of the app's life, across close and reopen.
+
   const test = async () => {
     setBusy(true);
     setTestResult(null);
-    const result = await testKey(replaceValue.trim() || undefined);
-    setTestResult(result);
-    setBusy(false);
+    try {
+      setTestResult(await testKey(replaceValue.trim() || undefined));
+    } catch (e) {
+      setTestResult({
+        ok: false,
+        error: errorText(e),
+        label: "Could not test the key",
+      });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const saveAfterTest = async () => {
@@ -219,36 +242,48 @@ export default function SettingsPanel({
     if (!key) return;
     setBusy(true);
     setTestResult(null);
-    // Test first — save only if the key authenticates.
-    const result = await testKey(key);
-    if (!result.ok) {
-      setTestResult(result);
-      setBusy(false);
-      return;
-    }
     try {
+      // Test first — save only if the key authenticates.
+      const result = await testKey(key).catch((e: unknown) => ({
+        ok: false,
+        error: errorText(e),
+        label: "Could not test the key",
+      }));
+      if (!result.ok) {
+        setTestResult(result);
+        return;
+      }
       await saveApiKey(key);
       setReplaceValue("");
       setTestResult({ ok: true });
       refreshStatus();
       onKeyChange();
     } catch (e) {
-      setTestResult({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      setTestResult({ ok: false, error: errorText(e) });
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   const remove = async () => {
     setBusy(true);
+    setTestResult(null);
     try {
       const next = await deleteKey();
       setStatus(next);
       setConfirmRemove(false);
       onKeyChange();
-    } catch {
-      // Leave the current status; the banner/health will reflect reality.
+    } catch (e) {
+      // Leave the current status (the banner/health reflect reality), but
+      // say why — a Remove that does nothing reads as a broken button.
+      setTestResult({
+        ok: false,
+        error: errorText(e),
+        label: "Could not remove the key",
+      });
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   const label = "text-[11px] font-medium tracking-wide text-ink-dim uppercase";
@@ -362,7 +397,7 @@ export default function SettingsPanel({
                   >
                     {testResult.ok
                       ? "Key authenticated ✓"
-                      : `Key rejected: ${testResult.error}`}
+                      : `${testResult.label ?? "Key rejected"}: ${testResult.error}`}
                   </p>
                 )}
               </div>

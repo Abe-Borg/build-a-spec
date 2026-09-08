@@ -9,7 +9,7 @@ Deliverable status: **implementation specification; no application changes or te
 Revision 1 proposed six packages (A–F) plus conditional cache work (G), a versioned per-seat financial-capture contract, a three-agent implementation team, and a lint-compaction package ranked as a recommended improvement. A second review agreed with every finding and disputed the design. The author accepted the substance of that review. Revision 2 therefore:
 
 1. **Recovers uncollected batch usage instead of only disclosing it.** The runner already acknowledges Stop synchronously and lets the worker unwind in a documented settling state, so a bounded post-cancel result read belongs in that window. Disclosure becomes the fallback when the bound expires.
-2. **Shrinks the disclosure to one per-seat count, one run-level status, and one derived session-meter flag** that mirrors an existing precedent (`includes_estimated_output`).
+2. **Shrinks the disclosure to one per-seat count, one run-level anomaly count, one run-level status, and one derived session-meter flag** that mirrors an existing precedent (`includes_estimated_output`).
 3. **Moves reading real QC exports to the front**, before any tooling or lint work, and corrects revision 1's batch-economics framing (section 2.4).
 4. **Gates lint compaction on a measurement from real documents.** It is no longer a recommended improvement by default.
 5. **Fixes the copyable commands** to the repository's `.venv` convention.
@@ -227,25 +227,26 @@ Write the result to `docs/review-results/<date>/measurements.md` with artifact p
 
 Replace `items = list(client.messages.batches.results(batch_id))` with item-by-item processing:
 
-1. Read one row. Validate its `custom_id` against this round's submitted set; an unknown id is skipped and counted, never assigned to a seat.
+1. Read one row. Validate its `custom_id` against this round's submitted set; an unknown id is never assigned to a seat. It is counted at run level (`QCResult.unassigned_batch_results`, section 7.5), because a provider result the app dropped must not let the run read as capture-complete.
 2. Fold it through `_apply_batch_item` exactly as today (settle, continue, or retry).
 3. On a later iterator exception, keep every row already folded, settle the remaining pending seats with the transport error under the existing failure class, and record the number of submitted requests whose result was never read (section 7.5). If every expected row was already read when the iterator's final step fails, the transport diagnostic is kept and no gap is recorded.
 
-A duplicate row for a seat already settled in this round is ignored. A retried or continued seat legitimately reuses its `custom_id` in a later round; identity is `(batch round, custom_id)`, which the per-round `states`/`answered` bookkeeping already gives.
+Identity within a round is `(round, custom_id)`, and it is checked **before every fold**, not only against `state.settled`: a second row for a `custom_id` this round has already folded is ignored and counted as unassigned, whatever the seat's state. `_apply_batch_item` deliberately leaves a seat unsettled after a retryable error or a `pause_turn`, so a duplicate of either row would restart the attempt twice or append and bill the same response twice; the current loop consults `answered` only afterwards, when it looks for missing rows. A retried or continued seat legitimately reuses its `custom_id` in a later round, and the per-round `states`/`answered` bookkeeping already keeps those apart.
 
 ### 7.3 Bounded settlement after Stop and after the deadline
 
-On `should_stop()` inside the poll loop, and on the wall-clock ceiling, after `_cancel_batch`:
+On `should_stop()` inside the poll loop, and on the wall-clock ceiling:
 
-1. Enter a settlement window bounded by `settings.QC_BATCH_SETTLE_SECONDS` (new; default 120; `_int_env(..., minimum=1)`; README row; the knob-inventory floor in `tests/test_settings.py` moves with it). The deadline is a single `time.monotonic()` value checked **between every operation**: after the cancel call, before each `retrieve`, before the results read, and between result rows.
-2. Poll `retrieve` until `processing_status == "ended"` or the deadline passes, sleeping `QC_BATCH_POLL_SECONDS` in one-second slices. Do not consult `should_stop()` here; the run is already stopped.
-3. If ended, read results through the incremental path of 7.2 in **recovery mode** (7.4).
-4. Every call inside the window goes through `client.with_options(max_retries=0, timeout=<short read timeout, e.g. 30 s>)`. Without this the SDK's own two retries at a 600 s read timeout make the bound fiction. The fake client gains a `with_options` that returns itself.
-5. When the deadline passes at any point, settle the remaining pending seats as cancelled (Stop) or with the ceiling message (deadline), exactly as today, and record the uncollected count.
+1. Take the settlement deadline **first**, before the cancel call: one `time.monotonic()` value plus `settings.QC_BATCH_SETTLE_SECONDS` (new; default 120; `_int_env(..., minimum=1)`; README row; the knob-inventory floor in `tests/test_settings.py` moves with it). It is checked between every operation that follows: after the cancel, before each `retrieve`, before the results read, and between result rows.
+2. Cancel through the overridden client of step 5. Today's `_cancel_batch` uses the main client, whose two retries at a 600 s read timeout would let one stalled cancel hold the settling state, and the locked QC controls, for roughly thirty minutes before the window opened. The cancel stays best effort, as today: one that raises or times out does not end the window, it only spends part of it.
+3. Poll `retrieve` until `processing_status == "ended"` or the deadline passes, sleeping `QC_BATCH_POLL_SECONDS` in one-second slices. Do not consult `should_stop()` here; the run is already stopped.
+4. If ended, read results through the incremental path of 7.2 in **recovery mode** (7.4).
+5. Every call inside the window, the cancel included, goes through `client.with_options(max_retries=0, timeout=<short read timeout, e.g. 30 s>)`. Without this the SDK's own two retries at a 600 s read timeout make the bound fiction. The fake client gains a `with_options` that returns itself.
+6. When the deadline passes at any point, settle the remaining pending seats as cancelled (Stop) or with the ceiling message (deadline), exactly as today, and record the uncollected count.
 
 Emit the existing `verification_batch` frames: `polling` with counts during the window, then `cancelled` or `timeout` carrying `uncollected: N`. No new status value, so `qcLive.ts` needs no fold change; the drawer may render the count on the terminal line.
 
-The user-visible cost: a replacement Final QC run, apply, dismiss and export stay locked while the attempt settles, for at most the bound plus one short read. That is already true of the streamed transport's Stop, for longer. State it in the Stop confirmation copy if the copy currently implies an instant end.
+The user-visible cost: a replacement Final QC run, apply, dismiss and export stay locked while the attempt settles, for at most the bound plus one short-timeout call. That is already true of the streamed transport's Stop, for longer. State it in the Stop confirmation copy if the copy currently implies an instant end.
 
 ### 7.4 Recovery mode in `_apply_batch_item`
 
@@ -258,17 +259,18 @@ A `recovering: bool = False` keyword. When true:
 
 Nothing else changes. Promotion is impossible by construction: the runner installs a result into the retained slot only when `execution_status == "complete"`, and a stopped run's `_try_resolve` has already lost.
 
-### 7.5 The disclosure: one count, one status, one derived flag
+### 7.5 The disclosure: two counts, one status, one derived flag
 
 - `QCVerdict.uncollected_requests: int = 0`: the number of submitted batch requests for this seat whose result was never read. Serialized like every other verdict field; loads as 0 when absent.
-- `QCResult.batch_usage_capture: str = ""`: `"complete"`, `"incomplete"`, or `""` for a report written before this change. Set at build time from the seats; `from_dict` refuses a value that disagrees with the seat counts, the same way outcome labels are checked against their seats. Empty is never promoted to complete.
-- `usage_ledger`: a counter key (`uncollected_batch_requests`) added into the `qc_batched` bucket by `usage_by_meter_category()` and delivered through the existing `usage_sink(category, bucket)`, so the runner's metering code and the session-generation guard are unchanged. `snapshot()` derives `includes_uncollected_charges` from the counter, exactly as `includes_estimated_output` is derived. The pricing helpers read named token keys, so the counter is never priced. Reset, project load, `load_snapshot` and `merge_delta` need no change.
+- `QCResult.unassigned_batch_results: int = 0`: returned rows whose `custom_id` matched no request submitted in that round, or duplicated one already folded. They belong to no seat, so a per-seat count cannot carry them, and a run that received every expected row plus one row it dropped must not read as complete.
+- `QCResult.batch_usage_capture: str = ""`: `"complete"`, `"incomplete"`, or `""` for a report written before this change. Set at build time: `incomplete` when any seat's `uncollected_requests` or the run's `unassigned_batch_results` is nonzero, `complete` otherwise for a batched run. `from_dict` refuses a value that disagrees with both counts, the same way outcome labels are checked against their seats. Empty is never promoted to complete.
+- `usage_ledger`: a counter key (`uncollected_batch_requests`, the seat counts plus the unassigned count) added into the `qc_batched` bucket by `usage_by_meter_category()` and delivered through the existing `usage_sink(category, bucket)`, so the runner's metering code and the session-generation guard are unchanged. `snapshot()` derives `includes_uncollected_charges` from the counter, exactly as `includes_estimated_output` is derived. The pricing helpers read named token keys, so the counter is never priced. Reset, project load, `load_snapshot` and `merge_delta` need no change.
 - Not in `input_manifest`, not in `input_fingerprint`, not in `cost_basis`. A retained result does not go stale because the app can now disclose capture. Test this explicitly.
 
 ### 7.6 Surfaces (text only, no new control)
 
-- QC drawer session line and QC confirmation text: append "Some batch charges from a stopped run could not be collected; the real figure may be higher." when the ledger flag is set.
-- `QCReportModal` cost line and `_qc_render_usage_and_cost` plus the executive cost line in the Word memo: per report, "Recorded cost estimate: $X. N batch requests were submitted whose results were not collected; the final cost may be higher." For `batch_usage_capture == ""`: "Cost-capture completeness was not recorded by this version."
+- QC drawer session line and QC confirmation text: append "Some batched Final QC results could not be collected, so the real figure may be higher." when the ledger flag is set. The wording is deliberately cause-neutral: the same flag is set by a results iterator failing on an ordinary run, a batch deadline, a missing result row, or an unattributable row, not only by a Stop, and the session meter carries no reason to select more specific copy from.
+- `QCReportModal` cost line and `_qc_render_usage_and_cost` plus the executive cost line in the Word memo: per report, "Recorded cost estimate: $X. N batch requests were submitted whose results were not collected; the final cost may be higher.", plus "M returned results could not be attributed to a reviewer seat." when `unassigned_batch_results` is nonzero. For `batch_usage_capture == ""`: "Cost-capture completeness was not recorded by this version."
 - Header spend pill tooltip and the Settings usage paragraph: one sentence, beside the existing estimated-output disclosure, kept distinct from it (estimated token content and unread provider results are different limitations).
 - JSON export: automatic through `to_dict`.
 - `TrustDeepDiveModal`: inspect the Money section and the Final QC and Stop runtime cards for claims this changes; correct only those.
@@ -285,15 +287,16 @@ Parameterize over shared fixtures; the behaviors are mandatory, the count is not
 | Stop after submission; batch never ends within the bound | Every pending seat cancelled; count recorded; no `retrieve` after the deadline; total calls inside the window bounded |
 | Deadline (wall-clock ceiling) case | Same as Stop, with the ceiling message |
 | Stop before submission | No batch, no gap, no warning |
-| Duplicate row and unknown `custom_id` | Neither double-counts nor is assigned; unknown ids counted |
+| Duplicate row and unknown `custom_id` | A duplicate of a `pause_turn` row and of a retryable-error row in one round is folded once (one continuation, one attempt, one billed response); an unknown id lands in `unassigned_batch_results`; every expected row plus one unknown row reads `incomplete` |
+| Cancel call stalls or raises | The cancel goes through the overridden client; a raising cancel still opens the window; the whole settlement, cancel included, ends within the bound |
 | Same `custom_id` in two rounds | Both rounds' usage counted |
 | Ledger | The counter reaches the `qc_batched` bucket; `includes_uncollected_charges` is derived; empty known usage still discloses; a later successful run does not clear it; reset clears it; a stale-generation delivery is rejected |
 | Persistence | `uncollected_requests` and `batch_usage_capture` survive project and JSON round trips; a disagreeing pair is refused; a pre-change report loads with `""` and renders the not-recorded wording; the input fingerprint of a retained result is unchanged |
-| SDK options | Every call inside the window goes through `with_options(max_retries=0, timeout=…)`; a `retrieve` that raises does not escape the window |
+| SDK options | Every call inside the window, the cancel included, goes through `with_options(max_retries=0, timeout=…)`; a `retrieve` that raises does not escape the window |
 
 Existing tests that must remain meaningful, by name: `test_stopping_cancels_the_batch_and_settles_every_open_seat`, `test_a_stop_before_submission_spends_nothing_on_phase_two`, `test_a_paused_seat_continues_in_a_second_round`, `test_a_retryable_seat_failure_restarts_on_a_fresh_conversation`, `test_a_seat_with_no_result_line_is_recorded_failed_not_dropped`, `test_the_run_total_is_the_sum_of_its_records_when_any_was_discounted`, `test_the_session_meter_prices_the_batched_phase_separately`, `test_a_stop_during_the_submission_backoff_returns_promptly` (all `tests/test_qc_batch_verification.py`); `test_cancelled_worker_preserves_paid_partial_without_replacing_success` (`test_qc_runner_audit_integrity.py`); `test_stopped_worker_cannot_resolve_or_emit_into_newer_run`, `test_current_schema_pricing_and_aggregate_accounting_are_reconciled`, `test_a_legacy_v3_report_keeps_its_historical_rendering` (`test_qc_audit_report.py`); `test_mixed_ttl_cache_writes_are_not_double_counted`, `test_ledger_reset_clears` (`test_usage.py`). The existing cancellation test does not detect missing spend; do not cite it as proof of the new behavior.
 
-Mutation evidence, each reverted in place and restored: whole-iterator materialization restored → the first two rows red; the settlement window removed → the two Stop-recovery rows red; the `with_options` override dropped → the SDK-options row red; the counter not delivered → the ledger row red; the run-level status not validated → the disagreeing-pair case red.
+Mutation evidence, each reverted in place and restored: whole-iterator materialization restored → the first two rows red; the settlement window removed → the two Stop-recovery rows red; the `with_options` override dropped → the SDK-options row red; the override dropped from the cancel alone → the stalled-cancel row red; the pre-fold `answered` check removed → the duplicate-row case red; the unassigned count dropped → the unknown-row case red; the counter not delivered → the ledger row red; the run-level status not validated → the disagreeing-pair case red.
 
 ### 7.8 Acceptance and rollback
 
@@ -407,8 +410,8 @@ reconciliation or run paid experiments. Use the .venv interpreter.
 - [ ] QC drawer includes streaming and batched categories (PR 1 merged).
 - [ ] Batching question answered from real exports and recorded, or the absence of exports recorded.
 - [ ] Partial batch result retrieval preserves observed verdicts and usage.
-- [ ] Results completed before a Stop or deadline are collected within the bound; every call inside the window carries the SDK overrides.
-- [ ] Uncollected requests are counted per seat, summarized per run, and disclosed on every cost surface; empty known usage still discloses.
+- [ ] Results completed before a Stop or deadline are collected within the bound; every call inside the window, the cancel included, carries the SDK overrides.
+- [ ] Uncollected requests are counted per seat, unattributable rows per run, both summarized into the run status and disclosed on every cost surface in cause-neutral wording; empty known usage still discloses.
 - [ ] No tokens, costs or request identities fabricated; no duplicate charges.
 - [ ] Stop acknowledgement, partial-attempt retention and successor isolation hold.
 - [ ] Pre-change reports load and render the not-recorded wording; fingerprints and adjudication unchanged.

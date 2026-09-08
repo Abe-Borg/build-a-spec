@@ -5022,6 +5022,42 @@ def _cancel_batch(client: Any, batch_id: str) -> None:
         pass
 
 
+# A refused batch submission is retried after a wait keyed on the SEAT
+# attempt — the same counter the streaming path and the per-result retry in
+# _apply_batch_item use — never on the round number. Rounds exist to carry
+# pause_turn continuations and retries forward, so the round index climbs on
+# a perfectly healthy phase, and keying an uncapped exponential on it turned
+# one 429 on round 10 into an 85-minute sleep that neither Stop nor the
+# phase deadline could interrupt. The local cap is the belt behind that
+# change; compute_backoff_seconds itself stays uncapped because the
+# streaming callers bound it by their attempt ceiling.
+_BATCH_SUBMISSION_BACKOFF_CAP_SECONDS = 60.0
+# Slice size for the interruptible wait: a user Stop or the phase deadline
+# is noticed within one slice, not after the whole backoff has elapsed.
+_BATCH_SLEEP_SLICE_SECONDS = 1.0
+
+
+def _sleep_interruptibly(
+    seconds: float, *, should_stop: Callable[[], bool], deadline: float
+) -> bool:
+    """Sleep up to ``seconds`` in short slices; True when cut short.
+
+    Returns the moment ``should_stop()`` reports a user Stop or the phase's
+    wall-clock ``deadline`` (a ``time.monotonic`` reading) passes. The
+    remaining time is counted DOWN rather than read off the clock so a test
+    that no-ops ``time.sleep`` still terminates after a bounded number of
+    slices instead of spinning for the real duration.
+    """
+    remaining = max(0.0, float(seconds))
+    while remaining > 0:
+        if should_stop() or time.monotonic() > deadline:
+            return True
+        step = min(_BATCH_SLEEP_SLICE_SECONDS, remaining)
+        time.sleep(step)
+        remaining -= step
+    return False
+
+
 def _run_batch_calls(
     client: Any,
     *,
@@ -5052,6 +5088,12 @@ def _run_batch_calls(
     round (submission refused, results unreadable) settles every unsettled
     seat with that error, so the run degrades to partial — which blocks
     readiness — rather than losing seat records.
+
+    Nor can the phase hang. A refused submission waits on the SEAT attempt
+    (capped, in interruptible slices), a submission that comes back without
+    a batch id fails the round on the spot rather than polling for a batch
+    that does not exist, and the wall-clock ceiling is checked between
+    rounds as well as inside the poll loop.
     """
     states = {
         key: _BatchSeatState(spec=spec, messages=[]) for key, spec in specs.items()
@@ -5065,7 +5107,12 @@ def _run_batch_calls(
     policy = DEFAULT_REALTIME_RETRY_POLICY
     attempts = max(1, policy.max_attempts)
     poll_seconds = max(1, settings.QC_BATCH_POLL_SECONDS)
-    deadline = time.monotonic() + max(60, settings.QC_BATCH_MAX_WAIT_SECONDS)
+    ceiling_seconds = max(60, settings.QC_BATCH_MAX_WAIT_SECONDS)
+    deadline = time.monotonic() + ceiling_seconds
+    ceiling_message = (
+        "Batched verification exceeded its wall-clock ceiling "
+        f"({ceiling_seconds}s)."
+    )
     max_rounds = max(1, settings.QC_BATCH_MAX_ROUNDS)
 
     def unsettled() -> list[str]:
@@ -5100,6 +5147,14 @@ def _run_batch_calls(
         if should_stop():
             settle_all(pending, "Cancelled by user.")
             emit("cancelled", round=round_index + 1)
+            return results()
+        if time.monotonic() > deadline:
+            # Every round used to trust the poll loop to notice the ceiling,
+            # but a round that ENDS before the ceiling and then needs another
+            # (a continuation, a retry) never re-enters that loop before
+            # submitting again.
+            settle_all(pending, ceiling_message, FailureClass.CONNECTION.value)
+            emit("timeout", round=round_index + 1)
             return results()
 
         requests: list[dict[str, Any]] = []
@@ -5136,17 +5191,29 @@ def _run_batch_calls(
             exhausted = [
                 key for key in pending if states[key].attempt >= attempts - 1
             ]
-            if not retryable or len(exhausted) == len(pending):
+            # A retry needs a round to run in. Refused on the last round,
+            # the seats fail with the refusal itself — never a backoff
+            # slept for nothing and then the loop's tail blaming the round
+            # ceiling (and, if a Stop cut that sleep short, calling a
+            # cancellation a ceiling breach; caught in review on PR #151).
+            no_round_left = round_index + 1 >= max_rounds
+            if not retryable or len(exhausted) == len(pending) or no_round_left:
                 settle_all(pending, message, failure_class.value)
                 emit("failed", round=round_index + 1, error=message)
                 return results()
             settle_all(exhausted, message, failure_class.value)
-            backoff = compute_backoff_seconds(
-                policy, attempt=round_index, failure_class=failure_class
+            retrying = [key for key in pending if states[key].settled is None]
+            # Keyed on the seats' own attempt counter (read BEFORE
+            # restart_attempt advances it, the _apply_batch_item convention),
+            # never on round_index — see the note above the helper.
+            seat_attempt = max(states[key].attempt for key in retrying)
+            backoff = min(
+                _BATCH_SUBMISSION_BACKOFF_CAP_SECONDS,
+                compute_backoff_seconds(
+                    policy, attempt=seat_attempt, failure_class=failure_class
+                ),
             )
-            for key in pending:
-                if states[key].settled is not None:
-                    continue
+            for key in retrying:
                 states[key].restart_attempt()
                 event_sink(
                     {
@@ -5158,10 +5225,22 @@ def _run_batch_calls(
                         "backoff_s": round(backoff, 1),
                     }
                 )
-            time.sleep(backoff)
+            # Cut short by a Stop or the ceiling; the top of the loop
+            # decides which and settles the seats accordingly. A next
+            # iteration always exists here — no_round_left returned above.
+            _sleep_interruptibly(backoff, should_stop=should_stop, deadline=deadline)
             continue
 
         batch_id = str(_item_attr(batch, "id") or "")
+        if not batch_id:
+            # Nothing to poll. The old loop polled anyway: every retrieve
+            # raised, was swallowed as a dropped poll, and the phase sat on
+            # the wall-clock ceiling before reporting a timeout that named
+            # the wrong cause.
+            message = "Batched verification submission returned no batch id."
+            settle_all(pending, message, FailureClass.UNKNOWN.value)
+            emit("failed", round=round_index + 1, error=message)
+            return results()
         emit("submitted", round=round_index + 1, batch_id=batch_id, submitted=len(requests))
 
         last_counts: dict[str, int] | None = None
@@ -5191,11 +5270,7 @@ def _run_batch_calls(
                     break
             if time.monotonic() > deadline:
                 _cancel_batch(client, batch_id)
-                message = (
-                    "Batched verification exceeded its wall-clock ceiling "
-                    f"({max(60, settings.QC_BATCH_MAX_WAIT_SECONDS)}s)."
-                )
-                settle_all(unsettled(), message, FailureClass.CONNECTION.value)
+                settle_all(unsettled(), ceiling_message, FailureClass.CONNECTION.value)
                 emit("timeout", round=round_index + 1, batch_id=batch_id)
                 return results()
             time.sleep(poll_seconds)

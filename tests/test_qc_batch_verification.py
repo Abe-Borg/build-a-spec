@@ -14,11 +14,14 @@ side in ``tests/test_qc_live_events.py``, which runs the streaming path.
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
+import anthropic
 import httpx
 from anthropic import BadRequestError
 
 from backend import settings
+from backend.qc import engine
 from backend.qc.engine import run_final_qc
 from backend.qc.schema import QC_LENSES
 from backend.spec_doc.model import DocumentStore
@@ -620,3 +623,258 @@ def test_the_session_meter_prices_the_batched_phase_separately():
         settings.QC_MODEL, tokens, multiplier=settings.BATCH_COST_MULTIPLIER
     )
     assert by_category["qc_batched"] < by_category["qc"]
+
+
+# ---------------------------------------------------------------------------
+# The phase cannot hang: a refused submission, a Stop mid-wait, a batch
+# with no id, and the wall-clock ceiling between rounds
+# ---------------------------------------------------------------------------
+
+
+def _rate_limited() -> anthropic.RateLimitError:
+    request = httpx.Request(
+        "POST", "https://api.anthropic.com/v1/messages/batches"
+    )
+    return anthropic.RateLimitError(
+        "Rate limited.", response=httpx.Response(429, request=request), body=None
+    )
+
+
+def _refuse_submissions(client, *, on_calls: set[int]) -> dict:
+    """Make ``batches.create`` raise a 429 on the given 1-based call numbers.
+
+    Every other call goes through to the fake, so the phase still finishes
+    once the refusal has been retried.
+    """
+    real_create = client.batches.create
+    calls = {"n": 0}
+
+    def create(*, requests):
+        calls["n"] += 1
+        if calls["n"] in on_calls:
+            raise _rate_limited()
+        return real_create(requests=requests)
+
+    client.batches.create = create
+    return calls
+
+
+def _never_sleep(_seconds):
+    raise AssertionError("the batch loop must not sleep on this path")
+
+
+def _pauses(count: int) -> list:
+    return [
+        pause_response(searched_urls=["https://example.org/a"])
+        for _ in range(count)
+    ]
+
+
+def test_a_refused_submission_backs_off_on_the_seat_attempt_not_the_round(
+    monkeypatch,
+):
+    """Rounds climb on a healthy phase; the wait must not climb with them.
+
+    Three pause_turn rounds put the loop at round index 3 before the first
+    429. Keyed on the round, the old code slept 5 * 2**3 = 40s here — and
+    85 minutes by round 10. Keyed on the seat attempt it is the first
+    retry's 5s: exactly what the streaming path and the per-result retry
+    already charge for the same failure.
+    """
+    waits: list[float] = []
+    monkeypatch.setattr(
+        engine,
+        "_sleep_interruptibly",
+        lambda seconds, **_kw: waits.append(seconds) or False,
+    )
+    scripts = _one_finding_scripts(
+        verdicts=[*_pauses(6), qc_verdict_response(True), qc_verdict_response(True)]
+    )
+    client = SequencedFakeClient(scripts)
+    _refuse_submissions(client, on_calls={4})
+    events: list[dict] = []
+    result = _run(client, events=events)
+
+    assert waits == [5.0]
+    retries = [e for e in events if e["type"] == "verifier_retry"]
+    assert len(retries) == 2
+    assert all(e["backoff_s"] == 5.0 and e["attempt"] == 1 for e in retries)
+    # Four batches in the fake's ledger: three pause rounds and the retry;
+    # the refused call never reached it.
+    assert len(client.batches.created) == 4
+    assert result.execution_status == "complete"
+
+
+def test_the_submission_backoff_is_capped(monkeypatch):
+    """The cap is local to the batch loop, and it binds.
+
+    ``compute_backoff_seconds`` stays uncapped for the streaming callers,
+    whose attempt ceiling already bounds it; this loop caps because a wait
+    here is one the whole phase — and the user — sits through.
+    """
+    waits: list[float] = []
+    monkeypatch.setattr(
+        engine,
+        "_sleep_interruptibly",
+        lambda seconds, **_kw: waits.append(seconds) or False,
+    )
+    monkeypatch.setattr(engine, "compute_backoff_seconds", lambda *_a, **_kw: 1e4)
+    client = SequencedFakeClient(_one_finding_scripts())
+    _refuse_submissions(client, on_calls={1})
+    result = _run(client)
+
+    assert waits == [engine._BATCH_SUBMISSION_BACKOFF_CAP_SECONDS]
+    assert result.execution_status == "complete"
+
+
+def test_a_stop_during_the_submission_backoff_returns_promptly(monkeypatch):
+    """Stop lands while the loop is waiting to resubmit.
+
+    The old ``time.sleep(backoff)`` slept the whole wait with the phase
+    locked behind it; the slice-and-check sleep notices the Stop on its
+    next slice, and the top of the loop settles the seats as cancelled.
+    """
+    stop = threading.Event()
+    slept: list[float] = []
+
+    def sleep_then_stop(seconds):
+        slept.append(seconds)
+        stop.set()
+
+    monkeypatch.setattr(engine.time, "sleep", sleep_then_stop)
+    client = SequencedFakeClient(_one_finding_scripts())
+    _refuse_submissions(client, on_calls={1})
+    result = _run(client, should_stop=stop.is_set)
+
+    # One slice, never the whole 5s wait — and no second submission.
+    assert slept == [engine._BATCH_SLEEP_SLICE_SECONDS]
+    assert client.batches.created == []
+    assert len(result.inconclusive) == 1
+    assert all(
+        v.status == "cancelled" for v in result.inconclusive[0].verdicts
+    )
+    assert result.execution_status in {"partial", "cancelled"}
+
+
+def test_a_submission_without_a_batch_id_fails_the_round_immediately(
+    monkeypatch,
+):
+    """No id means nothing to poll, and the loop must not pretend otherwise.
+
+    The old loop polled anyway: every ``retrieve("")`` raised, was swallowed
+    as a dropped poll, and the phase sat on the two-hour ceiling before
+    reporting a timeout that named the wrong cause.
+    """
+    monkeypatch.setattr(engine.time, "sleep", _never_sleep)
+    client = SequencedFakeClient(_one_finding_scripts())
+    real_create = client.batches.create
+    real_retrieve = client.batches.retrieve
+    retrieves: list[str] = []
+
+    def create_without_id(*, requests):
+        batch = real_create(requests=requests)
+        return SimpleNamespace(
+            id="",
+            processing_status=batch.processing_status,
+            request_counts=batch.request_counts,
+        )
+
+    def retrieve(batch_id):
+        retrieves.append(batch_id)
+        return real_retrieve(batch_id)
+
+    client.batches.create = create_without_id
+    client.batches.retrieve = retrieve
+    events: list[dict] = []
+    result = _run(client, events=events)
+
+    assert retrieves == []
+    assert result.execution_status == "partial"
+    seats = result.inconclusive[0].verdicts
+    assert len(seats) == 2
+    assert all(
+        v.status == "failed" and "no batch id" in v.error.lower() for v in seats
+    )
+    failed = [
+        e
+        for e in events
+        if e["type"] == "verification_batch" and e["status"] == "failed"
+    ]
+    assert len(failed) == 1 and "no batch id" in failed[0]["error"].lower()
+
+
+def test_the_round_loop_honours_the_wall_clock_ceiling_between_rounds(
+    monkeypatch,
+):
+    """The ceiling is a phase-wide promise, not a per-poll one.
+
+    It used to be checked only inside the poll loop, so a round that ended
+    before the ceiling and then needed another (a continuation here) kept
+    submitting past it. The clock jumps 100,000s after the first
+    submission: round 1 still folds its results, round 2 must not start.
+    """
+    clock = {"now": 0.0}
+    monkeypatch.setattr(engine.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(engine.time, "sleep", _never_sleep)
+    scripts = _one_finding_scripts(
+        verdicts=[*_pauses(1), qc_verdict_response(True), qc_verdict_response(True)]
+    )
+    client = SequencedFakeClient(scripts)
+    real_create = client.batches.create
+
+    def create_then_age(*, requests):
+        batch = real_create(requests=requests)
+        clock["now"] += 100_000.0
+        return batch
+
+    client.batches.create = create_then_age
+    events: list[dict] = []
+    result = _run(client, events=events)
+
+    assert len(client.batches.created) == 1
+    timeouts = [
+        e
+        for e in events
+        if e["type"] == "verification_batch" and e["status"] == "timeout"
+    ]
+    assert len(timeouts) == 1 and timeouts[0]["round"] == 2
+    assert result.execution_status == "partial"
+    seats = result.inconclusive[0].verdicts
+    cut_off = [v for v in seats if v.status == "failed"]
+    assert len(cut_off) == 1 and "wall-clock ceiling" in cut_off[0].error
+    assert [v.status for v in seats if v is not cut_off[0]] == ["completed"]
+
+
+
+def test_a_refusal_with_no_round_left_fails_with_the_refusal_not_a_sleep(
+    monkeypatch,
+):
+    """A retry needs a round to run in (caught in review on PR #151, Codex).
+
+    Refused on the last allowed round, the old branch queued a retry, slept
+    the backoff for nothing, and let the loop's tail blame the round
+    ceiling — and a Stop landing in that sleep read as a ceiling breach
+    rather than a cancellation. The seats now fail with the refusal itself,
+    at once.
+    """
+    monkeypatch.setattr(settings, "QC_BATCH_MAX_ROUNDS", 1)
+    monkeypatch.setattr(engine.time, "sleep", _never_sleep)
+    client = SequencedFakeClient(_one_finding_scripts())
+    _refuse_submissions(client, on_calls={1})
+    events: list[dict] = []
+    result = _run(client, events=events)
+
+    assert client.batches.created == []
+    assert [e for e in events if e["type"] == "verifier_retry"] == []
+    failed = [
+        e
+        for e in events
+        if e["type"] == "verification_batch" and e["status"] == "failed"
+    ]
+    assert len(failed) == 1 and "RateLimitError" in failed[0]["error"]
+    seats = result.inconclusive[0].verdicts
+    assert all(
+        v.status == "failed" and "RateLimitError" in v.error for v in seats
+    )
+    assert not any("round ceiling" in v.error for v in seats)
+    assert result.execution_status == "partial"

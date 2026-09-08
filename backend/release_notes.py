@@ -275,6 +275,26 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "change a decision about its content."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Final QC cannot sit on a rate limit for hours",
+                        body=(
+                            "The checking stage of a Final QC pass is "
+                            "submitted as a batch, and when the provider "
+                            "refused a submission the wait before trying "
+                            "again grew with how many rounds the pass had "
+                            "already run rather than with how many times "
+                            "it had been refused — forty seconds on a "
+                            "healthy fourth round, over an hour by the "
+                            "tenth — and Stop could not cut it short. The "
+                            "wait is now a few seconds, capped at one "
+                            "minute, and Stop is honoured within a second "
+                            "of the click. A submission that comes back "
+                            "malformed now fails that round at once instead "
+                            "of polling for two hours and then blaming the "
+                            "time limit, and the pass's two-hour ceiling is "
+                            "checked between rounds as well as during one."
+                        ),
+                    ),
                 ),
             ),
         ),

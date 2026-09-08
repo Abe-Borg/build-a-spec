@@ -715,3 +715,126 @@ def test_a_second_click_during_a_blocked_download_is_refused(
         release.set()
         again = client.post("/api/update/install")
         assert again.status_code == 200
+
+
+def test_new_work_is_refused_while_an_install_is_in_flight(monkeypatch, tmp_path):
+    """The workspace is reserved for the whole attempt (Codex, PR #152).
+
+    The gate ran once, then the download ran for as long as it took, and a
+    turn started or an edit made meanwhile was closed over by the installer
+    without ever being asked about. While the install lock is held every
+    mutating API request is refused; reads and the stop routes keep
+    answering, and the hold lifts with the attempt.
+    """
+    import threading
+
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+
+    calls = _installable(monkeypatch, tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_download(*_args, **_kwargs):
+        calls["downloads"] += 1
+        entered.set()
+        assert release.wait(10), "the test never released the download"
+        return tmp_path / "BuildASpecSetup.exe"
+
+    monkeypatch.setattr(updates, "download_installer", blocked_download)
+
+    with TestClient(create_app()) as client:
+        first: dict = {}
+        worker = threading.Thread(
+            target=lambda: first.update(resp=client.post("/api/update/install")),
+            daemon=True,
+        )
+        worker.start()
+        assert entered.wait(10)
+
+        held = client.post("/api/doc/edit", json={"ops": []})
+        assert held.status_code == 409
+        assert held.json()["code"] == "workspace_busy"
+        assert "update is being installed" in held.json()["error"]
+        assert client.post("/api/session/reset", json={}).status_code == 409
+
+        # Reads keep answering, and stopping is never new work.
+        assert client.get("/api/doc").status_code == 200
+        stop = client.post("/api/chat/stop")
+        assert "update is being installed" not in stop.json().get("error", "")
+
+        release.set()
+        worker.join(10)
+        assert not worker.is_alive()
+        assert first["resp"].status_code == 200
+
+        # The hold lifts with the attempt.
+        after = client.post("/api/doc/edit", json={"ops": []})
+        assert "update is being installed" not in after.json().get("error", "")
+    assert calls == {"downloads": 1, "spawns": 1}
+
+
+def test_work_that_slips_in_during_the_download_stops_the_spawn(
+    monkeypatch, tmp_path
+):
+    """The last look before the spawn is at the session as it is NOW.
+
+    The hold above is what keeps work out; this is the authoritative check
+    the installer's launch waits on regardless, so a turn that got in by any
+    other route is refused after the download rather than closed over.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend import sessions
+    from backend.app import create_app
+
+    calls = _installable(monkeypatch, tmp_path)
+    session = sessions.get_session()
+
+    def download_then_turn(*_args, **_kwargs):
+        calls["downloads"] += 1
+        session.turn_active = True
+        return tmp_path / "BuildASpecSetup.exe"
+
+    monkeypatch.setattr(updates, "download_installer", download_then_turn)
+    try:
+        resp = TestClient(create_app()).post("/api/update/install")
+    finally:
+        session.turn_active = False
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["code"] == "workspace_busy" and "not launched" in body["error"]
+    assert calls == {"downloads": 1, "spawns": 0}
+
+
+def test_unsaved_work_that_appears_during_the_download_asks_before_the_spawn(
+    monkeypatch, tmp_path
+):
+    from fastapi.testclient import TestClient
+
+    from backend import sessions
+    from backend.app import create_app
+
+    calls = _installable(monkeypatch, tmp_path)
+    session = sessions.get_session()
+
+    def download_then_work(*_args, **_kwargs):
+        calls["downloads"] += 1
+        session.history.append(
+            {"role": "user", "content": [{"type": "text", "text": "late"}]}
+        )
+        return tmp_path / "BuildASpecSetup.exe"
+
+    monkeypatch.setattr(updates, "download_installer", download_then_work)
+    client = TestClient(create_app())
+
+    refused = client.post("/api/update/install")
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "unsaved_progress"
+    assert calls == {"downloads": 1, "spawns": 0}
+
+    accepted = client.post("/api/update/install", json={"acknowledge_unsaved": True})
+    assert accepted.status_code == 200
+    assert calls == {"downloads": 2, "spawns": 1}

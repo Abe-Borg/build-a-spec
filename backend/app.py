@@ -2543,6 +2543,56 @@ def create_app(
         _apply_defensive_headers(response, api_path=is_api)
         return response
 
+    # One install at a time per app, and the lock spans the WHOLE attempt:
+    # gates, download, verification, spawn. While it is held, the middleware
+    # below refuses every mutating API request, so nothing new can start in
+    # the session during a download the installer is about to close the app
+    # over (caught in review on PR #152, Codex). Non-blocking, so a second
+    # click gets an answer rather than a queue.
+    install_lock = threading.Lock()
+    install_hold_exempt = {
+        ("POST", "/api/update/install"),
+        ("POST", "/api/bootstrap"),
+        # Stopping work is always allowed; starting it is what is held.
+        ("POST", "/api/chat/stop"),
+        ("POST", "/api/research/stop"),
+        ("POST", "/api/qc/stop"),
+        ("POST", "/api/diagnostics/client-event"),
+        ("POST", "/api/release-notes/seen"),
+    }
+
+    @app.middleware("http")
+    async def _hold_the_workspace_during_install(request: Request, call_next):
+        """Refuse new work while an update install is in flight.
+
+        The install route checks busy and unsaved work ONCE, then downloads
+        for as long as that takes and spawns an installer that closes the
+        app. Without this, a turn started or an edit made during the download
+        was closed over without ever being asked about. Reads (polls, the
+        document, save) keep answering; only mutations are held, and the
+        stop routes stay open because stopping is never new work.
+        """
+        path = request.url.path
+        if (
+            install_lock.locked()
+            and path.startswith("/api/")
+            and request.method in _MUTATING_METHODS
+            and (request.method, path) not in install_hold_exempt
+        ):
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "workspace_busy",
+                    "error": (
+                        "An update is being installed; the app will close "
+                        "once the installer starts. Wait for it, or cancel "
+                        "the installer when it appears and try again."
+                    ),
+                },
+                status_code=409,
+            )
+        return await call_next(request)
+
     @app.middleware("http")
     async def _lease_slow_session_operations(request: Request, call_next):
         """Keep workspace transitions out of delayed upload/load commits.
@@ -6847,11 +6897,40 @@ def create_app(
         )
         return payload
 
-    # One install at a time per app: the download runs for as long as it
-    # takes, and a second click meanwhile used to start a second download
-    # into the same ``.part`` file. Non-blocking, so the second click gets
-    # an answer rather than a queue.
-    install_lock = threading.Lock()
+    def _refuse_install(code: str, error: str) -> JSONResponse:
+        _trace_capture.app_event("update", action="install", ok=False, code=code)
+        return _coded_error_response(
+            {"ok": False, "code": code, "error": error}, status_code=409
+        )
+
+    def _install_gate_refusal(
+        session: SessionState, *, acknowledge_unsaved: bool, suffix: str = ""
+    ) -> JSONResponse | None:
+        """The busy / unsaved-work gate, in one place for both of its readings.
+
+        Called before the download and again right before the spawn: the
+        middleware above holds new work off while the lock is held, and this
+        is the authoritative last look at the session the installer is about
+        to close — anything that slipped past is refused here rather than
+        closed over.
+        """
+        with session.session_state_guard():
+            busy = sessions.busy_reasons(session)
+            unsaved = sessions.has_unsaved_progress(session)
+        if busy:
+            return _refuse_install(
+                "workspace_busy",
+                "Wait for the current work to finish before installing "
+                f"the update ({', '.join(busy)} still running) — the "
+                f"installer closes the app.{suffix}",
+            )
+        if unsaved and not acknowledge_unsaved:
+            return _refuse_install(
+                "unsaved_progress",
+                "This session has unsaved work. Save it to a project "
+                f"file first, or confirm installing without saving.{suffix}",
+            )
+        return None
 
     @app.post("/api/update/install")
     def update_install(body: UpdateInstallRequest | None = None) -> JSONResponse:
@@ -6874,14 +6953,7 @@ def create_app(
         from . import updates
 
         request = body or UpdateInstallRequest()
-
-        def refused(code: str, error: str) -> JSONResponse:
-            _trace_capture.app_event(
-                "update", action="install", ok=False, code=code
-            )
-            return _coded_error_response(
-                {"ok": False, "code": code, "error": error}, status_code=409
-            )
+        refused = _refuse_install
 
         if not install_lock.acquire(blocking=False):
             return refused(
@@ -6910,27 +6982,20 @@ def create_app(
                     "the app.",
                 )
             session = workspace.session
-            with session.session_state_guard():
-                busy = sessions.busy_reasons(session)
-                unsaved = sessions.has_unsaved_progress(session)
-            if busy:
-                return refused(
-                    "workspace_busy",
-                    "Wait for the current work to finish before installing "
-                    f"the update ({', '.join(busy)} still running) — the "
-                    "installer closes the app.",
-                )
-            if unsaved and not request.acknowledge_unsaved:
-                return refused(
-                    "unsaved_progress",
-                    "This session has unsaved work. Save it to a project "
-                    "file first, or confirm installing without saving.",
-                )
-            return _install_update(updates)
+            refusal = _install_gate_refusal(
+                session, acknowledge_unsaved=request.acknowledge_unsaved
+            )
+            if refusal is not None:
+                return refusal
+            return _install_update(
+                updates, session, acknowledge_unsaved=request.acknowledge_unsaved
+            )
         finally:
             install_lock.release()
 
-    def _install_update(updates: Any) -> JSONResponse:
+    def _install_update(
+        updates: Any, session: SessionState, *, acknowledge_unsaved: bool
+    ) -> JSONResponse:
         """The download-verify-spawn half, past every gate."""
         result = updates.check_for_update(settings.VERSION)
         if not result.update_available or result.info is None:
@@ -6942,6 +7007,16 @@ def create_app(
             installer = updates.download_installer(
                 result.info, updates.default_download_dir()
             )
+            # The last look before the app is closed: the download took as
+            # long as it took, and the gate's answer is re-read on the
+            # session as it is NOW, not as it was before the download.
+            refusal = _install_gate_refusal(
+                session,
+                acknowledge_unsaved=acknowledge_unsaved,
+                suffix=" The downloaded installer was not launched.",
+            )
+            if refusal is not None:
+                return refusal
             updates.spawn_installer(installer)
         except (updates.UpdateError, OSError) as exc:
             # OSError covers the download itself: ``urllib.error.URLError``

@@ -40,8 +40,8 @@ interface Props {
   health: Health | null;
   /** The app's current answer, so About offers the same install the header does. */
   update: UpdateCheckPayload | null;
-  /** A turn, manual edit, research, audit or Final QC is in flight: Install is inert. */
-  busy: boolean;
+  /** A turn, a manual edit or a file load is in flight: Install is inert. */
+  installBlocked: boolean;
   installing: boolean;
   installError: string | null;
   /** Runs a forced check. The app owns the answer; this dialog only reads it. */
@@ -538,7 +538,7 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
 function About({
   health,
   update,
-  busy,
+  installBlocked,
   installing,
   installError,
   onCheckUpdate,
@@ -546,7 +546,7 @@ function About({
 }: {
   health: Health | null;
   update: UpdateCheckPayload | null;
-  busy: boolean;
+  installBlocked: boolean;
   installing: boolean;
   installError: string | null;
   onCheckUpdate: () => Promise<UpdateCheckPayload>;
@@ -653,9 +653,9 @@ function About({
               <>
                 <button
                   onClick={onInstallUpdate}
-                  disabled={installing || busy}
+                  disabled={installing || installBlocked}
                   title={
-                    busy
+                    installBlocked
                       ? "Finish or stop the current work first — the installer closes the app"
                       : undefined
                   }
@@ -725,7 +725,7 @@ function About({
 
 type UpdateControls = {
   update: UpdateCheckPayload | null;
-  busy: boolean;
+  installBlocked: boolean;
   installing: boolean;
   installError: string | null;
   onCheckUpdate: () => Promise<UpdateCheckPayload>;
@@ -766,7 +766,7 @@ export default function HelpModal({
   onStartTutorialAtChapter,
   health,
   update,
-  busy,
+  installBlocked,
   installing,
   installError,
   onCheckUpdate,
@@ -861,7 +861,7 @@ export default function HelpModal({
             onDeepDive={() => setDeepDive(true)}
             updates={{
               update,
-              busy,
+              installBlocked,
               installing,
               installError,
               onCheckUpdate,

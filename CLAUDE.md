@@ -8603,6 +8603,23 @@ new SSE event, no new dep, no new env knob; one optional request body.
   a tutorial transition (Chunk 6.3's AB/BA), so the scope check is the
   first thing the route does after the lock and the guarded read is only
   the two session predicates.
+- **The lock spans the WHOLE attempt, and a middleware holds the workspace
+  while it does** (caught in review on PR #152, Codex). The first cut ran
+  the busy/unsaved gate once and then downloaded for as long as that took —
+  a turn started or an edit made meanwhile was closed over by the installer
+  without ever being asked about. `_hold_the_workspace_during_install`
+  refuses every mutating `/api/*` request with 409 `workspace_busy` ("an
+  update is being installed") while `install_lock.locked()`; reads, polls
+  and the project save keep answering, and `install_hold_exempt` keeps the
+  install route itself, the bootstrap, the three stop routes and the two
+  telemetry posts open — stopping work is never new work. It is registered
+  INSIDE the security middleware so an unauthenticated request is still a
+  401, never a leak of install state. `_install_gate_refusal` is then read a
+  SECOND time, under the guard, right before `spawn_installer` — the
+  authoritative last look at the session the installer is about to close,
+  refusing (with "the downloaded installer was not launched") anything that
+  got in by a route the hold does not cover. The hold is what keeps work
+  out; the re-check is what the launch waits on regardless.
 - **The lock is released on EVERY exit, success included, by design.**
   Holding it after a successful spawn would make the button dead until a
   relaunch whenever the user declines the installer's UAC prompt — the one
@@ -8611,10 +8628,14 @@ new SSE event, no new dep, no new env knob; one optional request body.
 - **The frontend guards the click, and the server would refuse anyway.**
   `onInstallUpdate` returns early on `busyRef` / `manualEditBusyRef` /
   `fileLoadingRef` (the guard set every other session-changing action
-  uses) and `Header`/`About` disable the button on `busy` with a tooltip
-  saying why — a click that does nothing reads as a broken button (the
-  v1.9.1 lesson), so the disabled state has to be visible. `HelpModal`
-  gained a `busy` prop threaded to `About` through `UpdateControls`.
+  uses), and `Header`/`About` disable the button on the SAME three states
+  as render-time truth — `installBlocked = busy || manualEditBusy ||
+  fileLoading !== null` — with a tooltip saying why. The first cut disabled
+  on `busy` alone, so a click during a manual edit or a file load did
+  nothing and showed nothing (Codex, PR #152): a click that does nothing
+  reads as a broken button (the v1.9.1 lesson), so the disabled state has
+  to match the handler exactly. `HelpModal` gained an `installBlocked` prop
+  threaded to `About` through `UpdateControls`.
 - **`unsaved_progress` is a prompt, not an error.** `lib/api.ts`'s
   `installUpdate(acknowledgeUnsaved)` throws a typed `UpdateInstallError`
   carrying the server's `code` (the `QcStartError` shape); `performInstall`
@@ -8633,15 +8654,19 @@ new SSE event, no new dep, no new env knob; one optional request body.
   delta — which `appendToLast` writes to the LAST bubble — landed on the
   install notice. A streaming turn is refused server-side now, but one can
   still start during the download, so the push is gated on `!busyRef`.
-- **Tests**: 5 in `tests/test_updates.py` under "Installing an update
+- **Tests**: 8 in `tests/test_updates.py` under "Installing an update
   closes the app" — refused while `turn_active` (downloader never called),
   refused on unsaved work until `{"acknowledge_unsaved": true}` (and a
   literal `false` is still a refusal), a fresh session installing on a
-  bodyless POST, refused inside a tutorial workspace, and the second click
+  bodyless POST, refused inside a tutorial workspace, the second click
   during a download parked on a real thread (`with TestClient(...)` for a
   genuinely concurrent second request; `install_in_progress`; the first
-  still completes; a fresh app installs again). Each gate reverted in place
-  → exactly its own test red. Frontend: `frontend/tests/updateApi.test.ts`
+  still completes; a fresh app installs again), the hold (an edit and a
+  reset refused mid-download, a read and a stop still answering, the hold
+  lifting with the attempt), and the two pre-spawn re-checks (a turn that
+  slipped in → `workspace_busy` and no spawn; unsaved work that appeared →
+  `unsaved_progress`, then the acknowledged retry spawns). Each gate
+  reverted in place → exactly its own test red. Frontend: `frontend/tests/updateApi.test.ts`
   (3 — the acknowledgement is always posted, a 409 surfaces its `code`, a
   plain failure carries none), registered in `package.json`.
 

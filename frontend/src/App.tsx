@@ -1226,6 +1226,10 @@ export default function App() {
     }
     void performInstall(false);
   }, [performInstall]);
+  /** The same three states, as render-time truth, so the buttons' disabled
+   *  look never disagrees with the handler's early return (a click that
+   *  does nothing reads as a broken button). */
+  const installBlocked = busy || manualEditBusy || fileLoading !== null;
 
   /** Follow the SSE stream of a running research. Live events merge into
    *  the local snapshot the moment they arrive (the agent board repaints
@@ -2600,6 +2604,7 @@ export default function App() {
         projectHeading={projectHeading}
         busy={busy}
         update={update}
+        installBlocked={installBlocked}
         installingUpdate={installing}
         usage={usage}
         onNewSession={() => void requestNewSession()}
@@ -2637,7 +2642,7 @@ export default function App() {
         }}
         health={health}
         update={update}
-        busy={busy}
+        installBlocked={installBlocked}
         installing={installing}
         installError={installError}
         onCheckUpdate={() => runUpdateCheck(true)}

@@ -307,9 +307,11 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "unsaved work it asks first, the same Save / "
                             "continue without saving / Cancel prompt New "
                             "session and Open project already use. Cancel "
-                            "keeps everything as it was. A second click "
-                            "while the installer is still downloading no "
-                            "longer starts a second download."
+                            "keeps everything as it was. While the "
+                            "installer downloads, nothing new can start in "
+                            "the session — the app is about to close — and "
+                            "a second click no longer starts a second "
+                            "download."
                         ),
                     ),
                 ),

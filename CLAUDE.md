@@ -9407,6 +9407,37 @@ stale sentences below should treat this section as the errata.
   are historical plan files, not runbooks. `QC_VERIFIER_EFFORT` is
   documented, not re-baselined. Batch 9 (ruff in CI, `React.memo`, the
   hand-rolled dialogs) stays off unless Abraham asks.
+- **Two Codex findings on PR #159, both real, both fixed.** (1) "A
+  majority refuting kills it" is not the whole rule: `panel_outcome` returns
+  `disputed` for a critical/high candidate whose refuting seats supplied no
+  validated citation — so the Help card taught "refuted" where the report
+  and readiness escalate to a human. The card (and the dossier's limitation
+  card, for parity) now states the evidence gate, and `verificationCopy`
+  requires "validated citation" on every site. (2) The two REPORT
+  projections — the Word methodology and the modal's — stated the shipped
+  panel sizes as fixed facts, while `BUILD_A_SPEC_QC_VERIFIERS_*` makes
+  them configurable and the engine persists both the run's configuration
+  (`input_manifest.configuration.verifiers_critical` / `_standard`) and
+  each candidate's `verification_panel_size`. A report from a run under an
+  override therefore carried a false methodology. `docx_export.
+  qc_panel_size_phrase` and its mirror `qcReport.qcPanelSizePhrase` derive
+  the phrase from the record: the manifest configuration first (the same
+  authority `QCResult._expected_verifier_panel_size` consults), the
+  per-finding sizes across all four raw collections when the manifest
+  predates the keys ("three or four (recorded per finding)" when they
+  disagree), and an explicit "a seat count this report did not record"
+  when neither exists — disclosed, never guessed. The distinction the pin
+  now draws is the one that matters: Help and the dossier describe the APP
+  as shipped and keep quoting `settings.py`; the report modal describes ONE
+  RUN and must call `qcPanelSizePhrase(report)` and hard-code no number
+  (asserted both ways). Tests: +4 frontend (272), +1 backend (1927 —
+  overridden manifest, legacy fallback, blanked record, mixed sizes).
+  Revert matrix: the Help clause dropped → `verificationCopy` 1 red; the
+  memo back to the literal → the new backend test red; the modal back to
+  the literal → `verificationCopy` 1 red. One knock-on: the new docstring
+  names the `BUILD_A_SPEC_QC_VERIFIERS_*` family, and the knob scan read
+  that glob prefix as a knob — it now skips a trailing-underscore match,
+  because a family mention in prose is not something README owes a row.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

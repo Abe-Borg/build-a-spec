@@ -51,6 +51,12 @@ const SITES: Array<[string, string]> = [
   ["QCReportModal", report],
 ];
 
+// Help and the dossier describe the APP as shipped, so they quote the
+// configured defaults. The report modal describes ONE RUN, whose panel sizes
+// are whatever `BUILD_A_SPEC_QC_VERIFIERS_*` said at the time — it must
+// derive them from the record (Codex, PR #159), never state the defaults.
+const APP_DESCRIPTION_SITES = SITES.filter(([name]) => name !== "QCReportModal");
+
 // The one sentence the Word memo's methodology and the report modal's
 // methodology both state verbatim (Chunk 5.3: the two projections must never
 // teach different meanings). tests/test_qc_audit_report.py pins the same
@@ -61,8 +67,8 @@ export const V4_RULE_SENTENCE =
   "a critical or high refutation additionally needs at least one validated " +
   "citation.";
 
-test("every copy site quotes the panel sizes settings.py actually configures", () => {
-  for (const [name, source] of SITES) {
+test("the app-description sites quote the panel sizes settings.py actually configures", () => {
+  for (const [name, source] of APP_DESCRIPTION_SITES) {
     const text = fold(source);
     assert.match(
       text,
@@ -77,6 +83,19 @@ test("every copy site quotes the panel sizes settings.py actually configures", (
   }
 });
 
+test("the report modal derives the panel sizes from the run it describes", () => {
+  assert.match(
+    report,
+    /qcPanelSizePhrase\(report\)/,
+    "QCReportModal's methodology must read the run's panel sizes off the record",
+  );
+  assert.doesNotMatch(
+    fold(report),
+    /\b(one|two|three|four|five) for (critical and high|medium and low)\b/,
+    "QCReportModal must not hard-code panel sizes — a run under an override would be misdescribed",
+  );
+});
+
 test("every copy site states the final-qc/4 outcomes and none the retired majority rule", () => {
   for (const [name, source] of SITES) {
     const text = fold(source);
@@ -85,6 +104,15 @@ test("every copy site states the final-qc/4 outcomes and none the retired majori
       text,
       /every seat upholds/,
       `${name} must state that survival needs a unanimous panel`,
+    );
+    // A refuting majority does NOT always refute: a critical/high refutation
+    // with no validated citation is disputed (the v4 evidence gate). A card
+    // that omits the exception teaches "refuted" where the report says
+    // "escalated to you" (Codex, PR #159).
+    assert.match(
+      text,
+      /validated citation/i,
+      `${name} must state the critical/high evidence gate`,
     );
     assert.doesNotMatch(
       text,

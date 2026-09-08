@@ -14,6 +14,7 @@ import {
   qcDisputedCandidates,
   qcInconclusiveCandidates,
   qcOperationEvaluation,
+  qcPanelSizePhrase,
   qcPrimaryReport,
   qcReportExportUrl,
   qcPreRemediationState,
@@ -1400,5 +1401,44 @@ test("a malformed reference record degrades instead of throwing", () => {
   assert.doesNotThrow(() => qcReferenceCoverage(withReferences({ count: "x" })));
   assert.doesNotThrow(() =>
     qcReferenceCoverage(withReferences({ count: 2, documents: "nope" })),
+  );
+});
+
+test("the methodology's panel sizes come from the run's manifest, not the shipped defaults", () => {
+  const configured = result({
+    input_manifest: { configuration: { verifiers_critical: 5, verifiers_standard: 1 } },
+    findings: [finding({ verification_panel_size: 3 })],
+  });
+  assert.equal(
+    qcPanelSizePhrase(configured),
+    "five for critical and high findings, one for medium and low",
+  );
+});
+
+test("a manifest without the seat counts falls back to the sizes persisted per finding", () => {
+  const legacy = result({
+    findings: [finding({ original_severity: "high", severity: "high", verification_panel_size: 3 })],
+    refuted: [finding({ finding_id: "qc-2", original_severity: "medium", severity: "medium", verification_panel_size: 2, verification_outcome: "refuted" })],
+  });
+  assert.equal(
+    qcPanelSizePhrase(legacy),
+    "three for critical and high findings, two for medium and low",
+  );
+});
+
+test("mixed and missing recorded sizes are disclosed rather than guessed", () => {
+  const mixed = result({
+    findings: [
+      finding({ verification_panel_size: 3 }),
+      finding({ finding_id: "qc-2", verification_panel_size: 4 }),
+    ],
+  });
+  assert.equal(
+    qcPanelSizePhrase(mixed),
+    "three or four (recorded per finding) for critical and high findings, a seat count this report did not record for medium and low",
+  );
+  assert.equal(
+    qcPanelSizePhrase(result()),
+    "a seat count this report did not record for critical and high findings, a seat count this report did not record for medium and low",
   );
 });

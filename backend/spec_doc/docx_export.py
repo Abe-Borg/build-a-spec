@@ -2952,6 +2952,88 @@ def _qc_render_export_current_state(
         )
 
 
+_QC_PANEL_COUNT_WORDS = (
+    "zero", "one", "two", "three", "four", "five",
+    "six", "seven", "eight", "nine", "ten",
+)
+
+
+def _qc_panel_count_word(count: int) -> str:
+    if 0 <= count < len(_QC_PANEL_COUNT_WORDS):
+        return _QC_PANEL_COUNT_WORDS[count]
+    return str(count)
+
+
+def _qc_configured_panel_size(qc_result: dict, key: str) -> int:
+    """The seat count the run's manifest recorded for one severity class.
+
+    ``input_manifest.configuration.verifiers_critical`` /
+    ``verifiers_standard`` are what the engine wrote at run time (and what
+    ``QCResult._expected_verifier_panel_size`` consults first). ``0`` when
+    the manifest predates the key or carries garbage.
+    """
+    manifest = qc_result.get("input_manifest")
+    configuration = manifest.get("configuration") if isinstance(manifest, dict) else None
+    value = configuration.get(key) if isinstance(configuration, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return 0
+    return value
+
+
+def _qc_recorded_panel_sizes(qc_result: dict, *, critical: bool) -> list[int]:
+    """Distinct ``verification_panel_size`` values persisted on the candidates
+    of one severity class, across every outcome collection, ascending."""
+    sizes: set[int] = set()
+    for key in ("findings", "refuted", "disputed", "inconclusive"):
+        candidates = qc_result.get(key)
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            severity = str(
+                candidate.get("original_severity") or candidate.get("severity") or ""
+            ).strip().lower()
+            if (severity in ("critical", "high")) != critical:
+                continue
+            size = candidate.get("verification_panel_size")
+            if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+                continue
+            sizes.add(size)
+    return sorted(sizes)
+
+
+def _qc_describe_panel_size(configured: int, recorded: list[int]) -> str:
+    if configured:
+        return _qc_panel_count_word(configured)
+    if len(recorded) == 1:
+        return _qc_panel_count_word(recorded[0])
+    if recorded:
+        return " or ".join(_qc_panel_count_word(n) for n in recorded) + " (recorded per finding)"
+    return "a seat count this report did not record"
+
+
+def qc_panel_size_phrase(qc_result: dict) -> str:
+    """The panel sizes THIS run used, in the memo's own words.
+
+    Panel sizes are configurable (``BUILD_A_SPEC_QC_VERIFIERS_*``), so a
+    methodology that states the shipped defaults describes a run that may
+    never have happened. The run's manifest configuration is authoritative;
+    a manifest that predates the keys falls back to the sizes persisted per
+    finding; a report with neither says so rather than guessing. Mirrored by
+    ``qcReport.qcPanelSizePhrase`` so the two projections cannot disagree.
+    """
+    critical = _qc_describe_panel_size(
+        _qc_configured_panel_size(qc_result, "verifiers_critical"),
+        _qc_recorded_panel_sizes(qc_result, critical=True),
+    )
+    standard = _qc_describe_panel_size(
+        _qc_configured_panel_size(qc_result, "verifiers_standard"),
+        _qc_recorded_panel_sizes(qc_result, critical=False),
+    )
+    return f"{critical} for critical and high findings, {standard} for medium and low"
+
+
 def _qc_render_methodology(document, qc_result: dict) -> None:
     _qc_heading(document, "Methodology and Interpretation", 1)
     document.add_paragraph(
@@ -3000,8 +3082,8 @@ def _qc_render_methodology(document, qc_result: dict) -> None:
             (
                 "Adversarial verification",
                 "Candidate findings are challenged by a severity-based panel of "
-                "independent refuters — three for critical and high findings, two "
-                "for medium and low. A finding survives only when every seat "
+                "independent refuters — " + qc_panel_size_phrase(qc_result) + ". "
+                "A finding survives only when every seat "
                 "upholds it, is refuted when the refuting seats outnumber the "
                 "upholding ones, and is disputed otherwise; a critical or high "
                 "refutation additionally needs at least one validated citation. "

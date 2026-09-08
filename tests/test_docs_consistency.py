@@ -29,9 +29,13 @@ def _app_env_knobs() -> set[str]:
     names: set[str] = set()
     sources = [REPO_ROOT / "main.py", *(REPO_ROOT / "backend").rglob("*.py")]
     for path in sources:
-        names.update(
-            re.findall(r"BUILD_A_SPEC_[A-Z0-9_]+", path.read_text(encoding="utf-8"))
-        )
+        for name in re.findall(
+            r"BUILD_A_SPEC_[A-Z0-9_]+", path.read_text(encoding="utf-8")
+        ):
+            # A docstring naming a FAMILY (`BUILD_A_SPEC_QC_VERIFIERS_*`)
+            # leaves a trailing underscore; that is prose, not a knob.
+            if not name.endswith("_"):
+                names.add(name)
     return names
 
 

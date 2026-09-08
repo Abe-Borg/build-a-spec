@@ -36,6 +36,7 @@ from backend.qc.runner import QCRunner
 from backend.qc.schema import QC_FINDINGS_SCHEMA, QC_LENSES, normalize_findings
 from backend.research.engine import DimensionStatus, RequirementsProfile, ResearchItem
 from backend.spec_doc.docx_export import (
+    qc_panel_size_phrase,
     QC_GROUNDING_METHODOLOGY_NOTE,
     _qc_manifest_changes,
     qc_pre_remediation_state,
@@ -3816,3 +3817,46 @@ def test_the_memo_methodology_states_the_v4_rule_the_report_modal_states() -> No
         "the report modal's methodology drifted from the Word memo's rule sentence"
     )
     assert "panel's majority" not in modal
+
+
+def test_the_memo_methodology_states_the_panel_sizes_the_run_recorded() -> None:
+    """A run under `BUILD_A_SPEC_QC_VERIFIERS_*` overrides must not be
+    described as a three-and-two-seat review (Codex, PR #159). The manifest's
+    configuration is the run's authority; a manifest that predates the keys
+    falls back to the sizes persisted per finding; neither → disclosed."""
+    store, result = _rich_audit_result()
+
+    overridden = copy.deepcopy(result.to_dict())
+    overridden["input_manifest"]["configuration"]["verifiers_critical"] = 5
+    overridden["input_manifest"]["configuration"]["verifiers_standard"] = 1
+    text = _document_text(
+        Document(io.BytesIO(build_qc_memo(overridden, store.doc, stale=False)))
+    )
+    assert "five for critical and high findings, one for medium and low" in text
+    assert "three for critical and high findings" not in text
+
+    legacy = copy.deepcopy(result.to_dict())
+    legacy["input_manifest"]["configuration"].pop("verifiers_critical")
+    legacy["input_manifest"]["configuration"].pop("verifiers_standard")
+    # The fixture's high finding faced 3 seats and its medium refuted candidate
+    # 2, so the per-finding record still reproduces the run's sizes.
+    assert qc_panel_size_phrase(legacy) == (
+        "three for critical and high findings, two for medium and low"
+    )
+
+    for collection in ("findings", "refuted", "disputed", "inconclusive"):
+        for candidate in legacy.get(collection) or []:
+            candidate["verification_panel_size"] = 0
+    assert qc_panel_size_phrase(legacy) == (
+        "a seat count this report did not record for critical and high "
+        "findings, a seat count this report did not record for medium and low"
+    )
+
+    mixed = copy.deepcopy(result.to_dict())
+    mixed["input_manifest"]["configuration"].pop("verifiers_critical")
+    mixed["findings"].append(
+        {**copy.deepcopy(mixed["findings"][0]), "verification_panel_size": 4}
+    )
+    assert qc_panel_size_phrase(mixed).startswith(
+        "three or four (recorded per finding) for critical and high findings"
+    )

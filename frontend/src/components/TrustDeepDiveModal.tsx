@@ -1435,9 +1435,10 @@ function Dossier() {
               error.</b> A QC finding surviving its refuters — three for critical
               and high findings, two for medium and low — means every one of
               them failed to knock it down. It does not make the finding true; a
-              split panel is recorded as disputed rather than decided for you;
-              and the report shows you the refuted and disputed ones too so you
-              can disagree with the panel.
+              split panel — or a critical/high refutation no seat could back
+              with a validated citation — is recorded as disputed rather than
+              decided for you; and the report shows you the refuted and
+              disputed ones too so you can disagree with the panel.
             </>,
             <>
               <b className="text-ink">Lint is exactly as smart as its rules.</b>{" "}

@@ -8487,6 +8487,79 @@ or of `stop_details` outside unrelated app-level uses of the word.
   alone → 1 red, chat → 2 red, template → 1 red, the audit → 1 red. Full
   suite 1888 passed, 9 skipped.
 
+## The Final QC batch phase cannot hang — implemented notes
+
+Batch 1 of the 2026-09-02 program diagnosis (re-judged 2026-09-07). The
+batched verifier transport ("Final QC phase 2 is batched" above) carried the
+streaming path's retry policy across into `_run_batch_calls` with one
+variable renamed — and that rename was the bug. No new endpoint, no new SSE
+event, no new dep, no new env knob, no schema or manifest change: a retained
+Final QC result stays current through this.
+
+- **The backoff was keyed on the ROUND counter, and rounds climb on a
+  healthy phase.** A round exists to carry pause_turn continuations and
+  retries forward, so a seat that paused three times has the loop at round
+  index 3 with its own attempt counter still at 0. The refused-submission
+  branch fed `round_index` to `compute_backoff_seconds` — `5 * 2**attempt`,
+  uncapped — so one 429 on `batches.create` slept 40s at round 3 and
+  **85 minutes at round 10**, through a bare `time.sleep` that consulted
+  neither `should_stop()` nor the phase deadline. Stop did nothing; QC
+  start/apply/dismiss/export stayed locked behind the settling worker; and
+  batched verification is ON by default. It now reads the pending seats'
+  own `attempt` (the MAX across the round's survivors, read BEFORE
+  `restart_attempt()` advances it — the `_apply_batch_item` convention, and
+  the streaming path's), which is 5s on the first retry however many rounds
+  came before.
+- **The cap is local, and `compute_backoff_seconds` stays uncapped on
+  purpose.** `_BATCH_SUBMISSION_BACKOFF_CAP_SECONDS` (60) binds only here:
+  the streaming callers bound the same exponential by their attempt ceiling
+  and never see a wait a user sits through, so capping the shared helper
+  would change nothing for them and hide a future policy change. With the
+  default policy the cap never binds (the seat attempt is at most 1 before
+  exhaustion); it is the belt behind the key change, pinned by monkeypatching
+  the policy to a huge number.
+- **The wait is sliced, and the slices are counted down, not read off the
+  clock.** `_sleep_interruptibly(seconds, should_stop=, deadline=)` sleeps
+  in `_BATCH_SLEEP_SLICE_SECONDS` (1s) steps and returns the moment a Stop
+  lands or the phase deadline passes; the top of the round loop then decides
+  which happened and settles the seats as cancelled or timed out — the helper
+  never settles anything itself. The countdown is a deliberate detail:
+  every QC test that patches `engine.time.sleep` to a no-op would otherwise
+  spin for the real backoff on a wall-clock loop, and the first draft of the
+  helper did exactly that. The poll loop's own `time.sleep(poll_seconds)` is
+  untouched — a Stop was already noticed there within one poll interval.
+- **A submission that returns no batch id fails the round on the spot.**
+  The old loop polled anyway: `retrieve("")` raised, was swallowed as a
+  dropped poll, and the phase sat on the whole `QC_BATCH_MAX_WAIT_SECONDS`
+  (two hours) before reporting a timeout that named the wrong cause. Every
+  pending seat now settles failed with "returned no batch id"
+  (`FailureClass.UNKNOWN` — an unclassifiable malformed response, not a
+  transport class), the run goes partial, and the `verification_batch`
+  `failed` frame carries the message. Not retried: a create that answered
+  without an id is not a refused create, and nothing says a second one
+  would be shaped differently.
+- **The wall-clock ceiling is checked between rounds, not only inside the
+  poll loop.** A round that ENDS before the ceiling and then needs another
+  (a continuation, a retry) never re-entered the poll loop before submitting
+  again, so a phase could keep paying for rounds past its own ceiling. The
+  round-top check reuses the one `ceiling_message` string the poll loop
+  now reads too, and emits `timeout` without a `batch_id`, since there is
+  no batch yet.
+- **Tests**: 5 in `tests/test_qc_batch_verification.py` under "The phase
+  cannot hang" — the seat-vs-round key (three pause rounds, then a 429:
+  `waits == [5.0]`, both retry frames say `backoff_s: 5.0, attempt: 1`),
+  the cap binding under a monkeypatched policy, a Stop landing in the first
+  slice (one `time.sleep` call, no second submission, seats cancelled), the
+  id-less submission (zero `retrieve` calls, `time.sleep` patched to RAISE
+  so a regression fails fast rather than hanging for the ceiling), and the
+  between-rounds ceiling (a fake `time.monotonic` that jumps 100,000s after
+  the first submission: one batch created, `timeout` on round 2, the paused
+  seat failed with the ceiling message, its partner still completed). Every
+  mechanism was reverted in place to prove it load-bearing: the full revert
+  → 5 red; round-keyed backoff → 1; cap removed → 1; plain `time.sleep` →
+  3 (the two wait-recording tests fall with it, and that run really sleeps
+  66s); empty id unchecked → 1; round-top deadline removed → 1.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

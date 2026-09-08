@@ -6226,9 +6226,10 @@ def create_app(
                 {"ok": False, "error": str(exc)}, status_code=409
             )
         try:
-            with session.session_state_guard():
-                payload = sessions.project_package_bytes(session)
-                filename = sessions.project_default_filename(session)
+            # Captures under the guard and renders without it — see
+            # sessions.project_package. Holding the guard across the whole
+            # ZIP build kept a chat claim and a stop waiting for seconds.
+            payload, filename = sessions.project_package(session)
         except ProjectPackageError as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=409

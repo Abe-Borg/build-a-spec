@@ -314,6 +314,24 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "download."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Saving no longer pauses the chat, and never saves half a turn",
+                        body=(
+                            "Writing a project file takes a few seconds on a "
+                            "large section, and the Save button in the panel "
+                            "used to hold the chat locked for all of it, while "
+                            "the native Save (and Save & close) took no lock "
+                            "at all — a save landing while a reply was being "
+                            "committed could write a file mixing the before "
+                            "and after. Both now snapshot the session in an "
+                            "instant and build the file from the snapshot: "
+                            "the chat keeps answering, and the file is always "
+                            "one consistent state. A save that fails for an "
+                            "unexpected reason is now recorded in the activity "
+                            "log instead of vanishing behind the one-line "
+                            "dialog."
+                        ),
+                    ),
                 ),
             ),
         ),

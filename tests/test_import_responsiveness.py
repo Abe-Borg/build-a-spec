@@ -1083,3 +1083,59 @@ def test_source_preserving_export_does_not_hold_the_turn_lock_either(monkeypatch
         f"a request needing the turn-state lock waited {elapsed:.2f}s for a "
         "source-preserving render"
     )
+
+
+def test_project_save_does_not_hold_the_turn_lock_while_it_packages(monkeypatch):
+    """A project save must not block the lock a chat turn has to claim.
+
+    ``/api/project/save`` held ``session_state_guard`` through JSON
+    serialization, source revalidation and the ZIP build — seconds on a real
+    master — so no turn could start and no stop could be processed while
+    the user saved. The same capture-then-render split the DOCX export got
+    (Chunk 6.4 Part A): snapshot under the guard, package without it.
+    ``/api/doc`` is the probe because it takes exactly that lock.
+    """
+    from backend import sessions
+
+    real_render = sessions.render_project_package
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_render(inputs):
+        entered.set()
+        # Stands in for the seconds of real packaging CPU.
+        release.wait(_BLOCK_SECONDS)
+        return real_render(inputs)
+
+    monkeypatch.setattr(sessions, "render_project_package", blocking_render)
+
+    with TestClient(app_module.create_app()) as client:
+        assert client.post(
+            "/api/doc/edit",
+            json={
+                "ops": [
+                    {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"}
+                ]
+            },
+        ).status_code == 200
+
+        worker_outcome: dict = {}
+
+        def run_save() -> None:
+            worker_outcome["response"] = client.get("/api/project/save")
+
+        worker = threading.Thread(target=run_save, daemon=True)
+        worker.start()
+        assert entered.wait(_BLOCK_SECONDS + 5), "the package never started"
+        started = time.perf_counter()
+        doc = client.get("/api/doc")
+        elapsed = time.perf_counter() - started
+        release.set()
+        worker.join(_BLOCK_SECONDS + 10)
+
+    assert doc.status_code == 200
+    assert worker_outcome["response"].status_code == 200
+    assert elapsed < _RESPONSIVE_SECONDS, (
+        f"a request needing the turn-state lock waited {elapsed:.2f}s for a "
+        "project package — the save is holding the lock across it again"
+    )

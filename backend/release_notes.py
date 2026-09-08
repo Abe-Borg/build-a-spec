@@ -332,6 +332,25 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "dialog."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Four controls now agree about when they will run",
+                        body=(
+                            "Research refuses to start while a reply is "
+                            "streaming, the way Final QC and Draft full "
+                            "section always have — a round that began "
+                            "mid-turn could read a project profile the reply "
+                            "was still recording. A manual edit that fails "
+                            "for an unexpected reason no longer leaves the "
+                            "document half-open for the next action to "
+                            "quietly undo. Opening a large project no longer "
+                            "freezes the app for as long as the file takes to "
+                            "load. And the compliance-audit endpoint the app "
+                            "stopped using in 0.9.0 now says it is retired "
+                            "instead of running a paid review past every "
+                            "guard the buttons honour; audits saved in old "
+                            "projects still load and export."
+                        ),
+                    ),
                 ),
             ),
         ),

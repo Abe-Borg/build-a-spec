@@ -297,11 +297,65 @@ def _seed_doc_and_research(client: TestClient, monkeypatch) -> None:
     _wait_terminal(client)
 
 
+def _start_audit(audit_client) -> bool:
+    """Start the retained-audit runner the way the (now retired) POST
+    /api/audit/start route did — every session-derived input captured under
+    the guard beside its owning runner and generation. The runner and its
+    restore path are still live: a retained audit loads, exports and reads
+    back from GET /api/audit/status, and these tests are that contract."""
+    from backend import settings
+    from backend.llm.conversation import effective_discipline
+    from backend.spec_doc.model import SpecSection
+
+    session = sessions.get_session()
+    with session.session_state_guard():
+        profile = session.research.profile_result
+        snapshot = SpecSection.from_dict(session.doc.doc.to_dict())
+        module = session.module
+        discipline = effective_discipline(session)
+        version_index = session.doc.index
+        run_generation = session.generation
+        runner = session.audit
+    assert profile is not None, "seed research before starting an audit"
+    return runner.start(
+        section=snapshot,
+        profile=profile,
+        module=module,
+        client=audit_client,
+        model=settings.RESEARCH_MODEL,
+        max_tokens=settings.RESEARCH_MAX_TOKENS,
+        version_index=version_index,
+        discipline=discipline,
+        usage_sink=lambda u, g=run_generation: (
+            session.add_usage_if_current(g, "audit", u)
+        ),
+    )
+
+
+def test_the_audit_start_endpoint_is_retired():
+    """Batch 4 gate parity: POST /api/audit/start is a 410, not a paid run.
+
+    The frontend stopped calling it in Batch 4 (v0.9.0) and every gate the
+    research/QC start routes grew since — lease, turn_active, the running-run
+    409s — was never added here, so a hand-made request could run a model
+    call past every guard the UI honours. The status route and the retained
+    audit's load/export path are untouched.
+    """
+    client = _client()
+    resp = client.post("/api/audit/start")
+    assert resp.status_code == 410, resp.text
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["code"] == "audit_retired"
+    assert "Final QC" in body["error"]
+    assert sessions.get_session().audit.status == "idle"
+    status = client.get("/api/audit/status")
+    assert status.status_code == 200
+    assert status.json()["status"] == "idle"
+
+
 def test_audit_api_lifecycle_and_export_and_round_trip(monkeypatch):
     client = _client()
-
-    # Gates: no research yet.
-    assert client.post("/api/audit/start").status_code == 400
 
     _seed_doc_and_research(client, monkeypatch)
     identity = client.post(
@@ -368,8 +422,7 @@ def test_audit_api_lifecycle_and_export_and_round_trip(monkeypatch):
             return _Ctx()
 
     audit_client = _AuditClient()
-    monkeypatch.setattr("backend.app.get_client", lambda: audit_client)
-    assert client.post("/api/audit/start").json()["ok"] is True
+    assert _start_audit(audit_client) is True
 
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -548,8 +601,7 @@ def test_a_failed_audit_still_reaches_the_meter(monkeypatch):
     audit_client = _ScriptedAuditClient(
         [_unparseable_response(usage(input=700, output=90))]
     )
-    monkeypatch.setattr("backend.app.get_client", lambda: audit_client)
-    assert client.post("/api/audit/start").json()["ok"] is True
+    assert _start_audit(audit_client) is True
 
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:

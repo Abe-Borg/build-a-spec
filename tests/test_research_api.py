@@ -847,3 +847,41 @@ def test_an_unknown_scope_is_refused_and_an_absent_body_runs_everything(
     assert client.post("/api/research/start").json()["ok"] is True
     assert _wait_terminal(client)["status"] == "complete"
     assert len(full.requests) == 4
+
+
+def test_research_start_is_refused_while_a_turn_streams(monkeypatch):
+    """Batch 4 gate parity: research_start refuses mid-turn like qc_start
+    and draft_full. The round reads the project profile and the section
+    number under its guard, and a streaming turn may be recording exactly
+    those — the same reason its two siblings already refuse."""
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+    fake = SequencedFakeClient(
+        _scripts(
+            governing_codes=[
+                research_response(
+                    items=[_item("2021 VCC governs.", ["https://a.gov"])],
+                    searched_urls=["https://a.gov"],
+                )
+            ]
+        )
+    )
+    _patch_research_client(monkeypatch, fake)
+
+    session = sessions.get_session()
+    session.turn_active = True
+    try:
+        resp = client.post("/api/research/start")
+        assert resp.status_code == 409, resp.text
+        assert "streaming" in resp.json()["error"]
+        assert client.get("/api/research/status").json()["status"] == "idle"
+        assert fake.requests == [], "the gate let a paid fan-out start"
+    finally:
+        session.turn_active = False
+
+    # The gate is the ONLY thing refusing: the same request runs once the
+    # turn is over.
+    resp = client.post("/api/research/start")
+    assert resp.status_code == 200, resp.text
+    assert _wait_terminal(client)["status"] == "complete"

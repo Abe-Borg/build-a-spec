@@ -595,3 +595,67 @@ def test_section_header_edit_is_rejected_while_a_model_turn_streams():
         assert resp.status_code == 409
     finally:
         sessions.get_session().turn_active = False
+
+
+def test_an_unexpected_edit_failure_leaves_no_open_turn(monkeypatch):
+    """Batch 4 gate parity: edit_doc rolls back on EVERY non-committing exit.
+
+    The route caught only SpecEditError. Anything else on its way to the
+    catch-all 500 left ``_turn_backup`` set, and the NEXT begin_turn — a chat
+    turn or another edit — would restore that stale backup, silently undoing
+    whatever landed in between. One ``finally``, one rollback path.
+    """
+    from backend.sessions import SessionState
+
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    _seed(client, monkeypatch)
+    session = sessions.get_session()
+    before = session.doc.doc.to_dict()
+    version_before = client.get("/api/doc").json()["doc"]["version"]
+
+    real_apply = SessionState.apply_doc_edits
+
+    def boom(self, ops):
+        raise RuntimeError("the source gate tripped over itself")
+
+    monkeypatch.setattr(SessionState, "apply_doc_edits", boom)
+    resp = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": "pt1.a1.p1",
+                    "text": "Never lands.",
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 500, resp.text
+    assert resp.json()["code"] == "internal_error"
+    # No turn left open, and the document is exactly what it was.
+    assert session.doc._turn_backup is None
+    assert session.doc.doc.to_dict() == before
+    assert client.get("/api/doc").json()["doc"]["version"] == version_before
+
+    # The next edit commits ONE version on top — a stale backup would have
+    # been restored by begin_turn first, which is the silent undo this pins.
+    monkeypatch.setattr(SessionState, "apply_doc_edits", real_apply)
+    ok = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": "pt1.a1.p1",
+                    "text": "Section includes wet-pipe systems per NFPA 13-2025, revised.",
+                }
+            ]
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["doc"]["version"]["count"] == version_before["count"] + 1
+    assert (
+        ok.json()["doc"]["parts"][0]["articles"][0]["paragraphs"][0]["text"]
+        == "Section includes wet-pipe systems per NFPA 13-2025, revised."
+    )

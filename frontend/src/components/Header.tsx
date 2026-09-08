@@ -7,6 +7,8 @@ interface Props {
   busy: boolean;
   update: UpdateCheckPayload | null;
   installingUpdate: boolean;
+  /** A turn, a manual edit or a file load is in flight: Install is inert. */
+  installBlocked: boolean;
   usage: UsageSummary | null;
   onNewSession: () => void;
   onOpenTemplates: () => void;
@@ -33,6 +35,7 @@ export default function Header({
   busy,
   update,
   installingUpdate,
+  installBlocked,
   usage,
   onNewSession,
   onOpenTemplates,
@@ -92,10 +95,14 @@ export default function Header({
           (update?.platform_supported ? (
             <button
               onClick={onInstallUpdate}
-              disabled={installingUpdate}
+              disabled={installingUpdate || installBlocked}
               data-capability="updates.manage"
               className="rounded-full border border-accent/60 bg-accent/15 px-3 py-1 text-xs text-accent transition-colors hover:bg-accent/25 disabled:pointer-events-none disabled:opacity-60"
-              title={update?.notes || "Download and install the update"}
+              title={
+                installBlocked
+                  ? "Finish or stop the current work first — the installer closes the app"
+                  : update?.notes || "Download and install the update"
+              }
             >
               {installingUpdate
                 ? "Downloading the update…"

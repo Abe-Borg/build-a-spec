@@ -295,6 +295,25 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "checked between rounds as well as during one."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Installing an update waits for your work",
+                        body=(
+                            "The installer closes the app, and the Install "
+                            "button used to launch it over a reply that was "
+                            "still streaming, a research or Final QC run "
+                            "still going, and work that had never been "
+                            "saved. It now stays inert while anything is "
+                            "running — hover it to see why — and with "
+                            "unsaved work it asks first, the same Save / "
+                            "continue without saving / Cancel prompt New "
+                            "session and Open project already use. Cancel "
+                            "keeps everything as it was. While the "
+                            "installer downloads, nothing new can start in "
+                            "the session — the app is about to close — and "
+                            "a second click no longer starts a second "
+                            "download."
+                        ),
+                    ),
                 ),
             ),
         ),

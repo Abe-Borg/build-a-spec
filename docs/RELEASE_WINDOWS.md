@@ -208,6 +208,13 @@ invisible to CI and expensive to the user.
       hash check in the minimum above is what stands between you and the
       expensive version of this going wrong.
 
+- [ ] **The install gate** (v1.17.0), on that same previous-version machine:
+      with a reply streaming, the header pill and Help → About's Install are
+      disabled and their tooltip says why; with unsaved work and nothing
+      running, Install opens the Save / Install without saving / Cancel
+      prompt, Cancel keeps the session, and either other choice launches the
+      installer; two rapid clicks start one download, not two.
+
 ### Streaming and chat feel (v0.7.0)
 
 - [ ] A long drafting turn, a thinking-heavy turn, and a search turn — text

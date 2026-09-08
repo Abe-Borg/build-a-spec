@@ -528,3 +528,313 @@ def test_updates_switched_off_are_not_offered_from_the_remembered_result(
         client.get("/api/update/check").json()["status"]
         == updates.STATUS_UPDATE_AVAILABLE
     )
+
+
+# ---------------------------------------------------------------------------
+# Installing an update closes the app, so it is gated like the window close
+# ---------------------------------------------------------------------------
+
+
+def _installable(monkeypatch, tmp_path):
+    """An update is available, the platform is Windows, and installing succeeds.
+
+    The download and the spawn are stubbed to record rather than act, so a
+    test can assert that a refused request never reached either.
+    """
+    monkeypatch.setenv(updates.ENV_STATE_PATH, str(tmp_path / "state.json"))
+    monkeypatch.delenv(updates.ENV_DISABLE, raising=False)
+    monkeypatch.setattr(updates, "installer_platform_supported", lambda: True)
+    monkeypatch.setattr(
+        updates,
+        "check_for_update",
+        lambda current, **_k: updates.UpdateCheckResult(
+            status=updates.STATUS_UPDATE_AVAILABLE,
+            current=current,
+            info=updates.parse_manifest(dict(_GOOD_MANIFEST)),
+        ),
+    )
+    calls = {"downloads": 0, "spawns": 0}
+
+    def download(*_args, **_kwargs):
+        calls["downloads"] += 1
+        return tmp_path / "BuildASpecSetup.exe"
+
+    def spawn(*_args, **_kwargs):
+        calls["spawns"] += 1
+
+    monkeypatch.setattr(updates, "download_installer", download)
+    monkeypatch.setattr(updates, "spawn_installer", spawn)
+    return calls
+
+
+def test_install_is_refused_while_the_session_is_busy(monkeypatch, tmp_path):
+    """A running turn, research, audit or Final QC keeps the installer away.
+
+    The installer closes the app; launching it over a streaming reply was
+    exactly what the window-close prompt exists to prevent, and this button
+    had no such gate at all.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend import sessions
+    from backend.app import create_app
+
+    calls = _installable(monkeypatch, tmp_path)
+    session = sessions.get_session()
+    session.turn_active = True
+    try:
+        client = TestClient(create_app())
+        resp = client.post("/api/update/install")
+    finally:
+        session.turn_active = False
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["ok"] is False and body["code"] == "workspace_busy"
+    assert "chat" in body["error"]
+    assert calls == {"downloads": 0, "spawns": 0}
+
+
+def test_install_is_refused_on_unsaved_work_until_acknowledged(
+    monkeypatch, tmp_path
+):
+    """Unsaved work asks first; the acknowledgement is the caller's promise
+    that it asked the user (the Save / Install without saving prompt)."""
+    from fastapi.testclient import TestClient
+
+    from backend import sessions
+    from backend.app import create_app
+
+    calls = _installable(monkeypatch, tmp_path)
+    sessions.get_session().history.append(
+        {"role": "user", "content": [{"type": "text", "text": "unsaved"}]}
+    )
+    client = TestClient(create_app())
+
+    refused = client.post("/api/update/install")
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "unsaved_progress"
+    assert calls == {"downloads": 0, "spawns": 0}
+
+    # Saying so without meaning it is still a refusal.
+    still = client.post("/api/update/install", json={"acknowledge_unsaved": False})
+    assert still.status_code == 409 and still.json()["code"] == "unsaved_progress"
+
+    accepted = client.post("/api/update/install", json={"acknowledge_unsaved": True})
+    assert accepted.status_code == 200
+    assert accepted.json() == {"ok": True, "version": _GOOD_MANIFEST["version"]}
+    assert calls == {"downloads": 1, "spawns": 1}
+
+
+def test_a_fresh_session_installs_without_a_prompt(monkeypatch, tmp_path):
+    """Nothing to lose, nothing to ask — and a bodyless POST still works."""
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+
+    calls = _installable(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    resp = client.post("/api/update/install")
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    assert calls == {"downloads": 1, "spawns": 1}
+
+
+def test_install_is_refused_inside_a_tutorial_workspace(monkeypatch, tmp_path):
+    """The user's real project is parked behind the tour; the installer
+    would close the app on top of it."""
+    from fastapi.testclient import TestClient
+
+    from backend import sessions
+    from backend.app import create_app
+
+    calls = _installable(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    sessions.workspace_manager().begin_tutorial(request_id="install-gate")
+    try:
+        resp = client.post("/api/update/install", json={"acknowledge_unsaved": True})
+    finally:
+        sessions.workspace_manager().force_restore_original()
+
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "tutorial_active"
+    assert calls == {"downloads": 0, "spawns": 0}
+
+
+def test_a_second_click_during_a_blocked_download_is_refused(
+    monkeypatch, tmp_path
+):
+    """Two clicks used to be two downloads into the same ``.part`` file.
+
+    The first request is parked inside the (stubbed) download on a real
+    thread; the second must be answered ``install_in_progress`` rather than
+    queued behind it or run beside it, and the first must still succeed
+    once released — the lock is per attempt, not per process.
+    """
+    import threading
+
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+
+    calls = _installable(monkeypatch, tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_download(*_args, **_kwargs):
+        calls["downloads"] += 1
+        entered.set()
+        assert release.wait(10), "the test never released the download"
+        return tmp_path / "BuildASpecSetup.exe"
+
+    monkeypatch.setattr(updates, "download_installer", blocked_download)
+
+    with TestClient(create_app()) as client:
+        first: dict = {}
+
+        def run_first():
+            first["resp"] = client.post("/api/update/install")
+
+        worker = threading.Thread(target=run_first, daemon=True)
+        worker.start()
+        assert entered.wait(10), "the first install never reached its download"
+
+        second = client.post("/api/update/install")
+        assert second.status_code == 409
+        assert second.json()["code"] == "install_in_progress"
+
+        release.set()
+        worker.join(10)
+        assert not worker.is_alive()
+
+    assert first["resp"].status_code == 200
+    assert calls == {"downloads": 1, "spawns": 1}
+
+    # Released after the attempt, so a retry after a declined installer
+    # (or a dropped download) is one click, not a relaunch.
+    with TestClient(create_app()) as client:
+        release.set()
+        again = client.post("/api/update/install")
+        assert again.status_code == 200
+
+
+def test_new_work_is_refused_while_an_install_is_in_flight(monkeypatch, tmp_path):
+    """The workspace is reserved for the whole attempt (Codex, PR #152).
+
+    The gate ran once, then the download ran for as long as it took, and a
+    turn started or an edit made meanwhile was closed over by the installer
+    without ever being asked about. While the install lock is held every
+    mutating API request is refused; reads and the stop routes keep
+    answering, and the hold lifts with the attempt.
+    """
+    import threading
+
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+
+    calls = _installable(monkeypatch, tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_download(*_args, **_kwargs):
+        calls["downloads"] += 1
+        entered.set()
+        assert release.wait(10), "the test never released the download"
+        return tmp_path / "BuildASpecSetup.exe"
+
+    monkeypatch.setattr(updates, "download_installer", blocked_download)
+
+    with TestClient(create_app()) as client:
+        first: dict = {}
+        worker = threading.Thread(
+            target=lambda: first.update(resp=client.post("/api/update/install")),
+            daemon=True,
+        )
+        worker.start()
+        assert entered.wait(10)
+
+        held = client.post("/api/doc/edit", json={"ops": []})
+        assert held.status_code == 409
+        assert held.json()["code"] == "workspace_busy"
+        assert "update is being installed" in held.json()["error"]
+        assert client.post("/api/session/reset", json={}).status_code == 409
+
+        # Reads keep answering, and stopping is never new work.
+        assert client.get("/api/doc").status_code == 200
+        stop = client.post("/api/chat/stop")
+        assert "update is being installed" not in stop.json().get("error", "")
+
+        release.set()
+        worker.join(10)
+        assert not worker.is_alive()
+        assert first["resp"].status_code == 200
+
+        # The hold lifts with the attempt.
+        after = client.post("/api/doc/edit", json={"ops": []})
+        assert "update is being installed" not in after.json().get("error", "")
+    assert calls == {"downloads": 1, "spawns": 1}
+
+
+def test_work_that_slips_in_during_the_download_stops_the_spawn(
+    monkeypatch, tmp_path
+):
+    """The last look before the spawn is at the session as it is NOW.
+
+    The hold above is what keeps work out; this is the authoritative check
+    the installer's launch waits on regardless, so a turn that got in by any
+    other route is refused after the download rather than closed over.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend import sessions
+    from backend.app import create_app
+
+    calls = _installable(monkeypatch, tmp_path)
+    session = sessions.get_session()
+
+    def download_then_turn(*_args, **_kwargs):
+        calls["downloads"] += 1
+        session.turn_active = True
+        return tmp_path / "BuildASpecSetup.exe"
+
+    monkeypatch.setattr(updates, "download_installer", download_then_turn)
+    try:
+        resp = TestClient(create_app()).post("/api/update/install")
+    finally:
+        session.turn_active = False
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["code"] == "workspace_busy" and "not launched" in body["error"]
+    assert calls == {"downloads": 1, "spawns": 0}
+
+
+def test_unsaved_work_that_appears_during_the_download_asks_before_the_spawn(
+    monkeypatch, tmp_path
+):
+    from fastapi.testclient import TestClient
+
+    from backend import sessions
+    from backend.app import create_app
+
+    calls = _installable(monkeypatch, tmp_path)
+    session = sessions.get_session()
+
+    def download_then_work(*_args, **_kwargs):
+        calls["downloads"] += 1
+        session.history.append(
+            {"role": "user", "content": [{"type": "text", "text": "late"}]}
+        )
+        return tmp_path / "BuildASpecSetup.exe"
+
+    monkeypatch.setattr(updates, "download_installer", download_then_work)
+    client = TestClient(create_app())
+
+    refused = client.post("/api/update/install")
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "unsaved_progress"
+    assert calls == {"downloads": 1, "spawns": 0}
+
+    accepted = client.post("/api/update/install", json={"acknowledge_unsaved": True})
+    assert accepted.status_code == 200
+    assert calls == {"downloads": 2, "spawns": 1}

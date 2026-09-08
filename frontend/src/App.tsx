@@ -62,6 +62,7 @@ import {
   uploadReference,
   deleteReference,
   installUpdate,
+  UpdateInstallError,
   loadProjectFile,
   redoDoc,
   resetSession,
@@ -270,6 +271,7 @@ export default function App() {
   // when idle — the session-close window prompt is separate (closePromptOpen).
   const [saveGate, setSaveGate] = useState<
     | { kind: "new-session" }
+    | { kind: "install-update" }
     | { kind: "open-project"; file: File }
     | { kind: "start-template"; templateId: string }
     | {
@@ -1163,39 +1165,71 @@ export default function App() {
    * purpose — inline wherever it was pressed, and in the chat, which is
    * what remains visible after a dialog closes.
    */
-  const onInstallUpdate = useCallback(async () => {
+  /** The download-verify-launch request, past the app's own guards.
+   *  `acknowledgeUnsaved` is the promise that the Save / Install-without-
+   *  saving prompt was shown; the server refuses unsaved work without it. */
+  const performInstall = useCallback(async (acknowledgeUnsaved: boolean) => {
     if (installingRef.current) return;
     installingRef.current = true;
     setInstalling(true);
     setInstallError(null);
     try {
-      await installUpdate();
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: newId(),
-          role: "assistant",
-          text: "The installer is running — the app will close to update.",
-        },
-      ]);
+      await installUpdate(acknowledgeUnsaved);
+      // A streaming reply is refused server-side, but a turn can start
+      // during the download: keep the bubble out of the middle of it — the
+      // next delta's appendToLast would land on the bubble, not the reply.
+      if (!busyRef.current) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: newId(),
+            role: "assistant",
+            text: "The installer is running — the app will close to update.",
+          },
+        ]);
+      }
     } catch (e) {
+      if (e instanceof UpdateInstallError && e.code === "unsaved_progress") {
+        // Not a failure: the server wants the user asked first. Same 3-way
+        // prompt as New session / Open project; Save and Install-without-
+        // saving both come back through performInstall(true).
+        setSaveGate({ kind: "install-update" });
+        return;
+      }
       const message = e instanceof Error ? e.message : String(e);
       setInstallError(message);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: newId(),
-          role: "assistant",
-          text: `Update failed: ${message}`,
-          error: true,
-        },
-      ]);
+      if (!busyRef.current) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: newId(),
+            role: "assistant",
+            text: `Update failed: ${message}`,
+            error: true,
+          },
+        ]);
+      }
     } finally {
       installingRef.current = false;
       setInstalling(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** Header / About "Install": inert while a turn streams, a manual edit is
+   *  awaiting the server, or a file is loading. The installer closes the
+   *  app, and the server refuses those states with a 409 regardless — the
+   *  guard here is what keeps the click from reading as a broken button. */
+  const onInstallUpdate = useCallback(() => {
+    if (busyRef.current || manualEditBusyRef.current || fileLoadingRef.current) {
+      return;
+    }
+    void performInstall(false);
+  }, [performInstall]);
+  /** The same three states, as render-time truth, so the buttons' disabled
+   *  look never disagrees with the handler's early return (a click that
+   *  does nothing reads as a broken button). */
+  const installBlocked = busy || manualEditBusy || fileLoading !== null;
 
   /** Follow the SSE stream of a running research. Live events merge into
    *  the local snapshot the moment they arrive (the agent board repaints
@@ -2337,7 +2371,8 @@ export default function App() {
     if (gate.kind === "new-session") {
       setTemplatesOnly(false);
       setNewSessionOpen(true);
-    } else if (gate.kind === "open-project") void doLoadProject(gate.file);
+    } else if (gate.kind === "install-update") void performInstall(true);
+    else if (gate.kind === "open-project") void doLoadProject(gate.file);
     else if (gate.kind === "start-template") {
       void doInstantiateTemplate(gate.templateId);
     } else {
@@ -2569,6 +2604,7 @@ export default function App() {
         projectHeading={projectHeading}
         busy={busy}
         update={update}
+        installBlocked={installBlocked}
         installingUpdate={installing}
         usage={usage}
         onNewSession={() => void requestNewSession()}
@@ -2606,6 +2642,7 @@ export default function App() {
         }}
         health={health}
         update={update}
+        installBlocked={installBlocked}
         installing={installing}
         installError={installError}
         onCheckUpdate={() => runUpdateCheck(true)}
@@ -2748,22 +2785,32 @@ export default function App() {
               ? "Start from this template?"
               : saveGate?.kind === "start-brief"
                 ? "Start the next section of the project?"
-                : "Start a new session?"
+                : saveGate?.kind === "install-update"
+                  ? "Install the update?"
+                  : "Start a new session?"
         }
-        body="You have unsaved work in this session. Save it to a project file first, or continue without saving — this can't be undone."
+        body={
+          saveGate?.kind === "install-update"
+            ? "You have unsaved work in this session. Save it to a project file first, or install without saving — the installer closes the app, and this can't be undone."
+            : "You have unsaved work in this session. Save it to a project file first, or continue without saving — this can't be undone."
+        }
         saveLabel={
           saveGate?.kind === "open-project"
             ? "Save, then open"
             : saveGate?.kind === "start-template"
               ? "Save, then use template"
-              : "Save, then start"
+              : saveGate?.kind === "install-update"
+                ? "Save, then install"
+                : "Save, then start"
         }
         discardLabel={
           saveGate?.kind === "open-project"
             ? "Open without saving"
             : saveGate?.kind === "start-template"
               ? "Use template without saving"
-              : "Start without saving"
+              : saveGate?.kind === "install-update"
+                ? "Install without saving"
+                : "Start without saving"
         }
         onSave={onGateSave}
         onDiscard={onGateDiscard}

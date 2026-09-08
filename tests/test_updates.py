@@ -240,6 +240,9 @@ def test_version_consistency_gate():
 
     assert checker.settings_version() == settings.VERSION
     assert checker.package_json_version() == settings.VERSION
+    assert checker.readme_headline_version() == settings.VERSION, (
+        "README.md's headline **vX.Y.Z** must name the shipped version"
+    )
     assert checker.main([]) == 0
     assert checker.main(["--tag", f"v{settings.VERSION}"]) == 0
     assert checker.main(["--tag", "v99.0.0"]) == 1

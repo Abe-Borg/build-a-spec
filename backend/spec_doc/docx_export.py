@@ -2439,8 +2439,8 @@ def _qc_render_executive_status(
     citation = document.add_paragraph(style="QC Table Citation")
     citation.add_run(
         "Counts are derived from the persisted report at export. "
-        "Surviving, refuted, and infrastructure-inconclusive candidates are "
-        "mutually exclusive."
+        "Surviving, disputed, refuted, and infrastructure-inconclusive "
+        "candidates are mutually exclusive."
     )
     _qc_render_executive_queue(document, open_findings, disputed)
     cost = qc_result.get("estimated_cost_usd")
@@ -2999,12 +2999,16 @@ def _qc_render_methodology(document, qc_result: dict) -> None:
             ),
             (
                 "Adversarial verification",
-                "Candidate findings are challenged by a severity-based reviewer "
-                "panel. Finding survival uses the completed panel's majority. In "
-                "schema 3, a proposed fix is separately approved only when every "
-                "expected seat completes, upholds the finding, and approves the "
-                "complete operation payload. The report preserves completed, "
-                "failed, and cancelled reviewer records.",
+                "Candidate findings are challenged by a severity-based panel of "
+                "independent refuters — three for critical and high findings, two "
+                "for medium and low. A finding survives only when every seat "
+                "upholds it, is refuted when the refuting seats outnumber the "
+                "upholding ones, and is disputed otherwise; a critical or high "
+                "refutation additionally needs at least one validated citation. "
+                "A proposed fix is separately approved only when every expected "
+                "seat completes, upholds the finding, and approves the complete "
+                "operation payload. The report preserves completed, failed, and "
+                "cancelled reviewer records.",
             ),
             (
                 "Operation validation and disposition",

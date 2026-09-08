@@ -1,6 +1,6 @@
 # Build-a-Spec
 
-**v1.7.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.17.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
@@ -41,6 +41,14 @@ active-content, unsupported-encoding, and unsupported-raw-ZIP-layout packages
 that are safe enough to retain remain pass-through-only; uploads that fail the
 initial package-safety boundary are rejected atomically. Build-a-Spec never
 flattens or normalizes an imported package as an implicit recovery path.
+
+Since v1.14.0 every import lands **detached and editable**: the permission
+sweep and the frozen / pass-through-only class described above are gone for
+new imports (a tracked-changes, macro-bearing, embedded-object or protected
+master imports editable rather than read-only), and *Export Word (keeps your
+formatting)* — the appearance-preserving export — is the default. The rows
+above still describe a `.baspec` saved before v1.14.0, which keeps the
+byte-exact contract it was saved under until its owner chooses *Edit freely*.
 
 Full Strict OOXML semantic import is a current compatibility limitation. The
 package scanner recognizes Strict relationship and Word namespaces for safety
@@ -1175,22 +1183,30 @@ All five roadmap phases are shipped. What remains is real-world hardening: cutti
 ```
 main.py                  pywebview shell: starts the backend, opens the native window
 backend/                 FastAPI + the conversation engine (Python 3.11+)
-  app.py                 /api/health, /api/key, /api/session/reset, /api/chat (SSE),
-                         /api/draft/full,
+  app.py                 /api/health, /api/key (+ status/test), /api/modules,
+                         /api/session/reset, /api/chat (SSE) + /api/chat/stop,
+                         /api/draft/full + /api/draft/adapt,
                          /api/research/debrief + /api/qc/debrief,
-                         /api/doc (+ undo/redo/edit/diff/capabilities),
+                         /api/doc (+ undo/redo/edit/diff/capabilities/
+                         detach-source),
                          /api/export/docx (+ ?redline=master|version),
                          /api/import/master + /api/import/original,
-                         /api/research/start|status|stream,
-                         /api/qc/start|status|stream|apply|dismiss|export +
-                         /api/qc/export.json,
+                         /api/research/start|status|stream|stop,
+                         /api/qc/start|status|stream|stop|apply|apply/preview|
+                         dismiss|export + /api/qc/export.json,
                          /api/readiness, /api/audit/status (deprecated;
                          POST /api/audit/start answers 410 since v1.17.0),
                          /api/templates (+preview/import/{id}/export/
                          {id}/instantiate),
                          /api/tutorial/status|start|scenario/*|restore,
-                         /api/reference/upload + /api/references,
-                         /api/figures + /api/figure/{fid}/csv,
+                         /api/reference/upload + /api/references +
+                         DELETE /api/reference/{rid},
+                         /api/figures + /api/figure/{fid}/csv +
+                         DELETE /api/figure/{fid},
+                         /api/followup/{fid} ("Waiting on you"),
+                         /api/project-facts (+ {pid}, {pid}/supersede),
+                         /api/project/brief (+ manifest/inspect/start),
+                         /api/release-notes (+ seen),
                          /api/session/unsaved|bundle, /api/usage,
                          /api/update/check|install,
                          /api/trace/viewer, /api/project/save + load/load-file
@@ -1366,7 +1382,7 @@ The backend serves the built frontend from `frontend/dist` in normal use; in dev
 
 - Windows 10/11 (WebView2 — preinstalled on current Windows), macOS, or Linux
 - Python 3.11+
-- Node 20+ (only to build or develop the frontend)
+- Node 22+ (only to build or develop the frontend — `npm test` runs `node --test` over the `.ts` sources and needs type stripping, which Node 20 cannot do; CI pins 22)
 - An Anthropic API key
 
 ## Install (Windows, prebuilt)
@@ -1430,20 +1446,29 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `ANTHROPIC_API_KEY` | — | API key; overrides keyring/file, never persisted. |
 | `BUILD_A_SPEC_INTERVIEW_MODEL` | `claude-sonnet-5` | Model for interview/drafting turns. |
 | `BUILD_A_SPEC_MAX_TOKENS` | `128000` | Per-response output ceiling (defaults to the model max — no app limit). |
+| `BUILD_A_SPEC_CONTEXT_WINDOW` | `1000000` | The context gauge's window (the header's "142k / 1M" pill). Pair it with a model override whose window differs; it changes nothing about what is sent. |
 | `BUILD_A_SPEC_INTERVIEW_EFFORT` | `high` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`). |
+| `BUILD_A_SPEC_TEMPLATE_EFFORT` | `medium` | Adaptive-thinking effort for the template studio's AI-generalize pass (a bounded mechanical rewrite the structural contract polices). |
 | `BUILD_A_SPEC_THINKING_DISPLAY` | `summarized` | Thinking-summary streaming: `summarized` streams a readable reasoning summary (the "see what the model is thinking" strip); `omitted` streams empty thinking. Degrades to `omitted` automatically if a model rejects the display key. |
 | `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the system block and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at 0.1×. The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
 | `BUILD_A_SPEC_CHAT_MAX_SEARCHES` | `8` | Interview web_search allowance per continuation round. |
 | `BUILD_A_SPEC_CHAT_MAX_FETCHES` | `4` | Interview web_fetch allowance per continuation round. |
+| `BUILD_A_SPEC_AUTO_DEBRIEF` | `1` | When research or Final QC completes, the app sends itself a debrief chat turn — a real, **billed** model turn with no click behind it — in which the model summarizes the findings and asks whether to proceed. `0` lets completions land silently in the panels; the debrief endpoints stay callable. |
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
 | `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5` | Model for the Final QC pass (the one non-Sonnet surface). |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Per-call QC output ceiling (model max — no app limit). |
-| `BUILD_A_SPEC_QC_EFFORT` | `high` | Adaptive-thinking effort for QC lenses/verifiers. |
+| `BUILD_A_SPEC_QC_EFFORT` | `high` | Adaptive-thinking effort for QC lenses/verifiers — the one-value fallback that sets both phases. |
+| `BUILD_A_SPEC_QC_LENS_EFFORT` | = `QC_EFFORT` | Effort for phase 1 (the five lenses and the consolidation call). |
+| `BUILD_A_SPEC_QC_VERIFIER_EFFORT` | `medium` | Effort for phase 2 (the verifier seats — ~90% of a run's calls, answering a bounded question each). Falls back to `QC_EFFORT` instead of `medium` when that is explicitly set, so a global `low` is never silently overridden upward. |
 | `BUILD_A_SPEC_QC_MAX_WORKERS` | `8` | Concurrent QC calls in flight (lenses share the pool with verifiers). |
 | `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings. |
 | `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings. |
+| `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | `1` | Submit phase 2 (every verifier seat) as one Message Batches request at 50% of standard token prices — same prompts, seats, adjudication and audit records; no live per-seat frames. `0` streams the seats through the thread pool instead. |
+| `BUILD_A_SPEC_QC_BATCH_POLL_SECONDS` | `5` | How often the batched phase polls the provider for results (floor 1). |
+| `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` | `7200` | Wall-clock ceiling on the batched phase (floor 60). A runaway guard, not a target: unsettled seats fail and the run reads partial. |
+| `BUILD_A_SPEC_QC_BATCH_MAX_ROUNDS` | `20` | Ceiling on batch rounds (each carries the seats that still need a continuation or a retry). |
 | `BUILD_A_SPEC_QC_CONSOLIDATION` | `1` | Group near-duplicate lens findings about one defect onto a shared verifier panel. Off reviews every raw candidate separately (the pre-5.2 behaviour, and the fallback every failure path already takes). |
 | `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET` | `25` | Runaway guard on one grouping call's input; a larger bucket falls back to separate panels and records why. |
 | `BUILD_A_SPEC_QC_MAX_SEARCHES_COMPLIANCE` | `24` | web_search allowance for the code-compliance lens (runaway guard). |
@@ -1465,16 +1490,17 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_LOG_MAX_AGE_DAYS` | `30` | Maximum eligible log-run age in days. `0` disables this one ceiling. |
 | `BUILD_A_SPEC_LOG_MAX_MIB` | `256` | Aggregate per-launch log storage ceiling in MiB. `0` disables this one ceiling. Current/live runs and recent unclean-shutdown evidence are protected; invalid or negative settings use the default. |
 | `BUILD_A_SPEC_UPDATE_URL` | GitHub latest | Override the update-manifest URL. |
+| `BUILD_A_SPEC_UPDATE_STATE_PATH` | config dir | Override the updater's state file (the once-a-day throttle, the skipped version, the remembered check, and the What's-new "last seen" marker). |
 | `BUILD_A_SPEC_DISABLE_UPDATE_CHECK` | off | Truthy disables update checks entirely. |
 
-Every integer knob is clamped to a floor — `1` unless noted; `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` floors at `60` and `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET` at `2` — and a value below it, or one that is not an integer, is corrected (to the floor, or to the default) with a warning in the activity log rather than taken silently. A zero-seat Final QC panel would have "upheld" every finding it never read, which is the case the floor exists for.
+Every integer knob in `backend/settings.py` is clamped to a floor — `1` unless noted; `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` floors at `60` and `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET` at `2` — and a value below it, or one that is not an integer, is corrected (to the floor, or to the default) with a warning in the activity log rather than taken silently. The six trace/log retention ceilings (`*_MAX_RUNS`, `*_MAX_AGE_DAYS`, `*_MAX_MIB`) are the exception: `0` switches one ceiling off, and a negative or unparseable value falls back to the default. A zero-seat Final QC panel would have "upheld" every finding it never read, which is the case the floor exists for.
 
 ## Testing
 
 Hermetic by default — no API key, no network. `tests/conftest.py` injects a placeholder key; API-touching tests monkeypatch a fake streaming client (the same convention as Spec Critic's suite).
 
 ```
-venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m pytest -q
 ```
 
 The live Final QC suite uses scripted streams to cover activity/search/fetch
@@ -1490,7 +1516,7 @@ The paid provider-schema smoke test is separate and explicitly opt-in; it
 sends one low-token QC verifier request and never runs a full Final QC:
 
 ```
-venv\Scripts\python tools\qc_verifier_canary.py --run
+.venv\Scripts\python tools\qc_verifier_canary.py --run
 ```
 
 Without `--run`, the command only reports whether a key is configured.

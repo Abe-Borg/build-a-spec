@@ -2,7 +2,7 @@
 ; Cloned from Claude-Spec-Critic packaging/windows/installer.iss.
 ;
 ; Compile with:
-;   ISCC /DMyAppVersion=0.9.0 packaging\windows\installer.iss
+;   ISCC /DMyAppVersion=X.Y.Z packaging\windows\installer.iss
 ; and expects the PyInstaller one-folder output at dist\BuildASpec\.
 ;
 ; Produces dist\installer\BuildASpecSetup.exe — a normal double-click

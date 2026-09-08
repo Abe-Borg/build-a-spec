@@ -13,6 +13,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 from docx import Document
@@ -3773,3 +3774,45 @@ def test_the_word_executive_layer_lists_one_blocker_per_defect():
     # The annex's full checklist still shows the alias; only the executive
     # blocker list excludes it.
     assert "qc_audit_complete" in text
+
+
+# The one sentence both Final QC methodology projections state verbatim. The
+# frontend suite (frontend/tests/verificationCopy.test.ts) carries the same
+# literal; the Chunk 5.3 contract is that the Word memo and the report modal
+# never teach different meanings, and the v3 "panel's majority" wording had
+# outlived the final-qc/4 rule in both.
+V4_RULE_SENTENCE = (
+    "A finding survives only when every seat upholds it, is refuted when the "
+    "refuting seats outnumber the upholding ones, and is disputed otherwise; "
+    "a critical or high refutation additionally needs at least one validated "
+    "citation."
+)
+
+
+def test_the_memo_methodology_states_the_v4_rule_the_report_modal_states() -> None:
+    """The Word memo's methodology must describe the adjudication rule the
+    engine actually runs (final-qc/4), name every outcome bucket including
+    disputed, and say it in the same words as the on-screen report."""
+    store, result = _rich_audit_result()
+    payload = build_qc_memo(result.to_dict(), store.doc, stale=False)
+    text = _document_text(Document(io.BytesIO(payload)))
+
+    assert V4_RULE_SENTENCE in text
+    assert "panel's majority" not in text
+    assert "three for critical and high findings, two for medium and low" in text
+    assert (
+        "Surviving, disputed, refuted, and infrastructure-inconclusive "
+        "candidates are mutually exclusive."
+    ) in text
+
+    modal = (
+        Path(__file__).resolve().parents[1]
+        / "frontend"
+        / "src"
+        / "components"
+        / "QCReportModal.tsx"
+    ).read_text(encoding="utf-8")
+    assert V4_RULE_SENTENCE in modal, (
+        "the report modal's methodology drifted from the Word memo's rule sentence"
+    )
+    assert "panel's majority" not in modal

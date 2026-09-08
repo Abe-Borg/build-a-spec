@@ -1014,7 +1014,10 @@ class SessionState:
         must reason from real permissions. It joins an in-flight warm rather
         than sweeping the same document twice. Those endpoints call it
         through ``app._settle_source_capabilities`` before taking the
-        session guard, so no lock is ever held across a sweep. The two QC
+        session guard, so the sweep normally runs with no lock held; a body
+        change landing between the settle and the guard costs one more
+        sweep behind the lock (see ``app._settle_source_capabilities``,
+        which says so). The two QC
         report downloads used to settle too, and it made them look broken —
         they now answer from the pending state and disclose it in the
         export.

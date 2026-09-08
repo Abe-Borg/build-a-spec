@@ -394,6 +394,22 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "since replaced."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Two things 1.15.0 shipped without saying so",
+                        body=(
+                            "Since 1.15.0 the source code is licensed under "
+                            "PolyForm Shield 1.0.0 rather than MIT: use it for "
+                            "anything, paid client work included, except a "
+                            "product that competes with Build-a-Spec (the "
+                            "About footer and the README say so). And the "
+                            "cost meter had been pricing Sonnet 5 at the "
+                            "announced post-introductory $3/$15 per million "
+                            "tokens; Anthropic made $2/$10 permanent, so since "
+                            "1.15.0 the meter prices what you are actually "
+                            "billed — earlier Sonnet 5 figures read about 50% "
+                            "high."
+                        ),
+                    ),
                 ),
             ),
         ),

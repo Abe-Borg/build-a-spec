@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import importlib
 import logging
+import time
 from pathlib import Path
 
 from backend import settings
@@ -124,3 +125,58 @@ def test_the_shipped_floors_hold_through_a_reload(monkeypatch):
         importlib.reload(settings)
     assert settings.QC_VERIFIERS_STANDARD == 2
     assert settings.QC_BATCH_MAX_WAIT_SECONDS == 7200
+
+
+def test_a_correction_before_logging_starts_is_held_and_replayed_once(monkeypatch):
+    """This module is imported before the activity-log handler exists
+    (``main.py`` imports it at the top; ``diagnostics.init_logging`` runs
+    inside ``main()``), so a correction is HELD and replayed the moment
+    durable logging appears — with its original timestamp — rather than lost
+    to a stderr the windowed build has pointed at devnull (Codex, PR #155)."""
+    knob = "BUILD_A_SPEC_QC_VERIFIERS_STANDARD"
+    monkeypatch.setenv(knob, "0")
+    landed: list[logging.LogRecord] = []
+
+    class _Sink(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            landed.append(record)
+
+    sink = _Sink()
+    root = logging.getLogger()
+    try:
+        importlib.reload(settings)  # emits while only the buffer listens
+        assert settings.pending_startup_records() == 1
+        root.addHandler(sink)
+        flushed_at = time.time()
+        assert settings.flush_startup_log() == 1
+        assert len(landed) == 1
+        message = landed[0].getMessage()
+        assert knob in message and "floor of 1" in message
+        assert landed[0].created <= flushed_at  # the import-time stamp survives
+        # Idempotent: nothing is replayed twice.
+        assert settings.flush_startup_log() == 0
+        assert len(landed) == 1
+        assert settings.pending_startup_records() == 0
+        # After the flush a correction goes straight through, not into a buffer.
+        monkeypatch.setenv(KNOB, "0")
+        assert settings._int_env(KNOB, 3, minimum=1) == 1
+        assert len(landed) == 2
+        assert settings.pending_startup_records() == 0
+    finally:
+        root.removeHandler(sink)
+        monkeypatch.delenv(knob, raising=False)
+        importlib.reload(settings)
+
+
+def test_a_settings_reload_keeps_exactly_one_startup_buffer():
+    """``importlib.reload`` mints a new class object, so the buffer is matched
+    by NAME — an ``isinstance`` check would leave the previous import's
+    buffer attached beside the new one, and every later reload would add
+    another."""
+    logger = logging.getLogger(LOGGER)
+    importlib.reload(settings)
+    importlib.reload(settings)
+    named = [
+        h for h in logger.handlers if h.get_name() == settings._STARTUP_BUFFER_NAME
+    ]
+    assert len(named) == 1

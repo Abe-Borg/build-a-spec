@@ -8,6 +8,7 @@ logging state down again (``diagnostics.reset_for_tests``).
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -18,7 +19,7 @@ from io import BytesIO
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import diagnostics, sessions
+from backend import diagnostics, sessions, settings
 from backend.app import create_app
 from backend.tracing import capture, config as trace_config
 from backend.tracing import recorder as recorder_module
@@ -142,6 +143,33 @@ def test_init_logging_writes_to_the_configured_dir_and_is_idempotent(log_env):
     assert health["initialization_succeeded"] is True
     assert health["handler_attached"] is True
     assert health["capture_active"] is True
+
+
+def test_settings_corrections_emitted_before_the_log_opens_still_land_in_it(
+    log_env, monkeypatch
+):
+    """``backend.settings`` is imported before ``init_logging`` runs, so its
+    knob corrections used to reach only stderr — devnull in the windowed
+    build, and the README promises the activity log. They are held and
+    written the moment the file opens, once, and a warning logged afterwards
+    takes the ordinary path (Codex, PR #155)."""
+    knob = "BUILD_A_SPEC_QC_VERIFIERS_STANDARD"
+    monkeypatch.setenv(knob, "0")
+    try:
+        importlib.reload(settings)  # nothing attached yet: no file exists
+        assert settings.pending_startup_records() == 1
+        path = diagnostics.init_logging(force=True)
+        assert path is not None
+        written = path.read_text(encoding="utf-8")
+        assert written.count(f"{knob}=0 is below its floor of 1") == 1
+        assert settings.pending_startup_records() == 0
+        logging.getLogger("buildaspec.settings").warning("after the log opened")
+        written = path.read_text(encoding="utf-8")
+        assert written.count("after the log opened") == 1
+        assert written.count("below its floor") == 1
+    finally:
+        monkeypatch.delenv(knob, raising=False)
+        importlib.reload(settings)
 
 
 def test_logging_startup_failure_is_visible_without_exposing_message(

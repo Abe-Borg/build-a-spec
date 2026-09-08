@@ -316,6 +316,26 @@ def current_log_file() -> Path | None:
     return current_log_dir() / LOG_FILENAME
 
 
+def _replay_startup_records() -> None:
+    """Hand settings' import-time warnings to the handler that now exists.
+
+    ``backend.settings`` is imported before ``init_logging`` runs (``main.py``
+    imports it at the top; the handler is attached inside ``main()``), so its
+    knob corrections are buffered there and would otherwise have reached only
+    stderr — devnull in the windowed build. Replayed on the success path
+    only: with logging disabled or failed the buffer keeps them, and its
+    stderr mirror already fired. Never raises: a replay failure must not be
+    mistaken for an initialization failure, which is also why this runs
+    outside the handler's own try/except.
+    """
+    try:
+        from . import settings
+
+        settings.flush_startup_log()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def init_logging(*, force: bool = False) -> Path | None:
     """Attach the rotating file handler to the root logger. Idempotent.
 
@@ -399,6 +419,7 @@ def init_logging(*, force: bool = False) -> Path | None:
             except Exception:  # noqa: BLE001
                 pass
             return None
+        _replay_startup_records()
         _install_crash_capture_locked()
         return directory / LOG_FILENAME
 

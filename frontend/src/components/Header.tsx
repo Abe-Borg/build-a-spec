@@ -92,10 +92,14 @@ export default function Header({
           (update?.platform_supported ? (
             <button
               onClick={onInstallUpdate}
-              disabled={installingUpdate}
+              disabled={installingUpdate || busy}
               data-capability="updates.manage"
               className="rounded-full border border-accent/60 bg-accent/15 px-3 py-1 text-xs text-accent transition-colors hover:bg-accent/25 disabled:pointer-events-none disabled:opacity-60"
-              title={update?.notes || "Download and install the update"}
+              title={
+                busy
+                  ? "Finish or stop the current work first — the installer closes the app"
+                  : update?.notes || "Download and install the update"
+              }
             >
               {installingUpdate
                 ? "Downloading the update…"

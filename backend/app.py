@@ -78,6 +78,7 @@ import re
 import secrets
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -591,6 +592,12 @@ class QcStartRequest(BaseModel):
     acknowledge_scope_mismatch: bool = False
     workspace_id: int | None = None
     generation: int | None = None
+
+
+class UpdateInstallRequest(BaseModel):
+    """Body of ``POST /api/update/install``; a bodyless POST reads as all-default."""
+
+    acknowledge_unsaved: bool = False
 
 
 class QcDismissRequest(BaseModel):
@@ -6840,24 +6847,91 @@ def create_app(
         )
         return payload
 
+    # One install at a time per app: the download runs for as long as it
+    # takes, and a second click meanwhile used to start a second download
+    # into the same ``.part`` file. Non-blocking, so the second click gets
+    # an answer rather than a queue.
+    install_lock = threading.Lock()
+
     @app.post("/api/update/install")
-    def update_install() -> JSONResponse:
+    def update_install(body: UpdateInstallRequest | None = None) -> JSONResponse:
         """Download + SHA-256-verify the latest installer, then launch it.
 
         Returns only after the verified installer has been spawned; the
         frontend then tells the user the app will close for the update.
+
+        Launching the installer closes the app, so it is gated the way the
+        window-close prompt is: refused while a chat turn, research, an
+        audit or Final QC is running or settling (409 ``workspace_busy``),
+        refused inside a tutorial workspace (409 ``tutorial_active`` — the
+        user's real project is parked behind it), and refused while the
+        session holds unsaved work until the caller says it asked the user
+        (409 ``unsaved_progress``, cleared by ``acknowledge_unsaved``). A
+        second request while a download is in flight is 409
+        ``install_in_progress``. The lock is released on every failure so
+        a dropped download or a declined installer can simply be retried.
         """
         from . import updates
 
-        if not updates.installer_platform_supported():
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "The installer is Windows-only; download "
-                    "releases manually on this platform.",
-                },
-                status_code=400,
+        request = body or UpdateInstallRequest()
+
+        def refused(code: str, error: str) -> JSONResponse:
+            _trace_capture.app_event(
+                "update", action="install", ok=False, code=code
             )
+            return _coded_error_response(
+                {"ok": False, "code": code, "error": error}, status_code=409
+            )
+
+        if not install_lock.acquire(blocking=False):
+            return refused(
+                "install_in_progress",
+                "An update is already being downloaded; wait for it to finish.",
+            )
+        try:
+            if not updates.installer_platform_supported():
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "The installer is Windows-only; download "
+                        "releases manually on this platform.",
+                    },
+                    status_code=400,
+                )
+            # The workspace is looked up BEFORE the session guard is taken,
+            # never under it (the manager lock and the turn-state lock are
+            # taken the other way round by a tutorial transition).
+            workspace = sessions.get_workspace()
+            if workspace.scope != "original":
+                return refused(
+                    "tutorial_active",
+                    "End the guided tour before installing the update; your "
+                    "project is parked behind it and the installer closes "
+                    "the app.",
+                )
+            session = workspace.session
+            with session.session_state_guard():
+                busy = sessions.busy_reasons(session)
+                unsaved = sessions.has_unsaved_progress(session)
+            if busy:
+                return refused(
+                    "workspace_busy",
+                    "Wait for the current work to finish before installing "
+                    f"the update ({', '.join(busy)} still running) — the "
+                    "installer closes the app.",
+                )
+            if unsaved and not request.acknowledge_unsaved:
+                return refused(
+                    "unsaved_progress",
+                    "This session has unsaved work. Save it to a project "
+                    "file first, or confirm installing without saving.",
+                )
+            return _install_update(updates)
+        finally:
+            install_lock.release()
+
+    def _install_update(updates: Any) -> JSONResponse:
+        """The download-verify-spawn half, past every gate."""
         result = updates.check_for_update(settings.VERSION)
         if not result.update_available or result.info is None:
             return JSONResponse(

@@ -191,6 +191,19 @@ So the handoff is a **project brief**, a deliberately partial file.
   the brief it came from (an append-only merge), a paid harvest pass that
   proposes facts from a legacy section's transcript, and per-section trimming
   of the carried research block are documented follow-ups, not built.
+- **Two things that could not be interrupted, fixed.** Final QC's batched
+  checking stage backed off on the wrong counter when the provider refused a
+  submission (forty seconds by a healthy fourth round, over an hour by the
+  tenth, Stop dead the whole time); it now waits a few seconds, capped at a
+  minute, and honours Stop within a second. And the Install-update button,
+  whose installer closes the app, used to fire over a streaming reply, a
+  running research or Final QC pass, and unsaved work; it now stays inert
+  while anything runs (hover for the reason), asks Save / install without
+  saving / Cancel on unsaved work — the New-session prompt — and refuses a
+  second click while a download is in flight (`POST /api/update/install`
+  answers 409 `workspace_busy`, `tutorial_active`, `unsaved_progress` or
+  `install_in_progress`; `{"acknowledge_unsaved": true}` is the caller's
+  promise that the prompt was shown).
 
 ## Shipped in v1.16.0 (Waiting on you — nothing you were asked scrolls away)
 

@@ -8575,6 +8575,76 @@ Final QC result stays current through this.
   with it, and that run really sleeps 66s); empty id unchecked → 1;
   round-top deadline removed → 1; the last-round guard → 1.
 
+## Installing an update is gated like closing the window — implemented notes
+
+Batch 2 of the 2026-09-02 program diagnosis. `POST /api/update/install`
+downloads, verifies and SPAWNS THE INSTALLER, which closes the app — and it
+had no gate at all: not against a streaming turn, a running research or
+Final QC pass, a tutorial workspace, unsaved work, or a second click during
+the download. The frontend buttons gated on `installing` alone, and the
+success/failure chat bubble was pushed even mid-stream. No new endpoint, no
+new SSE event, no new dep, no new env knob; one optional request body.
+
+- **The gates are the window-close prompt's, in the same order the close
+  path applies them.** `UpdateInstallRequest(acknowledge_unsaved=False)` is
+  the body (a bodyless POST — every pre-existing caller — reads as
+  all-default). Under the route: a per-app `threading.Lock` acquired
+  NON-blocking → 409 `install_in_progress` (two clicks used to be two
+  downloads into the same `.part`); the platform 400 as before; the
+  workspace scope → 409 `tutorial_active` (the user's project is parked
+  behind the tour); then under `session_state_guard()` ONE read of
+  `busy_reasons` + `has_unsaved_progress` → 409 `workspace_busy` naming
+  what is running, then 409 `unsaved_progress` unless acknowledged. Every
+  refusal goes through `_coded_error_response` and leaves an `update`
+  app_event carrying the code. Busy is checked before unsaved because a
+  streaming turn is both, and "wait" is the more useful answer.
+- **`sessions.get_workspace()` is called BEFORE the guard, never under it.**
+  The manager lock and the turn-state lock are taken the other way round by
+  a tutorial transition (Chunk 6.3's AB/BA), so the scope check is the
+  first thing the route does after the lock and the guarded read is only
+  the two session predicates.
+- **The lock is released on EVERY exit, success included, by design.**
+  Holding it after a successful spawn would make the button dead until a
+  relaunch whenever the user declines the installer's UAC prompt — the one
+  case where a second click is exactly right. What the lock exists for is
+  the window DURING a download; a deliberate later click is a new attempt.
+- **The frontend guards the click, and the server would refuse anyway.**
+  `onInstallUpdate` returns early on `busyRef` / `manualEditBusyRef` /
+  `fileLoadingRef` (the guard set every other session-changing action
+  uses) and `Header`/`About` disable the button on `busy` with a tooltip
+  saying why — a click that does nothing reads as a broken button (the
+  v1.9.1 lesson), so the disabled state has to be visible. `HelpModal`
+  gained a `busy` prop threaded to `About` through `UpdateControls`.
+- **`unsaved_progress` is a prompt, not an error.** `lib/api.ts`'s
+  `installUpdate(acknowledgeUnsaved)` throws a typed `UpdateInstallError`
+  carrying the server's `code` (the `QcStartError` shape); `performInstall`
+  turns that one code into `setSaveGate({kind: "install-update"})` — the
+  SAME `CloseDialog` New session / Open project / template / brief already
+  use, with install copy — and never sets `installError` or a bubble for
+  it. Save runs `saveProjectFile()` and then `performInstall(true)` only
+  when a file was written (a cancelled Save dialog keeps the session, the
+  gate's standing rule); "Install without saving" is `performInstall(true)`
+  directly; Cancel does nothing. The acknowledgement is the client's
+  promise that the prompt was shown — the server cannot know, which is why
+  it is a flag and not a second endpoint.
+- **The chat bubble is pushed only when no turn is streaming.** The old
+  diagnosis blamed `appendToLast`; the actual mechanism was a fresh bubble
+  pushed via `setMessages` AFTER the streaming one, so the reply's next
+  delta — which `appendToLast` writes to the LAST bubble — landed on the
+  install notice. A streaming turn is refused server-side now, but one can
+  still start during the download, so the push is gated on `!busyRef`.
+- **Tests**: 5 in `tests/test_updates.py` under "Installing an update
+  closes the app" — refused while `turn_active` (downloader never called),
+  refused on unsaved work until `{"acknowledge_unsaved": true}` (and a
+  literal `false` is still a refusal), a fresh session installing on a
+  bodyless POST, refused inside a tutorial workspace, and the second click
+  during a download parked on a real thread (`with TestClient(...)` for a
+  genuinely concurrent second request; `install_in_progress`; the first
+  still completes; a fresh app installs again). Each gate reverted in place
+  → exactly its own test red. Frontend: `frontend/tests/updateApi.test.ts`
+  (3 — the acknowledgement is always posted, a 409 surfaces its `code`, a
+  plain failure carries none), registered in `package.json`.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

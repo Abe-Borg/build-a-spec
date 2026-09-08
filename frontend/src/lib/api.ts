@@ -1351,10 +1351,36 @@ export async function markReleaseNotesSeen(): Promise<void> {
   await fetch("/api/release-notes/seen", { method: "POST" });
 }
 
-export async function installUpdate(): Promise<void> {
-  const resp = await fetch("/api/update/install", { method: "POST" });
+export class UpdateInstallError extends Error {
+  readonly status: number;
+  /** The server's declared refusal: `workspace_busy`, `tutorial_active`,
+   *  `unsaved_progress`, `install_in_progress` — or absent on a plain failure. */
+  readonly code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "UpdateInstallError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/** Download, verify and launch the installer. Launching it closes the app,
+ *  so the server refuses (409 + `code`) while work is running, inside a
+ *  tutorial, or on unsaved work until `acknowledgeUnsaved` says the user
+ *  was asked. */
+export async function installUpdate(acknowledgeUnsaved = false): Promise<void> {
+  const resp = await fetch("/api/update/install", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ acknowledge_unsaved: acknowledgeUnsaved }),
+  });
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
-    throw new Error(data.error ?? `update install failed (${resp.status})`);
+    throw new UpdateInstallError(
+      data.error ?? `update install failed (${resp.status})`,
+      resp.status,
+      typeof data.code === "string" ? data.code : undefined,
+    );
   }
 }

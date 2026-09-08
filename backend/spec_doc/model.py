@@ -1308,8 +1308,13 @@ class DocumentStore:
     # -- persistence --------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
+        # A COPY of the list, not the list: commit_turn truncates and appends
+        # to ``self.versions`` in place, and a serialized store that aliased
+        # it was not a snapshot at all — a project save rendering outside the
+        # session guard picked up the turn that committed meanwhile. The
+        # version records themselves are immutable history and need no copy.
         return {
-            "versions": self.versions,
+            "versions": list(self.versions),
             "index": self.index,
             "baseline_index": self.baseline_index,
             "source_detached": self.source_detached,

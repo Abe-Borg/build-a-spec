@@ -361,3 +361,107 @@ def test_save_and_close_overwrites_the_established_file(tmp_path, monkeypatch):
     assert len(window.dialog_calls) == 1
     assert _articles(target) == ["SUMMARY", "REFERENCES"]
     assert window.destroyed is True
+
+
+# --- the package is a snapshot, captured under the guard -------------------
+
+
+def test_a_document_mutated_while_the_package_renders_does_not_reach_the_file(
+    tmp_path, monkeypatch
+):
+    """The native save used to package the LIVE session with no guard at all.
+
+    A turn committing while the ZIP was built could land half in the file.
+    The mutation here runs from inside the render seam — on the save's own
+    thread, after the capture and before the bytes exist — so the
+    interleaving is deterministic: what was captured is what is written.
+    """
+    _fake_webview(monkeypatch)
+    target = tmp_path / "the-project.baspec"
+    controller = _controller_with(_FakeWindow(dialog_path=str(target)))
+    _draft("SUMMARY")
+
+    real_render = sessions.render_project_package
+    mutated = {"done": False}
+
+    def mutate_then_render(inputs):
+        if not mutated["done"]:
+            mutated["done"] = True
+            _draft("LATE")
+        return real_render(inputs)
+
+    monkeypatch.setattr(sessions, "render_project_package", mutate_then_render)
+
+    assert controller.save_project()["ok"] is True
+    assert mutated["done"], "the render seam never ran"
+    assert _articles(target) == ["SUMMARY"], (
+        "an edit landing during the package build reached the file"
+    )
+    # The edit itself was real; the NEXT save carries it.
+    assert controller.save_project()["ok"] is True
+    assert _articles(target) == ["SUMMARY", "LATE"]
+
+
+def test_the_native_save_captures_under_the_guard_and_renders_outside_it(
+    tmp_path, monkeypatch
+):
+    """The guard is the turn-state lock: held for the capture, never the build."""
+    _fake_webview(monkeypatch)
+    target = tmp_path / "the-project.baspec"
+    controller = _controller_with(_FakeWindow(dialog_path=str(target)))
+    _draft("SUMMARY")
+    session = sessions.get_session()
+    lock = session._turn_state_lock
+    seen: list[tuple[str, bool]] = []
+
+    real_capture = sessions.capture_project_package_inputs
+    real_render = sessions.render_project_package
+
+    def capture(s):
+        seen.append(("capture", lock._is_owned()))
+        return real_capture(s)
+
+    def render(inputs):
+        seen.append(("render", lock._is_owned()))
+        return real_render(inputs)
+
+    monkeypatch.setattr(sessions, "capture_project_package_inputs", capture)
+    monkeypatch.setattr(sessions, "render_project_package", render)
+
+    assert controller.save_project()["ok"] is True
+    assert seen == [("capture", True), ("render", False)]
+
+
+def test_an_unexpected_packaging_failure_is_logged_not_swallowed(
+    tmp_path, monkeypatch, caplog
+):
+    """The dialog line stays opaque; the cause must reach the activity log.
+
+    A bare ``except Exception`` returned "could not be packaged" and logged
+    nothing, on the one save path whose failure a user cannot diagnose from
+    the screen.
+    """
+    import logging
+
+    _fake_webview(monkeypatch)
+    controller = _controller_with(
+        _FakeWindow(dialog_path=str(tmp_path / "never-written.baspec"))
+    )
+    _draft("SUMMARY")
+
+    def explode(inputs):
+        raise RuntimeError("zip exploded")
+
+    monkeypatch.setattr(sessions, "render_project_package", explode)
+
+    with caplog.at_level(logging.ERROR, logger="buildaspec.main"):
+        result = controller.save_project()
+
+    assert result["ok"] is False
+    assert result["error"] == "This project could not be packaged for saving."
+    assert not (tmp_path / "never-written.baspec").exists()
+    records = [r for r in caplog.records if r.name == "buildaspec.main"]
+    assert records, "the packaging failure left no trace in the log"
+    assert any(
+        r.exc_info and "zip exploded" in str(r.exc_info[1]) for r in records
+    )

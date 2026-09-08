@@ -8670,6 +8670,79 @@ new SSE event, no new dep, no new env knob; one optional request body.
   (3 — the acknowledgement is always posted, a 409 surfaces its `code`, a
   plain failure carries none), registered in `package.json`.
 
+## A project save packages a snapshot, not the live session — implemented notes
+
+Batch 3 of the 2026-09-02 program diagnosis, and the same rule Chunk 6.4
+applied to the DOCX export and the chat request, applied to the third place
+it was missing — twice over, in opposite directions. No new endpoint, no
+new SSE event, no new dep, no new env knob, no project-format change: the
+bytes a save writes are what they were.
+
+- **Two save paths, two ways to be wrong.** `GET /api/project/save` held
+  `session_state_guard()` — the turn-state lock — through JSON
+  serialization, source revalidation and the ZIP build, seconds on a real
+  master, so no chat claim and no stop could land while the user saved.
+  The native save (`main._CloseController._save_project_file`: the panel's
+  Save, Save as…, and Save & close) took NO guard at all: a save landing
+  while a turn committed could package a history from one instant beside a
+  document from the next, on the one action whose entire purpose is not
+  losing work. The v1.12.0 save-target feature was built on top of that
+  path without noticing.
+- **`sessions.project_package(session) -> (bytes, filename)` is now the one
+  implementation**, and it takes the guard for the capture ONLY.
+  `capture_project_package_inputs` (caller-holds-guard, the
+  `_capture_export_inputs` wording) snapshots into a frozen
+  `ProjectPackageInputs` — the serialized payload, the immutable source
+  bytes, the session's immutable patch context, the default filename and
+  the generation, all from one guarded read — and `render_project_package`
+  builds the ZIP from it with the lock released. `project_package_bytes`
+  survives as the bytes half for the tutorial's project-roundtrip scenario
+  and for tests. `ensure_source_patch_context()` stays in the capture
+  because it BUILDS AND CACHES on the session; the `ProjectPackageError`
+  it maps to is therefore a capture-time failure too.
+- **The payload had to become a real snapshot first.** `save_project`
+  stores the history LIST BY REFERENCE, so the "detached" payload was
+  aliasing `session.history` and a turn committing during the render would
+  have appended into the JSON being serialized. `project_payload` now
+  passes `list(session.history)` — a shallow copy is a snapshot because
+  messages are appended, truncated or replaced wholesale and never mutated
+  in place (Chunk 6.4B's claim, re-used) — and deep-copies the two small
+  pass-through dicts (`template_origin`, `project_link`). Everything else
+  was already a fresh `to_dict()`. Chunk 6.4A's argument applies verbatim:
+  a deep copy of the whole payload once per save would be real cost for no
+  additional guarantee.
+- **`DocumentStore.to_dict()` was handing out its LIVE `versions` list**, and
+  the first cut of this batch found it: with the render moved outside the
+  guard, the mutation test wrote a file containing an article committed
+  AFTER the capture. `commit_turn` truncates and appends to that list in
+  place, so every consumer that believed `store.to_dict()` was a snapshot —
+  the payload here, the tutorial clone (saved only by its own deepcopy),
+  the QC input snapshot — was holding a reference. It now returns
+  `list(self.versions)`; the version records themselves are immutable
+  history (Chunk 6.3 relies on that identity) and need no copy. Pinned by
+  the mutation test, which is red against the live list.
+- **The filename is captured in the same read as the bytes.** The route
+  used to compute `project_default_filename` in the same guarded block; the
+  native path computed it a line later, unguarded. Both now take it off
+  `inputs`, so the stem can never come from a different section than the
+  document it names — the exact two-reads bug Part A found in the export.
+- **The native save's bare `except Exception` now logs.** The dialog line
+  stays opaque (it is a dialog line), but `buildaspec.main` gets the
+  traceback — the `main()` precedent — so a save that fails for an
+  unexpected reason leaves a record in the activity log and the support
+  bundle instead of vanishing behind "could not be packaged".
+- **Tests**: 4. `test_import_responsiveness.py` — a render parked on a real
+  thread leaves `/api/doc` (which takes exactly the turn-state lock)
+  answering under the file's `_RESPONSIVE_SECONDS`, the DOCX-export test's
+  shape. `test_save_overwrite.py` — a document mutated from INSIDE the
+  render seam (on the save's own thread, so the interleaving is
+  deterministic) does not reach the file and the next save carries it; the
+  native save captures with `_turn_state_lock._is_owned()` true and renders
+  with it false (an RLock, so `_is_owned` is the probe, never a
+  non-blocking re-acquire); and an unexpected packaging failure returns the
+  opaque line, writes nothing, and leaves an ERROR record carrying the
+  cause in `caplog`. Each mechanism reverted in place → its own red.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

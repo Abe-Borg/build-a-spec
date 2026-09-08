@@ -591,8 +591,13 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         else None
     )
     qc_record = session.qc.audit_record_snapshot()
+    # A shallow copy of the list is a snapshot: messages are appended,
+    # truncated or replaced wholesale, never mutated in place (the Chunk 6.4B
+    # claim), so a turn committing after this returns cannot reach the
+    # payload. The two small pass-through dicts are copied for the same
+    # reason; everything else below is already a fresh to_dict().
     return save_project(
-        session.history,
+        list(session.history),
         session.doc,
         session.module.module_id,
         requirements_profile=(
@@ -612,18 +617,38 @@ def project_payload(session: SessionState) -> dict[str, Any]:
         import_report=session.import_report,
         source_map=source_map_payload,
         format_map=format_map_payload,
-        template_origin=session.template_origin,
+        template_origin=copy.deepcopy(session.template_origin),
         project_facts=session.facts.to_dict(),
-        project_link=session.project_link,
+        project_link=copy.deepcopy(session.project_link),
     )
 
 
-def project_package_bytes(session: SessionState) -> bytes:
-    """Return the portable ``.baspec`` representation of ``session``.
+@dataclass(frozen=True)
+class ProjectPackageInputs:
+    """Everything :func:`render_project_package` needs, captured together.
 
-    Single source of truth for both the API download and native save-on-close.
-    The exact imported source is a distinct binary ZIP member; it is never
-    encoded into or mixed with the semantic project JSON.
+    Detached from the session by construction: ``project`` is the serialized
+    payload, ``source_docx_bytes`` are immutable, the patch context is the
+    session's immutable source index, and the filename was stamped in the
+    same guarded read — so a package rendered from one of these describes
+    one document however long the ZIP build takes.
+    """
+
+    project: dict[str, Any]
+    source_docx_bytes: bytes | None
+    source_docx_filename: str
+    source_patch_context: Any
+    filename: str
+    generation: int
+
+
+def capture_project_package_inputs(session: SessionState) -> ProjectPackageInputs:
+    """Snapshot everything the package render needs.
+
+    The CALLER holds ``session_state_guard``; nothing here builds a ZIP.
+    Raises :class:`ProjectPackageError` when the retained source context
+    cannot be validated — the one failure that belongs to the capture, since
+    ``ensure_source_patch_context`` builds and caches on the session.
     """
     source_bytes, source_filename, _source_docx_map = (
         _portable_source_attachment(session)
@@ -638,12 +663,50 @@ def project_package_bytes(session: SessionState) -> bytes:
         raise ProjectPackageError(
             f"The retained source context could not be validated: {exc}"
         ) from exc
-    return build_project_package(
-        project_payload(session),
+    return ProjectPackageInputs(
+        project=project_payload(session),
         source_docx_bytes=source_bytes,
         source_docx_filename=source_filename,
         source_patch_context=source_patch_context,
+        filename=project_default_filename(session),
+        generation=session.generation,
     )
+
+
+def render_project_package(inputs: ProjectPackageInputs) -> bytes:
+    """The ZIP build — JSON serialization, source revalidation, packaging.
+
+    Seconds on a real master, and it touches no session state: everything it
+    reads is in ``inputs``, so it runs with the guard released.
+    """
+    return build_project_package(
+        inputs.project,
+        source_docx_bytes=inputs.source_docx_bytes,
+        source_docx_filename=inputs.source_docx_filename,
+        source_patch_context=inputs.source_patch_context,
+    )
+
+
+def project_package(session: SessionState) -> tuple[bytes, str]:
+    """The portable ``.baspec`` bytes of ``session`` and their default filename.
+
+    Single source of truth for the API download and the native save. Takes
+    ``session_state_guard`` for the capture ONLY and renders outside it: the
+    guard is the turn-state lock, the one a chat claim and a stop need, and
+    holding it through the ZIP build (as the HTTP route did) or not holding
+    it at all (as the native save did) were the two ways to get this wrong.
+    Coherence needs the inputs captured together, not the lock held. The
+    exact imported source is a distinct binary ZIP member; it is never
+    encoded into or mixed with the semantic project JSON.
+    """
+    with session.session_state_guard():
+        inputs = capture_project_package_inputs(session)
+    return render_project_package(inputs), inputs.filename
+
+
+def project_package_bytes(session: SessionState) -> bytes:
+    """The bytes half of :func:`project_package`, for callers that name their own file."""
+    return project_package(session)[0]
 
 
 def project_default_stem(session: SessionState) -> str:

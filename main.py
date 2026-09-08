@@ -898,11 +898,23 @@ class _CloseController:
         # dialog is up must not bind the replacement session to this file.
         generation = session.generation
         try:
-            payload = sessions.project_package_bytes(session)
-            filename = sessions.project_default_filename(session)
+            # Captured under the session guard, rendered outside it — the
+            # HTTP route's twin. This used to package the live session with
+            # no guard at all, so a save landing while a turn committed could
+            # mix pre- and post-commit state, on the one action meant to
+            # prevent loss.
+            payload, filename = sessions.project_package(session)
         except ProjectPackageError as exc:
             return self._save_result(False, error=str(exc))
         except Exception:
+            # The message stays opaque (it is a dialog line), but the cause
+            # must not: this was the one save path whose failure left no
+            # trace anywhere.
+            import logging
+
+            logging.getLogger("buildaspec.main").exception(
+                "Packaging the project for a native save failed unexpectedly"
+            )
             return self._save_result(
                 False,
                 error="This project could not be packaged for saving.",

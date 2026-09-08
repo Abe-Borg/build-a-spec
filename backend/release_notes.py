@@ -364,6 +364,18 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "in the activity log instead of taken silently."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Starting a new session during Final QC no longer leaves the Review Room following the old run",
+                        body=(
+                            "When you start a new session, open a project or "
+                            "start from a template while Final QC is running, "
+                            "the app now cuts the old run's live connection "
+                            "the moment the workspace changes — the way it "
+                            "already did for research. Before, the Review "
+                            "Room's follower kept its line open to the "
+                            "outgoing run and could keep reconnecting to it."
+                        ),
+                    ),
                 ),
             ),
         ),

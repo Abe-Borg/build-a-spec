@@ -132,6 +132,17 @@ function UsageTable({ usage }: { usage: UsageSummary }) {
           provider-reported.
         </p>
       )}
+      {usage.includes_uncollected_charges && (
+        <p className="mt-2 text-[11px] text-ink-faint">
+          <span className="text-ink-dim">
+            Some batched Final QC results could not be collected.
+          </span>{" "}
+          Those requests were sent and may have been billed, so the Final QC
+          figures above are a floor rather than a total. Kept separate from
+          the estimate note: this is spend the provider may have made that
+          the app never saw, not output it measured for itself.
+        </p>
+      )}
       <p className="mt-1 text-[11px] text-ink-faint">
         Estimates from Anthropic list pricing — actual billing may differ.
       </p>

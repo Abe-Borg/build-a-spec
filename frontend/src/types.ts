@@ -110,6 +110,15 @@ export interface UsageSummary {
    */
   includes_estimated_output?: boolean;
   /**
+   * True when a Final QC run in this session submitted batch requests whose
+   * results it never collected. Those requests may have been billed, so the
+   * spend shown is a floor. Deliberately cause-neutral: the same flag is set
+   * by a stopped run, a results stream that failed, a batch deadline, a
+   * missing row and an unattributable one, and the meter carries no reason
+   * to choose more specific copy from.
+   */
+  includes_uncollected_charges?: boolean;
+  /**
    * Context gauge, not spend: the Anthropic-counted conversation size after
    * the last committed chat turn (system prompt + tools + history + project
    * context + the retained reply), against the model's context window. null
@@ -1078,6 +1087,11 @@ export interface QcVerdict {
   estimated_cost_usd?: number;
   api_request_count: number;
   model_response_count: number;
+  /** Batch requests submitted for this seat whose result was never read — a
+   *  Stop or the phase ceiling landed first, the results stream failed part
+   *  way, or no row came back. Absent on every streamed seat and on every
+   *  record written before the disclosure existed. */
+  uncollected_requests?: number;
 }
 
 export interface QcFinding {
@@ -1263,6 +1277,17 @@ export interface QcResultView {
   api_request_count: number;
   model_response_count: number;
   research_profile_present: boolean;
+  /** Submitted batch requests whose result this run never read, summed from
+   *  the seats. Serialized so every projection reads one number rather than
+   *  re-walking the verdicts; the loader refuses a record that disagrees. */
+  uncollected_batch_requests?: number;
+  /** Returned batch rows this run could not attribute to a request it sent.
+   *  They belong to no seat, so no per-seat count can carry them. */
+  unassigned_batch_results?: number;
+  /** Whether every batch request this run submitted has a known billing
+   *  outcome. Absent, or "", on a report written before the disclosure —
+   *  which cannot say, and must never be read as "complete". */
+  batch_usage_capture?: "complete" | "incomplete" | "";
   dismissed_ids: string[];
 }
 

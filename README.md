@@ -1471,6 +1471,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_BATCH_POLL_SECONDS` | `5` | How often the batched phase polls the provider for results (floor 1). |
 | `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` | `7200` | Wall-clock ceiling on the batched phase (floor 60). A runaway guard, not a target: unsettled seats fail and the run reads partial. |
 | `BUILD_A_SPEC_QC_BATCH_MAX_ROUNDS` | `20` | Ceiling on batch rounds (each carries the seats that still need a continuation or a retry). |
+| `BUILD_A_SPEC_QC_BATCH_SETTLE_SECONDS` | `120` | After a Stop or the wall-clock ceiling, how long the batched phase may keep collecting results the provider has already produced before disclosing the rest as uncollected (floor 1). Those requests are billed whether or not the app reads them, so the window recovers real charges and real verdicts; the cost is that a replacement Final QC run, apply, dismiss and export stay locked while the attempt settles. |
 | `BUILD_A_SPEC_QC_CONSOLIDATION` | `1` | Group near-duplicate lens findings about one defect onto a shared verifier panel. Off reviews every raw candidate separately (the pre-5.2 behaviour, and the fallback every failure path already takes). |
 | `BUILD_A_SPEC_QC_CONSOLIDATION_MAX_BUCKET` | `25` | Runaway guard on one grouping call's input; a larger bucket falls back to separate panels and records why. |
 | `BUILD_A_SPEC_QC_MAX_SEARCHES_COMPLIANCE` | `24` | web_search allowance for the code-compliance lens (runaway guard). |

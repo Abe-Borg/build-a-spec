@@ -972,16 +972,23 @@ export default function QCDrawer({
   // `qc_batched` and is most of a pass, so reading one category told the user
   // a fraction of what they had spent.
   const observedCost = qcSessionCost(usage);
+  // Cause-neutral on purpose: the same flag is set by a stopped run, a
+  // results stream that failed, a batch deadline, a missing row and an
+  // unattributable one, and the session meter carries no reason to choose
+  // more specific copy from.
+  const uncollectedNote = usage?.includes_uncollected_charges
+    ? " Some batched results could not be collected, so the real figure may be higher."
+    : "";
   const costLine =
     observedCost > 0
-      ? `Runs on Claude Opus 5 — a stronger reviewer than the drafter. This session's QC: ≈ $${observedCost.toFixed(2)}.`
+      ? `Runs on Claude Opus 5 — a stronger reviewer than the drafter. This session's QC: ≈ $${observedCost.toFixed(2)}.${uncollectedNote}`
       : "Runs on Claude Opus 5 — a stronger reviewer than the drafter.";
 
   // Cost-focused line for the confirmation dialog (the model name is already
   // stated there). A re-run folds the session's prior QC spend in.
   const costEstimate =
     (observedCost > 0
-      ? `This session's Final QC has cost ≈ $${observedCost.toFixed(2)} so far; expect a few dollars for another pass.`
+      ? `This session's Final QC has cost ≈ $${observedCost.toFixed(2)} so far; expect a few dollars for another pass.${uncollectedNote}`
       : "Expect a few dollars per pass.") +
     // Attached documents are read by every lens and every verifier seat, so
     // they are a real (if cached) part of what this pass costs. Say so where

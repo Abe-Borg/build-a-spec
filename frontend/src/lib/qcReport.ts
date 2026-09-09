@@ -656,6 +656,12 @@ function resultFields(result: QcResultView | QcReportResult): QcReportResult {
   return result as QcReportResult;
 }
 
+function counterValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
+}
+
 function verificationOutcome(finding: QcReportFinding): string {
   return String(finding.verification_outcome ?? "").trim().toLowerCase();
 }
@@ -1331,6 +1337,68 @@ export function buildQcReportMetrics(
 /** Backward-friendly short alias for consumers and direct unit tests. */
 export const computeQcMetrics = buildQcReportMetrics;
 
+export interface QcBatchCapture {
+  state: "complete" | "incomplete" | "unrecorded";
+  /** Row value — never a reassuring bare "Complete" for a record that
+   *  simply predates the disclosure. */
+  identity: string;
+  /** "" when there is nothing to disclose. */
+  limitation: string;
+}
+
+/**
+ * How completely one run accounted for the batch requests it submitted.
+ *
+ * The Word memo's `qc_batch_capture` mirror; the two are one contract and
+ * must keep saying the same thing. Reads the RECORD, never live state, and
+ * treats an absent status as "cannot say" rather than "complete": a report
+ * written before the disclosure existed carries no counts either, and
+ * reading that silence as an all-clear is exactly the failure this avoids.
+ */
+export function qcBatchCapture(
+  rawResult: QcResultView | QcReportResult,
+): QcBatchCapture {
+  const result = resultFields(rawResult);
+  const state = String(result.batch_usage_capture ?? "").trim().toLowerCase();
+  const uncollected = counterValue(result.uncollected_batch_requests);
+  const unassigned = counterValue(result.unassigned_batch_results);
+
+  if (state === "complete") {
+    return { state: "complete", identity: "Complete", limitation: "" };
+  }
+  if (state === "incomplete") {
+    const parts: string[] = [];
+    if (uncollected) {
+      parts.push(
+        `${uncollected} batch request(s) were submitted whose results were never collected`,
+      );
+    }
+    if (unassigned) {
+      parts.push(
+        `${unassigned} returned result(s) could not be attributed to a reviewer seat`,
+      );
+    }
+    const detail = parts.length
+      ? parts.join("; ")
+      : "some results were not collected";
+    return {
+      state: "incomplete",
+      identity: "Incomplete",
+      limitation:
+        `Cost capture is incomplete: ${detail}. Those requests may have been ` +
+        "billed, so the estimated cost below is a floor rather than a total.",
+    };
+  }
+  return {
+    state: "unrecorded",
+    identity: "Not recorded by this version",
+    limitation:
+      "This report predates cost-capture recording, so whether every batch " +
+      "request it submitted was accounted for cannot be established from the " +
+      "record.",
+  };
+}
+
 export interface QcResearchCoverage {
   state: "absent" | "unrecorded" | "complete" | "partial";
   /** Three-state identity value — never a reassuring bare "Yes". */
@@ -1957,6 +2025,10 @@ export function qcReportLimitations(
   if (research.limitation) limitations.push(research.limitation);
   const references = qcReferenceCoverage(rawResult);
   if (references.limitation) limitations.push(references.limitation);
+  // A charge the run could not collect limits the report's COST claim, not
+  // its review, so it reads beside the other coverage gaps.
+  const capture = qcBatchCapture(rawResult);
+  if (capture.limitation) limitations.push(capture.limitation);
   const consolidation = qcConsolidationSummary(rawResult);
   if (consolidation.limitation) limitations.push(consolidation.limitation);
   const failedLenses = result.lens_statuses.filter(

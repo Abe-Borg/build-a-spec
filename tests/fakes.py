@@ -1115,6 +1115,19 @@ class SequencedFakeClient:
         # existing QC fixture proves parity between the two paths instead of
         # needing a parallel set of batch fixtures.
         self.batches = _FakeBatches(self)
+        # Every ``with_options`` override this client was asked for, so a
+        # test can prove the settlement window applied its bound.
+        self.request_options: list[dict] = []
+
+    def with_options(self, **options):
+        """The SDK's per-request override, as the settlement window uses it.
+
+        Returns SELF so the same scripts, request log and batch recorder
+        serve the bounded client too — the override is about transport
+        limits, not about which conversation is being had.
+        """
+        self.request_options.append(dict(options))
+        return self
 
     def pop_turn(self, request: dict):
         """Resolve one request against the scripts. Raises a scripted error.

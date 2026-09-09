@@ -906,6 +906,13 @@ def _qc_dict(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _qc_int(value: object) -> int:
+    """A persisted counter, or 0. Bools are not counts (``True`` is an int)."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return 0
+    return value
+
+
 def _qc_research_names(record: dict, ids: list) -> list[str]:
     titles = _qc_dict(record.get("dimension_titles"))
     out: list[str] = []
@@ -914,6 +921,52 @@ def _qc_research_names(record: dict, ids: list) -> list[str]:
         title = titles.get(key)
         out.append(str(title).strip() if title else key)
     return out
+
+
+def qc_batch_capture(qc_result: dict) -> tuple[str, str]:
+    """``(identity value, limitation)`` for batch cost-capture completeness.
+
+    One function for both, for the reason :func:`qc_research_coverage` is
+    one: a row asserting what a run cost, beside no disclosure that some of
+    its charges could not be collected, is the reassuring half-truth the
+    pairing exists to prevent.
+
+    Reads the RECORD, never live state. Three readings, and the empty one
+    matters most: a report written before the disclosure existed cannot say
+    whether it accounted for everything, and must not be promoted to
+    "complete" just because it carries no counts.
+    """
+    state = str(qc_result.get("batch_usage_capture", "") or "").strip().lower()
+    uncollected = _qc_int(qc_result.get("uncollected_batch_requests"))
+    unassigned = _qc_int(qc_result.get("unassigned_batch_results"))
+
+    if state == "complete":
+        return "Complete", ""
+    if state == "incomplete":
+        parts: list[str] = []
+        if uncollected:
+            parts.append(
+                f"{uncollected} batch request(s) were submitted whose results "
+                "were never collected"
+            )
+        if unassigned:
+            parts.append(
+                f"{unassigned} returned result(s) could not be attributed to "
+                "a reviewer seat"
+            )
+        detail = "; ".join(parts) if parts else "some results were not collected"
+        return (
+            "Incomplete",
+            f"Cost capture is incomplete: {detail}. Those requests may have "
+            "been billed, so the estimated cost below is a floor rather than "
+            "a total.",
+        )
+    return (
+        "Not recorded by this version",
+        "This report predates cost-capture recording, so whether every "
+        "batch request it submitted was accounted for cannot be established "
+        "from the record.",
+    )
 
 
 def qc_research_coverage(qc_result: dict) -> tuple[str, str]:
@@ -4958,6 +5011,14 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
     else:
         for label, value in _qc_flatten_cost(cost):
             rows.append([label, value, "Application pricing estimate"])
+    capture_value, capture_note = qc_batch_capture(qc_result)
+    rows.append(
+        [
+            "Batch cost capture",
+            capture_value,
+            "Whether every batch request this run sent was accounted for",
+        ]
+    )
     _qc_add_table(
         document,
         ["Metric", "Value", "Meaning"],
@@ -4971,6 +5032,9 @@ def _qc_render_usage_and_cost(document, qc_result: dict) -> None:
         "in the lens records above; per-verifier-seat counters are preserved in "
         "the JSON export."
     )
+    if capture_note:
+        gap = document.add_paragraph(style="QC Table Citation")
+        gap.add_run(capture_note)
     note = document.add_paragraph(style="QC Table Citation")
     note.add_run(QC_REQUEST_METHODOLOGY_NOTE)
     cost_basis = _qc_dict(qc_result.get("cost_basis"))
@@ -5143,6 +5207,12 @@ def _qc_render_limitations_and_signoff(
     _reference_limitation = qc_reference_coverage(qc_result)[1]
     if _reference_limitation:
         limitations.append(_reference_limitation)
+    # A charge the run could not collect is a limitation of the report's
+    # COST claim, not of its review, so it reads beside the other coverage
+    # gaps rather than inside the sign-off.
+    _capture_limitation = qc_batch_capture(qc_result)[1]
+    if _capture_limitation:
+        limitations.append(_capture_limitation)
     if unresolved:
         limitations.append(
             f"{len(unresolved)} candidate finding(s) have unresolved reviewed anchors. "

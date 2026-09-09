@@ -52,6 +52,15 @@ ESTIMATED_OUTPUT_TOKENS_KEY = "estimated_output_tokens"
 # integer. See :meth:`UsageLedger.add`.
 USAGE_ESTIMATED_KEY = "usage_estimated"
 
+# Batch requests a Final QC run submitted whose result it never read — a
+# Stop or the phase ceiling landed first, the results stream failed part
+# way, a row never came back, or a row came back that belonged to no seat.
+# A COUNT OF REQUESTS, deliberately not tokens: the provider may have billed
+# them and the app cannot say how much, so the meter discloses the gap
+# rather than inventing a figure. Every pricing helper reads named token
+# keys, so this can never be charged for.
+UNCOLLECTED_BATCH_REQUESTS_KEY = "uncollected_batch_requests"
+
 
 def _get(obj: Any, key: str) -> Any:
     if isinstance(obj, dict):
@@ -325,6 +334,11 @@ class UsageLedger:
                 "cache_saved_usd": self._cache_saved(),
                 "includes_estimated_output": bool(
                     totals.get(ESTIMATED_OUTPUT_TOKENS_KEY, 0)
+                ),
+                # Derived from its counter for the same reason: the flag and
+                # the number it discloses can never disagree.
+                "includes_uncollected_charges": bool(
+                    totals.get(UNCOLLECTED_BATCH_REQUESTS_KEY, 0)
                 ),
             }
 

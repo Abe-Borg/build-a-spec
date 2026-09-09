@@ -9811,6 +9811,55 @@ protocol bump and nothing new in the input manifest.
   cancelled, the candidate inconclusive) ARE the contract this changes, and
   it now pins the recovery plus the partial-not-complete rule.
 
+## The revision-2 review plan, as executed — implemented notes (v1.18.0)
+
+Step 5 of `docs/REVIEW_IMPLEMENTATION_PLAN_2026-09-08.md`: the documentation
+and delivery half. No code change, no route, no SSE event, no dep, no
+project-format change. `requirements.txt` needed no change and none was made
+— nothing in steps 1–3 added a dependency.
+
+- **v1.17.0 was ALREADY TAGGED when this work began** (published 2026-09-08
+  19:11 UTC, confirmed through the GitHub Releases API — `git tag -l` is
+  empty in a fresh clone, which is how the v1.12.0 overwrite survived
+  review). Its `ReleaseNote` is therefore frozen, and steps 1 and 3 are the
+  only user-visible work that landed after it. So the entry is a NEW one,
+  1.18.0, and the version bumped in the five sites: `backend/settings.py`,
+  `frontend/package.json`, BOTH root `version` fields in
+  `frontend/package-lock.json`, and the README headline (which
+  `check_release_version.py` has read since Batch 8). Editing the 1.17.0
+  entry would have repeated exactly the mistake "A released version's entry
+  is frozen" records.
+- **The entry is written for a spec author, not a reader of this file.** It
+  says the cost line under the Final QC button was adding up only the
+  full-price half of a review, that Stop used to throw away reviewer
+  opinions already finished and billed, that Stop now waits briefly and
+  collects them, and that what cannot be collected is stated as a floor
+  rather than dropped. The transports, the manifest and the settlement
+  window's internals are this file's business and stay here.
+- **ERRATUM to "Final QC cost + speed" (v1.8.0): "every verifier seat
+  shares another" cached prefix is WRONG — there are two verifier
+  lineages.** `_verifier_tools(lens, model)` appends the web search and
+  fetch tools when `lens.web`, which is `code_compliance` alone, so a seat
+  verifying a compliance finding carries a different `tools` array from
+  every other seat. Tools render ahead of system and messages, so its byte
+  prefix diverges from the start — the identical reason that section
+  already gives for `code_compliance` not joining the LENS lineage, applied
+  one phase later and missed there. Nothing is broken by it: each lineage
+  caches correctly within itself, and the seats that carry web tools are a
+  minority of a phase. What the wording cost was an accurate model of where
+  the phase's cache reads actually come from, which is what any future
+  costing work would start from. The v1.8.0 section is history and is not
+  edited; this is the correction, the Batch 8 errata posture.
+- **Two steps of the plan are deliberately unfinished, and neither is
+  blocked on code.** Step 2 (read a real Final QC export and answer the
+  batching question from it) and step 4 (measure the LINT REPORT block on a
+  real office master, and compact it only if it earns the change) both need
+  files that exist only on the owner's machine. Step 4 is CONDITIONAL by
+  design — the plan's threshold is a block over ~5k characters that
+  exact-`(rule, severity, message)` grouping would more than halve — and
+  the brief's 96k-character figure was a repeated-text fixture inflated by
+  `duplicate_provision`, so it decides nothing. Neither was guessed at.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

@@ -1,6 +1,6 @@
 # Build-a-Spec
 
-**v1.17.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.18.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
@@ -859,7 +859,11 @@ actions.
   the request instead of silently returning a different report.
   The Word document is the human sign-off artifact, ending with a reviewer
   checklist and signature page; JSON is the lossless audit and
-  downstream-integration artifact. The software records the review but does
+  downstream-integration artifact — and the one place a real run's cost can
+  be reconciled from its own records, since it carries per-lens and per-seat
+  token counts, request counts, the pricing basis and the batch billing
+  multiplier. Questions about what the review architecture actually costs are
+  settled from a saved export, not from a model of it. The software records the review but does
   not itself approve or seal the specification. The main spec export includes
   the QC closing only when the export-time `qc_current` and
   `qc_audit_complete` readiness checks both pass; otherwise it omits that
@@ -876,6 +880,22 @@ actions.
   the actionable retained queue; apply and dismiss independently recheck a
   current audit-complete result and remain locked while a stopped worker is
   still settling billable output.
+- **The session's Final QC cost is both halves of the bill.** Verification
+  runs as one Message Batches submission at half token price while the rest of
+  the review runs at list price, so the meter keeps them in separate buckets —
+  one bucket can only carry one rate. The drawer's "This session's QC" line and
+  the launch confirmation sum **both**; reading only the list-priced one
+  reported a fraction of a batched review, or nothing at all.
+- **A charge the app could not account for is disclosed, never written off.**
+  A batch request is billed whether or not its result is ever read, so a Stop
+  cancels and then spends a bounded window
+  (`BUILD_A_SPEC_QC_BATCH_SETTLE_SECONDS`, default 120s) collecting what the
+  provider already finished — those verdicts and their cost land in the report
+  and the meter. What the window cannot collect, and any result that cannot be
+  matched to the seat that produced it, is counted and stated: the spend meter
+  says some batched results could not be collected and the figure shown is a
+  floor, and the report names the counts. A review you stopped is recorded
+  partial, never as a finished one, however much of it came back.
 - **Spend and limits are part of the evidence.** The report breaks out billed
   token/cache/search usage, API/model response counts, and estimated cost for
   the run, with attribution to lenses and verifier seats where captured. It

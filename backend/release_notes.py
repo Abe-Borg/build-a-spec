@@ -89,6 +89,80 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.18.0",
+        date="2026-09-09",
+        headline="A stopped review still counts what it cost",
+        summary=(
+            "Final QC sends its verification stage to Anthropic as one "
+            "batch, at half price. Two things about that were wrong. The "
+            "cost line under the Final QC button read only the full-price "
+            "half, so a review that ran batched — which is every review, "
+            "unless you have turned batching off — reported a fraction of "
+            "what it cost, and often nothing at all. And pressing Stop "
+            "cancelled the batch and walked away, so reviewer opinions "
+            "Anthropic had already finished and billed were thrown out "
+            "unread. Stop now waits briefly and collects them, and "
+            "whatever it cannot collect is stated rather than quietly "
+            "dropped."
+        ),
+        sections=(
+            ReleaseSection(
+                title="What a review costs",
+                items=(
+                    ReleaseItem(
+                        title="The session's Final QC cost is the whole of it",
+                        body=(
+                            "Verification runs at half price as a batch, and "
+                            "the rest of the review runs at full price. The "
+                            "\u201cThis session\u2019s QC\u201d line and the "
+                            "confirmation you read before spending were adding "
+                            "up only the full-price part, so a session whose "
+                            "only review ran batched could show $0.00 after a "
+                            "real bill. Both now show both halves."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="Stopping collects the work already paid for",
+                        body=(
+                            "Pressing Stop during verification used to cancel "
+                            "and return, leaving every reviewer opinion "
+                            "Anthropic had already finished unread \u2014 paid "
+                            "for and thrown away. Stop now cancels, waits up "
+                            "to two minutes for the batch to close, and reads "
+                            "back whatever completed. Those verdicts and their "
+                            "cost land in the report and the meter. Nothing "
+                            "new is started: the review is over, and the "
+                            "window only records what was already done."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="A gap in the accounting is stated, not hidden",
+                        body=(
+                            "When the wait runs out, or a result cannot be "
+                            "matched to the reviewer who produced it, the "
+                            "spend meter says some batched results could not "
+                            "be collected and the cost shown is a floor. The "
+                            "Final QC report names the counts. A review you "
+                            "stopped is also marked incomplete rather than "
+                            "passing as a finished one, however much of it "
+                            "came back."
+                        ),
+                    ),
+                    ReleaseItem(
+                        title="One failed page no longer discards the rest",
+                        body=(
+                            "Reading a finished batch is now one result at a "
+                            "time. A connection that dropped part way through "
+                            "used to discard every reviewer opinion already "
+                            "read and mark the whole round failed; it now "
+                            "costs only what had not been read yet."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.17.0",
         date="2026-09-04",
         headline="The next section starts where the last one left off",

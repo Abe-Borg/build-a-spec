@@ -105,6 +105,11 @@ _OUTPUT = "output_tokens"
 _READ = "cache_read_input_tokens"
 _WRITE = "cache_creation_input_tokens"
 _WRITE_1H = "cache_creation_1h_input_tokens"
+_ESTIMATED_OUTPUT = "estimated_output_tokens"
+# Server-tool counters, flattened into every usage record by
+# ``usage_ledger.usage_to_dict`` from ``usage.server_tool_use``.
+_WEB_SEARCH = "web_search_requests"
+_WEB_FETCH = "web_fetch_requests"
 
 # A verifier seat's tools are chosen from its finding's lens: only
 # ``code_compliance`` carries web search and fetch, and tools render ahead
@@ -142,6 +147,14 @@ class Tokens:
     write_1h: int = 0
     cache_read: int = 0
     output: int = 0
+    # Beyond what the provider reported, on a stopped turn. Disjoint from
+    # ``output`` by construction and charged at the output rate. A QC record
+    # cannot carry it today (``usage_to_dict`` never emits it), but pricing
+    # it keeps this recomputation an exact mirror of
+    # ``usage_ledger.estimate_usage_cost`` rather than a near-copy.
+    estimated_output: int = 0
+    web_search_requests: int = 0
+    web_fetch_requests: int = 0
     api_requests: int = 0
     model_responses: int = 0
     uncollected_requests: int = 0
@@ -163,6 +176,14 @@ class Tokens:
         self.write_5m += total_write - one_hour
         self.cache_read += read
         self.output += _int(usage.get(_OUTPUT))
+        self.estimated_output += _int(usage.get(_ESTIMATED_OUTPUT))
+        # Server-tool fees are real money and are priced separately by the
+        # cost basis. Dropping them understates every web-enabled bucket —
+        # which on a real run is always at least the code_compliance lens —
+        # and, because it shrinks the denominator, OVERSTATES output's share
+        # of the bill, the one number this whole script exists to report.
+        self.web_search_requests += _int(usage.get(_WEB_SEARCH))
+        self.web_fetch_requests += _int(usage.get(_WEB_FETCH))
         if read > 0:
             self.records_with_read += 1
         if total_write > 0:
@@ -189,14 +210,29 @@ class Tokens:
             return None
         return self.cache_read / denominator
 
-    def cost(self, rates: dict[str, float], multiplier: float) -> dict[str, float]:
+    def cost(
+        self,
+        rates: dict[str, float],
+        multiplier: float,
+        *,
+        web_search_rate: float = 0.0,
+        web_fetch_rate: float = 0.0,
+    ) -> dict[str, float]:
+        """Mirror ``usage_ledger.estimate_usage_cost`` term for term.
+
+        The multiplier scales EVERY charge, server-tool fees included —
+        it describes how the call was sent, not what the rate table says.
+        """
+        output_rate = rates.get("output", 0.0)
         priced = {
             "input": self.uncached_input * rates.get("input", 0.0),
             "cache_write_5m": self.write_5m * rates.get("cache_write", 0.0),
             "cache_write_1h": self.write_1h
             * rates.get("cache_write_1h", rates.get("cache_write", 0.0)),
             "cache_read": self.cache_read * rates.get("cache_read", 0.0),
-            "output": self.output * rates.get("output", 0.0),
+            "output": (self.output + self.estimated_output) * output_rate,
+            "web_search": self.web_search_requests * web_search_rate,
+            "web_fetch": self.web_fetch_requests * web_fetch_rate,
         }
         return {key: value * multiplier for key, value in priced.items()}
 
@@ -216,6 +252,8 @@ class RunProfile:
     batch_verification: Any = None
     consolidation_enabled: Any = None
     rates: dict[str, float] = field(default_factory=dict)
+    web_search_rate: float = 0.0
+    web_fetch_rate: float = 0.0
     rate_source: str = ""
     recorded_total_cost: float = 0.0
     batch_usage_capture: str = ""
@@ -253,6 +291,10 @@ def _rates_for(report: dict, run: RunProfile) -> None:
         }
         rate_model = str(_manifest_value(basis, "rate_model") or "")
         used_fallback = bool(_manifest_value(basis, "used_fallback_rate"))
+        # Server-tool fees sit OUTSIDE rates_per_token, as their own
+        # top-level basis fields, and are charged per request.
+        run.web_search_rate = _float(_manifest_value(basis, "web_search_per_request"))
+        run.web_fetch_rate = _float(_manifest_value(basis, "web_fetch_per_request"))
         run.rate_source = (
             f"the report's own cost_basis (rate model {rate_model or 'unnamed'}"
             f"{'; a fallback rate' if used_fallback else ''})"
@@ -272,6 +314,10 @@ def _rates_for(report: dict, run: RunProfile) -> None:
     else:
         run.rate_source = f"this build's PRICING table for {model}"
     run.rates = dict(table)
+    # Matching estimate_usage_cost: web SEARCH is billed per request, web
+    # FETCH is billed by tokens and carries no per-request fee.
+    run.web_search_rate = float(settings.WEB_SEARCH_COST)
+    run.web_fetch_rate = 0.0
 
 
 def _profile_run(report: dict, artifact: str) -> RunProfile:
@@ -439,26 +485,35 @@ def _run_markdown(run: RunProfile) -> list[str]:
     lines.append(f"- Rates from {run.rate_source}.")
     lines.append("")
 
+    # "Records" is one lens / grouping call / verifier seat. "API calls" is
+    # the billed streaming-call count, which is larger whenever a record
+    # retried or resumed a pause_turn — the two are different questions and
+    # a single "Calls" column answered neither.
     header = (
-        "| Bucket | Calls | Uncached in | 5m write | 1h write | Cache read | "
-        "Output | Read share | Cost |"
+        "| Bucket | Records | API calls | Uncached in | 5m write | 1h write | "
+        "Cache read | Output | Web search | Read share | Cost |"
     )
     lines.append(header)
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
     computed_total = 0.0
     for label in sorted(run.buckets):
         tokens, multiplier = run.buckets[label]
-        priced = tokens.cost(run.rates, multiplier)
+        priced = tokens.cost(
+            run.rates,
+            multiplier,
+            web_search_rate=run.web_search_rate,
+            web_fetch_rate=run.web_fetch_rate,
+        )
         subtotal = sum(priced.values())
         computed_total += subtotal
         suffix = " ×½" if multiplier < 1.0 else ""
         lines.append(
-            f"| `{label}`{suffix} | {tokens.records} | "
+            f"| `{label}`{suffix} | {tokens.records} | {tokens.api_requests} | "
             f"{tokens.uncached_input:,} | {tokens.write_5m:,} | "
             f"{tokens.write_1h:,} | {tokens.cache_read:,} | "
-            f"{tokens.output:,} | {_pct(tokens.cache_read_share())} | "
-            f"{_usd(subtotal)} |"
+            f"{tokens.output:,} | {tokens.web_search_requests} | "
+            f"{_pct(tokens.cache_read_share())} | {_usd(subtotal)} |"
         )
 
     totals = Tokens()
@@ -470,16 +525,39 @@ def _run_markdown(run: RunProfile) -> list[str]:
         totals.write_1h += tokens.write_1h
         totals.cache_read += tokens.cache_read
         totals.output += tokens.output
+        totals.estimated_output += tokens.estimated_output
+        totals.web_search_requests += tokens.web_search_requests
+        totals.web_fetch_requests += tokens.web_fetch_requests
         totals.records += tokens.records
+        totals.api_requests += tokens.api_requests
         totals.uncollected_requests += tokens.uncollected_requests
-        output_cost += tokens.cost(run.rates, multiplier)["output"]
+        output_cost += tokens.cost(
+            run.rates,
+            multiplier,
+            web_search_rate=run.web_search_rate,
+            web_fetch_rate=run.web_fetch_rate,
+        )["output"]
     lines.append(
-        f"| **run total** | {totals.records} | {totals.uncached_input:,} | "
-        f"{totals.write_5m:,} | {totals.write_1h:,} | {totals.cache_read:,} | "
-        f"{totals.output:,} | {_pct(totals.cache_read_share())} | "
+        f"| **run total** | {totals.records} | {totals.api_requests} | "
+        f"{totals.uncached_input:,} | {totals.write_5m:,} | "
+        f"{totals.write_1h:,} | {totals.cache_read:,} | {totals.output:,} | "
+        f"{totals.web_search_requests} | {_pct(totals.cache_read_share())} | "
         f"{_usd(computed_total)} |"
     )
     lines.append("")
+    if totals.web_search_requests or totals.web_fetch_requests:
+        web_fees = (
+            totals.web_search_requests * run.web_search_rate
+            + totals.web_fetch_requests * run.web_fetch_rate
+        )
+        lines.append(
+            f"- Server-tool fees are included above: "
+            f"{totals.web_search_requests} web search(es) and "
+            f"{totals.web_fetch_requests} fetch(es), "
+            f"{_usd(web_fees)} at the recorded per-request rates (before any "
+            "batch multiplier). Web fetch is billed by tokens, not per "
+            "request, so its rate is normally zero."
+        )
 
     lines.append(
         f"- Output is **{_pct(output_cost / computed_total) if computed_total else 'n/a'}** "

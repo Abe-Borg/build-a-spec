@@ -68,6 +68,16 @@ _HEADER = (
 # than a new numbering scheme.
 _GROUP_INDENT = "  "
 
+# The recorded implementation contract scopes the proposed compaction to
+# these two rules to begin with ("Start with `stale_edition` and
+# `unrecorded_edition`"). Measuring grouping across EVERY rule would credit
+# the change with savings the scoped renderer would not deliver — and on a
+# document with many repeated `duplicate_provision` or placeholder findings
+# that difference is easily the whole verdict. So the threshold is judged on
+# the scoped number and the all-rules figure is reported beside it as the
+# upper bound it is.
+_SCOPED_RULES = frozenset({"stale_edition", "unrecorded_edition"})
+
 # chars -> tokens is an ESTIMATE, and this is its rule: the same len/4 the
 # app uses everywhere it has no real count to hand. It is not a tokenizer.
 _CHARS_PER_TOKEN = 4
@@ -117,11 +127,16 @@ class DocProfile:
     issue_count: int = 0
     by_rule: Counter = field(default_factory=Counter)
     legacy_chars: int = 0
+    # Grouping only the rules the proposed change would actually compact.
     grouped_chars: int = 0
+    # Grouping every rule — the ceiling, not the proposal.
+    grouped_chars_all: int = 0
     groups_total: int = 0
     groups_merged: int = 0
     largest_group: int = 0
+    largest_scoped_group: int = 0
     groups_declined: int = 0
+    scoped_issue_count: int = 0
     unstructured: bool = False
     chrome_lines: int = 0
     note: str = ""
@@ -137,8 +152,19 @@ class DocProfile:
         return self.removed_chars / self.legacy_chars
 
     @property
+    def removed_share_all_rules(self) -> float:
+        if self.legacy_chars <= 0:
+            return 0.0
+        return max(0, self.legacy_chars - self.grouped_chars_all) / self.legacy_chars
+
+    @property
     def meets_threshold(self) -> bool:
-        """The plan's working threshold, stated as the judgment call it is."""
+        """The plan's working threshold, stated as the judgment call it is.
+
+        Judged on the SCOPED saving: the question is whether the change the
+        contract describes earns its keep, not whether some larger change
+        might.
+        """
         return self.legacy_chars > 5000 and self.removed_share > 0.5
 
 
@@ -201,6 +227,64 @@ def _preserved_chrome(project: dict[str, Any], has_source: bool) -> tuple[str, .
         return ()
 
 
+@dataclass
+class GroupedRender:
+    """One hypothetical rendering of the block."""
+
+    chars: int = 0
+    groups: int = 0
+    merged: int = 0
+    declined: int = 0
+    largest: int = 0
+
+
+def _render_grouped(
+    issues: list[dict[str, Any]], rules: frozenset[str] | None
+) -> GroupedRender:
+    """Render the block with grouping applied to ``rules`` only.
+
+    ``rules`` of ``None`` groups everything — the ceiling. Issues outside
+    the set keep their legacy lines in place, which is what the scoped
+    renderer described by the contract would actually emit.
+    """
+    # Exact equality on the triple: no normalization, first-seen order,
+    # every element id and reference preserved.
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    order: list[tuple[str, str, str]] = []
+    for issue in issues:
+        key = (
+            str(issue.get("rule") or ""),
+            str(issue.get("severity") or ""),
+            str(issue.get("message") or ""),
+        )
+        if key not in grouped:
+            order.append(key)
+        grouped[key].append(issue)
+
+    out = GroupedRender(groups=len(order))
+    rendered = [_HEADER]
+    for key in order:
+        members = grouped[key]
+        out.largest = max(out.largest, len(members))
+        legacy_form = [_legacy_line(issue) for issue in members]
+        eligible = rules is None or key[0] in rules
+        if len(members) < 2 or not eligible:
+            rendered.extend(legacy_form)
+            continue
+        group_form = _group_lines(members)
+        # Grouping is used ONLY where it is strictly shorter; a short
+        # message can make the grouped form longer than the lines it
+        # replaces, and singleton rendering stays byte-identical.
+        if len("\n".join(group_form)) < len("\n".join(legacy_form)):
+            rendered.extend(group_form)
+            out.merged += 1
+        else:
+            rendered.extend(legacy_form)
+            out.declined += 1
+    out.chars = len("\n".join(rendered))
+    return out
+
+
 def _profile(path: Path) -> DocProfile:
     data = path.read_bytes()
     profile = DocProfile(artifact=hashlib.sha256(data).hexdigest()[:12])
@@ -236,41 +320,19 @@ def _profile(path: Path) -> DocProfile:
 
     legacy = [_HEADER] + [_legacy_line(issue) for issue in issues]
     profile.legacy_chars = len("\n".join(legacy))
+    profile.scoped_issue_count = sum(
+        1 for issue in issues if str(issue.get("rule") or "") in _SCOPED_RULES
+    )
 
-    # Exact equality on the triple: no normalization, first-seen order,
-    # every element id and reference preserved.
-    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
-    order: list[tuple[str, str, str]] = []
-    for issue in issues:
-        key = (
-            str(issue.get("rule") or ""),
-            str(issue.get("severity") or ""),
-            str(issue.get("message") or ""),
-        )
-        if key not in grouped:
-            order.append(key)
-        grouped[key].append(issue)
-
-    rendered = [_HEADER]
-    profile.groups_total = len(order)
-    for key in order:
-        members = grouped[key]
-        profile.largest_group = max(profile.largest_group, len(members))
-        legacy_form = [_legacy_line(issue) for issue in members]
-        if len(members) < 2:
-            rendered.extend(legacy_form)
-            continue
-        group_form = _group_lines(members)
-        # Grouping is used ONLY where it is strictly shorter; a short
-        # message can make the grouped form longer than the lines it
-        # replaces, and singleton rendering stays byte-identical.
-        if len("\n".join(group_form)) < len("\n".join(legacy_form)):
-            rendered.extend(group_form)
-            profile.groups_merged += 1
-        else:
-            rendered.extend(legacy_form)
-            profile.groups_declined += 1
-    profile.grouped_chars = len("\n".join(rendered))
+    scoped = _render_grouped(issues, _SCOPED_RULES)
+    every_rule = _render_grouped(issues, None)
+    profile.grouped_chars = scoped.chars
+    profile.grouped_chars_all = every_rule.chars
+    profile.groups_total = every_rule.groups
+    profile.groups_merged = scoped.merged
+    profile.groups_declined = scoped.declined
+    profile.largest_group = every_rule.largest
+    profile.largest_scoped_group = scoped.largest
     return profile
 
 
@@ -302,20 +364,30 @@ def _markdown(profiles: list[DocProfile], drift: list[str]) -> str:
     )
     lines.append("")
     lines.append(
-        "| Document | Module | Issues | Groups | Merged | Legacy chars | "
-        "Grouped chars | Removed | ~Tokens saved |"
+        "The **Removed** column is the SCOPED saving — grouping applied only "
+        f"to {', '.join(sorted('`' + r + '`' for r in _SCOPED_RULES))}, the "
+        "rules the proposed change starts with. **All rules** is what "
+        "grouping every rule would remove: a ceiling for a wider change, not "
+        "a promise of this one, and the column to distrust if a document "
+        "repeats one non-scoped finding many times."
     )
-    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("")
+    lines.append(
+        "| Document | Module | Issues | In scope | Merged | Legacy chars | "
+        "Grouped chars | Removed | All rules | ~Tokens saved |"
+    )
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     for profile in profiles:
         if profile.note:
             continue
         saved = profile.removed_chars // _CHARS_PER_TOKEN
         lines.append(
             f"| `{profile.artifact}` | `{profile.module_id or 'unknown'}` | "
-            f"{profile.issue_count} | {profile.groups_total} | "
+            f"{profile.issue_count} | {profile.scoped_issue_count} | "
             f"{profile.groups_merged} | {profile.legacy_chars:,} | "
             f"{profile.grouped_chars:,} | "
-            f"{profile.removed_share * 100:.1f}% | ~{saved:,} |"
+            f"{profile.removed_share * 100:.1f}% | "
+            f"{profile.removed_share_all_rules * 100:.1f}% | ~{saved:,} |"
         )
     lines.append("")
 
@@ -336,8 +408,13 @@ def _markdown(profiles: list[DocProfile], drift: list[str]) -> str:
             lines.append("")
             continue
         lines.append(
+            f"- {profile.scoped_issue_count} of {profile.issue_count} finding(s) "
+            "are in the rules the proposed change would compact."
+        )
+        lines.append(
             f"- Largest single `(rule, severity, message)` group: "
-            f"{profile.largest_group} occurrence(s)."
+            f"{profile.largest_group} occurrence(s) across all rules, "
+            f"{profile.largest_scoped_group} within the scoped rules."
         )
         if profile.groups_declined:
             lines.append(
@@ -355,9 +432,10 @@ def _markdown(profiles: list[DocProfile], drift: list[str]) -> str:
         )
         lines.append(
             f"- Against the plan's working threshold (>5,000 chars AND >50% "
-            f"removable), this document {verdict}: "
+            f"removable by the SCOPED change), this document {verdict}: "
             f"{profile.legacy_chars:,} chars, {profile.removed_share * 100:.1f}% "
-            "removable."
+            f"removable in scope ({profile.removed_share_all_rules * 100:.1f}% "
+            "if every rule were grouped)."
         )
         lines.append("")
 
@@ -379,7 +457,9 @@ def _markdown(profiles: list[DocProfile], drift: list[str]) -> str:
             f"Largest block measured: **{worst.legacy_chars:,} characters** "
             f"(~{worst.legacy_chars // _CHARS_PER_TOKEN:,} estimated tokens), "
             f"of which **{worst.removed_share * 100:.1f}%** would be removed by "
-            "exact `(rule, severity, message)` grouping."
+            "the scoped change "
+            f"({worst.removed_share_all_rules * 100:.1f}% if grouping were "
+            "extended to every rule)."
         )
         lines.append("")
         if qualifying:
@@ -393,12 +473,22 @@ def _markdown(profiles: list[DocProfile], drift: list[str]) -> str:
                 "rendering byte-identical."
             )
         else:
+            wider = [p for p in measured if p.removed_share_all_rules > 0.5]
             lines.append(
                 "→ **No document meets the threshold.** Defer the compaction "
                 "and keep this measurement as the reason. The dollar case is "
                 "small either way; re-measure if a real master ever pushes "
                 "the block past it."
             )
+            if wider:
+                lines.append("")
+                lines.append(
+                    f"Note that {len(wider)} document(s) WOULD clear 50% if "
+                    "grouping were extended past the two scoped rules. That is "
+                    "an argument for revisiting the scope, not for claiming "
+                    "the scoped change earns its keep — decide it deliberately "
+                    "rather than by letting the measurement drift."
+                )
     lines.append("")
     return "\n".join(lines)
 

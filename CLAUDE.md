@@ -9618,6 +9618,41 @@ pytest), two new env knobs with unchanged defaults.
   `leave` popping blindly → `dialogStack.test.ts`; NewSessionDialog's
   `onEscape` dropped → the re-pointed `tour.test.ts`.
 
+## The QC drawer counts both halves of a pass — implemented notes
+
+Step 1 of `docs/REVIEW_IMPLEMENTATION_PLAN_2026-09-08.md` (revision 2), shipped
+on its own because it is one line of arithmetic and independently valuable.
+Frontend only: no route, no SSE event, no dep, no backend change, no
+project-format bump.
+
+- **The drawer read one of the two QC meter buckets.** `usage_ledger` splits
+  Final QC spend by the rate it was billed at — `qc` at list price,
+  `qc_batched` at `settings.BATCH_COST_MULTIPLIER` — because one bucket could
+  only ever be priced at one of the two. Batched verification has been the
+  default since v1.12.0 and is roughly nine calls in ten, so
+  `by_category.qc` alone reported a fraction of what a pass cost, and a session
+  whose only QC spend was batched displayed no figure at all. Both surfaces
+  quoting it were wrong: the drawer's own "This session's QC" line and the
+  launch confirmation the user reads while deciding to spend.
+- **`qcReport.qcSessionCost` is the one derivation**, beside that module's other
+  usage-and-cost helpers, summing `QC_SPEND_CATEGORIES` — the pair named as a
+  constant so it cannot drift from `usage_ledger._category_models`. Interview,
+  research, audit and template spend stay out: the question is what Final QC
+  has cost, not what the session has. An absent or non-finite entry reads as
+  zero, because both call sites format with `toFixed` and one bad number would
+  render `$NaN` for the session.
+- **A retained report's own `estimated_cost_usd` is a different number** and
+  stays separate — that prices ONE run, this prices the session.
+- **Tests**: `frontend/tests/qcSessionCost.test.ts` (7, registered in
+  `package.json`'s explicit `node --test` list) — each phase alone, both summed
+  with unrelated categories excluded, empty and absent meters, a malformed
+  entry, the category pair pinned against the ledger's, and a source-level pin
+  that the drawer calls the helper rather than reading a category (the
+  `chatPerf.test.ts` idiom; the drawer has no DOM harness). Both mechanisms
+  were reverted in place to prove them load-bearing: the single-category read
+  restored → the source pin red; `qc_batched` dropped from the constant → three
+  red.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

@@ -93,8 +93,8 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
         date="2026-09-09",
         headline="A stopped review still counts what it cost",
         summary=(
-            "Final QC sends its verification stage to Anthropic as one "
-            "batch, at half price. Two things about that were wrong. The "
+            "Final QC sends its verification stage to Anthropic in "
+            "batches, at half price. Two things about that were wrong. The "
             "cost line under the Final QC button read only the full-price "
             "half, so a review that ran batched — which is every review, "
             "unless you have turned batching off — reported a fraction of "
@@ -112,7 +112,7 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                     ReleaseItem(
                         title="The session's Final QC cost is the whole of it",
                         body=(
-                            "Verification runs at half price as a batch, and "
+                            "Verification runs at half price in batches, and "
                             "the rest of the review runs at full price. The "
                             "\u201cThis session\u2019s QC\u201d line and the "
                             "confirmation you read before spending were adding "
@@ -149,13 +149,16 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                         ),
                     ),
                     ReleaseItem(
-                        title="One failed page no longer discards the rest",
+                        title="A dropped connection keeps what already arrived",
                         body=(
-                            "Reading a finished batch is now one result at a "
-                            "time. A connection that dropped part way through "
-                            "used to discard every reviewer opinion already "
-                            "read and mark the whole round failed; it now "
-                            "costs only what had not been read yet."
+                            "Results are read back one at a time now. A "
+                            "connection that dropped part way through used to "
+                            "throw away every reviewer opinion already read "
+                            "and mark the whole round failed \u2014 and since "
+                            "those requests were billed the moment they ran, "
+                            "that was work you had already paid for. What "
+                            "arrived is kept, in the report and in the meter; "
+                            "only the rest is recorded as uncollected."
                         ),
                     ),
                 ),

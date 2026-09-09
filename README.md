@@ -881,8 +881,10 @@ actions.
   current audit-complete result and remain locked while a stopped worker is
   still settling billable output.
 - **The session's Final QC cost is both halves of the bill.** Verification
-  runs as one Message Batches submission at half token price while the rest of
-  the review runs at list price, so the meter keeps them in separate buckets —
+  runs through the Message Batches API at half token price — one submission
+  per round, and `_run_batch_calls` adds a round whenever a seat pauses or has
+  to retry — while the rest of the review runs at list price, so the meter
+  keeps them in separate buckets —
   one bucket can only carry one rate. The drawer's "This session's QC" line and
   the launch confirmation sum **both**; reading only the list-priced one
   reported a fraction of a batched review, or nothing at all.

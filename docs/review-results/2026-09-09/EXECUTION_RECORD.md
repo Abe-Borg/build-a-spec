@@ -73,6 +73,27 @@ two verifier lineages. Nothing is broken by it; each caches correctly within
 itself. The correction is recorded in a new section rather than by editing
 the frozen v1.8.0 one.
 
+## Review findings on PR #164
+
+Two P2 findings from Codex on `ee3b779`, both real, both in copy this change
+itself wrote:
+
+- **A dropped result read does not reduce the bill.** The release note said an
+  interrupted read "now costs only what had not been read yet". The provider
+  ran and billed those requests when the batch processed — which is the whole
+  premise of the settlement window, and stated as such two files away. What
+  incremental reading saves is the verdicts and the recorded usage already
+  folded, not the charge. Rewritten to say that.
+- **Verification is not one submission.** `messages.batches.create` sits inside
+  `_run_batch_calls`'s round loop, so a phase submits one batch per round and
+  a round is added whenever a seat pauses or retries. The README line and the
+  release summary both claimed one batch; both corrected, along with the
+  `CLAUDE.md` Layout index entry that seeded the wording. The frozen v1.12.0
+  section is left alone and the correction is recorded as errata.
+
+Neither changes behavior; both were claims a reader could have checked and
+found false, which is the class of defect step 5 exists to remove.
+
 ## What is still open, and why
 
 **Step 2 — answer the batching question from a real export.** The plan moved

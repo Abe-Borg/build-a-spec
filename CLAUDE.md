@@ -248,9 +248,11 @@ backend/
                            _qc_request_kwargs is the ONE request shape both
                            transports build from (one cache lineage); phase 2
                            runs either as a streamed ThreadPool fan-out or —
-                           default — as one Message Batches submission
-                           (_run_batch_calls: rounds carry pause_turn
-                           continuations and retries, same policy/ceilings,
+                           default — as batched submissions, ONE PER ROUND
+                           (_run_batch_calls: a round is added whenever a seat
+                           pauses or retries, so "one batch per phase" holds
+                           only for a run where neither happens —
+                           same policy/ceilings,
                            50% token price, no live seat frames);
                            lens fan-out (ThreadPool cap settings.QC_MAX_WORKERS
                            = 8, pause_turn loop, 2×
@@ -9850,6 +9852,27 @@ project-format change. `requirements.txt` needed no change and none was made
   the phase's cache reads actually come from, which is what any future
   costing work would start from. The v1.8.0 section is history and is not
   edited; this is the correction, the Batch 8 errata posture.
+- **ERRATUM, second: "one Message Batches submission" (v1.12.0, "Final QC
+  phase 2 is batched") overstates it, and the release copy inherited the
+  error before review caught it.** `client.messages.batches.create` sits
+  INSIDE `_run_batch_calls`'s round loop, so a phase submits one batch per
+  ROUND and a round is added whenever a seat pauses or has to retry — up to
+  `QC_BATCH_MAX_ROUNDS`. That section's own next clause names the rounds, so
+  the machinery was never in doubt; the summary sentence just does not
+  survive being read on its own, which is exactly how it reached a README
+  line and a user-facing release note in this change. Both were corrected
+  before merge, and the Layout index — which is maintained current rather
+  than frozen — now says one per round. The v1.12.0 section itself stands.
+- **A dropped result read costs verdicts, never money, and saying otherwise
+  contradicted this change's own premise.** A first draft of the release
+  note said an interrupted read "now costs only what had not been read yet".
+  It cannot: the provider ran and billed those requests when the batch
+  processed, which is the whole reason the settlement window exists. What
+  incremental reading saves is the VERDICTS and the recorded usage of the
+  rows already folded — work already paid for, previously discarded whole.
+  The item now says that. Worth keeping in mind for any future copy about
+  this subsystem: retrieval is free, and the thing being recovered is the
+  record, not the charge.
 - **Two steps of the plan are deliberately unfinished, and neither is
   blocked on code.** Step 2 (read a real Final QC export and answer the
   batching question from it) and step 4 (measure the LINT REPORT block on a

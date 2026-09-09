@@ -58,7 +58,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .. import settings
-from ..llm.client import AUTH_ERROR_MESSAGE, is_authentication_error
+from ..llm.client import (
+    AUTH_ERROR_MESSAGE,
+    bounded_request_options,
+    is_authentication_error,
+)
 from ..research.engine import (
     RequirementsProfile,
     research_context_block,
@@ -120,6 +124,7 @@ from ..spec_doc.source_patch import (
 from ..spec_modules import SpecModule
 from ..standards import standards_context_block
 from ..usage_ledger import (
+    UNCOLLECTED_BATCH_REQUESTS_KEY,
     estimate_usage_cost,
     usage_pricing_snapshot,
     usage_to_dict,
@@ -318,6 +323,39 @@ def _persisted_nonnegative_int(value: object, *, field_name: str) -> int:
             f"Persisted QC {field_name} is outside the supported range."
         )
     return value
+
+
+# The four readings of "did every batch request this run submitted end up
+# with a known billing outcome?". A run that verified over the STREAMING
+# transport submitted none, so the question does not arise for it — which is
+# a different answer from "", the pre-disclosure record, which submitted
+# batch requests and cannot say what became of them. Neither is ever
+# promoted to complete, but only one of them is a limitation: telling a
+# reader that a run produced by this build predates the recording it is
+# reading would be false.
+BATCH_CAPTURE_COMPLETE = "complete"
+BATCH_CAPTURE_INCOMPLETE = "incomplete"
+BATCH_CAPTURE_NOT_APPLICABLE = "not_applicable"
+BATCH_CAPTURE_UNRECORDED = ""
+_BATCH_CAPTURE_STATES = frozenset(
+    {
+        BATCH_CAPTURE_COMPLETE,
+        BATCH_CAPTURE_INCOMPLETE,
+        BATCH_CAPTURE_NOT_APPLICABLE,
+        BATCH_CAPTURE_UNRECORDED,
+    }
+)
+
+
+def _persisted_batch_usage_capture(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Persisted QC batch_usage_capture must be a string.")
+    state = value.strip().lower()
+    if state not in _BATCH_CAPTURE_STATES:
+        raise ValueError(
+            f"Unsupported persisted QC batch_usage_capture: {value!r}"
+        )
+    return state
 
 
 def _persisted_nonnegative_number(
@@ -806,6 +844,13 @@ class QCVerdict:
     cost_multiplier: float = 1.0
     api_request_count: int = 0
     model_response_count: int = 0
+    # Batch requests submitted for this seat whose result was never read —
+    # a Stop or the phase ceiling landed first, the results stream failed
+    # part way, or the provider returned no row. Those requests may have
+    # been billed and the app cannot say, which is the whole of what the
+    # capture disclosure claims. Always 0 on the streaming transport and on
+    # every record written before the disclosure existed.
+    uncollected_requests: int = 0
 
     @classmethod
     def from_dict(cls, raw: object) -> "QCVerdict | None":
@@ -883,6 +928,10 @@ class QCVerdict:
             model_response_count=_persisted_nonnegative_int(
                 raw.get("model_response_count", 0),
                 field_name="verdict model_response_count",
+            ),
+            uncollected_requests=_persisted_nonnegative_int(
+                raw.get("uncollected_requests", 0),
+                field_name="verdict uncollected_requests",
             ),
         )
 
@@ -1599,6 +1648,17 @@ class QCResult:
     api_request_count: int = 0
     model_response_count: int = 0
     research_profile_present: bool = False
+    # Returned batch rows this run could not attribute to a request it
+    # submitted — an unknown custom id, or a second row for one already
+    # folded. They belong to no seat, so no per-seat counter can carry them,
+    # and a run that received every expected row PLUS one it dropped must
+    # not read as having accounted for its charges.
+    unassigned_batch_results: int = 0
+    # Whether every batch request this run submitted has a known billing
+    # outcome: "complete", "incomplete", or "" for a record written before
+    # the disclosure existed. Empty is never promoted to complete — an older
+    # report simply cannot say, and saying so is the honest reading.
+    batch_usage_capture: str = ""
     # Content-addressed ids the reviewer dismissed — remembered so a re-run
     # that regenerates the same finding auto-marks it dismissed.
     dismissed_ids: list[str] = field(default_factory=list)
@@ -1809,6 +1869,45 @@ class QCResult:
             )
             else "rejected"
         )
+
+    def uncollected_batch_requests(self) -> int:
+        """Submitted batch requests whose result this run never read.
+
+        Summed across every seat in every outcome collection. Says nothing
+        about whether those requests were billed — that is exactly the point:
+        the app cannot know, so it counts them and says so.
+        """
+        return sum(
+            verdict.uncollected_requests
+            for finding in [
+                *self.findings,
+                *self.refuted,
+                *self.disputed,
+                *self.inconclusive,
+            ]
+            for verdict in finding.verdicts
+        )
+
+    def _batch_capture_consistent(self) -> bool:
+        """A recorded capture status must agree with the counts under it.
+
+        Complete means nothing was left unread AND nothing came back that
+        could not be attributed. A record claiming complete over a nonzero
+        count is contradicting its own evidence, and is refused rather than
+        quietly believed — the same posture the outcome labels take against
+        their seats.
+        """
+        gaps = self.uncollected_batch_requests() + self.unassigned_batch_results
+        if self.batch_usage_capture == BATCH_CAPTURE_COMPLETE:
+            return gaps == 0
+        if self.batch_usage_capture == BATCH_CAPTURE_INCOMPLETE:
+            return gaps > 0
+        # Not applicable: a streamed run, which submitted no batch request,
+        # so no seat can carry an uncollected one and no row can arrive
+        # unattributable. Unrecorded: a pre-disclosure report, which cannot
+        # have counts either. Counts under either is a record no version
+        # could write.
+        return gaps == 0
 
     def _audit_accounting_consistent(self) -> bool:
         """Reconcile current-schema spend to every underlying review record."""
@@ -2194,6 +2293,18 @@ class QCResult:
             for key, value in record.usage_totals.items():
                 if value:
                     bucket[key] = bucket.get(key, 0) + int(value)
+        # The disclosure rides the batched bucket, so it reaches the session
+        # meter through the SAME sink and generation guard as the tokens —
+        # no second channel to keep in step, and a snapshot can never show a
+        # run's new spend without the warning that belongs to it. It is a
+        # COUNT of requests, not tokens: the pricing helpers read named token
+        # keys, so it is never priced.
+        gaps = self.uncollected_batch_requests() + self.unassigned_batch_results
+        if gaps:
+            bucket = buckets.setdefault("qc_batched", {})
+            bucket[UNCOLLECTED_BATCH_REQUESTS_KEY] = (
+                bucket.get(UNCOLLECTED_BATCH_REQUESTS_KEY, 0) + gaps
+            )
         return {name: bucket for name, bucket in buckets.items() if bucket}
 
     def to_dict(self) -> dict[str, Any]:
@@ -2231,6 +2342,13 @@ class QCResult:
             "api_request_count": self.api_request_count,
             "model_response_count": self.model_response_count,
             "research_profile_present": self.research_profile_present,
+            # Derived from the seats, but serialized so the Word memo, the
+            # report modal and the JSON export read one number instead of
+            # each re-walking the verdicts and risking three answers.
+            # ``from_dict`` re-derives it and refuses a record that disagrees.
+            "uncollected_batch_requests": self.uncollected_batch_requests(),
+            "unassigned_batch_results": self.unassigned_batch_results,
+            "batch_usage_capture": self.batch_usage_capture,
             "dismissed_ids": list(self.dismissed_ids),
         }
 
@@ -2416,6 +2534,13 @@ class QCResult:
                     field_name="model_response_count",
                 ),
                 research_profile_present=research_profile_present,
+                unassigned_batch_results=_persisted_nonnegative_int(
+                    data.get("unassigned_batch_results", 0),
+                    field_name="unassigned_batch_results",
+                ),
+                batch_usage_capture=_persisted_batch_usage_capture(
+                    data.get("batch_usage_capture", "")
+                ),
                 dismissed_ids=[value.strip() for value in dismissed_raw],
             )
             if (
@@ -2450,6 +2575,17 @@ class QCResult:
                 ):
                     return None
                 if not result._audit_accounting_consistent():
+                    return None
+                if not result._batch_capture_consistent():
+                    return None
+                persisted_uncollected = data.get("uncollected_batch_requests")
+                if persisted_uncollected is not None and (
+                    _persisted_nonnegative_int(
+                        persisted_uncollected,
+                        field_name="uncollected_batch_requests",
+                    )
+                    != result.uncollected_batch_requests()
+                ):
                     return None
                 all_findings = [
                     *result.findings,
@@ -3108,6 +3244,12 @@ class _CallResult:
     error: str = ""
     api_request_count: int = 0
     failure_class: str = ""
+    # Batch requests submitted for this call whose result was never read: a
+    # Stop or the phase ceiling landed first, the results stream failed part
+    # way, or the provider returned no row for it. Those requests may have
+    # been billed and the app cannot say — which is the whole of what the
+    # capture disclosure claims. Always 0 on the streaming transport.
+    uncollected_requests: int = 0
 
 
 def _refusal_error(response: Any) -> str:
@@ -4839,6 +4981,7 @@ def _verifier_outcome(
                 cost_multiplier=cost_multiplier,
                 api_request_count=result.api_request_count,
                 model_response_count=len(result.billed),
+                uncollected_requests=result.uncollected_requests,
             ),
             billed=result.billed,
             shared_request_failure=shared_request_failure,
@@ -4866,6 +5009,7 @@ def _verifier_outcome(
                 cost_multiplier=cost_multiplier,
                 api_request_count=result.api_request_count,
                 model_response_count=len(result.billed),
+                uncollected_requests=result.uncollected_requests,
             ),
             billed=result.billed,
         )
@@ -4898,6 +5042,7 @@ def _verifier_outcome(
             cost_multiplier=cost_multiplier,
             api_request_count=result.api_request_count,
             model_response_count=len(result.billed),
+            uncollected_requests=result.uncollected_requests,
         ),
         billed=result.billed,
     )
@@ -4958,6 +5103,9 @@ class _BatchSeatState:
     continuations: int = 0
     container_id: str = ""
     settled: _CallResult | None = None
+    # Submitted requests for this seat whose result never came back. Counted
+    # before the seat settles, because ``settle`` freezes it into the record.
+    uncollected_requests: int = 0
 
     def initial_messages(self) -> list[dict]:
         return [
@@ -4993,6 +5141,7 @@ class _BatchSeatState:
             error,
             self.api_request_count,
             failure_class,
+            self.uncollected_requests,
         )
 
     def settle_parsed(self) -> None:
@@ -5005,6 +5154,8 @@ class _BatchSeatState:
             [*self.billed, *self.all_responses],
             "" if payload is not None else "QC produced no parseable payload.",
             self.api_request_count,
+            "",
+            self.uncollected_requests,
         )
 
 
@@ -5015,6 +5166,66 @@ def _batch_request_counts(snapshot: Any) -> dict[str, int]:
         name: int(_item_attr(counts, name) or 0) if counts is not None else 0
         for name in fields
     }
+
+
+# Ceiling on any ONE call inside the settlement window. Short on purpose:
+# the window is a couple of minutes and one stalled call must not be able to
+# spend most of it. The SDK's own retries go off with it, or a single
+# refused call would be tried three times before returning.
+_BATCH_SETTLE_REQUEST_TIMEOUT_SECONDS = 30.0
+
+# Below this much budget left, another provider call is not worth starting:
+# it would be handed a timeout it cannot plausibly meet and would spend the
+# remainder of the window failing.
+#
+# It MUST stay below the floor on ``BUILD_A_SPEC_QC_BATCH_SETTLE_SECONDS``
+# (1). At or above it, the shortest window a user can configure would skip
+# its own cancellation — the one call in the window that stops the provider
+# billing further, traded away to save a fraction of a second. Pinned by
+# test_a_stop_whose_batch_never_ends_discloses_the_uncollected_requests,
+# which runs on a one-second window and asserts the cancel went out.
+_BATCH_SETTLE_MIN_REQUEST_SECONDS = 0.25
+
+
+def _settle_request_seconds(deadline: float) -> float:
+    """How long one settlement call may take, or 0.0 when the window is spent.
+
+    The budget is the time actually LEFT, not a fixed ceiling. The deadline
+    is only checked between operations, so a call granted more time than the
+    window has left simply outlives it — and the settling state holds Final
+    QC's start, apply, dismiss and export controls locked while it does, so
+    the advertised bound has to be the real one. A window configured shorter
+    than the per-call ceiling (``BUILD_A_SPEC_QC_BATCH_SETTLE_SECONDS`` is
+    floored at 1) is the case that made this visible.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining < _BATCH_SETTLE_MIN_REQUEST_SECONDS:
+        return 0.0
+    return min(_BATCH_SETTLE_REQUEST_TIMEOUT_SECONDS, remaining)
+
+
+def _bounded_client(client: Any, seconds: float) -> Any:
+    """The same client with the SDK's retries off, bounded by ``seconds``.
+
+    Built fresh per operation from ``_settle_request_seconds`` rather than
+    once per window: a client bound at window start would still hand its
+    full ceiling to a call issued near the deadline.
+
+    Falls back to the client as given when it cannot be re-optioned (a test
+    double, a future transport). That is deliberately not fatal: the
+    settlement's deadline is still checked between every operation, so the
+    worst case is one long call inside a window that still ends, rather than
+    no settlement and no recovered charges at all.
+    """
+    with_options = getattr(client, "with_options", None)
+    if not callable(with_options):
+        return client
+    try:
+        return with_options(**bounded_request_options(seconds))
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:  # noqa: BLE001 — a refused override is not a failure
+        return client
 
 
 def _cancel_batch(client: Any, batch_id: str) -> None:
@@ -5074,7 +5285,7 @@ def _run_batch_calls(
     batch_event_type: str = "verification_batch",
     event_sink: EventSink = _noop_sink,
     should_stop: Callable[[], bool] = lambda: False,
-) -> dict[str, _CallResult]:
+) -> _BatchPhaseOutcome:
     """Run many independent QC calls through the Message Batches API.
 
     The transposition of :func:`_run_streaming_call`: the same pause_turn
@@ -5108,7 +5319,7 @@ def _run_batch_calls(
     for state in states.values():
         state.messages = state.initial_messages()
     if not states:
-        return {}
+        return _BatchPhaseOutcome({})
 
     fields_for = seat_event_fields or {}
     policy = DEFAULT_REALTIME_RETRY_POLICY
@@ -5121,6 +5332,11 @@ def _run_batch_calls(
         f"({ceiling_seconds}s)."
     )
     max_rounds = max(1, settings.QC_BATCH_MAX_ROUNDS)
+    settle_seconds = max(1, settings.QC_BATCH_SETTLE_SECONDS)
+    # Returned rows this phase could not attribute to a request it submitted,
+    # across every round. They belong to no seat, so they are the run's to
+    # carry — see ``_consume_batch_results``.
+    unassigned_results = 0
 
     def unsettled() -> list[str]:
         return [key for key, state in states.items() if state.settled is None]
@@ -5140,12 +5356,119 @@ def _run_batch_calls(
             }
         )
 
-    def results() -> dict[str, _CallResult]:
-        return {
-            key: state.settled
-            for key, state in states.items()
-            if state.settled is not None
-        }
+    def settle_open_batch(
+        batch_id: str,
+        *,
+        pending: list[str],
+        round_index: int,
+        status: str,
+        message: str,
+        failure_class: str = "",
+    ) -> _BatchPhaseOutcome:
+        """End the phase on a LIVE batch, collecting what it already produced.
+
+        A Stop or the wall-clock ceiling ends the review, but the provider
+        has been running the seats all along and bills them whether or not
+        the app ever reads their results. Cancelling and returning left that
+        money — and the verdicts it bought — on the floor, and disclosed a
+        gap the app could have closed.
+
+        So: take the deadline FIRST, cancel, poll until the batch reports
+        ``ended``, then read its results in recovery mode. Recovery never
+        submits new work — no continuation, no retry — because the review is
+        over; it only records what was already done. Whatever the window
+        cannot collect is counted against its seat and disclosed.
+
+        Every call inside the window goes through a client bounded by the
+        time the window has LEFT, rebuilt per operation — a fixed per-call
+        ceiling would let a call issued near the deadline outlive it, and a
+        window configured shorter than that ceiling would never be honoured
+        at all. The cancel is inside the bound too: it rides the same
+        transport, and one stalled cancellation on the module defaults would
+        hold the settling state for tens of minutes before the advertised
+        window even began.
+
+        ``should_stop`` is deliberately not consulted here. The run is
+        already stopping; asking again would abandon the collection at its
+        first sleep and give back exactly the behaviour this replaces.
+        """
+        nonlocal unassigned_results
+        settle_deadline = time.monotonic() + settle_seconds
+        budget = _settle_request_seconds(settle_deadline)
+        if budget:
+            _cancel_batch(_bounded_client(client, budget), batch_id)
+
+        answered: set[str] = set()
+        last_counts: dict[str, int] | None = None
+        while True:
+            budget = _settle_request_seconds(settle_deadline)
+            if not budget:
+                break
+            try:
+                snapshot = _bounded_client(
+                    client, budget
+                ).messages.batches.retrieve(batch_id)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception:  # noqa: BLE001 — a dropped poll is not a failure
+                snapshot = None
+            if snapshot is not None:
+                counts = _batch_request_counts(snapshot)
+                if counts != last_counts:
+                    last_counts = counts
+                    emit(
+                        "polling",
+                        round=round_index + 1,
+                        batch_id=batch_id,
+                        settling=True,
+                        **counts,
+                    )
+                if str(_item_attr(snapshot, "processing_status") or "") == "ended":
+                    budget = _settle_request_seconds(settle_deadline)
+                    if not budget:
+                        break
+                    read = _consume_batch_results(
+                        _bounded_client(client, budget),
+                        batch_id,
+                        states=states,
+                        submitted=set(pending),
+                        attempts=attempts,
+                        retry_event=f"{seat_event_prefix}_retry",
+                        fields_for=fields_for,
+                        event_sink=event_sink,
+                        recovering=True,
+                        deadline=settle_deadline,
+                    )
+                    unassigned_results += read.unassigned
+                    answered = read.answered
+                    break
+            _sleep_interruptibly(
+                poll_seconds, should_stop=lambda: False, deadline=settle_deadline
+            )
+
+        uncollected = [key for key in pending if key not in answered]
+        for key in uncollected:
+            states[key].uncollected_requests += 1
+        settle_all(unsettled(), message, failure_class)
+        emit(
+            status,
+            round=round_index + 1,
+            batch_id=batch_id,
+            uncollected=len(uncollected),
+        )
+        outcome = results()
+        outcome.terminated_early = True
+        return outcome
+
+    def results() -> _BatchPhaseOutcome:
+        return _BatchPhaseOutcome(
+            results={
+                key: state.settled
+                for key, state in states.items()
+                if state.settled is not None
+            },
+            unassigned_results=unassigned_results,
+        )
 
     for round_index in range(max_rounds):
         pending = unsettled()
@@ -5154,7 +5477,9 @@ def _run_batch_calls(
         if should_stop():
             settle_all(pending, "Cancelled by user.")
             emit("cancelled", round=round_index + 1)
-            return results()
+            outcome = results()
+            outcome.terminated_early = True
+            return outcome
         if time.monotonic() > deadline:
             # Every round used to trust the poll loop to notice the ceiling,
             # but a round that ENDS before the ceiling and then needs another
@@ -5162,7 +5487,9 @@ def _run_batch_calls(
             # submitting again.
             settle_all(pending, ceiling_message, FailureClass.CONNECTION.value)
             emit("timeout", round=round_index + 1)
-            return results()
+            outcome = results()
+            outcome.terminated_early = True
+            return outcome
 
         requests: list[dict[str, Any]] = []
         for key in pending:
@@ -5253,10 +5580,16 @@ def _run_batch_calls(
         last_counts: dict[str, int] | None = None
         while True:
             if should_stop():
-                _cancel_batch(client, batch_id)
-                settle_all(unsettled(), "Cancelled by user.")
-                emit("cancelled", round=round_index + 1, batch_id=batch_id)
-                return results()
+                # Not just cancel-and-go: seats the provider already
+                # finished are billed, so the window collects them before
+                # the attempt is written off.
+                return settle_open_batch(
+                    batch_id,
+                    pending=pending,
+                    round_index=round_index,
+                    status="cancelled",
+                    message="Cancelled by user.",
+                )
             try:
                 snapshot = client.messages.batches.retrieve(batch_id)
             except (KeyboardInterrupt, SystemExit):
@@ -5276,44 +5609,54 @@ def _run_batch_calls(
                 if str(_item_attr(snapshot, "processing_status") or "") == "ended":
                     break
             if time.monotonic() > deadline:
-                _cancel_batch(client, batch_id)
-                settle_all(unsettled(), ceiling_message, FailureClass.CONNECTION.value)
-                emit("timeout", round=round_index + 1, batch_id=batch_id)
-                return results()
+                return settle_open_batch(
+                    batch_id,
+                    pending=pending,
+                    round_index=round_index,
+                    status="timeout",
+                    message=ceiling_message,
+                    failure_class=FailureClass.CONNECTION.value,
+                )
             time.sleep(poll_seconds)
 
-        try:
-            items = list(client.messages.batches.results(batch_id))
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except Exception as exc:  # noqa: BLE001 — whole round unreadable
-            message = f"{type(exc).__name__}: {exc}"
-            settle_all(unsettled(), message, classify_exception(exc).value)
-            emit("failed", round=round_index + 1, batch_id=batch_id, error=message)
+        read = _consume_batch_results(
+            client,
+            batch_id,
+            states=states,
+            submitted=set(pending),
+            attempts=attempts,
+            retry_event=f"{seat_event_prefix}_retry",
+            fields_for=fields_for,
+            event_sink=event_sink,
+        )
+        unassigned_results += read.unassigned
+        # Only a request whose row was never read has an unknown charge. A
+        # seat answered and then left mid-continuation was read; its billing
+        # is known even if the round ends here.
+        unread = [key for key in pending if key not in read.answered]
+
+        if read.error:
+            for key in unread:
+                states[key].uncollected_requests += 1
+            settle_all(unsettled(), read.error, read.failure_class)
+            emit(
+                "failed",
+                round=round_index + 1,
+                batch_id=batch_id,
+                error=read.error,
+                uncollected=len(unread),
+            )
             return results()
 
-        answered: set[str] = set()
-        for item in items:
-            key = str(_item_attr(item, "custom_id") or "")
-            state = states.get(key)
-            if state is None or state.settled is not None:
-                continue
-            answered.add(key)
-            _apply_batch_item(
-                state,
-                item,
-                attempts=attempts,
-                retry_event=f"{seat_event_prefix}_retry",
-                retry_fields=fields_for.get(key, {}),
-                event_sink=event_sink,
-            )
-
         # A submitted seat with no result line is a hole in the batch, not a
-        # verdict. Recorded as a failed seat (which makes the run partial)
-        # rather than silently dropped from the panel.
-        for key in pending:
-            if key in answered or states[key].settled is not None:
+        # verdict. Recorded as a failed seat (which makes the run partial),
+        # with an uncollected request against it because the provider may
+        # have billed work the app never saw — rather than silently dropped
+        # from the panel.
+        for key in unread:
+            if states[key].settled is not None:
                 continue
+            states[key].uncollected_requests += 1
             states[key].settle(
                 "Batched verification returned no result for this seat.",
                 FailureClass.UNKNOWN.value,
@@ -5328,6 +5671,109 @@ def _run_batch_calls(
     return results()
 
 
+# What a seat's record says when the phase ended underneath it — a Stop or
+# the wall-clock ceiling — while its own call had already succeeded or was
+# mid-continuation. True of both causes, which is why it names neither: the
+# run's own terminal event carries that.
+_RECOVERED_INCOMPLETE_MESSAGE = (
+    "Batched verification ended before this seat completed."
+)
+
+
+@dataclass
+class _BatchReadOutcome:
+    """What one pass over a batch's results stream managed to account for."""
+
+    answered: set[str]
+    unassigned: int = 0
+    error: str = ""
+    failure_class: str = ""
+
+
+@dataclass
+class _BatchPhaseOutcome:
+    """A batched phase's per-seat results plus its run-level anomalies."""
+
+    results: dict[str, _CallResult]
+    unassigned_results: int = 0
+    # True when a Stop or the wall-clock ceiling ended the phase. The
+    # settlement window can recover every seat a stopped run had already
+    # paid for — which is the point — but a review the user stopped must
+    # never read as COMPLETE just because the provider happened to finish
+    # first. The run degrades to partial, so readiness stays blocked and
+    # nothing recovered becomes actionable.
+    terminated_early: bool = False
+
+
+def _consume_batch_results(
+    client: Any,
+    batch_id: str,
+    *,
+    states: dict[str, _BatchSeatState],
+    submitted: set[str],
+    attempts: int,
+    retry_event: str,
+    fields_for: dict[str, dict[str, Any]],
+    event_sink: EventSink,
+    recovering: bool = False,
+    deadline: float | None = None,
+) -> _BatchReadOutcome:
+    """Fold one batch's results in, ONE ROW AT A TIME.
+
+    The row-at-a-time read is the point. Materializing the whole iterator
+    first meant a failure part way through discarded every row already
+    yielded — their VERDICTS as much as their usage — and settled every seat
+    in the round as a transport failure. Now a failure costs only the
+    remainder of the stream.
+
+    Identity within a round is ``(round, custom_id)`` and is checked BEFORE
+    every fold, never merely against ``state.settled``: a seat is left
+    deliberately unsettled after a ``pause_turn`` or a retryable error, so a
+    duplicated row for one of those would queue a second continuation or
+    restart the attempt twice, billing the same work again. A row that
+    matches no request this round submitted belongs to no seat at all, so no
+    per-seat counter can carry it — it is counted at run level instead
+    (``QCResult.unassigned_batch_results``), because a run that received
+    every expected row plus one it could not attribute must not read as
+    having accounted for its charges.
+
+    ``deadline`` bounds the read itself, checked between rows: the settlement
+    window uses it so a slow stream cannot outlive the window it belongs to.
+    The ordinary path passes ``None`` — abandoning a row it could have folded
+    would throw away a verdict the run has already paid for.
+    """
+    answered: set[str] = set()
+    unassigned = 0
+    try:
+        for item in client.messages.batches.results(batch_id):
+            if deadline is not None and time.monotonic() > deadline:
+                break
+            key = str(_item_attr(item, "custom_id") or "")
+            if key not in submitted or key in answered:
+                unassigned += 1
+                continue
+            answered.add(key)
+            _apply_batch_item(
+                states[key],
+                item,
+                attempts=attempts,
+                retry_event=retry_event,
+                retry_fields=fields_for.get(key, {}),
+                event_sink=event_sink,
+                recovering=recovering,
+            )
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as exc:  # noqa: BLE001 — the rows already folded stand
+        return _BatchReadOutcome(
+            answered=answered,
+            unassigned=unassigned,
+            error=f"{type(exc).__name__}: {exc}",
+            failure_class=classify_exception(exc).value,
+        )
+    return _BatchReadOutcome(answered=answered, unassigned=unassigned)
+
+
 def _apply_batch_item(
     state: _BatchSeatState,
     item: Any,
@@ -5336,8 +5782,17 @@ def _apply_batch_item(
     retry_event: str,
     retry_fields: dict[str, Any],
     event_sink: EventSink,
+    recovering: bool = False,
 ) -> None:
-    """Fold one batch result into its seat: settle, continue, or retry."""
+    """Fold one batch result into its seat: settle, continue, or retry.
+
+    ``recovering`` is the settlement window's read (see ``_settle_open_batch``):
+    the phase has already ended, so the fold captures what the provider
+    actually did and buys nothing further. A completed call still parses into
+    a real verdict, and a paused or retryable one settles where it stands with
+    its billed responses retained — no continuation is queued and no retry is
+    started, because both would be new model work after a Stop.
+    """
     outcome = _item_attr(item, "result")
     outcome_type = str(_item_attr(outcome, "type") or "")
 
@@ -5353,7 +5808,7 @@ def _apply_batch_item(
     if outcome_type != "succeeded":
         failure_class, message = _batch_error_facts(_item_attr(outcome, "error"))
         is_last = state.attempt >= attempts - 1
-        if not is_retryable_failure_class(failure_class) or is_last:
+        if recovering or not is_retryable_failure_class(failure_class) or is_last:
             state.settle(message, failure_class.value)
             return
         backoff = compute_backoff_seconds(
@@ -5392,6 +5847,11 @@ def _apply_batch_item(
         state.settle_parsed()
         return
     if stop_class == STOP_CLASS_PAUSE:
+        if recovering:
+            # The response is already in ``all_responses``, so its usage is
+            # captured; what is refused is the continuation that would follow.
+            state.settle(_RECOVERED_INCOMPLETE_MESSAGE)
+            return
         search_ceiling = max(1, state.spec.max_searches * 2)
         total_search = sum(_web_search_count(r) for r in state.all_responses)
         if total_search > search_ceiling:
@@ -6160,6 +6620,16 @@ def run_final_qc(
         i: [] for i in range(len(raw_findings))
     }
     candidate_outcomes: dict[int, tuple[str, str]] = {}
+    # Rows the batched phase could not attribute to a seat it submitted.
+    # Bound here rather than in the verification block: a run with no
+    # candidates never enters that block, and the record is built either way.
+    # Always 0 on the streaming transport, which has no such concept.
+    unassigned_batch_results = 0
+    # A Stop or the phase ceiling ended verification. Recovered seats keep
+    # their verdicts, but the review itself was cut short and cannot read as
+    # complete. The streaming transport reaches its own cancellation through
+    # the seats' own statuses, so it leaves this False.
+    verification_cut_short = False
     done = 0
     total = len(raw_findings)
     event_sink({"type": "verify_progress", "done": 0, "total": total})
@@ -6275,7 +6745,7 @@ def run_final_qc(
                 for i, j in tasks
             }
             pending_tasks.clear()
-            call_results = _run_batch_calls(
+            batch_phase = _run_batch_calls(
                 client,
                 specs=seat_specs,
                 seat_event_prefix="verifier",
@@ -6284,6 +6754,9 @@ def run_final_qc(
                 event_sink=event_sink,
                 should_stop=should_stop,
             )
+            call_results = batch_phase.results
+            unassigned_batch_results = batch_phase.unassigned_results
+            verification_cut_short = batch_phase.terminated_early
             # Recorded in submission order so a candidate's panel is folded
             # in reviewer_index order, exactly as the streamed path's
             # per-candidate accounting expects.
@@ -6588,6 +7061,12 @@ def run_final_qc(
     verification_complete = all(
         verdict.status == "completed" for verdict in all_verdicts
     )
+    # Requests the batched phase submitted whose result it never read. Summed
+    # from the seats rather than tracked separately, so the run-level status
+    # and the per-seat records can never disagree about the same gap.
+    uncollected_batch_requests = sum(
+        verdict.uncollected_requests for verdict in all_verdicts
+    )
     api_request_count = (
         sum(status.api_request_count for status in lens_statuses)
         + consolidation.api_request_count
@@ -6606,6 +7085,7 @@ def run_final_qc(
         execution_status=(
             "complete"
             if coverage_complete and verification_complete
+            and not verification_cut_short
             else "partial"
         ),
         summary=" ".join(summaries).strip(),
@@ -6650,5 +7130,20 @@ def run_final_qc(
         api_request_count=api_request_count,
         model_response_count=model_response_count,
         research_profile_present=profile is not None,
+        unassigned_batch_results=unassigned_batch_results,
+        # Derived from the seats and the run's own anomalies, never asserted:
+        # a batched run says complete only when every request it submitted
+        # came back and every row it received belonged to one. A streamed run
+        # says not-applicable rather than leaving the field empty, which is
+        # reserved for a report written before any of this existed.
+        batch_usage_capture=(
+            BATCH_CAPTURE_NOT_APPLICABLE
+            if not batch_verification
+            else (
+                BATCH_CAPTURE_INCOMPLETE
+                if uncollected_batch_requests or unassigned_batch_results
+                else BATCH_CAPTURE_COMPLETE
+            )
+        ),
         dismissed_ids=dismissed_ids,
     )

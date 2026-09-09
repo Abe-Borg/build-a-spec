@@ -123,9 +123,17 @@ export default function Header({
         <button
           onClick={onOpenSettings}
           title={
-            usage?.includes_estimated_output
-              ? "Estimated spend this session — click for the breakdown. Includes an estimated allowance for output from a stopped turn: the provider reports no final token count when generation is interrupted, so it is measured from what arrived."
-              : "Estimated spend this session — click for the breakdown"
+            [
+              "Estimated spend this session — click for the breakdown",
+              usage?.includes_estimated_output
+                ? "Includes an estimated allowance for output from a stopped turn: the provider reports no final token count when generation is interrupted, so it is measured from what arrived."
+                : "",
+              usage?.includes_uncollected_charges
+                ? "Some batched Final QC results could not be collected, so the figure is a floor: those requests were sent and may have been billed."
+                : "",
+            ]
+              .filter(Boolean)
+              .join(". ")
           }
           data-tour="spend-pill"
           data-capability="usage.details"

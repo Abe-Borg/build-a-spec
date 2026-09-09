@@ -43,6 +43,7 @@ import {
   qcReportLimitations,
   qcRequestPopulation,
   qcRequestPopulationNote,
+  qcBatchCapture,
   qcReferenceCoverage,
   qcResearchCoverage,
   qcSubstantivelyRefutedCandidates,
@@ -1134,6 +1135,7 @@ export default function QCReportModal({
               <DataField label="QC input fingerprint" mono>{recorded(report.input_fingerprint)}</DataField>
               <DataField label="Requirements research present">{qcResearchCoverage(report).identity}</DataField>
               <DataField label="Reference documents reviewed against">{qcReferenceCoverage(report).identity}</DataField>
+              <DataField label="Batch cost capture">{qcBatchCapture(report).identity}</DataField>
               <DataField label="Remembered dismissed IDs">{report.dismissed_ids.length.toLocaleString("en-US")}</DataField>
               <DataField label="Latest attempt run ID" mono>{recorded(latestAttempt?.run_id)}</DataField>
               <DataField label="Latest attempt status">{recorded(latestAttempt?.status)}</DataField>

@@ -379,12 +379,22 @@ def test_a_seat_with_no_result_line_is_recorded_failed_not_dropped():
     assert result.execution_status == "partial"
 
 
-def test_stopping_cancels_the_batch_and_settles_every_open_seat():
+def test_stopping_cancels_the_batch_and_collects_what_it_already_produced():
     """Stop lands while the batch is in flight, after phase 1 has finished.
 
     Setting the flag before the run would kill the lenses instead, which is
-    a different (already covered) path — the point here is that a batch we
-    have already submitted is cancelled rather than waited out.
+    a different (already covered) path — the point here is a batch already
+    submitted.
+
+    It is cancelled, and then SETTLED: the provider bills every seat it has
+    already run whether or not the app reads the result, so the window
+    collects them. This fake resolves a batch immediately, which models the
+    case the recovery exists for — the work was done before the Stop
+    landed. The seats therefore keep their verdicts and their usage, and no
+    charge is disclosed as uncollected because none was.
+
+    What the recovery must NOT do is launder a stopped review into a
+    complete one: the run reads partial however many seats came back.
     """
     stop = threading.Event()
     client = SequencedFakeClient(_one_finding_scripts())
@@ -399,11 +409,29 @@ def test_stopping_cancels_the_batch_and_settles_every_open_seat():
     result = _run(client, should_stop=stop.is_set)
 
     assert client.batches.cancelled
-    assert len(result.inconclusive) == 1
+    # Recovered, not written off: one adjudicated candidate with real seats.
+    candidates = [
+        *result.findings,
+        *result.refuted,
+        *result.disputed,
+        *result.inconclusive,
+    ]
+    assert len(candidates) == 1
+    verdicts = candidates[0].verdicts
+    assert verdicts and all(v.status == "completed" for v in verdicts)
+    # Each seat's response was actually folded, not synthesized as a failure.
+    assert all(v.api_request_count > 0 for v in verdicts)
+    # Every submitted row was read, so there is nothing to disclose.
+    assert result.uncollected_batch_requests() == 0
+    assert result.unassigned_batch_results == 0
+    assert result.batch_usage_capture == "complete"
+    # And a stopped review is never a complete one.
+    assert result.execution_status == "partial"
+    # The bound is applied to the calls inside the window, cancel included.
+    assert client.request_options, "the settlement used the bounded client"
     assert all(
-        v.status == "cancelled" for v in result.inconclusive[0].verdicts
+        options["max_retries"] == 0 for options in client.request_options
     )
-    assert result.execution_status in {"partial", "cancelled"}
 
 
 def test_a_stop_before_submission_spends_nothing_on_phase_two():
@@ -878,3 +906,458 @@ def test_a_refusal_with_no_round_left_fails_with_the_refusal_not_a_sleep(
     )
     assert not any("round ceiling" in v.error for v in seats)
     assert result.execution_status == "partial"
+
+
+# ---------------------------------------------------------------------------
+# Trustworthy accounting: what the phase read, and what it could not
+# ---------------------------------------------------------------------------
+#
+# The provider bills a batch request whether or not the app ever reads its
+# result. Two ways that used to go wrong. The whole results iterator was
+# materialized before any row was folded, so one failure part way through
+# discarded every row already yielded — the verdicts as much as the usage.
+# And a Stop cancelled the batch and returned, leaving seats the provider
+# had already finished unread and unbilled in the record.
+#
+# Now the read is row-at-a-time, a Stop or the ceiling opens a bounded
+# settlement window, and whatever the window still cannot collect is
+# disclosed rather than written off.
+
+
+def _uncollected(result) -> int:
+    return result.uncollected_batch_requests()
+
+
+class _FailingResults:
+    """A results stream that yields ``rows`` and then raises."""
+
+    def __init__(self, batches, rows_before_failure: int):
+        self._batches = batches
+        self._rows = rows_before_failure
+
+    def __call__(self, batch_id):
+        for index, item in enumerate(self._batches.real_results(batch_id)):
+            if index >= self._rows:
+                raise anthropic.APIConnectionError(
+                    request=httpx.Request("GET", "https://api.anthropic.com/x")
+                )
+            yield item
+
+
+def _with_failing_results(client, rows_before_failure: int):
+    batches = client.batches
+    batches.real_results = batches.results
+    batches.results = _FailingResults(batches, rows_before_failure)
+    return client
+
+
+def test_a_results_stream_that_fails_part_way_keeps_what_it_already_read():
+    """The headline: one failure no longer discards the rows before it.
+
+    Two seats, the first row folded and the second never delivered. The
+    folded seat keeps its verdict; only the unread one is a gap.
+    """
+    client = _with_failing_results(SequencedFakeClient(_one_finding_scripts()), 1)
+    result = _run(client)
+
+    seats = [
+        verdict
+        for finding in [
+            *result.findings,
+            *result.refuted,
+            *result.disputed,
+            *result.inconclusive,
+        ]
+        for verdict in finding.verdicts
+    ]
+    assert len(seats) == 2
+    completed = [seat for seat in seats if seat.status == "completed"]
+    assert len(completed) == 1, "the row that arrived keeps its verdict"
+    assert completed[0].api_request_count > 0
+    # Exactly one request's result was never read.
+    assert _uncollected(result) == 1
+    assert result.batch_usage_capture == "incomplete"
+    assert result.execution_status == "partial"
+
+
+def test_a_failure_after_every_expected_row_invents_no_gap():
+    """The read failed, but it had already read everything.
+
+    A transport diagnostic is not evidence of a missing charge, and
+    manufacturing one would make the disclosure noise.
+    """
+    client = _with_failing_results(SequencedFakeClient(_one_finding_scripts()), 2)
+    result = _run(client)
+
+    assert _uncollected(result) == 0
+    assert result.unassigned_batch_results == 0
+    assert result.batch_usage_capture == "complete"
+
+
+def test_a_stop_whose_batch_never_ends_discloses_the_uncollected_requests(
+    monkeypatch,
+):
+    """The window opens, the batch stays in flight, the bound expires.
+
+    Nothing is recovered — and nothing is invented either. Both seats are
+    cancelled and both are counted, because their billing outcome is
+    genuinely unknown.
+
+    The window is shortened to a second: this test is about what the bound
+    DOES when it expires, not about how long the shipped default is.
+    """
+    monkeypatch.setattr(settings, "QC_BATCH_SETTLE_SECONDS", 1)
+    stop = threading.Event()
+    client = SequencedFakeClient(_one_finding_scripts())
+    real_create = client.batches.create
+
+    def create_then_stop(*, requests):
+        batch = real_create(requests=requests)
+        stop.set()
+        return batch
+
+    client.batches.create = create_then_stop
+    # The batch never reports `ended`, so the window can only wait it out.
+    client.batches.retrieve = lambda batch_id: SimpleNamespace(
+        id=batch_id,
+        processing_status="in_progress",
+        request_counts=SimpleNamespace(
+            processing=2, succeeded=0, errored=0, canceled=0, expired=0
+        ),
+    )
+    result = _run(client, should_stop=stop.is_set)
+
+    assert client.batches.cancelled
+    assert _uncollected(result) == 2
+    assert result.batch_usage_capture == "incomplete"
+    assert result.execution_status == "partial"
+
+
+def test_the_settlement_window_bounds_every_call_it_makes():
+    """Including the cancel.
+
+    The app client runs the SDK's own retries at a ten-minute read timeout,
+    so one stalled call would hold the settling state — and the locked QC
+    controls with it — for far longer than the window advertises.
+    """
+    stop = threading.Event()
+    client = SequencedFakeClient(_one_finding_scripts())
+    real_create = client.batches.create
+
+    def create_then_stop(*, requests):
+        batch = real_create(requests=requests)
+        stop.set()
+        return batch
+
+    client.batches.create = create_then_stop
+    _run(client, should_stop=stop.is_set)
+
+    assert client.request_options, "the window re-optioned the client"
+    for options in client.request_options:
+        assert options["max_retries"] == 0
+        # A short read timeout, well under the module default. On the shipped
+        # window (two minutes) the per-call ceiling is what binds, and the
+        # SDK's own connect timeout is left intact — folding connect into a
+        # LONG read budget would make a black-holed connect the longest call
+        # in the window. It is only ever bounded downward; see the next test.
+        assert options["timeout"].read <= 60.0
+        assert options["timeout"].connect == 5.0
+
+
+def test_each_settlement_call_is_bounded_by_the_time_the_window_has_left(
+    monkeypatch,
+):
+    """The budget is the remaining window, not a fixed per-call ceiling.
+
+    The deadline is checked only BETWEEN operations, so a call granted more
+    time than the window has left simply outlives it — and the settling
+    state holds Final QC's start, apply, dismiss and export locked while it
+    does. A window configured shorter than the ceiling was the case that
+    made this visible: every call still got the full ceiling, plus a connect
+    timeout several times the whole advertised window.
+    """
+    monkeypatch.setattr(settings, "QC_BATCH_SETTLE_SECONDS", 2)
+    stop = threading.Event()
+    client = SequencedFakeClient(_one_finding_scripts())
+    real_create = client.batches.create
+
+    def create_then_stop(*, requests):
+        batch = real_create(requests=requests)
+        stop.set()
+        return batch
+
+    client.batches.create = create_then_stop
+    # Never ends, so the window polls until the budget is spent — which is
+    # what gives us a call issued near the deadline to inspect.
+    client.batches.retrieve = lambda batch_id: SimpleNamespace(
+        id=batch_id,
+        processing_status="in_progress",
+        request_counts=SimpleNamespace(
+            processing=2, succeeded=0, errored=0, canceled=0, expired=0
+        ),
+    )
+    _run(client, should_stop=stop.is_set)
+
+    assert client.request_options, "the window re-optioned the client"
+    for options in client.request_options:
+        assert options["max_retries"] == 0
+        assert options["timeout"].read <= 2.0, "a call outlives its own window"
+        assert options["timeout"].connect <= 2.0, "connect outlives the window"
+    # And the budget really is falling, not one short value reused: the last
+    # call has strictly less to spend than the first.
+    reads = [options["timeout"].read for options in client.request_options]
+    assert len(reads) > 1
+    assert reads[-1] < reads[0]
+
+
+def test_a_cancel_that_raises_still_opens_the_window():
+    """Cancellation is advisory; collection is the valuable half.
+
+    A provider that refuses the cancel has not stopped billing, so giving up
+    on the read would forfeit exactly the charges worth recovering.
+    """
+    stop = threading.Event()
+    client = SequencedFakeClient(_one_finding_scripts())
+    real_create = client.batches.create
+
+    def create_then_stop(*, requests):
+        batch = real_create(requests=requests)
+        stop.set()
+        return batch
+
+    def refuse_cancel(batch_id):
+        raise anthropic.APIConnectionError(
+            request=httpx.Request("POST", "https://api.anthropic.com/x")
+        )
+
+    client.batches.create = create_then_stop
+    client.batches.cancel = refuse_cancel
+    result = _run(client, should_stop=stop.is_set)
+
+    # The results were still collected despite the failed cancellation.
+    assert _uncollected(result) == 0
+    assert result.batch_usage_capture == "complete"
+    assert result.execution_status == "partial"
+
+
+def test_a_duplicate_row_is_folded_once_and_counted_as_unattributable():
+    """Identity is (round, custom_id), checked before every fold.
+
+    `_apply_batch_item` deliberately leaves a seat unsettled after a
+    pause_turn or a retryable error, so a repeated row for one of those
+    would queue a second continuation or restart the attempt again — billing
+    the same work twice.
+    """
+    client = SequencedFakeClient(_one_finding_scripts())
+    batches = client.batches
+    real_results = batches.results
+    batches.results = lambda batch_id: [
+        *(rows := list(real_results(batch_id))),
+        rows[0],
+    ]
+    result = _run(client)
+
+    seats = [
+        verdict
+        for finding in [
+            *result.findings,
+            *result.refuted,
+            *result.disputed,
+            *result.inconclusive,
+        ]
+        for verdict in finding.verdicts
+    ]
+    assert len(seats) == 2, "the duplicate did not mint a third seat"
+    assert all(seat.api_request_count == 1 for seat in seats)
+    # Read but unattributable: it belongs to no seat, so the run carries it.
+    assert result.unassigned_batch_results == 1
+    assert _uncollected(result) == 0
+    assert result.batch_usage_capture == "incomplete"
+
+
+def test_an_unknown_custom_id_prevents_a_false_complete_capture():
+    """Every expected row arrived — plus one the run could not place.
+
+    A per-seat counter cannot carry it, which is why the run keeps its own.
+    Without that the report would read as having accounted for its charges
+    while having dropped a provider result on the floor.
+    """
+    client = SequencedFakeClient(_one_finding_scripts())
+    batches = client.batches
+    real_results = batches.results
+    batches.results = lambda batch_id: [
+        *real_results(batch_id),
+        SimpleNamespace(
+            custom_id="seat-that-was-never-submitted",
+            result=SimpleNamespace(type="succeeded", message=None),
+        ),
+    ]
+    result = _run(client)
+
+    assert result.unassigned_batch_results == 1
+    assert _uncollected(result) == 0
+    assert result.batch_usage_capture == "incomplete"
+
+
+def test_a_clean_batched_run_records_complete_capture():
+    """The control: nothing missing, nothing unattributable, nothing to say."""
+    result = _run(SequencedFakeClient(_one_finding_scripts()))
+    assert result.batch_usage_capture == "complete"
+    assert _uncollected(result) == 0
+    assert result.unassigned_batch_results == 0
+    assert result.execution_status == "complete"
+
+
+def test_a_streamed_run_says_not_applicable_not_predates_the_recording():
+    """A streamed run submitted no batch request, and says so in its own state.
+
+    Leaving the field empty conflated it with a report written before any of
+    this existed — and both renderers turn that empty state into a
+    limitation claiming the report predates cost-capture recording, which is
+    false of a run this build just produced. The two must stay distinguishable
+    in the record, and neither is ever promoted to complete.
+    """
+    from backend.qc.engine import (
+        BATCH_CAPTURE_NOT_APPLICABLE,
+        BATCH_CAPTURE_UNRECORDED,
+    )
+
+    result = _run(SequencedFakeClient(_one_finding_scripts()), batch=False)
+    assert result.batch_usage_capture == BATCH_CAPTURE_NOT_APPLICABLE
+    assert result.batch_usage_capture != BATCH_CAPTURE_UNRECORDED
+    assert _uncollected(result) == 0
+
+    # And it survives a round trip, so a saved project reads the same way.
+    from backend.qc.engine import QCResult
+
+    reloaded = QCResult.from_dict(result.to_dict())
+    assert reloaded is not None
+    assert reloaded.batch_usage_capture == BATCH_CAPTURE_NOT_APPLICABLE
+
+
+def test_the_gap_reaches_the_session_meter_and_derives_its_own_flag():
+    """The disclosure rides the batched bucket, not a second channel.
+
+    That is what makes it inherit the sink, the session-generation guard,
+    reset, project load and the detached-workspace merge for free — and what
+    makes it impossible for a snapshot to show a run's new spend without the
+    warning belonging to it.
+    """
+    from backend.usage_ledger import UNCOLLECTED_BATCH_REQUESTS_KEY, UsageLedger
+
+    client = _with_failing_results(SequencedFakeClient(_one_finding_scripts()), 1)
+    result = _run(client)
+    buckets = result.usage_by_meter_category()
+    assert buckets["qc_batched"][UNCOLLECTED_BATCH_REQUESTS_KEY] == 1
+
+    ledger = UsageLedger()
+    for category, bucket in buckets.items():
+        ledger.add(category, bucket)
+    snapshot = ledger.snapshot()
+    assert snapshot["includes_uncollected_charges"] is True
+    # A count of requests, never a token: no pricing helper reads this key,
+    # so it cannot become a charge.
+    priced = snapshot["estimated_cost_usd"]["by_category"]["qc_batched"]
+    ledger_without = UsageLedger()
+    ledger_without.add(
+        "qc_batched",
+        {
+            k: v
+            for k, v in buckets["qc_batched"].items()
+            if k != UNCOLLECTED_BATCH_REQUESTS_KEY
+        },
+    )
+    assert priced == (
+        ledger_without.snapshot()["estimated_cost_usd"]["by_category"].get(
+            "qc_batched", 0.0
+        )
+    )
+
+
+def test_an_empty_subtotal_still_discloses_its_missing_charges():
+    """No tokens read is not the same as no money spent.
+
+    A run that read nothing back has the LEAST evidence about what it was
+    billed, so suppressing the warning for want of a token count would drop
+    it in exactly the case that needs it most.
+    """
+    from backend.usage_ledger import UNCOLLECTED_BATCH_REQUESTS_KEY, UsageLedger
+
+    ledger = UsageLedger()
+    ledger.add("qc_batched", {UNCOLLECTED_BATCH_REQUESTS_KEY: 2})
+    snapshot = ledger.snapshot()
+
+    assert snapshot["includes_uncollected_charges"] is True
+    assert snapshot["estimated_cost_usd"]["by_category"]["qc_batched"] == 0.0
+    assert snapshot["includes_estimated_output"] is False
+
+
+def test_a_clean_run_sets_no_warning_anywhere():
+    """The control: the flag is derived, so silence means silence."""
+    from backend.usage_ledger import UsageLedger
+
+    result = _run(SequencedFakeClient(_one_finding_scripts()))
+    ledger = UsageLedger()
+    for category, bucket in result.usage_by_meter_category().items():
+        ledger.add(category, bucket)
+    assert ledger.snapshot()["includes_uncollected_charges"] is False
+
+
+def test_the_capture_record_survives_a_round_trip_and_polices_itself():
+    """Serialized, reloaded — and refused when it contradicts its evidence."""
+    from backend.qc.engine import QCResult
+
+    client = _with_failing_results(SequencedFakeClient(_one_finding_scripts()), 1)
+    result = _run(client)
+    payload = result.to_dict()
+    assert payload["batch_usage_capture"] == "incomplete"
+    assert payload["uncollected_batch_requests"] == 1
+
+    reloaded = QCResult.from_dict(payload)
+    assert reloaded is not None
+    assert reloaded.batch_usage_capture == "incomplete"
+    assert reloaded.uncollected_batch_requests() == 1
+
+    # A record claiming it accounted for everything, over evidence that it
+    # did not, is contradicting itself and is refused rather than believed.
+    forged = result.to_dict()
+    forged["batch_usage_capture"] = "complete"
+    assert QCResult.from_dict(forged) is None
+
+    # So is a serialized total that disagrees with the seats under it.
+    miscounted = result.to_dict()
+    miscounted["uncollected_batch_requests"] = 0
+    assert QCResult.from_dict(miscounted) is None
+
+
+def test_a_report_written_before_the_disclosure_is_never_promoted():
+    """It carries no counts, and cannot say. "" is the honest reading."""
+    from backend.qc.engine import QCResult
+
+    payload = _run(SequencedFakeClient(_one_finding_scripts())).to_dict()
+    payload.pop("batch_usage_capture")
+    payload.pop("uncollected_batch_requests")
+    payload.pop("unassigned_batch_results")
+
+    reloaded = QCResult.from_dict(payload)
+    assert reloaded is not None
+    assert reloaded.batch_usage_capture == ""
+    assert reloaded.unassigned_batch_results == 0
+
+
+def test_the_disclosure_does_not_stale_a_retained_review():
+    """Cost capture is not a review input.
+
+    Putting it in the hashed manifest would flip every retained result stale
+    to describe something the reviewers never read.
+    """
+    store = _store()
+    result = _run(SequencedFakeClient(_one_finding_scripts()))
+    assert result.matches_inputs(store.index, store.doc, None, DEFAULT_MODULE)
+    manifest_text = repr(result.input_manifest)
+    for key in (
+        "batch_usage_capture",
+        "uncollected_batch_requests",
+        "unassigned_batch_results",
+    ):
+        assert key not in manifest_text

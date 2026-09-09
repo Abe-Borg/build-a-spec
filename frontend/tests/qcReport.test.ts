@@ -22,6 +22,7 @@ import {
   qcRequestPopulation,
   qcRequestPopulationNote,
   qcReferenceCoverage,
+  qcBatchCapture,
   qcResearchCoverage,
   qcSubstantivelyRefutedCandidates,
   qcSurvivingCandidates,
@@ -1441,4 +1442,107 @@ test("mixed and missing recorded sizes are disclosed rather than guessed", () =>
     qcPanelSizePhrase(result()),
     "a seat count this report did not record for critical and high findings, a seat count this report did not record for medium and low",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Batch cost capture — the mirror of docx_export.qc_batch_capture
+// ---------------------------------------------------------------------------
+//
+// The provider bills a batch request whether or not the app reads its
+// result, so a run that could not collect one has a cost floor rather than a
+// total. The Word memo and this modal are one contract: a row asserting the
+// cost, beside no disclosure that part of it is unknown, is the reassuring
+// half-truth the pairing exists to prevent.
+
+test("a run that accounted for every batch request discloses nothing", () => {
+  const capture = qcBatchCapture(
+    result({
+      batch_usage_capture: "complete",
+      uncollected_batch_requests: 0,
+      unassigned_batch_results: 0,
+    }),
+  );
+  assert.equal(capture.state, "complete");
+  assert.equal(capture.identity, "Complete");
+  assert.equal(capture.limitation, "");
+});
+
+test("uncollected requests are named, and the cost is called a floor", () => {
+  const capture = qcBatchCapture(
+    result({
+      batch_usage_capture: "incomplete",
+      uncollected_batch_requests: 3,
+      unassigned_batch_results: 0,
+    }),
+  );
+  assert.equal(capture.state, "incomplete");
+  assert.equal(capture.identity, "Incomplete");
+  assert.match(capture.limitation, /3 batch request\(s\)/);
+  assert.match(capture.limitation, /floor rather than a total/);
+  assert.doesNotMatch(capture.limitation, /attributed to a reviewer seat/);
+});
+
+test("an unattributable result is disclosed on its own terms", () => {
+  const capture = qcBatchCapture(
+    result({
+      batch_usage_capture: "incomplete",
+      uncollected_batch_requests: 0,
+      unassigned_batch_results: 2,
+    }),
+  );
+  assert.match(capture.limitation, /2 returned result\(s\)/);
+  assert.doesNotMatch(capture.limitation, /batch request\(s\) were submitted/);
+});
+
+test("a report written before the disclosure is never read as complete", () => {
+  // The case that matters most: no status and no counts is "cannot say",
+  // and reading that silence as an all-clear is the failure to avoid.
+  const capture = qcBatchCapture(result({}));
+  assert.equal(capture.state, "unrecorded");
+  assert.equal(capture.identity, "Not recorded by this version");
+  assert.match(capture.limitation, /predates cost-capture recording/);
+});
+
+test("a streamed run is not told it predates the recording it just wrote", () => {
+  // Both no-count states carry no gap, and they are still different
+  // answers: a streamed run submitted nothing to account for, so there is
+  // nothing to disclose. The empty state's limitation would tell a reader
+  // that a run this build produced predates its own recording.
+  const capture = qcBatchCapture(
+    result({ batch_usage_capture: "not_applicable" }),
+  );
+  assert.equal(capture.state, "not_applicable");
+  assert.match(capture.identity, /Not applicable/);
+  assert.equal(capture.limitation, "");
+  assert.notEqual(capture.state, "complete");
+
+  // And it stays out of the limitations list entirely.
+  const record = result({ batch_usage_capture: "not_applicable" });
+  const limitations = qcReportLimitations(record);
+  assert.ok(!limitations.some((line) => /cost capture/i.test(line)));
+  assert.ok(!limitations.some((line) => /predates cost-capture/i.test(line)));
+});
+
+test("a malformed counter cannot invent a gap or hide one", () => {
+  const broken = result({ batch_usage_capture: "incomplete" }) as Record<
+    string,
+    unknown
+  >;
+  broken.uncollected_batch_requests = "3";
+  broken.unassigned_batch_results = Number.NaN;
+  const capture = qcBatchCapture(broken as unknown as QcReportResult);
+  assert.equal(capture.state, "incomplete");
+  // Neither count is usable, so the disclosure stays true without naming a
+  // number it cannot stand behind.
+  assert.match(capture.limitation, /some results were not collected/);
+});
+
+test("the capture limitation reaches the report's limitations verbatim", () => {
+  const record = result({
+    batch_usage_capture: "incomplete",
+    uncollected_batch_requests: 1,
+    unassigned_batch_results: 0,
+  });
+  const limitations = qcReportLimitations(record);
+  assert.ok(limitations.includes(qcBatchCapture(record).limitation));
 });

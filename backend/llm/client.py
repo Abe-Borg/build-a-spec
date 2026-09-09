@@ -50,6 +50,35 @@ def _client_options() -> dict:
     }
 
 
+def bounded_request_options(read_timeout_seconds: float) -> dict:
+    """Per-request overrides for a call that must finish inside a deadline.
+
+    ``client.with_options(**bounded_request_options(30))`` turns the SDK's own
+    retries off and shortens the read timeout, so one call can spend at most
+    roughly its timeout of the caller's window. Without it a single request
+    rides the module defaults — ``SDK_MAX_RETRIES`` attempts at
+    ``API_TIMEOUT_SECONDS`` each — and any bound measured in a couple of
+    minutes is fiction.
+
+    The connect timeout is the SDK's own, EXCEPT that it is bounded down to
+    the read budget when that budget is shorter. Only ever shortened: the
+    reason in ``_CONNECT_TIMEOUT_SECONDS`` is that a read value applied to
+    connecting makes a black-holed connect the longest call of all, and
+    lowering it cannot do that. A caller with two seconds left must not hand
+    out a five-second connect.
+
+    Used by Final QC's post-cancellation settlement window, which collects
+    results the provider already produced before a Stop.
+    """
+    read = float(read_timeout_seconds)
+    return {
+        "max_retries": 0,
+        "timeout": anthropic.Timeout(
+            read, connect=min(_CONNECT_TIMEOUT_SECONDS, read)
+        ),
+    }
+
+
 _lock = threading.Lock()
 _cached_client: anthropic.Anthropic | None = None
 _cached_key: str = ""

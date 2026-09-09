@@ -393,6 +393,16 @@ QC_BATCH_MAX_WAIT_SECONDS = _int_env("BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS", 7
 # spent its full per-seat QC_MAX_CONTINUATIONS x retry budget; that is
 # deliberate, and 20 is far above anything a real verifier seat reaches.
 QC_BATCH_MAX_ROUNDS = _int_env("BUILD_A_SPEC_QC_BATCH_MAX_ROUNDS", 20, minimum=1)
+# After a Stop or the wall-clock ceiling, how long the batched phase may keep
+# collecting results the provider has ALREADY produced before disclosing the
+# rest as uncollected. Those requests are billed whether or not the app reads
+# them, so a bounded settlement recovers real money and real verdicts; the
+# cost is that a replacement run, apply, dismiss and export stay locked while
+# the attempt settles. The bound covers the cancellation call, the polls and
+# the results read together — see ``qc.engine._settle_open_batch``.
+QC_BATCH_SETTLE_SECONDS = _int_env(
+    "BUILD_A_SPEC_QC_BATCH_SETTLE_SECONDS", 120, minimum=1
+)
 
 # Cross-lens candidate consolidation (Chunk 5.2): near-duplicate findings
 # raised by different lenses about the SAME defect at the same element share

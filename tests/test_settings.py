@@ -90,7 +90,7 @@ def test_every_shipped_knob_declares_a_floor():
             bare.append(
                 first.value if isinstance(first, ast.Constant) else "<dynamic>"
             )
-    assert calls >= 20, "the knob inventory shrank — re-check the sweep"
+    assert calls >= 21, "the knob inventory shrank — re-check the sweep"
     assert bare == [], f"integer knobs with no floor: {bare}"
 
 

@@ -325,14 +325,25 @@ def _persisted_nonnegative_int(value: object, *, field_name: str) -> int:
     return value
 
 
-# The three readings of "did every batch request this run submitted end up
-# with a known billing outcome?". "" is the pre-disclosure record, which
-# cannot say — and must never be promoted to complete.
+# The four readings of "did every batch request this run submitted end up
+# with a known billing outcome?". A run that verified over the STREAMING
+# transport submitted none, so the question does not arise for it — which is
+# a different answer from "", the pre-disclosure record, which submitted
+# batch requests and cannot say what became of them. Neither is ever
+# promoted to complete, but only one of them is a limitation: telling a
+# reader that a run produced by this build predates the recording it is
+# reading would be false.
 BATCH_CAPTURE_COMPLETE = "complete"
 BATCH_CAPTURE_INCOMPLETE = "incomplete"
+BATCH_CAPTURE_NOT_APPLICABLE = "not_applicable"
 BATCH_CAPTURE_UNRECORDED = ""
 _BATCH_CAPTURE_STATES = frozenset(
-    {BATCH_CAPTURE_COMPLETE, BATCH_CAPTURE_INCOMPLETE, BATCH_CAPTURE_UNRECORDED}
+    {
+        BATCH_CAPTURE_COMPLETE,
+        BATCH_CAPTURE_INCOMPLETE,
+        BATCH_CAPTURE_NOT_APPLICABLE,
+        BATCH_CAPTURE_UNRECORDED,
+    }
 )
 
 
@@ -1891,8 +1902,11 @@ class QCResult:
             return gaps == 0
         if self.batch_usage_capture == BATCH_CAPTURE_INCOMPLETE:
             return gaps > 0
-        # Unrecorded: a pre-disclosure report, which cannot have counts
-        # either. Counts without a status is a record no version could write.
+        # Not applicable: a streamed run, which submitted no batch request,
+        # so no seat can carry an uncollected one and no row can arrive
+        # unattributable. Unrecorded: a pre-disclosure report, which cannot
+        # have counts either. Counts under either is a record no version
+        # could write.
         return gaps == 0
 
     def _audit_accounting_consistent(self) -> bool:
@@ -5154,15 +5168,48 @@ def _batch_request_counts(snapshot: Any) -> dict[str, int]:
     }
 
 
-# Read timeout for every call inside the settlement window. Short on
-# purpose: the window is a couple of minutes and one stalled call must not
-# be able to spend most of it. The SDK's own retries go off with it, or a
-# single refused call would be tried three times before returning.
+# Ceiling on any ONE call inside the settlement window. Short on purpose:
+# the window is a couple of minutes and one stalled call must not be able to
+# spend most of it. The SDK's own retries go off with it, or a single
+# refused call would be tried three times before returning.
 _BATCH_SETTLE_REQUEST_TIMEOUT_SECONDS = 30.0
 
+# Below this much budget left, another provider call is not worth starting:
+# it would be handed a timeout it cannot plausibly meet and would spend the
+# remainder of the window failing.
+#
+# It MUST stay below the floor on ``BUILD_A_SPEC_QC_BATCH_SETTLE_SECONDS``
+# (1). At or above it, the shortest window a user can configure would skip
+# its own cancellation — the one call in the window that stops the provider
+# billing further, traded away to save a fraction of a second. Pinned by
+# test_a_stop_whose_batch_never_ends_discloses_the_uncollected_requests,
+# which runs on a one-second window and asserts the cancel went out.
+_BATCH_SETTLE_MIN_REQUEST_SECONDS = 0.25
 
-def _bounded_client(client: Any) -> Any:
-    """The same client with the SDK's retries off and a short read timeout.
+
+def _settle_request_seconds(deadline: float) -> float:
+    """How long one settlement call may take, or 0.0 when the window is spent.
+
+    The budget is the time actually LEFT, not a fixed ceiling. The deadline
+    is only checked between operations, so a call granted more time than the
+    window has left simply outlives it — and the settling state holds Final
+    QC's start, apply, dismiss and export controls locked while it does, so
+    the advertised bound has to be the real one. A window configured shorter
+    than the per-call ceiling (``BUILD_A_SPEC_QC_BATCH_SETTLE_SECONDS`` is
+    floored at 1) is the case that made this visible.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining < _BATCH_SETTLE_MIN_REQUEST_SECONDS:
+        return 0.0
+    return min(_BATCH_SETTLE_REQUEST_TIMEOUT_SECONDS, remaining)
+
+
+def _bounded_client(client: Any, seconds: float) -> Any:
+    """The same client with the SDK's retries off, bounded by ``seconds``.
+
+    Built fresh per operation from ``_settle_request_seconds`` rather than
+    once per window: a client bound at window start would still hand its
+    full ceiling to a call issued near the deadline.
 
     Falls back to the client as given when it cannot be re-optioned (a test
     double, a future transport). That is deliberately not fatal: the
@@ -5174,9 +5221,7 @@ def _bounded_client(client: Any) -> Any:
     if not callable(with_options):
         return client
     try:
-        return with_options(
-            **bounded_request_options(_BATCH_SETTLE_REQUEST_TIMEOUT_SECONDS)
-        )
+        return with_options(**bounded_request_options(seconds))
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception:  # noqa: BLE001 — a refused override is not a failure
@@ -5334,10 +5379,14 @@ def _run_batch_calls(
         over; it only records what was already done. Whatever the window
         cannot collect is counted against its seat and disclosed.
 
-        Every call inside the window goes through the bounded client. The
-        cancel is inside the bound too: it rides the same transport, and one
-        stalled cancellation on the module defaults would hold the settling
-        state for tens of minutes before the advertised window even began.
+        Every call inside the window goes through a client bounded by the
+        time the window has LEFT, rebuilt per operation — a fixed per-call
+        ceiling would let a call issued near the deadline outlive it, and a
+        window configured shorter than that ceiling would never be honoured
+        at all. The cancel is inside the bound too: it rides the same
+        transport, and one stalled cancellation on the module defaults would
+        hold the settling state for tens of minutes before the advertised
+        window even began.
 
         ``should_stop`` is deliberately not consulted here. The run is
         already stopping; asking again would abandon the collection at its
@@ -5345,14 +5394,20 @@ def _run_batch_calls(
         """
         nonlocal unassigned_results
         settle_deadline = time.monotonic() + settle_seconds
-        bounded = _bounded_client(client)
-        _cancel_batch(bounded, batch_id)
+        budget = _settle_request_seconds(settle_deadline)
+        if budget:
+            _cancel_batch(_bounded_client(client, budget), batch_id)
 
         answered: set[str] = set()
         last_counts: dict[str, int] | None = None
-        while time.monotonic() <= settle_deadline:
+        while True:
+            budget = _settle_request_seconds(settle_deadline)
+            if not budget:
+                break
             try:
-                snapshot = bounded.messages.batches.retrieve(batch_id)
+                snapshot = _bounded_client(
+                    client, budget
+                ).messages.batches.retrieve(batch_id)
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception:  # noqa: BLE001 — a dropped poll is not a failure
@@ -5369,8 +5424,11 @@ def _run_batch_calls(
                         **counts,
                     )
                 if str(_item_attr(snapshot, "processing_status") or "") == "ended":
+                    budget = _settle_request_seconds(settle_deadline)
+                    if not budget:
+                        break
                     read = _consume_batch_results(
-                        bounded,
+                        _bounded_client(client, budget),
                         batch_id,
                         states=states,
                         submitted=set(pending),
@@ -7075,9 +7133,11 @@ def run_final_qc(
         unassigned_batch_results=unassigned_batch_results,
         # Derived from the seats and the run's own anomalies, never asserted:
         # a batched run says complete only when every request it submitted
-        # came back and every row it received belonged to one.
+        # came back and every row it received belonged to one. A streamed run
+        # says not-applicable rather than leaving the field empty, which is
+        # reserved for a report written before any of this existed.
         batch_usage_capture=(
-            BATCH_CAPTURE_UNRECORDED
+            BATCH_CAPTURE_NOT_APPLICABLE
             if not batch_verification
             else (
                 BATCH_CAPTURE_INCOMPLETE

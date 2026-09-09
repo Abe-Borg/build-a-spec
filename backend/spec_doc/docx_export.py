@@ -931,10 +931,14 @@ def qc_batch_capture(qc_result: dict) -> tuple[str, str]:
     its charges could not be collected, is the reassuring half-truth the
     pairing exists to prevent.
 
-    Reads the RECORD, never live state. Three readings, and the empty one
-    matters most: a report written before the disclosure existed cannot say
-    whether it accounted for everything, and must not be promoted to
-    "complete" just because it carries no counts.
+    Reads the RECORD, never live state. Four readings, and the two that
+    carry no counts are NOT the same: a streamed run submitted no batch
+    request, so the question does not arise and there is nothing to
+    disclose, while a report written before the disclosure existed cannot
+    say whether it accounted for everything. Neither is promoted to
+    "complete" merely for carrying no counts, but only the second is a
+    limitation — telling a reader that a run this build produced predates
+    the recording they are reading would be false.
     """
     state = str(qc_result.get("batch_usage_capture", "") or "").strip().lower()
     uncollected = _qc_int(qc_result.get("uncollected_batch_requests"))
@@ -942,6 +946,8 @@ def qc_batch_capture(qc_result: dict) -> tuple[str, str]:
 
     if state == "complete":
         return "Complete", ""
+    if state == "not_applicable":
+        return "Not applicable (verification was not batched)", ""
     if state == "incomplete":
         parts: list[str] = []
         if uncollected:

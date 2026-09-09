@@ -1055,11 +1055,59 @@ def test_the_settlement_window_bounds_every_call_it_makes():
     assert client.request_options, "the window re-optioned the client"
     for options in client.request_options:
         assert options["max_retries"] == 0
-        # A short read timeout, with the SDK's own connect timeout intact:
-        # folding connect into the read budget would make a black-holed
-        # connect the longest call in the window.
+        # A short read timeout, well under the module default. On the shipped
+        # window (two minutes) the per-call ceiling is what binds, and the
+        # SDK's own connect timeout is left intact — folding connect into a
+        # LONG read budget would make a black-holed connect the longest call
+        # in the window. It is only ever bounded downward; see the next test.
         assert options["timeout"].read <= 60.0
         assert options["timeout"].connect == 5.0
+
+
+def test_each_settlement_call_is_bounded_by_the_time_the_window_has_left(
+    monkeypatch,
+):
+    """The budget is the remaining window, not a fixed per-call ceiling.
+
+    The deadline is checked only BETWEEN operations, so a call granted more
+    time than the window has left simply outlives it — and the settling
+    state holds Final QC's start, apply, dismiss and export locked while it
+    does. A window configured shorter than the ceiling was the case that
+    made this visible: every call still got the full ceiling, plus a connect
+    timeout several times the whole advertised window.
+    """
+    monkeypatch.setattr(settings, "QC_BATCH_SETTLE_SECONDS", 2)
+    stop = threading.Event()
+    client = SequencedFakeClient(_one_finding_scripts())
+    real_create = client.batches.create
+
+    def create_then_stop(*, requests):
+        batch = real_create(requests=requests)
+        stop.set()
+        return batch
+
+    client.batches.create = create_then_stop
+    # Never ends, so the window polls until the budget is spent — which is
+    # what gives us a call issued near the deadline to inspect.
+    client.batches.retrieve = lambda batch_id: SimpleNamespace(
+        id=batch_id,
+        processing_status="in_progress",
+        request_counts=SimpleNamespace(
+            processing=2, succeeded=0, errored=0, canceled=0, expired=0
+        ),
+    )
+    _run(client, should_stop=stop.is_set)
+
+    assert client.request_options, "the window re-optioned the client"
+    for options in client.request_options:
+        assert options["max_retries"] == 0
+        assert options["timeout"].read <= 2.0, "a call outlives its own window"
+        assert options["timeout"].connect <= 2.0, "connect outlives the window"
+    # And the budget really is falling, not one short value reused: the last
+    # call has strictly less to spend than the first.
+    reads = [options["timeout"].read for options in client.request_options]
+    assert len(reads) > 1
+    assert reads[-1] < reads[0]
 
 
 def test_a_cancel_that_raises_still_opens_the_window():
@@ -1160,14 +1208,31 @@ def test_a_clean_batched_run_records_complete_capture():
     assert result.execution_status == "complete"
 
 
-def test_a_streamed_run_records_no_capture_status_at_all():
-    """The disclosure is batch-specific; streaming has no such concept.
+def test_a_streamed_run_says_not_applicable_not_predates_the_recording():
+    """A streamed run submitted no batch request, and says so in its own state.
 
-    "" is the honest reading, and it must never be promoted to complete.
+    Leaving the field empty conflated it with a report written before any of
+    this existed — and both renderers turn that empty state into a
+    limitation claiming the report predates cost-capture recording, which is
+    false of a run this build just produced. The two must stay distinguishable
+    in the record, and neither is ever promoted to complete.
     """
+    from backend.qc.engine import (
+        BATCH_CAPTURE_NOT_APPLICABLE,
+        BATCH_CAPTURE_UNRECORDED,
+    )
+
     result = _run(SequencedFakeClient(_one_finding_scripts()), batch=False)
-    assert result.batch_usage_capture == ""
+    assert result.batch_usage_capture == BATCH_CAPTURE_NOT_APPLICABLE
+    assert result.batch_usage_capture != BATCH_CAPTURE_UNRECORDED
     assert _uncollected(result) == 0
+
+    # And it survives a round trip, so a saved project reads the same way.
+    from backend.qc.engine import QCResult
+
+    reloaded = QCResult.from_dict(result.to_dict())
+    assert reloaded is not None
+    assert reloaded.batch_usage_capture == BATCH_CAPTURE_NOT_APPLICABLE
 
 
 def test_the_gap_reaches_the_session_meter_and_derives_its_own_flag():

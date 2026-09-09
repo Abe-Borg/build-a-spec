@@ -1503,6 +1503,26 @@ test("a report written before the disclosure is never read as complete", () => {
   assert.match(capture.limitation, /predates cost-capture recording/);
 });
 
+test("a streamed run is not told it predates the recording it just wrote", () => {
+  // Both no-count states carry no gap, and they are still different
+  // answers: a streamed run submitted nothing to account for, so there is
+  // nothing to disclose. The empty state's limitation would tell a reader
+  // that a run this build produced predates its own recording.
+  const capture = qcBatchCapture(
+    result({ batch_usage_capture: "not_applicable" }),
+  );
+  assert.equal(capture.state, "not_applicable");
+  assert.match(capture.identity, /Not applicable/);
+  assert.equal(capture.limitation, "");
+  assert.notEqual(capture.state, "complete");
+
+  // And it stays out of the limitations list entirely.
+  const record = result({ batch_usage_capture: "not_applicable" });
+  const limitations = qcReportLimitations(record);
+  assert.ok(!limitations.some((line) => /cost capture/i.test(line)));
+  assert.ok(!limitations.some((line) => /predates cost-capture/i.test(line)));
+});
+
 test("a malformed counter cannot invent a gap or hide one", () => {
   const broken = result({ batch_usage_capture: "incomplete" }) as Record<
     string,

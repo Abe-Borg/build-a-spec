@@ -9696,12 +9696,32 @@ protocol bump and nothing new in the input manifest.
   cancellation would hold the settling state, and the locked QC controls
   with it, for roughly half an hour before a 120-second window even opened.
   Every call inside the window goes through `_bounded_client`, which is
-  `llm.client.bounded_request_options` (retries off, short read timeout, the
-  SDK's own connect timeout preserved for the `_CONNECT_TIMEOUT_SECONDS`
-  reason). A client that cannot be re-optioned falls back rather than
+  `llm.client.bounded_request_options` (retries off, short read timeout).
+  A client that cannot be re-optioned falls back rather than
   failing the settlement: the deadline is still checked between every
   operation, so the worst case is one long call inside a window that still
   ends, against no recovery at all.
+- **Each call is bounded by the time the window has LEFT, not a fixed
+  ceiling, and the client is rebuilt per operation to say so.** The deadline
+  is only checked BETWEEN operations, so a call granted the full per-call
+  ceiling near the deadline simply outlives the window — and the settling
+  state holds Final QC's start, apply, dismiss and export locked while it
+  does, which is the whole reason the bound exists. A window configured
+  shorter than the ceiling was the case that made it visible: every call
+  still got 30 seconds, plus a connect timeout several times the entire
+  advertised window. `_settle_request_seconds(deadline)` is the budget;
+  `bounded_request_options` now bounds the connect timeout DOWN to it as
+  well, never up — the `_CONNECT_TIMEOUT_SECONDS` reasoning is that a long
+  read value applied to connecting makes a black-holed connect the longest
+  call of all, and lowering it cannot do that, so on the shipped window
+  connect is still exactly the SDK's 5s.
+- **`_BATCH_SETTLE_MIN_REQUEST_SECONDS` (0.25) must stay BELOW the floor on
+  `BUILD_A_SPEC_QC_BATCH_SETTLE_SECONDS` (1).** It is the "not worth
+  starting another provider call" threshold, and at or above the setting's
+  own minimum the shortest window a user can configure would skip its own
+  cancellation — the one call in the window that stops the provider billing
+  further, traded away to save a fraction of a second. Found by the existing
+  one-second-window test going red, which is what now pins it.
 - **Recovery never buys new work.** `_apply_batch_item(recovering=True)`
   parses a completed call into a real verdict, settles a `pause_turn` where
   it stands (AFTER its response is appended, so the usage is captured) and
@@ -9718,11 +9738,18 @@ protocol bump and nothing new in the input manifest.
 - **The disclosure is two counts, one status, one derived flag.**
   `QCVerdict.uncollected_requests` per seat; `QCResult
   .unassigned_batch_results` per run; `QCResult.batch_usage_capture`
-  (`complete` / `incomplete` / `""`) derived from both at build time, never
-  asserted. `""` is a report written before this existed: it cannot say, and
-  `_batch_capture_consistent` refuses to promote it — or to believe a
-  `complete` sitting over a nonzero count, the same posture the outcome
-  labels take against their seats. The per-seat sum is also SERIALIZED
+  (`complete` / `incomplete` / `not_applicable` / `""`) derived from both at
+  build time, never asserted. The two states that carry no counts are NOT
+  the same, and conflating them put a false sentence in an audit document:
+  `not_applicable` is a run verified over the STREAMING transport, which
+  submitted no batch request, so there is nothing to account for and nothing
+  to disclose; `""` is a report written before any of this existed, which
+  submitted batch requests and cannot say what became of them. Filing a
+  streamed run as `""` had both renderers tell the reader it predated
+  cost-capture recording — false of a run the current build had just
+  produced. `_batch_capture_consistent` refuses to promote either — or to
+  believe a `complete` sitting over a nonzero count, the same posture the
+  outcome labels take against their seats. The per-seat sum is also SERIALIZED
   (`uncollected_batch_requests`) so the memo, the modal and the JSON export
   read one number instead of each re-walking the verdicts; `from_dict`
   re-derives it and refuses a record that disagrees.
@@ -9758,20 +9785,27 @@ protocol bump and nothing new in the input manifest.
   settles), and any attempt to reconstruct final provider charges after a
   cancellation. The record is finalized with its known subtotal and an
   explicit gap.
-- **Tests**: 15 new in `tests/test_qc_batch_verification.py` (a stream
+- **Tests**: 17 new in `tests/test_qc_batch_verification.py` (a stream
   failing part way keeping what it read, a failure after every row inventing
   no gap, a Stop collecting what the provider finished, a Stop whose batch
   never ends disclosing instead, the bound on every call including the
-  cancel, a cancel that raises still opening the window, the duplicate row,
+  cancel, the budget falling with the window rather than a fixed ceiling,
+  a cancel that raises still opening the window, the duplicate row,
   the unknown `custom_id`, the clean and streamed controls, the meter and
   its derived flag, an empty subtotal still disclosing, the round trip and
-  its two self-checks, a pre-disclosure record never promoted, and the
-  fingerprint left alone) and 6 in `frontend/tests/qcReport.test.ts`. Nine
-  mechanisms were reverted in place to prove them load-bearing: whole-
-  iterator materialization → 3 red; the settlement window → 3; the bounded
-  client → 2; the pre-fold identity check → 2; the cut-short guard → 2; the
-  meter counter → 1; the consistency gate → 1; and on the frontend, an
-  unrecorded status promoted to complete → 1 and the limitation dropped → 1.
+  its two self-checks, a pre-disclosure record never promoted, a streamed
+  run saying not-applicable rather than predating its own recording, and the
+  fingerprint left alone), 1 in `tests/test_qc_audit_report.py` (the Word
+  renderer's fourth state) and 7 in `frontend/tests/qcReport.test.ts`.
+  Thirteen mechanisms were reverted in place to prove them load-bearing:
+  whole-iterator materialization → 3 red; the settlement window → 3; the
+  bounded client → 2; the pre-fold identity check → 2; the cut-short guard →
+  2; the meter counter → 1; the consistency gate → 1; the remaining-budget
+  bound → 1; the connect bound → 1; the floor raised into the setting's
+  minimum → 1; the streamed run filed as pre-disclosure → 1; the Word
+  renderer's fourth state → 1; and on the frontend, an unrecorded status
+  promoted to complete → 1, the limitation dropped → 1, and the mirror's
+  fourth state → 1.
   The pre-existing `test_stopping_cancels_the_batch_and_settles_every_open_
   seat` was renamed and rewritten in place: its old assertions (every seat
   cancelled, the candidate inconclusive) ARE the contract this changes, and

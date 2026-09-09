@@ -3859,3 +3859,27 @@ def test_the_memo_methodology_states_the_panel_sizes_the_run_recorded() -> None:
     assert qc_panel_size_phrase(mixed).startswith(
         "three or four (recorded per finding) for critical and high findings"
     )
+
+
+def test_a_streamed_run_is_not_told_its_report_predates_the_recording() -> None:
+    """The Word renderer's fourth capture state, and why it is not the empty one.
+
+    A run verified over the streaming transport submitted no batch request,
+    so there is nothing to account for and nothing to disclose. Reading that
+    as the pre-disclosure state put a limitation in the memo saying the
+    report predates cost-capture recording — false of a run the current
+    build had just produced, in a document whose whole purpose is to be
+    believed. Neither no-count state is ever promoted to complete.
+    """
+    from backend.spec_doc.docx_export import qc_batch_capture
+
+    identity, limitation = qc_batch_capture({"batch_usage_capture": "not_applicable"})
+    assert "Not applicable" in identity
+    assert limitation == ""
+    assert identity != "Complete"
+
+    # The pre-disclosure record keeps its own, different answer.
+    legacy_identity, legacy_limitation = qc_batch_capture({})
+    assert legacy_identity == "Not recorded by this version"
+    assert "predates cost-capture recording" in legacy_limitation
+    assert legacy_identity != identity

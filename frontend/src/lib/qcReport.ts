@@ -1338,7 +1338,7 @@ export function buildQcReportMetrics(
 export const computeQcMetrics = buildQcReportMetrics;
 
 export interface QcBatchCapture {
-  state: "complete" | "incomplete" | "unrecorded";
+  state: "complete" | "incomplete" | "not_applicable" | "unrecorded";
   /** Row value — never a reassuring bare "Complete" for a record that
    *  simply predates the disclosure. */
   identity: string;
@@ -1354,6 +1354,11 @@ export interface QcBatchCapture {
  * treats an absent status as "cannot say" rather than "complete": a report
  * written before the disclosure existed carries no counts either, and
  * reading that silence as an all-clear is exactly the failure this avoids.
+ *
+ * A run that verified over the STREAMING transport is the fourth state, and
+ * deliberately not the empty one: it submitted no batch request, so there is
+ * nothing to account for and nothing to disclose. Reporting it as predating
+ * the recording would be false of a run this build just produced.
  */
 export function qcBatchCapture(
   rawResult: QcResultView | QcReportResult,
@@ -1365,6 +1370,13 @@ export function qcBatchCapture(
 
   if (state === "complete") {
     return { state: "complete", identity: "Complete", limitation: "" };
+  }
+  if (state === "not_applicable") {
+    return {
+      state: "not_applicable",
+      identity: "Not applicable (verification was not batched)",
+      limitation: "",
+    };
   }
   if (state === "incomplete") {
     const parts: string[] = [];

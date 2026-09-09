@@ -1,10 +1,17 @@
 # Revision-2 review plan — execution record
 
-Plan: `docs/REVIEW_IMPLEMENTATION_PLAN_2026-09-08.md` (revision 2).
+Plan: `docs/REVIEW_IMPLEMENTATION_PLAN_2026-09-08.md` (revision 2), **deleted
+2026-09-09 at the owner's instruction once every step that could be executed
+without his files had shipped.** This record supersedes it and is the surviving
+statement of the work — the three `CLAUDE.md` implemented-notes sections that
+cite the plan by name (steps 1, 3 and 5) are frozen history and still name it as
+the provenance it was; this file is where that reference now leads.
 Baseline reviewed by the plan: `ce0249a7144677074fddea09b334d793907ee536`.
 Executed: 2026-09-08 → 2026-09-09, shipped in **v1.18.0**.
 
 This file records what each step delivered and what it deliberately did not.
+Because the plan is gone, the two steps that were never run carry their full
+acceptance criteria below rather than a pointer — see *What is still open*.
 The original review brief is not edited — this is kept separate from it, per
 the plan's step 5.
 
@@ -96,35 +103,164 @@ found false, which is the class of defect step 5 exists to remove.
 
 ## What is still open, and why
 
-**Step 2 — answer the batching question from a real export.** The plan moved
-this ahead of any further cost work deliberately: `/api/qc/export.json`
-carries per-lens and per-seat token counts, request counts, the pricing basis
-and the batch multiplier, so a saved export settles what the review
-architecture actually costs. Nothing in the repository can stand in for one.
-Most informative would be an export from a run between v1.8.0 and v1.11.0,
-which predates batching and would show what the streaming phase cost per seat.
+Both steps need documents that exist only on the owner's machine. Neither was
+guessed at. Because the plan file is deleted, each carries its full acceptance
+criteria here — enough to run it from this record alone.
 
-**Step 4 — measure the lint block, then decide.** Conditional by design. The
-plan's threshold is a LINT REPORT block over roughly 5k characters on a
-representative real document, of which exact `(rule, severity, message)`
-grouping would remove more than half. The original brief's 96k-character
-figure came from a repeated-text fixture inflated by `duplicate_provision`
-and decides nothing. No compaction was written, because writing it before the
-measurement would be building to a number nobody has.
+### Step 2 — answer the batching question from a real export
 
-Both need documents that exist only on the owner's machine. The cheapest way
-to close them is a read-only script under `tools/` that the owner runs locally
-and pastes the output of — the plan sanctions exactly that for step 2. It was
-offered and not yet taken up.
+The plan put this ahead of any further cost work deliberately: a saved
+`/api/qc/export.json` settles what the review architecture actually costs,
+and nothing in the repository can stand in for one. Most informative would be
+an export from a run between v1.8.0 and v1.11.0, which predates batching and
+would show what a streaming verifier seat cost per seat.
+
+**No application code is required.** A read-only script under `tools/` is
+acceptable if it makes the reading repeatable. It must not import the client
+factory, initialize a session, make model requests, or emit document text,
+prompts, reference-document contents or credentials.
+
+*Inputs.* Owner-designated Final QC JSON exports and `.baspec` project files.
+Every persisted `QCVerdict` and `QCLensStatus` carries `usage_totals` with
+`input_tokens`, `output_tokens`, `cache_read_input_tokens`,
+`cache_creation_input_tokens` and — since Chunk 4.1 —
+`cache_creation_1h_input_tokens`; each verdict carries `cost_multiplier`
+(0.5 for a batched seat, 1.0 otherwise). The export's `report` and
+`current_state` are separate; count a run once even if it was exported twice.
+
+*What to extract.* Per run, split lens records from verifier records, and
+verifier records by `cost_multiplier` and by whether the seat's lens carried
+web tools:
+
+- Token totals by class: uncached input, five-minute writes
+  (`cache_creation_input_tokens − cache_creation_1h_input_tokens`), one-hour
+  writes, cache reads, output.
+- Cache-read share `R / (I + W + R)`, labelled as a token-weighted share of the
+  input side and **not** a request hit rate.
+- Output as a share of the run's estimated cost, using the persisted
+  `cost_basis`.
+- Phase 1: how many of the four web-toolless lenses wrote versus read the
+  shared prefix. This decides the staggered-launch idea below on its own.
+- Capture completeness is **unknown** for every record written before v1.18.0;
+  do not infer it.
+
+*Decision rule.*
+
+- Batched seats show cache reads on most seats → the batched default stands and
+  the batch-cache-reuse investigation is closed.
+- Batched seats show near-zero reads → the default still stands on the output
+  term, the measured input-side gap is recorded, and batch cache reuse becomes
+  a concrete, budgeted proposal for the owner rather than a deferred idea.
+- Exports from v1.8.0 through v1.11.0 exist → report the measured streaming
+  phase-2 cache behavior beside the batched figure and retire the $5.61
+  hypothetical.
+
+Write the result to `docs/review-results/<date>/measurements.md`, with artifact
+provenance and privacy-preserving summaries only.
+
+**Note the erratum recorded below:** phase 2 has *two* verifier cache lineages,
+not one, so seats verifying a `code_compliance` finding must be counted
+separately or the cache-read share will read low for a reason that is
+structural rather than a defect.
+
+### Step 4 — measure the lint block, then decide
+
+Conditional by design, and the measurement comes first. On the owner's real
+project files, offline, with the injected date frozen: run `lint_document` and
+the chat context builder, and record per document the occurrence count by rule,
+the characters of the LINT REPORT block, and the share of that block that exact
+`(rule, severity, message)` grouping would remove. Label any chars-to-tokens
+conversion as an estimate and state its rule.
+
+*Working threshold, a judgment call and stated as such:* proceed when the block
+on a representative real document is more than about 5k characters **and**
+grouping would remove more than half of it; otherwise defer and record the
+measurement. The original brief's 96k-character figure came from a
+repeated-text fixture inflated by `duplicate_provision` and decides nothing.
+The dollar case is small either way — the block sits in the uncached tail every
+turn, but forty identical lines are roughly 2,500 tokens at Sonnet 5 rates — so
+the justification, if any, is keeping the report readable for the model in the
+twenty-plus occurrence regime. No compaction was written, because writing it
+before the measurement would be building to a number nobody has.
+
+*Contract if it proceeds.* Change only the lint text inserted into
+`_turn_context_text` — not `lint_document`, raw ids, frontend rows, the lint
+SSE payload, readiness, or exports. Start with `stale_edition` and
+`unrecorded_edition`. A small pure helper beside the context builder; never in
+the lint engine. Grouping key is exact `(rule, severity, message)` equality:
+no normalization, first-seen order, every element id and reference preserved,
+per-element occurrence counts preserved, no cap on the location list,
+unrecognized or malformed issues rendered exactly as today, input records never
+mutated, the advisory framing and the delimiter neutralization preserved. Use
+grouping for a group only when its rendering is strictly shorter than the
+legacy lines; otherwise keep the legacy lines, and singleton rendering stays
+byte-identical. Do not change the QC input manifest. Rollback is the renderer
+call site; raw records are untouched.
+
+Illustrative rendering, using the existing formats rather than a new numbering
+scheme:
+
+```text
+- [unrecorded_edition] <exact existing message>
+  Affected citations (3): 1.1.A (element pt1.a1.p1); 1.1.B (element pt1.a1.p2); 1.2.A (element pt1.a2.p1).
+```
+
+*Tests if it proceeds.* Many identical edition messages across elements; the
+same standard at two cited years; the same standard with differing severity or
+message; two physical citations in one paragraph; mixed edition and
+non-edition issues; singleton-only; empty; missing optional fields; determinism
+and no mutation; short messages where grouping is longer; hostile delimiter
+text; a continuation turn reusing the frozen context. At least one fake-client
+integration test must assert on the final emitted request text, on the
+unchanged raw lint payload, on readiness reporting the same population, and on
+committed history not acquiring the block. Existing pins to retain, by name:
+`test_stale_edition_detected_in_three_citation_shapes`,
+`test_unrecorded_edition_fires_on_the_engine_citation_shapes`,
+`test_recording_the_edition_silences_the_rule`,
+`test_overlapping_designation_forms_are_not_double_reported`,
+`test_three_identical_siblings_report_two_findings_not_three`
+(`test_linting.py`); `test_chat_turn_emits_lint_event_and_payloads_carry_standards`,
+`test_context_block_never_fossilizes_into_history`,
+`test_a_turns_cached_prefix_is_a_byte_prefix_of_the_next_request`,
+`test_no_breakpoint_survives_into_history_or_a_saved_project`
+(`test_app.py`); `test_document_text_cannot_forge_the_context_boundary`
+(`test_reference_docs.py`).
+
+### The cheapest way to close either
+
+A read-only script under `tools/` that the owner runs locally and pastes the
+output of. The plan sanctioned exactly that for step 2. It was offered and not
+taken up.
 
 ## Deferred, unchanged from the plan
 
-Section 10's cache investigations (staggered phase-one launch, batch cache
-reuse, client continuation caching, slow-changing assets before history) remain
-conditional and were not started. `QC_VERIFIER_EFFORT` was documented, not
-re-baselined. No background reconciliation service exists or was proposed: the
-settlement window is bounded and synchronous, and its gap is disclosed rather
-than queued for later repair.
+None of this was required to finish steps 1–5, and none of it is a production
+default. Recorded here because the plan that held it is gone.
+
+**Staggered phase-one launch.** Decided by the phase-1 telemetry in step 2: if
+the four web-toolless lenses routinely *all* write the shared prefix, an
+experiment may start one and release the rest on an observed response-start
+event. It would have to cover failure-to-start, cancellation, timeout and the
+web-toolled lens, and measure wall-clock as well as cost. Retain the current
+scheduler unless the measured benefit justifies the coordination.
+
+**Batch cache reuse.** Decided by the batched-seat cache-read share in step 2.
+If it is near zero, a concrete proposal states request count, synthetic
+payload, output allowance, timeout, maximum spend and cleanup **before** the
+owner authorizes any paid comparison. Compare total cost for equivalent work
+including output, retries and every cache-write TTL.
+`tools/qc_verifier_canary.py` is a schema-acceptance check, not cache
+evidence — do not expand its paid scope.
+
+**Client continuation caching, and slow-changing assets before history.** Both
+remain deferred and both need real usage evidence. Neither may attach cache
+metadata to thinking blocks, memoize QC context by run id alone, or truncate
+the document or location lists under the label of a cache change.
+
+**Not re-baselined.** `QC_VERIFIER_EFFORT` was documented, not changed. No
+background reconciliation service exists or was proposed: the settlement window
+is bounded and synchronous, and its gap is disclosed rather than queued for
+later repair.
 
 ## What pins the version bump
 

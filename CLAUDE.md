@@ -9883,6 +9883,24 @@ project-format change. `requirements.txt` needed no change and none was made
   the brief's 96k-character figure was a repeated-text fixture inflated by
   `duplicate_provision`, so it decides nothing. Neither was guessed at.
 
+## Where the revision-2 plan went — errata
+
+`docs/REVIEW_IMPLEMENTATION_PLAN_2026-09-08.md` was **deleted 2026-09-09** at
+Abraham's instruction, once every step that could be executed without his own
+project files had shipped. The three implemented-notes sections above that cite
+it by name (steps 1, 3 and 5) are frozen history and still name it as the
+provenance it was; they are not rewritten.
+
+`docs/review-results/2026-09-09/EXECUTION_RECORD.md` supersedes it and is where
+that reference now leads. Before the deletion, the two steps that were never
+run — step 2 (read a real Final QC export and settle the batching-cost
+question) and step 4 (measure the LINT REPORT block on a real office master,
+and compact it only if grouping earns it) — had their FULL acceptance criteria
+folded into that record, along with the four deferred cache investigations and
+their decision gates. Deleting a plan whose unfinished half lived nowhere else
+would have thrown away the specification; the record is what makes the deletion
+lossless, and it is the file to read before either step is picked up.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

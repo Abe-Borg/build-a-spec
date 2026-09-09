@@ -20,9 +20,9 @@ the plan's step 5.
 | Step | Work | Outcome |
 |---|---|---|
 | 1 | QC drawer sums `qc` + `qc_batched` | Shipped — PR #162 |
-| 2 | Read real QC exports; answer the batching question | **Not run** — needs a file only the owner has |
+| 2 | Read real QC exports; answer the batching question | **Not run** — needs a file only the owner has; `tools/qc_export_cost_profile.py` is ready for it |
 | 3 | Incremental result consumption, bounded post-cancel settlement, minimal disclosure | Shipped — PR #163 |
-| 4 | Measure real lint repetition, compact only if it earns it | **Not run** — needs a file only the owner has; conditional by design |
+| 4 | Measure real lint repetition, compact only if it earns it | **Not run** — needs a file only the owner has; conditional by design; `tools/lint_block_profile.py` is ready for it |
 | 5 | Documentation, release metadata, integrated gates | This change |
 
 ## What shipped
@@ -228,9 +228,50 @@ committed history not acquiring the block. Existing pins to retain, by name:
 
 ### The cheapest way to close either
 
-A read-only script under `tools/` that the owner runs locally and pastes the
-output of. The plan sanctioned exactly that for step 2. It was offered and not
-taken up.
+Both scripts now exist. Each is read-only, runs entirely on the owner's
+machine, makes no model request, and prints a markdown block to paste into
+`docs/review-results/<date>/measurements.md`. Neither imports the API client —
+each checks that at exit and says so if it ever does, because the privacy claim
+is worth more asserted mechanically than promised in a docstring.
+
+**Step 2 — `tools/qc_export_cost_profile.py`**
+
+```
+.venv\Scripts\python tools\qc_export_cost_profile.py "C:\path\FINAL QC REPORT *.json"
+```
+
+Takes `GET /api/qc/export.json` downloads, `.baspec` packages and legacy
+`.json` projects in any mix, deduplicates runs by `run_id`, and reports the
+five disjoint token classes per bucket, the token-weighted cache-read share,
+output as a share of estimated cost, the phase-1 write-vs-read count, and the
+three-branch decision. Phase-2 seats are split by billing rate AND by cache
+lineage, per the verifier-lineage erratum below. It recomputes the run cost
+from the persisted `cost_basis` and flags any disagreement with the recorded
+total by more than 1%. Capture completeness on a pre-v1.18.0 record reads
+UNKNOWN and is never inferred.
+
+Artifacts are identified in the pasteable output by a SHA-256 prefix, not a
+filename — a filename routinely carries a client's name. The console names the
+file locally so the owner can tell inputs apart.
+
+**Step 4 — `tools/lint_block_profile.py`**
+
+```
+.venv\Scripts\python tools\lint_block_profile.py "C:\specs\*.baspec"
+```
+
+Loads each project, runs the real `lint_document` with the same
+`unstructured_import` and `preserved_chrome` arguments a live turn passes,
+renders the LINT REPORT block exactly as `_turn_context_text` does, and reports
+occurrences by rule, block characters, and the share exact
+`(rule, severity, message)` grouping would remove — applying the "only where
+strictly shorter" rule, so the figure is what compaction would actually save
+rather than an upper bound. It states the threshold verdict per document. The
+copied format is checked against `conversation.py` at every run, so a drifted
+renderer is reported rather than silently measured.
+
+Only rule names, counts and character totals travel; no provision text, lint
+match excerpt, element reference or filename reaches the output.
 
 ## Deferred, unchanged from the plan
 

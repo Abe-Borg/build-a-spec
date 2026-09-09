@@ -248,9 +248,11 @@ backend/
                            _qc_request_kwargs is the ONE request shape both
                            transports build from (one cache lineage); phase 2
                            runs either as a streamed ThreadPool fan-out or —
-                           default — as one Message Batches submission
-                           (_run_batch_calls: rounds carry pause_turn
-                           continuations and retries, same policy/ceilings,
+                           default — as batched submissions, ONE PER ROUND
+                           (_run_batch_calls: a round is added whenever a seat
+                           pauses or retries, so "one batch per phase" holds
+                           only for a run where neither happens —
+                           same policy/ceilings,
                            50% token price, no live seat frames);
                            lens fan-out (ThreadPool cap settings.QC_MAX_WORKERS
                            = 8, pause_turn loop, 2×
@@ -9810,6 +9812,76 @@ protocol bump and nothing new in the input manifest.
   seat` was renamed and rewritten in place: its old assertions (every seat
   cancelled, the candidate inconclusive) ARE the contract this changes, and
   it now pins the recovery plus the partial-not-complete rule.
+
+## The revision-2 review plan, as executed — implemented notes (v1.18.0)
+
+Step 5 of `docs/REVIEW_IMPLEMENTATION_PLAN_2026-09-08.md`: the documentation
+and delivery half. No code change, no route, no SSE event, no dep, no
+project-format change. `requirements.txt` needed no change and none was made
+— nothing in steps 1–3 added a dependency.
+
+- **v1.17.0 was ALREADY TAGGED when this work began** (published 2026-09-08
+  19:11 UTC, confirmed through the GitHub Releases API — `git tag -l` is
+  empty in a fresh clone, which is how the v1.12.0 overwrite survived
+  review). Its `ReleaseNote` is therefore frozen, and steps 1 and 3 are the
+  only user-visible work that landed after it. So the entry is a NEW one,
+  1.18.0, and the version bumped in the five sites: `backend/settings.py`,
+  `frontend/package.json`, BOTH root `version` fields in
+  `frontend/package-lock.json`, and the README headline (which
+  `check_release_version.py` has read since Batch 8). Editing the 1.17.0
+  entry would have repeated exactly the mistake "A released version's entry
+  is frozen" records.
+- **The entry is written for a spec author, not a reader of this file.** It
+  says the cost line under the Final QC button was adding up only the
+  full-price half of a review, that Stop used to throw away reviewer
+  opinions already finished and billed, that Stop now waits briefly and
+  collects them, and that what cannot be collected is stated as a floor
+  rather than dropped. The transports, the manifest and the settlement
+  window's internals are this file's business and stay here.
+- **ERRATUM to "Final QC cost + speed" (v1.8.0): "every verifier seat
+  shares another" cached prefix is WRONG — there are two verifier
+  lineages.** `_verifier_tools(lens, model)` appends the web search and
+  fetch tools when `lens.web`, which is `code_compliance` alone, so a seat
+  verifying a compliance finding carries a different `tools` array from
+  every other seat. Tools render ahead of system and messages, so its byte
+  prefix diverges from the start — the identical reason that section
+  already gives for `code_compliance` not joining the LENS lineage, applied
+  one phase later and missed there. Nothing is broken by it: each lineage
+  caches correctly within itself, and the seats that carry web tools are a
+  minority of a phase. What the wording cost was an accurate model of where
+  the phase's cache reads actually come from, which is what any future
+  costing work would start from. The v1.8.0 section is history and is not
+  edited; this is the correction, the Batch 8 errata posture.
+- **ERRATUM, second: "one Message Batches submission" (v1.12.0, "Final QC
+  phase 2 is batched") overstates it, and the release copy inherited the
+  error before review caught it.** `client.messages.batches.create` sits
+  INSIDE `_run_batch_calls`'s round loop, so a phase submits one batch per
+  ROUND and a round is added whenever a seat pauses or has to retry — up to
+  `QC_BATCH_MAX_ROUNDS`. That section's own next clause names the rounds, so
+  the machinery was never in doubt; the summary sentence just does not
+  survive being read on its own, which is exactly how it reached a README
+  line and a user-facing release note in this change. Both were corrected
+  before merge, and the Layout index — which is maintained current rather
+  than frozen — now says one per round. The v1.12.0 section itself stands.
+- **A dropped result read costs verdicts, never money, and saying otherwise
+  contradicted this change's own premise.** A first draft of the release
+  note said an interrupted read "now costs only what had not been read yet".
+  It cannot: the provider ran and billed those requests when the batch
+  processed, which is the whole reason the settlement window exists. What
+  incremental reading saves is the VERDICTS and the recorded usage of the
+  rows already folded — work already paid for, previously discarded whole.
+  The item now says that. Worth keeping in mind for any future copy about
+  this subsystem: retrieval is free, and the thing being recovered is the
+  record, not the charge.
+- **Two steps of the plan are deliberately unfinished, and neither is
+  blocked on code.** Step 2 (read a real Final QC export and answer the
+  batching question from it) and step 4 (measure the LINT REPORT block on a
+  real office master, and compact it only if it earns the change) both need
+  files that exist only on the owner's machine. Step 4 is CONDITIONAL by
+  design — the plan's threshold is a block over ~5k characters that
+  exact-`(rule, severity, message)` grouping would more than halve — and
+  the brief's 96k-character figure was a repeated-text fixture inflated by
+  `duplicate_provision`, so it decides nothing. Neither was guessed at.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

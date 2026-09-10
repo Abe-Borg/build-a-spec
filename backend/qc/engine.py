@@ -5915,6 +5915,65 @@ def _sha256_json(value: object) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _majority_rule_prose(standard: int, critical: int) -> str:
+    """The adjudication rule THIS configuration actually follows.
+
+    Rendered into the hashed input manifest, and from there into the Word
+    memo and the report modal. It therefore has to be true of the panel
+    sizes it names: at one seat a panel cannot split, so "split =
+    disputed" and "majority uphold = disputed" describe outcomes
+    :func:`panel_outcome` can never reach — a claim a reader could check
+    and find false, inside an audit record.
+
+    Both ``>= 2`` branches are the shipped literals, BYTE FOR BYTE, and a
+    test freezes them at the shipped sizes. ``QCResult.matches_inputs`` rebuilds
+    this string from LIVE settings and compares it against a retained
+    report's ``input_fingerprint``, so one character of drift flips every
+    retained result stale and invites a paid re-run of a review that has
+    not gone out of date.
+
+    ``critical == 2`` deliberately keeps the shipped wording even though
+    a 1-1 tie is not a "majority uphold": that names a REACHABLE outcome
+    imprecisely, which is a different defect from claiming an unreachable
+    one, and rewording it would move the fingerprint for anyone running
+    that configuration.
+    """
+    if standard >= 2:
+        medium = (
+            f"{standard}-seat panels (medium/low): all uphold = upheld, "
+            "split = disputed, all refute = refuted. "
+        )
+    else:
+        medium = (
+            "1-seat panels (medium/low): uphold = upheld, refute = refuted; "
+            "one seat cannot split, so no medium/low candidate can be "
+            "disputed. "
+        )
+    if critical >= 2:
+        high = (
+            f"{critical}-seat panels (critical/high): all uphold = upheld, "
+            "majority uphold = disputed, majority refute = refuted. "
+        )
+    else:
+        high = (
+            "1-seat panels (critical/high): uphold = upheld, refute = "
+            "refuted; one seat cannot split, so a critical/high candidate "
+            "is disputed only through the evidence rule below. "
+        )
+    return (
+        "final-qc/4 adjudication of a fully completed panel. "
+        + medium
+        + high
+        + "A critical/high refutation additionally requires at least one "
+        "validated evidence citation from a refuting seat (a "
+        "retrieved source or a resolvable document reference; tool "
+        "activity alone does not count), else disputed with reason "
+        "insufficient_refutation_evidence. Disputed blocks audit "
+        "completeness and is never auto-applied. Failed, cancelled "
+        "or missing seats make the candidate inconclusive."
+    )
+
+
 def build_qc_input_manifest(
     section: SpecSection,
     profile: RequirementsProfile | None,
@@ -6091,20 +6150,9 @@ def build_qc_input_manifest(
             # Kept under its historical key so an old report's manifest and a
             # new one remain field-comparable; the VALUE now states the v4
             # scheme, with panel sizes explicit.
-            "majority_rule": (
-                "final-qc/4 adjudication of a fully completed panel. "
-                f"{max(1, settings.QC_VERIFIERS_STANDARD)}-seat panels "
-                "(medium/low): all uphold = upheld, split = disputed, all "
-                f"refute = refuted. {max(1, settings.QC_VERIFIERS_CRITICAL)}"
-                "-seat panels (critical/high): all uphold = upheld, majority "
-                "uphold = disputed, majority refute = refuted. A "
-                "critical/high refutation additionally requires at least one "
-                "validated evidence citation from a refuting seat (a "
-                "retrieved source or a resolvable document reference; tool "
-                "activity alone does not count), else disputed with reason "
-                "insufficient_refutation_evidence. Disputed blocks audit "
-                "completeness and is never auto-applied. Failed, cancelled "
-                "or missing seats make the candidate inconclusive."
+            "majority_rule": _majority_rule_prose(
+                max(1, settings.QC_VERIFIERS_STANDARD),
+                max(1, settings.QC_VERIFIERS_CRITICAL),
             ),
             "severity_rule": "median of original and upheld revised severities",
             "lenses": [

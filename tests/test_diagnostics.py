@@ -153,7 +153,11 @@ def test_settings_corrections_emitted_before_the_log_opens_still_land_in_it(
     build, and the README promises the activity log. They are held and
     written the moment the file opens, once, and a warning logged afterwards
     takes the ordinary path (Codex, PR #155)."""
-    knob = "BUILD_A_SPEC_QC_VERIFIERS_STANDARD"
+    # QC_MAX_WORKERS, not a verifier panel size: this test is about the
+    # startup BUFFER, and QC_VERIFIERS_STANDARD now emits a second,
+    # consequence warning of its own, which would make the counts below
+    # fail for a reason that has nothing to do with what is under test.
+    knob = "BUILD_A_SPEC_QC_MAX_WORKERS"
     monkeypatch.setenv(knob, "0")
     try:
         importlib.reload(settings)  # nothing attached yet: no file exists

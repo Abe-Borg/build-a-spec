@@ -830,6 +830,235 @@ def test_a_gaps_round_with_nothing_to_retry_is_refused_with_the_reason(
     assert "4 of 4" in resp.json()["error"]
 
 
+def _one_area_client(dimension_id: str) -> SequencedFakeClient:
+    """Scripted for ONE dimension only.
+
+    An unasked dimension raises "no script matches the request", so the
+    scoping is proved by the round completing at all — the technique
+    ``test_a_gaps_round_researches_only_the_incomplete_areas`` established.
+    """
+    return SequencedFakeClient(
+        {
+            DIM_KEYS[dimension_id]: [
+                research_response(items=[], searched_urls=["https://x.gov"])
+            ]
+        }
+    )
+
+
+def test_a_selected_round_runs_only_the_areas_the_user_picked(monkeypatch):
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+    _patch_research_client(monkeypatch, SequencedFakeClient(_scripts()))
+    assert client.post("/api/research/start").json()["ok"] is True
+    assert _wait_terminal(client)["status"] == "complete"
+
+    picked = _one_area_client("governing_codes")
+    _patch_research_client(monkeypatch, picked)
+    resp = client.post(
+        "/api/research/start",
+        json={"scope": "selected", "dimension_ids": ["governing_codes"]},
+    )
+    assert resp.json()["ok"] is True
+    snapshot = _wait_terminal(client)
+    assert snapshot["status"] == "complete"
+
+    roster = next(e for e in snapshot["events"] if e["type"] == "research_started")
+    assert roster["dimensions"] == ["governing_codes"]
+    assert roster["declared_dimension_count"] == 4
+    assert len(picked.requests) == 1
+
+
+def test_a_selected_round_may_re_run_an_area_that_already_completed(monkeypatch):
+    """The motivating case: the jurisdiction changed, so re-research that
+    one area rather than paying for four. Naming a settled area is the
+    feature, not an error — and the areas nobody named must come through
+    the round untouched."""
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+    _patch_research_client(monkeypatch, SequencedFakeClient(_scripts()))
+    assert client.post("/api/research/start").json()["ok"] is True
+    assert _wait_terminal(client)["status"] == "complete"
+
+    def _others(snapshot: dict) -> list[dict]:
+        return [
+            d
+            for d in snapshot["profile"]["dimension_statuses"]
+            if d["dimension_id"] != "governing_codes"
+        ]
+
+    before = _others(client.get("/api/research/status").json())
+    assert len(before) == 3
+
+    _patch_research_client(monkeypatch, _one_area_client("governing_codes"))
+    resp = client.post(
+        "/api/research/start",
+        json={"scope": "selected", "dimension_ids": ["governing_codes"]},
+    )
+    assert resp.json()["ok"] is True
+    assert _wait_terminal(client)["status"] == "complete"
+
+    status = client.get("/api/research/status").json()
+    # Untouched areas are byte-identical: a scoped round cannot make a
+    # settled dimension look regressed or recounted.
+    assert _others(status) == before
+    assert status["coverage"]["gaps"] == []
+    # Cumulative completion is sticky, so readiness cannot flip backwards.
+    assert _readiness_research(client)["ok"] is True
+
+
+def test_a_selected_round_with_no_areas_is_refused_with_the_reason(monkeypatch):
+    """Refused UP FRONT, before anything is billed.
+
+    Letting an empty selection through would have the engine raise
+    ``ResearchFanoutError`` on a background thread — after the route had
+    already answered ``ok: true``.
+    """
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+    never = SequencedFakeClient(_scripts())
+    _patch_research_client(monkeypatch, never)
+
+    resp = client.post(
+        "/api/research/start", json={"scope": "selected", "dimension_ids": []}
+    )
+    assert resp.status_code == 400
+    assert "at least one research area" in resp.json()["error"]
+    assert "'all'" in resp.json()["error"]
+    assert never.requests == []
+    assert client.get("/api/research/status").json()["status"] == "idle"
+
+
+def test_a_selected_round_naming_an_undeclared_area_is_refused_and_starts_nothing(
+    monkeypatch,
+):
+    """Strict at the route, lenient in the engine — deliberately.
+
+    ``select_research_dimensions`` IGNORES an unknown id, which is the
+    right last-resort invariant for a direct caller. At the route a user
+    picked N areas, and running fewer than N bills them for a round they
+    did not ask for. It is also the guard for the real race: the module
+    can change between the poll that drew the picker and the click.
+    """
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+    never = SequencedFakeClient(_scripts())
+    _patch_research_client(monkeypatch, never)
+
+    resp = client.post(
+        "/api/research/start",
+        json={
+            "scope": "selected",
+            "dimension_ids": ["governing_codes", "not_a_dimension"],
+        },
+    )
+    assert resp.status_code == 400
+    assert "not_a_dimension" in resp.json()["error"]
+    assert never.requests == []
+
+
+def test_a_repeated_area_is_the_same_selection_however_often_it_is_named(
+    monkeypatch,
+):
+    """The runaway bound has to judge the SELECTION, not the raw list.
+
+    Counting the raw entries made equivalent selections behave
+    differently: on a four-area module, five copies of one valid id was a
+    400 while four copies ran a one-area round. Whatever a caller repeats
+    or pads with blanks, what it selected is the set of ids it named
+    (Codex, PR #167).
+    """
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+    _patch_research_client(monkeypatch, SequencedFakeClient(_scripts()))
+    assert client.post("/api/research/start").json()["ok"] is True
+    assert _wait_terminal(client)["status"] == "complete"
+
+    picked = _one_area_client("governing_codes")
+    _patch_research_client(monkeypatch, picked)
+    resp = client.post(
+        "/api/research/start",
+        json={
+            "scope": "selected",
+            # More raw entries than the module declares areas, and blanks
+            # besides — one area, named clumsily.
+            "dimension_ids": ["governing_codes"] * 5 + ["", "  "],
+        },
+    )
+    assert resp.json()["ok"] is True, resp.json()
+    snapshot = _wait_terminal(client)
+    assert snapshot["status"] == "complete"
+    roster = next(e for e in snapshot["events"] if e["type"] == "research_started")
+    assert roster["dimensions"] == ["governing_codes"]
+    assert len(picked.requests) == 1
+
+
+def test_a_dimension_list_is_refused_on_a_scope_that_does_not_take_one(
+    monkeypatch,
+):
+    """Silently ignoring the list is how a user pays for four areas after
+    picking one."""
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+    never = SequencedFakeClient(_scripts())
+    _patch_research_client(monkeypatch, never)
+
+    for scope in ("all", "gaps"):
+        resp = client.post(
+            "/api/research/start",
+            json={"scope": scope, "dimension_ids": ["governing_codes"]},
+        )
+        assert resp.status_code == 400
+        assert "only meaningful with" in resp.json()["error"]
+    assert never.requests == []
+
+
+def test_the_status_payload_names_every_declared_area_with_its_title(monkeypatch):
+    """`completed` carries ids only and no route exposes the module's
+    dimensions, so a picker could not name a settled area at all."""
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+    boom = RuntimeError("kaput")
+    _patch_research_client(
+        monkeypatch,
+        SequencedFakeClient(
+            _scripts(ahj_requirements=[boom], client_standards=[boom])
+        ),
+    )
+    assert client.post("/api/research/start").json()["ok"] is True
+    assert _wait_terminal(client)["status"] == "complete"
+
+    coverage = client.get("/api/research/status").json()["coverage"]
+    declared = sessions.get_workspace().session.module.research_dimensions
+    areas = coverage["areas"]
+    # The full roster, in module declaration order.
+    assert [a["dimension_id"] for a in areas] == [
+        d.dimension_id for d in declared
+    ]
+    assert [a["title"] for a in areas] == [d.title for d in declared]
+    assert all(a["required"] is True for a in areas)
+    # Every area says whether it is done, so the picker need not intersect
+    # two server lists to find out.
+    assert {a["dimension_id"] for a in areas if a["completed"]} == set(
+        coverage["completed"]
+    )
+    assert {a["dimension_id"] for a in areas if not a["completed"]} == {
+        "ahj_requirements",
+        "client_standards",
+    }
+    # And a gap now carries what an optional one would justify itself with.
+    for gap in coverage["gaps"]:
+        assert gap["optional_rationale"] == ""
+        assert gap["recorded"] is True
+
+
 def test_an_unknown_scope_is_refused_and_an_absent_body_runs_everything(
     monkeypatch,
 ):

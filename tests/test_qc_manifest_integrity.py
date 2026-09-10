@@ -1,6 +1,7 @@
 """Focused regressions for complete Final-QC input identity."""
 from __future__ import annotations
 
+import copy
 import inspect
 from dataclasses import replace
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from backend.qc.engine import (
     QCSourceGuard,
     _lens_request_suffix,
     _lens_shared_prefix,
+    _majority_rule_prose,
     _render_profile,
     build_qc_input_manifest,
     qc_input_fingerprint,
@@ -279,3 +281,67 @@ def test_pricing_rates_are_not_part_of_reviewed_input_identity() -> None:
     # cannot pass by the manifest having quietly lost its configuration.
     assert configuration["model"] == settings.QC_MODEL
     assert configuration["effort"] == settings.QC_EFFORT
+
+
+# The adjudication prose as it shipped at the default panel sizes, spelled
+# out here rather than rebuilt from the source under test — a test that
+# recomputes the value it is pinning passes vacuously through any drift.
+_SHIPPED_MAJORITY_RULE = (
+    "final-qc/4 adjudication of a fully completed panel. "
+    "2-seat panels (medium/low): all uphold = upheld, split = disputed, "
+    "all refute = refuted. 3-seat panels (critical/high): all uphold = "
+    "upheld, majority uphold = disputed, majority refute = refuted. A "
+    "critical/high refutation additionally requires at least one "
+    "validated evidence citation from a refuting seat (a retrieved "
+    "source or a resolvable document reference; tool activity alone does "
+    "not count), else disputed with reason "
+    "insufficient_refutation_evidence. Disputed blocks audit "
+    "completeness and is never auto-applied. Failed, cancelled or "
+    "missing seats make the candidate inconclusive."
+)
+
+
+def test_the_shipped_majority_rule_prose_is_frozen_because_it_is_hashed() -> None:
+    """One character here re-prices every retained review.
+
+    ``majority_rule`` sits in the hashed configuration block, and
+    ``QCResult.matches_inputs`` rebuilds the manifest from LIVE settings to
+    decide whether a retained report is still current. So prose drift at
+    the shipped sizes does not merely reword a report — it flips every
+    saved result to stale and invites a paid re-run of a review that has
+    not gone out of date. Conditional rendering may add branches; it may
+    not move this one by a byte.
+    """
+    section = _section()
+    guard = _source_guard(section)
+    live = _manifest(section, guard)
+    assert live["configuration"]["majority_rule"] == _SHIPPED_MAJORITY_RULE
+
+    pinned = copy.deepcopy(live)
+    pinned["configuration"]["majority_rule"] = _SHIPPED_MAJORITY_RULE
+    assert qc_input_fingerprint(pinned) == qc_input_fingerprint(live)
+
+
+def test_a_one_seat_panel_never_claims_a_split_can_happen() -> None:
+    """An audit record must not describe an outcome it cannot reach.
+
+    ``panel_outcome`` needs at least two seats to return ``disputed`` from
+    a split, so at one seat "split = disputed" and "majority uphold =
+    disputed" name states that cannot occur. The manifest is rendered into
+    the Word memo and the report modal, so leaving the sentence in place
+    puts a claim a reader could check and find false inside the document
+    the review is judged on.
+    """
+    one_standard = _majority_rule_prose(1, 3)
+    assert "split = disputed" not in one_standard
+    assert "no medium/low candidate can be disputed" in one_standard
+    # The critical panel is untouched at its shipped size.
+    assert "majority uphold = disputed" in one_standard
+
+    both_one = _majority_rule_prose(1, 1)
+    assert "majority uphold = disputed" not in both_one
+    # The evidence gate still fires at one seat, so that sentence stays.
+    assert "insufficient_refutation_evidence" in both_one
+
+    # And the branch cannot leak into the shipped rendering.
+    assert _majority_rule_prose(2, 3) == _SHIPPED_MAJORITY_RULE

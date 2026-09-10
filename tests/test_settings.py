@@ -133,7 +133,11 @@ def test_a_correction_before_logging_starts_is_held_and_replayed_once(monkeypatc
     inside ``main()``), so a correction is HELD and replayed the moment
     durable logging appears — with its original timestamp — rather than lost
     to a stderr the windowed build has pointed at devnull (Codex, PR #155)."""
-    knob = "BUILD_A_SPEC_QC_VERIFIERS_STANDARD"
+    # QC_MAX_WORKERS, not a verifier panel size: this test is about the
+    # startup BUFFER, and QC_VERIFIERS_STANDARD now emits a second,
+    # consequence warning of its own, which would make the counts below
+    # fail for a reason that has nothing to do with what is under test.
+    knob = "BUILD_A_SPEC_QC_MAX_WORKERS"
     monkeypatch.setenv(knob, "0")
     landed: list[logging.LogRecord] = []
 
@@ -180,3 +184,56 @@ def test_a_settings_reload_keeps_exactly_one_startup_buffer():
         h for h in logger.handlers if h.get_name() == settings._STARTUP_BUFFER_NAME
     ]
     assert len(named) == 1
+
+
+def test_a_one_seat_standard_panel_warns_at_settings_load(monkeypatch):
+    """One seat is legal, in range, and changes what a review MEANS.
+
+    ``panel_outcome`` cannot return ``disputed`` from a split at one seat,
+    so a lone reviewer's refusal deletes a medium/low finding outright with
+    no escalation. The floor deliberately stays at 1 — that is what
+    ``test_the_shipped_floors_hold_through_a_reload`` pins, and CLAUDE.md
+    records 2 -> 1 as a deferred cost lever — so the only thing between an
+    operator and a silently weaker review is this warning. It goes through
+    the startup buffer like every other settings correction, because
+    ``settings`` is imported long before the activity log exists.
+    """
+    knob = "BUILD_A_SPEC_QC_VERIFIERS_STANDARD"
+    landed: list[logging.LogRecord] = []
+
+    class _Sink(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            landed.append(record)
+
+    sink = _Sink()
+    root = logging.getLogger()
+    root.addHandler(sink)
+    try:
+        # In range and legal, so the clamp says nothing: this is the only
+        # thing that speaks up, and today nothing does.
+        monkeypatch.setenv(knob, "1")
+        reloaded = importlib.reload(settings)
+        assert reloaded.QC_VERIFIERS_STANDARD == 1
+        assert reloaded.pending_startup_records() == 1
+        landed.clear()
+        assert reloaded.flush_startup_log() == 1
+        message = landed[0].getMessage()
+        assert knob in message
+        assert "cannot split" in message
+        assert "disputed" in message
+
+        # Below the floor: the clamp AND the consequence, both held.
+        monkeypatch.setenv(knob, "0")
+        reloaded = importlib.reload(settings)
+        assert reloaded.QC_VERIFIERS_STANDARD == 1
+        assert reloaded.pending_startup_records() == 2
+
+        # The shipped default says nothing at all.
+        monkeypatch.delenv(knob, raising=False)
+        reloaded = importlib.reload(settings)
+        assert reloaded.QC_VERIFIERS_STANDARD == 2
+        assert reloaded.pending_startup_records() == 0
+    finally:
+        root.removeHandler(sink)
+        monkeypatch.delenv(knob, raising=False)
+        importlib.reload(settings)

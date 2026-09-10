@@ -89,6 +89,66 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.19.0",
+        date="2026-09-10",
+        headline="A disagreement you settled stays settled",
+        summary=(
+            "When Final QC's reviewers disagree about a finding, the app "
+            "asks you to settle it and write down why. That decision was "
+            "then thrown away: the next review brought the same "
+            "disagreement back and blocked the section from being ready to "
+            "issue all over again, with your written reason already on "
+            "file. It now carries forward, the same way a dismissed "
+            "finding always did. Requirements research also stops being "
+            "all-or-nothing \u2014 you can research one area again instead "
+            "of four."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Final QC",
+                items=(
+                    ReleaseItem(
+                        title="A dispute you set aside stays set aside",
+                        body=(
+                            "Two reviewers can read the same provision "
+                            "differently. When they do, Final QC hands the "
+                            "call to you and asks for a reason \u2014 and "
+                            "that reason is what unblocks issue readiness. "
+                            "Re-running the review resurrected the "
+                            "disagreement as a fresh blocker every single "
+                            "time, because the decision was never passed "
+                            "along to the new run. It is now, as long as "
+                            "the review reaches the same disagreement about "
+                            "the same unchanged wording. If it reaches a "
+                            "different conclusion, that is a genuinely new "
+                            "question and you will be asked again."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Requirements research",
+                items=(
+                    ReleaseItem(
+                        title="Research one area again, not all four",
+                        body=(
+                            "A repeat round was all-or-nothing, or a retry "
+                            "of whatever had failed. There was no way to "
+                            "say \u201cthe jurisdiction changed \u2014 go "
+                            "back over the governing codes\u201d without "
+                            "paying for every area again. Choose areas in "
+                            "the Research panel and only those run. What a "
+                            "round finds is added to what is already "
+                            "recorded: nothing you have already paid for is "
+                            "removed or overwritten, and an area you did "
+                            "not pick comes through untouched."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.18.0",
         date="2026-09-09",
         headline="A stopped review still counts what it cost",

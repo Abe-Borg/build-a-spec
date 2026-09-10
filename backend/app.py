@@ -138,6 +138,7 @@ from .research.engine import (
     RequirementsProfile,
     research_coverage,
     research_manifest_facts,
+    select_research_dimensions,
     validate_research_facts,
 )
 from .research.grounding import refusal_category
@@ -491,15 +492,32 @@ class ResearchStartRequest(WorkspaceMutationRequest):
     asks a question already answered and pays a full search budget to
     re-answer it.
 
-    The gap set is resolved HERE, from :func:`research_coverage`, and is
-    never sent up by the client. Readiness already derives coverage from
+    ``selected`` runs exactly the areas named in ``dimension_ids`` — the
+    jurisdiction changed, so re-research the governing codes and pay for
+    that one area instead of four. Naming an area that already completed
+    is the point, not an error.
+
+    The gap set is still resolved HERE, from :func:`research_coverage`,
+    and is never sent up by the client: readiness derives coverage from
     that one function, and a second derivation in the frontend would be
     free to offer a retry the server is about to refuse — the same
     one-derivation rule ``profile_complete`` and the draft prerequisites
     follow.
+
+    ``dimension_ids`` is a different kind of thing and does not weaken
+    that rule. It is a user SELECTION — an input — not a derivation, and
+    the server stays the authority over it: the ids are resolved through
+    :func:`select_research_dimensions` against what the module declares
+    right now, an empty selection is refused, and an id the module does
+    not declare is refused BY NAME rather than silently dropped. What the
+    rule forbids is the client computing a scope the server would refuse;
+    it does not forbid the user choosing one the server then validates.
     """
 
     scope: str = "all"
+    # Only meaningful with ``scope: "selected"``. Pydantic v2 copies a
+    # non-hashable default per instance, so the plain literal is safe.
+    dimension_ids: list[str] = []
 
 
 class SessionResetRequest(BaseModel):
@@ -1695,7 +1713,12 @@ def _carried_research_note(
 
 RESEARCH_SCOPE_ALL = "all"
 RESEARCH_SCOPE_GAPS = "gaps"
-RESEARCH_SCOPES: tuple[str, ...] = (RESEARCH_SCOPE_ALL, RESEARCH_SCOPE_GAPS)
+RESEARCH_SCOPE_SELECTED = "selected"
+RESEARCH_SCOPES: tuple[str, ...] = (
+    RESEARCH_SCOPE_ALL,
+    RESEARCH_SCOPE_GAPS,
+    RESEARCH_SCOPE_SELECTED,
+)
 
 
 def _research_coverage_payload(session: SessionState) -> dict:
@@ -1714,6 +1737,8 @@ def _research_coverage_payload(session: SessionState) -> dict:
         session.module, session.research.profile_result
     )
     carried_from, carried_rounds = _carried_research(session)
+    completed = set(coverage.completed)
+    recorded_gaps = {gap.dimension_id: gap for gap in coverage.gaps}
     return {
         "total": coverage.total,
         "completed": list(coverage.completed),
@@ -1722,8 +1747,39 @@ def _research_coverage_payload(session: SessionState) -> dict:
                 "dimension_id": gap.dimension_id,
                 "title": gap.title,
                 "required": gap.required,
+                "optional_rationale": gap.optional_rationale,
+                "recorded": gap.recorded,
             }
             for gap in coverage.gaps
+        ],
+        # The full declared roster, in module declaration order, so a
+        # picker can offer a settled area by NAME — `completed` carries
+        # ids only, and no route exposes `module.research_dimensions`.
+        # Built from the same tuple `select_research_dimensions` filters
+        # against, which is what keeps one derivation: the roster this
+        # draws and the roster the start endpoint validates against are
+        # the same object read the same way.
+        "areas": [
+            {
+                "dimension_id": dimension.dimension_id,
+                "title": dimension.title or dimension.dimension_id,
+                "required": dimension.required,
+                "optional_rationale": dimension.optional_rationale,
+                "completed": dimension.dimension_id in completed,
+                # False only when the profile holds no status at all for a
+                # declared area — never attempted, as against attempted
+                # and failed.
+                "recorded": (
+                    True
+                    if dimension.dimension_id in completed
+                    else getattr(
+                        recorded_gaps.get(dimension.dimension_id),
+                        "recorded",
+                        False,
+                    )
+                ),
+            }
+            for dimension in session.module.research_dimensions
         ],
         # Which sections' research this session inherited, and how many of
         # the profile's rounds came with it — so the drawer labels carried
@@ -5214,7 +5270,76 @@ def create_app(
                 status_code=400,
             )
         dimension_ids: list[str] | None = None
-        if scope == RESEARCH_SCOPE_GAPS:
+        requested_ids = list(body.dimension_ids) if body is not None else []
+        if requested_ids and scope != RESEARCH_SCOPE_SELECTED:
+            # A client that asks for a full round AND names areas has a bug.
+            # Ignoring the list silently is how a user pays for four areas
+            # after picking one.
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "dimension_ids is only meaningful with "
+                    f"scope: {RESEARCH_SCOPE_SELECTED!r}.",
+                },
+                status_code=400,
+            )
+        if scope == RESEARCH_SCOPE_SELECTED:
+            declared = list(module.research_dimensions)
+            # NORMALIZED FIRST, and into a set so this stays linear in the
+            # raw list. Every check below judges the SELECTION — the set of
+            # areas named — and counting raw entries instead made
+            # equivalent selections behave differently: five copies of one
+            # valid id was a 400 on a four-area module while four copies
+            # ran a one-area round (Codex, PR #167). Order is discarded
+            # deliberately; it comes from the module.
+            wanted: set[str] = set()
+            for raw_id in requested_ids:
+                cleaned = str(raw_id).strip()
+                if cleaned:
+                    wanted.add(cleaned)
+            if len(wanted) > len(declared):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "More research areas were named than this "
+                        f"module declares ({len(declared)}).",
+                    },
+                    status_code=400,
+                )
+            if not wanted:
+                # The gaps posture: refuse with the reason, never silently
+                # upgrade to the more expensive action.
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Name at least one research area to "
+                        f"research. A full round is scope: "
+                        f"{RESEARCH_SCOPE_ALL!r}.",
+                    },
+                    status_code=400,
+                )
+            # The same pure filter the engine uses, so a picker cannot
+            # smuggle an unknown id past the server. Deliberately STRICTER
+            # than the engine, which ignores one: the engine's filter is a
+            # last-resort invariant for direct callers, but here a user
+            # picked N areas and running fewer than N bills them for a
+            # round they did not ask for. It is also the right guard for
+            # the real race — the module can change (session reset, module
+            # switch) between the poll that drew the picker and the click.
+            resolved = select_research_dimensions(module, wanted)
+            unknown = sorted(wanted - {d.dimension_id for d in resolved})
+            if unknown:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "This module declares no research area "
+                        f"named: {', '.join(unknown)}.",
+                    },
+                    status_code=400,
+                )
+            # Order always comes from the module, never the selection.
+            dimension_ids = [d.dimension_id for d in resolved]
+        elif scope == RESEARCH_SCOPE_GAPS:
             # Resolved server-side from the one coverage join (see
             # ResearchStartRequest). With no profile yet every dimension is
             # a gap, so "gaps" degrades to a full first round rather than

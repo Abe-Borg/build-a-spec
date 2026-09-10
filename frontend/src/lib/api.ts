@@ -992,14 +992,19 @@ export async function stopChat(): Promise<void> {
 /* --- Research (Phase 4) --- */
 
 /**
- * Start a research round. `scope` is `"all"` (every declared dimension) or
+ * Start a research round. `scope` is `"all"` (every declared dimension),
  * `"gaps"` — the areas that never completed, resolved SERVER-side from the
- * same coverage join readiness uses, so the client never sends a dimension
- * list of its own.
+ * same coverage join readiness uses, so the client never derives that set
+ * — or `"selected"`, which runs exactly the areas the user picked.
+ *
+ * `dimensionIds` rides ONLY with `"selected"`. A full round that carried a
+ * stray selection is refused by the server, deliberately: silently ignoring
+ * the list is how a user pays for four areas after picking one.
  */
 export async function startResearch(
   lease: WorkspaceLeaseInput = {},
   scope: ResearchScope = "all",
+  dimensionIds?: string[],
 ): Promise<void> {
   const resp = await fetch("/api/research/start", {
     method: "POST",
@@ -1008,6 +1013,7 @@ export async function startResearch(
       workspace_id: lease.workspaceId,
       generation: lease.generation,
       scope,
+      ...(scope === "selected" ? { dimension_ids: dimensionIds ?? [] } : {}),
     }),
   });
   const data = await resp.json();

@@ -598,25 +598,42 @@ class QCRunner:
 
     # -- mutation (accept / dismiss; guarded) --------------------------------
 
-    def remembered_dismissed(self) -> set[str]:
-        with self._lock:
-            if self.result is None:
-                return set()
-            return set(self.result.dismissed_ids)
-
     def remembered_dismissals(self) -> dict[str, dict[str, Any]]:
-        """Dismissal reasons/events carried into content-identical re-runs."""
+        """Dismissal reasons/events carried into content-identical re-runs.
+
+        Resolved through :meth:`QCResult.finding`, which is the ONE
+        definition of "a candidate a disposition may target" — survivors
+        AND disputed, deliberately, since a dispute is resolved by a human
+        dismissing it with a reason. This scanned ``result.findings``
+        instead, which made it a fourth, wrong copy of that rule: every
+        dismissed DISPUTE was withheld, ``run_final_qc`` was handed nothing
+        for it (its receiving code was unreachable from the app), and the
+        dispute came back OPEN — re-blocking issue-readiness on every
+        re-run with the user's written rationale already on file. The same
+        survivors-only mistake was found and fixed on the reload path in
+        PR #103; this was the twin nobody looked for. Going through
+        ``finding()`` removes the duplicate rather than adding a correct
+        one, so the two cannot drift apart again.
+
+        Refuted and inconclusive candidates stay out, as they do
+        everywhere: they are audit records, not an action queue, and have
+        no disposition workflow to carry.
+        """
         with self._lock:
             if self.result is None:
                 return {}
-            return {
-                finding.finding_id: {
+            carried: dict[str, dict[str, Any]] = {}
+            for finding_id in self.result.dismissed_ids:
+                finding = self.result.finding(finding_id)
+                if finding is None:
+                    continue
+                carried[finding_id] = {
                     "reason": finding.dismiss_reason,
-                    "events": [event.to_dict() for event in finding.disposition_events],
+                    "events": [
+                        event.to_dict() for event in finding.disposition_events
+                    ],
                 }
-                for finding in self.result.findings
-                if finding.finding_id in self.result.dismissed_ids
-            }
+            return carried
 
     def mark_applied(
         self,

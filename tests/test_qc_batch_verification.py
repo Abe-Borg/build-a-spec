@@ -14,6 +14,7 @@ side in ``tests/test_qc_live_events.py``, which runs the streaming path.
 from __future__ import annotations
 
 import threading
+import time as _real_time
 from types import SimpleNamespace
 
 import anthropic
@@ -34,6 +35,46 @@ from tests.fakes import (
 )
 
 _LENS_KEYS = {lens.lens_id: f"[[QC-LENS:{lens.lens_id}]]" for lens in QC_LENSES}
+
+
+class _SteppedClock:
+    """A deterministic stand-in for the ``time`` module ``engine`` reads.
+
+    ``monotonic()`` advances a fixed step per reading and ``sleep()``
+    advances by what it was asked to sleep, so a test can assert that a
+    budget DERIVED from the clock fell between two calls without depending
+    on the host's clock resolution — or on real seconds passing.
+
+    The host clock cannot carry that assertion. Python backs
+    ``time.monotonic()`` with ``GetTickCount64`` on Windows, whose
+    granularity is ~15.6 ms, so two readings microseconds apart return the
+    IDENTICAL value; on Linux it is nanosecond-resolution. A strict ``<``
+    between two budgets computed either side of one cheap fake call
+    therefore passes on Linux and fails on Windows — which is exactly how it
+    reached a release build: CI runs the backend suite on ubuntu-latest, and
+    a tag build is the only place it ever runs on Windows.
+
+    Everything but ``monotonic``/``sleep`` delegates to the real module, so
+    a wall-clock timestamp stays a wall-clock timestamp. Locked because the
+    lens fan-out reads the same module name from worker threads.
+    """
+
+    def __init__(self, *, step: float = 0.05) -> None:
+        self._step = float(step)
+        self._now = 0.0
+        self._lock = threading.Lock()
+
+    def monotonic(self) -> float:
+        with self._lock:
+            self._now += self._step
+            return self._now
+
+    def sleep(self, seconds: float) -> None:
+        with self._lock:
+            self._now += max(0.0, float(seconds))
+
+    def __getattr__(self, name: str):
+        return getattr(_real_time, name)
 
 
 def _store() -> DocumentStore:
@@ -1075,8 +1116,16 @@ def test_each_settlement_call_is_bounded_by_the_time_the_window_has_left(
     does. A window configured shorter than the ceiling was the case that
     made this visible: every call still got the full ceiling, plus a connect
     timeout several times the whole advertised window.
+
+    The clock is a deterministic stand-in, and it has to be: the budget is
+    the remaining window, so proving it FALLS means comparing two readings
+    taken either side of one cheap fake call — microseconds apart, which a
+    ~15.6 ms Windows tick cannot distinguish (see ``_SteppedClock``). It
+    also removes the several real seconds the poll loop used to sleep.
     """
     monkeypatch.setattr(settings, "QC_BATCH_SETTLE_SECONDS", 2)
+    monkeypatch.setattr(settings, "QC_BATCH_POLL_SECONDS", 1)
+    monkeypatch.setattr(engine, "time", _SteppedClock())
     stop = threading.Event()
     client = SequencedFakeClient(_one_finding_scripts())
     real_create = client.batches.create

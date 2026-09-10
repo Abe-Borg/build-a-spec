@@ -10191,6 +10191,69 @@ never calls either function it changes.
   picker's greatest-below → 2, its grammar skip → 1, its at-or-above
   exclusion → 1, and the workflow back on `git describe` → 1.
 
+## A test that had only ever run on Linux — implemented notes
+
+The `v1.19.0` tag build died at **"Run backend tests"** on `windows-latest`
+— `assert 2.0 < 2.0`, one test of 1,982 — so every step after it was
+skipped and no release was published. The product code was correct; the
+test asserted wall-clock progress it did not control. Test-only fix: no
+route, no SSE event, no dep, no env knob, no behaviour change, and no
+release-note item, because nothing a user can see moved.
+
+- **`ci.yml`'s backend job runs on `ubuntu-latest`, so a tag build is the
+  ONLY place the suite ever runs on Windows** — the primary target
+  platform. That is the structural fact behind this failure, and this fix
+  does not change it: a Windows-fragile test still cannot fail before a
+  release is being cut.
+- **This one had never run there at all.** It arrived on 2026-09-09 with
+  the batched-settlement window ("A stopped batch is settled, not written
+  off"), one day after the `v1.17.0` tag; `1.18.0` was bumped and never
+  tagged, which this repo has now done three times (1.14.0, 1.16.0,
+  1.18.0). So `v1.19.0` was the test's first Windows execution, and it
+  failed on it. **A version that is bumped but never tagged buys no
+  Windows coverage for anything in it.**
+- **The mechanism is clock RESOLUTION, not clock speed.** Python backs
+  `time.monotonic()` with `GetTickCount64` on Windows (~15.625 ms), so two
+  readings microseconds apart return the IDENTICAL value; on Linux it is
+  nanosecond-resolution. The test computed a budget either side of one
+  cheap fake call and asserted the second was strictly smaller — true on
+  Linux by a float epsilon, false on Windows by construction.
+- **The budget itself was never wrong.** `_settle_request_seconds` returns
+  `min(_BATCH_SETTLE_REQUEST_TIMEOUT_SECONDS, remaining)` and
+  `_bounded_client` rebuilds per operation, exactly as designed. What the
+  test could not do was OBSERVE the fall.
+- **`_SteppedClock` replaces the module REFERENCE (`engine.time`), never
+  the stdlib module.** `monotonic()` advances a fixed step per reading,
+  `sleep()` advances by what it was asked to sleep, everything else
+  delegates to the real module, and it is locked because the lens fan-out
+  reads the same name from worker threads. The test is now deterministic on
+  any host and instant (3.7s -> 0.4s), because the poll loop's real seconds
+  are gone with it.
+- **The window now genuinely polls more than once**, which is what the
+  test's own comment always claimed ("a call issued near the deadline to
+  inspect") and could not deliver: the default 5s poll blew the whole 2s
+  window on its first sleep, so there were exactly two calls differing by a
+  float epsilon. With `QC_BATCH_POLL_SECONDS` at its floor of 1 the budgets
+  are `[1.95, 1.90, 0.80]` — a real fall, and the last call is really the
+  one issued near the deadline.
+- **The assertions are untouched, deliberately.** This is a determinism
+  fix, not a re-specification: a reviewer should not have to work out
+  whether the test still means what it meant.
+- **The whole suite was swept under a process-wide coarse clock** before
+  re-tagging, because this was its first Windows-granularity run and a
+  sibling could have been sitting on the same fault. **1,982 passed, 9
+  skipped** — no sibling shares the fault, and by inspection none can:
+  every other `time.monotonic()` reading in `backend/` and `tests/` is
+  either a deadline poll (`while monotonic() < deadline`) or an elapsed
+  interval compared against a threshold, and coarser granularity cannot
+  invert either.
+- **Deliberately NOT done**: converting the thirteen
+  `monkeypatch.setattr(engine.time, "sleep", ...)` sites across
+  `test_qc_batch_verification.py`, `test_qc_live_events.py` and
+  `test_research_engine.py`. Mutating the stdlib module briefly is the
+  established house pattern there, and re-plumbing all of it onto the
+  module-reference swap is a separate decision, not a release unblock.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

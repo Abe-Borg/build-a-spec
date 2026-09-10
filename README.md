@@ -1,6 +1,6 @@
 # Build-a-Spec
 
-**v1.18.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.19.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
@@ -460,9 +460,14 @@ round 1 cost and mostly re-derived it. Each dimension is now briefed on what
 is already established for it and told to report only what is NEW, CHANGED
 or CORRECTED — and to re-verify anything still `[UNVERIFIED]`. `POST
 /api/research/start` also takes `scope: "gaps"`, which runs only the
-dimensions that never completed. A brief only ever describes the project
-being researched *now*: correct the city, jurisdiction or client and the
-next round is not briefed at all.
+dimensions that never completed, and `scope: "selected"` with a
+`dimension_ids` list, which runs exactly the areas you pick — including
+ones that already completed, which is the point when a jurisdiction
+changes. The selection is validated server-side against what the module
+declares: an empty one is refused, and an undeclared id is refused by
+name rather than silently dropped. A brief only ever describes the
+project being researched *now*: correct the city, jurisdiction or client
+and the next round is not briefed at all.
 
 **Everything else.** The Final QC report downloads no longer wait out the
 imported-source permission sweep (minutes, silently, right after applying a
@@ -1487,8 +1492,8 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_QC_LENS_EFFORT` | = `QC_EFFORT` | Effort for phase 1 (the five lenses and the consolidation call). |
 | `BUILD_A_SPEC_QC_VERIFIER_EFFORT` | `medium` | Effort for phase 2 (the verifier seats — ~90% of a run's calls, answering a bounded question each). Falls back to `QC_EFFORT` instead of `medium` when that is explicitly set, so a global `low` is never silently overridden upward. |
 | `BUILD_A_SPEC_QC_MAX_WORKERS` | `8` | Concurrent QC calls in flight (lenses share the pool with verifiers). |
-| `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings. |
-| `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings. |
+| `BUILD_A_SPEC_QC_VERIFIERS_STANDARD` | `2` | Verification panel size for medium/low findings (floor 1). At `1` a panel cannot split, so a medium/low finding can never be `disputed` and a single reviewer's refusal deletes it with no escalation — the app warns at startup, and the audit manifest records the rule that configuration actually follows. |
+| `BUILD_A_SPEC_QC_VERIFIERS_CRITICAL` | `3` | Verification panel size for critical/high findings (floor 1). At `1` the evidence rule still keeps `disputed` reachable. |
 | `BUILD_A_SPEC_QC_BATCH_VERIFICATION` | `1` | Submit phase 2 (every verifier seat) as one Message Batches request at 50% of standard token prices — same prompts, seats, adjudication and audit records; no live per-seat frames. `0` streams the seats through the thread pool instead. |
 | `BUILD_A_SPEC_QC_BATCH_POLL_SECONDS` | `5` | How often the batched phase polls the provider for results (floor 1). |
 | `BUILD_A_SPEC_QC_BATCH_MAX_WAIT_SECONDS` | `7200` | Wall-clock ceiling on the batched phase (floor 60). A runaway guard, not a target: unsettled seats fail and the run reads partial. |

@@ -938,6 +938,27 @@ export interface ResearchCoverageGap {
   /** False only for a dimension the module declares optional, with a stated
    *  rationale — those never block issue readiness. */
   required: boolean;
+  /** Why the module declared it optional ("" when required). */
+  optional_rationale: string;
+  /** False when the profile holds no status for it AT ALL — never
+   *  attempted, as against attempted and failed. */
+  recorded: boolean;
+}
+
+/** One area the module declares, done or not.
+ *
+ *  The full roster in module declaration order, so a picker can offer a
+ *  SETTLED area by name: `completed` carries ids only, and no route
+ *  exposes the module's dimensions. Server-built from the same tuple
+ *  `select_research_dimensions` filters against, so the roster shown and
+ *  the roster validated against are the same object. */
+export interface ResearchAreaView {
+  dimension_id: string;
+  title: string;
+  required: boolean;
+  optional_rationale: string;
+  completed: boolean;
+  recorded: boolean;
 }
 
 /** How the module's declared research areas line up with what ran.
@@ -949,6 +970,8 @@ export interface ResearchCoverageView {
   total: number;
   completed: string[];
   gaps: ResearchCoverageGap[];
+  /** Every declared area, in module order — what a picker renders. */
+  areas: ResearchAreaView[];
   /** Sections whose research this session inherited through a project
    *  brief ([] when none) and how many of the profile's rounds came with
    *  it. Server-derived from the project link — the drawer labels, never
@@ -958,8 +981,14 @@ export interface ResearchCoverageView {
 }
 
 /** Which declared dimensions a round runs. `gaps` is resolved server-side
- *  to the areas that never completed; `all` is every declared dimension. */
-export type ResearchScope = "all" | "gaps";
+ *  to the areas that never completed; `all` is every declared dimension;
+ *  `selected` runs exactly the ids sent with it.
+ *
+ *  A selection is an INPUT, not a second derivation of the gap set: the
+ *  server resolves the ids through `select_research_dimensions` against
+ *  what the module declares now, refuses an empty selection, and refuses
+ *  an undeclared id by name. */
+export type ResearchScope = "all" | "gaps" | "selected";
 
 export interface ResearchSnapshot {
   status: ResearchRunStatus;

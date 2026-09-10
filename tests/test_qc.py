@@ -643,6 +643,117 @@ def test_a_dismissed_dispute_survives_a_save_and_reload():
     assert reloaded.open_disputed_count() == 0
 
 
+def _split_panel_verdicts() -> list:
+    """Two upholds and a refutation: a fully completed, split 3-seat panel."""
+    return [
+        qc_verdict_response(True),
+        qc_verdict_response(True),
+        qc_verdict_response(False),
+    ]
+
+
+def test_a_dismissed_dispute_stays_dismissed_across_a_rerun():
+    """The runner has to OFFER the record, not merely the engine accept it.
+
+    ``run_final_qc`` carries a dismissal onto a regenerated dispute
+    deliberately: a content-addressed id means this is the SAME
+    disagreement the user already considered and set aside. But
+    ``QCRunner.remembered_dismissals`` built its record dict from
+    ``result.findings`` alone, and a dispute lives in ``result.disputed``
+    — so the engine was handed nothing for it and the dispute came back
+    OPEN, re-blocking issue-readiness on every re-run with the user's
+    written rationale sitting on file.
+
+    ``test_a_dismissed_dispute_survives_a_save_and_reload`` does not cover
+    this: the reload path restores the finding's own persisted status,
+    where a re-run has to re-derive one from the carried record.
+    """
+    store = _section()
+    first = _run(SequencedFakeClient(_high_scripts(_split_panel_verdicts())), store)
+    runner = QCRunner()
+    runner.restore(first)
+    disputed = runner.result.disputed[0]
+    fid = disputed.finding_id
+    assert (
+        runner.dismiss(
+            fid,
+            "Split panel reviewed with the engineer of record.",
+            document_version=store.index,
+            document_fingerprint=qc_version_fingerprint(store.doc),
+        )
+        is True
+    )
+
+    remembered = runner.remembered_dismissals()
+    assert fid in remembered, "the runner must offer a dismissed dispute's record"
+
+    second = _run(
+        SequencedFakeClient(_high_scripts(_split_panel_verdicts())),
+        store,
+        remembered=remembered,
+    )
+    regenerated = second.disputed[0]
+    # The same disagreement: same votes, same claim, so the same id.
+    assert regenerated.finding_id == fid
+    assert regenerated.status == "dismissed"
+    assert regenerated.dismiss_reason.startswith("Split panel reviewed")
+    assert fid in second.dismissed_ids
+    # And it is no longer blocking issue-readiness.
+    assert second.open_disputed_count() == 0
+
+
+def test_every_dismissed_id_carries_its_record_forward():
+    """The rule, stated independently of the carry mechanics.
+
+    Whatever :meth:`QCRunner.dismiss` could reach, the next run has to be
+    offered — so the accessor's key set is exactly ``dismissed_ids``. A
+    future edit that narrows it to one collection again breaks this
+    directly, without needing a re-run to notice.
+    """
+    scripts = _qc_scripts(
+        enforceability_language=[
+            qc_findings_response(
+                "enforceability_language",
+                findings=[
+                    _finding("Vague language", "Uses 'as required'.", severity="medium")
+                ],
+            )
+        ],
+        code_compliance=[
+            qc_findings_response(
+                "code_compliance",
+                findings=[
+                    _finding("Wrong edition", "Edition mismatch.", severity="high")
+                ],
+            )
+        ],
+    )
+    # Unanimous on the medium candidate: it survives.
+    scripts["Vague language"] = [qc_verdict_response(True), qc_verdict_response(True)]
+    # Split on the high one: it is disputed.
+    scripts["Wrong edition"] = _split_panel_verdicts()
+
+    store = _section()
+    runner = QCRunner()
+    runner.restore(_run(SequencedFakeClient(scripts), store))
+    result = runner.result
+    assert len(result.findings) == 1 and len(result.disputed) == 1
+
+    for finding_id in (result.findings[0].finding_id, result.disputed[0].finding_id):
+        assert (
+            runner.dismiss(
+                finding_id,
+                "Considered and set aside for this project.",
+                document_version=store.index,
+                document_fingerprint=qc_version_fingerprint(store.doc),
+            )
+            is True
+        )
+
+    assert set(runner.remembered_dismissals()) == set(result.dismissed_ids)
+    assert len(result.dismissed_ids) == 2
+
+
 def test_every_v4_finding_persists_the_rule_that_adjudicated_it():
     result = _run(
         SequencedFakeClient(

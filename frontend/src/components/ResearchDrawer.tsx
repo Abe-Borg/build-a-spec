@@ -41,7 +41,7 @@ interface Props {
   referenceDocCount: number;
   research: ResearchSnapshot | null;
   busy: boolean;
-  onStart: (scope?: ResearchScope) => void;
+  onStart: (scope?: ResearchScope, dimensionIds?: string[]) => void;
   onStop: () => void;
   onEditDoc: (ops: EditOp[]) => void;
   /** Guided-tour "ensure open" (Batch 6): a bump expands the drawer. */
@@ -314,6 +314,8 @@ export default function ResearchDrawer({
   // Which agent's full activity modal is open; null = closed. Torn down
   // with the research state itself (reset / failed status refresh).
   const [agentDetailId, setAgentDetailId] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
   useEffect(() => {
     if (!research) setAgentDetailId(null);
   }, [research]);
@@ -347,6 +349,13 @@ export default function ResearchDrawer({
   // fresh session every area is a "gap" and "retry" would just be the first
   // round wearing a different label.
   const retryable = rounds > 0 && gaps.length > 0;
+  // Every declared area, done or not — server-built in module order from
+  // the same tuple the start endpoint validates a selection against.
+  const areas = research?.coverage?.areas ?? [];
+  // Gated like `retryable`, and for the same reason: on a fresh session
+  // nothing has been researched, so picking areas is just the first round
+  // wearing a different label.
+  const pickable = rounds > 0 && !running && areas.length > 0;
   // Research carried from another section of the same project — a session
   // seeded from a project brief. Server-derived beside the coverage join
   // (the seed recorded how many rounds it installed); the drawer labels and
@@ -453,6 +462,23 @@ export default function ResearchDrawer({
             View report
           </button>
         )}
+        {pickable && (
+          <Tip
+            tip="Research only the areas you pick — the jurisdiction changed, or an owner standard did. What it finds is ADDED to the rounds already recorded."
+            className="shrink-0"
+          >
+            <button
+              className="rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40"
+              onClick={() => setPickerOpen((v) => !v)}
+              disabled={startDisabled}
+              /* Shares research.run with the other two scopes — the
+                 updates.manage precedent recorded below. */
+              data-capability="research.run"
+            >
+              Choose areas…
+            </button>
+          </Tip>
+        )}
         {retryable && !running && (
           <Tip tip={retryTip} className="shrink-0">
             <button
@@ -494,6 +520,79 @@ export default function ResearchDrawer({
           </button>
         )}
       </div>
+
+      {pickerOpen && pickable && (
+        <div className="mt-2 rounded-md border border-edge bg-raised/60 px-3 py-2">
+          <p className="text-[11px] text-ink-faint">
+            Research these areas again. What a round finds is{" "}
+            <span className="text-ink-dim">added</span> to the rounds already
+            recorded — nothing already found is removed or replaced.
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {areas.map((area) => (
+              <li key={area.dimension_id}>
+                <label className="flex items-start gap-2 text-[11px] text-ink-dim">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 shrink-0"
+                    checked={picked.includes(area.dimension_id)}
+                    onChange={() =>
+                      setPicked((prev) =>
+                        prev.includes(area.dimension_id)
+                          ? prev.filter((id) => id !== area.dimension_id)
+                          : [...prev, area.dimension_id],
+                      )
+                    }
+                  />
+                  <span className="min-w-0">
+                    <span className="text-ink">{area.title}</span>
+                    <span className="text-ink-faint">
+                      {area.completed
+                        ? " · done"
+                        : area.recorded
+                          ? " · did not complete"
+                          : " · never attempted"}
+                    </span>
+                    {!area.required && (
+                      <span
+                        className="text-ink-faint"
+                        title={area.optional_rationale || undefined}
+                      >
+                        {" · optional"}
+                      </span>
+                    )}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              className="rounded-md border border-accent/70 bg-accent/15 px-2 py-0.5 text-[11px] text-accent transition-colors hover:bg-accent/25 disabled:pointer-events-none disabled:opacity-40"
+              onClick={() => {
+                onStart("selected", picked);
+                setPickerOpen(false);
+                setPicked([]);
+              }}
+              disabled={startDisabled || picked.length === 0}
+              data-capability="research.run"
+            >
+              {`Research ${picked.length} selected area${
+                picked.length === 1 ? "" : "s"
+              }`}
+            </button>
+            <button
+              className="rounded-md border border-edge bg-raised px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-accent hover:text-accent"
+              onClick={() => {
+                setPickerOpen(false);
+                setPicked([]);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {status === "failed" && research?.error && (
         <p className="mt-1 text-[11px] text-err">{research.error}</p>

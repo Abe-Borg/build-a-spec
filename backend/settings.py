@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Build-a-Spec"
-VERSION = "1.18.0"
+VERSION = "1.19.0"
 
 # --- Models -----------------------------------------------------------------
 
@@ -353,6 +353,22 @@ QC_MAX_WORKERS = _int_env("BUILD_A_SPEC_QC_MAX_WORKERS", 8, minimum=1)
 # 2-seat panel needed 2-of-2).
 QC_VERIFIERS_STANDARD = _int_env("BUILD_A_SPEC_QC_VERIFIERS_STANDARD", 2, minimum=1)
 QC_VERIFIERS_CRITICAL = _int_env("BUILD_A_SPEC_QC_VERIFIERS_CRITICAL", 3, minimum=1)
+
+# One seat is in range and legal, and it changes what the review MEANS
+# rather than merely how much of it there is: a panel of one cannot split,
+# so `disputed` is unreachable for medium/low and a lone reviewer's
+# refusal deletes the finding with no escalation to anyone. That is a
+# defensible choice and it stays available (CLAUDE.md records 2 -> 1 as a
+# deferred cost lever), but it must never be a silent one. Warned on the
+# RESOLVED value, so a clamp up from 0 says this too.
+if QC_VERIFIERS_STANDARD < 2:
+    logging.getLogger(_LOGGER_NAME).warning(
+        "BUILD_A_SPEC_QC_VERIFIERS_STANDARD=%d: a one-seat medium/low panel "
+        "cannot split, so no medium/low finding can be disputed and a single "
+        "reviewer's refusal is final, with no escalation. The audit manifest "
+        "records the rule this configuration actually follows.",
+        QC_VERIFIERS_STANDARD,
+    )
 
 # --- Batched verification (phase 2 on the Message Batches API) ---------------
 

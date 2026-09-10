@@ -1375,9 +1375,10 @@ export default function App() {
     replaceResearchSnapshot,
   ]);
 
-  const onStartResearch = useCallback(async (scope: ResearchScope = "all") => {
+  const onStartResearch = useCallback(
+    async (scope: ResearchScope = "all", dimensionIds?: string[]) => {
     try {
-      await startResearch(currentWorkspaceLease(), scope);
+      await startResearch(currentWorkspaceLease(), scope, dimensionIds);
       // Clear the auth-modal dedup ref for this fresh attempt — see
       // researchAuthHandledRef's declaration comment: refreshResearch (not
       // an effect) is what actually reopens the modal.
@@ -1393,7 +1394,11 @@ export default function App() {
       addNote(
         scope === "gaps"
           ? "Retrying the incomplete research areas — progress in the Research panel."
-          : "Started requirements research — progress in the Research panel.",
+          : scope === "selected"
+            ? `Researching ${dimensionIds?.length ?? 0} selected area${
+                (dimensionIds?.length ?? 0) === 1 ? "" : "s"
+              } — progress in the Research panel.`
+            : "Started requirements research — progress in the Research panel.",
       );
       void followResearch();
     } catch (e) {
@@ -1407,13 +1412,15 @@ export default function App() {
         coverage: researchSnapshotRef.current?.coverage,
       });
     }
-  }, [
-    followResearch,
-    addNote,
-    bumpDrawer,
-    replaceResearchSnapshot,
-    currentWorkspaceLease,
-  ]);
+    },
+    [
+      followResearch,
+      addNote,
+      bumpDrawer,
+      replaceResearchSnapshot,
+      currentWorkspaceLease,
+    ],
+  );
 
   /** Stop the running research fan-out (confirmed in the drawer — loses progress). */
   const onStopResearch = useCallback(async () => {

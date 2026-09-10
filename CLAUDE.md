@@ -9901,6 +9901,194 @@ their decision gates. Deleting a plan whose unfinished half lived nowhere else
 would have thrown away the specification; the record is what makes the deletion
 lossless, and it is the file to read before either step is picked up.
 
+## A dispute stays dismissed, and a 1-seat panel stops lying — implemented notes (v1.19.0)
+
+Provenance: a seven-item Final QC cost analysis, reviewed against `7017e13`.
+All seven items described the code accurately; **the investigation changed
+which were worth doing.** Four are gated on a measurement only the owner can
+produce, and `tools/qc_export_cost_profile.py` (PR #166) is the script for it
+— so the cost items were left behind that measurement rather than built on a
+modelled "output is ~85% of a run", a number PR #166's own review had already
+shown once to be an artifact of a dropped web-tool term (84.4% vs 64.7%).
+What shipped is the defect the analysis did not mention, one audit-record
+falsehood, and the research control. No new dep, no schema or protocol bump.
+
+- **The biggest "safe win" in the analysis is not buildable as designed, and
+  the reason is worth recording.** Skipping verifier panels for
+  already-dismissed findings founders on `_mint_finding_id`, which hashes
+  `verification_outcome`, `final_severity` and the full `panel_result` — so
+  at the seat-allocation seam (`qc/engine.py`, the ONE place both transports
+  build their task list) no finding id exists yet and the run cannot know
+  which candidates were dismissed. Carrying the prior verdicts instead is
+  necessary (an empty panel makes `_structural_verification_outcome` return
+  `None`, and `QCResult.from_dict` then discards the whole report) but
+  collides with four more invariants: `_audit_accounting_consistent` (a
+  carried verdict's usage would claim spend this run did not incur),
+  `_batch_capture_consistent`, the deliberate pin at
+  `test_qc_audit_report.py::test_carried_dismissal_requires_same_final_severity_panel_and_grounding`
+  (panel configuration IS part of finding identity), and
+  `test_qc_live_events.py`'s exact-dict `verification_started` assertion.
+  It is buildable; its payoff is bounded by how often lens output reproduces
+  materially, which is measurable and unmeasured. Wrong order.
+- **A dismissed DISPUTE was never carried across a re-run.**
+  `QCRunner.remembered_dismissals` scanned `result.findings` — survivors —
+  making it a fourth, wrong copy of "what a disposition may target", which
+  `QCResult.finding` already answers as `[*findings, *disputed]`
+  deliberately ("a dispute is resolved by a human dismissing it with a
+  reason, so it has to be reachable"). `dismiss()` writes the id into
+  `dismissed_ids`, and `run_final_qc` HAS the receiving code for a disputed
+  carry — its block was simply unreachable from the app, which never handed
+  it a record. Open disputes block readiness via `open_disputed_count`, so a
+  dispute settled with a written rationale came back and re-blocked
+  issue-readiness on every re-run. **The same survivors-only mistake was
+  found and fixed on the RELOAD path in PR #103**; this was the twin nobody
+  looked for, and `test_a_dismissed_dispute_survives_a_save_and_reload`
+  could never catch it because reload restores the finding's own persisted
+  status where a re-run re-derives one.
+- **The fix routes through `finding()` rather than adding a correct fifth
+  copy** of the collection list. Cost is O(n·m) over tens of findings once
+  per re-run start; the win is that the accessor and `dismiss()` cannot
+  drift apart again, which is exactly how this happened.
+- **Honest hit rate, stated rather than sold.** `_mint_finding_id` hashes
+  the panel, so a dispute carries only when the re-run splits the same way
+  with the same seats voting identically — materially less often than a
+  unanimous survivor. The fix is still correct: the runner withheld the
+  record 100% of the time, so the feature had a zero hit rate, not a low
+  one. It is also a **readiness-affecting** change, not a pure no-op:
+  a re-run can now produce `open_disputed_count() == 0` where today it
+  blocks.
+- **`QCRunner.remembered_dismissed()` was deleted** — zero callers repo-wide
+  (only the identically-named *parameter* on `run_final_qc` matched), under
+  the Batch 5 dead-symbol precedent. Note the irony: the dead accessor was
+  CORRECT (`set(self.result.dismissed_ids)`, disputes included); the gap
+  arrived with the richer record-carrying replacement.
+- **A 1-seat panel made the hashed audit manifest state an impossible
+  rule.** `panel_outcome` needs two seats to return `disputed` from a split,
+  so at `QC_VERIFIERS_STANDARD=1` the `split_panel` branch is unreachable
+  for medium/low (and `majority uphold = disputed` likewise at
+  `QC_VERIFIERS_CRITICAL=1`). But `build_qc_input_manifest` interpolated the
+  live sizes into a prose `majority_rule` string, so it rendered "1-seat
+  panels (medium/low): all uphold = upheld, **split = disputed**…" — hashed
+  into `input_fingerprint` and rendered in the Word memo and the report
+  modal. An audit record describing an outcome it cannot reach: the exact
+  class of defect PR #164/#165 exist to remove.
+- **`_majority_rule_prose(standard, critical)` is the conditional
+  rendering, and its `>= 2` branches are the shipped literals BYTE FOR
+  BYTE.** The stake is not the report's own identity (`from_dict`
+  recomputes from the PERSISTED manifest, so a retained report always agrees
+  with itself) — it is **freshness**: `QCResult.matches_inputs` rebuilds the
+  manifest from LIVE settings, so one character of drift flips every
+  retained result stale and invites a paid re-run of a review that has not
+  gone out of date. Pinned by a test that spells the literal out rather than
+  rebuilding it from the source under test, which would pass vacuously.
+- **The floor stays at 1, deliberately.**
+  `test_settings.py::test_the_shipped_floors_hold_through_a_reload` asserts
+  `QC_VERIFIERS_STANDARD == 1` from an env of `0`, and its docstring says
+  the floor exists for ZERO ("a zero-seat verifier panel upholds every
+  finding it never looked at"). Raising it reverses that and removes a lever
+  this file records as deferred. A startup WARNING names the consequence
+  instead, through the existing `_StartupLogBuffer` (settings is imported
+  long before the activity log exists), and the README rows carry it.
+  `VERIFICATION_RULE_V4` is untouched: it is size-independent and persisted
+  on every finding.
+- **ERRATUM to "Final QC cost + speed" (v1.8.0).** Its deferred-lever
+  bullet lists "reducing `QC_VERIFIERS_STANDARD` 2 -> 1" as a cost lever
+  with no note of what it costs. At 1 the `disputed` outcome is unreachable
+  for medium/low, so the escalation path collapses entirely and a lone
+  seat's refusal is final — on 48 of the 49 candidates in the reported
+  21 05 00 run. The lever stays available; it is not advisable, and the
+  v1.8.0 section is frozen history so the correction is recorded here.
+- **`critical == 2`'s "majority uphold" is deliberately NOT fixed.** A 1-1
+  tie is not a majority uphold, but that names a REACHABLE outcome
+  imprecisely — a different defect from claiming an unreachable one — and
+  rewording it would move the fingerprint for anyone running that
+  configuration. `HelpModal` / `TrustDeepDiveModal` panel copy is likewise
+  left alone: it describes the shipped defaults, not an audit record, and
+  the startup warning reaches the one person who changed the knob.
+- **Two existing tests pinned `pending_startup_records() == 1` using this
+  exact knob** (`test_settings.py`, `test_diagnostics.py`) and would have
+  gone red for a reason unrelated to what they test — both are about the
+  BUFFER. They are repointed to `BUILD_A_SPEC_QC_MAX_WORKERS` (floor 1, no
+  consequence warning), preserving every assertion verbatim. Deliberately
+  NOT changed to `== 2`: that couples two unrelated tests to a new
+  behaviour and re-breaks them the next time a warning is added.
+- **`scope: "selected"` lets a repeat round pick its areas.** The retry
+  button only ever appeared when something FAILED (`retryable = rounds > 0
+  && gaps.length > 0`), so "re-research the governing codes, the
+  jurisdiction changed" meant paying for a full round. The engine plumbing
+  already existed (`select_research_dimensions` filters unknown ids and
+  forces module order; `ResearchRunner.start(dimension_ids=)` threads it).
+- **A selection is an INPUT, not a second derivation — and the docstring
+  says so now rather than being silently contradicted.**
+  `ResearchStartRequest` explicitly recorded that the client never sends a
+  dimension list, citing the one-derivation rule. Its PURPOSE is "never
+  offer a retry the server is about to refuse", and that holds: the ids are
+  resolved through `select_research_dimensions` against what the module
+  declares NOW, an empty selection is refused, and an undeclared id is
+  refused BY NAME.
+- **The route is STRICT where the engine is lenient, deliberately.**
+  `select_research_dimensions` ignores an unknown id — the right last-resort
+  invariant for a direct caller. At the route a user picked N areas, and
+  running fewer than N bills them for a round they did not ask for. It is
+  also the correct guard for the real race: the module can change (session
+  reset, module switch) between the poll that drew the picker and the click.
+  A stray `dimension_ids` on `all`/`gaps` is refused for the same reason —
+  silently ignoring it is how someone pays for four areas after picking one.
+- **`coverage.areas` is the new payload block**, the full declared roster in
+  module declaration order with `title`/`required`/`optional_rationale`/
+  `completed`/`recorded`, plus `optional_rationale` and `recorded` on each
+  gap. It closes two gaps at once: `completed` carried ids only, and
+  `module.research_dimensions` was exposed by NO route, so a picker could
+  not name a settled area at all. Built from the same tuple
+  `select_research_dimensions` filters against, which is what keeps one
+  derivation. `research_manifest_facts` was considered and rejected: it is
+  an audit projection of a run's INPUT snapshot, its titles come from
+  recorded statuses, and it can carry ids the module no longer declares — a
+  picker built on it would enumerate history and offer an area that cannot
+  run.
+- **A selected re-run ADDS; it cannot REPLACE.** `append_research_round`
+  joins on the content hash and removes nothing, and `_accumulate_statuses`
+  makes `completed` sticky. So re-researching an area leaves the previous
+  jurisdiction's items in the profile, distinguishable only by
+  `round_index`. That is not new — a full round has always behaved this way
+  — but the picker's copy is what would make a user expect a refresh, so the
+  tooltip and the panel prose say **added**, never "updates" or "refreshes".
+  The sticky half is the good news: a selected re-run that FAILS cannot
+  regress a settled area, so readiness never flips backwards (asserted).
+- **`ArtifactPanel`'s `onStartResearch: () => void` was a live latent bug**,
+  fixed here. TypeScript assigns a zero-parameter function to a
+  parameterized slot happily, so the scope reached `startResearch` only
+  because JS ignores the declaration — the day someone wrapped it
+  (`onStart={() => onStartResearch()}`) the scope AND the selection would
+  vanish with no type error and no failing test.
+- **No capability edit, no `TOUR_VERSION` bump.** Both new controls reuse
+  `data-capability="research.run"` — one capability offered at three scopes,
+  the `updates.manage` precedent already recorded inline in
+  `ResearchDrawer.tsx`. A bump would re-show the tutorial to every user for
+  a control inside a collapsed drawer.
+- **Coverage limitation, stated:** the picker component itself is covered by
+  `tsc --noEmit` on the widened prop chain and by `researchApi.test.ts`, not
+  by a DOM test — the repo has no DOM harness, and a source-text regex over
+  the drawer would be brittle without proving behaviour.
+- **Tests**: 9 backend (2 in `test_qc.py`, 2 in
+  `test_qc_manifest_integrity.py`, 1 in `test_settings.py`, 6 in
+  `test_research_api.py` — 11 new plus 2 repointed) and 3 frontend
+  (`tests/researchApi.test.ts`, registered in `package.json`'s explicit
+  `node --test` list). Every mechanism reverted in place: the dismissal
+  accessor → 2 red with `test_dismiss_memory_survives_a_rerun` staying
+  GREEN (proving the new tests cover ground the old one does not); the
+  engine's disputed-carry block → 1 red with the reload test staying green
+  (proving the two halves are independent and that block was previously
+  untested end to end); the deleted dead accessor → 0 red, which IS the
+  proof; the conditional prose → 1 red with the frozen-literal test staying
+  green (they pin different things and cannot cover for each other); the
+  startup warning → 1 red; the two repointed buffer tests → 2 red; the
+  `selected` scope → 4 red; each route guard individually (empty selection,
+  unknown id, stray list) → exactly 1 red each, precisely its own test; the
+  `areas` payload → 1 red with all four named existing contract tests
+  staying green (proving it is additive); `dimension_ids` in
+  `startResearch` → 2 red.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

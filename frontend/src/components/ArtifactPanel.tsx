@@ -21,6 +21,7 @@ import type {
   QcSnapshot,
   ReadinessPayload,
   ReferenceDocMeta,
+  ResearchScope,
   ResearchSnapshot,
   SaveOutcome,
   SaveTarget,
@@ -163,7 +164,13 @@ interface Props {
   onAttachReference: (file: File) => void;
   onRemoveReference: (rid: string) => void;
   referenceBusy: boolean;
-  onStartResearch: () => void;
+  /** Typed with its parameters, not as `() => void`: TypeScript happily
+   *  assigns a zero-parameter function here, so the scope reached
+   *  `startResearch` only because JS ignores the declaration. The day
+   *  someone wraps this (`onStart={() => onStartResearch()}`) the scope
+   *  AND the selection are dropped silently — the user clicks "Research
+   *  1 selected area" and pays for four. */
+  onStartResearch: (scope?: ResearchScope, dimensionIds?: string[]) => void;
   onStopResearch: () => void;
   onStartQc: (acknowledgeScopeMismatch?: boolean) => void;
   onStopQc: () => void;

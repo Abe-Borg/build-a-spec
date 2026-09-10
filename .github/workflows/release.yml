@@ -50,6 +50,8 @@ jobs:
       - name: Resolve version and tag
         id: ver
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}   # gh api, for the published releases
         run: |
           $settings = Get-Content backend/settings.py -Raw
           if ($settings -notmatch '(?m)^VERSION\s*=\s*"([^"]+)"') {
@@ -61,9 +63,34 @@ jobs:
           } else {
             $tag = "v$version"
           }
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          # Which versions already have a RELEASE PAGE. Deliberately not
+          # "which are tagged": a tag build that fails after the tag is
+          # pushed leaves a tag behind with no release, and the Windows-only
+          # steps below (freeze, smoke test, installer) are never exercised
+          # by CI, so that is a real way to end up here. Taking such a tag as
+          # the notes bound would skip that version's notes — the exact gap
+          # the span exists to close. Drafts are excluded (no public page);
+          # prereleases are not (theirs is public). The renderer picks the
+          # greatest one below this version.
+          # No fallback to tags on purpose: if this API is unreachable then
+          # the publish step at the end cannot work either.
+          $released = ""
+          try {
+            $names = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" `
+              --jq '.[] | select(.draft == false) | .tag_name'
+            if ($LASTEXITCODE -eq 0 -and $names) { $released = (@($names) -join ",") }
+          } catch {
+            Write-Host "could not list published releases: $($_.Exception.Message)"
+          }
+          # gh exits nonzero when it cannot answer, and a pwsh step exits on
+          # the last native exit code — that must not fail the build here.
+          $global:LASTEXITCODE = 0
+
+          "version=$version"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "released=$released" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "Building version=$version tag=$tag"
+          Write-Host "Published releases: $released"
 
       - name: Install Python dependencies
         run: |
@@ -174,10 +201,20 @@ jobs:
           # app sees and the GitHub Release body. The script exits non-zero if
           # the version has no entry, so a release page can never go out with
           # no notes on it.
-          python packaging/windows/render_release_notes.py `
-            --version "${{ steps.ver.outputs.version }}" `
-            --notes-out "release-notes.txt" `
-            --body-out "release-body.md"
+          # A version bumped since the last release but never tagged still
+          # ships in this installer (1.14.0, 1.16.0 and 1.18.0 all were), so
+          # the page and the manifest have to name it too — otherwise they
+          # describe less than the build contains. Built as an array because
+          # an empty --since would reach argparse as a missing value.
+          $renderArgs = @(
+            "packaging/windows/render_release_notes.py",
+            "--version", "${{ steps.ver.outputs.version }}",
+            "--notes-out", "release-notes.txt",
+            "--body-out", "release-body.md"
+          )
+          $released = "${{ steps.ver.outputs.released }}"
+          if ($released) { $renderArgs += @("--released", $released) }
+          python @renderArgs
           if ($LASTEXITCODE -ne 0) { throw "release notes render failed" }
           Get-Content release-body.md
 

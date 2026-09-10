@@ -67,6 +67,37 @@ never disagree:
 time. The app never fetches its own notes — they ship inside the build, so a
 freshly-updated app can show them with no network at all.
 
+**A release covers every version since the last one, not just its own.** The
+version bump and the release are separate acts, and they come apart: 1.14.0,
+1.16.0 and 1.18.0 were each bumped and merged, then superseded by the next
+bump without ever being tagged. Their work ships in the following installer,
+so the two surfaces above have to name it — they are what a user reads
+*before* deciding to update, and a page describing less than the build
+contains is the failure here. (The in-app modal already spanned the gap on
+its own: `resolve_pending` announces everything newer than the user's
+`last_seen_version`, whatever was tagged in between.)
+
+The workflow works the bound out itself — it asks the API which releases
+have actually **published** and passes the list as `--released`, and the
+renderer takes the greatest one below the version being cut — so cutting a
+release is still just a tag push. It asks for releases rather than tags on
+purpose: a tag build that fails after the tag is pushed leaves a tag behind
+with no release page, and the Windows-only steps here (freeze, smoke test,
+installer) are never exercised by CI, so that is a real way to get one.
+Treating it as the bound would skip that version's notes — the gap this
+exists to close. An unusable bound falls back to describing the tagged
+version alone rather than emptying the whole changelog onto one page.
+Rendering by hand, where `--since` is the explicit override:
+
+```bash
+python packaging/windows/render_release_notes.py \
+    --version 1.19.0 --since v1.17.0 \
+    --notes-out release-notes.txt --body-out release-body.md
+```
+
+It prints the versions it covered; `--since` is optional and omitting it
+renders the single entry, exactly as it did before.
+
 The "has this user seen it" marker is `last_seen_version` in the update
 state file (`update_check.json`, beside the API key). A fresh install is
 deliberately shown nothing; the app distinguishes it from an upgrade by

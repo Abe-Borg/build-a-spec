@@ -10100,6 +10100,76 @@ falsehood, and the research control. No new dep, no schema or protocol bump.
   staying green (proving it is additive); `dimension_ids` in
   `startResearch` → 2 red.
 
+## A release describes every version in it — implemented notes
+
+Cutting v1.19.0 exposed the gap: the release page and `latest.json` would
+have described 1.19.0 and said nothing about 1.18.0, whose whole batch (the
+batched-QC settlement window, the two-bucket cost line) shipped in the same
+installer. No route, no SSE event, no dep, no env knob, no version bump —
+and no release-note item, because this is build-time tooling and the app
+never calls either function it changes.
+
+- **The bump and the release are separate acts, and they come apart.**
+  1.14.0, 1.16.0 and 1.18.0 were each bumped, merged, and superseded by the
+  next bump without ever being tagged — `git describe --tags --abbrev=0
+  v1.17.0^` returns `v1.15.0`, so the gap is systematic rather than a
+  one-off. The work still ships; it was simply announced nowhere a user
+  looks BEFORE deciding to update.
+- **Two of the three audiences were wrong, and the third was always
+  right.** The in-app modal spans the gap on its own — `resolve_pending`
+  announces everything newer than `last_seen_version`, whatever was tagged
+  in between — so a 1.17.0 user updating to 1.19.0 always saw both entries
+  *after* installing. `manifest_summary` and `markdown_notes` were the
+  single-version pair, and they are exactly the surfaces consulted before
+  installing. The "one entry, three audiences ... they can never disagree"
+  contract was being kept by the modal alone.
+- **`notes_for_release(version, after=)` is the one span resolver**, and
+  both renderings go through it rather than each deciding for itself —
+  the same reason `qc_research_coverage` returns identity and limitation
+  together. `notes_between` already existed (it is what `resolve_pending`
+  uses), so this is a rendering fix, not new selection logic.
+- **The fail-safe direction is the whole safety argument, and it is the
+  opposite of the modal's.** `notes_between` reads an unparseable bound as
+  "no lower bound" — right for a cosmetic modal that must never fail to
+  open, and catastrophic here, where it would empty all fourteen entries
+  onto one release page. So every ambiguous bound (unparseable, blank, at
+  or above the version, a raw `v`-prefixed tag the caller forgot to strip)
+  collapses to the single entry instead: byte for byte the pre-span output.
+  A span that somehow lost the version being released is refused for the
+  same reason — it is not a description of it.
+- **The workflow resolves the bound itself**, so cutting a release is still
+  one tag push: `git describe --tags --abbrev=0` below the tagged commit on
+  a tag build, from `HEAD` on a branch dispatch (where HEAD is not tagged,
+  so the nearest reachable tag IS the previous release). Two things this
+  needs that are easy to miss — `fetch-depth: 0` on the checkout, because
+  the default depth-1 fetch carries no tags at all and there would be
+  nothing to describe against; and `$global:LASTEXITCODE = 0` after, since
+  `git describe` exits nonzero when it finds nothing and a `pwsh` step exits
+  on the last native exit code, which would fail the first release ever cut.
+  `--since` is built into an argument ARRAY rather than interpolated,
+  because an empty value would reach argparse as a missing one.
+- **release.yml is never exercised by CI** — a tag build is the first time
+  it runs — so the wiring is pinned in the suite instead
+  (`test_the_release_workflow_asks_git_for_the_previous_release`), the
+  `test_ci_lints_before_it_tests` precedent. All three parts are asserted:
+  without the tags there is nothing to describe, without the lookup there is
+  no bound, and without the argument the renderer is back to one version.
+- **The widest possible span is bounded by the changelog and pinned against
+  the manifest cap.** `after=EARLIEST_KNOWN_VERSION` renders all fourteen
+  entries at 7k chars against `updates.MAX_MANIFEST_BYTES` (64 KiB) — worth
+  a test because exceeding it would break the update path itself, not merely
+  make a tooltip long. The earlier entries in a summary contribute headline
+  and item titles but never their summary paragraph, which is what keeps
+  that bounded.
+- **Tests**: 11 cases in `tests/test_release_notes.py` (the page and the
+  summary each covering a skipped version's real items, the manifest-cap
+  headroom, byte-identity with no bound, the four ambiguous bounds as a
+  parametrize, a bound at the released version still describing it, the
+  renderer end to end including the `v` prefix a git tag arrives with, and
+  the workflow pin). Every mechanism reverted in place to prove it
+  load-bearing: the unparseable-bound guard → 2 red, the empty-span guard →
+  2, the renderer's pass-through → 1, the workflow's argument → 1.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

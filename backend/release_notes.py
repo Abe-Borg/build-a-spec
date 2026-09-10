@@ -2269,33 +2269,83 @@ def resolve_pending(
 # --------------------------------------------------------------------------
 
 
-def manifest_summary(version: str) -> str:
+def notes_for_release(version: str, *, after: str = "") -> tuple[ReleaseNote, ...]:
+    """The entries a release at ``version`` has to describe, newest first.
+
+    ``after`` is the last version that already got its OWN release page.
+    A version bump that never got its own tag is the ordinary case in this
+    repo — 1.14.0, 1.16.0 and 1.18.0 all happened — and its work ships in
+    the next build having been announced nowhere a user looks *before*
+    updating. So the release page and ``latest.json`` cover the whole span,
+    while the app's What's-new modal keeps deciding for itself through
+    :func:`resolve_pending` and its own ``last_seen_version`` marker.
+
+    Anything ambiguous falls back to the single entry for ``version`` —
+    byte for byte the pre-range output. That direction is deliberate:
+    :func:`notes_between` reads an unparseable bound as "no lower bound",
+    which is right for a cosmetic modal that must never fail to open, and
+    exactly wrong here, where it would empty the entire back catalogue onto
+    one release page.
+    """
+    note = note_for(version)
+    if note is None:
+        return ()
+    bound = after.strip()
+    if not bound or _sortable(version) is None or _sortable(bound) is None:
+        return (note,)
+    span = notes_between(after=bound, through=version)
+    # A bound at or above ``version`` selects nothing, and a span that lost
+    # the version being released is not a description of it.
+    if not span or all(entry.version != version for entry in span):
+        return (note,)
+    return span
+
+
+def manifest_summary(version: str, *, after: str = "") -> str:
     """Plain-text summary for ``latest.json``'s ``notes`` field.
 
     Shown to a user who has NOT updated yet (the update pill's tooltip and
     the update dialog), so it describes the version they would be getting.
-    Kept short — the full entry ships inside the build they install.
+    Kept short — the full entry ships inside the build they install. Where
+    ``after`` spans versions that never had a release of their own, each one
+    contributes its headline and item titles but not its summary paragraph,
+    so naming them all cannot run the tooltip away with it.
     """
-    note = note_for(version)
-    if note is None:
+    span = notes_for_release(version, after=after)
+    if not span:
         return f"Build-a-Spec {version} — see the release page for details."
-    lines = [f"Build-a-Spec {version} — {note.headline}", "", note.summary]
-    for section in note.sections:
+    lead, *earlier = span
+    lines = [f"Build-a-Spec {version} — {lead.headline}", "", lead.summary]
+    for section in lead.sections:
         for item in section.items:
             lines.append(f"• {item.title}")
+    for note in earlier:
+        lines.append("")
+        lines.append(f"Also includes {note.version} — {note.headline}")
+        for section in note.sections:
+            for item in section.items:
+                lines.append(f"• {item.title}")
     return "\n".join(lines)
 
 
-def markdown_notes(version: str) -> str:
+def markdown_notes(version: str, *, after: str = "") -> str:
     """Markdown for the GitHub Release body."""
-    note = note_for(version)
-    if note is None:
+    span = notes_for_release(version, after=after)
+    out: list[str] = []
+    for index, note in enumerate(span):
+        if index == 0:
+            out.append(f"## What's new in {note.version} — {note.headline}")
+        else:
+            out.append(f"## Also in this release — {note.version}: {note.headline}")
+        out.append("")
+        out.append(note.summary)
+        out.append("")
+        for section in note.sections:
+            out.append(f"### {section.title}")
+            out.append("")
+            for item in section.items:
+                out.append(f"- **{item.title}** — {item.body}")
+            out.append("")
+    if not out:
         return ""
-    out = [f"## What's new in {note.version} — {note.headline}", "", note.summary, ""]
-    for section in note.sections:
-        out.append(f"### {section.title}")
-        out.append("")
-        for item in section.items:
-            out.append(f"- **{item.title}** — {item.body}")
-        out.append("")
     return "\n".join(out).rstrip() + "\n"

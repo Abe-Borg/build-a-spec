@@ -9,6 +9,7 @@ launch, and the shipped notes drifting out of step with ``settings.VERSION``
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -248,3 +249,200 @@ def test_markdown_notes_render_every_item_for_the_release_page():
         for item in section.items:
             assert item.title in md
     assert release_notes.markdown_notes("9.9.9") == ""
+
+
+# --------------------------------------------------------------------------
+# A release covers every version that never got one of its own
+# --------------------------------------------------------------------------
+#
+# The version bump and the release are separate acts here, and they have come
+# apart repeatedly: 1.14.0, 1.16.0 and 1.18.0 were each bumped, merged and
+# then superseded by the next bump without ever being tagged. Their work
+# ships in the following installer, so the release page and ``latest.json``
+# have to name it — those are the two surfaces a user reads BEFORE deciding
+# to update, and the in-app modal they see afterwards already spans the gap
+# on its own through ``last_seen_version``. A release page that describes
+# less than the build contains is the thing these pin.
+
+
+def _span_versions(text: str) -> list[str]:
+    """Versions a rendered body or summary actually names, in order."""
+    return re.findall(
+        r"^(?:## What's new in|## Also in this release —|Also includes"
+        r"|Build-a-Spec) ([0-9][^ :—]*)",
+        text,
+        re.M,
+    )
+
+
+def test_the_release_page_covers_every_version_that_never_shipped():
+    current = release_notes.RELEASE_NOTES[0].version
+    skipped = release_notes.RELEASE_NOTES[1]
+    last_released = release_notes.RELEASE_NOTES[2].version
+
+    md = release_notes.markdown_notes(current, after=last_released)
+
+    assert md.startswith(f"## What's new in {current}")
+    assert _span_versions(md) == [current, skipped.version]
+    # Named is not enough — the skipped version's actual work has to be on
+    # the page, which is the whole reason it is there.
+    assert skipped.headline in md
+    for section in skipped.sections:
+        for item in section.items:
+            assert item.title in md, item.title
+
+
+def test_the_manifest_summary_names_every_version_in_the_span():
+    """``latest.json``'s notes are what a not-yet-updated app shows in the
+    update pill. It describes what you would be getting, so it carries every
+    unreleased version's items — headline and titles, not whole summaries."""
+    current = release_notes.RELEASE_NOTES[0].version
+    skipped = release_notes.RELEASE_NOTES[1]
+    last_released = release_notes.RELEASE_NOTES[2].version
+
+    summary = release_notes.manifest_summary(current, after=last_released)
+
+    assert _span_versions(summary) == [current, skipped.version]
+    assert skipped.headline in summary
+    for section in skipped.sections:
+        for item in section.items:
+            assert item.title in summary, item.title
+    # Kept short: the earlier entry contributes titles, never its paragraph.
+    assert skipped.summary not in summary
+
+
+def test_the_widest_possible_span_still_fits_the_update_manifest():
+    """A span is bounded by the changelog itself, and ``latest.json`` has a
+    hard 64 KiB ceiling the updater enforces — blowing it would break the
+    update path rather than merely making a tooltip long."""
+    current = release_notes.RELEASE_NOTES[0].version
+    widest = release_notes.manifest_summary(
+        current, after=release_notes.EARLIEST_KNOWN_VERSION
+    )
+    assert len(_span_versions(widest)) == len(release_notes.RELEASE_NOTES)
+    assert len(widest.encode("utf-8")) < updates.MAX_MANIFEST_BYTES / 2
+
+
+def test_a_release_without_a_bound_renders_exactly_what_it_always_did():
+    current = release_notes.RELEASE_NOTES[0].version
+    assert release_notes.markdown_notes(current, after="") == (
+        release_notes.markdown_notes(current)
+    )
+    assert release_notes.manifest_summary(current, after="") == (
+        release_notes.manifest_summary(current)
+    )
+    assert "## Also in this release" not in release_notes.markdown_notes(current)
+    assert "Also includes" not in release_notes.manifest_summary(current)
+
+
+@pytest.mark.parametrize(
+    "bound",
+    [
+        "garbage",
+        "v1.17.0",   # a raw git tag: the caller must strip the v, not us
+        "9.9.9",     # above every entry
+        "   ",
+    ],
+)
+def test_an_unusable_bound_falls_back_to_one_entry_not_the_back_catalogue(bound):
+    """``notes_between`` reads an unparseable bound as "no lower bound",
+    which is right for a modal that must never fail to open and exactly
+    wrong here — it would empty the whole changelog onto one release page.
+    Every ambiguous bound collapses to the single entry instead."""
+    current = release_notes.RELEASE_NOTES[0].version
+    assert release_notes.markdown_notes(current, after=bound) == (
+        release_notes.markdown_notes(current)
+    )
+    assert release_notes.notes_for_release(current, after=bound) == (
+        release_notes.note_for(current),
+    )
+
+
+def test_a_bound_at_the_released_version_still_describes_it():
+    """``after`` equal to the version selects nothing at all. The release
+    still has to describe itself."""
+    current = release_notes.RELEASE_NOTES[0].version
+    assert release_notes.notes_for_release(current, after=current) == (
+        release_notes.note_for(current),
+    )
+    assert release_notes.markdown_notes(current, after=current).strip()
+
+
+def test_the_renderer_covers_the_span_the_workflow_hands_it(tmp_path):
+    """End to end through the script the release workflow actually calls,
+    including the leading ``v`` a git tag arrives with."""
+    import sys
+
+    sys.path.insert(0, str(settings.REPO_ROOT / "packaging" / "windows"))
+    import render_release_notes
+
+    current = release_notes.RELEASE_NOTES[0].version
+    skipped = release_notes.RELEASE_NOTES[1].version
+    last_released = release_notes.RELEASE_NOTES[2].version
+    notes_out = tmp_path / "release-notes.txt"
+    body_out = tmp_path / "release-body.md"
+
+    code = render_release_notes.main(
+        [
+            "--version", current,
+            "--notes-out", str(notes_out),
+            "--body-out", str(body_out),
+            "--since", f"v{last_released}",
+        ]
+    )
+
+    assert code == 0
+    body = body_out.read_text(encoding="utf-8")
+    assert _span_versions(body) == [current, skipped]
+    assert _span_versions(notes_out.read_text(encoding="utf-8")) == [current, skipped]
+    # The install/SmartScreen instructions still follow the notes.
+    assert "## Install (Windows)" in body
+
+
+def test_the_release_workflow_asks_git_for_the_previous_release():
+    """release.yml is never exercised by CI — a tag build is the first time
+    it runs — so the wiring is pinned here instead. All three parts matter:
+    without the tags there is nothing to describe against, without the
+    lookup there is no bound, and without the argument the renderer is back
+    to describing one version."""
+    workflow = (
+        settings.REPO_ROOT / ".github" / "workflows" / "release.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "fetch-depth: 0" in workflow, "a depth-1 checkout fetches no tags"
+    assert "git describe --tags --abbrev=0" in workflow
+    assert "since=$since" in workflow, "the resolved bound is never published"
+    assert '"--since", $since' in workflow, "the renderer is never given it"
+    # git describe exits nonzero when it finds nothing, and a pwsh step exits
+    # on the last native exit code: a first release must not fail the build.
+    assert "$global:LASTEXITCODE = 0" in workflow
+
+
+def test_the_renderer_warns_only_when_the_bound_is_unusable(tmp_path, capsys):
+    """A span of one entry is the ORDINARY release — the previous release is
+    the version below this one — so warning on span length would cry wolf
+    every time and train whoever cuts the release to ignore it. The bound
+    nobody can parse is the actual mistake, and it is the only one that
+    speaks up."""
+    import sys
+
+    sys.path.insert(0, str(settings.REPO_ROOT / "packaging" / "windows"))
+    import render_release_notes
+
+    current = release_notes.RELEASE_NOTES[0].version
+    just_below = release_notes.RELEASE_NOTES[1].version
+
+    def render(since: str) -> str:
+        code = render_release_notes.main(
+            [
+                "--version", current,
+                "--notes-out", str(tmp_path / "n.txt"),
+                "--body-out", str(tmp_path / "b.md"),
+                "--since", since,
+            ]
+        )
+        assert code == 0, "an unusable bound falls back; it never fails the build"
+        return capsys.readouterr().err
+
+    assert render(just_below) == ""
+    assert "WARNING" in render("nonsense")

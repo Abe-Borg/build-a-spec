@@ -34,6 +34,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history AND tags. The release-notes step asks git which
+          # version was tagged last so it can cover any version bumped since
+          # then that never got a release of its own; the default depth-1
+          # checkout fetches no tags at all, and git describe would find
+          # nothing to compare against.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v7
         with:
@@ -61,9 +68,28 @@ jobs:
           } else {
             $tag = "v$version"
           }
+          # The version whose release page already exists. On a tag build,
+          # look below the tagged commit; on a branch dispatch HEAD is not
+          # tagged, so the nearest reachable tag IS the previous release.
+          # Best-effort by design: no tag in history (the first release, or a
+          # shallow clone) leaves this empty and the renderer falls back to
+          # describing this version alone.
+          $since = ""
+          $describeFrom = if ($env:GITHUB_REF -like 'refs/tags/*') { "$tag^" } else { "HEAD" }
+          try {
+            $prev = (git describe --tags --abbrev=0 $describeFrom 2>$null | Select-Object -First 1)
+            if ($prev) { $since = ($prev.Trim() -replace '^v', '') }
+          } catch {
+            Write-Host "no previous tag reachable from ${describeFrom}: $($_.Exception.Message)"
+          }
+          # git describe exits nonzero when it finds nothing, and pwsh steps
+          # exit on the last native exit code — that must not fail the build.
+          $global:LASTEXITCODE = 0
+
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Building version=$version tag=$tag"
+          "since=$since"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Building version=$version tag=$tag since=$since"
 
       - name: Install Python dependencies
         run: |
@@ -174,10 +200,20 @@ jobs:
           # app sees and the GitHub Release body. The script exits non-zero if
           # the version has no entry, so a release page can never go out with
           # no notes on it.
-          python packaging/windows/render_release_notes.py `
-            --version "${{ steps.ver.outputs.version }}" `
-            --notes-out "release-notes.txt" `
-            --body-out "release-body.md"
+          # A version bumped since the last release but never tagged still
+          # ships in this installer (1.14.0, 1.16.0 and 1.18.0 all were), so
+          # the page and the manifest have to name it too — otherwise they
+          # describe less than the build contains. Built as an array because
+          # an empty --since would reach argparse as a missing value.
+          $renderArgs = @(
+            "packaging/windows/render_release_notes.py",
+            "--version", "${{ steps.ver.outputs.version }}",
+            "--notes-out", "release-notes.txt",
+            "--body-out", "release-body.md"
+          )
+          $since = "${{ steps.ver.outputs.since }}"
+          if ($since) { $renderArgs += @("--since", $since) }
+          python @renderArgs
           if ($LASTEXITCODE -ne 0) { throw "release notes render failed" }
           Get-Content release-body.md
 

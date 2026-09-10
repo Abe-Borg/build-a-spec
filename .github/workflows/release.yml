@@ -34,13 +34,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          # Full history AND tags. The release-notes step asks git which
-          # version was tagged last so it can cover any version bumped since
-          # then that never got a release of its own; the default depth-1
-          # checkout fetches no tags at all, and git describe would find
-          # nothing to compare against.
-          fetch-depth: 0
 
       - uses: actions/setup-python@v7
         with:
@@ -57,6 +50,8 @@ jobs:
       - name: Resolve version and tag
         id: ver
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}   # gh api, for the published releases
         run: |
           $settings = Get-Content backend/settings.py -Raw
           if ($settings -notmatch '(?m)^VERSION\s*=\s*"([^"]+)"') {
@@ -68,28 +63,34 @@ jobs:
           } else {
             $tag = "v$version"
           }
-          # The version whose release page already exists. On a tag build,
-          # look below the tagged commit; on a branch dispatch HEAD is not
-          # tagged, so the nearest reachable tag IS the previous release.
-          # Best-effort by design: no tag in history (the first release, or a
-          # shallow clone) leaves this empty and the renderer falls back to
-          # describing this version alone.
-          $since = ""
-          $describeFrom = if ($env:GITHUB_REF -like 'refs/tags/*') { "$tag^" } else { "HEAD" }
+          # Which versions already have a RELEASE PAGE. Deliberately not
+          # "which are tagged": a tag build that fails after the tag is
+          # pushed leaves a tag behind with no release, and the Windows-only
+          # steps below (freeze, smoke test, installer) are never exercised
+          # by CI, so that is a real way to end up here. Taking such a tag as
+          # the notes bound would skip that version's notes — the exact gap
+          # the span exists to close. Drafts are excluded (no public page);
+          # prereleases are not (theirs is public). The renderer picks the
+          # greatest one below this version.
+          # No fallback to tags on purpose: if this API is unreachable then
+          # the publish step at the end cannot work either.
+          $released = ""
           try {
-            $prev = (git describe --tags --abbrev=0 $describeFrom 2>$null | Select-Object -First 1)
-            if ($prev) { $since = ($prev.Trim() -replace '^v', '') }
+            $names = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" `
+              --jq '.[] | select(.draft == false) | .tag_name'
+            if ($LASTEXITCODE -eq 0 -and $names) { $released = (@($names) -join ",") }
           } catch {
-            Write-Host "no previous tag reachable from ${describeFrom}: $($_.Exception.Message)"
+            Write-Host "could not list published releases: $($_.Exception.Message)"
           }
-          # git describe exits nonzero when it finds nothing, and pwsh steps
-          # exit on the last native exit code — that must not fail the build.
+          # gh exits nonzero when it cannot answer, and a pwsh step exits on
+          # the last native exit code — that must not fail the build here.
           $global:LASTEXITCODE = 0
 
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "since=$since"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Building version=$version tag=$tag since=$since"
+          "version=$version"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "released=$released" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Building version=$version tag=$tag"
+          Write-Host "Published releases: $released"
 
       - name: Install Python dependencies
         run: |
@@ -211,8 +212,8 @@ jobs:
             "--notes-out", "release-notes.txt",
             "--body-out", "release-body.md"
           )
-          $since = "${{ steps.ver.outputs.since }}"
-          if ($since) { $renderArgs += @("--since", $since) }
+          $released = "${{ steps.ver.outputs.released }}"
+          if ($released) { $renderArgs += @("--released", $released) }
           python @renderArgs
           if ($LASTEXITCODE -ne 0) { throw "release notes render failed" }
           Get-Content release-body.md

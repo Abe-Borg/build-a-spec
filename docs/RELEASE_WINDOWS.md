@@ -77,13 +77,17 @@ contains is the failure here. (The in-app modal already spanned the gap on
 its own: `resolve_pending` announces everything newer than the user's
 `last_seen_version`, whatever was tagged in between.)
 
-The workflow resolves the bound itself — `git describe --tags --abbrev=0`
-below the tagged commit — and passes it as `--since`, so cutting a release
-is still just a tag push. Two consequences worth knowing if you touch this:
-the checkout needs `fetch-depth: 0` or there are no tags to describe
-against, and an unusable bound falls back to describing the tagged version
-alone rather than emptying the whole changelog onto one page. Rendering by
-hand:
+The workflow works the bound out itself — it asks the API which releases
+have actually **published** and passes the list as `--released`, and the
+renderer takes the greatest one below the version being cut — so cutting a
+release is still just a tag push. It asks for releases rather than tags on
+purpose: a tag build that fails after the tag is pushed leaves a tag behind
+with no release page, and the Windows-only steps here (freeze, smoke test,
+installer) are never exercised by CI, so that is a real way to get one.
+Treating it as the bound would skip that version's notes — the gap this
+exists to close. An unusable bound falls back to describing the tagged
+version alone rather than emptying the whole changelog onto one page.
+Rendering by hand, where `--since` is the explicit override:
 
 ```bash
 python packaging/windows/render_release_notes.py \

@@ -10137,23 +10137,40 @@ never calls either function it changes.
   collapses to the single entry instead: byte for byte the pre-span output.
   A span that somehow lost the version being released is refused for the
   same reason — it is not a description of it.
-- **The workflow resolves the bound itself**, so cutting a release is still
-  one tag push: `git describe --tags --abbrev=0` below the tagged commit on
-  a tag build, from `HEAD` on a branch dispatch (where HEAD is not tagged,
-  so the nearest reachable tag IS the previous release). Two things this
-  needs that are easy to miss — `fetch-depth: 0` on the checkout, because
-  the default depth-1 fetch carries no tags at all and there would be
-  nothing to describe against; and `$global:LASTEXITCODE = 0` after, since
-  `git describe` exits nonzero when it finds nothing and a `pwsh` step exits
-  on the last native exit code, which would fail the first release ever cut.
-  `--since` is built into an argument ARRAY rather than interpolated,
-  because an empty value would reach argparse as a missing one.
+- **A tag is not a release, and the bound is the release** (caught in
+  review on PR #168, Codex). The first cut derived it with `git describe
+  --tags --abbrev=0`, which answers a different question: a tag build that
+  fails AFTER the tag is pushed leaves a tag behind with no release page,
+  and taking it as the bound skips that version's notes — the exact gap the
+  span exists to close. This repo is unusually exposed to it, because the
+  release workflow's Windows-only steps (PyInstaller freeze, the three
+  smoke checks, Inno) are never exercised by CI, so a tag build really can
+  fail on its own. All nine tags happen to have releases today, which is an
+  accident of every tag build having succeeded rather than an invariant.
+  The workflow now asks the API which releases PUBLISHED (drafts excluded —
+  they have no public page; prereleases kept — theirs is public) and passes
+  the list as `--released`; `previous_released_version` picks the greatest
+  below the version being cut. **No fallback to tags**, deliberately: if
+  that API is unreachable the publish step at the end cannot work either,
+  so a fallback would only ever paper over a build that fails anyway.
+- **The selection is in Python because a workflow step cannot be tested
+  until the tag build that runs it.** The workflow fetches and hands over a
+  list; `previous_released_version` does the comparing, skipping anything
+  outside the version grammar rather than raising — one odd tag name in an
+  API listing must not cost a release its notes. `--since` survives as the
+  explicit override (manual runs, tests) and outranks the derived bound.
+  Both are built into an argument ARRAY rather than interpolated, because an
+  empty value would reach argparse as a missing one, and
+  `$global:LASTEXITCODE = 0` follows the `gh` call since it exits nonzero
+  when it cannot answer and a `pwsh` step exits on the last native exit
+  code — which would fail the first release ever cut. Dropping `git
+  describe` also let `fetch-depth: 0` go: nothing reads tags locally now.
 - **release.yml is never exercised by CI** — a tag build is the first time
   it runs — so the wiring is pinned in the suite instead
-  (`test_the_release_workflow_asks_git_for_the_previous_release`), the
-  `test_ci_lints_before_it_tests` precedent. All three parts are asserted:
-  without the tags there is nothing to describe, without the lookup there is
-  no bound, and without the argument the renderer is back to one version.
+  (`test_the_release_workflow_asks_which_versions_actually_published`), the
+  `test_ci_lints_before_it_tests` precedent. It asserts the release lookup,
+  the draft exclusion, the token, the argument — and that `git describe`
+  does NOT appear, since reintroducing it is the regression.
 - **The widest possible span is bounded by the changelog and pinned against
   the manifest cap.** `after=EARLIEST_KNOWN_VERSION` renders all fourteen
   entries at 7k chars against `updates.MAX_MANIFEST_BYTES` (64 KiB) — worth
@@ -10161,14 +10178,18 @@ never calls either function it changes.
   make a tooltip long. The earlier entries in a summary contribute headline
   and item titles but never their summary paragraph, which is what keeps
   that bounded.
-- **Tests**: 11 cases in `tests/test_release_notes.py` (the page and the
+- **Tests**: 20 cases in `tests/test_release_notes.py` (the page and the
   summary each covering a skipped version's real items, the manifest-cap
   headroom, byte-identity with no bound, the four ambiguous bounds as a
   parametrize, a bound at the released version still describing it, the
-  renderer end to end including the `v` prefix a git tag arrives with, and
-  the workflow pin). Every mechanism reverted in place to prove it
-  load-bearing: the unparseable-bound guard → 2 red, the empty-span guard →
-  2, the renderer's pass-through → 1, the workflow's argument → 1.
+  renderer end to end including the `v` prefix a git tag arrives with, the
+  warning firing only on a bound nobody can parse, the tagged-but-never-
+  released scenario, the picker's six selection cases, explicit-beats-
+  derived, and the workflow pin). Every mechanism reverted in place to prove
+  it load-bearing: the unparseable-bound guard → 2 red, the empty-span guard
+  → 2, the renderer's pass-through → 1, the workflow's argument → 1, the
+  picker's greatest-below → 2, its grammar skip → 1, its at-or-above
+  exclusion → 1, and the workflow back on `git describe` → 1.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

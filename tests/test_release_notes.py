@@ -399,23 +399,96 @@ def test_the_renderer_covers_the_span_the_workflow_hands_it(tmp_path):
     assert "## Install (Windows)" in body
 
 
-def test_the_release_workflow_asks_git_for_the_previous_release():
+def test_the_release_workflow_asks_which_versions_actually_published():
     """release.yml is never exercised by CI — a tag build is the first time
-    it runs — so the wiring is pinned here instead. All three parts matter:
-    without the tags there is nothing to describe against, without the
-    lookup there is no bound, and without the argument the renderer is back
-    to describing one version."""
+    it runs — so the wiring is pinned here instead.
+
+    It must ask for RELEASES, never tags. A tag build that fails after the
+    tag is pushed leaves a tag behind with no release page, and the
+    Windows-only steps (freeze, smoke test, installer) are never exercised
+    by CI, so that is a real way to get one. Taking such a tag as the bound
+    would skip that version's notes — the exact gap the span exists to
+    close."""
     workflow = (
         settings.REPO_ROOT / ".github" / "workflows" / "release.yml"
     ).read_text(encoding="utf-8")
 
-    assert "fetch-depth: 0" in workflow, "a depth-1 checkout fetches no tags"
-    assert "git describe --tags --abbrev=0" in workflow
-    assert "since=$since" in workflow, "the resolved bound is never published"
-    assert '"--since", $since' in workflow, "the renderer is never given it"
-    # git describe exits nonzero when it finds nothing, and a pwsh step exits
-    # on the last native exit code: a first release must not fail the build.
+    assert "/releases?per_page=100" in workflow, "the release list is never read"
+    assert "select(.draft == false)" in workflow, "drafts have no public page"
+    assert "GH_TOKEN" in workflow, "gh api cannot authenticate"
+    assert "released=$released" in workflow, "the list is never published"
+    assert '"--released", $released' in workflow, "the renderer never gets it"
+    # gh exits nonzero when it cannot answer, and a pwsh step exits on the
+    # last native exit code: that must not fail the build.
     assert "$global:LASTEXITCODE = 0" in workflow
+    # The bound is emphatically not the last tag.
+    assert "git describe" not in workflow
+
+
+def test_the_bound_is_the_last_published_release_not_the_last_tag():
+    """The finding this closes: v1.18.0 tagged, its build failed, no release
+    page. The next release must still carry its notes."""
+    import sys
+
+    sys.path.insert(0, str(settings.REPO_ROOT / "packaging" / "windows"))
+    import render_release_notes as rrn
+
+    published = ["v1.17.0", "v1.15.0", "v1.13.0"]
+    assert rrn.previous_released_version("1.19.0", published) == "1.17.0"
+    # Once 1.18.0 really has a page, the bound moves up and 1.19.0 stands
+    # alone — the span is not a habit, it is a description of what shipped.
+    assert (
+        rrn.previous_released_version("1.19.0", ["v1.18.0"] + published) == "1.18.0"
+    )
+
+
+@pytest.mark.parametrize(
+    ("published", "expected"),
+    [
+        ([], ""),                                   # first release ever
+        (["v1.19.0", "v1.20.0"], ""),               # nothing below it
+        (["v1.15.0", "v1.17.0", "v1.13.0"], "1.17.0"),  # greatest, not first
+        (["1.17.0"], "1.17.0"),                     # bare, no v
+        (["nightly", "v1.17.0", ""], "1.17.0"),     # unparseable skipped
+        (["v1.9.1", "v1.10.0"], "1.10.0"),          # numeric, not lexical
+    ],
+)
+def test_the_picker_takes_the_greatest_release_below_the_version(published, expected):
+    """One odd tag name out of an API listing must not cost a release its
+    notes, so anything outside the grammar is skipped rather than raising."""
+    import sys
+
+    sys.path.insert(0, str(settings.REPO_ROOT / "packaging" / "windows"))
+    import render_release_notes as rrn
+
+    assert rrn.previous_released_version("1.19.0", published) == expected
+
+
+def test_an_explicit_since_outranks_the_derived_bound(tmp_path):
+    """``--since`` is the manual override; ``--released`` is what the
+    workflow hands over. Explicit beats derived."""
+    import sys
+
+    sys.path.insert(0, str(settings.REPO_ROOT / "packaging" / "windows"))
+    import render_release_notes
+
+    current = release_notes.RELEASE_NOTES[0].version
+    skipped = release_notes.RELEASE_NOTES[1].version
+    two_back = release_notes.RELEASE_NOTES[2].version
+    body_out = tmp_path / "b.md"
+
+    code = render_release_notes.main(
+        [
+            "--version", current,
+            "--notes-out", str(tmp_path / "n.txt"),
+            "--body-out", str(body_out),
+            "--since", two_back,
+            "--released", f"v{skipped}",
+        ]
+    )
+
+    assert code == 0
+    assert _span_versions(body_out.read_text(encoding="utf-8")) == [current, skipped]
 
 
 def test_the_renderer_warns_only_when_the_bound_is_unusable(tmp_path, capsys):

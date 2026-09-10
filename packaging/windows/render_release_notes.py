@@ -20,21 +20,65 @@ never got its own tag still reaches the two surfaces a user reads BEFORE
 deciding to update. Omit it and the output is byte for byte what it was
 when this only ever rendered one entry.
 
+``--released`` is how the workflow supplies that bound without having to
+work it out in PowerShell: hand it the tag names of the PUBLISHED releases
+and it picks the greatest one below ``--version``. A tag is deliberately
+not good enough — a tag build that failed after the tag was pushed leaves a
+tag behind with no release page, and taking it as the bound would skip that
+version's notes, which is the gap the span exists to close.
+
 Usage:
     python packaging/windows/render_release_notes.py \
         --version 1.7.0 \
         --notes-out release-notes.txt \
         --body-out release-body.md \
-        [--since 1.6.0]
+        [--since 1.6.0 | --released v1.6.0,v1.5.0]
 """
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _INSTALL_NOTES = Path(__file__).resolve().parent / "release_install_notes.md"
+
+
+def _strip_v(value: str) -> str:
+    value = value.strip()
+    return value[1:] if value.startswith("v") else value
+
+
+def previous_released_version(version: str, released: list[str]) -> str:
+    """Greatest PUBLISHED release strictly below ``version``, or ``""``.
+
+    The caller passes what actually published, never what is merely tagged.
+    Entries outside the version grammar are skipped rather than raising: the
+    list comes from an API and one odd tag name must not cost the release
+    its notes. Selection is here rather than in the workflow because a
+    workflow step cannot be tested until the tag build that runs it.
+    """
+    from backend.updates import parse_version
+
+    try:
+        current = parse_version(version)
+    except ValueError:
+        return ""
+    best, best_key = "", None
+    for raw in released:
+        candidate = _strip_v(raw)
+        if not candidate:
+            continue
+        try:
+            key = parse_version(candidate)
+        except ValueError:
+            continue
+        if key >= current:
+            continue
+        if best_key is None or key > best_key:
+            best, best_key = candidate, key
+    return best
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,6 +95,15 @@ def main(argv: list[str] | None = None) -> int:
             "tag can be passed straight through."
         ),
     )
+    parser.add_argument(
+        "--released",
+        default="",
+        help=(
+            "tag names of the PUBLISHED releases, comma- or whitespace-"
+            "separated; the greatest one below --version becomes the bound. "
+            "Ignored when --since is given explicitly."
+        ),
+    )
     args = parser.parse_args(argv)
 
     sys.path.insert(0, str(_REPO_ROOT))
@@ -60,9 +113,19 @@ def main(argv: list[str] | None = None) -> int:
         notes_for_release,
     )
 
-    since = args.since.strip()
-    if since.startswith("v"):
-        since = since[1:]
+    since = _strip_v(args.since)
+    released = [part for part in re.split(r"[,\s]+", args.released) if part]
+    if not since and released:
+        since = previous_released_version(args.version, released)
+        if not since:
+            # Every published release is at or above this version, or none
+            # parses. Either way there is no span to describe and the single
+            # entry is the honest output — but say which, because a release
+            # page that quietly narrowed looks identical to a correct one.
+            print(
+                f"no published release below {args.version} in "
+                f"{len(released)} candidate(s); describing it alone"
+            )
     if since:
         from backend.updates import parse_version
 

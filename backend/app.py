@@ -5285,7 +5285,19 @@ def create_app(
             )
         if scope == RESEARCH_SCOPE_SELECTED:
             declared = list(module.research_dimensions)
-            if len(requested_ids) > len(declared):
+            # NORMALIZED FIRST, and into a set so this stays linear in the
+            # raw list. Every check below judges the SELECTION — the set of
+            # areas named — and counting raw entries instead made
+            # equivalent selections behave differently: five copies of one
+            # valid id was a 400 on a four-area module while four copies
+            # ran a one-area round (Codex, PR #167). Order is discarded
+            # deliberately; it comes from the module.
+            wanted: set[str] = set()
+            for raw_id in requested_ids:
+                cleaned = str(raw_id).strip()
+                if cleaned:
+                    wanted.add(cleaned)
+            if len(wanted) > len(declared):
                 return JSONResponse(
                     {
                         "ok": False,
@@ -5294,11 +5306,6 @@ def create_app(
                     },
                     status_code=400,
                 )
-            wanted: list[str] = []
-            for raw_id in requested_ids:
-                cleaned = str(raw_id).strip()
-                if cleaned and cleaned not in wanted:
-                    wanted.append(cleaned)
             if not wanted:
                 # The gaps posture: refuse with the reason, never silently
                 # upgrade to the more expensive action.
@@ -5320,17 +5327,13 @@ def create_app(
             # the real race — the module can change (session reset, module
             # switch) between the poll that drew the picker and the click.
             resolved = select_research_dimensions(module, wanted)
-            unknown = [
-                dimension_id
-                for dimension_id in wanted
-                if all(d.dimension_id != dimension_id for d in resolved)
-            ]
+            unknown = sorted(wanted - {d.dimension_id for d in resolved})
             if unknown:
                 return JSONResponse(
                     {
                         "ok": False,
                         "error": "This module declares no research area "
-                        f"named: {', '.join(sorted(unknown))}.",
+                        f"named: {', '.join(unknown)}.",
                     },
                     status_code=400,
                 )

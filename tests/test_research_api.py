@@ -961,6 +961,43 @@ def test_a_selected_round_naming_an_undeclared_area_is_refused_and_starts_nothin
     assert never.requests == []
 
 
+def test_a_repeated_area_is_the_same_selection_however_often_it_is_named(
+    monkeypatch,
+):
+    """The runaway bound has to judge the SELECTION, not the raw list.
+
+    Counting the raw entries made equivalent selections behave
+    differently: on a four-area module, five copies of one valid id was a
+    400 while four copies ran a one-area round. Whatever a caller repeats
+    or pads with blanks, what it selected is the set of ids it named
+    (Codex, PR #167).
+    """
+    client = _client()
+    _select_fire(client)
+    _record_profile(client, monkeypatch)
+    _patch_research_client(monkeypatch, SequencedFakeClient(_scripts()))
+    assert client.post("/api/research/start").json()["ok"] is True
+    assert _wait_terminal(client)["status"] == "complete"
+
+    picked = _one_area_client("governing_codes")
+    _patch_research_client(monkeypatch, picked)
+    resp = client.post(
+        "/api/research/start",
+        json={
+            "scope": "selected",
+            # More raw entries than the module declares areas, and blanks
+            # besides — one area, named clumsily.
+            "dimension_ids": ["governing_codes"] * 5 + ["", "  "],
+        },
+    )
+    assert resp.json()["ok"] is True, resp.json()
+    snapshot = _wait_terminal(client)
+    assert snapshot["status"] == "complete"
+    roster = next(e for e in snapshot["events"] if e["type"] == "research_started")
+    assert roster["dimensions"] == ["governing_codes"]
+    assert len(picked.requests) == 1
+
+
 def test_a_dimension_list_is_refused_on_a_scope_that_does_not_take_one(
     monkeypatch,
 ):

@@ -10066,6 +10066,17 @@ falsehood, and the research control. No new dep, no schema or protocol bump.
   the `updates.manage` precedent already recorded inline in
   `ResearchDrawer.tsx`. A bump would re-show the tutorial to every user for
   a control inside a collapsed drawer.
+- **The runaway bound has to judge the SELECTION, not the raw list**
+  (caught in review on PR #167, Codex). The declared-area guard counted
+  `requested_ids` before the loop that strips and dedupes them, so
+  equivalent selections behaved differently: on a four-area module five
+  copies of one valid id was a 400 while four copies ran a one-area round.
+  Normalization now runs FIRST, into a `set` so it stays linear in the raw
+  list (the previous `cleaned not in wanted` over a list was O(n²) on
+  hostile input, which is what made a pre-loop bound feel necessary), and
+  every check below judges the set of areas actually named. The unknown-id
+  computation became a set difference for the same reason. Order was
+  already discarded on purpose — it comes from the module.
 - **Coverage limitation, stated:** the picker component itself is covered by
   `tsc --noEmit` on the widened prop chain and by `researchApi.test.ts`, not
   by a DOM test — the repo has no DOM harness, and a source-text regex over

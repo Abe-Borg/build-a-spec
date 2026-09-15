@@ -377,19 +377,21 @@ def test_a_declined_generalize_pass_is_not_reported_as_malformed_content(
     Without the check that reads as "the model returned malformed content" —
     the one wording guaranteed to send the user round the same loop again.
     """
-    from tests.test_templates import _catalog, _starter
+    from tests.test_templates import _FinalMessageStream, _catalog, _starter
 
     catalog = _catalog(tmp_path)
     session = sessions.SessionState()
     session.doc.seed_template(_starter(catalog))
 
     class _Messages:
-        def create(self, **_kwargs):
-            return SimpleNamespace(
-                content=[],
-                stop_reason="refusal",
-                stop_details=SimpleNamespace(type="refusal", category="cyber"),
-                usage={"input_tokens": 9, "output_tokens": 0},
+        def stream(self, **_kwargs):
+            return _FinalMessageStream(
+                SimpleNamespace(
+                    content=[],
+                    stop_reason="refusal",
+                    stop_details=SimpleNamespace(type="refusal", category="cyber"),
+                    usage={"input_tokens": 9, "output_tokens": 0},
+                )
             )
 
     monkeypatch.setattr(

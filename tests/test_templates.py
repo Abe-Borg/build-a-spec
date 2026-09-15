@@ -28,6 +28,20 @@ from backend.templates import (
 CURATED_ROOT = Path(__file__).resolve().parents[1] / "backend" / "templates" / "curated"
 
 
+class _FinalMessageStream:
+    def __init__(self, message):
+        self.message = message
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def get_final_message(self):
+        return self.message
+
+
 def _catalog(tmp_path: Path) -> TemplateCatalog:
     return TemplateCatalog(personal_root=tmp_path / "personal", curated_root=CURATED_ROOT)
 
@@ -252,17 +266,19 @@ def test_ai_generalization_is_usage_metered_and_must_preserve_structure(
     requests: list[dict] = []
 
     class _Messages:
-        def create(self, **kwargs):
+        def stream(self, **kwargs):
             requests.append(kwargs)
-            return SimpleNamespace(
-                content=[
-                    {
-                        "type": "tool_use",
-                        "name": TEMPLATE_DOCUMENT_TOOL_NAME,
-                        "input": {"document": generalized.to_dict()},
-                    }
-                ],
-                usage={"input_tokens": 9, "output_tokens": 4},
+            return _FinalMessageStream(
+                SimpleNamespace(
+                    content=[
+                        {
+                            "type": "tool_use",
+                            "name": TEMPLATE_DOCUMENT_TOOL_NAME,
+                            "input": {"document": generalized.to_dict()},
+                        }
+                    ],
+                    usage={"input_tokens": 9, "output_tokens": 4},
+                )
             )
 
     monkeypatch.setattr(
@@ -308,10 +324,12 @@ def test_a_reply_without_the_output_tool_is_refused_not_parsed(tmp_path, monkeyp
     document = json.dumps({"document": session.doc.doc.to_dict()})
 
     class _Messages:
-        def create(self, **_kwargs):
-            return SimpleNamespace(
-                content=[{"type": "text", "text": f"```json\n{document}\n```"}],
-                usage={"input_tokens": 9, "output_tokens": 4},
+        def stream(self, **_kwargs):
+            return _FinalMessageStream(
+                SimpleNamespace(
+                    content=[{"type": "text", "text": f"```json\n{document}\n```"}],
+                    usage={"input_tokens": 9, "output_tokens": 4},
+                )
             )
 
     monkeypatch.setattr(

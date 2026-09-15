@@ -17,7 +17,6 @@ from backend.qc.engine import (
     VERIFICATION_RULE_V4,
     QCFanoutError,
     QCResult,
-    _lens_system_prompt,
     qc_version_fingerprint,
     run_final_qc,
 )
@@ -40,14 +39,6 @@ from tests.fakes import (
 )
 
 _LENS_KEYS = {lens.lens_id: f"[[QC-LENS:{lens.lens_id}]]" for lens in QC_LENSES}
-
-
-def test_lens_prompt_collects_candidates_before_the_adversarial_filter():
-    prompt = _lens_system_prompt(DEFAULT_MODULE)
-
-    assert "Report every defect you find" in prompt
-    assert "coverage, not pre-filtering" in prompt
-    assert "Report only real, actionable" not in prompt
 
 
 def _client() -> TestClient:

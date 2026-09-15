@@ -2410,7 +2410,7 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
         + encoded
     )
     try:
-        response = get_client().messages.create(
+        with get_client().messages.stream(
             model=settings.INTERVIEW_MODEL,
             max_tokens=settings.INTERVIEW_MAX_TOKENS,
             # Stated explicitly, like every other model call in this app, so
@@ -2420,7 +2420,8 @@ def _ai_generalized_template_document(session: SessionState) -> dict[str, Any]:
             output_config={"effort": settings.TEMPLATE_EFFORT},
             tools=[template_document_tool()],
             messages=[{"role": "user", "content": prompt}],
-        )
+        ) as stream:
+            response = stream.get_final_message()
     except MissingApiKeyError:
         raise
     session.usage.add("template", getattr(response, "usage", None), count_turn=True)

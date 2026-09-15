@@ -89,6 +89,46 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.19.1",
+        date="2026-09-15",
+        headline="Making a template out of a long section",
+        summary=(
+            "A fix for one step of template creation. Turning a finished "
+            "section into a reusable template with AI Generalize asks "
+            "Claude to rewrite the project-specific wording into reusable "
+            "language, and on a long section that answer takes a while to "
+            "come back. The app was not set up to wait for all of it, so "
+            "the attempt could give up part way through and report a "
+            "failure when nothing was actually wrong."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Templates",
+                items=(
+                    ReleaseItem(
+                        title="AI Generalize waits for the whole answer",
+                        body=(
+                            "Save as Template \u2192 AI Generalize rewrites a "
+                            "finished section into a reusable starting "
+                            "point, and the longer the section, the longer "
+                            "that takes. The app was not reading the reply "
+                            "as it arrived, so a long enough rewrite could "
+                            "run past the connection's own time limit and "
+                            "fail after several minutes of waiting \u2014 with "
+                            "nothing wrong with the section or the request. "
+                            "It now reads the answer as it is written. "
+                            "Nothing else about the pass changed: the same "
+                            "structure check still refuses a rewrite that "
+                            "alters your section instead of generalizing "
+                            "it, and Exact is still the option that copies "
+                            "your wording verbatim."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.19.0",
         date="2026-09-10",
         headline="A disagreement you settled stays settled",

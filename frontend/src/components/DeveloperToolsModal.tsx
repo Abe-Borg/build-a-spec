@@ -4,6 +4,7 @@ import type {
   DiagnosticsLog,
   DiagnosticsSnapshot,
   DiagnosticsTraces,
+  HistoryComposition,
 } from "../types";
 import {
   getDiagnostics,
@@ -60,6 +61,19 @@ function eventFields(event: Record<string, unknown>): string {
     .filter(([k]) => k !== "ts" && k !== "span_id" && k !== "type")
     .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
     .join("  ");
+}
+
+/** The saved conversation by category, largest first: what the model
+ *  re-reads on every turn. Sizes only (the backend never sends text), and
+ *  tokens are the app's len/4 estimate. A nonzero stale-outline count means
+ *  something committed an edit result without the outline elision. */
+function historyMakeup(h: HistoryComposition): string {
+  const top = h.categories
+    .slice(0, 4)
+    .map((c) => `${c.category} ${h.chars ? Math.round((100 * c.chars) / h.chars) : 0}%`)
+    .join(" · ");
+  const stale = h.stale_outlines ? ` · ${h.stale_outlines} stale outlines` : "";
+  return `~${h.estimated_tokens.toLocaleString()} tokens (est.) in ${h.messages} messages${top ? ` · ${top}` : ""}${stale}`;
 }
 
 function Row({ name, value, mono }: { name: string; value: string; mono?: boolean }) {
@@ -473,6 +487,12 @@ export default function DeveloperToolsModal({ open, onClose }: Props) {
                   name="Context gauge"
                   value={sess.last_context_tokens === null ? "not measured" : `${sess.last_context_tokens.toLocaleString()} tokens`}
                 />
+                {sess.history_composition && sess.history_composition.messages > 0 && (
+                  <Row
+                    name="History makeup"
+                    value={historyMakeup(sess.history_composition)}
+                  />
+                )}
                 <Row
                   name="Spend (est.)"
                   value={`$${snapshot.usage.estimated_cost_usd.total.toFixed(3)} across ${snapshot.usage.turns} turn${snapshot.usage.turns === 1 ? "" : "s"}`}

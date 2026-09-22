@@ -38,6 +38,7 @@ export const END_USER_CAPABILITIES = [
   "document.lint",
   "followups.track",
   "project.facts",
+  "project.facts-harvest",
   "standards.basis",
   "standards.manage",
   "research.profile",

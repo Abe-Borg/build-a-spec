@@ -229,18 +229,146 @@ running the pass.
 
 ## Release-note draft (Phase 7 copies from here)
 
-- **Harvest the facts the chat settled.** One button reads the
-  conversation, the confirmed provisions and your Final QC dismissal
-  reasons, and proposes the project facts nobody recorded — each with the
-  line it rests on. You accept or reject every proposal before anything is
-  saved, and a proposal that points at a research item, reference or
-  finding that does not exist cannot be accepted. It is a paid model call,
-  runs only when you press it, and the Next-section and Export flows tell
-  you how many replies have gone unharvested.
-- **A fact's source has to exist.** Recording a fact — by the assistant or
-  in the panel — now checks that its cited research item, reference
-  document or Final QC finding is really there.
+- **Harvest the facts the chat settled.** Harvest facts… in the Project
+  facts panel reads the conversation since the last harvest, the draft's
+  provisions and your Final QC dismissal reasons, and proposes the project
+  facts nobody recorded — each with its source and the line it rests on
+  (a quote that cannot be found in what was read is flagged for you to
+  check). You tick, edit or reject every proposal before anything is
+  saved; a proposal that points at a research finding, attached document,
+  Final QC finding or reply that does not exist cannot be recorded until
+  you correct it, and fixing one never costs another call. It is one paid
+  model call, runs only when you press Run, and shows in Settings → Usage
+  as "Fact harvest". Next section and the Export menu say how many replies
+  have gone unharvested and offer to harvest first — they never run it.
+- **A fact's source has to exist.** Recording a fact — by the assistant,
+  in the panel or from a harvest — now checks that its cited research
+  finding, attached document, Final QC finding or reply is really there;
+  the assistant is told why and corrects it. A fact recorded before this
+  check, carried in from another section, or whose document was removed is
+  marked "source not found" in the panel and otherwise left exactly as it
+  was.
 
 ## Deviations from the plan
 
 (Record each as-built deviation here, dated, with the reason.)
+
+As built, 2026-09-22:
+
+1. **The resolver takes a snapshot, not the session.** The spec's
+   `resolve_fact_source(kind, ref, *, session)` became
+   `resolve_fact_source(kind, ref, *, sources: FactSources)`, with
+   `conversation.fact_sources(session)` building the frozen id sets
+   (research items, attached documents, retained QC survivors + disputed,
+   committed replies, known section numbers) and `source_resolver(sources)`
+   the hook `record` / `supersede` / `apply` / `update` accept as
+   `resolve=`. `project_facts.py` stays a leaf (no session import), a caller
+   holding the guard gets an answer coherent with what it is about to write,
+   and the harvest's `<available_sources>` block is rendered from the same
+   sets the commit checks against — the prompt cannot offer an id the check
+   would refuse.
+2. **`record()` resolves before the duplicate check, and `update()` only
+   when the source changes.** A restated fact citing a missing source is
+   refused rather than silently confirmed — every ref a caller sends must
+   resolve. An edit that leaves `source_kind` / `source_ref` alone is not
+   checked, so a fact recorded before the check (flagged, never rewritten)
+   can still be edited or retired from the panel.
+3. **`brief` resolves to the merge's own provenance too.** The spec said
+   "a section number in the link's registry"; Phase 3 writes
+   `"project brief; <who>"` for the D4 conflict fact and for a carried fact
+   whose source broke in the merge, so `"project brief"` and
+   `"project brief; …"` resolve as well, and the known section numbers are
+   the registry plus this section's own. `brief` stays unrecordable by the
+   tool, the panel and the harvest; the rule only decides the flag.
+4. **Every facts surface carries the flag.** "`unresolved_ref: true` in the
+   panel payload" is `SessionState.facts_payload()`, the ONE ledger view the
+   document payload, the `project_facts` SSE event, the panel routes and the
+   harvest commit all return — a flag on one surface and not the next would
+   flicker on every turn.
+5. **Shape fails the preview; everything else is a per-proposal problem.**
+   A payload that is not a list, a field of the wrong type, a value outside
+   an enum, a missing required field, or more than 40 proposals fails the
+   whole preview (a reply that broke the schema cannot be trusted in its
+   other parts). An over-long statement, detail, section or source, an
+   empty statement, and a source that does not resolve are shown on the
+   sheet as that proposal's `problem` — the strict-mode subset carries no
+   length limits, and one over-long line must not throw away a paid call's
+   other proposals. Over-long `evidence` (display-only, never recorded) is
+   trimmed and marked rather than refused.
+6. **The token survives a fixable commit.** A token is consumed by a
+   successful commit or a stale binding, but NOT by `invalid_fact` (the
+   reasons come back per proposal index) or `turn_active` — the preview
+   was a paid call and a typo must not cost another one.
+7. **The binding is re-checked when the call returns**, not only at
+   commit: a project that changed while the call ran answers 409
+   `harvest_stale` at once (still metered) instead of showing a sheet that
+   could never commit.
+8. **A commit also refuses collisions.** An accepted proposal the user
+   edited into a statement an active fact already says, or two accepted
+   proposals saying the same thing, is an `invalid_fact` error for that
+   index rather than a silent no-op — the user edited it and should know.
+9. **Recording nothing is a commit.** An empty `accepted` still advances
+   the marker (the user reviewed those replies and chose none); the dialog
+   labels it "Record none — mark these replies read". Cancel is the way to
+   leave the marker where it was.
+10. **The marker never runs past its conversation.** It moves to the reply
+    count the preview read, clamped to the replies the history holds now
+    and never backwards; project load clamps a hand-edited value (and reads
+    a boolean as 0); deleting a reference document that truncates the
+    history clamps it too.
+11. **Metered through `add_usage_if_current`**, not `usage.add`: a harvest
+    whose session was replaced while the call ran must not bill the new
+    session (the research/QC posture). Every error after a response — a
+    refusal, no tool block, a malformed payload — carries its usage.
+12. **Refusal codes and statuses.** Beyond the spec's tour 409 and no-key
+    400: 409 `turn_active`; 400 `nothing_to_harvest` (no replies, no
+    provisions and no dismissal reasons — refused without a call); 502
+    `harvest_refused` / `harvest_no_output` / `harvest_malformed` /
+    `auth_error` / `provider_error`; and at commit 409 `harvest_stale` /
+    `harvest_expired`. The preview answers the transcript window too
+    (`turns_read`, `turns_dropped`, `first_turn`, `last_turn`,
+    `replies_total`, `since_bubble`, `provisions`, `dismissals`) and an
+    `estimated_cost_usd`, so the sheet can say what was read and what it
+    cost.
+13. **`evidence_found` is advisory.** Each proposal says whether its quote
+    appears in what the call read (spacing, case and markdown emphasis
+    aside); a quote not found is flagged on the sheet for a human to check,
+    never blocked — the model was told to quote exactly, and a line nobody
+    wrote is the first sign of a fact nobody settled.
+14. **The harvest does not propose research findings.** They already
+    travel with the project in its research profile; the system prompt says
+    to cite one as a source instead of restating it, so a brief never
+    carries the same requirement twice.
+15. **`harvest` on the document payload carries `replies_total`** beside
+    the spec's `replies_since` / `last_bubble`, and
+    `_assistant_bubble_count` is public (`assistant_bubble_count`): the
+    harvest numbers its transcript by it, so `turn:N` means the same reply
+    to the prompt, the resolver and the hint.
+16. **The pending-preview cache also caps its count** (16, oldest out)
+    beside the template cache's expiry and byte cap.
+17. **The brief-export hint lives in the Export menu.** The spec put it in
+    the brief export's confirm; PR #178 removed that confirm (the entry
+    saves straight away), so the hint is a line under *Export project brief*
+    that closes the menu and opens the dialog. Next section's hint re-reads
+    its receipt when a harvest records something, keeping the user's choice.
+18. **The dialog has an intro and a done state.** Opening it never spends:
+    the intro says what will be read and that it is one paid call, and only
+    *Run the harvest* makes it. After a commit, the done state says what was
+    recorded before the dialog closes (back to whatever opened it — Next
+    section stacks under it, and Escape closes only the top dialog).
+19. **The Project facts panel renders when replies are waiting**, outside
+    a tour, not only when facts exist or the section is linked — the harvest
+    is how a section that never recorded a fact finds the ones it settled,
+    so its door cannot hide behind an empty ledger. The harvest button is
+    hidden in a tour (the server refuses there too); its capability rides the
+    `project-facts` step as specified, with no `TOUR_VERSION` bump.
+20. **Settings gets a label.** The spec expected nothing to change because
+    categories render generically; they do, but as the raw key, so
+    `CATEGORY_LABEL` gains `harvest: "Fact harvest"`.
+21. **`ModalShell` gains `xwide`** (`max-w-3xl`) for a review sheet whose
+    rows carry quoted evidence; every existing consumer is unchanged.
+22. **The trust dossier gains more than the fifteenth card.** Its model
+    roster says the harvest runs on the interview model at `medium`, the
+    boundary line names "no automatic fact harvest", and the "What the model
+    may touch" matrix gains the `record_project_facts` row it never had —
+    this phase changes that tool's constraint, and the matrix is a contract.

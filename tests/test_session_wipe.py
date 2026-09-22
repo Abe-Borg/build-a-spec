@@ -62,6 +62,10 @@ _STATE_PROBES = {
     "suggested_prompts": lambda s: list(s.suggested_prompts),
     "followups": lambda s: s.followups.to_dict(),
     "facts": lambda s: s.facts.to_dict(),
+    # How far the last committed fact harvest read (Project workspace
+    # Phase 4). A marker that outlived its conversation would hide the new
+    # session's first replies from its first harvest as "already read".
+    "last_harvest_bubble": lambda s: s.last_harvest_bubble,
     "project_link": lambda s: s.project_link,
     "usage": lambda s: s.usage.snapshot(),
     "last_context_tokens": lambda s: s.last_context_tokens,
@@ -162,6 +166,7 @@ def _dirty(session: SessionState) -> None:
         recorded_in="21 13 13",
         recorded_at="2026-09-04",
     )
+    session.last_harvest_bubble = 3
     session.project_link = {
         "project_id": "a" * 32,
         "name": "The previous project",

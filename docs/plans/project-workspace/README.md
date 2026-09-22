@@ -48,7 +48,7 @@ closed without merging is reconciled back to `not started` with a note.
 | 1 | (in the plan file) | **complete** | `b8bac2f` + `28bad83` (PR #174) | Next section →; **cut as v1.20.0**, tagged by Abraham at `0a744ab` on 2026-09-22 — a tree that also holds Phase 2 (see "Release policy") |
 | handoff | this folder | **complete** | `aa119fa` (PR #175, merged `5b25df9`) | the program folder, the specs, the release policy |
 | 2 | `02_PROJECT_HOME.md` | **complete** | `7cf3893` + `3da1e64` (PR #176, merged `c6b7803`) | project folder + Project panel; desktop shell only, the browser keeps the file relay; 13 as-built deviations in the phase file |
-| 3 | `03_WRITE_BACK_MERGE.md` | **in review** | `4176a56` (PR #179) | the brief is a living file: save-time refresh, Update project brief, export-onto-existing merge, Pull project changes; 19 as-built deviations in the phase file |
+| 3 | `03_WRITE_BACK_MERGE.md` | **complete** | `4176a56` + `5cd6a8c` (PR #179, merged `5cdc83a`) | the brief is a living file: save-time refresh, Update project brief, export-onto-existing merge, Pull project changes; 21 as-built deviations in the phase file (19 as built + 2 from the Codex review) |
 | 4 | `04_HARVEST.md` | not started | | independent of 2–3; may run beside them |
 | 5 | `05_RELEVANCE_TRIM.md` | not started | | part A (measure) any time; part B gated on the measurement |
 | 6 | `06_CLIENT_LIBRARY.md` | not started | | optional (D5); after 3; only when a second project for one client exists |
@@ -84,6 +84,14 @@ was written. For Phase 7 this means:
   own entry.
 - The closeout entry is the only place Phase 2's draft notes can reach
   users. It should say the Project panel arrived in 1.20.0, not call it new.
+
+**Confirmed (2026-09-22, during Phase 4's reconcile):** the v1.20.0 tag
+build published — the GitHub Releases API lists *Build-a-Spec 1.20.0*,
+published 2026-09-22 20:31 UTC. The first bullet above is therefore the
+case: the 1.20.0 entry is frozen, and the closeout ships as a new version
+(1.21.0 in `07_RELEASE_CLOSEOUT.md`). Unlike Phase 2, none of Phase 3 is in
+the 1.20.0 build (PR #179 merged after the tag), so the closeout entry
+announces Phase 3's work as new.
 
 ## How to hand this off
 

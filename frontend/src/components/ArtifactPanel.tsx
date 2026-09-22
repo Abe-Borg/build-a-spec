@@ -42,9 +42,16 @@ import {
   downloadAttachment,
   exportDocxUrl,
 } from "../lib/api";
-import type { ProjectFactInput } from "../lib/api";
-import type { NextSectionRequest } from "../types";
+import type { HarvestCommitInput, ProjectFactInput } from "../lib/api";
+import type {
+  HarvestCommitResult,
+  HarvestPreview,
+  HarvestStatus,
+  NextSectionRequest,
+} from "../types";
 import NextSectionDialog from "./NextSectionDialog";
+import HarvestDialog from "./HarvestDialog";
+import { harvestHint } from "../lib/harvest";
 import { useDownloads } from "../lib/useDownloads";
 import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
 import QCDrawer from "./QCDrawer";
@@ -96,6 +103,16 @@ interface Props {
   ) => Promise<string | null>;
   /** Export the project brief: the native Save dialog, else a download. */
   onExportProjectBrief: () => Promise<SaveOutcome>;
+  /** Replies since the last committed fact harvest (Project workspace
+   *  Phase 4) — the hint the facts panel, Next section and the Export menu
+   *  share. Null before the first payload. */
+  harvestStatus: HarvestStatus | null;
+  /** The harvest's one paid call (App's handler; rejects with a
+   *  HarvestRequestError). Only the dialog calls it. */
+  onRunHarvest: () => Promise<HarvestPreview>;
+  /** Record the accepted proposals (App's handler: adopts the ledger and
+   *  refreshes readiness + Final QC). */
+  onCommitHarvest: (input: HarvestCommitInput) => Promise<HarvestCommitResult>;
   /** Start the next section of this project from this session (v1.20.0):
    *  App runs the save gate, then the one-transaction seed. */
   onStartNextSection: (opts: NextSectionRequest) => void;
@@ -372,6 +389,9 @@ export default function ArtifactPanel({
   onUpdateProjectFact,
   onSupersedeProjectFact,
   onExportProjectBrief,
+  harvestStatus,
+  onRunHarvest,
+  onCommitHarvest,
   onStartNextSection,
   projectHome,
   onOpenSection,
@@ -490,6 +510,20 @@ export default function ArtifactPanel({
     "block w-full px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink disabled:opacity-50";
   // Next section (v1.20.0): the dialog collects the choice; App does the rest.
   const [nextSectionOpen, setNextSectionOpen] = useState(false);
+  // The fact harvest (Project workspace Phase 4). Opened from the facts
+  // panel, Next section's "Harvest first" and the Export menu's hint; it
+  // stacks over whatever opened it, so closing it returns the user there.
+  // Every door only OPENS it — the paid call runs when Run is pressed.
+  const [harvestOpen, setHarvestOpen] = useState(false);
+  // Bumped when a harvest records something, so an open Next-section
+  // dialog re-reads its receipt (the fact count it shows moved).
+  const [harvestCommits, setHarvestCommits] = useState(0);
+  const pendingHarvest = tutorialActive ? "" : harvestHint(harvestStatus);
+  const commitHarvest = async (input: HarvestCommitInput) => {
+    const result = await onCommitHarvest(input);
+    setHarvestCommits((value) => value + 1);
+    return result;
+  };
   // Export project brief: straight to the host's write — the native Save
   // dialog, else a download. No confirm step (owner decision, 2026-09-22).
   // The menu closes on click, so the busy state rides the Export trigger and
@@ -1155,6 +1189,19 @@ export default function ArtifactPanel({
                     Export project brief (.basproject)…
                   </button>
                 )}
+                {pendingHarvest && (
+                  <button
+                    className="block w-full px-3 pb-1.5 text-left text-[11px] text-warn hover:bg-surface"
+                    onClick={() => {
+                      setExportMenuOpen(false);
+                      setHarvestOpen(true);
+                    }}
+                    title="The brief carries recorded facts only. Open the harvest to review what this section settled — it runs only when you press Run."
+                    data-capability="project.facts-harvest"
+                  >
+                    {pendingHarvest} — Harvest first…
+                  </button>
+                )}
                 {/* The Final QC report downloads deliberately do NOT appear
                     here: they live only in the Final QC surfaces (QCDrawer +
                     QCReportModal), beside the run identity they are pinned
@@ -1763,6 +1810,9 @@ export default function ArtifactPanel({
         currentDiscipline={doc?.project_identity?.discipline ?? ""}
         busy={busy}
         openNonce={drawerNonces?.projectFacts}
+        harvest={harvestStatus}
+        harvestAvailable={!tutorialActive}
+        onHarvest={() => setHarvestOpen(true)}
         onAdd={onAddProjectFact}
         onUpdate={onUpdateProjectFact}
         onSupersede={onSupersedeProjectFact}
@@ -1774,6 +1824,19 @@ export default function ArtifactPanel({
             setNextSectionOpen(false);
             onStartNextSection(opts);
           }}
+          harvestHint={pendingHarvest}
+          onHarvestFirst={() => setHarvestOpen(true)}
+          refreshKey={harvestCommits}
+        />
+      )}
+      {/* Rendered after Next section so it stacks above it (both are
+          z-[70] ModalShells); the dialog stack routes Escape to the top. */}
+      {harvestOpen && !tutorialActive && (
+        <HarvestDialog
+          pending={harvestStatus}
+          onRun={onRunHarvest}
+          onCommit={commitHarvest}
+          onClose={() => setHarvestOpen(false)}
         />
       )}
 

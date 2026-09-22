@@ -18,8 +18,14 @@
  * from an office master — a named page counts as content and the master
  * import refuses it, so the choice is made here rather than discovered at
  * the Import button.
+ *
+ * Project workspace Phase 4 adds one line: when replies of this section have
+ * gone unharvested, it says how many, with "Harvest first" — which OPENS the
+ * harvest dialog over this one (closing it returns here, with the receipt
+ * re-read) and never runs the paid call itself. The brief carries recorded
+ * facts only, so a fact left in the transcript is left behind.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { NextSectionOptions, NextSectionRequest, ProjectBriefManifest } from "../types";
 import { nextSectionOptions } from "../lib/api";
 import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
@@ -104,10 +110,21 @@ function BriefContents({ manifest }: { manifest: ProjectBriefManifest }) {
 export default function NextSectionDialog({
   onClose,
   onStart,
+  harvestHint = "",
+  onHarvestFirst,
+  refreshKey = 0,
 }: {
   onClose: () => void;
   /** Hand the choice up; App runs the save gate and the request. */
   onStart: (opts: NextSectionRequest) => void;
+  /** "N replies since facts were last harvested", or "" (nothing waiting,
+   *  or a tour). */
+  harvestHint?: string;
+  /** Open the harvest dialog over this one. Never runs it. */
+  onHarvestFirst?: () => void;
+  /** Bumped when a harvest records facts: the receipt re-reads, and the
+   *  choices already made here are kept. */
+  refreshKey?: number;
 }) {
   const [options, setOptions] = useState<NextSectionOptions | null>(null);
   const [error, setError] = useState("");
@@ -115,6 +132,10 @@ export default function NextSectionDialog({
   const [number, setNumber] = useState("");
   const [title, setTitle] = useState("");
   const [discipline, setDiscipline] = useState("");
+  // The defaults (the first open catalog entry, the session's discipline)
+  // are seeded ONCE: a re-read after a harvest refreshes the receipt without
+  // undoing a choice the user already made here.
+  const seeded = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +143,8 @@ export default function NextSectionDialog({
       .then((loaded) => {
         if (cancelled) return;
         setOptions(loaded);
+        if (seeded.current) return;
+        seeded.current = true;
         setDiscipline(loaded.discipline);
         const firstOpen = loaded.catalog.find((entry) => !entry.done);
         setChoice(
@@ -138,7 +161,7 @@ export default function NextSectionDialog({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshKey]);
 
   /** A typed number the project already drafted: the catalog greys those,
    *  and the typed path must not be a way around it — the server refuses
@@ -312,6 +335,20 @@ export default function NextSectionDialog({
             </label>
 
             <BriefContents manifest={options.manifest} />
+            {harvestHint && onHarvestFirst && (
+              <p className="mt-2 text-[11px] text-warn">
+                {harvestHint}; the next section starts with recorded facts only.{" "}
+                <button
+                  type="button"
+                  className="underline underline-offset-2 hover:text-accent"
+                  onClick={onHarvestFirst}
+                  title="Opens the harvest over this dialog. It runs only when you press Run, and closing it brings you back here."
+                  data-capability="project.facts-harvest"
+                >
+                  Harvest first
+                </button>
+              </p>
+            )}
             <p className="mt-2 text-[11px] text-ink-faint">
               To pair the new section with a template instead, use New session →
               New section in an existing project.

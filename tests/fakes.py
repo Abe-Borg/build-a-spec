@@ -554,6 +554,56 @@ def raw_turn(
     return turn
 
 
+def harvest_proposal(statement: str, **fields: Any) -> dict[str, str]:
+    """One fact-harvest proposal carrying every field the strict schema
+    requires (Project workspace Phase 4); ``fields`` override the defaults."""
+    proposal = {
+        "statement": statement,
+        "detail": "",
+        "scope": "project",
+        "section": "",
+        "status": "confirmed",
+        "source_kind": "user",
+        "source_ref": "",
+        "evidence": "",
+    }
+    proposal.update(fields)
+    return proposal
+
+
+def harvest_response(
+    proposals: list[dict[str, Any]] | None = None,
+    *,
+    payload: Any = None,
+    usage: SimpleNamespace | None = None,
+) -> SimpleNamespace:
+    """A scripted fact-harvest reply: one ``propose_project_facts`` tool
+    block. ``payload`` replaces the whole tool input, for the malformed-reply
+    cases; the usage defaults to a non-empty bill, because every reply the
+    harvest receives is metered."""
+    from backend.harvest import HARVEST_TOOL_NAME
+
+    tool_input = payload if payload is not None else {"proposals": list(proposals or [])}
+    return raw_turn(
+        [tool_use_block("toolu_harvest", HARVEST_TOOL_NAME, tool_input)],
+        stop_reason="tool_use",
+        usage=usage or token_usage(input=2_000, output=400),
+    )
+
+
+def harvest_refusal(
+    category: str | None = None, *, usage: SimpleNamespace | None = None
+) -> SimpleNamespace:
+    """A harvest the safety classifier declined: no content at all, a normal
+    200 with ``stop_reason: "refusal"`` — and still a billed response."""
+    return raw_turn(
+        [],
+        stop_reason="refusal",
+        usage=usage or token_usage(input=1_500),
+        refusal_category=category,
+    )
+
+
 def request_context_text(request: dict) -> str:
     """The PROJECT CONTEXT block of a captured chat request.
 

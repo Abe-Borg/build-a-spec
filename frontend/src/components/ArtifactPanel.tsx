@@ -1149,7 +1149,7 @@ export default function ArtifactPanel({
                     className="block w-full border-t border-edge/60 px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink"
                     onClick={() => void runBriefExport()}
                     disabled={briefBusy}
-                    title="Save a .basproject carrying this project's profile, edition overrides, research, attached references and recorded facts — never the conversation or this document — so the next section of the same project starts where this one left off. It holds the full text of attached reference documents, so treat it as sensitive project data."
+                    title="Save a .basproject carrying this project's profile, edition overrides, research, attached references and recorded facts — never the conversation or this document — so the next section of the same project starts where this one left off. In the desktop app, saving it over this project's existing brief adds to that brief instead of replacing it. It holds the full text of attached reference documents, so treat it as sensitive project data."
                     data-capability="project.brief-export"
                   >
                     Export project brief (.basproject)…

@@ -438,11 +438,13 @@ invisible to CI and expensive to the user.
       in the panel, and a Save still succeeds with a notice saying the brief
       was not updated.
 - [ ] **Export onto the existing file.** Export → *Export project brief* and
-      pick the project's existing `.basproject`: the export merges — the
-      other section's facts are still in the file afterwards. Export onto a
-      `.basproject` of a DIFFERENT project: a "Replace the file?" question;
-      *No* leaves that file byte-identical, *Yes* replaces it. Export onto a
-      text file renamed `.basproject`: the same question.
+      pick the project's existing `.basproject`. Windows' Save dialog first
+      asks whether to replace it; answer *Yes*. The export then merges
+      instead of replacing: the other section's facts are still in the file
+      afterwards. Export onto a `.basproject` of a DIFFERENT project: after
+      Windows' question, the app asks "Replace the file?"; *No* leaves that
+      file byte-identical, *Yes* replaces it. Export onto a text file renamed
+      `.basproject`: the same two questions.
 - [ ] **Pull into the older section.** After the second section saved its
       fact and document, open the first: the Project panel header says
       "changes to pull" and the panel offers *Pull project changes* with what

@@ -10943,6 +10943,17 @@ No new dep, no new env knob, no new SSE event, no project-format bump.
   never hold a lock another save waits on (pinned both ways). A write failure is a 500
   `write_failed` (an environment failure, not a state conflict) and leaves
   the old file byte-identical (pinned by patching `os.replace`).
+- **Windows asks "replace it?" before the app merges, and that is fine.**
+  pywebview's `FileDialog.SAVE` is a WinForms `SaveFileDialog`, whose
+  `OverwritePrompt` is on by default, so picking the project's existing
+  brief shows the OS question first; *Yes* returns the path and the app then
+  merges rather than replaces. Nothing is suppressed. The prompt promises
+  more loss than happens, never less. Since #178 removed the export's
+  confirm modal, the menu entry's tooltip is where this is said ("In the
+  desktop app, saving it over this project's existing brief adds to that
+  brief instead of replacing it"), and the QA row warns testers about the
+  OS question. Another project's brief gets both questions: the OS one,
+  then the app's own.
 - **A pull installs three assets, facts first.** `_install_pull_locked`
   runs under the pull's one guard acquisition, inside `active_write`:
   `facts.absorb` first because it is the one install that can refuse (a

@@ -10254,6 +10254,19 @@ release-note item, because nothing a user can see moved.
   established house pattern there, and re-plumbing all of it onto the
   module-reference swap is a separate decision, not a release unblock.
 
+## Where the 2026-09-22 deep review lives
+
+`docs/review-results/2026-09-22/DEEP_REVIEW.md` is a whole-codebase adversarial
+review of `d5c9034` (v1.19.1): ten subsystem passes, every headline finding
+re-run or re-read by the coordinating session before it was accepted, ranked
+by user impact. Nothing in that review changed code; it is the queue the next
+batches should be drawn from. Read its section 1 first (the twelve findings to
+fix first) and section 8 (the suggested order of work). The claims in THIS
+file it contradicts — most of them of the form "X is one transaction" or
+"never rolls back" — are true of the happy path only; the review names the
+exception path in each case. Do not rewrite those earlier sections; treat
+the review as their errata until the fixes land.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

@@ -110,8 +110,8 @@ see Phase 5.
 
 | Phase | What | Status | Commit/PR | Notes |
 |---|---|---|---|---|
-| plan | this file | **in review** | `72a3b2f` (PR #182) | |
-| 1 | Stale outlines out of saved history + history composition | **in review** | `43a8ad8` (PR #182) | commit-time + load-time elision; Developer tools row; offline profiler |
+| plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
+| 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
 | 2 | Fetched web-page text out of saved history | not started | | gated: owner decision D2 + one live canary request |
 | 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | not started | | gated: D1, D3; ship both halves together |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
@@ -120,14 +120,35 @@ see Phase 5.
 A status moves to **complete** only after the PR merges, set by the next
 session that touches this file (the project-workspace convention).
 
+**Where it stands (2026-09-22, recorded after PR #182 merged).** Phase 1
+is on `master`. No other phase can be built yet. The owner left D1–D4
+undecided on 2026-09-22 and supplied no real measurements, so the numbers
+under "What actually fills the history" are still the synthetic ones.
+
+- **Phase 2** waits on a yes to D2. Its live check is built with the
+  phase. The check's one paid request (`--run`) is the owner's to send,
+  and its result is recorded here. The evidence for D2 is the "Web
+  research kept" share that `tools/chat_history_profile.py` reports on
+  real projects.
+- **Phase 3** waits on D1 and D3. Turning it on by default also waits on
+  the paid recall check under "Before it is on by default".
+- **D4** blocks nothing in this plan. It decides whether Phase 3's list of
+  decisions missing from the ledgers becomes a candidate source for the
+  harvest. That wiring can only happen once Phase 3 and project-workspace
+  Phase 4 both exist, and `project-workspace/04_HARVEST.md` does not
+  mention it yet.
+- **Phase 5** is not gated by any of D1–D4. It is optional, and it needs a
+  measured before/after on real full drafts. Only the owner's paid runs
+  can produce that measurement.
+
 ## Decisions (owner)
 
 | # | Question | Recommendation | Status |
 |---|---|---|---|
-| D1 | Trigger size for condensing, and how many turns to keep word for word | 150k tokens of committed conversation (the API's own default threshold); keep the last 3 user turns | open — needed before Phase 3 |
-| D2 | Drop fetched web-page text when a turn is saved, like PDFs? | Yes: the reply keeps its cited passages; the model can re-fetch | open — needed before Phase 2 |
-| D3 | Our own summarizer, or Anthropic's on-demand compaction beta? | Our own (reasons under Phase 3) | open — needed before Phase 3 |
-| D4 | Should flagged decisions become Project-facts suggestions? | Yes, via the harvest (Phase 4 hand-off) | open |
+| D1 | Trigger size for condensing, and how many turns to keep word for word | 150k tokens of committed conversation (the API's own default threshold); keep the last 3 user turns | open — left undecided by the owner, 2026-09-22; needed before Phase 3 |
+| D2 | Drop fetched web-page text when a turn is saved, like PDFs? | Yes: the reply keeps its cited passages; the model can re-fetch | open — left undecided by the owner, 2026-09-22; needed before Phase 2 |
+| D3 | Our own summarizer, or Anthropic's on-demand compaction beta? | Our own (reasons under Phase 3) | open — left undecided by the owner, 2026-09-22; needed before Phase 3 |
+| D4 | Should flagged decisions become Project-facts suggestions? | Yes, via the harvest (Phase 4 hand-off) | open — left undecided by the owner, 2026-09-22; gates only the Phase 4 hand-off's wiring |
 
 Phase 1 needs none of these: it removes only data that is stale by
 construction and duplicated in full by every turn's PROJECT CONTEXT.

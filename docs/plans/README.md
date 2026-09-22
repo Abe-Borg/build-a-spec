@@ -21,9 +21,10 @@ section, not here.
 **[Chat history compaction](CHAT_HISTORY_COMPACTION_2026-09-22.md)** —
 opened 2026-09-22. Keep the chat history the model re-reads every turn
 bounded without losing what only the conversation holds: stop saving data
-stored elsewhere (Phase 1, stale edit outlines — in review; Phase 2,
-fetched page text), then condense the conversation rarely between turns
-with the full transcript kept and recallable (Phase 3). The file is the
+stored elsewhere (Phase 1, stale edit outlines — complete, PR #182; Phase 2,
+fetched page text — waiting on owner decision D2), then condense the
+conversation rarely between turns with the full transcript kept and
+recallable (Phase 3 — waiting on D1 and D3). The file is the
 plan, the owner decisions (D1–D4) and the implementation record; its
 "promote before prune" phase is handed to the project workspace's harvest.
 Ships with the project workspace's release (same release policy).

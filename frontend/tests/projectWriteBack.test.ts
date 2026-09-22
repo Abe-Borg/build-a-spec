@@ -176,7 +176,13 @@ test("the refresh line counts what was added and names edition disagreements", (
 test("the pull lines count, and the notice lines are the server's, each once", () => {
   assert.equal(
     describePull({ rounds: 1, references: 2, facts: 3 }),
-    "Pulled project changes: 3 facts, 1 research round and 2 documents.",
+    "Pulled project changes: 3 fact changes, 1 research round and 2 documents.",
+  );
+  // A pull that only edited or retired facts is not "nothing new" (Codex,
+  // PR #179): the count includes in-place changes, and says so.
+  assert.equal(
+    describePull({ rounds: 0, references: 0, facts: 1 }),
+    "Pulled project changes: 1 fact change.",
   );
   assert.equal(describePull({ rounds: 0, references: 0, facts: 0 }), "Pulled project changes: nothing new to bring in.");
   assert.equal(

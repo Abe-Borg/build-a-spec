@@ -50,6 +50,7 @@ precedent.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import uuid
 from dataclasses import dataclass, field, replace
@@ -542,9 +543,15 @@ class ProjectFactStore:
         session's); one already bound keeps its discipline, because editing
         another discipline's fact does not make it this discipline's.
 
-        ``uid`` never changes either, and ``edited_at`` is stamped (``edited_at``
-        or now): together they are what lets a project brief recognise this
-        fact after the edit and let the later edit win (``merge_facts``).
+        A ``uid`` never changes either, and ``edited_at`` is stamped
+        (``edited_at`` or now): together they are what lets a project brief
+        recognise this fact after the edit and let the later edit win
+        (``merge_facts``). A fact recorded before uids existed has none, and
+        is stamped here — before this edit touches anything — with the uid
+        its PRE-edit record derives (:func:`_legacy_uid`). Every unedited
+        copy of it (the brief's, a sibling section's) still derives that same
+        value, so the edit is recognised as this fact rather than landing
+        beside the old statement (Codex, PR #179).
         """
         fact = self.get(pid)
         if fact is None:
@@ -604,6 +611,11 @@ class ProjectFactStore:
             )
         else:
             candidate.discipline = ""
+        if not fact.uid:
+            # Derived from the record as it stands BEFORE the edit: the
+            # statement is part of a legacy fact's identity, so computing it
+            # afterwards would describe a fact nobody else holds.
+            fact.uid = _legacy_uid(fact)
         fact.statement = candidate.statement
         fact.detail = candidate.detail
         fact.scope = candidate.scope
@@ -725,8 +737,9 @@ class ProjectFactStore:
 def _restore_facts(raw: list[Any]) -> tuple[list[ProjectFact], int]:
     """Parse serialized facts leniently: malformed entries and repeated pids
     are dropped, and a repeated ``uid`` is cleared on the later fact (it
-    then merges by its statement) — a copy with a borrowed identity would
-    otherwise be taken for the fact it copied. Returns ``(facts, max_seq)``."""
+    then merges as a fact recorded before uids existed would) — a copy with
+    a borrowed identity would otherwise be taken for the fact it copied.
+    Returns ``(facts, max_seq)``."""
     restored: list[ProjectFact] = []
     seen: set[str] = set()
     uids: set[str] = set()
@@ -1087,9 +1100,11 @@ def project_facts_manifest_facts(
 # into the one it duplicates. The rules, in the order they apply:
 #
 # 1. The same RECORD on both sides (``uid``; for a fact recorded before
-#    uids existed, its statement + placement + where and when it was
-#    recorded) is one fact: a retirement on either side is terminal, and
-#    between two live copies the later in-place edit (``edited_at``) wins.
+#    uids existed, the uid its statement + placement + where and when it was
+#    recorded derive — ``_legacy_uid``, which ``update`` stamps before the
+#    first edit so the edited copy still meets the unedited one) is one
+#    fact: a retirement on either side is terminal, and between two live
+#    copies the later in-place edit (``edited_at``) wins.
 # 2. Otherwise the statement is the key (``fact_match_key`` — scope-blind,
 #    like ``record()``): an incoming live fact that says what a live fact
 #    here already says, at the same placement, confirms it in place; an
@@ -1166,6 +1181,30 @@ def _legacy_identity(fact: ProjectFact) -> tuple[Any, ...]:
     )
 
 
+def _legacy_uid(fact: ProjectFact) -> str:
+    """The ``uid`` a fact recorded before uids existed stands for.
+
+    Such a fact is known by its statement, placement, and where and when it
+    was recorded (:func:`_legacy_identity`); hashed, that is a uid-shaped
+    value one comparison can use for both kinds of fact. It is DETERMINISTIC
+    on purpose: :meth:`ProjectFactStore.update` stamps it before the first
+    edit changes the statement, and two sections editing the same legacy
+    fact independently must stamp the same value and meet as twins — a
+    freshly minted uid would make them strangers.
+    """
+    material = json.dumps(
+        list(_legacy_identity(fact)), ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
+
+
+def _effective_uid(fact: ProjectFact) -> str:
+    """A fact's identity for twin matching: its uid, else the one its record
+    derives — so an edited legacy fact (stamped by ``update``) and an
+    unedited copy still holding no uid are recognised as one fact."""
+    return fact.uid or _legacy_uid(fact)
+
+
 def _retire(fact: ProjectFact, reason: str) -> None:
     fact.status = "superseded"
     fact.supersede_reason = " ".join(reason.split())[:MAX_REASON_CHARS]
@@ -1225,19 +1264,24 @@ def merge_facts(
             return mapped
         return fact.source_ref
 
+    # Each base fact's identity, derived once. A base fact's record only
+    # changes after it is matched and claimed, so an entry never goes stale
+    # while it can still be matched.
+    effective = {id(fact): _effective_uid(fact) for fact in merged}
+
     def find_twin(fact: ProjectFact) -> ProjectFact | None:
-        if fact.uid:
-            for candidate in merged:
-                if candidate.uid == fact.uid and id(candidate) not in claimed:
-                    return candidate
-            return None
-        identity = _legacy_identity(fact)
+        # One comparison for both kinds of fact (``_effective_uid``). Keying
+        # a uid-bearing fact on its uid alone left an edited legacy fact —
+        # stamped by ``update`` — unable to meet the unedited copy the other
+        # side still holds, and the old statement stayed live beside the new
+        # one (Codex, PR #179). Several copies can share a legacy identity (a
+        # fact retired and re-recorded in the same second), so the one in the
+        # same state wins.
+        identity = _effective_uid(fact)
         matches = [
             candidate
             for candidate in merged
-            if not candidate.uid
-            and id(candidate) not in claimed
-            and _legacy_identity(candidate) == identity
+            if id(candidate) not in claimed and effective.get(id(candidate)) == identity
         ]
         same_status = [m for m in matches if m.active == fact.active]
         return (same_status or matches or [None])[0]
@@ -1265,6 +1309,10 @@ def merge_facts(
                     twin.source_kind = fact.source_kind
                     twin.source_ref = carried_ref(fact)
                     twin.edited_at = fact.edited_at
+                    # The edit carries the identity it was stamped with: once
+                    # the statement changes, a legacy twin could no longer
+                    # derive it.
+                    twin.uid = twin.uid or fact.uid
                     carried.add(id(twin))
                     report.updated += 1
                 else:

@@ -230,14 +230,17 @@ Phase 3 makes the brief the project's shared, append-only record:
   Research press is still round N+1, and the readiness checklist names the
   sections they came from), their reference documents (a new one takes the
   next free id in this section, and the facts that cite it follow it), and
-  their project facts. Everything else is **reported, never applied**: a
-  different city, client or project type, or an edition two sections record
-  differently, is listed in the panel's notice strip for you to act on — the
-  document is this section's own. A pull that changes what Final QC read makes
-  a retained Final QC report read stale, exactly as editing those inputs does.
-  Whether a pull is worth offering is decided by a dry run of the pull itself,
-  never by the file's date alone — a sibling saving without adding anything
-  does not light the offer.
+  their project facts — new ones, and edits or retirements of facts this
+  section already holds (a fact recorded by an earlier version is recognised
+  from its first edit on). The panel counts every fact the pull adds or
+  changes, the same count the offer showed. Everything else is **reported,
+  never applied**: a different city, client or project type, or an edition
+  two sections record differently, is listed in the panel's notice strip for
+  you to act on — the document is this section's own. A pull that changes
+  what Final QC read makes a retained Final QC report read stale, exactly as
+  editing those inputs does. Whether a pull is worth offering is decided by a
+  dry run of the pull itself, never by the file's date alone — a sibling
+  saving without adding anything does not light the offer.
 
 How two copies of a project are joined (one merge, used by all three):
 
@@ -255,7 +258,10 @@ How two copies of a project are joined (one merge, used by all three):
   as merged into it; a fact retired in one section is retired everywhere, with
   that section's reason, and never comes back from an older copy. Each fact
   also carries its own identity, so a fact edited in the Project facts panel
-  is still recognised, and between two edits the later one wins. A carried
+  is still recognised, and between two edits the later one wins. A fact an
+  older build recorded has no identity yet; it gets one — derived from the
+  fact as it was, so every copy of it agrees — the first time it is edited,
+  and two sections editing it on their own still meet as one fact. A carried
   fact keeps its provenance — who recorded it, where, when, and on what source
   — except that one whose source cannot be found after the merge (a document
   over the attachment limit, a research finding the brief does not hold) says

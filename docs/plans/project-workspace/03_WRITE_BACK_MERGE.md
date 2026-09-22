@@ -314,15 +314,17 @@ and QC state after success (`refreshReadiness()` / `refreshQc()` calls).
   project's brief (or a file that is not one) asks before replacing it.
 - **Pull what your other sections learned.** When a section's siblings have
   added work it lacks, the Project panel says so and offers **Pull project
-  changes**: their facts, research rounds and reference documents come in,
+  changes**: their facts (new ones, and edits or retirements of ones this
+  section already holds), research rounds and reference documents come in,
   nothing is removed, and differences in the project setup (a city, a
   client, an edition) are shown, not applied.
 - **Two sections that disagree on an edition are told so.** A conflict in a
   recorded edition between sections becomes a project fact to resolve, not
   a silent choice.
 - **An edited project fact keeps its identity.** Each fact now carries its
-  own id, so a fact edited in one section is recognised in another, and the
-  later edit wins.
+  own id (a fact recorded by an earlier version gets one the first time it
+  is edited), so a fact edited in one section is recognised in another, and
+  the later edit wins.
 
 ## Deviations from the plan
 
@@ -437,3 +439,27 @@ As built, 2026-09-22:
     back (append-only; retiring a fact is the travelling way to withdraw
     it). A browser (dev) export stays a plain download — a browser cannot
     read the destination file to merge into it.
+
+Review fixes, 2026-09-22 (PR #179, Codex):
+
+20. **A fact recorded before uids is stamped with a DERIVED uid at its
+    first edit** (item 1 as first built missed this). Such a fact is known
+    by its statement + placement + where and when it was recorded, and an
+    edit changes the statement — so the edited record matched no copy that
+    still held the old one, and a save-time refresh or a pull kept the old
+    statement AND the new one, both live. `update()` now stamps, before the
+    edit changes anything, the uid the PRE-edit record derives (a hash of
+    that legacy identity), and twin matching compares each side's uid-or-
+    derived-uid, so the edit meets every unedited copy. It is derived, not
+    minted, so two sections editing the same legacy fact on their own stamp
+    the same value and still meet as one fact; a twin adopts the edit's
+    uid, since once the statement moves it can no longer derive it. A
+    legacy fact nobody edits still gains no uid (materializing one would
+    rewrite every ledger and wake every sibling's pull offer for nothing).
+21. **The pull's fact count is changes, not new pids** (item 9's
+    `installed` refined). A pull keeps the pids the section already holds,
+    so a pull that only edited or retired facts minted none and reported
+    "nothing new to bring in" right after an offer that had promised those
+    changes. One count now serves both: merged fact records that are new or
+    differ from the section's own, joined by pid. The panel line says "fact
+    change(s)"; the trace field is `fact_changes`.

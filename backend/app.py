@@ -92,7 +92,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal, Mapping, Sequence
 from urllib.parse import quote
 
 import anthropic
@@ -2569,17 +2569,44 @@ def _read_home_brief(home: dict[str, str]) -> ProjectBrief | BriefSyncOutcome:
     return on_disk
 
 
+def _pull_dry_merge(
+    section_brief: ProjectBrief, on_disk: ProjectBrief
+) -> tuple[ProjectBrief, MergeReport]:
+    """What a pull from ``on_disk`` would do to this section — computed, never
+    applied, with the merged brief kept so an offer can count what the pull
+    would change (:func:`_fact_changes`)."""
+    return merge_project_brief(
+        section_brief, on_disk, section_side="existing", apply_setup=False
+    )
+
+
 def _pull_dry_run(
     section_brief: ProjectBrief, on_disk: ProjectBrief
 ) -> MergeReport:
-    """What a pull from ``on_disk`` would do to this section — computed, never
-    applied. ``assets_changed`` is the honest "has the project changes this
-    section lacks" signal; the file's timestamp alone is not (every save of a
-    sibling rewrites its registry record)."""
-    _merged, report = merge_project_brief(
-        section_brief, on_disk, section_side="existing", apply_setup=False
+    """The report of :func:`_pull_dry_merge`. ``assets_changed`` is the honest
+    "has the project changes this section lacks" signal; the file's timestamp
+    alone is not (every save of a sibling rewrites its registry record)."""
+    return _pull_dry_merge(section_brief, on_disk)[1]
+
+
+def _fact_changes(
+    before: Sequence[Mapping[str, Any]], after: Sequence[Mapping[str, Any]]
+) -> int:
+    """How many fact records a pull adds to or changes in this section's
+    ledger — new ones, and ones edited, retired, folded or confirmed in place.
+
+    A pull keeps every pid the section already holds (its ledger is the
+    merge's base), so the pid is the join. Counting only newly minted pids
+    reported a pull that edited or retired facts as "nothing new to bring in"
+    beside an offer that had just promised those changes (Codex, PR #179);
+    the offer and the result now both come from this one count.
+    """
+    held = {entry.get("pid"): entry for entry in before if isinstance(entry, Mapping)}
+    return sum(
+        1
+        for entry in after
+        if isinstance(entry, Mapping) and held.get(entry.get("pid")) != entry
     )
-    return report
 
 
 def _pull_availability(
@@ -2612,16 +2639,14 @@ def _pull_availability(
     with session.session_state_guard():
         section_brief = build_project_brief(session, ready=False)
     try:
-        report = _pull_dry_run(section_brief, on_disk)
+        merged, report = _pull_dry_merge(section_brief, on_disk)
     except ProjectBriefError:
         return None
     return {
         "available": report.assets_changed,
         "rounds": int(report.research.get("rounds_added", 0) or 0),
         "references": int(report.references.get("added", 0) or 0),
-        "facts": int(report.facts.get("added", 0) or 0)
-        + int(report.facts.get("retired", 0) or 0)
-        + int(report.facts.get("updated", 0) or 0),
+        "facts": _fact_changes(section_brief.facts, merged.facts),
     }
 
 
@@ -2654,11 +2679,8 @@ def _install_pull_locked(
         # First, because it is the one install that can refuse (a turn owns
         # the ledger): refusing before anything else moved keeps a pull
         # all-or-nothing.
-        before = {fact.pid for fact in session.facts.items}
         session.facts.absorb(merged.facts)
-        installed["facts"] = sum(
-            1 for fact in session.facts.items if fact.pid not in before
-        )
+        installed["facts"] = _fact_changes(section_brief.facts, merged.facts)
     if (
         merged.research_profile is not None
         and merged.research_profile != section_brief.research_profile
@@ -7331,7 +7353,7 @@ def create_app(
             project_id=merged.project_id,
             rounds_added=installed["rounds"],
             references_added=installed["references"],
-            facts_added=installed["facts"],
+            fact_changes=installed["facts"],
             conflicts=len(report.conflicts),
             setup_differences=len(report.setup),
         )

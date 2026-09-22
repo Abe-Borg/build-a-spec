@@ -615,6 +615,69 @@ def test_an_in_place_edit_travels_by_uid_and_the_later_edit_wins():
     ]
 
 
+def _legacy_store(fact: dict) -> ProjectFactStore:
+    """A section whose ledger an older build saved: its facts carry no uid."""
+    store = ProjectFactStore()
+    store.load({"project_facts": [fact], "next_seq": 2})
+    assert "uid" not in store.snapshot()[0]
+    return store
+
+
+def test_a_legacy_fact_keeps_its_identity_through_its_first_edit():
+    """Regression, PR #179 review (Codex P1). A fact recorded before uids
+    existed is known by its statement, placement, and where and when it was
+    recorded — and editing it changes the statement. The first cut stamped
+    ``edited_at`` but no uid, so the edited record no longer matched the
+    brief's unedited copy: the merge kept the old statement AND added the
+    new one, both live. ``update`` now stamps the uid the PRE-edit record
+    derives, and the merge matches on it."""
+    legacy = _fact("pf-1", "Riser rooms are heated.")
+    store = _legacy_store(legacy)
+    assert store.update("pf-1", {"statement": "Riser rooms are heated to 40 °F."}) == "ok"
+    edited = store.snapshot()[0]
+    assert len(edited["uid"]) == 32 and edited["edited_at"]
+
+    # Deterministic: another section editing the same legacy fact on its own
+    # stamps the SAME uid, so the two edits meet as one fact.
+    other = _legacy_store(legacy)
+    other.update("pf-1", {"statement": "Riser rooms are heated to 50 °F."})
+    assert other.snapshot()[0]["uid"] == edited["uid"]
+
+    # Save → refresh: the brief still holds the unedited legacy copy.
+    merged, report = merge_facts([legacy], [edited])
+    live = [f for f in merged if f["status"] != "superseded"]
+    assert [f["statement"] for f in live] == ["Riser rooms are heated to 40 °F."]
+    assert (report.updated, report.added) == (1, 0)
+    assert merged[0]["uid"] == edited["uid"]
+    # ...and again: idempotent.
+    again, again_report = merge_facts(merged, [edited])
+    assert again == merged and again_report.updated == 0
+
+    # Pull: this section pulling a brief that still holds the old copy keeps
+    # its own edit and adds nothing.
+    pulled, pull_report = merge_facts([edited], [legacy])
+    assert [f["statement"] for f in pulled] == ["Riser rooms are heated to 40 °F."]
+    assert (pull_report.added, pull_report.updated) == (0, 0)
+
+    # A sibling that still holds the legacy copy pulls the refreshed brief:
+    # its copy takes the edit, and the uid with it.
+    sibling, sibling_report = merge_facts([legacy], merged)
+    assert [f["statement"] for f in sibling] == ["Riser rooms are heated to 40 °F."]
+    assert sibling_report.updated == 1 and sibling[0]["uid"] == edited["uid"]
+
+    # A PLACEMENT edit changes the identity too (scope is part of it).
+    moved = _legacy_store(legacy)
+    moved.update("pf-1", {"scope": "section", "section": "21 13 13"})
+    merged_moved, _ = merge_facts([legacy], moved.snapshot())
+    assert [(f["scope"], f["status"]) for f in merged_moved] == [("section", "confirmed")]
+
+    # Through the whole-brief merge, the way a save refreshes the brief.
+    whole, _whole_report = merge_project_brief(_brief(facts=[legacy]), _brief(facts=[edited]))
+    assert [f["statement"] for f in whole.facts if f["status"] != "superseded"] == [
+        "Riser rooms are heated to 40 °F."
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 3.2 References
 # ---------------------------------------------------------------------------
@@ -1163,6 +1226,44 @@ def test_pull_availability_is_a_dry_run_not_a_timestamp(tmp_path):
     listing = client.get("/api/project/sections").json()
     assert listing["pull_available"] is False
     assert listing["pull_summary"]["available"] is False
+
+
+def test_a_pull_that_only_edits_and_retires_facts_reports_both(tmp_path):
+    """Regression, PR #179 review (Codex P2). A pull that edits or retires a
+    fact this section already holds keeps the fact's pid, so counting newly
+    minted pids reported it as "nothing new to bring in" — right after the
+    offer had promised those changes. The offer and the result are now one
+    count of the records the pull adds or changes."""
+    client = _client()
+    session, section_file = _project_folder(client, tmp_path)
+    _home(session, section_file)
+    brief_path = tmp_path / BRIEF_NAME
+    brief = parse_project_brief(brief_path.read_bytes())
+    live = [fact for fact in brief.facts if fact["status"] != "superseded"]
+    edited, retired = live[0], live[1]
+    # A sibling section edited one fact in its panel and retired another.
+    edited.update(
+        statement=edited["statement"] + " (confirmed by the AHJ)",
+        edited_at="2099-01-01T00:00:00+00:00",
+    )
+    retired.update(status="superseded", supersede_reason="Superseded by the owner's standard.")
+    brief.updated_at = "2099-01-01T00:00:00+00:00"
+    write_brief_atomically(str(brief_path), brief_bytes(brief))
+    pids_before = {fact.pid for fact in session.facts.items}
+
+    offered = client.get("/api/project/sections").json()
+    assert offered["pull_available"] is True
+    assert offered["pull_summary"] == {"available": True, "rounds": 0, "references": 0, "facts": 2}
+
+    resp = client.post("/api/project/pull")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["installed"] == {"rounds": 0, "references": 0, "facts": 2}
+    by_pid = {fact.pid: fact for fact in session.facts.items}
+    assert by_pid[edited["pid"]].statement.endswith("(confirmed by the AHJ)")
+    assert by_pid[retired["pid"]].status == "superseded"
+    # Both changes happened in place: no pid was minted.
+    assert set(by_pid) == pids_before
 
 
 def test_a_save_refreshes_the_home_brief_and_never_fails_on_it(tmp_path, monkeypatch):

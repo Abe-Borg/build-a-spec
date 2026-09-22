@@ -56,14 +56,19 @@ export function describePullOffer(summary: PullSummary | null | undefined): stri
     : "The project brief holds work this section has not pulled yet.";
 }
 
-/** The one line a pull leaves behind (the chat marker reuses it). */
+/**
+ * The one line a pull leaves behind (the chat marker reuses it). `facts`
+ * counts every fact the pull added OR changed in place (an edit, a
+ * retirement, a fold) — the same count the offer showed, so it says "fact
+ * change" too: a pull that only edited facts is not "nothing new".
+ */
 export function describePull(installed: {
   rounds: number;
   references: number;
   facts: number;
 }): string {
   const brought = joinCounts([
-    [installed.facts, "fact"],
+    [installed.facts, "fact change"],
     [installed.rounds, "research round"],
     [installed.references, "document"],
   ]);

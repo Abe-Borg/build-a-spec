@@ -10872,6 +10872,24 @@ No new dep, no new env knob, no new SSE event, no project-format bump.
   `superseded_by` links rewritten through the pid map; then no two live
   facts may share a statement — the WIDER scope survives (tie: earlier
   `recorded_at`) and the other folds in as superseded, pointing at it.
+- **A fact recorded before uids gets its uid at its FIRST EDIT, and it is
+  derived, not minted** (caught in review on PR #179, Codex). Such a fact
+  is known by its statement + placement + where and when it was recorded —
+  and an edit changes the statement. The first cut stamped `edited_at` but
+  no uid, so the edited record matched nothing: the save refreshed a brief
+  holding the old statement AND the new one, both live, and a pull
+  answered with the same pair. `update()` now stamps, BEFORE the edit
+  touches anything, the uid the pre-edit record derives
+  (`_legacy_uid`: a hash of `_legacy_identity`), and `find_twin` compares
+  `_effective_uid` — a uid, else the derived one — on both sides, so the
+  edited copy meets every unedited copy still holding no uid. DETERMINISTIC
+  on purpose: two sections editing the same legacy fact independently
+  stamp the same value and meet as twins, where a freshly minted uid would
+  have made them strangers. The twin path adopts the edit's uid
+  (`twin.uid = twin.uid or fact.uid`), because once the statement moves a
+  legacy twin can no longer derive it. An UNTOUCHED legacy fact still gains
+  no uid — materializing one on every merge would change the ledger's bytes
+  for nothing and wake every sibling's pull offer.
 - **`brief` is used in exactly two cases** — the D4 conflict fact, and a
   carried fact whose source cannot resolve after the merge (a document
   dropped at the cap, a research item the merged profile lacks) — and a
@@ -10971,6 +10989,19 @@ No new dep, no new env knob, no new SSE event, no project-format bump.
   a carried round's stamp records — so the readiness disclosure appears for
   a pulled-into section that was never seeded and never credits a
   sibling's research to the seed alone.
+- **The offer and the result are one fact count, and it counts changes,
+  not new pids** (caught in review on PR #179, Codex). A pull keeps every
+  pid the section already holds — its ledger is the merge's base — so a
+  pull that EDITED or RETIRED facts minted nothing, and the result counted
+  minted pids: "nothing new to bring in", right after an offer that had
+  promised those changes. `_fact_changes(before, after)` joins the two
+  ledgers on pid and counts every merged record that is new or differs
+  (an edit, a retirement, a fold, a confirm-in-place); the offer
+  (`_pull_availability`, over `_pull_dry_merge`'s merged brief) and the
+  result (`_install_pull_locked`) both call it, so they cannot disagree
+  again. The frontend line says "fact change(s)", because a count that
+  includes in-place edits is not a count of facts; the trace field is
+  `fact_changes`.
 - **The fixture that could never see a rich session.**
   `tests/fakes.audit_grade_qc_result` built its manifest with
   `session.discipline` and no reference documents, while
@@ -11005,7 +11036,8 @@ No new dep, no new env knob, no new SSE event, no project-format bump.
   `TOUR_VERSION` unchanged — no step added or moved. HelpModal's recipe and
   the trust dossier's brief card and data-handling line describe the
   living file.
-- **Tests**: `tests/test_brief_merge.py` (27) plus 2 in
+- **Tests**: `tests/test_brief_merge.py` (29 — the two review regressions
+  included) plus 2 in
   `test_close_prompt.py` (the export-onto-existing merge with both
   questions, and the multipart replay through the real route), the
   frontend `tests/projectWriteBack.test.ts` (6), and knowing updates in
@@ -11017,7 +11049,9 @@ No new dep, no new env knob, no new SSE event, no project-format bump.
   microsecond stamps → 1, the carried-round bump → 1, the pulled-stamp
   names → 1, write-only-when-changed → 1, the fixture correction → 1, the
   dry-run offer → 3, uid twins → 6, the in-process lock → 1, the export
-  merge → 1, the save-time refresh → 1.
+  merge → 1, the save-time refresh → 1; and the review fixes the same way:
+  the pre-edit uid stamp → 1, effective-uid matching → 1, the twin's uid
+  adoption → 1, the pid-joined change count → 1.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

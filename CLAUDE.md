@@ -916,6 +916,10 @@ frontend/src/
                            session field as a load fallback) +
                            formatProjectHeading ("Discipline · Project Type ·
                            City, Region", never country)
+  lib/qcModel.ts           qcModelLabel: health.qc_model → the display name
+                           the QC drawer's consent copy renders, plus whether
+                           it may claim to out-reason the drafter (known
+                           Opus/Fable ids only; unknown ids shown verbatim)
   lib/qcRemediation.ts     pure helpers for the compact remediation queue
                            (buckets, safe-fix vs advisory ordering); the
                            backend stays the authority on applicability
@@ -10626,8 +10630,24 @@ No schema or protocol bump.
 - **Frozen history, deliberately not rewritten.** Earlier sections of this
   file that say "Opus 5" describe what shipped at the time. So do the
   engine/module docstrings that name Opus 5 as the QC model. The
-  user-facing copy (Help, the trust dossier, the QC drawer and its
-  confirmation, README) was updated, because those surfaces are contracts.
+  user-facing copy (Help, the trust dossier, README) was updated, because
+  those surfaces are contracts.
+- **The paid-run consent copy names the CONFIGURED model, never a
+  hardcoded one** (caught in review on PR #177, Codex). The QC drawer's cost
+  line, its tooltips and the launch confirmation hardcoded the default, so a
+  `BUILD_A_SPEC_QC_MODEL` override got consent text describing a model the
+  run would not call — and credited it with out-reasoning the drafter.
+  `/api/health` now reports `qc_model` (`settings.QC_MODEL`), threaded
+  App → ArtifactPanel → QCDrawer, and `lib/qcModel.ts` (`qcModelLabel`)
+  turns it into a display name plus a `strongerThanDrafter` flag (true only
+  for the Opus/Fable ids it knows; an unknown id is shown verbatim and makes
+  no strength claim; absent → the shipped default). Help and the trust
+  dossier still quote the shipped default on purpose — they describe the
+  app, not one run. Pinned by `frontend/tests/qcModel.test.ts` (no model
+  name hardcoded in QCDrawer's code) and
+  `test_health_names_the_configured_qc_model`. The ledger test that prices
+  the "qc" bucket now pins `settings.QC_MODEL` to Opus 5.5 itself, so an
+  operator's override cannot turn it red.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

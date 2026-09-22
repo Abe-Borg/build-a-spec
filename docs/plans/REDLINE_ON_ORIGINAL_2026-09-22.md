@@ -38,7 +38,9 @@ delivering a redline that is wrong (see D-7).
 
 "Equal" in the two bullets above means element-for-element equal, up to how
 Word splits text into runs (Word re-splits runs on every save anyway). It
-does not mean byte-for-byte equal.
+does not mean byte-for-byte equal. There is one invisible exception, set out
+in D-6: when you move a provision, its bookmarks stay with its new position,
+so Reject All does not restore them at the old one.
 
 ## Why today's redline can't do this
 
@@ -168,6 +170,26 @@ source element decides *text*.
 
 - `diff_sections(baseline, current)` supplies the merged document order and
   where each deleted element sat, tree-aware.
+- **The diff cannot see a reorder, so the plan detects moves itself.**
+  `_merge_by_uid` emits every surviving element as `both`, in current order.
+  Taken as it is, an unchanged but reordered provision would come out `kept`
+  at its new position, untracked. Reject All would then keep the new order,
+  and D-7 would refuse every reordered document. (Codex, PR #181.)
+  - **The rule.** Within each sibling list, the survivors whose relative
+    order held are the longest increasing subsequence of their base indices,
+    taken in current order. Every other survivor is `moved`.
+  - **Rendering a move.** A moved element's whole subtree is `deleted` at
+    its base position and `inserted` at its current position.
+  - **Where the old copy goes.** It is spliced at its base position the way
+    `_merge_by_uid` already places deleted nodes: after the nearest
+    preceding stable survivor.
+  - **What the new copy is built from.** The inserted copy is cloned from
+    the element's *own* origin, not from kin. Its runs are wrapped in
+    `w:ins`, and its text is the accept view: the D-2 splice's result when
+    the text also changed. That makes Accept All yield exactly what the
+    clean export places there.
+  - **Where it lives.** An opt-in on `diff_sections`, so the compare view
+    and the normalized redline are unchanged when the flag is off.
 - Each element's content is judged relative to the upload, through the
   format map:
   - A current element with an origin is `kept` when its rendered text
@@ -237,6 +259,19 @@ finding #1.
   deleted paragraph mark (`w:pPr/w:rPr/w:del`). Accept removes it; Reject
   restores it exactly. Its leading blank spacers are deleted with it, just
   as the clean export drops them.
+- **A deleted provision that carries a section break in its own `w:pPr`
+  keeps its paragraph mark.** (Codex, PR #181.)
+  - **What is marked.** Only its runs are marked deleted. Accept All then
+    leaves an empty paragraph holding the break, which is exactly what the
+    Phase 0 rule makes the clean export produce. Reject All restores the
+    text.
+  - **The old copy of a moved provision** that carries a break gets the
+    same treatment. The break stays at the old position (a break belongs to
+    the content above it), and the moved copy never carries one (clone
+    hygiene, D-6).
+  - **The general rule.** No tracked change ever deletes a paragraph mark
+    that holds `w:sectPr`. Deleting one would merge two Word sections on
+    Accept All. The renderer asserts it, and D-7 would catch a violation.
 - **Deleted preserved block.**
   - A table: every row gets `w:trPr/w:del` and every cell's text is marked
     deleted.
@@ -249,10 +284,11 @@ finding #1.
   Word-numbered master, Word renumbers itself under both Accept and Reject.
 - **Moves.** Batch 5's "moves are not marked" rule cannot hold here: Reject
   All has to restore your order.
-  - Phase 1 renders a reorder as deleted-here plus inserted-there.
-  - Phase 2 upgrades *pure* moves to native Word move tracking
-    (`w:moveFrom`/`w:moveTo` with paired range markers; Word shows them green
-    with "Moved" balloons).
+  - Phase 1 detects them (D-1, per-sibling longest increasing subsequence)
+    and renders each as deleted-here plus inserted-there.
+  - Phase 2 changes only the rendering: it upgrades *pure* moves to native
+    Word move tracking (`w:moveFrom`/`w:moveTo` with paired range markers;
+    Word shows them green with "Moved" balloons).
   - Moving a provision to a different parent is already a delete plus an add
     in the model (`move` refuses a new parent), so the diff already sees it
     as delete plus insert.
@@ -319,6 +355,21 @@ extracted provisions* still works for them.
   - `w14:paraId` and `w14:textId`, which Word expects to be unique and
     regenerates when they are absent;
   - bookmarks and comment anchors.
+- **Identity markers on a moved provision.** A move puts two copies of one
+  element in the redline, but the file must never carry two bookmarks with
+  one name, and Word drops a duplicate on load.
+  - **Which copy keeps them.** The copy that survives Accept All (the new
+    position) keeps the provision's bookmarks and `w14` ids. It never keeps
+    its `w:sectPr`, which stays at the old position (D-3). That way Accept
+    All still equals the clean export, which moves the element the same way.
+    The deleted old copy gives the bookmarks and ids up.
+  - **The limit this creates.** Reject All restores a moved provision's
+    text and formatting at the old position, but not its bookmarks. Word
+    recreates `_GoBack` on its own, and a TOC update restores `_Toc`
+    anchors.
+  - **What D-7 checks.** Content and formatting exactly, plus
+    every-bookmark-name-at-most-once. It treats `w14` ids as identity, not
+    content.
 - **Track Changes switched on in the file (optional, Decision 4).** Add
   `<w:trackRevisions/>` at its schema position in `word/settings.xml`, as the
   one other replaced member.
@@ -334,10 +385,13 @@ extracted provisions* still works for them.
 Before returning the file, render both the redline R and the clean export C
 from the same plan. Then run pure-XML **Accept All** and **Reject All**
 transforms on R's body and compare canonically: adjacent runs with identical
-properties merged, empty runs dropped. All three of these must hold:
+properties merged, empty runs dropped, and `w14` ids treated as identity
+rather than content. All four of these must hold:
 
 - `accept(R) ≡ C`
-- `reject(R) ≡` the upload's body
+- `reject(R) ≡` the upload's body, except for the one documented D-6 limit:
+  a moved provision's bookmarks stay with its new copy
+- no bookmark name appears twice in R
 - every package member other than `word/document.xml` (and `settings.xml`,
   if Decision 4 turns Track Changes on) is byte-identical to the upload
 
@@ -355,10 +409,26 @@ oracle.
 - **Route.** `GET /api/export/docx?redline=master&mode=preserved` returns the
   new file.
   - Today a redline forces `normalized`; this pairing becomes allowed.
-  - A bare `redline=master` defaults to it whenever it is available, the
-    same way the clean export defaults to `preserved`.
+  - **Defaults, for callers that name no mode:**
+    - `redline=master` → `preserved` when it is available, the same way the
+      clean export defaults to `preserved`;
+    - `redline=version` → `normalized`, because the preserved redline is
+      master-only in Phase 1.
   - `redline=version` + `preserved` is a 400 in Phase 1. Redlining against
     an arbitrary version on the original is Phase 3.
+- **The frontend never relies on either default.** (Codex, PR #181.)
+  - **What it sends.** Every redline menu action states its mode
+    explicitly: `preserved` for the new item, and `normalized` for both
+    *Redline of extracted provisions* and *Redline vs version…*.
+  - **Why it matters.** Today *Redline of extracted provisions* calls the
+    bare `redline=master` URL. Under the new default it would silently
+    download the new format, leaving two menu items that produce the same
+    file.
+  - **The code change.** `ExportDocxQuery` / `exportDocxUrl` in
+    `frontend/src/lib/api.ts` gain a `mode` on redline queries. Today a
+    redline query cannot carry one.
+  - **The pin.** `frontend/tests/downloads.test.ts` updates its bare-URL
+    assertions to the explicit forms.
 - **Payload.** `preserved_redline_available` plus a reason. It is one
   derivation, shared by the route and the menu, the
   `_preserved_export_available` pattern. False when:
@@ -390,8 +460,10 @@ oracle.
 - Section-break rules:
   - an empty section-break paragraph stays after the content above it;
   - a clone never copies a break;
-  - deleting the provision that carries the break in its own `w:pPr` leaves
-    an empty paragraph holding the break.
+  - deleting *or moving* the provision that carries the break in its own
+    `w:pPr` leaves an empty paragraph holding the break where the provision
+    was. The redline's Accept All must be able to reproduce this, which is
+    why D-3 never deletes a paragraph mark that holds `w:sectPr`.
 - Stale "(Not used.)": a PART that now has articles drops its
   "(Not used.)" line.
 - The diff's letter numbering: use `labelled_paragraphs`.
@@ -420,7 +492,11 @@ release note.
 - The plan/render split (D-1) and the revision writer.
 - Deletes, inserts, word-level splices, letters and tables (D-2 through
   D-4).
-- Moves as delete plus insert.
+- Move detection: the per-sibling longest increasing subsequence, as an
+  opt-in on `diff_sections`. With the flag off, output is byte-identical,
+  so the compare view and the normalized redline are untouched. Moves are
+  rendered as delete plus insert.
+- The explicit `mode` on every redline URL the frontend builds (D-8).
 - The D-5 refusal.
 - Ids, schema order, the self-check (D-7).
 - The route, the payload flag, the menu item, Open in Word, the capability.
@@ -439,10 +515,9 @@ release note.
 
 **Scope:**
 
-- **Native moves:** `w:moveFrom`/`w:moveTo` for pure moves, detected by an
-  opt-in `diff_sections(..., detect_moves=True)`. With the flag off, output
-  is byte-identical, so the compare view and the normalized redline are
-  untouched. A moved *and* edited element stays delete plus insert.
+- **Native moves:** render the pure moves Phase 1 already detects as
+  `w:moveFrom`/`w:moveTo`. Detection itself does not change. A moved *and*
+  edited element stays delete plus insert.
 - **Real Word as the judge:** the hidden-Word automation gains an Accept All
   / Reject All + SaveAs mode, so real Word judges the corpus. It is an
   optional Windows suite, like the visual regression suite.
@@ -480,9 +555,15 @@ release note.
   - deleting a paragraph that has children;
   - deleting an article;
   - deleting a table;
-  - reordering articles;
+  - a pure reorder with every text unchanged, both of provisions within an
+    article and of an article carrying its children: Reject All restores the
+    upload's order. This is the case the diff alone cannot see;
+  - a reorder that also edits the moved provision's text;
   - filling a "(Not used.)" PART;
   - deleting the provision under a section break;
+  - deleting, and moving, a provision that carries the section break in its
+    own `w:pPr`: Accept All leaves the break in an empty paragraph, and no
+    paragraph mark holding `w:sectPr` is ever marked deleted;
   - a section renumber on a header line;
   - a fallback paragraph (field or hyperlink);
   - spacers travelling with their provision;
@@ -505,8 +586,12 @@ release note.
   - a failed self-check → 409;
   - the filename comes from the upload;
   - the trace event is recorded.
-- **Frontend:** `npm test` (the capability contract), a menu-wiring pin, and
-  `npm run build`.
+- **Frontend:**
+  - `npm test` (the capability contract);
+  - a menu-wiring pin;
+  - the URL-builder test pinning an explicit mode on all three redline
+    actions;
+  - `npm run build`.
 - **Manual, in real Word, on a real office master:**
   - the file opens with no repair prompt;
   - the reviewing pane shows Build-a-Spec;

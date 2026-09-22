@@ -403,7 +403,44 @@ export interface ProjectBriefInspection {
   warnings: string[];
 }
 
-/** What `POST /api/project/brief/start` installed. */
+/** `GET /api/project/next-section` (v1.20.0): what the Next-section dialog
+ *  shows — the module's sibling catalog with the project's drafted sections
+ *  flagged, the open section, the effective discipline, and the manifest of
+ *  what a seed from THIS session would carry. A pure read. */
+export interface NextSectionOptions {
+  /** The project link, once this section has exported or been seeded. */
+  project: { project_id: string; name: string } | null;
+  /** The section open right now — the one being left behind. */
+  current: { number: string; title: string };
+  module_id: string;
+  module: string;
+  /** True on the generic module: no catalog, so the dialog offers a typed
+   *  header alone. */
+  open_catalog: boolean;
+  discipline: string;
+  /** Section numbers the project already drafted (registry, then this one). */
+  done: string[];
+  catalog: {
+    number: string;
+    title: string;
+    scope_note: string;
+    /** Already drafted in this project — shown greyed, never hidden. */
+    done: boolean;
+  }[];
+  manifest: ProjectBriefManifest;
+}
+
+/** Body of `POST /api/project/next-section`; every field optional. */
+export interface NextSectionRequest {
+  number?: string;
+  title?: string;
+  discipline?: string;
+  moduleId?: string;
+  templateId?: string;
+}
+
+/** What `POST /api/project/brief/start` (or `/api/project/next-section`)
+ *  installed. */
 export interface SeedReport {
   module_id: string;
   discipline: string;
@@ -418,9 +455,13 @@ export interface SeedReport {
   references_dropped: string[];
   facts_restored: number;
   sections: number;
+  /** The header version 0 opened on: the Next-section pick, a paired
+   *  template's own, or empty. */
+  section: { number: string; title: string };
   template: { template_id: string; name: string } | null;
   warnings: string[];
-  source: "brief" | "project";
+  /** `session` (v1.20.0): seeded straight from the previous section, no file. */
+  source: "brief" | "project" | "session";
   project_id: string;
   name: string;
 }

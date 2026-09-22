@@ -89,6 +89,51 @@ class ReleaseNote:
 
 RELEASE_NOTES: tuple[ReleaseNote, ...] = (
     ReleaseNote(
+        version="1.20.0",
+        date="2026-09-22",
+        headline="The next section is one click away",
+        summary=(
+            "A project has many sections, and since 1.17.0 the work one "
+            "section pays for \u2014 the research on the client and the "
+            "jurisdiction, the attached standards, the adopted editions, "
+            "the facts the project has settled \u2014 could carry into the "
+            "next one through a project brief. Getting there took an "
+            "export, a file, and a New-session dialog. It is now one button "
+            "in the document panel."
+        ),
+        sections=(
+            ReleaseSection(
+                title="Projects",
+                items=(
+                    ReleaseItem(
+                        title="Next section \u2192, in the panel",
+                        body=(
+                            "Finish the fire-sprinkler section, press Next "
+                            "section \u2192, and the fire-pump section opens "
+                            "carrying the project profile, the recorded "
+                            "editions, every research round (briefed for "
+                            "the next one), the attached reference documents "
+                            "and the recorded project facts \u2014 never the "
+                            "conversation or the document you were just in. "
+                            "You are offered to save first, exactly as New "
+                            "session does. The section is picked from the "
+                            "module's own catalog with the ones already "
+                            "drafted greyed out; type a header the catalog "
+                            "does not list, or leave it unnamed if the "
+                            "section will start from an office master. The "
+                            "new page opens named, so Draft full section is "
+                            "available at once. Export project brief and "
+                            "New session \u2192 New section in an existing "
+                            "project still exist for a section drafted on "
+                            "another day or another machine, and for "
+                            "pairing the brief with a template."
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ReleaseNote(
         version="1.19.1",
         date="2026-09-15",
         headline="Making a template out of a long section",

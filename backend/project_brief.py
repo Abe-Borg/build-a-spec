@@ -46,7 +46,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 
 from . import settings
 from .project_facts import ProjectFact
@@ -296,6 +296,78 @@ def build_project_brief(session: Any, *, ready: bool) -> ProjectBrief:
         facts=session.facts.snapshot(),
         sections=sections,
     )
+
+
+# ---------------------------------------------------------------------------
+# The Next-section dialog (v1.20.0): what the project has drafted, and what
+# the module still offers
+# ---------------------------------------------------------------------------
+
+# Bounds for a user-typed section header on the Next-section path. The
+# registry sanitizer (spec_doc.project.sanitize_section_record) bounds the
+# same two fields at the same widths, so a section named here is a section
+# the registry can record.
+MAX_NEXT_SECTION_NUMBER_CHARS = 40
+MAX_NEXT_SECTION_TITLE_CHARS = 160
+
+
+def _fold(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def sections_drafted(session: Any) -> list[str]:
+    """Section numbers this project already has, in registry order with the
+    open section last: the link's registry (what the brief listed, plus
+    anything a later export upserted) and this session's own number when it
+    has one. Deduplicated, whitespace-folded, never ``"(unnumbered)"`` — an
+    unnumbered section is not a section the catalog can exclude."""
+    link = session.project_link if isinstance(session.project_link, dict) else {}
+    numbers: list[str] = []
+    for record in link.get("sections", []) or []:
+        number = _fold((record or {}).get("number"))
+        if number and number != "(unnumbered)" and number not in numbers:
+            numbers.append(number)
+    own = _fold(getattr(session.doc.doc, "number", ""))
+    if own and own not in numbers:
+        numbers.append(own)
+    return numbers
+
+
+def next_section_catalog(module: Any, done_numbers: Iterable[str]) -> list[dict[str, Any]]:
+    """The module's sibling catalog as the dialog lists it: every declared
+    section, in declaration order, flagged ``done`` when the project already
+    drafted it. Flagged rather than filtered so the dialog can SHOW what is
+    done — a list that silently omits 21 13 13 reads as a module that never
+    offered it. An open-catalog module (generic) declares nothing and gets
+    ``[]``; the dialog then offers the typed header alone."""
+    done = {_fold(n) for n in done_numbers}
+    return [
+        {
+            "number": entry.number,
+            "title": entry.title,
+            "scope_note": entry.scope_note,
+            "done": _fold(entry.number) in done,
+        }
+        for entry in getattr(module, "section_catalog", ()) or ()
+    ]
+
+
+def clean_next_section_header(number: Any, title: Any) -> tuple[str, str]:
+    """Whitespace-fold and bound a typed section header; ``ProjectBriefError``
+    past the bounds, so the route answers 400 in the brief's own words."""
+    folded_number = _fold(number)
+    folded_title = _fold(title)
+    if len(folded_number) > MAX_NEXT_SECTION_NUMBER_CHARS:
+        raise ProjectBriefError(
+            f"The section number is too long ({len(folded_number)} > "
+            f"{MAX_NEXT_SECTION_NUMBER_CHARS} characters)."
+        )
+    if len(folded_title) > MAX_NEXT_SECTION_TITLE_CHARS:
+        raise ProjectBriefError(
+            f"The section title is too long ({len(folded_title)} > "
+            f"{MAX_NEXT_SECTION_TITLE_CHARS} characters)."
+        )
+    return folded_number, folded_title
 
 
 def brief_bytes(brief: ProjectBrief) -> bytes:

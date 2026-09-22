@@ -176,8 +176,11 @@ from .project_brief import (
     brief_from_sibling_project,
     brief_manifest,
     build_project_brief,
+    clean_next_section_header,
+    next_section_catalog,
     parse_brief_json,
     parse_project_brief,
+    sections_drafted,
 )
 from .project_facts import ProjectFactError
 from .reference_docs import ReferenceDocError, prepare_reference_text
@@ -622,6 +625,24 @@ class UpdateInstallRequest(BaseModel):
     """Body of ``POST /api/update/install``; a bodyless POST reads as all-default."""
 
     acknowledge_unsaved: bool = False
+
+
+class NextSectionRequest(BaseModel):
+    """Body of ``POST /api/project/next-section`` (v1.20.0).
+
+    Every field is optional: a bodyless POST seeds an unnamed section on the
+    brief's own module and discipline, exactly what ``/api/project/brief/start``
+    does with a file and no form fields. ``number`` / ``title`` name the new
+    section up front (a catalog pick, or typed); ``discipline`` and
+    ``module_id`` override the brief's; ``template_id`` pairs a template the
+    way the brief start does.
+    """
+
+    number: str = ""
+    title: str = ""
+    discipline: str = ""
+    module_id: str = ""
+    template_id: str = ""
 
 
 class QcDismissRequest(BaseModel):
@@ -6615,6 +6636,202 @@ def create_app(
             source=source,
             project_id=brief.project_id,
             module_id=seed["module_id"],
+            template=bool(template_origin),
+            research_rounds=seed["research_rounds"],
+            references=seed["references_restored"],
+            facts=seed["facts_restored"],
+            ok=True,
+        )
+        bundle = await run_in_threadpool(_session_bundle, sessions.get_workspace())
+        return JSONResponse({"ok": True, "seed": seed, "session": bundle})
+
+    def _next_section_busy_response(busy: list[str]) -> JSONResponse:
+        return _coded_error_response(
+            {
+                "ok": False,
+                "code": "workspace_busy",
+                "error": (
+                    "Wait for the current work to finish before starting the "
+                    f"next section ({', '.join(busy)} still running)."
+                ),
+            },
+            status_code=409,
+        )
+
+    @app.get("/api/project/next-section")
+    def project_next_section_options() -> JSONResponse:
+        """What the Next-section dialog shows: the module's sibling catalog
+        with the sections this project already drafted flagged, the current
+        section, the effective discipline, and the manifest of what a seed
+        would carry — built from THIS session, the way the export confirm's
+        manifest is. A pure read: nothing is stamped or replaced."""
+        refusal = _brief_scope_refusal()
+        if refusal is not None:
+            return refusal
+        session = sessions.get_session()
+        with session.session_state_guard():
+            ready = bool(_readiness_payload(session)["ready"])
+            brief = build_project_brief(session, ready=ready)
+            doc = session.doc.doc
+            done = sections_drafted(session)
+            link = session.project_link if isinstance(session.project_link, dict) else None
+            payload = {
+                "ok": True,
+                "project": (
+                    {"project_id": link["project_id"], "name": link.get("name", "")}
+                    if link
+                    else None
+                ),
+                "current": {"number": doc.number or "", "title": doc.title or ""},
+                "module_id": session.module.module_id,
+                "module": session.module.display_name,
+                "open_catalog": bool(session.module.open_catalog),
+                "discipline": effective_discipline(session),
+                "done": done,
+                "catalog": next_section_catalog(session.module, done),
+                "manifest": brief_manifest(brief),
+            }
+        return JSONResponse(payload)
+
+    @app.post("/api/project/next-section")
+    async def project_next_section_start(
+        body: NextSectionRequest | None = None,
+    ) -> JSONResponse:
+        """Start the next section of THIS project from THIS session — no file.
+
+        The brief/start route with the file relay removed: the brief is
+        built in memory from the session being replaced and the seed runs in
+        the same ``session_state_guard()`` acquisition, so the brief
+        describes exactly the session the seed replaces (a turn or an edit
+        cannot land between the two). Refuses outside the original
+        workspace and while anything runs, like brief/start; the template
+        lookup happens first, on a worker thread. Nothing is written to
+        disk — the section being left behind is the caller's to save (the
+        frontend's save gate runs before this request), and the brief
+        travels only in memory.
+        """
+        refusal = _brief_scope_refusal()
+        if refusal is not None:
+            return refusal
+        body = body or NextSectionRequest()
+        try:
+            number, title = clean_next_section_header(body.number, body.title)
+        except ProjectBriefError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        entry_lease = sessions.get_workspace()
+        session = entry_lease.session
+        entry_generation = session.generation
+        busy = sessions.busy_reasons(session)
+        if busy:
+            return _next_section_busy_response(busy)
+
+        template_section: SpecSection | None = None
+        template_origin: dict[str, Any] | None = None
+        template_module = ""
+        template_discipline = ""
+        wanted_template = body.template_id.strip()
+        if wanted_template:
+            try:
+                template, _source = await run_in_threadpool(
+                    get_template_catalog().get, wanted_template
+                )
+            except TemplateError as exc:
+                return _template_error(exc)
+            template_section = SpecSection.from_dict(copy.deepcopy(template["document"]))
+            template_origin = {
+                "template_id": template["id"],
+                "name": template["name"],
+                "seed_block_ids": [
+                    p.uid for _part, _article, p, _depth, _ref in iter_paragraphs(template_section)
+                ],
+            }
+            template_module = str(template.get("module_id") or "")
+            template_discipline = str(
+                (template_section.project_identity or {}).get("discipline", "") or ""
+            )
+
+        requested_module = body.module_id.strip()
+        requested_discipline = " ".join(body.discipline.split())
+        try:
+            with sessions.active_write(entry_lease.workspace_id):
+                with session.session_state_guard():
+                    sessions.workspace_manager().assert_active(entry_lease)
+                    if session.generation != entry_generation:
+                        return _stale_tutorial_response()
+                    busy = sessions.busy_reasons(session)
+                    if busy:
+                        return _next_section_busy_response(busy)
+                    # A number the project already drafted is refused, and
+                    # refused HERE rather than only greyed in the dialog: the
+                    # typed-header path and a direct caller bypass the
+                    # catalog, and two sections with one number are not two
+                    # sections — build_project_brief upserts the registry by
+                    # number, so the later export would silently replace the
+                    # earlier section's record (Codex, PR #174).
+                    if number and number in sections_drafted(session):
+                        return _coded_error_response(
+                            {
+                                "ok": False,
+                                "code": "section_already_drafted",
+                                "error": (
+                                    f"Section {number} is already drafted in this "
+                                    "project. Open that section instead, or pick "
+                                    "a different number."
+                                ),
+                            },
+                            status_code=409,
+                        )
+                    # The brief is built from the session about to be
+                    # replaced, under the same guard as the seed. The link
+                    # stamp is deliberate even though this session is going
+                    # away: the brief's registry must carry THIS section, and
+                    # _build_brief_locked is the one place the registry is
+                    # upserted the way an export upserts it.
+                    brief = _build_brief_locked(session)
+                    newest = brief.newest_section or {}
+                    chosen_module = (
+                        requested_module
+                        or session.module.module_id
+                        or str(newest.get("module_id") or "")
+                    )
+                    chosen_discipline = (
+                        requested_discipline
+                        or effective_discipline(session)
+                        or str(newest.get("discipline") or "")
+                    )
+                    extra_warnings: list[str] = []
+                    if template_module:
+                        if chosen_module and template_module != chosen_module:
+                            extra_warnings.append(
+                                f"The template's module ({template_module}) was used "
+                                f"instead of this project's ({chosen_module}): the "
+                                "template's playbook shaped that document."
+                            )
+                        chosen_module = template_module
+                        if not chosen_discipline:
+                            chosen_discipline = template_discipline
+                    seed = session.start_from_brief(
+                        brief,
+                        module_id=chosen_module,
+                        discipline=chosen_discipline,
+                        template_section=template_section,
+                        template_origin=template_origin,
+                        number=number,
+                        title=title,
+                    )
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+        seed["warnings"] = list(brief.warnings) + extra_warnings + list(seed["warnings"])
+        seed["source"] = "session"
+        seed["project_id"] = brief.project_id
+        seed["name"] = brief.name
+        _trace_capture.app_event(
+            "project_brief",
+            action="next_section",
+            source="session",
+            project_id=brief.project_id,
+            module_id=seed["module_id"],
+            section=number,
             template=bool(template_origin),
             research_rounds=seed["research_rounds"],
             references=seed["references_restored"],

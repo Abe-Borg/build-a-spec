@@ -31,6 +31,7 @@ import type {
   UpdateCheckPayload,
   UsageSummary,
   OpenInWordResult,
+  NextSectionRequest,
 } from "./types";
 import {
   applyQc,
@@ -73,6 +74,7 @@ import {
   updateProjectFact,
   supersedeProjectFact,
   startFromProjectBrief,
+  startNextSection,
   downloadProjectBrief,
   startResearch,
   stopChat,
@@ -288,6 +290,7 @@ export default function App() {
         discipline?: string;
         templateId?: string;
       }
+    | { kind: "next-section"; opts: NextSectionRequest }
     | null
   >(null);
   // A file upload in flight (master import / project open). Reading, parsing
@@ -2415,6 +2418,78 @@ export default function App() {
     }
   };
 
+  /** Next section in one click (v1.20.0): the brief is built server-side
+   *  from THIS session and seeded in one transaction — no file. Same
+   *  bundle, same pane discard and the same chat marker as the brief path,
+   *  which is deliberate: the two must read as one feature. */
+  async function doStartNextSection(opts: NextSectionRequest) {
+    if (briefStarting) return;
+    setBriefStarting(true);
+    try {
+      const session = await startNextSection(opts);
+      if (!applySessionBundle(session)) return;
+      discardPaneState();
+      onboardingRef.current?.syncSessionIdentity(session);
+      const seed = session.seed;
+      const from = session.project_link?.seeded_from ?? [];
+      const named = `${seed.section.number} ${seed.section.title}`.trim();
+      addNote(
+        `Started ${named ? `section ${named}` : "the next section"} of project “${seed.name}”` +
+          (from.length ? ` (after ${from.join(", ")})` : "") +
+          `: carried the project profile, ${seed.edition_overrides} recorded edition${
+            seed.edition_overrides === 1 ? "" : "s"
+          }, ${seed.research_rounds} research round${
+            seed.research_rounds === 1 ? "" : "s"
+          } (${seed.research_items} finding${seed.research_items === 1 ? "" : "s"}), ${
+            seed.references_restored
+          } reference document${seed.references_restored === 1 ? "" : "s"}, and ${
+            seed.facts_restored
+          } project fact${seed.facts_restored === 1 ? "" : "s"}.` +
+          (named
+            ? " Tell me about this section and I will draft from what the project already knows."
+            : " Tell me which section this is and I will draft from what the project already knows."),
+      );
+      const lines = [
+        ...seed.warnings,
+        ...(seed.references_dropped.length
+          ? [
+              `Not carried (past the attachment cap): ${seed.references_dropped.join(", ")}`,
+            ]
+          : []),
+      ];
+      if (lines.length) {
+        setImportNotice({
+          tone: "warn",
+          name: "Next section",
+          title: "Started with notes from the project",
+          lines,
+        });
+      }
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: newId(),
+          role: "assistant",
+          text: `Could not start the next section: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          error: true,
+        },
+      ]);
+    } finally {
+      setBriefStarting(false);
+    }
+  }
+
+  const requestStartNextSection = async (opts: NextSectionRequest) => {
+    if (await isUnsaved()) {
+      setSaveGate({ kind: "next-section", opts });
+    } else {
+      void doStartNextSection(opts);
+    }
+  };
+
   const openTemplateStudio = () => {
     setTemplatesOnly(true);
     setNewSessionOpen(true);
@@ -2429,6 +2504,8 @@ export default function App() {
     else if (gate.kind === "open-project") void doLoadProject(gate.file);
     else if (gate.kind === "start-template") {
       void doInstantiateTemplate(gate.templateId);
+    } else if (gate.kind === "next-section") {
+      void doStartNextSection(gate.opts);
     } else {
       void doStartFromBrief(gate.file, {
         discipline: gate.discipline,
@@ -2837,7 +2914,7 @@ export default function App() {
             ? "Open a different project?"
             : saveGate?.kind === "start-template"
               ? "Start from this template?"
-              : saveGate?.kind === "start-brief"
+              : saveGate?.kind === "start-brief" || saveGate?.kind === "next-section"
                 ? "Start the next section of the project?"
                 : saveGate?.kind === "install-update"
                   ? "Install the update?"
@@ -2900,6 +2977,7 @@ export default function App() {
           onUpdateProjectFact={updateProjectFactHandler}
           onSupersedeProjectFact={supersedeProjectFactHandler}
           onExportProjectBrief={saveProjectBrief}
+          onStartNextSection={(opts) => void requestStartNextSection(opts)}
           lintIssues={lintIssues}
           standards={standards}
           profileComplete={profileComplete}

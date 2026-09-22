@@ -1,7 +1,9 @@
 # Project workspace — carry a project's work across its sections
 
 Owner: Abraham. Drafted 2026-09-22 against `d5c9034` (v1.19.1). Status:
-**proposed, awaiting review** — nothing here is built.
+**decisions D1–D5 ratified as recommended (Abraham, 2026-09-22); Phase 1
+shipped in v1.20.0; Phases 2–6 not started.** Phase 1's as-built deviations
+are recorded under its heading below.
 
 The ask: finish the common work on the fire-sprinkler section (21 13 13) —
 the client and jurisdiction research, the location facts, the system facts,
@@ -98,7 +100,15 @@ never silent).
 
 ### Phase 1 — Next section in one click (no file relay)
 
-*Ships alone. Smallest change, biggest daily win.*
+*Ships alone. Smallest change, biggest daily win.* **Shipped in v1.20.0.**
+As built, three deviations from the text below: (1) template pairing stays
+on the New-session route (the dialog says so) — the fast path is a fast
+path; (2) the dialog gained a third choice, **leave it unnamed**, because a
+named page counts as content (`has_body_content`) and the master import
+refuses it — the choice belongs in the dialog, not at the Import button;
+(3) the capability rides the `template-use` tour step, which is where
+`project.brief-start` already lived (the plan said "the `project.brief-start`
+step"; that is the step).
 
 - **`POST /api/project/next-section`** `{module_id?, discipline?, number?,
   title?, template_id?}` builds `build_project_brief(session)` in memory,

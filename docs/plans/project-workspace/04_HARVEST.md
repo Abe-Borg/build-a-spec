@@ -1,6 +1,6 @@
 # Phase 4 — Harvest: nothing settled is left in the transcript
 
-**Status:** not started. **Depends on:** nothing in this program (Phase 1
+**Status:** in review (`54d2437`, PR #185). **Depends on:** nothing in this program (Phase 1
 shipped the surfaces it hooks into). D3 is ratified: a paid, opt-in,
 preview-then-commit pass; never fires on its own.
 

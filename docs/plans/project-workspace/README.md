@@ -49,7 +49,7 @@ closed without merging is reconciled back to `not started` with a note.
 | handoff | this folder | **complete** | `aa119fa` (PR #175, merged `5b25df9`) | the program folder, the specs, the release policy |
 | 2 | `02_PROJECT_HOME.md` | **complete** | `7cf3893` + `3da1e64` (PR #176, merged `c6b7803`) | project folder + Project panel; desktop shell only, the browser keeps the file relay; 13 as-built deviations in the phase file |
 | 3 | `03_WRITE_BACK_MERGE.md` | **complete** | `4176a56` + `5cd6a8c` (PR #179, merged `5cdc83a`) | the brief is a living file: save-time refresh, Update project brief, export-onto-existing merge, Pull project changes; 21 as-built deviations in the phase file (19 as built + 2 from the Codex review) |
-| 4 | `04_HARVEST.md` | not started | | independent of 2–3; may run beside them |
+| 4 | `04_HARVEST.md` | **in review** | `54d2437` (PR #185) | the fact harvest: one opt-in paid call, a review sheet, one-batch commit; a fact's source must resolve (the recording tool, the panel, the commit), older ones flagged, never rewritten; 23 as-built deviations in the phase file |
 | 5 | `05_RELEVANCE_TRIM.md` | not started | | part A (measure) any time; part B gated on the measurement |
 | 6 | `06_CLIENT_LIBRARY.md` | not started | | optional (D5); after 3; only when a second project for one client exists |
 | 7 | `07_RELEASE_CLOSEOUT.md` | not started | | **last.** The one release for Phases 2–6; the tag is Abraham's |

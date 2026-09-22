@@ -50,14 +50,20 @@ precedent.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-from dataclasses import dataclass, replace
-from typing import Any, Callable, Iterable, Sequence
+import uuid
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 FACT_SCOPES = ("project", "discipline", "section")
 FACT_STATUSES = ("confirmed", "assumed", "superseded")
-# ``brief`` is accepted on LOAD only: it is reserved for the deferred harvest
-# pass and write-back merge, and neither the tool nor the panel may claim it.
+# ``brief`` is accepted on LOAD only: neither the tool nor the panel may
+# claim it. The write-back merge (Project workspace Phase 3, ``merge_facts``)
+# uses it in exactly two cases — the D4 edition-conflict fact, and a carried
+# fact whose source no longer resolves after the merge — and the deferred
+# harvest pass is the other reserved user.
 FACT_SOURCE_KINDS = ("user", "research", "reference", "qc", "model", "brief")
 FACT_TOOL_SOURCE_KINDS = ("user", "research", "reference", "qc", "model")
 # A fact is RECORDED as confirmed or assumed; ``superseded`` is only ever the
@@ -107,9 +113,31 @@ def _clean_str(value: Any, limit: int, what: str) -> str:
     return text
 
 
-def _match_key(statement: str) -> str:
-    """Normalized statement, for the active-fact duplicate check."""
+def fact_match_key(statement: str) -> str:
+    """Normalized statement: the store's active-fact duplicate key.
+
+    Public since Project workspace Phase 3 because the write-back merge
+    (:func:`merge_facts`) joins two ledgers on exactly this key — scope-blind,
+    like ``record()`` — so a merged ledger can never hold a state ``record()``
+    would refuse.
+    """
     return " ".join(statement.split()).casefold()
+
+
+_match_key = fact_match_key
+
+# A fact's stable identity (Project workspace Phase 3): minted by ``record``,
+# never changed by an edit, carried by every copy a project brief makes.
+_FACT_UID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _fact_uid(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if _FACT_UID_RE.fullmatch(text) else ""
+
+
+def _now_stamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 @dataclass
@@ -146,6 +174,16 @@ class ProjectFact:
     recorded_at: str = ""
     superseded_by: str = ""
     supersede_reason: str = ""
+    # Project workspace Phase 3. ``uid`` is the fact's own identity across
+    # copies — minted once by ``record``, kept by every edit, carried by a
+    # project brief — because neither the pid (a per-session counter) nor
+    # the statement (an edit changes it) survives a fork. ``edited_at`` is
+    # the moment of the last in-place edit (the panel's Edit), so two copies
+    # of one fact edited in two sections settle on the later edit. Both are
+    # serialized only when set: a fact recorded before this field existed
+    # keeps its bytes, and merges by its statement.
+    uid: str = ""
+    edited_at: str = ""
 
     @property
     def active(self) -> bool:
@@ -166,6 +204,8 @@ class ProjectFact:
             "recorded_at": self.recorded_at,
             "superseded_by": self.superseded_by,
             "supersede_reason": self.supersede_reason,
+            **({"uid": self.uid} if self.uid else {}),
+            **({"edited_at": self.edited_at} if self.edited_at else {}),
         }
 
     @classmethod
@@ -209,6 +249,8 @@ class ProjectFact:
             supersede_reason=" ".join(
                 str(data.get("supersede_reason", "") or "").split()
             )[:MAX_REASON_CHARS],
+            uid=_fact_uid(data.get("uid")),
+            edited_at=str(data.get("edited_at", "") or "")[:40],
         )
 
 
@@ -343,6 +385,7 @@ class ProjectFactStore:
             ),
             recorded_in=_clean_str(recorded_in, MAX_SECTION_CHARS, "recorded_in"),
             recorded_at=str(recorded_at or "")[:40],
+            uid=uuid.uuid4().hex,
         )
         self._next_seq += 1
         self.items.append(fact)
@@ -484,7 +527,12 @@ class ProjectFactStore:
         return summary
 
     def update(
-        self, pid: str, changes: dict[str, Any], *, discipline: str = ""
+        self,
+        pid: str,
+        changes: dict[str, Any],
+        *,
+        discipline: str = "",
+        edited_at: str = "",
     ) -> str:
         """Edit an active fact in place (the panel's affordance).
 
@@ -494,6 +542,16 @@ class ProjectFactStore:
         moved INTO discipline scope binds to ``discipline`` (the editing
         session's); one already bound keeps its discipline, because editing
         another discipline's fact does not make it this discipline's.
+
+        A ``uid`` never changes either, and ``edited_at`` is stamped
+        (``edited_at`` or now): together they are what lets a project brief
+        recognise this fact after the edit and let the later edit win
+        (``merge_facts``). A fact recorded before uids existed has none, and
+        is stamped here — before this edit touches anything — with the uid
+        its PRE-edit record derives (:func:`_legacy_uid`). Every unedited
+        copy of it (the brief's, a sibling section's) still derives that same
+        value, so the edit is recognised as this fact rather than landing
+        beside the old statement (Codex, PR #179).
         """
         fact = self.get(pid)
         if fact is None:
@@ -553,6 +611,11 @@ class ProjectFactStore:
             )
         else:
             candidate.discipline = ""
+        if not fact.uid:
+            # Derived from the record as it stands BEFORE the edit: the
+            # statement is part of a legacy fact's identity, so computing it
+            # afterwards would describe a fact nobody else holds.
+            fact.uid = _legacy_uid(fact)
         fact.statement = candidate.statement
         fact.detail = candidate.detail
         fact.scope = candidate.scope
@@ -561,6 +624,7 @@ class ProjectFactStore:
         fact.status = candidate.status
         fact.source_kind = candidate.source_kind
         fact.source_ref = candidate.source_ref
+        fact.edited_at = str(edited_at or _now_stamp())[:40]
         return "ok"
 
     # -- views ------------------------------------------------------------
@@ -631,21 +695,7 @@ class ProjectFactStore:
         raw = data.get("project_facts")
         if not isinstance(raw, list):
             return
-        restored: list[ProjectFact] = []
-        seen: set[str] = set()
-        max_seq = 0
-        for entry in raw:
-            if not isinstance(entry, dict):
-                continue
-            try:
-                item = ProjectFact.from_dict(entry)
-            except (ValueError, KeyError, TypeError):
-                continue
-            if item.pid in seen:
-                continue
-            seen.add(item.pid)
-            restored.append(item)
-            max_seq = max(max_seq, _seq_of(item))
+        restored, max_seq = _restore_facts(raw)
         self.items = restored
         stored_seq = data.get("next_seq")
         # Belt and braces: a hand-edited file must not make the store mint an
@@ -654,6 +704,64 @@ class ProjectFactStore:
             max_seq + 1,
             int(stored_seq) if isinstance(stored_seq, int) and not isinstance(stored_seq, bool) else 1,
         )
+
+    @property
+    def next_seq(self) -> int:
+        """The next pid this store would mint — the floor a merge into it
+        (``merge_facts(pid_floor=…)``) re-mints past, so an id a rolled-back
+        turn consumed is never handed to a different fact."""
+        return self._next_seq
+
+    def absorb(self, snapshot: Iterable[Any]) -> int:
+        """Replace the ledger with a merged one — a Pull (Project workspace
+        Phase 3). Returns the number of facts now held.
+
+        ``snapshot`` is :func:`merge_facts`' output with this store's own
+        facts as its base, so every pid already here is kept and every
+        carried fact was re-minted past :attr:`next_seq`. Refused while a
+        model turn owns the store: that turn's rollback would restore its
+        pre-turn snapshot over the merge (the panel mutators' posture).
+        ``_next_seq`` never moves backwards — ids are never reused.
+        """
+        if self._turn_backup is not None:
+            raise ProjectFactError(
+                "a model turn owns the project facts ledger; try again when "
+                "it finishes."
+            )
+        restored, max_seq = _restore_facts(list(snapshot))
+        self.items = restored
+        self._next_seq = max(self._next_seq, max_seq + 1)
+        return len(self.items)
+
+
+def _restore_facts(raw: list[Any]) -> tuple[list[ProjectFact], int]:
+    """Parse serialized facts leniently: malformed entries and repeated pids
+    are dropped, and a repeated ``uid`` is cleared on the later fact (it
+    then merges as a fact recorded before uids existed would) — a copy with
+    a borrowed identity would otherwise be taken for the fact it copied.
+    Returns ``(facts, max_seq)``."""
+    restored: list[ProjectFact] = []
+    seen: set[str] = set()
+    uids: set[str] = set()
+    max_seq = 0
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            item = ProjectFact.from_dict(entry)
+        except (ValueError, KeyError, TypeError):
+            continue
+        if item.pid in seen:
+            continue
+        seen.add(item.pid)
+        if item.uid:
+            if item.uid in uids:
+                item.uid = ""
+            else:
+                uids.add(item.uid)
+        restored.append(item)
+        max_seq = max(max_seq, _seq_of(item))
+    return restored, max_seq
 
 
 def _seq_of(item: ProjectFact) -> int:
@@ -980,6 +1088,348 @@ def project_facts_manifest_facts(
         "trimmed": omitted > 0,
         "fingerprint": hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest(),
     }
+
+
+# ---------------------------------------------------------------------------
+# The write-back merge (Project workspace Phase 3)
+# ---------------------------------------------------------------------------
+#
+# Two ledgers of one project — a section's and its project brief's, or two
+# sections' through the brief — are joined here. Nothing is deleted: a fact
+# only ever gets confirmed, retired with a reason, or folded as superseded
+# into the one it duplicates. The rules, in the order they apply:
+#
+# 1. The same RECORD on both sides (``uid``; for a fact recorded before
+#    uids existed, the uid its statement + placement + where and when it was
+#    recorded derive — ``_legacy_uid``, which ``update`` stamps before the
+#    first edit so the edited copy still meets the unedited one) is one
+#    fact: a retirement on either side is terminal, and between two live
+#    copies the later in-place edit (``edited_at``) wins.
+# 2. Otherwise the statement is the key (``fact_match_key`` — scope-blind,
+#    like ``record()``): an incoming live fact that says what a live fact
+#    here already says, at the same placement, confirms it in place; an
+#    incoming retired fact retires the live one here (terminal again) and
+#    lands as history beside it. Anything else lands, re-minted past the
+#    ledger's highest pid.
+# 3. Then no two live facts may share a statement: the WIDER scope is kept
+#    (project > discipline > section; tie → the earlier ``recorded_at``) and
+#    the other is folded in as superseded, pointing at the one kept.
+# 4. Provenance is never restamped — except that a carried fact whose source
+#    cannot resolve after the merge (a reference document dropped at the
+#    cap, a research item the merged profile lacks) says so honestly:
+#    ``source_kind="brief"``, naming the section that recorded it.
+# 5. Past ``MAX_ACTIVE_FACTS`` the merge refuses rather than dropping.
+
+_SCOPE_WIDTH = {"project": 0, "discipline": 1, "section": 2}
+_RETIRED_ELSEWHERE = "Retired in another section of the project."
+
+
+class FactsMergeRefused(ProjectFactError):
+    """A merge that would leave more live facts than a ledger may hold."""
+
+    def __init__(self, message: str, report: "FactsMergeReport") -> None:
+        super().__init__(message)
+        self.report = report
+
+
+@dataclass
+class FactsMergeReport:
+    """What :func:`merge_facts` did, as counts plus the conflicts it named."""
+
+    added: int = 0
+    confirmed: int = 0
+    updated: int = 0
+    retired: int = 0
+    folded: int = 0
+    history_added: int = 0
+    re_minted: int = 0
+    refs_rewritten: int = 0
+    refs_unresolved: int = 0
+    conflicts: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "added": self.added,
+            "confirmed": self.confirmed,
+            "updated": self.updated,
+            "retired": self.retired,
+            "folded": self.folded,
+            "history_added": self.history_added,
+            "re_minted": self.re_minted,
+            "refs_rewritten": self.refs_rewritten,
+            "refs_unresolved": self.refs_unresolved,
+            "conflicts": list(self.conflicts),
+        }
+
+
+def _placement(fact: ProjectFact) -> tuple[str, str, str]:
+    """Where a fact applies: its scope, plus the discipline or section that
+    scope is bound to."""
+    return (
+        fact.scope,
+        discipline_key(fact.discipline) if fact.scope == "discipline" else "",
+        " ".join(fact.section.split()) if fact.scope == "section" else "",
+    )
+
+
+def _legacy_identity(fact: ProjectFact) -> tuple[Any, ...]:
+    return (
+        fact_match_key(fact.statement),
+        _placement(fact),
+        fact.recorded_in,
+        fact.recorded_at,
+    )
+
+
+def _legacy_uid(fact: ProjectFact) -> str:
+    """The ``uid`` a fact recorded before uids existed stands for.
+
+    Such a fact is known by its statement, placement, and where and when it
+    was recorded (:func:`_legacy_identity`); hashed, that is a uid-shaped
+    value one comparison can use for both kinds of fact. It is DETERMINISTIC
+    on purpose: :meth:`ProjectFactStore.update` stamps it before the first
+    edit changes the statement, and two sections editing the same legacy
+    fact independently must stamp the same value and meet as twins — a
+    freshly minted uid would make them strangers.
+    """
+    material = json.dumps(
+        list(_legacy_identity(fact)), ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
+
+
+def _effective_uid(fact: ProjectFact) -> str:
+    """A fact's identity for twin matching: its uid, else the one its record
+    derives — so an edited legacy fact (stamped by ``update``) and an
+    unedited copy still holding no uid are recognised as one fact."""
+    return fact.uid or _legacy_uid(fact)
+
+
+def _retire(fact: ProjectFact, reason: str) -> None:
+    fact.status = "superseded"
+    fact.supersede_reason = " ".join(reason.split())[:MAX_REASON_CHARS]
+    fact.superseded_by = ""
+
+
+def merge_facts(
+    base: Sequence[Mapping[str, Any]],
+    incoming: Sequence[Mapping[str, Any]],
+    *,
+    rid_map: Mapping[str, str] | None = None,
+    section_of_incoming: str = "",
+    resolves: Callable[[str, str], bool] | None = None,
+    resolved_before: Callable[[str, str], bool] | None = None,
+    pid_floor: int = 1,
+    max_active: int = MAX_ACTIVE_FACTS,
+) -> tuple[list[dict[str, Any]], FactsMergeReport]:
+    """Join two serialized ledgers (``ProjectFactStore.snapshot()`` shape).
+
+    ``base`` keeps its pids and its order; ``incoming`` facts are placed by
+    the rules in the section comment above, in ``incoming``'s order (a store
+    appends in time order, so a retirement is seen before a fact that came
+    back). ``rid_map`` rewrites an incoming fact's ``ref-N`` source into the
+    merged reference numbering. ``resolves(kind, ref)`` answers whether a
+    ``reference`` / ``research`` source exists after the merge, and
+    ``resolved_before`` whether it did in ``base`` — a base fact is only
+    rewritten when the merge itself broke its source. ``pid_floor`` is the
+    lowest pid a carried fact may take (a store's ``next_seq``, so an id a
+    rolled-back turn consumed is never reused). ``section_of_incoming``
+    names the incoming side when a fact does not say where it was recorded.
+
+    Deterministic and idempotent: merging the result with the same
+    ``incoming`` again changes nothing. Never mutates its inputs. Raises
+    :class:`FactsMergeRefused` past ``max_active`` live facts.
+    """
+    report = FactsMergeReport()
+    rid_map = dict(rid_map or {})
+    # The store's own lenient restore on both sides: a malformed entry or a
+    # repeated pid is dropped and a borrowed uid cleared, exactly as a load
+    # would, so a hand-edited brief cannot make two facts claim one identity.
+    merged, _base_max = _restore_facts([dict(e) for e in base if isinstance(e, Mapping)])
+    incoming_facts, _incoming_max = _restore_facts(
+        [dict(e) for e in incoming if isinstance(e, Mapping)]
+    )
+
+    next_seq = max(pid_floor, max((_seq_of(f) for f in merged), default=0) + 1)
+    pid_map: dict[str, str] = {}
+    pending: list[tuple[ProjectFact, str]] = []
+    carried: set[int] = set()  # id() of facts whose provenance came in
+    claimed: set[int] = set()  # id() of base records already matched as a twin
+
+    def carried_ref(fact: ProjectFact) -> str:
+        if fact.source_kind == "reference" and fact.source_ref in rid_map:
+            mapped = rid_map[fact.source_ref]
+            if mapped != fact.source_ref:
+                report.refs_rewritten += 1
+            return mapped
+        return fact.source_ref
+
+    # Each base fact's identity, derived once. A base fact's record only
+    # changes after it is matched and claimed, so an entry never goes stale
+    # while it can still be matched.
+    effective = {id(fact): _effective_uid(fact) for fact in merged}
+
+    def find_twin(fact: ProjectFact) -> ProjectFact | None:
+        # One comparison for both kinds of fact (``_effective_uid``). Keying
+        # a uid-bearing fact on its uid alone left an edited legacy fact —
+        # stamped by ``update`` — unable to meet the unedited copy the other
+        # side still holds, and the old statement stayed live beside the new
+        # one (Codex, PR #179). Several copies can share a legacy identity (a
+        # fact retired and re-recorded in the same second), so the one in the
+        # same state wins.
+        identity = _effective_uid(fact)
+        matches = [
+            candidate
+            for candidate in merged
+            if id(candidate) not in claimed and effective.get(id(candidate)) == identity
+        ]
+        same_status = [m for m in matches if m.active == fact.active]
+        return (same_status or matches or [None])[0]
+
+    for fact in incoming_facts:
+        twin = find_twin(fact)
+        if twin is not None:
+            claimed.add(id(twin))
+            pid_map[fact.pid] = twin.pid
+            if not fact.active:
+                if twin.active:
+                    _retire(twin, fact.supersede_reason or _RETIRED_ELSEWHERE)
+                    pending.append((twin, fact.superseded_by))
+                    report.retired += 1
+                elif not twin.superseded_by and fact.superseded_by:
+                    pending.append((twin, fact.superseded_by))
+            elif twin.active:
+                if fact.edited_at and fact.edited_at > twin.edited_at:
+                    twin.statement = fact.statement
+                    twin.detail = fact.detail
+                    twin.scope = fact.scope
+                    twin.section = fact.section
+                    twin.discipline = fact.discipline
+                    twin.status = fact.status
+                    twin.source_kind = fact.source_kind
+                    twin.source_ref = carried_ref(fact)
+                    twin.edited_at = fact.edited_at
+                    # The edit carries the identity it was stamped with: once
+                    # the statement changes, a legacy twin could no longer
+                    # derive it.
+                    twin.uid = twin.uid or fact.uid
+                    carried.add(id(twin))
+                    report.updated += 1
+                else:
+                    changed = False
+                    if not twin.detail and fact.detail:
+                        twin.detail = fact.detail
+                        changed = True
+                    if twin.status == "assumed" and fact.status == "confirmed":
+                        twin.status = "confirmed"
+                        changed = True
+                    report.confirmed += int(changed)
+            # A live copy of a fact this side already retired: terminal.
+            continue
+
+        key = fact_match_key(fact.statement)
+        live = next(
+            (m for m in merged if m.active and fact_match_key(m.statement) == key),
+            None,
+        )
+        if fact.active and live is not None and _placement(live) == _placement(fact):
+            pid_map[fact.pid] = live.pid
+            changed = False
+            if not live.detail and fact.detail:
+                live.detail = fact.detail
+                changed = True
+            if live.status == "assumed" and fact.status == "confirmed":
+                live.status = "confirmed"
+                changed = True
+            report.confirmed += int(changed)
+            continue
+
+        placed = replace(fact, pid=f"pf-{next_seq}", source_ref=carried_ref(fact))
+        next_seq += 1
+        if placed.pid != fact.pid:
+            report.re_minted += 1
+        pid_map[fact.pid] = placed.pid
+        merged.append(placed)
+        claimed.add(id(placed))
+        carried.add(id(placed))
+        if fact.active:
+            report.added += 1
+            continue
+        report.history_added += 1
+        placed.superseded_by = ""
+        pending.append((placed, fact.superseded_by))
+        if live is not None:
+            reason = fact.supersede_reason or _RETIRED_ELSEWHERE
+            _retire(live, reason)
+            pending.append((live, fact.superseded_by))
+            report.retired += 1
+            where = fact.recorded_in or section_of_incoming or "another section"
+            report.conflicts.append(
+                f'"{live.statement}" was retired in {where}: {reason}'
+            )
+
+    for fact, target in pending:
+        mapped = pid_map.get(target, "") if target else ""
+        fact.superseded_by = mapped if mapped != fact.pid else ""
+
+    groups: dict[str, list[ProjectFact]] = {}
+    for fact in merged:
+        if fact.active:
+            groups.setdefault(fact_match_key(fact.statement), []).append(fact)
+    position = {id(fact): index for index, fact in enumerate(merged)}
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        kept = min(
+            members,
+            key=lambda m: (
+                _SCOPE_WIDTH.get(m.scope, len(_SCOPE_WIDTH)),
+                m.recorded_at or "￿",
+                position[id(m)],
+            ),
+        )
+        by = kept.recorded_in or section_of_incoming or "another section"
+        for loser in members:
+            if loser is kept:
+                continue
+            _retire(
+                loser,
+                f"Merged: the same fact was recorded at {fact_label(kept)} by {by}.",
+            )
+            loser.superseded_by = kept.pid
+            report.folded += 1
+            report.conflicts.append(
+                f'"{kept.statement}" was recorded at {fact_label(loser)} and at '
+                f"{fact_label(kept)}; the {fact_label(kept)} fact is kept."
+            )
+
+    if resolves is not None:
+        for fact in merged:
+            if fact.source_kind not in ("reference", "research") or not fact.source_ref:
+                continue
+            if resolves(fact.source_kind, fact.source_ref):
+                continue
+            broke_here = id(fact) in carried or (
+                resolved_before is not None
+                and resolved_before(fact.source_kind, fact.source_ref)
+            )
+            if not broke_here:
+                continue
+            fact.source_kind = "brief"
+            fact.source_ref = (
+                fact.recorded_in or section_of_incoming or "project brief"
+            )[:MAX_SOURCE_REF_CHARS]
+            report.refs_unresolved += 1
+
+    active = sum(1 for fact in merged if fact.active)
+    if active > max_active:
+        raise FactsMergeRefused(
+            f"Merging would leave {active} active project facts; the limit is "
+            f"{max_active}. Retire the facts that no longer apply (in either "
+            "section), then try again — nothing was merged.",
+            report,
+        )
+    return [fact.to_dict() for fact in merged], report
 
 
 # ---------------------------------------------------------------------------

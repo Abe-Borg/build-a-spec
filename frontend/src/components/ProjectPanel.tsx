@@ -18,10 +18,18 @@
  * it can never have a folder and the panel's promise would be a dead end
  * there. The tour is the exception — its practice copy is linked but lives
  * in no folder, and the panel is what the step points at.
+ *
+ * Phase 3 (the brief is a living file) adds the two write-back controls, both
+ * shown only with a home and never in a tour: **Update project brief** (merge
+ * this section into the brief now — every save already does it silently) and
+ * **Pull project changes**, offered when a dry run of the pull says the brief
+ * holds research, documents or facts this section lacks. Neither sends a
+ * path; the server reads the brief in the folder it found.
  */
 import { useEffect, useRef, useState } from "react";
 
 import { projectSections } from "../lib/api";
+import { describePullOffer } from "../lib/projectMerge";
 import type {
   ProjectHome,
   ProjectLink,
@@ -64,6 +72,8 @@ export default function ProjectPanel({
   openNonce,
   onOpenSection,
   onNextSection,
+  onRefreshBrief,
+  onPull,
 }: {
   link: ProjectLink | null;
   home: ProjectHome | null;
@@ -81,10 +91,22 @@ export default function ProjectPanel({
   onOpenSection: (number: string) => void;
   /** Phase 1's dialog, owned by ArtifactPanel. */
   onNextSection: () => void;
+  /** Update project brief (Phase 3): App merges this section into the brief
+   *  in the folder and resolves one line saying what happened — or rejects
+   *  with the server's own refusal. */
+  onRefreshBrief: () => Promise<string>;
+  /** Pull project changes (Phase 3): App installs what the brief holds that
+   *  this section lacks, re-reads research, Final QC and readiness, and
+   *  resolves one line saying what came in. */
+  onPull: () => Promise<string>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [listing, setListing] = useState<ProjectSectionsPayload | null>(null);
   const [error, setError] = useState("");
+  // The write-back action in flight (one at a time), and what the last one
+  // said — shown until the next action or the panel's next listing.
+  const [action, setAction] = useState<"refresh" | "pull" | null>(null);
+  const [outcome, setOutcome] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [desktopShell, setDesktopShell] = useState(hasDesktopShell);
   // Newest request wins: a slow listing resolving after a newer one must not
   // repaint rows from before a save or an open.
@@ -137,6 +159,22 @@ export default function ProjectPanel({
 
   if (!visible) return null;
 
+  const run = async (kind: "refresh" | "pull") => {
+    setAction(kind);
+    setOutcome(null);
+    try {
+      const text = await (kind === "refresh" ? onRefreshBrief() : onPull());
+      if (text) setOutcome({ tone: "ok", text });
+    } catch (failure: unknown) {
+      setOutcome({
+        tone: "err",
+        text: failure instanceof Error ? failure.message : String(failure),
+      });
+    } finally {
+      setAction(null);
+    }
+  };
+
   const rows = listing?.sections ?? [];
   // The prop is authoritative (the doc payload, or the save that just ran);
   // the listing's copy can trail it by one fetch.
@@ -146,6 +184,11 @@ export default function ProjectPanel({
   const unnamed = !currentNumber.trim();
   const unregistered = listing?.unregistered ?? [];
   const warnings = listing?.warnings ?? [];
+  // The write-back controls need the folder (the brief lives there) and are
+  // never offered on a tour's practice copy, which lives in no folder.
+  const writeBack = !!where && !tutorialActive;
+  const pullOffered = writeBack && !!listing?.pull_available;
+  const acting = action !== null;
 
   return (
     <div
@@ -165,6 +208,11 @@ export default function ProjectPanel({
         <span className="shrink-0">
           · {plural(rows.filter((row) => row.in_registry).length, "section")}
         </span>
+        {pullOffered && (
+          <span className="shrink-0 text-accent" title="The project brief holds work this section has not pulled yet">
+            · changes to pull
+          </span>
+        )}
         <span className="ml-auto shrink-0">{expanded ? "▾" : "▸"}</span>
       </button>
 
@@ -187,6 +235,26 @@ export default function ProjectPanel({
             <p className="px-1 text-[10px] text-ink-faint">
               This section has no number yet, so the list cannot mark it as the one you are in.
             </p>
+          )}
+          {pullOffered && (
+            <div className="flex items-center gap-2 rounded border border-accent/40 bg-accent/5 px-1.5 py-1 text-[10px]">
+              <span className="min-w-0 flex-1 text-ink-dim">
+                {describePullOffer(listing?.pull_summary)}
+              </span>
+              <button
+                className="shrink-0 rounded border border-accent/60 px-1.5 py-0.5 text-accent hover:bg-accent/10 disabled:opacity-40"
+                onClick={() => void run("pull")}
+                disabled={busy || acting}
+                title={
+                  busy
+                    ? "Wait for the current work to finish"
+                    : "Bring in the research rounds, reference documents and facts this project's other sections added. Nothing here is removed, and profile or edition differences are shown, not applied."
+                }
+                data-capability="project.pull"
+              >
+                {action === "pull" ? "Pulling…" : "Pull project changes"}
+              </button>
+            </div>
           )}
 
           <ul className="max-h-64 space-y-0.5 overflow-y-auto">
@@ -220,7 +288,7 @@ export default function ProjectPanel({
                         <button
                           className="rounded border border-edge px-1.5 py-0.5 text-ink-dim hover:border-accent hover:text-accent disabled:opacity-40"
                           onClick={() => onOpenSection(row.number)}
-                          disabled={busy}
+                          disabled={busy || acting}
                           title={
                             busy
                               ? "Wait for the current work to finish"
@@ -266,17 +334,44 @@ export default function ProjectPanel({
               {error}
             </p>
           )}
+          {outcome && (
+            <p
+              role={outcome.tone === "err" ? "alert" : "status"}
+              className={
+                "px-1 text-[10px] " + (outcome.tone === "err" ? "text-err" : "text-ink-dim")
+              }
+            >
+              {outcome.text}
+            </p>
+          )}
 
           {!tutorialActive && (
-            <button
-              className={"px-1 text-[10px] " + smallBtn}
-              onClick={onNextSection}
-              disabled={busy}
-              title="Leave this section and open the next one of the same project — carrying the profile, editions, research, references and facts, never this conversation or document. You are offered to save first."
-              data-capability="project.next-section"
-            >
-              Next section →
-            </button>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              {writeBack && (
+                <button
+                  className={"px-1 text-[10px] " + smallBtn}
+                  onClick={() => void run("refresh")}
+                  disabled={busy || acting}
+                  title={
+                    busy
+                      ? "Wait for the current work to finish"
+                      : "Add what this section established — research rounds, reference documents, facts — to the project brief in this folder. Nothing another section recorded is removed. Every save already does this."
+                  }
+                  data-capability="project.brief-refresh"
+                >
+                  {action === "refresh" ? "Updating the brief…" : "Update project brief"}
+                </button>
+              )}
+              <button
+                className={"px-1 text-[10px] " + smallBtn}
+                onClick={onNextSection}
+                disabled={busy || acting}
+                title="Leave this section and open the next one of the same project — carrying the profile, editions, research, references and facts, never this conversation or document. You are offered to save first."
+                data-capability="project.next-section"
+              >
+                Next section →
+              </button>
+            </div>
           )}
         </div>
       )}

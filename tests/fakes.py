@@ -47,6 +47,7 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         qc_input_fingerprint,
         qc_version_fingerprint,
     )
+    from backend.qc.apply import _effective_discipline
     from backend.qc.schema import QC_LENSES
     from backend.usage_ledger import usage_pricing_snapshot
 
@@ -61,7 +62,11 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         profile,
         session.module,
         version_index=session.doc.index,
-        discipline=session.discipline,
+        # The EFFECTIVE discipline (the document identity's, the legacy
+        # session field only as a fallback) — what `matches_current_inputs`
+        # rebuilds with, so a session whose identity names a discipline is
+        # not stale before anything moved.
+        discipline=_effective_discipline(session),
         source_guard=source_guard,
         model=settings.QC_MODEL,
         max_tokens=settings.QC_MAX_TOKENS,
@@ -69,7 +74,10 @@ def audit_grade_qc_result(session: Any, findings: list[Any]):
         # fixture pinned to the other one would read as stale to every
         # freshness check and never reach the guard it exists to exercise.
         consolidation_enabled=settings.QC_CONSOLIDATION,
-        # Every input the freshness check rebuilds with (the PR #148 lesson).
+        # Every input the freshness check rebuilds with (the PR #148 lesson):
+        # attached documents included, or a session holding one is stale
+        # from birth.
+        reference_docs=list(session.references.docs),
         project_facts=list(session.facts.active()),
     )
     lens_ids = {lens.lens_id for lens in QC_LENSES}

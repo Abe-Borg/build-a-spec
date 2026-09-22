@@ -87,15 +87,17 @@ test("the panel is desktop-only outside the tour, and inert inside it", () => {
   // Its root is the tour's anchor and declares the panel's capability.
   assert.match(panel, /data-tour="project-panel"/);
   assert.match(panel, /data-capability="project\.sections"/);
-  // Open is hidden in a tour and locked while anything runs.
+  // Open is hidden in a tour and locked while anything runs — including a
+  // Phase 3 write-back (an update or a pull) the panel itself started.
   const open = /!tutorialActive && \(\s*<button[\s\S]*?Open\s*<\/button>\s*\)/.exec(panel)?.[0];
   assert.ok(open, "the Open button must be gated on tutorialActive");
   assert.match(open, /data-capability="project\.open-section"/);
-  assert.match(open, /disabled=\{busy\}/);
+  assert.match(open, /disabled=\{busy \|\| acting\}/);
   // An Open only exists for a present file in a known folder.
   assert.match(panel, /!where \? null : row\.present \?/);
-  // Next section → from the panel is the same dialog, hidden in a tour too.
-  const next = /\{!tutorialActive && \(\s*<button[\s\S]*?Next section →[\s\S]*?<\/button>\s*\)\}/.exec(
+  // Next section → from the panel is the same dialog, hidden in a tour too
+  // (since Phase 3 it shares the tour-hidden row with Update project brief).
+  const next = /\{!tutorialActive && \(\s*<div[\s\S]*?Next section →[\s\S]*?<\/button>\s*<\/div>\s*\)\}/.exec(
     panel,
   )?.[0];
   assert.ok(next, "the panel's Next section → must be gated on tutorialActive");
@@ -144,7 +146,10 @@ test("the tour step points at the panel inside the paper chapter", () => {
   assert.match(step, /anchor:\s*"project-panel"/);
   assert.match(step, /drawer:\s*"projectPanel"/);
   assert.match(step, /mode:\s*"explanatory"/);
-  assert.match(step, /"project\.sections", "project\.open-section"/);
+  assert.match(
+    step,
+    /"project\.sections",\s*"project\.open-section",\s*"project\.brief-refresh",\s*"project\.pull"/,
+  );
   // Right after the project-facts step, as the spec places it.
   assert.ok(chapter.indexOf('id: "project-facts"') < chapter.indexOf('id: "project-panel"'));
   assert.match(tour, /TOUR_VERSION = 8;/);

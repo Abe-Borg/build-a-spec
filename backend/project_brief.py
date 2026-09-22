@@ -39,17 +39,23 @@ readiness disclosure read. It is never a source of authority.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import re
+import tempfile
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from . import settings
-from .project_facts import ProjectFact
+from .project_facts import (
+    FactsMergeRefused,
+    ProjectFact,
+    merge_facts,
+)
 from .project_profile import ProjectProfile
 from .reference_docs import (
     MAX_REFERENCE_DOCS,
@@ -58,7 +64,7 @@ from .reference_docs import (
     ReferenceDocError,
     rebound_reference_doc,
 )
-from .research.engine import RequirementsProfile
+from .research.engine import RequirementsProfile, merge_research_profiles
 from .spec_doc.project import (
     MAX_LINK_SECTIONS,
     sanitize_project_link,
@@ -106,8 +112,33 @@ class ProjectBriefTooLargeError(ProjectBriefError):
     (every parse-side ``except`` keeps working) but the routes answer 413."""
 
 
+class ProjectBriefMismatchError(ProjectBriefError):
+    """Two briefs of different projects (Project workspace Phase 3). Never
+    merged: the caller decides — the shell asks before it replaces the other
+    project's file, and the save-time refresh reports and writes nothing."""
+
+
+class ProjectBriefMergeRefused(ProjectBriefError):
+    """A merge that cannot be written without deleting something or breaking
+    an identity (past the active-fact cap, a duplicate reference id). Carries
+    the partial report; the caller reports it and never writes."""
+
+    def __init__(self, message: str, report: "MergeReport | None" = None) -> None:
+        super().__init__(message)
+        self.report = report
+
+
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    """A brief's and a registry record's timestamp.
+
+    Microseconds since Project workspace Phase 3: ``updated_at`` is how a
+    section recognises the exact brief it last agreed with
+    (``project_link.brief_updated_at``), and at second resolution a brief
+    rewritten within the same second as a sync read as unchanged. The
+    ISO-8601 form still sorts chronologically against a seconds-only stamp
+    an older build wrote ("…:14+00:00" < "…:14.5+00:00" < "…:15+00:00").
+    """
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _one_line(value: Any, limit: int) -> str:
@@ -711,6 +742,619 @@ def brief_from_sibling_project(data: bytes) -> ProjectBrief:
         "file rather than an exported brief; its readiness was not assessed."
     )
     return brief
+
+
+# ---------------------------------------------------------------------------
+# The write-back merge (Project workspace Phase 3): the brief is a living file
+# ---------------------------------------------------------------------------
+#
+# A section seeded from a brief is a FORK: facts, rounds and references added
+# in one section reach another only through the brief, and a brief export
+# used to OVERWRITE the file — losing whatever another section had written
+# into it since. ``merge_project_brief`` is the one join, used three ways
+# (a save refreshing the brief beside it, an export onto an existing brief,
+# and a section pulling what its siblings added): append-only, id-joined,
+# idempotent. Nothing a merge touches is ever deleted — a round is replayed,
+# a document is kept by its content, a fact is confirmed, retired with a
+# reason, or folded as superseded into the one it duplicates.
+
+# The project-profile fields a merge compares, with the words a report uses.
+_PROFILE_FIELD_LABELS = {
+    "city": "city",
+    "state_or_province": "state or province",
+    "country": "country",
+    "client_name": "client",
+}
+
+
+@dataclass
+class MergeReport:
+    """What :func:`merge_project_brief` did — the routes serialize it.
+
+    ``setup`` lists every project-setup difference found (profile fields, the
+    project type, an edition recorded differently): each names both values
+    and which side is kept. ``conflicts`` are the disagreements a person has
+    to resolve (the D4 edition conflicts and the fact scope conflicts);
+    ``warnings`` is everything else worth saying. ``changed`` says whether the
+    merged brief differs from ``existing`` at all; ``assets_changed`` whether
+    its research, references or facts do — what a pull would install.
+    """
+
+    research: dict[str, int] = field(default_factory=dict)
+    references: dict[str, Any] = field(default_factory=dict)
+    facts: dict[str, Any] = field(default_factory=dict)
+    sections: dict[str, int] = field(default_factory=dict)
+    setup: list[dict[str, str]] = field(default_factory=list)
+    conflicts: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    changed: bool = False
+    assets_changed: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "research": dict(self.research),
+            "references": dict(self.references),
+            "facts": dict(self.facts),
+            "sections": dict(self.sections),
+            "setup": [dict(entry) for entry in self.setup],
+            "conflicts": list(self.conflicts),
+            "warnings": list(self.warnings),
+            "changed": self.changed,
+            "assets_changed": self.assets_changed,
+        }
+
+
+def _reference_fingerprint(doc: dict[str, Any]) -> str:
+    claimed = doc.get("content_fingerprint")
+    if isinstance(claimed, str) and len(claimed) == 64:
+        return claimed
+    return _fingerprint(str(doc.get("text", "") or ""))
+
+
+def _rid_tail(rid: Any) -> int | None:
+    text = str(rid or "")
+    if not text.startswith("ref-"):
+        return None
+    tail = text[4:]
+    return int(tail) if tail.isdigit() else None
+
+
+def _merge_reference_docs(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+    *,
+    mint_floor: int | None,
+) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, Any]]:
+    """Join two reference lists by CONTENT; returns ``(docs, rid_map, counts)``.
+
+    A document already present (same ``content_fingerprint``) keeps its
+    existing rid, and the incoming rid maps onto it. A new document keeps
+    its own rid unless another document here already holds it — then it is
+    re-minted past the highest rid — or, with ``mint_floor`` (a pull into a
+    session's store), is always minted from the store's own counter so an id
+    a deleted document once held is never handed to a different one. A
+    duplicate rid on the existing side is a hand-edited file and refused:
+    two documents answering to one id is exactly the state the re-minting
+    exists to prevent. The session cap is applied by the caller.
+    """
+    # Either side: on a pull the brief file is the INCOMING side, and two of
+    # its documents answering to one id would leave a fact that cites that
+    # id pointing at whichever the rid map happened to see first.
+    for side in (existing, incoming):
+        rids = [str(doc.get("rid", "")) for doc in side]
+        if len(set(rids)) != len(rids):
+            raise ProjectBriefMergeRefused(
+                "The project brief lists two reference documents under one id; "
+                "it was edited by hand. Nothing was merged."
+            )
+    docs: list[dict[str, Any]] = []
+    by_content: dict[str, str] = {}
+    used: set[str] = set()
+    highest = 0
+    for doc in existing:
+        record = dict(doc)
+        record["content_fingerprint"] = _reference_fingerprint(doc)
+        docs.append(record)
+        by_content.setdefault(record["content_fingerprint"], str(record.get("rid", "")))
+        used.add(str(record.get("rid", "")))
+        tail = _rid_tail(record.get("rid"))
+        if tail is not None:
+            highest = max(highest, tail)
+    next_tail = max(highest + 1, mint_floor or 1)
+    rid_map: dict[str, str] = {}
+    counts = {"added": 0, "already_present": 0, "re_minted": 0}
+    for doc in incoming:
+        own_rid = str(doc.get("rid", ""))
+        fingerprint = _reference_fingerprint(doc)
+        if fingerprint in by_content:
+            rid_map.setdefault(own_rid, by_content[fingerprint])
+            counts["already_present"] += 1
+            continue
+        rid = own_rid
+        if mint_floor is not None or rid in used or _rid_tail(rid) is None:
+            rid = f"ref-{next_tail}"
+            next_tail += 1
+        if rid != own_rid:
+            counts["re_minted"] += 1
+        used.add(rid)
+        next_tail = max(next_tail, (_rid_tail(rid) or 0) + 1)
+        rid_map.setdefault(own_rid, rid)
+        by_content[fingerprint] = rid
+        docs.append({**dict(doc), "rid": rid, "content_fingerprint": fingerprint})
+        counts["added"] += 1
+    return docs, rid_map, counts
+
+
+def _cap_added_reference_docs(
+    docs: list[dict[str, Any]], *, already_held: int
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The session cap, applied to what a merge ADDS and never to what the
+    extended side already holds.
+
+    ``docs`` is ``_merge_reference_docs``' output: the ``already_held``
+    documents first, then the new ones. Every held document is kept whatever
+    the totals say — a merge is append-only, and a legacy file already past
+    the token cap must not lose an attachment because something new arrived
+    — and a new document lands only while the count and the tokens stay
+    inside ``MAX_REFERENCE_DOCS`` / ``MAX_REFERENCE_TOKENS``. The titles of
+    the new documents that do not fit are returned, to be named.
+    """
+    kept = [dict(doc) for doc in docs[:already_held]]
+    total = sum(int(doc.get("token_count", 0) or 0) for doc in kept)
+    dropped: list[str] = []
+    for doc in docs[already_held:]:
+        tokens = int(doc.get("token_count", 0) or 0)
+        if len(kept) >= MAX_REFERENCE_DOCS or total + tokens > MAX_REFERENCE_TOKENS:
+            dropped.append(str(doc.get("title") or doc.get("rid") or "document"))
+            continue
+        total += tokens
+        kept.append(dict(doc))
+    return kept, dropped
+
+
+def _unless_only_restamped(
+    record: dict[str, Any], held: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """``record``, or the held record for its number when the two differ only
+    by ``exported_at`` (see the registry step of :func:`merge_project_brief`)."""
+    previous = held.get(_fold(record.get("number")))
+    if previous is None:
+        return record
+    unstamped = {key: value for key, value in record.items() if key != "exported_at"}
+    held_unstamped = {
+        key: value for key, value in previous.items() if key != "exported_at"
+    }
+    return dict(previous) if unstamped == held_unstamped else record
+
+
+def _section_label(brief: ProjectBrief, fallback: str) -> str:
+    newest = brief.newest_section or {}
+    number = _fold(newest.get("number"))
+    if number and number != "(unnumbered)":
+        return f"section {number}"
+    return fallback
+
+
+def _edition_conflict_fact(
+    standard: str,
+    brief_entry: dict[str, str],
+    section_entry: dict[str, str],
+    *,
+    section_label: str,
+    section_number: str,
+    recorded_at: str,
+    index: int,
+) -> dict[str, Any]:
+    """D4: an edition recorded differently by two sections is a coordination
+    defect, so it becomes a project fact a person has to resolve.
+
+    The statement names the two editions in sorted order and nothing about
+    which side holds which — so every merge that meets this disagreement
+    produces the SAME statement (the duplicate key): a refresh from either
+    section, and a pull the other way. Without that, "newest export wins"
+    would flip the brief's own edition on each section's save and word the
+    conflict the other way round each time, recording one disagreement as
+    two facts. Who records what, and on which basis, rides in ``detail`` (a
+    statement is bounded at 240 characters and a basis is free text). The
+    uid is derived from the statement for the same reason: one
+    disagreement, one fact.
+    """
+    editions = sorted(
+        {str(brief_entry.get("edition", "")), str(section_entry.get("edition", ""))}
+    )
+    statement = (
+        f"Sections disagree on the {standard} edition: {' and '.join(editions)} "
+        "are both recorded. Resolve before issue."
+    )
+    detail = (
+        f"The project brief records {brief_entry.get('edition', '')} "
+        f"(basis: {brief_entry.get('basis', '') or 'none recorded'}); "
+        f"{section_label} records {section_entry.get('edition', '')} "
+        f"(basis: {section_entry.get('basis', '') or 'none recorded'})."
+    )
+    return {
+        # A placeholder the merge always re-mints; unique per conflict (a
+        # ledger restore drops a repeated pid) and never numeric, so it can
+        # never be read as a real fact's sequence number.
+        "pid": f"pf-conflict{index}",
+        "statement": statement,
+        "detail": detail,
+        "scope": "project",
+        "status": "assumed",
+        "source_kind": "brief",
+        "source_ref": f"project brief; {section_label}",
+        "recorded_in": section_number,
+        "recorded_at": recorded_at,
+        "uid": hashlib.sha256(statement.encode("utf-8")).hexdigest()[:32],
+    }
+
+
+def _brief_content(brief: ProjectBrief) -> dict[str, Any]:
+    content = brief.to_dict()
+    content.pop("updated_at", None)
+    content.pop("app_version", None)
+    return content
+
+
+def merge_project_brief(
+    existing: ProjectBrief,
+    incoming: ProjectBrief,
+    *,
+    section_side: str = "incoming",
+    apply_setup: bool = True,
+    fact_pid_floor: int = 1,
+    reference_mint_floor: int | None = None,
+    now: str | None = None,
+) -> tuple[ProjectBrief, MergeReport]:
+    """Join ``incoming`` into ``existing``. Pure and deterministic; never
+    mutates either. Returns ``(merged, report)``.
+
+    ``existing`` is the side being extended — the brief file on a refresh or
+    an export onto an existing file, the section's own brief on a pull —
+    and keeps its ids: its pids, its rids, its research rounds' numbers.
+    ``section_side`` says which side is the SECTION (``"incoming"`` or
+    ``"existing"``), so a report and the D4 conflict fact name the two sides
+    the same way whichever direction the merge ran.
+
+    - Research: :func:`merge_research_profiles` (unseen rounds replayed).
+    - References: by content (``_merge_reference_docs``), then the session
+      cap; drops are named.
+    - Facts: :func:`project_facts.merge_facts`, with every incoming ``ref-N``
+      rewritten through the reference map and the D4 conflict facts appended.
+    - Profile and project type: an empty value never erases a recorded one;
+      where both sides record a value, the newest export's wins (D4) and the
+      difference is reported naming both. With ``apply_setup=False`` (a pull
+      — the document is the section's own) nothing is applied, only
+      reported. Edition overrides: a union; one standard recorded at two
+      editions is a warning AND a project fact (D4).
+    - Sections registry: joined by number, newest ``exported_at`` wins
+      (``merge_section_registries``), kept in export order.
+
+    Idempotent: merging the result with the same ``incoming`` again returns
+    it unchanged, ``updated_at`` included — nothing new means nothing to
+    write. Raises :class:`ProjectBriefMismatchError` for two projects and
+    :class:`ProjectBriefMergeRefused` for a merge that would have to delete
+    or duplicate to proceed.
+    """
+    if existing.project_id != incoming.project_id:
+        raise ProjectBriefMismatchError(
+            "These are briefs of two different projects; they were not merged."
+        )
+    stamp = now or _now()
+    report = MergeReport()
+    section_is_incoming = section_side != "existing"
+    brief_side, section_brief = (
+        (existing, incoming) if section_is_incoming else (incoming, existing)
+    )
+    section_label = _section_label(section_brief, "this section")
+    section_number = _fold((section_brief.newest_section or {}).get("number"))
+    if section_number == "(unnumbered)":
+        section_number = ""
+    newest = incoming if (incoming.updated_at or "") > (existing.updated_at or "") else existing
+    older = existing if newest is incoming else incoming
+    kept_label = "the section" if newest is section_brief else "the project brief"
+
+    # -- research -------------------------------------------------------------
+    base_profile = (
+        RequirementsProfile.from_dict(existing.research_profile)
+        if existing.research_profile is not None
+        else None
+    )
+    other_profile = (
+        RequirementsProfile.from_dict(incoming.research_profile)
+        if incoming.research_profile is not None
+        else None
+    )
+    merged_profile, research_report = merge_research_profiles(base_profile, other_profile)
+    research_dict = (
+        existing.research_profile
+        if merged_profile is base_profile
+        else (merged_profile.to_dict() if merged_profile is not None else None)
+    )
+    report.research = research_report.to_dict()
+    report.warnings.extend(research_report.notes())
+
+    # -- references -------------------------------------------------------------
+    reference_docs, rid_map, reference_counts = _merge_reference_docs(
+        list(existing.reference_docs),
+        list(incoming.reference_docs),
+        mint_floor=reference_mint_floor,
+    )
+    kept_docs, dropped = _cap_added_reference_docs(
+        reference_docs, already_held=len(existing.reference_docs)
+    )
+    if dropped:
+        reference_counts["added"] = max(0, reference_counts["added"] - len(dropped))
+    report.references = {**reference_counts, "dropped": list(dropped)}
+    if dropped:
+        report.warnings.append(
+            "Reference document(s) past the attachment cap were not carried: "
+            + ", ".join(dropped)
+        )
+
+    # -- setup: profile, project type, edition overrides ------------------------
+    profile = dict(existing.profile)
+    base_parsed = ProjectProfile.from_dict(existing.profile)
+    other_parsed = ProjectProfile.from_dict(incoming.profile)
+    base_fields = base_parsed.to_dict() if base_parsed is not None else {}
+    other_fields = other_parsed.to_dict() if other_parsed is not None else {}
+    newest_fields = other_fields if newest is incoming else base_fields
+    older_fields = base_fields if newest is incoming else other_fields
+    brief_fields = base_fields if section_is_incoming else other_fields
+    section_fields = other_fields if section_is_incoming else base_fields
+    for key, label in _PROFILE_FIELD_LABELS.items():
+        brief_value = brief_fields.get(key, "")
+        section_value = section_fields.get(key, "")
+        if brief_value and section_value and brief_value != section_value:
+            report.setup.append(
+                {
+                    "kind": "profile",
+                    "field": key,
+                    "label": label,
+                    "brief": brief_value,
+                    "section": section_value,
+                    "kept": kept_label if apply_setup else "the section",
+                }
+            )
+    if apply_setup and (newest_fields or older_fields):
+        # Field by field: the newest export's value where it records one, the
+        # older side's where it does not — an empty field never erases a
+        # recorded one (nothing is deleted by a merge). Replaced only when a
+        # value actually moved, so a brief whose profile is merely shaped
+        # differently (a session-built brief omits blank fields) is left
+        # byte-identical.
+        combined = {
+            key: newest_fields.get(key, "") or older_fields.get(key, "")
+            for key in _PROFILE_FIELD_LABELS
+        }
+        before = {key: base_fields.get(key, "") for key in _PROFILE_FIELD_LABELS}
+        if combined != before:
+            profile = combined
+
+    project_type = existing.project_type
+    brief_type = brief_side.project_type
+    section_type = section_brief.project_type
+    if brief_type and section_type and brief_type != section_type:
+        report.setup.append(
+            {
+                "kind": "project_type",
+                "field": "project_type",
+                "label": "project type",
+                "brief": brief_type,
+                "section": section_type,
+                "kept": kept_label if apply_setup else "the section",
+            }
+        )
+    if apply_setup:
+        project_type = newest.project_type or older.project_type
+
+    overrides = {name: dict(entry) for name, entry in existing.edition_overrides.items()}
+    conflict_facts: list[dict[str, Any]] = []
+    recorded_at = stamp[:10]
+    for name, entry in brief_side.edition_overrides.items():
+        other_entry = section_brief.edition_overrides.get(name)
+        if other_entry is None or other_entry.get("edition") == entry.get("edition"):
+            continue
+        report.setup.append(
+            {
+                "kind": "edition",
+                "field": name,
+                "label": f"{name} edition",
+                "brief": str(entry.get("edition", "")),
+                "section": str(other_entry.get("edition", "")),
+                "kept": kept_label if apply_setup else "the section",
+            }
+        )
+        conflict_facts.append(
+            _edition_conflict_fact(
+                name,
+                entry,
+                other_entry,
+                section_label=section_label,
+                section_number=section_number,
+                recorded_at=recorded_at,
+                index=len(conflict_facts),
+            )
+        )
+        report.conflicts.append(
+            f"The project brief records {name} {entry.get('edition', '')}; "
+            f"{section_label} records {other_entry.get('edition', '')}. "
+            "Recorded as a project fact to resolve before issue."
+        )
+    if apply_setup:
+        for name, entry in incoming.edition_overrides.items():
+            if name not in overrides or newest is incoming:
+                overrides[name] = dict(entry)
+    for difference in report.setup:
+        if difference["kind"] == "edition":
+            continue
+        where = (
+            f"the brief keeps {difference['kept']}'s value, the newest export"
+            if apply_setup
+            else "this section keeps its own — change it here if the brief is right"
+        )
+        report.warnings.append(
+            f"The {difference['label']} differs: the project brief records "
+            f"{difference['brief']!r}; {section_label} records "
+            f"{difference['section']!r} ({where})."
+        )
+
+    # -- facts ------------------------------------------------------------------
+    kept_rids = {str(doc.get("rid", "")) for doc in kept_docs}
+    before_rids = {str(doc.get("rid", "")) for doc in existing.reference_docs}
+    merged_items = {
+        item.item_id for item in (merged_profile.items if merged_profile else [])
+    }
+    before_items = {
+        item.item_id for item in (base_profile.items if base_profile else [])
+    }
+
+    def resolves(kind: str, ref: str) -> bool:
+        return ref in (kept_rids if kind == "reference" else merged_items)
+
+    def resolved_before(kind: str, ref: str) -> bool:
+        return ref in (before_rids if kind == "reference" else before_items)
+
+    try:
+        facts, facts_report = merge_facts(
+            list(existing.facts),
+            [*incoming.facts, *conflict_facts],
+            rid_map=rid_map,
+            section_of_incoming=(
+                section_number if section_is_incoming else "the project brief"
+            ),
+            resolves=resolves,
+            resolved_before=resolved_before,
+            pid_floor=fact_pid_floor,
+        )
+    except FactsMergeRefused as exc:
+        report.facts = exc.report.to_dict()
+        raise ProjectBriefMergeRefused(str(exc), report) from exc
+    report.facts = facts_report.to_dict()
+    report.conflicts.extend(facts_report.conflicts)
+    if facts_report.refs_unresolved:
+        report.warnings.append(
+            f"{facts_report.refs_unresolved} carried fact(s) cited a source the "
+            "merged brief does not hold; each now names the section that "
+            "recorded it instead."
+        )
+
+    # -- sections registry ------------------------------------------------------
+    before_numbers = {_fold(s.get("number")): s for s in existing.sections}
+    # A section rebuilds its own record with a fresh ``exported_at`` on every
+    # save; a record that differs from the one on file ONLY by that stamp is
+    # not news, so the file's copy is kept — otherwise every save of an
+    # unchanged section would rewrite the brief (and reorder its registry)
+    # for nothing, and a sibling syncing the folder would see a change that
+    # is not one.
+    incoming_sections = [
+        _unless_only_restamped(record, before_numbers)
+        for record in incoming.sections
+    ]
+    joined = merge_section_registries(existing.sections, incoming_sections)
+    ordered = sorted(
+        enumerate(joined), key=lambda pair: (str(pair[1].get("exported_at") or ""), pair[0])
+    )
+    sections = [record for _index, record in ordered][-MAX_LINK_SECTIONS:]
+    report.sections = {
+        "added": sum(1 for s in sections if _fold(s.get("number")) not in before_numbers),
+        "updated": sum(
+            1
+            for s in sections
+            if _fold(s.get("number")) in before_numbers
+            and before_numbers[_fold(s.get("number"))] != s
+        ),
+    }
+
+    created = min(
+        (value for value in (existing.created_at, incoming.created_at) if value),
+        default=existing.created_at,
+    )
+    merged = ProjectBrief(
+        project_id=existing.project_id,
+        name=existing.name or incoming.name,
+        created_at=created,
+        updated_at=existing.updated_at,
+        app_version=existing.app_version,
+        profile=profile,
+        project_type=project_type,
+        edition_overrides=overrides,
+        research_profile=research_dict,
+        reference_docs=[dict(doc) for doc in kept_docs],
+        facts=facts,
+        sections=[dict(record) for record in sections],
+    )
+    report.assets_changed = (
+        merged.research_profile != existing.research_profile
+        or merged.reference_docs != [dict(doc) for doc in existing.reference_docs]
+        or merged.facts != [dict(fact) for fact in existing.facts]
+    )
+    report.changed = _brief_content(merged) != _brief_content(existing)
+    if not report.changed:
+        # Nothing new: the existing brief, untouched — its updated_at too,
+        # which is what makes a repeated merge (and a save that brought
+        # nothing) a no-op a sibling section never sees as a change.
+        return replace(copy.deepcopy(existing), warnings=[]), report
+    merged.updated_at = stamp
+    merged.app_version = settings.VERSION
+    return merged, report
+
+
+def write_brief_atomically(
+    path: str, payload: bytes, *, prefix: str = ".buildaspec-brief-"
+) -> None:
+    """Replace ``path`` with ``payload`` atomically, or leave it untouched.
+
+    The shell's ``_atomic_write_target`` idiom, moved here so the refresh
+    route and the native shell share one implementation (the shell's own
+    saves go through it too): a temporary file in the SAME folder, flushed
+    and fsynced, then ``os.replace`` — so a crash or a full disk leaves the
+    old file byte-identical rather than half-written. Raises ``OSError`` (or
+    ``TypeError`` / ``ValueError`` for a path the platform cannot express);
+    the temporary file never outlives a failure.
+    """
+    temp_path: str | None = None
+    try:
+        target_path = os.path.abspath(os.fspath(path))
+        target_dir = os.path.dirname(target_path)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target_dir,
+            prefix=prefix,
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = handle.name
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, target_path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+
+def read_brief_file(path: str) -> ProjectBrief:
+    """Read and parse the brief at ``path`` — bounded, never following a link.
+
+    Raises ``ProjectBriefError`` (unreadable, not a brief, past the cap) or
+    ``OSError`` (gone, unreadable). Worker threads only: it is disk I/O and a
+    full parse.
+    """
+    if os.path.islink(path):
+        raise ProjectBriefError("The project brief is a link; links are never followed.")
+    if os.path.getsize(path) > MAX_PROJECT_BRIEF_BYTES:
+        raise ProjectBriefTooLargeError(
+            "The project brief exceeds the "
+            f"{MAX_PROJECT_BRIEF_BYTES // (1024 * 1024)} MiB limit."
+        )
+    with open(path, "rb") as handle:
+        data = handle.read(MAX_PROJECT_BRIEF_BYTES + 1)
+    return parse_project_brief(data)
 
 
 # ---------------------------------------------------------------------------

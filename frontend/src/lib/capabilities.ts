@@ -73,6 +73,8 @@ export const END_USER_CAPABILITIES = [
   "project.next-section",
   "project.sections",
   "project.open-section",
+  "project.brief-refresh",
+  "project.pull",
   "usage.details",
   "help.topics",
   "help.trust",

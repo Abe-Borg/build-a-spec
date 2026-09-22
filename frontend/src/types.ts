@@ -320,6 +320,13 @@ export interface ProjectFact {
   recorded_at: string;
   superseded_by: string;
   supersede_reason: string;
+  /** The fact's identity across copies (Project workspace Phase 3): minted
+   *  when it is recorded, kept by every edit, carried by a project brief.
+   *  Absent on a fact recorded before it existed. */
+  uid?: string;
+  /** When the panel last edited it in place — between two edited copies of
+   *  one fact, the later edit wins a merge. */
+  edited_at?: string;
 }
 
 /** One section of a project, as its brief's registry records it. */
@@ -386,6 +393,90 @@ export interface ProjectSectionsPayload {
   /** .baspec files in the folder that no registry record names. */
   unregistered: string[];
   warnings: string[];
+  /** The brief in the folder holds research, documents or facts this section
+   *  lacks (Project workspace Phase 3) — a dry run of the pull decided it,
+   *  never a timestamp alone. Older servers omit it. */
+  pull_available?: boolean;
+  /** What that pull would bring, or null without a home or a readable brief. */
+  pull_summary?: PullSummary | null;
+}
+
+/** What a pull from the project brief would bring (counts). */
+export interface PullSummary {
+  available: boolean;
+  rounds: number;
+  references: number;
+  /** Facts added, retired or updated. */
+  facts: number;
+}
+
+/** One project-setup difference a merge found (Project workspace Phase 3):
+ *  a profile field, the project type, or an edition two sections record
+ *  differently. `kept` names the side whose value stands. */
+export interface MergeSetupDifference {
+  kind: "profile" | "project_type" | "edition";
+  field: string;
+  label: string;
+  brief: string;
+  section: string;
+  kept: string;
+}
+
+/** What a project-brief merge did — `project_brief.MergeReport.to_dict()`. */
+export interface MergeReport {
+  research: {
+    rounds_added: number;
+    items_added: number;
+    items_confirmed: number;
+    legacy_rounds: number;
+    first_found_only: number;
+    carried_without_round: number;
+  };
+  references: {
+    added: number;
+    already_present: number;
+    re_minted: number;
+    dropped: string[];
+  };
+  facts: {
+    added: number;
+    confirmed: number;
+    updated: number;
+    retired: number;
+    folded: number;
+    history_added: number;
+    re_minted: number;
+    refs_rewritten: number;
+    refs_unresolved: number;
+    conflicts: string[];
+  };
+  sections: { added: number; updated: number };
+  setup: MergeSetupDifference[];
+  /** Disagreements a person has to resolve (edition conflicts, scope folds). */
+  conflicts: string[];
+  warnings: string[];
+  /** The merged brief differs from the side it extended. */
+  changed: boolean;
+  /** Its research, references or facts do — what a pull would install. */
+  assets_changed: boolean;
+}
+
+/** `POST /api/project/brief/refresh` — Update project brief. */
+export interface BriefRefreshResult {
+  ok: boolean;
+  report: MergeReport | null;
+  brief_updated_at: string;
+  /** The brief holds work this section still lacks — offer the pull. */
+  pull_available: boolean;
+  /** Whether the file was rewritten (a merge that brought nothing writes
+   *  nothing). */
+  written: boolean;
+}
+
+/** `POST /api/project/pull` — what was installed, plus the fresh doc payload. */
+export interface ProjectPullResult extends DocPayload {
+  report: MergeReport;
+  installed: { rounds: number; references: number; facts: number };
 }
 
 /** What a project brief holds, as the manifest/inspect routes describe it. */
@@ -769,6 +860,16 @@ export interface SaveProjectResult {
    *  only beside a non-empty `target` (an unbound target means the session
    *  was replaced mid-save). Older shells omit it. */
   home?: ProjectHome | null;
+  /** Project workspace Phase 3: what happened to the project brief — the
+   *  refresh a save of a homed section runs, or the merge an export onto an
+   *  existing brief ran. Never changes `ok`: a brief that could not be
+   *  updated says so in `brief_error` beside a successful save. Older shells
+   *  omit all of these. */
+  brief_refreshed?: boolean;
+  brief_written?: boolean;
+  brief_error?: string;
+  brief_report?: MergeReport | null;
+  pull_available?: boolean;
 }
 
 /**

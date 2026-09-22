@@ -68,7 +68,9 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            _bind_save_target and reports it as the save
                            result's `home`, the first save of a homed section
                            opens its dialog in the project folder, and a brief
-                           exported beside the saved section finds the home
+                           export binds NO folder (it stamps the link in the
+                           live session only; the next save writes it and
+                           finds the folder — Codex, PR #176)
 backend/
   settings.py              models (claude-sonnet-5 default), SDK transport
                            (SDK_MAX_RETRIES / API_TIMEOUT_SECONDS — the SDK's
@@ -10466,18 +10468,31 @@ them by number. No release: Phases 2–6 ship together (Phase 7), so
   `remember_project_home` stores the answer under `session_state_guard()`,
   generation-checked like `remember_project_save_target`, and re-checks the
   link there — a home is never stored beside a link naming another project.
-- **Three places discover, and only the shell knows paths.** After every
+- **Two places discover, and only the shell knows paths.** After every
   native save (`_discover_home_after_save`, only for a BOUND target — an
   unbound one means the session was replaced mid-save, and the replacement
-  is not touched), reported as the save result's `home`; after a brief
-  export that lands beside the section's own saved file (the natural
-  first-project order is "save the section, export its brief next to it",
-  and waiting for an unrelated save left the panel claiming the section was
-  in no folder while it sat beside its brief); and `bind_project_home`
-  after a native Open. The frontend never holds a path: `open_file` mints
-  an opaque single-use token for a PROJECT open (bounded `_recent_opens`,
-  oldest out; `""` for docx/reference/template/brief picks) and the panel
-  asks for sections by NUMBER.
+  is not touched), reported as the save result's `home`; and
+  `bind_project_home` after a native Open. The frontend never holds a
+  path: `open_file` mints an opaque single-use token for a PROJECT open
+  (bounded `_recent_opens`, oldest out; `""` for docx/reference/template/
+  brief picks) and the panel asks for sections by NUMBER.
+- **A brief export is deliberately NOT a discovery point** (caught in
+  review on PR #176, Codex). The first cut bound the folder when a brief
+  was exported beside the section's own saved file, to spare the natural
+  first-project order ("save the section, export its brief next to it")
+  one more Save. But the export stamps the project link in the LIVE
+  session only: a section saved before its first export has no link in
+  its file, so the folder bound at the export was a promise the file could
+  not keep — close the app, reopen the section, and the link, the folder,
+  the panel and sibling Open were all gone. The invariant: **a home is
+  bound only when the section's file on disk carries the project id the
+  home was found by**, which is exactly what a save (it writes the link)
+  or an open (it read the link) establishes. The export now binds nothing;
+  the panel's homeless line says to save once more, and that save writes
+  the link and finds the folder in one step. Pinned by
+  `test_a_brief_export_never_binds_the_folder_the_next_save_does`, which
+  walks save → export → save → close and reopen; restoring the export-time
+  binding turns it red at "the export binds no folder".
 - **The bind is checked against the LOAD's generation, not a pre-dialog
   sample** — the spec's wording, and it would have refused every bind:
   `load_project` calls `invalidate_model_turn()`, so the load itself
@@ -10584,7 +10599,8 @@ them by number. No release: Phases 2–6 ship together (Phase 7), so
   expectation. The commit-time busy re-check is pinned by a turn claimed
   from INSIDE staging (the swap refuses and the turn still owns the
   session), the post-read size bound by a `getsize` that under-reports;
-  each was reverted in place → exactly its own test red.
+  each was reverted in place → exactly its own test red, as was the
+  export-time binding removed above.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

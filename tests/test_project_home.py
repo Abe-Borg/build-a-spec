@@ -730,42 +730,87 @@ def test_the_first_save_of_a_homed_section_opens_in_the_project_folder(tmp_path,
     assert saved["home"] == {"folder": str(tmp_path), "brief_name": BRIEF_NAME}
 
 
-def test_a_brief_exported_beside_the_saved_section_makes_the_home_at_once(
+def _saved_link(path: Path) -> dict | None:
+    """The project link a saved ``.baspec`` actually carries on disk."""
+    return parse_project_package(path.read_bytes()).project.get("project_link")
+
+
+def test_a_brief_export_never_binds_the_folder_the_next_save_does(
     tmp_path, monkeypatch
 ):
+    """Caught in review on PR #176 (Codex). Exporting a brief stamps the
+    project link in the LIVE session only, so a section saved BEFORE its first
+    export has no link on disk. Binding the folder at the export (the first
+    cut did, for a brief written beside the saved file) made the panel promise
+    a folder the file could never find again: close the app, reopen the
+    section, and the link — and with it the folder, the panel and sibling
+    Open — was gone. The export binds nothing; the save that follows writes
+    the link AND finds the folder, and the reopened file finds it too."""
     import main
 
     _fake_webview(monkeypatch)
     client = _client()
     session = _rich_session(client)
-    exported = client.get("/api/project/brief")  # stamps the link, as the route does
-    assert exported.status_code == 200
+    assert session.project_link is None, "a section that never exported"
     section_file = tmp_path / "21 13 13.baspec"
     window = _FakeWindow(dialog_path=str(section_file))
     controller = main._CloseController(
         None, backend=type("B", (), {"host": "127.0.0.1", "port": 1, "api_token": "t"})()
     )
     controller._bind(window)
-    assert controller.save_project()["home"] is None, "no brief beside it yet"
 
+    # 1. Saved first: no link, so no project and no folder.
+    first = controller.save_project()
+    assert first["ok"] is True and first["home"] is None
+    assert _saved_link(section_file) is None
+
+    # 2. The brief exported beside it. The route stamps the live link (the
+    #    shell fetches exactly this route); the file on disk has none.
+    exported = client.get("/api/project/brief")
+    assert exported.status_code == 200
     monkeypatch.setattr(
         main,
         "_fetch_backend_bytes",
         lambda backend, path, **kw: (exported.content, BRIEF_NAME),
     )
     window._dialog_path = str(tmp_path / BRIEF_NAME)
-    assert controller.save_project_brief()["ok"] is True
+    result = controller.save_project_brief()
+    assert result["ok"] is True
+    assert session.project_link is not None, "the export stamped the live link"
+    assert session.project_home is None, "the export binds no folder"
+    assert result["home"] is None
+    assert client.get("/api/doc").json()["project_home"] is None
+    assert _saved_link(section_file) is None, "…because the file still has no link"
 
-    assert session.project_home is not None
+    # 3. The next save writes the link and finds the folder in one step.
+    second = controller.save_project()
+    assert second["ok"] is True
+    assert second["home"] == {"folder": str(tmp_path), "brief_name": BRIEF_NAME}
     assert session.project_home["folder"] == str(tmp_path)
-    assert client.get("/api/doc").json()["project_home"]["brief_name"] == BRIEF_NAME
+    project_id = session.project_link["project_id"]
+    assert _saved_link(section_file)["project_id"] == project_id
 
-    # A brief exported ANYWHERE ELSE leaves the section's home alone.
+    # A brief exported ANYWHERE ELSE leaves the section's folder alone.
     other = tmp_path / "other"
     other.mkdir()
     window._dialog_path = str(other / BRIEF_NAME)
     assert controller.save_project_brief()["ok"] is True
     assert session.project_home["folder"] == str(tmp_path)
+
+    # 4. Close and reopen — the scenario the export-time binding broke. The
+    #    reopened file carries the link, so its folder is found again.
+    sessions.reset_session()
+    client = _client()
+    window._dialog_path = str(section_file)
+    picked = controller.open_file("project")
+    loaded = client.post(
+        "/api/project/load-file",
+        files={"file": (picked["name"], section_file.read_bytes(), "application/zip")},
+    )
+    assert loaded.status_code == 200, loaded.text
+    bound = controller.bind_project_home(picked["token"], loaded.json()["generation"])
+    assert bound["ok"] is True
+    assert bound["home"] == {"folder": str(tmp_path), "brief_name": BRIEF_NAME}
 
 
 def test_a_natively_opened_file_binds_its_folder_for_the_session_its_load_produced(

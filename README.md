@@ -173,8 +173,11 @@ How the folder is found, and why nothing records it:
   section file, it looks in that file's folder for a `.basproject` whose
   project id matches the section's project (no subfolders, no shortcuts
   followed, an unreadable brief skipped). A section that never exported or
-  started from a brief belongs to no project yet and has no folder. Exporting
-  the brief beside an already-saved section finds the folder at once.
+  started from a brief belongs to no project yet and has no folder. Saving is
+  what links a section to its folder: exporting a brief stamps the project
+  into the open section but not into the file you saved earlier, so a section
+  saved before its first brief export joins the folder at its next Save (the
+  panel says so).
 - **No path is written into any file** — not the `.baspec`, not the brief —
   and the interface never sends one: it asks for a section by number, and a
   file you open is named to it only by a one-time token. So a project folder

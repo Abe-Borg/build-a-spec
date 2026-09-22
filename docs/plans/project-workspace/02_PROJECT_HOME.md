@@ -296,13 +296,19 @@ All recorded 2026-09-22, as built.
    "beside"), not merely under it — a nested path is an
    `outside_project_folder` 400 like `..`, an absolute name or a symlink out
    — and the resolved path is the one read.
-8. **Two discovery points beyond the spec's two.** A brief exported beside
-   the section's already-saved file finds the home at once (the natural
-   first-project order is save, then export next to it; waiting for an
-   unrelated save left the panel calling the section folderless), and the
-   first save of a section that arrived with a home (Next section →) opens
-   its dialog in the project folder so the next section lands beside its
-   brief by default. Both read only; neither writes the brief.
+8. **The first save of a homed section opens in the project folder, and a
+   brief export is NOT a discovery point.** A section that arrived with a
+   home (Next section →) opens its first Save dialog in the project folder,
+   so the next section lands beside its brief by default. The first cut also
+   bound the folder when a brief was exported beside the section's
+   already-saved file (the natural first-project order is save, then export
+   next to it). Codex caught the flaw on PR #176: the export stamps the
+   project link in the live session only, so a section saved before its
+   first export has no link on disk, and the folder bound at the export was
+   lost the next time that file was opened. As built, only a save (which
+   writes the link) or an open (which read it) binds a folder; after such an
+   export the panel's homeless line says to save once more, and that save
+   links the folder. Neither path writes the brief.
 9. **A save reports its `home`** (`_save_result` gains the key), adopted by
    the frontend only beside a bound target. After any brief export the
    frontend re-reads the doc payload: the export stamps the link, which was

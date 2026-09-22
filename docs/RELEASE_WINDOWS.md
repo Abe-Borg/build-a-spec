@@ -396,8 +396,11 @@ invisible to CI and expensive to the user.
       section into the same folder as the `.basproject`: the **Project**
       panel appears above Project facts, opens itself, names the folder and
       the brief with its "brief last updated" date, and marks the section
-      *current*. Export the brief into a folder where the section is already
-      saved instead: the panel lights up without another save.
+      *current*. Now the other order: in a fresh section, save first and
+      then export the brief into that same folder. The panel shows the
+      project with no folder and says to save once more; press Save and it
+      names the folder. Close the app and reopen that file: the folder is
+      found again (the save wrote the project into the file).
 - [ ] **Open a sibling by number.** From that section press *Next section →*,
       pick the next section, and save it: the first Save dialog opens in the
       project folder. Export the brief again, then press *Open* on the first

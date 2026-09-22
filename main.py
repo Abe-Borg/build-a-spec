@@ -772,10 +772,6 @@ class _CloseController:
                 False,
                 error="Return to your project before exporting a project brief.",
             )
-        # Sampled before the fetch and the dialog, like a save: a reset or an
-        # open while the dialog is up must not be handed this folder.
-        session = workspace.session
-        generation = session.generation
         try:
             payload, name = _fetch_backend_bytes(
                 self._backend,
@@ -806,22 +802,15 @@ class _CloseController:
             return self._save_result(
                 False, error="The project brief could not be written."
             )
-        # A brief written beside the section's own saved file makes that
-        # folder the project's home right now — the natural first-project
-        # order is "save the section, then export its brief next to it", and
-        # waiting for the next save to notice would leave the Project panel
-        # saying the section is in no folder while it sits beside its brief.
-        # A brief written anywhere else leaves the home alone: the section's
-        # file did not move.
-        own = str(getattr(session, "save_target", "") or "")
-        try:
-            beside = bool(own) and os.path.normcase(
-                os.path.dirname(os.path.abspath(own))
-            ) == os.path.normcase(os.path.dirname(written))
-        except (TypeError, ValueError):
-            beside = False
-        if beside:
-            self._discover_home_after_save(session, own, generation)
+        # Deliberately NOT a place the project folder is found (caught in
+        # review on PR #176, Codex). The export stamps the project link in
+        # the LIVE session only, so a section saved before its first export
+        # has no link in its file on disk — a folder bound here would
+        # vanish the next time that file is opened, taking the Project panel
+        # and sibling Open with it. The save that follows writes the link
+        # and finds the folder (``_discover_home_after_save``); an open finds
+        # it from a file that already carries the link. The panel says to
+        # save once more until then.
         return self._save_result(True, target=written)
 
     def open_file(self, kind: str = "project") -> dict[str, str] | None:

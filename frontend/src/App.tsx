@@ -2282,9 +2282,10 @@ export default function App() {
       try {
         const result = await api.save_project_brief();
         if (result?.ok) {
-          // Exporting stamps the project link, and a brief written beside
-          // this section's own file makes that folder its project home — so
-          // re-read both from the server rather than guess either here.
+          // Exporting stamps the project link server-side, so re-read it
+          // rather than guess here. It never binds the project folder: this
+          // section's saved file only carries the link after its next save,
+          // and that save is what finds the folder.
           refreshDoc();
           setProjectSectionsNonce((n) => n + 1);
         }

@@ -178,8 +178,9 @@ export default function ProjectPanel({
             </p>
           ) : (
             <p className="px-1 text-[10px] leading-relaxed text-ink-faint">
-              Not in a project folder — save this section beside its project brief to open
-              its sections from here.
+              Not in a project folder yet — saving this section beside its project brief is
+              what links them (save again if you exported the brief since your last save), and
+              then its sections open from here.
             </p>
           )}
           {unnamed && (

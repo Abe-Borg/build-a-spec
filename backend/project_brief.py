@@ -370,6 +370,117 @@ def clean_next_section_header(number: Any, title: Any) -> tuple[str, str]:
     return folded_number, folded_title
 
 
+# ---------------------------------------------------------------------------
+# The project folder (Project workspace Phase 2): a brief read FROM DISK
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BriefOnDisk:
+    """The identity and section registry of a ``.basproject`` read from disk.
+
+    Only what folder discovery and the Project panel need: the project id
+    (the join key), its name, when it was last written, and the registry.
+    ``parse_project_brief`` would also rebuild the research profile and
+    re-bound every reference body — megabytes of work per panel refresh for
+    fields nothing here renders — so this reads the envelope and sanitizes
+    the registry the way ``parse_project_brief`` does, and stops.
+    """
+
+    path: str
+    project_id: str
+    name: str
+    updated_at: str
+    sections: tuple[dict[str, Any], ...]
+
+
+def read_brief_on_disk(path: str) -> BriefOnDisk | None:
+    """``path`` as a project brief, or ``None`` — never raises.
+
+    Refused, silently (a folder is shared data, and one bad file must never
+    stop the rest of it being read): a symlink (the retention module's
+    posture — links are never followed), anything that is not a regular
+    file, a file past :data:`MAX_PROJECT_BRIEF_BYTES` (judged from ``stat``
+    before a byte is read), anything that is not a brief of this format with
+    a valid project id. A malformed section record is dropped rather than
+    failing the brief, as ``parse_project_brief`` drops it.
+    """
+    try:
+        if os.path.islink(path) or not os.path.isfile(path):
+            return None
+        if os.path.getsize(path) > MAX_PROJECT_BRIEF_BYTES:
+            return None
+        with open(path, "rb") as handle:
+            data = handle.read(MAX_PROJECT_BRIEF_BYTES + 1)
+        parsed = parse_brief_json(data)
+    except (OSError, ValueError):
+        # ProjectBriefError is a ValueError: a bad encoding, bad JSON, a
+        # duplicate key, a non-finite number, or past the cap mid-read.
+        return None
+    if parsed.get("kind") != PROJECT_BRIEF_KIND:
+        return None
+    if parsed.get("format") != PROJECT_BRIEF_FORMAT:
+        return None
+    project_id = str(parsed.get("project_id", "") or "").strip()
+    if not _PROJECT_ID_RE.fullmatch(project_id):
+        return None
+    raw_sections = parsed.get("sections") or []
+    sections: list[dict[str, Any]] = []
+    if isinstance(raw_sections, list):
+        for entry in raw_sections[:MAX_LINK_SECTIONS]:
+            record = sanitize_section_record(entry)
+            if record is not None:
+                sections.append(record)
+    return BriefOnDisk(
+        path=path,
+        project_id=project_id,
+        name=_one_line(parsed.get("name"), 160) or "Untitled project",
+        updated_at=_one_line(parsed.get("updated_at"), 40),
+        sections=tuple(sections),
+    )
+
+
+def merge_section_registries(
+    primary: Iterable[dict[str, Any]],
+    secondary: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Two section registries as one, joined by (whitespace-folded) number.
+
+    ``primary`` is the session's link, ``secondary`` the brief on disk. Per
+    number the record with the LATER ``exported_at`` wins — the stamps are
+    ISO-8601 UTC strings written by one clock format, so they compare
+    lexically — and a tie goes to ``primary``: the link is what this session
+    last agreed with. A winner with no ``file_name`` borrows the other
+    record's, so a section exported before it was ever saved still resolves
+    to the file a later export named. Order is ``primary``'s, then the
+    ``secondary``-only records in theirs. Pure: never mutates its inputs.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for source_rank, records in ((0, primary), (1, secondary)):
+        for record in records or []:
+            if not isinstance(record, dict):
+                continue
+            number = _fold(record.get("number"))
+            if not number or number == "(unnumbered)":
+                continue
+            candidate = dict(record)
+            existing = merged.get(number)
+            if existing is None:
+                merged[number] = candidate
+                order.append(number)
+                continue
+            # Only a strictly later export from the secondary registry wins.
+            later = str(candidate.get("exported_at") or "") > str(
+                existing.get("exported_at") or ""
+            )
+            winner, other = (candidate, existing) if later and source_rank else (existing, candidate)
+            if not winner.get("file_name") and other.get("file_name"):
+                winner = {**winner, "file_name": other["file_name"]}
+            merged[number] = winner
+    return [merged[number] for number in order]
+
+
 def brief_bytes(brief: ProjectBrief) -> bytes:
     payload = json.dumps(
         brief.to_dict(), ensure_ascii=False, indent=2, allow_nan=False

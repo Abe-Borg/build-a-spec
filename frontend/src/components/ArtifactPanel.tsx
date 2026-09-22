@@ -12,6 +12,7 @@ import type {
   ImportNotice,
   ProjectBriefManifest,
   ProjectFact,
+  ProjectHome,
   ProjectLink,
   ImportReport,
   LintIssue,
@@ -36,6 +37,7 @@ import type {
 } from "../types";
 import FollowUpsPanel from "./FollowUpsPanel";
 import ProjectFactsPanel from "./ProjectFactsPanel";
+import ProjectPanel from "./ProjectPanel";
 import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
 import {
   ORIGINAL_UPLOAD_URL,
@@ -100,6 +102,15 @@ interface Props {
   /** Start the next section of this project from this session (v1.20.0):
    *  App runs the save gate, then the one-transaction seed. */
   onStartNextSection: (opts: NextSectionRequest) => void;
+  /** The project folder this section's file lives in (Project workspace
+   *  Phase 2), or null. Server-owned — DocPayload.project_home. */
+  projectHome: ProjectHome | null;
+  /** Open a sibling section by number: App runs the save gate, then the
+   *  server resolves the number to a file beside the brief. */
+  onOpenSection: (number: string) => void;
+  /** Bumped after a save or a brief export so the Project panel re-reads
+   *  the folder. */
+  projectSectionsNonce: number;
   lintIssues: LintIssue[];
   standards: StandardInfo[];
   profileComplete: boolean;
@@ -199,6 +210,7 @@ interface Props {
     openItems: number;
     followups: number;
     projectFacts: number;
+    projectPanel: number;
   };
 }
 
@@ -356,6 +368,9 @@ export default function ArtifactPanel({
   onSupersedeProjectFact,
   onExportProjectBrief,
   onStartNextSection,
+  projectHome,
+  onOpenSection,
+  projectSectionsNonce,
   lintIssues,
   standards,
   profileComplete,
@@ -1706,6 +1721,17 @@ export default function ArtifactPanel({
         openNonce={drawerNonces?.followups}
         onSetStatus={onSetFollowupStatus}
         onJump={scrollToElement}
+      />
+      <ProjectPanel
+        link={projectLink}
+        home={projectHome}
+        currentNumber={doc?.section.number ?? ""}
+        busy={busy || !!fileLoading}
+        tutorialActive={tutorialActive}
+        refreshNonce={projectSectionsNonce}
+        openNonce={drawerNonces?.projectPanel}
+        onOpenSection={onOpenSection}
+        onNextSection={() => setNextSectionOpen(true)}
       />
       <ProjectFactsPanel
         items={projectFacts}

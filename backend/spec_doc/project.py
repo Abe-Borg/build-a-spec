@@ -631,6 +631,14 @@ def load_project(data: Any, session) -> None:
     # callers still pass.
     if hasattr(session, "save_target"):
         session.save_target = ""
+    # The project folder the OUTGOING session lived in, for the same reason
+    # and with the same guard. A file opened through the native shell is
+    # re-bound afterwards (``bind_project_home``), and the open-section route
+    # re-assigns its home under the commit's own guard — both deliberately
+    # AFTER this clear, so a load can never inherit a folder it was not
+    # opened from.
+    if hasattr(session, "project_home"):
+        session.project_home = None
     # Semantic/legacy JSON never contains source bytes. Clear them only after
     # the incoming project's load-bearing content validates. A .baspec caller
     # attaches its separately validated bytes after this semantic commit.

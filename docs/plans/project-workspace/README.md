@@ -46,7 +46,7 @@ closed without merging is reconciled back to `not started` with a note.
 |---|---|---|---|---|
 | plan | `../PROJECT_WORKSPACE_2026-09-22.md` | **complete** | PR #173 | assessment + plan; four Codex findings folded into Phases 3–4 |
 | 1 | (in the plan file) | **complete** | `b8bac2f` + `28bad83` (PR #174) | Next section →; **cut as v1.20.0** (merged; tag not yet pushed — see "Release policy") |
-| handoff | this folder | in review | PR #175 | the program folder, the specs, the release policy |
+| handoff | this folder | **complete** | `aa119fa` (PR #175, merged `5b25df9`) | the program folder, the specs, the release policy |
 | 2 | `02_PROJECT_HOME.md` | not started | | **next up.** Desktop shell only; the browser keeps the file relay |
 | 3 | `03_WRITE_BACK_MERGE.md` | not started | | needs Phase 2's `project_home` for the automatic trigger; the merge itself is pure and can be built first behind the explicit action |
 | 4 | `04_HARVEST.md` | not started | | independent of 2–3; may run beside them |

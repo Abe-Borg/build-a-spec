@@ -245,3 +245,87 @@ both capabilities; `tour.test.ts`'s anchor and capability contracts.
 ## Deviations from the plan
 
 (Record each as-built deviation here, dated, with the reason.)
+
+All recorded 2026-09-22, as built.
+
+1. **The bind is checked against the LOAD's generation, not one sampled
+   before the dialog.** `load_project` calls `invalidate_model_turn()`, so
+   the load itself advances the generation and a pre-dialog sample would
+   refuse every bind. `bind_project_home(token, generation)` takes the
+   generation the load-file response reported (the frontend passes it); a
+   session replaced since the load is never handed the folder. Absent or
+   malformed, the bind samples its own, which still guards its folder read.
+   The token is single-use, and `open_file` mints one only for a PROJECT
+   open (`""` for docx / reference / template / brief picks) — only a
+   project file can live in a project folder.
+2. **The registry merge is "newest `exported_at` wins, ties to the link",
+   not "the link wins".** The spec's reason ("because it is newer") is
+   usually but not always true — a sibling can export after this session
+   loaded — so the reason became the rule. A winner with no `file_name`
+   borrows the other record's. It is ONE function
+   (`project_brief.merge_section_registries`, via
+   `sessions.project_registry`) that both the listing and open-section's
+   "link first, then the on-disk brief" resolution read, so the row clicked
+   and the file opened cannot disagree. Phase 3's D4 registry rule is the
+   same one.
+3. **The open section is always a row.** A section started with Next
+   section → is in no registry until it exports a brief; the listing adds a
+   synthetic `in_registry: false` current row, every row carries
+   `in_registry`, and "Not in the registry" excludes this section's own
+   saved file. The response also carries `warnings` (an unreadable brief,
+   an unlistable folder). An unnumbered section cannot be a row, and the
+   panel says so.
+4. **Rows are listed without a home** (from the link), with no Open and no
+   presence verdict, so the homeless line reads "…to open its sections from
+   here" instead of "…to see its sections here", which would have
+   contradicted the rows beneath it.
+5. **Desktop shell or tour.** "Renders when linked or homed" and "a browser
+   session shows no panel" are reconciled by requiring the shell bridge
+   (`bind_project_home`, re-checked on `pywebviewready` because pywebview
+   injects its api asynchronously) unless a tour is running.
+6. **open-section answers with the load-file payload**
+   (`{ok, chat, …doc_payload}` + `section`, `home_kept`), not a session
+   bundle — it runs the load-file path, so it gives the load-file answer —
+   and the frontend shares one apply path with Open project
+   (`applyLoadedProject`) rather than `applySessionBundle`.
+7. **Refusal vocabulary, and "inside" means "beside".** An unknown number is
+   404 `section_not_found`; a record with no file name, a missing file, or
+   one that vanished before the read is 404 `section_file_missing`; a blank
+   number is 400; a file past `MAX_PACKAGE_BYTES` is 413. The containment
+   check requires the resolved path to sit DIRECTLY in the folder (D1:
+   "beside"), not merely under it — a nested path is an
+   `outside_project_folder` 400 like `..`, an absolute name or a symlink out
+   — and the resolved path is the one read.
+8. **Two discovery points beyond the spec's two.** A brief exported beside
+   the section's already-saved file finds the home at once (the natural
+   first-project order is save, then export next to it; waiting for an
+   unrelated save left the panel calling the section folderless), and the
+   first save of a section that arrived with a home (Next section →) opens
+   its dialog in the project folder so the next section lands beside its
+   brief by default. Both read only; neither writes the brief.
+9. **A save reports its `home`** (`_save_result` gains the key), adopted by
+   the frontend only beside a bound target. After any brief export the
+   frontend re-reads the doc payload: the export stamps the link, which was
+   previously left stale until the next unrelated payload.
+10. **The tour step opens the panel** through a new `projectPanel` drawer
+    name (the `project-facts` step's idiom), and its body says why no row is
+    current: the practice section's registry record is 21 13 13 — the
+    section the facts fixture records its facts in — while its header is
+    blank for the lint lesson.
+11. **The gate's title** for open-section is "Open another section of this
+    project?" — the open-project button labels under a title that does not
+    say "a different project".
+12. **Not done here:** binding a home from a `.basproject` picked in New
+    session → New section in an existing project. The seeded section finds
+    its folder on its first save beside the brief; binding it at the seed
+    is a small follow-up if the first-save default is not enough.
+13. **The busy refusal is checked twice, and so is the size.** The spec's
+    one `busy_reasons` check on entry is a window, not a gate: staging runs
+    for seconds on a worker thread, a chat turn or a run can start in that
+    window, and `load_project` invalidates whatever turn owns the session —
+    so the swap could kill a reply that began after the click. The check is
+    repeated inside the commit's own guard (`_load_project_bytes`'s
+    `refuse_if_busy`, open-section only; load-file keeps its historical
+    posture). The section file's size is likewise judged before the read and
+    again on the bytes read, so a file that grows past `MAX_PACKAGE_BYTES`
+    between the two is still a 413.

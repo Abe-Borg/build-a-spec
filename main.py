@@ -19,6 +19,8 @@ import secrets
 import socket
 import sys
 import tempfile
+import uuid
+from collections import OrderedDict
 from pathlib import Path
 import threading
 import time
@@ -73,6 +75,12 @@ _PROJECT_BRIEF_OPEN_FILE_TYPES = (
     "All files (*.*)",
 )
 _PROJECT_BRIEF_FALLBACK_NAME = "buildaspec-project.basproject"
+# How many recent native opens ``open_file`` remembers by token (Project
+# workspace Phase 2). A token names the path of a file the user just picked
+# so the frontend can ask the shell to bind that file's project folder
+# without ever holding the path itself; eight is far more than a window has
+# in flight at once, and the oldest is evicted first.
+_RECENT_OPENS_LIMIT = 8
 _OPEN_FILE_TYPES_BY_KIND = {
     "docx": _DOCX_OPEN_FILE_TYPES,
     "reference": _REFERENCE_OPEN_FILE_TYPES,
@@ -443,7 +451,9 @@ class _CloseController:
 
     The bridge also exposes ``save_project`` (the in-app save gate),
     ``open_file`` (native Open/Import, since HTML file inputs are unreliable
-    in the webview), and ``open_external_link`` (routes outbound hyperlink
+    in the webview), ``bind_project_home`` (the project folder of a file
+    ``open_file`` just read — the frontend names the file by an opaque token,
+    never a path), and ``open_external_link`` (routes outbound hyperlink
     clicks to the system browser instead of the app window). Only these
     ``js_api`` methods are public; everything else is underscore-prefixed so
     pywebview does not expose it to JavaScript.
@@ -494,6 +504,13 @@ class _CloseController:
         self._allow_close = False
         self._prompting = False
         self._close_reason = "unsaved"
+        # token -> (absolute path, dialog kind) for the last few native opens
+        # (see _RECENT_OPENS_LIMIT). The path never leaves this object: the
+        # frontend holds only the token and hands it back to
+        # bind_project_home. js_api calls can arrive on different threads,
+        # hence the lock.
+        self._recent_opens: OrderedDict[str, tuple[str, str]] = OrderedDict()
+        self._recent_opens_lock = threading.Lock()
 
     def _bind(self, window) -> None:
         self._window = window
@@ -749,11 +766,16 @@ class _CloseController:
             )
         from backend import sessions
 
-        if sessions.get_workspace().scope != "original":
+        workspace = sessions.get_workspace()
+        if workspace.scope != "original":
             return self._save_result(
                 False,
                 error="Return to your project before exporting a project brief.",
             )
+        # Sampled before the fetch and the dialog, like a save: a reset or an
+        # open while the dialog is up must not be handed this folder.
+        session = workspace.session
+        generation = session.generation
         try:
             payload, name = _fetch_backend_bytes(
                 self._backend,
@@ -784,6 +806,22 @@ class _CloseController:
             return self._save_result(
                 False, error="The project brief could not be written."
             )
+        # A brief written beside the section's own saved file makes that
+        # folder the project's home right now — the natural first-project
+        # order is "save the section, then export its brief next to it", and
+        # waiting for the next save to notice would leave the Project panel
+        # saying the section is in no folder while it sits beside its brief.
+        # A brief written anywhere else leaves the home alone: the section's
+        # file did not move.
+        own = str(getattr(session, "save_target", "") or "")
+        try:
+            beside = bool(own) and os.path.normcase(
+                os.path.dirname(os.path.abspath(own))
+            ) == os.path.normcase(os.path.dirname(written))
+        except (TypeError, ValueError):
+            beside = False
+        if beside:
+            self._discover_home_after_save(session, own, generation)
         return self._save_result(True, target=written)
 
     def open_file(self, kind: str = "project") -> dict[str, str] | None:
@@ -802,10 +840,17 @@ class _CloseController:
         ``kind`` selects the dialog's file filter (``"project"`` for
         ``.baspec``/``.json``, ``"docx"`` for a master import, ``"reference"``
         for an attachment, which accepts several types); an unknown kind
-        degrades to the project filter. Returns ``{"name", "data_b64"}`` for
-        the picked file, or ``None`` when the dialog is cancelled or the read
-        fails — the frontend then does nothing, exactly like a cancelled HTML
-        picker.
+        degrades to the project filter. Returns ``{"name", "data_b64",
+        "token"}`` for the picked file, or ``None`` when the dialog is
+        cancelled or the read fails — the frontend then does nothing,
+        exactly like a cancelled HTML picker.
+
+        ``token`` (Project workspace Phase 2) is an opaque name for the
+        picked path, minted only for a PROJECT open — the one kind that can
+        live in a project folder — and ``""`` otherwise. The frontend hands
+        it to :meth:`bind_project_home` after the load succeeds, so the
+        project folder is found without the path ever reaching JavaScript.
+        Existing callers simply ignore the key.
         """
         if self._window is None or not self._trusted_page():
             return None
@@ -836,16 +881,86 @@ class _CloseController:
             return None
         if not self._trusted_page():
             return None
+        token = ""
+        if kind == "project":
+            token = self._remember_open(os.path.abspath(os.fspath(target)), kind)
         return {
             "name": os.path.basename(os.fspath(target)),
             "data_b64": base64.b64encode(payload).decode("ascii"),
+            "token": token,
         }
+
+    def bind_project_home(self, token: str = "", generation: Any = None) -> dict[str, Any]:
+        """Bind the session to the project folder of a file ``open_file`` read.
+
+        The frontend calls this right after ``/api/project/load-file``
+        succeeds for a file picked through the native Open dialog, passing
+        the token ``open_file`` returned and the ``generation`` the load
+        response reported. The token resolves to the picked path (a token is
+        single-use, and only a project open mints one); the folder beside it
+        is searched for this project's brief (``discover_project_home``) off
+        the guard; the answer is stored under it only if the session is
+        still the one that load produced — a reset or another open since
+        then replaced it, and the replacement never asked to live in this
+        folder (the ``remember_project_save_target`` posture).
+
+        ``generation`` is the LOAD's, not one sampled before the dialog: the
+        load itself advances the generation, so a pre-dialog sample would
+        refuse every bind. Absent or malformed, the generation is sampled
+        here, which still protects the folder read itself.
+
+        Returns ``{"ok", "home", "error"}`` — ``home`` is ``{"folder",
+        "brief_name"}`` or ``None`` (the file is not beside its project's
+        brief, or the project has no brief yet).
+        """
+        refusal: dict[str, Any] = {"ok": False, "home": None}
+        if not self._trusted_page():
+            return {**refusal, "error": "This page cannot open files."}
+        with self._recent_opens_lock:
+            entry = self._recent_opens.pop(str(token or ""), None)
+        if entry is None:
+            return {**refusal, "error": "That file is no longer known to this window."}
+        path, kind = entry
+        if kind != "project":
+            return {**refusal, "error": "Only a project file lives in a project folder."}
+        from backend import sessions
+
+        workspace = sessions.get_workspace()
+        if workspace.scope != "original":
+            return {**refusal, "error": "Return to your project before binding a folder."}
+        session = workspace.session
+        expected = (
+            generation
+            if isinstance(generation, int) and not isinstance(generation, bool)
+            else session.generation
+        )
+        if session.generation != expected:
+            return {
+                **refusal,
+                "error": "The session changed before its project folder could be read.",
+            }
+        home = sessions.discover_project_home(session, path)
+        if not sessions.remember_project_home(session, home, generation=expected):
+            return {
+                **refusal,
+                "error": "The session changed before its project folder could be read.",
+            }
+        return {"ok": True, "home": sessions.project_home_payload(session), "error": ""}
 
     # --- internals ---------------------------------------------------------
     def _force_close(self) -> None:
         self._allow_close = True
         if self._window is not None:
             self._window.destroy()
+
+    def _remember_open(self, path: str, kind: str) -> str:
+        """Mint a token for a path ``open_file`` just read (bounded, oldest out)."""
+        token = uuid.uuid4().hex
+        with self._recent_opens_lock:
+            self._recent_opens[token] = (path, kind)
+            while len(self._recent_opens) > _RECENT_OPENS_LIMIT:
+                self._recent_opens.popitem(last=False)
+        return token
 
     @staticmethod
     def _save_result(
@@ -854,6 +969,7 @@ class _CloseController:
         cancelled: bool = False,
         error: str = "",
         target: str = "",
+        home: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """The one shape every save path returns.
 
@@ -861,6 +977,11 @@ class _CloseController:
         them differently: backing out of a Save dialog is a decision and
         deserves silence, while a write that failed needs to say so — and the
         two are indistinguishable once both are just ``False``.
+
+        ``home`` is the project folder the session was found to live in by
+        this save (``{"folder", "brief_name"}``), meaningful only beside a
+        bound ``target``: an unbound target means the session was replaced
+        mid-save, and its home is the replacement's business.
         """
         return {
             "ok": bool(ok),
@@ -868,7 +989,31 @@ class _CloseController:
             "error": error,
             "target": target,
             "name": os.path.basename(target) if target else "",
+            "home": home,
         }
+
+    @staticmethod
+    def _discover_home_after_save(
+        session, written: str, generation: int
+    ) -> dict[str, str] | None:
+        """Find (or lose) the project folder for the file just written.
+
+        Runs only for a bound target — ``written`` is ``""`` when the
+        generation guard refused the save target, and then the session was
+        replaced and must not be touched. The disk read happens here, on the
+        js_api thread, never under the session guard; the store is
+        generation-checked with the same sample the save used. A save
+        outside the project folder is an honest ``None``: the section no
+        longer lives beside its brief.
+        """
+        if not written:
+            return None
+        from backend import sessions
+
+        home = sessions.discover_project_home(session, written)
+        if not sessions.remember_project_home(session, home, generation=generation):
+            return None
+        return sessions.project_home_payload(session)
 
     def _save_project_file(self, *, force_dialog: bool = False) -> dict[str, Any]:
         """Write the current session to a project file.
@@ -928,20 +1073,33 @@ class _CloseController:
         if remembered:
             written = self._resolved_write(remembered, payload)
             if written:
+                bound = self._bind_save_target(session, written, generation)
                 return self._save_result(
                     True,
-                    target=self._bind_save_target(
-                        session, written, generation
-                    ),
+                    target=bound,
+                    home=self._discover_home_after_save(session, bound, generation),
                 )
             # Fall through to the dialog: the remembered file is no longer
             # writable, so asking is the only way forward that saves anything.
 
+        # Where the dialog opens: the folder this session already saves into,
+        # else — for the first save of a section that arrived with a project
+        # home (Next section → carries it) — the project folder, so the next
+        # section's file lands beside its brief by default instead of
+        # wherever the OS last pointed.
+        home = getattr(session, "project_home", None)
+        start_folder = (
+            os.path.dirname(current)
+            if current
+            else str(home.get("folder") or "")
+            if isinstance(home, dict)
+            else ""
+        )
         target = self._window.create_file_dialog(
             webview.FileDialog.SAVE,
             save_filename=filename,
             file_types=_PROJECT_SAVE_FILE_TYPES,
-            **({"directory": os.path.dirname(current)} if current else {}),
+            **({"directory": start_folder} if start_folder else {}),
         )
         if not target:
             return self._save_result(
@@ -961,9 +1119,11 @@ class _CloseController:
                 False,
                 error="That file could not be written. Try another location.",
             )
+        bound = self._bind_save_target(session, written, generation)
         return self._save_result(
             True,
-            target=self._bind_save_target(session, written, generation),
+            target=bound,
+            home=self._discover_home_after_save(session, bound, generation),
         )
 
     @staticmethod

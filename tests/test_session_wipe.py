@@ -69,6 +69,10 @@ _STATE_PROBES = {
     "_active_turn_token": lambda s: s._active_turn_token,
     "stop_requested": lambda s: s.stop_requested.is_set(),
     "save_target": lambda s: s.save_target,
+    # The project folder the section lived in (Project workspace Phase 2).
+    # A home that survived a reset would list — and open by name — another
+    # project's sections beside a fresh session.
+    "project_home": lambda s: s.project_home,
 }
 
 # Fields a reset deliberately does NOT restore, each with the reason it is
@@ -200,6 +204,12 @@ def _dirty(session: SessionState) -> None:
     session._active_turn_token = object()
     session.stop_requested.set()
     session.save_target = "/home/abe/projects/the-previous-project.baspec"
+    session.project_home = {
+        "folder": "/home/abe/projects",
+        "brief_path": "/home/abe/projects/the-previous-project.basproject",
+        "brief_name": "the-previous-project.basproject",
+        "project_id": "a" * 32,
+    }
 
 
 def test_every_session_field_is_classified_as_wiped_or_kept():

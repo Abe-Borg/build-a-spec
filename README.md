@@ -133,6 +133,71 @@ sheet, a previous project's section, or meeting notes.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
 
+## Project workspace (in progress)
+
+The project-workspace program (`docs/plans/project-workspace/`) makes a
+project a first-class thing: one project folder, sections that hang off it,
+switching between them in one click. Its phases land as ordinary pull
+requests and ship together in one release at the end; until then this
+section says what `master` already does beyond v1.20.0.
+
+### The project has a home (Phase 2)
+
+**A project lives in one folder**: its project brief (`.basproject`) beside
+one saved section file (`.baspec`) per section. The desktop app finds that
+folder on its own — from a section you save there, or one you open from there
+with Open — and shows it in a **Project** panel directly above Project facts:
+
+- **Where the project lives**, and when its brief was last written.
+- **Every section the project has drafted** — number, title, whether it was
+  exported issue-ready, when, and the facts and research rounds it recorded —
+  joined with which files are actually in the folder. The section you are in
+  is marked **current**; any other whose file is present has **Open**, and one
+  whose file is missing says "file not found beside the brief". Section files
+  in the folder that the brief does not list appear on a "Not in the
+  registry" line (open those with the ordinary Open button). A section that is
+  not in the brief yet still shows as the current row, saying it joins when
+  the section exports one.
+- **Open** offers to save the section you are leaving (the same Save / Open
+  without saving / Cancel prompt as Open), then opens the sibling by its
+  number: the server looks the number up in the project's registry, refuses a
+  file name that resolves outside the folder, and runs the exact project-load
+  path Open uses.
+- **Next section →** at the bottom is the v1.20.0 dialog. The new section
+  carries the folder with it, and its first Save opens in that folder, so it
+  lands beside the brief by default.
+
+How the folder is found, and why nothing records it:
+
+- The folder is **discovered, never declared**. When the app saves or opens a
+  section file, it looks in that file's folder for a `.basproject` whose
+  project id matches the section's project (no subfolders, no shortcuts
+  followed, an unreadable brief skipped). A section that never exported or
+  started from a brief belongs to no project yet and has no folder. Exporting
+  the brief beside an already-saved section finds the folder at once.
+- **No path is written into any file** — not the `.baspec`, not the brief —
+  and the interface never sends one: it asks for a section by number, and a
+  file you open is named to it only by a one-time token. So a project folder
+  can be moved or shared whole, and the next open finds it wherever it now
+  is. The folder is forgotten on New session and on opening another project,
+  exactly like where Save writes.
+- **A browser (dev) session keeps the file relay** — Open, and New session →
+  New section in an existing project — and shows no Project panel: a browser
+  never knows a folder. The tutorial's practice copy shows the panel without
+  a folder, which is what a section looks like before it is saved beside its
+  brief.
+- This phase **reads** the brief in the folder and never writes it; the
+  panel's "brief last updated" date is how a stale one shows. Keeping the
+  brief current on every save is the next phase.
+
+Routes: `GET /api/project/sections` (the panel's listing — the section's
+project link joined with the brief in the folder, the newest export winning
+per section, plus which files are present and which are unregistered) and
+`POST /api/project/open-section {number}` (409 in a tour, while anything
+runs, or with no project folder; 404 for an unknown number or a missing file;
+400 for a file name outside the folder). The document payload gains
+`project_home`.
+
 ## Shipped in v1.20.0 (Next section in one click)
 
 **The project brief was a file relay.** Everything a section pays for could
@@ -1267,6 +1332,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/project-facts (+ {pid}, {pid}/supersede),
                          /api/project/brief (+ manifest/inspect/start),
                          /api/project/next-section (GET options / POST seed),
+                         /api/project/sections + /api/project/open-section
+                         (the project folder, Project workspace Phase 2),
                          /api/release-notes (+ seen),
                          /api/session/unsaved|bundle, /api/usage,
                          /api/update/check|install,

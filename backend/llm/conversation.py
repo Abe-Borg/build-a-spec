@@ -446,6 +446,21 @@ class SessionState:
     # path it was written from says nothing about where its next reader
     # should save it.
     save_target: str = ""
+    # The project folder this section's file lives in (Project workspace
+    # Phase 2): ``{"folder", "brief_path", "brief_name", "project_id"}`` —
+    # the folder holding this section's ``.baspec`` beside a ``.basproject``
+    # whose project id matches ``project_link``. DISCOVERED, never declared:
+    # ``sessions.discover_project_home`` is the only thing that computes it,
+    # from a file the native shell just saved or opened, and
+    # ``sessions.remember_project_home`` the only thing that stores it.
+    #
+    # The ``save_target`` posture exactly, for the same two reasons: reset
+    # and project load clear it (a folder listing that outlived its session
+    # would offer another project's sections), and it is never persisted — a
+    # folder can be moved or shared whole precisely because no file names
+    # where it was. The one path that persists is the registry's BASENAME
+    # (``section_record.file_name``), which it already did.
+    project_home: dict[str, str] | None = None
 
     def import_is_unstructured(self) -> bool:
         """True when the ACTIVE document came from an import with no
@@ -1575,6 +1590,11 @@ class SessionState:
         # been saved, so its first Save must ask again — and, more to the
         # point, must not silently overwrite the project just discarded.
         self.save_target = ""
+        # The folder the OUTGOING section lived in. A fresh session belongs
+        # to no project folder until a save or an open discovers one; the
+        # routes that carry a home across a seed (next-section) re-assign it
+        # after this, under the same guard, on purpose.
+        self.project_home = None
         self.generation += 1
 
     def start_from_template(

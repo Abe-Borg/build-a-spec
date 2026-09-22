@@ -57,7 +57,18 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            same route, same guards), writes a fresh
                            mkstemp-unique file under <temp>/BuildASpec —
                            never a timestamp name, Word holds the previous
-                           one open — and os.startfile()s it (v1.15.0)
+                           one open — and os.startfile()s it (v1.15.0);
+                           Project workspace Phase 2: open_file mints an opaque
+                           token for a PROJECT open (bounded _recent_opens, 8,
+                           oldest out; "" for any other kind), js_api
+                           bind_project_home(token, generation) binds that
+                           file's folder for the session the load produced
+                           (single-use token, the LOAD's generation), every
+                           save discovers (or loses) the home after
+                           _bind_save_target and reports it as the save
+                           result's `home`, the first save of a homed section
+                           opens its dialog in the project folder, and a brief
+                           exported beside the saved section finds the home
 backend/
   settings.py              models (claude-sonnet-5 default), SDK transport
                            (SDK_MAX_RETRIES / API_TIMEOUT_SECONDS — the SDK's
@@ -116,7 +127,20 @@ backend/
                            ?status_only=1 on GET /api/doc/capabilities;
                            v1.20.0 adds GET/POST /api/project/next-section
                            (the brief built in memory from THIS session and
-                           seeded under the SAME guard — no file relay)
+                           seeded under the SAME guard — no file relay);
+                           Project workspace Phase 2 extracts
+                           _load_project_bytes (the ONE staged load: staging,
+                           the one-guard commit with its lease + generation
+                           re-checks, the _doc_payload offload) out of
+                           load-file, and adds GET /api/project/sections
+                           (plain def: link/home snapshot under the guard,
+                           the brief + folder read after it) and POST
+                           /api/project/open-section {number} (in the lease
+                           middleware's guarded list; resolves the number
+                           through sessions.resolve_section_file, re-assigns
+                           project_home inside the commit's guard when the
+                           file belongs to the same project) + project_home on
+                           _doc_payload + the home carried across next-section
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides −
@@ -428,7 +452,14 @@ backend/
                            reference docs (+content_fingerprint), facts (all
                            statuses) and the section registry — NEVER the
                            transcript, the document, figures, QC, follow-ups,
-                           source DOCX or suppressed standards
+                           source DOCX or suppressed standards. Project
+                           workspace Phase 2 adds read_brief_on_disk (the
+                           envelope + sanitized registry of a brief in the
+                           project folder, never raising: symlink / non-file /
+                           past the cap / wrong kind or format / bad id → None)
+                           and merge_section_registries (by number, newest
+                           exported_at wins, ties to the link, a blank
+                           file_name borrowed from the other record; pure)
   suggestions.py           [Batch 9] model-driven reply chips: MAX_PROMPTS/
                            MAX_PROMPT_CHARS, SuggestError, validate_prompts (strict,
                            fold-whitespace/dedupe/cap; empty list valid) +
@@ -474,7 +505,9 @@ backend/
                            module) and the practice-copy builders (blank /
                            detached / structural / review / media) — all
                            bundled and deterministic, no model call anywhere
-                           in the tutorial
+                           in the tutorial; the structural copy also seeds a
+                           project_link (TUTORIAL_PROJECT_ID; 21 13 13 + 21 30
+                           00, no home) for the Project panel step
   sessions.py              SessionState (history + DocumentStore
                            + SpecModule + discipline (Batch 10, session-level
                            like module) + ResearchRunner + AuditRunner + QCRunner
@@ -496,7 +529,17 @@ backend/
                            project_save_target + remember_project_save_target
                            (where this session already saved itself — reset and
                            project load clear it, and nothing else establishes
-                           it)
+                           it); Project workspace Phase 2 adds the project
+                           folder: find_project_home / discover_project_home
+                           (the ONE computation — *.basproject beside the
+                           anchor, name order, no symlinks, first id match),
+                           remember_project_home (guard + generation + link
+                           re-check — the ONE store), project_home_payload,
+                           section_file_path (realpath must sit DIRECTLY in
+                           the folder, else ProjectFolderEscape),
+                           project_registry (link ∪ brief on disk — the one
+                           derivation the panel and open-section both read),
+                           project_sections_listing, resolve_section_file
   spec_modules/base.py     [PORT: Spec Critic src/modules/base.py]
                            frozen SpecModule (catalog, playbook, prompt slots, lint
                            vocabulary, dormant research dimensions); import-time
@@ -734,7 +777,11 @@ backend/
                            block, the *_project_fact_if_idle panel helpers,
                            and start_from_brief — the seed transaction
                            (start_from_template's shape: reset, then install
-                           every carried asset under one lock acquisition)
+                           every carried asset under one lock acquisition);
+                           Project workspace Phase 2 adds
+                           SessionState.project_home (the save_target posture:
+                           local-only, cleared by _reset_while_locked and
+                           load_project, never persisted)
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -752,7 +799,13 @@ frontend/src/
                            panel-button click in the chat window); Final QC follows
                            its chatty SSE log locally, reconciles milestone
                            snapshots, reconnects unexpected closes while running
-                           or settling, and auto-expands once on successful start
+                           or settling, and auto-expands once on successful start;
+                           Project workspace Phase 2: projectHome (from the doc
+                           payload and a save's `home`), the open-section save
+                           gate kind + requestOpenSection/doOpenSection,
+                           applyLoadedProject (the ONE apply for Open and the
+                           panel's Open), and the nativeOpenTokens WeakMap +
+                           bindNativeProjectHome after a native open's load
   lib/api.ts               streamChat async generator; doc/undo/redo/edit/project;
                            draftFull; key status/delete/test; usage; Batch 4 qc
                            start/status/stream/apply/dismiss + readiness; Batch 5
@@ -983,7 +1036,10 @@ frontend/src/
                            trace runs, the bundle; a SIBLING of the settings
                            backdrop) / FollowUpsPanel (v1.16.0 "Waiting on
                            you") / ProjectFactsPanel (v1.17.0 "Project
-                           facts") / HelpModal (the five help topics + the
+                           facts") / ProjectPanel (Project workspace Phase 2
+                           "Project" — the folder, the section registry with
+                           present/current rows, Open by number, Next section
+                           →; desktop shell or tour only) / HelpModal (the five help topics + the
                            About footer, which states the license to every
                            user) / TrustDeepDiveModal (the "I'm not
                            convinced" dossier — fourteen runtime cards; a
@@ -1110,6 +1166,15 @@ tests/
                            as content), the bodyless post, overrides,
                            template pairing with the pick winning, the
                            400/409/404 matrix, and a three-section lineage
+  test_project_home.py     [Project workspace Phase 2] discovery (link + id
+                           match, symlink/malformed/oversized skipped, name
+                           order), never persisted, the registry merge (newest
+                           export, ties to the link), the sections listing
+                           (present/current/unregistered + the synthetic
+                           current row), open-section state-for-state against
+                           load-file on the same bytes, the refusal matrix,
+                           the home across next-section, and the shell's save
+                           / brief-export / bind discovery incl. a moved folder
   test_facts_agent_visibility.py
                            [v1.17.0] the reference-visibility mirror: both
                            audiences, block 0 of every dimension rendered
@@ -10364,6 +10429,162 @@ no new SSE event.
   `_brief_bytes_from_a_rich_section`, `_upload`) are imported from
   `test_project_brief.py` rather than copied, so a change to what a rich
   section holds reaches both suites.
+
+## The project has a home — implemented notes (Project workspace Phase 2)
+
+Phase 2 of `docs/plans/project-workspace/` (spec: `02_PROJECT_HOME.md`,
+decision D1: a project is a folder). v1.17.0's brief carried a project's
+assets between sections, but nothing knew where a project's sections LIVED —
+the registry records only a basename, the save target is never persisted,
+and "swap in the fire-pump section" meant Open and a file dialog. Now a
+section saved or opened beside its project's `.basproject` knows that
+folder, and a Project panel lists the project's sections and opens any of
+them by number. No release: Phases 2–6 ship together (Phase 7), so
+`VERSION` stays 1.20.0 and the user-facing notes wait in the phase file's
+"Release-note draft".
+
+- **`SessionState.project_home` is `save_target`'s twin, on purpose.**
+  `{"folder", "brief_path", "brief_name", "project_id"}`, local-only,
+  cleared by `_reset_while_locked` and by `load_project`, never serialized
+  (not in `project_payload`, not in a brief — pinned by
+  `test_a_home_is_never_persisted`, byte-scanning both for the folder), and
+  declared in `test_session_wipe.py`'s sweep. A home that outlived its
+  session would list — and open by name — another project's sections, the
+  same class of hazard as a save target that silently overwrites the
+  project just discarded. And because no file names the folder, a folder
+  can be moved or shared whole: the next open finds it wherever it now is.
+- **Discovered, never declared — one computation, one store.**
+  `sessions.discover_project_home(session, anchor)` lists `*.basproject`
+  directly in the anchor's folder (no recursion, symlinks skipped — the
+  retention posture), in name order, reads each through
+  `project_brief.read_brief_on_disk` (the envelope and the sanitized
+  registry only — `parse_project_brief` would rebuild the research profile
+  and re-bound every reference body per panel refresh) and keeps the FIRST
+  whose project id equals the session link's. No link, no home: a section
+  that never exported or seeded belongs to no project however many briefs
+  sit beside it. It is a pure disk read, run off the guard;
+  `remember_project_home` stores the answer under `session_state_guard()`,
+  generation-checked like `remember_project_save_target`, and re-checks the
+  link there — a home is never stored beside a link naming another project.
+- **Three places discover, and only the shell knows paths.** After every
+  native save (`_discover_home_after_save`, only for a BOUND target — an
+  unbound one means the session was replaced mid-save, and the replacement
+  is not touched), reported as the save result's `home`; after a brief
+  export that lands beside the section's own saved file (the natural
+  first-project order is "save the section, export its brief next to it",
+  and waiting for an unrelated save left the panel claiming the section was
+  in no folder while it sat beside its brief); and `bind_project_home`
+  after a native Open. The frontend never holds a path: `open_file` mints
+  an opaque single-use token for a PROJECT open (bounded `_recent_opens`,
+  oldest out; `""` for docx/reference/template/brief picks) and the panel
+  asks for sections by NUMBER.
+- **The bind is checked against the LOAD's generation, not a pre-dialog
+  sample** — the spec's wording, and it would have refused every bind:
+  `load_project` calls `invalidate_model_turn()`, so the load itself
+  advances the generation. The frontend passes the generation the
+  load-file response reported; a session replaced since (a New session, a
+  second open) is never handed the folder. Absent or malformed, the bind
+  samples its own generation, which still guards its folder read.
+- **`_load_project_bytes` is the one staged load.** Extracted from
+  load-file so `POST /api/project/open-section` shares staging on a worker
+  thread, the one-guard commit with its lease and generation re-checks, the
+  `_doc_payload` offload and the trace event (`mode="section"`) — the two
+  routes cannot validate differently. The route resolves the number through
+  `sessions.resolve_section_file` → `project_registry` (the link merged
+  with the brief on disk — the SAME derivation the panel lists, so the row
+  clicked and the file opened cannot disagree) → `section_file_path`, which
+  requires the RESOLVED path to sit directly in the folder (realpath both
+  sides, `normcase`d): `..`, an absolute or drive-qualified name, a nested
+  path and a symlink out are all `outside_project_folder` 400s, and the
+  resolved path is what gets read, so the file read is the file checked.
+  After the commit, inside the same guard, the home is re-assigned when the
+  opened file's link names the same project; a sibling that belongs to
+  another project (or none) opens homeless and the response says
+  `home_kept: false`. Refused before anything is replaced: a tour, running
+  work (`busy_reasons` — unlike a bare load, a one-click swap must not race
+  a turn), no home, an unknown number (404 `section_not_found`), a record
+  with no file or a file not beside the brief (404 `section_file_missing`).
+  It is in the lease middleware's guarded list, beside load-file.
+- **The entry check is a window, so the commit checks again.** Staging
+  takes seconds on a worker thread and a chat turn (or a run) can start in
+  that window — and `load_project` invalidates whatever turn owns the
+  session, so a busy check on entry alone would let the swap kill a reply
+  that began after the click. `_load_project_bytes(refuse_if_busy=True)`
+  repeats `busy_reasons` inside the commit's own guard, beside the lease
+  and generation re-checks (safe there: the install gate already reads it
+  under that guard, and it takes only runner locks). load-file keeps its
+  historical posture (the frontend gates Open on busy). Likewise the
+  section file's size is judged twice, before the read and on the bytes
+  actually read, so a file that grew past `MAX_PACKAGE_BYTES` between the
+  two cannot ride in on the size it used to have.
+- **The registry merge is "newest export wins", not "the link wins".** The
+  spec said the link wins per number "because it is newer"; that is often
+  but not always true (a sibling can export after this session loaded), so
+  `project_brief.merge_section_registries` checks the reason instead of
+  assuming it: per number the later `exported_at` wins (one clock format,
+  so the ISO strings compare lexically), a tie goes to the link, and a
+  winner with no `file_name` borrows the other record's. Phase 3's D4 rule
+  for the registry is the same one.
+- **The open section is always a row.** The registry lists what EXPORTED;
+  a section started with Next section → is in no registry until it exports
+  a brief, and a panel with no "you are here" row read as a list the user
+  was not part of. The listing appends a synthetic `in_registry: false`
+  current row, and excludes this section's own saved file from the
+  "Not in the registry" line. An UNNUMBERED section cannot be a row (the
+  registry is keyed by number) and the panel says so — which is exactly
+  the tutorial's state, whose practice header is blank for the lint lesson.
+- **Rows show without a home; actions and presence need one.** The link
+  knows the registry even when no folder does, so the panel lists it with
+  no Open and no "file not found" verdict (a file cannot be missing from a
+  folder nobody knows). The homeless line therefore says "to open its
+  sections from here", not the spec's "to see its sections here", which
+  would have contradicted the rows under it.
+- **Desktop-only, except the tour.** The spec said the panel renders when
+  linked or homed AND that a browser session shows no panel; the condition
+  that reconciles them is the shell bridge (`bind_project_home`, re-checked
+  on `pywebviewready`, since pywebview injects its api asynchronously) — a
+  browser can never have a folder, so the panel's promise would be a dead
+  end there. The tour is the exception: its structural practice copy is
+  linked (`TUTORIAL_PROJECT_ID`; 21 13 13 — where the facts fixture records
+  its facts — and 21 30 00) with no home, and Open / Next section → are
+  hidden there.
+- **Two small UX calls ride along.** The first save of a section that
+  arrived with a home (Next section → carries it across the seed, re-
+  assigned inside the seed's guard after `start_from_brief` resets) opens
+  its dialog in the project folder, so the next section lands beside its
+  brief by default. And after any brief export the frontend re-reads the
+  doc payload — the export stamps the link, which the frontend used to
+  leave stale until the next unrelated payload (harmless before; the panel
+  renders off the link now).
+- **Frontend.** `ProjectPanel.tsx` (above Project facts; the drawer idiom,
+  `openNonce` via a new `projectPanel` drawer name, auto-expands the first
+  time a home is known; a newest-request-wins listing keyed on the link,
+  home and section number BY VALUE — the payload hands down a new link
+  object every refresh). `App.requestOpenSection` runs the save gate (kind
+  `open-section`, the open-project labels under an accurate title) before
+  `doOpenSection`, and `applyLoadedProject` is the one apply path Open and
+  the panel's Open share. `project.sections` / `project.open-section` are
+  the three-place capability edit, on a new step right after
+  `project-facts`; `TOUR_VERSION` 7 → 8. HelpModal's next-section recipe
+  and the trust dossier's brief card say the folder is read locally.
+- **Deliberately not done.** The brief is read, never written (Phase 3's
+  merge is the only thing that may write it); no folder watching (the
+  panel refetches on save, open, link/home change and the tour's nonce);
+  no "New project" flow (a project is born at its first brief export); and
+  a brief picked in New session → New section in an existing project does
+  not bind a home (the seeded section finds its folder on its first save
+  beside the brief). Deviations are recorded in the phase file.
+- **Tests**: `tests/test_project_home.py` (20) plus 2 in
+  `test_close_prompt.py` (the token map and the single-use, load-generation
+  bind), 1 in `test_tutorial.py`, the wipe-sweep probe, and
+  `frontend/tests/projectPanel.test.ts` (8, source-level). The
+  open-section test asserts the loaded session STATE-FOR-STATE against an
+  upload of the same bytes through load-file — the Phase 1 idiom, one path
+  checked against the other rather than against a hand-written
+  expectation. The commit-time busy re-check is pinned by a turn claimed
+  from INSIDE staging (the swap refuses and the turn still owns the
+  session), the post-read size bound by a `getsize` that under-reports;
+  each was reverted in place → exactly its own test red.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

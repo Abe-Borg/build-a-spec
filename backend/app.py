@@ -64,6 +64,13 @@ Endpoints (all JSON unless noted):
   exact source DOCX when available).
 - ``POST /api/project/load-file`` → stage and restore ``.baspec`` or legacy JSON.
 - ``POST /api/project/load``  → legacy source-less JSON compatibility load.
+- ``GET  /api/project/sections`` → the Project panel: the project's section
+  registry (link ∪ the brief in the project folder) joined with which files
+  sit beside the brief, plus the folder's unregistered ``.baspec`` files.
+- ``POST /api/project/open-section`` → open a sibling section by NUMBER: the
+  registry names its file, which must sit directly in the project folder,
+  and the bytes run the exact load-file path (409 in a tour, while busy, or
+  with no project folder; 404 unknown/missing; 400 outside the folder).
 
 When ``frontend/dist`` exists (production / packaged), it is served at
 ``/``; in development the Vite dev server proxies ``/api`` here instead.
@@ -74,6 +81,7 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import sys
@@ -203,6 +211,7 @@ from .spec_doc.project import (
     sanitize_project_link,
 )
 from .spec_doc.project_package import (
+    MAX_PACKAGE_BYTES,
     PACKAGE_MEDIA_TYPE,
     ProjectPackageError,
     ProjectPackageTooLargeError,
@@ -643,6 +652,17 @@ class NextSectionRequest(BaseModel):
     discipline: str = ""
     module_id: str = ""
     template_id: str = ""
+
+
+class OpenSectionRequest(BaseModel):
+    """Body of ``POST /api/project/open-section`` (Project workspace Phase 2).
+
+    A section NUMBER, never a path: the server resolves it through the
+    project registry to a file beside the brief, so no path the shell knows
+    ever travels from the frontend as an input.
+    """
+
+    number: str = ""
 
 
 class QcDismissRequest(BaseModel):
@@ -1565,6 +1585,12 @@ def _doc_payload(session, *, workspace=None) -> dict[str, Any]:
         # of the two it is — server-owned so the button can never offer a
         # silent overwrite of a file the session has been reset away from.
         "project_save_target": sessions.project_save_target(session),
+        # The project folder this section's file lives in, beside its
+        # project brief ({"folder", "brief_name"}), or null. Discovered by
+        # the native shell on save/open and cleared on reset/load, like the
+        # save target above; the Project panel reads it to say where the
+        # project lives and whether sibling sections can open by name.
+        "project_home": sessions.project_home_payload(session),
         "research_status": session.research.status,
         # The imported-master version index (Batch 5), for the compare
         # picker's "Master (import)" option; ``None`` for from-scratch.
@@ -2691,6 +2717,9 @@ def create_app(
             ("POST", "/api/reference/upload"),
             ("POST", "/api/import/master"),
             ("POST", "/api/project/load-file"),
+            # The same staged load as load-file, with the bytes read from the
+            # project folder instead of an upload.
+            ("POST", "/api/project/open-section"),
             ("POST", "/api/research/start"),
             ("POST", "/api/research/stop"),
             ("POST", "/api/qc/start"),
@@ -6781,6 +6810,16 @@ def create_app(
                             },
                             status_code=409,
                         )
+                    # The project folder the outgoing section lives in. The
+                    # seed below resets the session (which clears it), and
+                    # the next section of the same project belongs in the
+                    # same folder — so it is carried across here, inside the
+                    # same guard, once the seed has run.
+                    carried_home = (
+                        dict(session.project_home)
+                        if isinstance(session.project_home, dict)
+                        else None
+                    )
                     # The brief is built from the session about to be
                     # replaced, under the same guard as the seed. The link
                     # stamp is deliberate even though this session is going
@@ -6819,6 +6858,20 @@ def create_app(
                         number=number,
                         title=title,
                     )
+                    # Same project, same folder. The seeded link carries the
+                    # brief's project id, which is the outgoing link's own
+                    # (a home implies a link, and the brief reuses its id);
+                    # the equality check is the guard that keeps a home
+                    # from ever sitting beside a different project's link.
+                    new_link = (
+                        session.project_link
+                        if isinstance(session.project_link, dict)
+                        else {}
+                    )
+                    if carried_home is not None and new_link.get(
+                        "project_id"
+                    ) == carried_home.get("project_id"):
+                        session.project_home = carried_home
         except sessions.WorkspaceConflictError:
             return _stale_tutorial_response()
         seed["warnings"] = list(brief.warnings) + extra_warnings + list(seed["warnings"])
@@ -6878,31 +6931,49 @@ def create_app(
             }
         )
 
-    @app.post("/api/project/load-file")
-    async def project_load_file(file: UploadFile) -> JSONResponse:
-        """Load a native .baspec package or a legacy JSON project upload.
+    def _load_failed(
+        exc: Exception, *, status_code: int, trace_mode: str
+    ) -> JSONResponse:
+        _trace_capture.app_event(
+            "project_load", mode=trace_mode, ok=False, error=str(exc)
+        )
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=status_code)
 
-        The complete outer package, semantic history, source DOCX, typed
-        source map, and current preservation plan are validated against a
-        throwaway session before the live session is touched.
+    async def _load_project_bytes(
+        entry_lease: sessions.WorkspaceLease,
+        entry_generation: int,
+        payload: bytes,
+        *,
+        trace_mode: str,
+        project_home: dict[str, str] | None = None,
+        extra: dict[str, Any] | None = None,
+        refuse_if_busy: bool = False,
+    ) -> JSONResponse:
+        """Stage, commit and answer a project load — the one load path.
+
+        Shared by ``/api/project/load-file`` (bytes uploaded from the
+        frontend) and ``/api/project/open-section`` (bytes read from the
+        project folder), so the two can never validate differently: the
+        throwaway-session staging, the one-guard commit with its lease and
+        generation re-checks, and the ``_doc_payload`` offload are this
+        function, not a copy of it. ``entry_generation`` is sampled by the
+        caller BEFORE its own read, because the read is where the event
+        loop yields.
+
+        ``project_home`` (open-section only) is re-assigned inside the
+        commit's own guard — ``load_project`` clears it — when the loaded
+        file belongs to the same project; a sibling that turns out to belong
+        to another project, or none, opens without a home rather than
+        inheriting one.
+
+        ``refuse_if_busy`` (open-section only) repeats the caller's
+        running-work refusal inside the commit's guard. Staging takes seconds
+        on a worker thread, and a chat turn or a run can start in that
+        window; ``load_project`` would then invalidate it mid-stream. A bare
+        load keeps its historical posture (the frontend gates Open on busy),
+        but a one-click swap must never be the thing that kills a reply.
         """
-        # The session the user chose this file for. Staging yields the event
-        # loop for seconds, so "New session" can complete in between — and
-        # this commit replaces everything, so a stale load would silently
-        # discard the session the user just deliberately started.
-        entry_lease = sessions.get_workspace()
-        if entry_lease.scope != "original":
-            return _coded_error_response(
-                {
-                    "ok": False,
-                    "code": "tutorial_active",
-                    "error": "End the tour and return to your project before opening another one.",
-                },
-                status_code=409,
-            )
-        entry_generation = entry_lease.session.generation
         try:
-            payload = await read_project_upload_bounded(file)
             # Staging re-parses and re-indexes the attached master, which is
             # the same seconds-of-CPU work the import path does. Keep it off
             # the event loop so an open never freezes a streaming turn.
@@ -6912,23 +6983,14 @@ def create_app(
                 _stage_project_load, payload
             )
         except ProjectPackageTooLargeError as exc:
-            _trace_capture.app_event(
-                "project_load", mode="package", ok=False, error=str(exc)
-            )
-            return JSONResponse(
-                {"ok": False, "error": str(exc)}, status_code=413
-            )
+            return _load_failed(exc, status_code=413, trace_mode=trace_mode)
         except (ProjectPackageError, ValueError) as exc:
-            _trace_capture.app_event(
-                "project_load", mode="package", ok=False, error=str(exc)
-            )
-            return JSONResponse(
-                {"ok": False, "error": str(exc)}, status_code=400
-            )
+            return _load_failed(exc, status_code=400, trace_mode=trace_mode)
 
         # The same semantic payload was fully staged above, so these writes
         # are the commit point. A rejected package never reaches them.
         session = entry_lease.session
+        home_kept: list[bool] = []
 
         def _commit_load() -> JSONResponse | None:
             """The commit, on a worker thread, under ONE guard.
@@ -6964,6 +7026,22 @@ def create_app(
                         },
                         status_code=409,
                     )
+                if refuse_if_busy:
+                    busy = sessions.busy_reasons(session)
+                    if busy:
+                        return _coded_error_response(
+                            {
+                                "ok": False,
+                                "code": "workspace_busy",
+                                "error": (
+                                    "Work started while the section was being "
+                                    "read — wait for it to finish, then open "
+                                    f"the section again ({', '.join(busy)} "
+                                    "still running)."
+                                ),
+                            },
+                            status_code=409,
+                        )
                 load_project(parsed.project, session)
                 session.source_docx_bytes = parsed.source_docx_bytes
                 session.source_docx_filename = (
@@ -6973,6 +7051,17 @@ def create_app(
                 session.source_patch_context = (
                     source_context if parsed.source_docx_bytes is not None else None
                 )
+                if project_home is not None:
+                    loaded_link = (
+                        session.project_link
+                        if isinstance(session.project_link, dict)
+                        else {}
+                    )
+                    if loaded_link.get("project_id") == project_home.get(
+                        "project_id"
+                    ):
+                        session.project_home = dict(project_home)
+                        home_kept.append(True)
             return None
 
         refusal = await run_in_threadpool(_commit_load)
@@ -6980,21 +7069,245 @@ def create_app(
             return refusal
         _trace_capture.app_event(
             "project_load",
-            mode="package",
+            mode=trace_mode,
             ok=True,
             source_retained=parsed.source_docx_bytes is not None,
         )
         # Same reason as the import response: a source-backed project pays for
         # the first capability sweep here, which must not run on the loop.
-        payload = await run_in_threadpool(
+        doc_payload = await run_in_threadpool(
             _doc_payload, session, workspace=entry_lease
         )
-        return JSONResponse(
-            {
-                "ok": True,
-                "chat": chat_transcript(session.history),
-                **payload,
-            }
+        body: dict[str, Any] = {
+            "ok": True,
+            "chat": chat_transcript(session.history),
+            **doc_payload,
+        }
+        if project_home is not None:
+            body["home_kept"] = bool(home_kept)
+        if extra:
+            body.update(extra)
+        return JSONResponse(body)
+
+    @app.post("/api/project/load-file")
+    async def project_load_file(file: UploadFile) -> JSONResponse:
+        """Load a native .baspec package or a legacy JSON project upload.
+
+        The complete outer package, semantic history, source DOCX, typed
+        source map, and current preservation plan are validated against a
+        throwaway session before the live session is touched.
+        """
+        # The session the user chose this file for. Staging yields the event
+        # loop for seconds, so "New session" can complete in between — and
+        # this commit replaces everything, so a stale load would silently
+        # discard the session the user just deliberately started.
+        entry_lease = sessions.get_workspace()
+        if entry_lease.scope != "original":
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "tutorial_active",
+                    "error": "End the tour and return to your project before opening another one.",
+                },
+                status_code=409,
+            )
+        entry_generation = entry_lease.session.generation
+        try:
+            payload = await read_project_upload_bounded(file)
+        except ProjectPackageTooLargeError as exc:
+            return _load_failed(exc, status_code=413, trace_mode="package")
+        except (ProjectPackageError, ValueError) as exc:
+            return _load_failed(exc, status_code=400, trace_mode="package")
+        return await _load_project_bytes(
+            entry_lease, entry_generation, payload, trace_mode="package"
+        )
+
+    # --- The project folder (Project workspace Phase 2) --------------------
+    #
+    # A project lives in one folder: its .basproject beside one .baspec per
+    # section. The native shell discovers the folder from a file it saved
+    # or opened (sessions.discover_project_home) and the session holds the
+    # answer as ``project_home``; these two routes are what the Project
+    # panel reads and clicks. Neither ever takes a path from the frontend:
+    # the panel asks by section NUMBER, and the server resolves the number
+    # through the registry to a file it refuses to find outside the folder.
+
+    @app.get("/api/project/sections")
+    def project_sections() -> JSONResponse:
+        """The Project panel's listing — a read, and never under the guard
+        for the disk part.
+
+        The link, the home, the open section and the save target are
+        snapshotted under ``session_state_guard()``; the brief on disk and
+        the folder listing are read after it is released (a plain ``def``
+        route already runs on a worker thread, so the small reads never touch
+        the event loop). Answers in a tutorial workspace too — the practice
+        copy's panel lists its seeded registry, and with no home there is no
+        folder to read.
+        """
+        workspace = sessions.get_workspace()
+        session = workspace.session
+        with session.session_state_guard():
+            link = (
+                copy.deepcopy(session.project_link)
+                if isinstance(session.project_link, dict)
+                else None
+            )
+            home = (
+                dict(session.project_home)
+                if isinstance(session.project_home, dict)
+                else None
+            )
+            current_number = session.doc.doc.number or ""
+            current_title = session.doc.doc.title or ""
+            save_target = str(session.save_target or "")
+        listing = sessions.project_sections_listing(
+            link=link,
+            home=home,
+            current_number=current_number,
+            current_title=current_title,
+            save_target=save_target,
+        )
+        return JSONResponse({"ok": True, **listing})
+
+    def _read_section_bytes(path: str) -> bytes:
+        """The section file's bytes — worker thread only, size-bounded the
+        way an upload is (``MAX_PACKAGE_BYTES``).
+
+        Judged twice: before the read (a large file is refused without being
+        read at all) and after it, on the bytes actually read — a file that
+        grew between the ``getsize`` and the ``read`` must not slip past the
+        bound on the strength of a size it no longer has.
+        """
+        too_large = ProjectPackageTooLargeError(
+            "The project file is too large (maximum "
+            f"{MAX_PACKAGE_BYTES // (1024 * 1024)} MiB)."
+        )
+        if os.path.getsize(path) > MAX_PACKAGE_BYTES:
+            raise too_large
+        with open(path, "rb") as handle:
+            data = handle.read(MAX_PACKAGE_BYTES + 1)
+        if len(data) > MAX_PACKAGE_BYTES:
+            raise too_large
+        return data
+
+    @app.post("/api/project/open-section")
+    async def project_open_section(body: OpenSectionRequest) -> JSONResponse:
+        """Open a sibling section of this project by its number.
+
+        The number resolves through the project registry (the link first,
+        then the brief on disk — ``sessions.resolve_section_file``, the same
+        merge the panel lists) to a file that must sit directly in the
+        project folder; the bytes then run the exact load-file path
+        (``_load_project_bytes``), so every validation stays shared. The home
+        carries over when the opened file belongs to the same project.
+
+        Refusals, each before anything is replaced: a tutorial (409
+        ``tutorial_active``), running work (409 ``workspace_busy``, checked
+        on entry and again inside the commit's guard — unlike a bare load,
+        which invalidates a streaming turn, this is a one-click swap and must
+        not race one), no home (409 ``no_project_home``), an
+        unknown number (404 ``section_not_found``), a record with no file or
+        a file not beside the brief (404 ``section_file_missing``), and a
+        file name that resolves outside the folder (400
+        ``outside_project_folder`` — a registry entry is data from a file
+        people share). The save gate for the section being left runs in the
+        frontend before this request, as it does before load-file.
+        """
+        entry_lease = sessions.get_workspace()
+        if entry_lease.scope != "original":
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "tutorial_active",
+                    "error": "End the tour and return to your project before opening another section.",
+                },
+                status_code=409,
+            )
+        session = entry_lease.session
+        entry_generation = session.generation
+        busy = sessions.busy_reasons(session)
+        if busy:
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "workspace_busy",
+                    "error": (
+                        "Wait for the current work to finish before opening "
+                        f"another section ({', '.join(busy)} still running)."
+                    ),
+                },
+                status_code=409,
+            )
+        number = " ".join((body.number or "").split())
+        if not number:
+            return JSONResponse(
+                {"ok": False, "error": "Name the section to open."}, status_code=400
+            )
+        with session.session_state_guard():
+            link = (
+                copy.deepcopy(session.project_link)
+                if isinstance(session.project_link, dict)
+                else None
+            )
+            home = (
+                dict(session.project_home)
+                if isinstance(session.project_home, dict)
+                else None
+            )
+        if home is None:
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "no_project_home",
+                    "error": (
+                        "This section is not in a project folder. Save it "
+                        "beside its project brief first, or use Open."
+                    ),
+                },
+                status_code=409,
+            )
+        try:
+            path = await run_in_threadpool(
+                sessions.resolve_section_file, link, home, number
+            )
+            payload = await run_in_threadpool(_read_section_bytes, path)
+        except sessions.SectionNotInRegistry as exc:
+            return _coded_error_response(
+                {"ok": False, "code": "section_not_found", "error": str(exc)},
+                status_code=404,
+            )
+        except sessions.SectionFileMissing as exc:
+            return _coded_error_response(
+                {"ok": False, "code": "section_file_missing", "error": str(exc)},
+                status_code=404,
+            )
+        except sessions.ProjectFolderEscape as exc:
+            return _coded_error_response(
+                {"ok": False, "code": "outside_project_folder", "error": str(exc)},
+                status_code=400,
+            )
+        except ProjectPackageTooLargeError as exc:
+            return _load_failed(exc, status_code=413, trace_mode="section")
+        except OSError as exc:
+            # The file vanished or could not be read between the listing and
+            # the click: the same answer as a file that is not there.
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "section_file_missing",
+                    "error": f"Section {number}'s file could not be read: {exc.strerror or exc}",
+                },
+                status_code=404,
+            )
+        return await _load_project_bytes(
+            entry_lease,
+            entry_generation,
+            payload,
+            trace_mode="section",
+            project_home=home,
+            extra={"section": number},
+            refuse_if_busy=True,
         )
 
     # --- Developer tools / diagnostics --------------------------------------

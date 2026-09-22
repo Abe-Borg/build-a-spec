@@ -44,6 +44,8 @@ import {
   projectBriefManifest,
 } from "../lib/api";
 import type { ProjectFactInput } from "../lib/api";
+import type { NextSectionRequest } from "../types";
+import NextSectionDialog, { BriefContents } from "./NextSectionDialog";
 import { useDownloads } from "../lib/useDownloads";
 import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
 import QCDrawer from "./QCDrawer";
@@ -95,6 +97,9 @@ interface Props {
   ) => Promise<string | null>;
   /** Export the project brief: the native Save dialog, else a download. */
   onExportProjectBrief: () => Promise<SaveOutcome>;
+  /** Start the next section of this project from this session (v1.20.0):
+   *  App runs the save gate, then the one-transaction seed. */
+  onStartNextSection: (opts: NextSectionRequest) => void;
   lintIssues: LintIssue[];
   standards: StandardInfo[];
   profileComplete: boolean;
@@ -195,77 +200,6 @@ interface Props {
     followups: number;
     projectFacts: number;
   };
-}
-
-/** What the brief would carry, one line per asset — the export's receipt,
- *  shown BEFORE the write so a missing research profile or a reference past
- *  the cap is a decision rather than a surprise. */
-function BriefContents({ manifest }: { manifest: ProjectBriefManifest }) {
-  const research = manifest.research;
-  const rows: [string, string][] = [
-    ["Project", manifest.name || "Untitled project"],
-    [
-      "Profile",
-      manifest.profile.line
-        ? `${manifest.profile.line}${manifest.profile.complete ? "" : " (incomplete)"}`
-        : "not recorded",
-    ],
-    ["Project type", manifest.project_type || "not recorded"],
-    [
-      "Editions",
-      manifest.edition_overrides.count
-        ? manifest.edition_overrides.standards.join("; ")
-        : "none recorded",
-    ],
-    [
-      "Research",
-      research
-        ? `${research.items} finding${research.items === 1 ? "" : "s"} over ${research.rounds} round${
-            research.rounds === 1 ? "" : "s"
-          }, last ${research.last_research_date || "—"}`
-        : "none",
-    ],
-    [
-      "References",
-      manifest.references.length
-        ? `${manifest.references.length} document${
-            manifest.references.length === 1 ? "" : "s"
-          } (${manifest.reference_tokens.toLocaleString()} tokens of text): ${manifest.references
-            .map((doc) => doc.title)
-            .join("; ")}`
-        : "none",
-    ],
-    [
-      "Facts",
-      `${manifest.facts.active} active${
-        manifest.facts.superseded ? `, ${manifest.facts.superseded} retired` : ""
-      }`,
-    ],
-    [
-      "Sections",
-      manifest.sections.map((s) => `${s.number} ${s.title}`.trim()).join("; ") ||
-        "this one",
-    ],
-  ];
-  return (
-    <div className="mt-3 rounded-lg border border-edge bg-raised/50 p-3">
-      <dl className="grid gap-x-3 gap-y-1 text-xs sm:grid-cols-[7rem_1fr]">
-        {rows.map(([label, value]) => (
-          <div key={label} className="contents">
-            <dt className="text-ink-faint">{label}</dt>
-            <dd className="min-w-0 break-words text-ink-dim">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      {manifest.warnings.length > 0 && (
-        <ul className="mt-2 space-y-1 border-t border-edge/60 pt-2 text-[11px] text-warn">
-          {manifest.warnings.map((warning) => (
-            <li key={warning}>⚠ {warning}</li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
 }
 
 /** The paper while a file is being read server-side. Same sheet as the empty
@@ -421,6 +355,7 @@ export default function ArtifactPanel({
   onUpdateProjectFact,
   onSupersedeProjectFact,
   onExportProjectBrief,
+  onStartNextSection,
   lintIssues,
   standards,
   profileComplete,
@@ -534,6 +469,8 @@ export default function ArtifactPanel({
   // would export (the manifest route), then hands the write to the host —
   // native Save dialog or download. A refusal is the server's own message.
   const [briefConfirmOpen, setBriefConfirmOpen] = useState(false);
+  // Next section (v1.20.0): the dialog collects the choice; App does the rest.
+  const [nextSectionOpen, setNextSectionOpen] = useState(false);
   const [briefManifest, setBriefManifest] = useState<ProjectBriefManifest | null>(null);
   const [briefManifestError, setBriefManifestError] = useState("");
   const [briefBusy, setBriefBusy] = useState(false);
@@ -1209,6 +1146,21 @@ export default function ArtifactPanel({
               </div>
             )}
           </div>
+          {/* Next section (v1.20.0): the project brief without the file
+              relay. Hidden in a tour (a practice copy is not a project) and
+              disabled while anything is in flight; the save gate for the
+              section being left runs in App. */}
+          {!tutorialActive && (
+            <button
+              className={actionButton}
+              onClick={() => setNextSectionOpen(true)}
+              disabled={busy || !!fileLoading}
+              title="Leave this section and open the next one of the same project — carrying the profile, editions, research, references and facts, never this conversation or document. You are offered to save first."
+              data-capability="project.next-section"
+            >
+              Next section →
+            </button>
+          )}
           {/* Save asks where exactly once per session, then overwrites that
               file the way a save button is expected to. The dialog does not
               disappear with it — it moves behind the caret as Save as…, which
@@ -1766,6 +1718,15 @@ export default function ArtifactPanel({
         onUpdate={onUpdateProjectFact}
         onSupersede={onSupersedeProjectFact}
       />
+      {nextSectionOpen && (
+        <NextSectionDialog
+          onClose={() => setNextSectionOpen(false)}
+          onStart={(opts) => {
+            setNextSectionOpen(false);
+            onStartNextSection(opts);
+          }}
+        />
+      )}
       {briefConfirmOpen && (
         <ModalShell
           title="Export project brief"

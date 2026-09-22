@@ -9,6 +9,8 @@ import type {
   Figure,
   FollowUp,
   Health,
+  NextSectionOptions,
+  NextSectionRequest,
   ProjectBriefInspection,
   ProjectBriefManifest,
   ProjectFact,
@@ -465,6 +467,44 @@ export async function startFromProjectBrief(
   const data = await resp.json();
   if (!resp.ok || !data.ok) {
     throw new Error(data.error ?? `project brief start failed (${resp.status})`);
+  }
+  const session = (data.session ?? data) as SessionBundle & { seed: SeedReport };
+  session.seed = data.seed as SeedReport;
+  return session;
+}
+
+/** What the Next-section dialog shows: catalog, drafted sections, manifest. */
+export async function nextSectionOptions(): Promise<NextSectionOptions> {
+  const resp = await fetch("/api/project/next-section");
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `next section options failed (${resp.status})`);
+  }
+  return data as NextSectionOptions;
+}
+
+/**
+ * Start the next section of THIS project from THIS session — the brief is
+ * built in memory and seeded in one server transaction, no file relay. Same
+ * refusals and the same session bundle as `startFromProjectBrief`.
+ */
+export async function startNextSection(
+  opts: NextSectionRequest = {},
+): Promise<SessionBundle & { seed: SeedReport }> {
+  const resp = await fetch("/api/project/next-section", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      number: opts.number ?? "",
+      title: opts.title ?? "",
+      discipline: opts.discipline ?? "",
+      module_id: opts.moduleId ?? "",
+      template_id: opts.templateId ?? "",
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `next section failed (${resp.status})`);
   }
   const session = (data.session ?? data) as SessionBundle & { seed: SeedReport };
   session.seed = data.seed as SeedReport;

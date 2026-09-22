@@ -1608,6 +1608,8 @@ class SessionState:
         discipline: str,
         template_section: SpecSection | None = None,
         template_origin: dict[str, Any] | None = None,
+        number: str = "",
+        title: str = "",
     ) -> dict[str, Any]:
         """Atomically replace this session with a section seeded from a brief.
 
@@ -1621,6 +1623,12 @@ class SessionState:
         References are carried in order up to the session cap; the rest are
         named in the report rather than silently dropped. Facts keep their
         pids, so a superseded fact's link to its replacement stays valid.
+
+        ``number`` / ``title`` (v1.20.0, the Next-section path) name the new
+        section up front so version 0 opens on a named page: a non-empty
+        value overrides what a paired template carried, an empty one leaves
+        the template's (or nothing) in place — the caller has already folded
+        and bounded them (``clean_next_section_header``).
 
         Returns the seed report the route hands back — counts and warnings,
         nothing the model could mistake for instructions.
@@ -1650,6 +1658,10 @@ class SessionState:
                 identity["discipline"] = discipline
             section.project_identity = identity
             section.edition_overrides = copy.deepcopy(brief.edition_overrides)
+            if number:
+                section.number = number
+            if title:
+                section.title = title
             self.doc.seed_template(section)
             self.template_origin = dict(template_origin) if template_origin else None
 
@@ -1712,6 +1724,7 @@ class SessionState:
                 "references_dropped": dropped,
                 "facts_restored": len(self.facts.items),
                 "sections": len(brief.sections),
+                "section": {"number": section.number, "title": section.title},
                 "template": dict(template_origin) if template_origin else None,
                 "warnings": warnings,
             }

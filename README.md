@@ -1,6 +1,6 @@
 # Build-a-Spec
 
-**v1.19.1** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
+**v1.20.0** — Conversational authoring of construction specification sections. You talk through the project with Claude; it interviews you, drafts CSI SectionFormat language incrementally, and builds the section live in a document panel beside the chat — the way artifacts work in the Claude app.
 
 First curated domain: **Division 21 fire suppression for hyperscale data centers (USA)**, starting with wet-pipe sprinkler systems (21 13 13) and siblings. Since v1.5.0 a second, **generic module** drafts **any discipline, for projects anywhere in the USA or Canada** (no pinned editions — every standard edition is recorded per-project with its stated basis). The engine is domain-neutral; discipline knowledge lives in registry-validated **spec modules**, the same architecture as [Spec Critic](https://github.com/Abe-Borg/Claude-Spec-Critic)'s review modules.
 
@@ -132,6 +132,38 @@ sheet, a previous project's section, or meeting notes.
   standard still offers to save before you start over.
 - Attach at any point in a session (unlike a master import, which needs a
   blank document), remove one with the ✕, up to 20 per session.
+
+## Shipped in v1.20.0 (Next section in one click)
+
+**The project brief was a file relay.** Everything a section pays for could
+carry into the next section since v1.17.0, but getting there meant Export →
+Export project brief, then New session → New section in an existing project,
+then the file dialog. Phase 1 of the project-workspace plan
+(`docs/plans/PROJECT_WORKSPACE_2026-09-22.md`) removes the file.
+
+- **Next section → in the document panel.** It offers to save the section you
+  are leaving (the same Save / Continue without saving / Cancel prompt as New
+  session), then the server builds the brief in memory from this session and
+  seeds the next section in one transaction — `POST /api/project/next-section`,
+  the `brief/start` route without the upload, and the same refusals (409
+  inside a tour, 409 while a turn, research or Final QC runs). What carries is
+  exactly what the brief carries; the seeded session is state-for-state the
+  one the file route produces, and a test asserts the two against each other
+  rather than against a hand-written expectation.
+- **Pre-filled from the module's sibling catalog.** `GET /api/project/next-
+  section` lists the module's catalog with the sections this project already
+  drafted greyed (the link's registry plus the open section) — shown, never
+  hidden — the open section, the effective discipline and the manifest of what
+  will carry. On a hyperscale project 21 30 00 Fire Pumps is one click. Type a
+  header the catalog does not list (the only option on the generic module,
+  which declares none), or **leave it unnamed** for a section that will start
+  from an office master: a named page counts as content and the master import
+  refuses it, so the choice is made in the dialog rather than discovered at the
+  Import button. A named page opens with Draft full section available at once,
+  since the full-draft gate wants the section named.
+- **Template pairing stays on the New-session route.** The dialog says so.
+  The file route also remains the way to continue a project on another
+  machine or another day.
 
 ## Shipped in v1.17.0 (Project briefs — the next section starts where the last one left off)
 
@@ -1233,6 +1265,7 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/followup/{fid} ("Waiting on you"),
                          /api/project-facts (+ {pid}, {pid}/supersede),
                          /api/project/brief (+ manifest/inspect/start),
+                         /api/project/next-section (GET options / POST seed),
                          /api/release-notes (+ seen),
                          /api/session/unsaved|bundle, /api/usage,
                          /api/update/check|install,

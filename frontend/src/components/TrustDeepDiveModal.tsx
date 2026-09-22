@@ -1304,7 +1304,7 @@ function Dossier() {
         <Runtime
           n={14}
           title="Exporting or starting from a project brief"
-          trigger="Export → Export project brief; or New session → New section in an existing project."
+          trigger="Next section → in the panel (no file: the brief is built in memory and the next section seeded from it); or Export → Export project brief; or New session → New section in an existing project."
           runs={
             <>
               Local serialization and parsing only. Exporting writes a{" "}

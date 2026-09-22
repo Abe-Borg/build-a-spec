@@ -604,13 +604,14 @@ export const TOUR: readonly TourChunk[] = [
           "template.import",
           "template.manage",
           "project.brief-start",
+          "project.next-section",
         ],
         mode: "explanatory",
         anchor: "templates",
         placement: "bottom",
         title: "Reusable starters, created and used in one place",
         body:
-          "The template studio is the one door to reusable work. From here a built-in or personal template starts an independent spec; personal templates import and export as files, rename, take a description, and delete behind a confirmation. The same studio turns the spec you have open into a named starter of your own — an exact copy, or an AI-generalized version where available, always previewed as real server-produced content before anything commits. Missing curated modules are shown rather than silently substituted. New session → New section in an existing project takes a project brief (or a sibling section's .baspec file) and can pair it with a template from here: the template's body under the project's own profile, editions, research, references and facts.",
+          "The template studio is the one door to reusable work. From here a built-in or personal template starts an independent spec; personal templates import and export as files, rename, take a description, and delete behind a confirmation. The same studio turns the spec you have open into a named starter of your own — an exact copy, or an AI-generalized version where available, always previewed as real server-produced content before anything commits. Missing curated modules are shown rather than silently substituted. New session → New section in an existing project takes a project brief (or a sibling section's .baspec file) and can pair it with a template from here: the template's body under the project's own profile, editions, research, references and facts. The panel's Next section → button is the same handoff without the file: it offers to save, then opens the next section of the same project straight from this one, pre-filled from the module's sibling catalog.",
       },
       {
         id: "finish",

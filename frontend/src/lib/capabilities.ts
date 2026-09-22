@@ -70,6 +70,7 @@ export const END_USER_CAPABILITIES = [
   "project.save-open",
   "project.brief-export",
   "project.brief-start",
+  "project.next-section",
   "usage.details",
   "help.topics",
   "help.trust",

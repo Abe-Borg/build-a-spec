@@ -113,7 +113,10 @@ backend/
                            /bundle,/client-event) behind Settings → Developer tools;
                            the import-intent batch adds detach=Form(False) on
                            /api/import/master, POST /api/draft/adapt, and
-                           ?status_only=1 on GET /api/doc/capabilities
+                           ?status_only=1 on GET /api/doc/capabilities;
+                           v1.20.0 adds GET/POST /api/project/next-section
+                           (the brief built in memory from THIS session and
+                           seeded under the SAME guard — no file relay)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides −
@@ -1098,6 +1101,15 @@ tests/
                            409/413/400 matrix, template pairing, save →
                            reload → export extends the lineage), and carried
                            research readiness + the briefed round
+  test_next_section.py     [v1.20.0] the pure helpers (catalog flagged not
+                           filtered, drafted sections registry-then-own and
+                           never "(unnumbered)", the bounded header), the
+                           options route as a pure read, the in-memory seed
+                           asserted STATE-FOR-STATE against the file relay,
+                           the named page in version 0 (and that it counts
+                           as content), the bodyless post, overrides,
+                           template pairing with the pick winning, the
+                           400/409/404 matrix, and a three-section lineage
   test_facts_agent_visibility.py
                            [v1.17.0] the reference-visibility mirror: both
                            audiences, block 0 of every dimension rendered
@@ -10253,6 +10265,96 @@ release-note item, because nothing a user can see moved.
   `test_research_engine.py`. Mutating the stdlib module briefly is the
   established house pattern there, and re-plumbing all of it onto the
   module-reference swap is a separate decision, not a release unblock.
+
+## Next section in one click — implemented notes (v1.20.0)
+
+Phase 1 of `docs/plans/PROJECT_WORKSPACE_2026-09-22.md`, built on Abraham's
+"i trust you homie … just handle it" (2026-09-22), which ratified the plan's
+five recommended decisions. The v1.17.0 project brief carried everything a
+section pays for into the next one, through a file the user had to export,
+find, and re-import. This removes the file. One new pure-helper trio, two
+routes, one dialog; no new dep, no new env knob, no project-format change,
+no new SSE event.
+
+- **The brief is built from the session being replaced, under the SAME
+  guard as the seed.** `POST /api/project/next-section` is `brief/start`
+  with the upload removed: `_build_brief_locked(session)` and
+  `session.start_from_brief(...)` run inside one `session_state_guard()`
+  acquisition (inside `active_write`), so the brief describes exactly the
+  session the seed replaces — a turn or an edit cannot land between the
+  two. The template lookup still happens first, on a worker thread, as it
+  does on the file route. `_build_brief_locked` (not the pure
+  `build_project_brief`) is deliberate even though the session is about to
+  go away: it is the one place the registry is upserted the way an export
+  upserts it, so the new section's link carries THIS section's record.
+- **State-for-state identical to the file relay, and asserted as such.**
+  `test_next_section_seeds_the_same_session_the_file_relay_does` runs the
+  v1.17.0 path (export the bytes, start from the file) and the new path
+  on identical rich sessions and compares a projection of everything a
+  seed installs — the two are one feature and must never drift, and a
+  hand-written expectation would let them. The projection drops what
+  cannot agree by construction: the section header (the two paths name it
+  differently by design), `project_id` (minted per export), and the two
+  clock stamps. Anything else differing is a bug in one of the paths.
+- **The section header lands in version 0** (`start_from_brief` gains
+  `number` / `title`; a non-empty value overrides a paired template's, an
+  empty one leaves the template's in place). The full-draft prerequisite
+  gate wants the section named, so a page named at the seed has *Draft full
+  section* available at once — the whole reason to name it up front.
+- **A named page counts as content, and that is why the dialog has a third
+  choice.** `SpecSection.has_body_content()` — the master-import gate and
+  the frontend's `hasContent` mirror — is true for a bare header, so a
+  section named at the seed REFUSES an office-master import. The README's
+  "import a master afterwards; the setup survives" only holds for an
+  unnamed page. The dialog therefore offers **leave it unnamed** beside the
+  catalog pick and the typed header, says why, and the runbook's QA row
+  exercises it. Changing the predicate was not on the table: it exists so
+  a header the user typed is never silently replaced.
+- **The catalog is flagged, never filtered.** `next_section_catalog(module,
+  done)` returns every declared section in declaration order with `done`
+  set for the ones the project drafted; the dialog greys them. A list that
+  silently omitted 21 13 13 would read as a module that never offered it.
+  `sections_drafted(session)` is the link's registry (what the brief listed
+  plus anything a later export upserted) then the open section, folded and
+  deduplicated, never `"(unnumbered)"` — an unnumbered section is not one
+  the catalog can exclude. The open-catalog module (generic) gets `[]`, and
+  the dialog then offers the typed header alone.
+- **The typed header is bounded where the registry is bounded.**
+  `clean_next_section_header` folds whitespace and refuses past 40 / 160
+  characters — the same widths `sanitize_section_record` applies — so a
+  section named here is one the registry can record; the route answers 400
+  in the brief's own words.
+- **The options route is a pure read.** `GET /api/project/next-section`
+  builds the brief with the pure `build_project_brief` (the manifest route's
+  posture), never `_build_brief_locked`: a preview must not stamp a link. It
+  answers during a streaming turn (a read), where the POST refuses.
+- **The frontend is the brief path with the file removed, on purpose.**
+  `NextSectionDialog` (its own file; `BriefContents` moved there from
+  `ArtifactPanel` and is imported back, so the export confirm and this
+  dialog render the receipt from one component) collects the choice and
+  hands it up; `App.requestStartNextSection` runs `isUnsaved()` → the same
+  `CloseDialog` gate (new kind `next-section`, the `start-brief` copy) →
+  `doStartNextSection`, which mirrors `doStartFromBrief` line for line
+  (bundle applied, panes discarded, the chat marker naming what was
+  carried, warnings in the notice strip). Template pairing stays on the
+  New-session route and the dialog says so — the fast path is a fast path.
+- **Capability `project.next-section`** — the three-place edit: the
+  registry, the panel button and the dialog's root/primary button, and the
+  `template-use` tour step, which is where `project.brief-start` already
+  lived (one step, several controls — the `updates.manage` precedent). No
+  new step, no anchor, no `TOUR_VERSION` bump. The button is hidden in a
+  tour (a practice copy is not a project) and disabled while anything is
+  in flight; HelpModal's recipe and the trust dossier's brief card were
+  resynced, since both named the file route as the only way.
+- **Tests**: `tests/test_next_section.py` (13) and
+  `frontend/tests/nextSection.test.ts` (5, source-level: the gate before the
+  seed, the gate resuming the new kind, the hidden-in-tour button with its
+  capability, the dialog's three choices with the drafted ones greyed, and
+  the client posting JSON to the one route). The v1.17.0 brief tests are
+  untouched and still pass; the reused fixtures (`_rich_session`,
+  `_brief_bytes_from_a_rich_section`, `_upload`) are imported from
+  `test_project_brief.py` rather than copied, so a change to what a rich
+  section holds reaches both suites.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

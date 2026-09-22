@@ -373,6 +373,22 @@ invisible to CI and expensive to the user.
       what it truncated, and contains **no** key material.
 - [ ] The trace viewer opens from Developer tools and renders with no network.
 
+### Next section in one click (v1.20.0)
+
+- [ ] **Next section → on a rich section.** With a profile, an override, a
+      research round, an attached reference and a recorded fact in the
+      session, press *Next section →*: the save prompt appears; *Save, then
+      start* writes the `.baspec` and opens a new page named from the pick,
+      with the references and facts in their panels, the standards strip
+      showing the carried edition, and readiness passing research as
+      carried. The chat marker names what was carried.
+- [ ] **Leave it unnamed, then import.** Choose *Leave it unnamed* and
+      import an office master into the new section: the import is accepted
+      (a named page would have been refused) and the project setup survives
+      the import.
+- [ ] **In a tour, the button is absent**; with a turn streaming, it is
+      disabled.
+
 ### State that must recover (v1.17.0)
 
 None of these have a DOM harness; the source-level pins in

@@ -1,6 +1,6 @@
 # Phase 3 — Write-back: the brief is a living file, the merge is append-only
 
-**Status:** not started. **Depends on:** Phase 2 for the automatic
+**Status:** in review (PR pending). **Depends on:** Phase 2 (complete, PR #176) for the automatic
 save-time trigger and the panel's affordances (`project_home`). The merge
 itself (3.1–3.4) is pure and may be built and shipped first behind the
 explicit *Update project brief* action and the export-onto-existing-file
@@ -305,15 +305,24 @@ and QC state after success (`refreshReadiness()` / `refreshQc()` calls).
 - **The project brief stays current on its own.** Saving a section now
   refreshes the project's brief beside it, adding what the section
   established — research rounds, references, facts — without removing
-  anything another section recorded. Exporting a brief onto an existing one
-  merges the same way.
-- **Pull what your other sections learned.** A section started earlier can
-  pull the facts, research and references its siblings added since, from
-  the Project panel. Differences in the project setup are shown, not
-  applied.
+  anything another section recorded. A save that adds nothing leaves the
+  brief untouched, and a brief that cannot be updated never stops the save
+  (it says why instead). **Update project brief** in the Project panel does
+  the same on demand.
+- **Exporting onto an existing brief merges.** Picking the project's
+  existing `.basproject` keeps everything already in it; picking another
+  project's brief (or a file that is not one) asks before replacing it.
+- **Pull what your other sections learned.** When a section's siblings have
+  added work it lacks, the Project panel says so and offers **Pull project
+  changes**: their facts, research rounds and reference documents come in,
+  nothing is removed, and differences in the project setup (a city, a
+  client, an edition) are shown, not applied.
 - **Two sections that disagree on an edition are told so.** A conflict in a
   recorded edition between sections becomes a project fact to resolve, not
   a silent choice.
+- **An edited project fact keeps its identity.** Each fact now carries its
+  own id, so a fact edited in one section is recognised in another, and the
+  later edit wins.
 
 ## Deviations from the plan
 
@@ -321,3 +330,110 @@ and QC state after success (`refreshReadiness()` / `refreshQc()` calls).
 known: the plan file's Phase 3 stamps every pulled fact `source_kind="brief"`;
 this spec keeps provenance and uses `brief` only for the D4 conflict fact
 and an unresolvable ref — see 3.4.)
+
+As built, 2026-09-22:
+
+1. **Facts carry an identity (`uid`) and an edit stamp (`edited_at`)**
+   beyond the spec's statement key. The panel's Edit changes a fact's
+   statement, so the statement alone cannot recognise an edited fact across
+   a fork — it would land as a second active fact beside its older self.
+   `record()` mints the uid, `update()` keeps it and stamps `edited_at`;
+   both are serialized only when set. The merge takes a twin by uid first
+   (for a fact recorded before uids: statement + placement + where and when
+   recorded), a retirement on either side stays terminal, and between two
+   live copies the later edit wins. The statement key then applies exactly
+   as specified to everything that is not a twin.
+2. **The research merge reconciles two things after the replay.** Replaying
+   unseen rounds through `append_research_round` assumes the fresh round is
+   the newer one; a fork's rounds interleave in time, so a sequential
+   replay can mis-date an item's evidence and pick the wrong "latest"
+   error. After the replay, an item held on both sides is dated by the
+   symmetric rule (latest grounding, else earliest report), and each
+   dimension's error, the profile date and its project are recomputed from
+   the merged rounds by date. The item-level join itself is untouched.
+3. **A legacy round's key is carried as its `round_id`.** The spec keys a
+   round with no id on `(section, research_date, round_index)`; an index
+   changes the moment a merge renumbers the round, so the key is hashed
+   into a round-id-shaped string and carried as the replayed round's id —
+   the next merge still recognises it.
+4. **The profile merges field by field.** "Newest `updated_at` wins whole"
+   would let a section with a blank field erase the project's value (a
+   deletion). Each field takes the newest export's value where it records
+   one and the older value otherwise; every difference is still reported
+   naming both.
+5. **The D4 conflict statement is direction-independent.** The spec's
+   template names both sections in the statement. The brief does not
+   record which section set its override, a statement is bounded at 240
+   characters (bases are free text), and — the decisive one — with "newest
+   export wins" the brief's edition flips on each section's save, so a
+   directional statement recorded ONE disagreement as TWO facts. The
+   statement names the sorted editions ("… 2022 and 2025 are both recorded.
+   Resolve before issue."); who holds which, and each basis, ride in
+   `detail`; the uid derives from the statement.
+6. **The reference cap applies to what a merge ADDS.** Applying the cap to
+   the whole merged list could drop a document the extended side already
+   held (a legacy file past the token cap) — a deletion. Held documents are
+   always kept; new ones land while they fit; the rest are named.
+7. **Duplicate rids are refused on either side**, not only in the merged
+   store: on a pull the file is the incoming side, and two documents under
+   one id would point a fact at whichever the rid map saw first.
+8. **A pull installs references through `ReferenceDocStore.load`**, not
+   `add()`: the merge already minted new rids past the store's counter
+   (`reference_mint_floor = next_seq`, a new read-only property) and
+   rewrote the facts' refs to them; `add()` would re-prepare the text,
+   re-stamp it and mint again. Facts install first (`absorb` is the one
+   install that can refuse), so a refused pull changes nothing.
+9. **The pull answers `{ok, report, installed, …doc payload}`**, not a
+   session bundle — a bundle would reset client state (the transcript
+   view, the panes) that a pull never touches; the client re-reads
+   research, Final QC and readiness instead.
+10. **Pull availability is a dry run.** The spec offered the pull when the
+    file's `updated_at` is newer than the link's `brief_updated_at`; a
+    sibling's save rewrites its registry record without adding an asset,
+    so that rule would offer empty pulls. `brief_updated_at` now moves only
+    when the section holds everything the file holds, equality of the two
+    stamps short-circuits, and anything else runs the pull as a dry merge
+    (`GET /api/project/sections` gains `pull_available` + `pull_summary`).
+11. **Brief timestamps have microsecond resolution.** Found by a smoke run:
+    a sibling's refresh landing in the same second as this section's sync
+    produced the same seconds-resolution `updated_at`, and the pull offer
+    was silently withheld. The ISO form still sorts chronologically against
+    an older build's stamps; the frontend reads only the date.
+12. **A registry record that moved only its `exported_at` is not news.**
+    Every save rebuilds the section's record with a fresh stamp; without
+    this rule every save would rewrite (and reorder) the brief. A save that
+    brings nothing new leaves the file byte-identical.
+13. **The shell's save-time refresh calls `refresh_project_brief`
+    directly**, not over HTTP: the same function the route runs, no token,
+    and it works in a session with no backend runtime. An in-process lock
+    serializes read-merge-write — the export-onto-existing path holds it
+    too, but asks its "Replace the file?" question with it released; there
+    is no cross-process lock (two app instances on one folder: the later
+    write wins; a torn file is impossible).
+14. **The merge route answers the brief as text in JSON** (`brief`, plus
+    `filename`, `report`, `pull_available`) rather than as an attachment:
+    the shell needs the report with the bytes in one response.
+15. **A write failure is a 500 `write_failed`**, not a 409 — an
+    environment failure, not a state conflict.
+16. **Carried research stays disclosed after a pull.** The rounds a pull
+    installs grow `research_rounds_at_seed` (so the registry keeps the
+    section's own count), and the readiness disclosure also names the
+    sections a carried round's stamp records — so it appears for a
+    pulled-into section that was never seeded.
+17. **Test placement.** The "a pull that changes facts flips the retained
+    QC result stale" assertion lives in the pull route test
+    (`tests/test_brief_merge.py`), asserted once where the pull happens,
+    rather than in `test_facts_agent_visibility.py` /
+    `test_qc_manifest_integrity.py`. Writing it exposed that
+    `tests/fakes.audit_grade_qc_result` built its manifest without the
+    effective discipline and the attached documents — stale from birth for
+    any rich session — and it was corrected.
+18. **Two knowing test updates outside the new file**: the tutorial's facts
+    fixture takes deterministic uids (a bundled fixture must not mint random
+    ones), and `test_next_section.py`'s state-for-state projection drops the
+    per-record uid as it already drops the per-export project id.
+19. **Limits recorded, not solved.** Deleting a reference document in one
+    section does not remove it from the brief, and a later pull offers it
+    back (append-only; retiring a fact is the travelling way to withdraw
+    it). A browser (dev) export stays a plain download — a browser cannot
+    read the destination file to merge into it.

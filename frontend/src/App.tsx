@@ -79,6 +79,8 @@ import {
   startFromProjectBrief,
   startNextSection,
   downloadProjectBrief,
+  pullProject,
+  refreshProjectBrief,
   startResearch,
   stopChat,
   stopQc,
@@ -118,6 +120,11 @@ import {
   formatProjectHeading,
   projectDiscipline,
 } from "./lib/projectHeading";
+import {
+  describeBriefRefresh,
+  describePull,
+  pullNoticeLines,
+} from "./lib/projectMerge";
 import CloseDialog from "./components/CloseDialog";
 import ConfirmDialog from "./components/ConfirmDialog";
 import { buildQcApplicationDigest } from "./lib/qcRemediation";
@@ -2236,6 +2243,21 @@ export default function App() {
           // replacement brings it).
           if (result.target) setProjectHome(result.home ?? null);
           setProjectSectionsNonce((n) => n + 1);
+          // The save refreshed the project brief beside it (Project
+          // workspace Phase 3). A brief that could not be updated never fails
+          // the save — but it is said, in the shell's own words, because the
+          // next section would otherwise read a brief missing this work.
+          if (result.brief_error) {
+            setImportNotice({
+              tone: "warn",
+              name: "",
+              title: "Saved — but the project brief was not updated",
+              lines: [result.brief_error],
+            });
+          } else if (result.brief_refreshed) {
+            // The brief now lists this section's own record: re-read the link.
+            refreshDoc();
+          }
         }
         return {
           ok: !!result?.ok,
@@ -2314,6 +2336,50 @@ export default function App() {
         error: e instanceof Error ? e.message : String(e),
       };
     }
+  };
+
+  /** Update project brief (Project workspace Phase 3): merge this section
+   *  into the brief in its project folder — append-only, the implementation
+   *  every save of a homed section already runs. Rejects with the server's
+   *  own refusal (a tour, running work, no folder, a brief it cannot read). */
+  const onRefreshProjectBrief = async (): Promise<string> => {
+    const result = await refreshProjectBrief();
+    // The link's registry (and the brief it last agreed with) moved.
+    refreshDoc();
+    setProjectSectionsNonce((n) => n + 1);
+    return (
+      describeBriefRefresh(result.report, result.written) +
+      (result.pull_available
+        ? " The brief also holds work from other sections that this one has not pulled yet."
+        : "")
+    );
+  };
+
+  /** Pull project changes (Project workspace Phase 3): install the research
+   *  rounds, reference documents and facts this project's other sections
+   *  added. Differences in the project setup are SHOWN (the notice strip,
+   *  in the server's words), never applied — the document is the section's
+   *  own. Research, Final QC and readiness are re-read: new facts and
+   *  documents change what a retained review read. */
+  const onPullProject = async (): Promise<string> => {
+    const result = await pullProject();
+    if (!applyDocPayload(result)) return "";
+    refreshResearch();
+    refreshQc();
+    refreshReadiness();
+    setProjectSectionsNonce((n) => n + 1);
+    const summary = describePull(result.installed);
+    addNote(summary);
+    const lines = pullNoticeLines(result.report);
+    if (lines.length) {
+      setImportNotice({
+        tone: "warn",
+        name: "",
+        title: "Pulled project changes — differences to review",
+        lines,
+      });
+    }
+    return summary;
   };
 
   /** Does the session hold work worth saving? Authoritative server check
@@ -3113,6 +3179,8 @@ export default function App() {
           onUpdateProjectFact={updateProjectFactHandler}
           onSupersedeProjectFact={supersedeProjectFactHandler}
           onExportProjectBrief={saveProjectBrief}
+          onRefreshProjectBrief={onRefreshProjectBrief}
+          onPullProject={onPullProject}
           onStartNextSection={(opts) => void requestStartNextSection(opts)}
           projectHome={projectHome}
           onOpenSection={(number) => void requestOpenSection(number)}

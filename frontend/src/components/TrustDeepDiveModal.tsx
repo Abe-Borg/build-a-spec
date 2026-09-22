@@ -694,14 +694,15 @@ function Dossier() {
             <>
               <b className="text-ink">Project briefs.</b> A{" "}
               <code className="text-ink">.basproject</code> is written locally
-              when you export one and read locally when the next section starts
-              from it; no request is made either way. In the desktop app the
-              Project panel also reads the project folder locally — the brief
-              beside a section's saved file and the names of the section files
-              next to it — and never writes a path into any file. A brief
-              carries the full text of your attached reference documents and
-              every recorded project fact, so treat it as sensitive project
-              data.
+              when you export one — and, in the desktop app, every time you save
+              a section that lives beside it, which merges that section's work
+              into it — and read locally when the next section starts from it
+              or pulls from it; no request is made either way. The Project
+              panel also reads the project folder locally — the brief beside a
+              section's saved file and the names of the section files next to
+              it — and never writes a path into any file. A brief carries the
+              full text of your attached reference documents and every recorded
+              project fact, so treat it as sensitive project data.
             </>,
             <>
               <b className="text-ink">Telemetry, analytics, crash reports, usage
@@ -1307,8 +1308,8 @@ function Dossier() {
 
         <Runtime
           n={14}
-          title="Exporting or starting from a project brief"
-          trigger="Next section → in the panel (no file: the brief is built in memory and the next section seeded from it); or Export → Export project brief; or New session → New section in an existing project; or Open on a row of the Project panel."
+          title="Exporting, updating, or starting from a project brief"
+          trigger="Next section → in the panel (no file: the brief is built in memory and the next section seeded from it); or Export → Export project brief; or New session → New section in an existing project; or Open on a row of the Project panel; or saving a section that lives beside its brief; or Update project brief / Pull project changes in the Project panel."
           runs={
             <>
               Local serialization and parsing only. Exporting writes a{" "}
@@ -1329,7 +1330,18 @@ function Dossier() {
               the section files present, and its Open reads a sibling by number
               through the same project-load path as Open — a name that resolves
               outside the folder is refused. The folder is never recorded in
-              any file, so a project folder can be moved or shared whole.
+              any file, so a project folder can be moved or shared whole. The
+              brief there is a living file: each save of a section beside it —
+              or Update project brief — merges that section into it
+              append-only (research rounds replayed by their own ids,
+              documents kept by their content, facts joined by statement, and
+              nothing another section recorded removed), written whole or not
+              at all; exporting onto an existing brief merges the same way, and
+              asks before replacing a file that is another project’s. Pull
+              project changes runs the merge the other way, bringing in only
+              research rounds, documents and facts — a difference in the
+              project setup is listed, never applied, and an edition two
+              sections disagree on becomes a project fact to resolve.
             </>
           }
           sent="Nothing. No network call is made."

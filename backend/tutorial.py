@@ -8,6 +8,7 @@ API key.
 from __future__ import annotations
 
 import copy
+import hashlib
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -514,6 +515,14 @@ def _seed_tutorial_project_facts(clone: SessionState) -> None:
         # so the panel's group header carries a name in the tour.
         discipline=effective_discipline(clone),
     )
+    # ``record`` mints a random identity per fact (Project workspace Phase 3
+    # — what lets a project brief recognise a fact across a fork). A tutorial
+    # fixture is bundled and deterministic, so its facts take one derived
+    # from their own statements instead.
+    for fact in clone.facts.items:
+        fact.uid = hashlib.sha256(
+            f"tutorial-fact:{fact.statement}".encode("utf-8")
+        ).hexdigest()[:32]
 
 
 def _seed_tutorial_followups(clone: SessionState, element_id: str) -> None:

@@ -38,6 +38,7 @@ import hashlib
 import json
 import re
 import time
+import uuid
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -626,6 +627,18 @@ class ResearchRound:
     # (and the QC research fingerprint over them) are untouched. Last, so
     # positional construction keeps working.
     section: str = ""
+    # The round's own identity (Project workspace Phase 3): a uuid4 hex
+    # minted at the round's birth in ``run_requirements_research`` and
+    # carried verbatim by every later append, so two copies of a profile
+    # that forked through a project brief can tell a round they share from
+    # two genuine same-day rounds on one section — a fingerprint over the
+    # record could not (the item ids live cumulatively on the profile).
+    # ``item_ids`` is this round's own membership, new AND re-confirmed,
+    # which is what makes a round replayable into another profile
+    # (:func:`merge_research_profiles`). Both are serialized only when set,
+    # the ``section`` rule: a legacy profile's bytes do not move.
+    round_id: str = ""
+    item_ids: list[str] = field(default_factory=list)
 
     @property
     def completed_dimensions(self) -> int:
@@ -809,6 +822,8 @@ class RequirementsProfile:
                     "new_items": r.new_items,
                     "repeat_items": r.repeat_items,
                     **({"section": r.section} if r.section else {}),
+                    **({"round_id": r.round_id} if r.round_id else {}),
+                    **({"item_ids": list(r.item_ids)} if r.item_ids else {}),
                 }
                 for r in self.rounds
             ],
@@ -865,6 +880,8 @@ class RequirementsProfile:
                     new_items=int(raw.get("new_items", 0) or 0),
                     repeat_items=int(raw.get("repeat_items", 0) or 0),
                     section=" ".join(str(raw.get("section", "") or "").split()),
+                    round_id=_round_id_from_raw(raw.get("round_id")),
+                    item_ids=_item_ids_from_raw(raw.get("item_ids")),
                 )
             )
         if not rounds:
@@ -910,6 +927,36 @@ def _as_list(value: object) -> list:
     block the whole project from opening.
     """
     return value if isinstance(value, list) else []
+
+
+# Bounds on the two round-identity fields read back from a file. Lenient by
+# design (the deserializer's posture): a value that is not a string, or is
+# blank, simply reads as "not recorded" — a round without an id is keyed the
+# legacy way (:func:`research_round_key`), never refused.
+_MAX_ROUND_ID_CHARS = 64
+_MAX_ITEM_ID_CHARS = 80
+
+
+def _round_id_from_raw(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.strip()
+    return cleaned if 0 < len(cleaned) <= _MAX_ROUND_ID_CHARS else ""
+
+
+def _item_ids_from_raw(value: object) -> list[str]:
+    """A round's membership: strings only, deduplicated, first-seen order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in _as_list(value):
+        if not isinstance(entry, str):
+            continue
+        cleaned = entry.strip()
+        if not cleaned or len(cleaned) > _MAX_ITEM_ID_CHARS or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        out.append(cleaned)
+    return out
 
 
 def _statuses_from_raw(data: object) -> list[DimensionStatus]:
@@ -1103,6 +1150,7 @@ def append_research_round(
     fresh: RequirementsProfile,
     *,
     section: str = "",
+    round_id: str = "",
 ) -> RequirementsProfile:
     """Fold a just-completed run into the session's accumulated profile.
 
@@ -1128,12 +1176,20 @@ def append_research_round(
     ``fresh``'s own round — the engine stamps a fan-out's profile at birth
     — is carried over when the caller passes none; that is what lets the
     runner's adopt path stay ``append_research_round(previous, result)``.
+
+    ``round_id`` follows the same rule (Project workspace Phase 3): the
+    engine mints one into the round it stamps at birth, and an append that
+    passes none carries ``fresh``'s own. The record's ``item_ids`` is every
+    item id in ``fresh`` — new AND re-confirmed — so the round can later be
+    replayed into another copy of the profile (:func:`merge_research_profiles`).
     """
     round_index = (previous.round_count + 1) if previous is not None else 1
     date = fresh.research_date
     section = " ".join(section.split()) or (
         fresh.rounds[-1].section if fresh.rounds else ""
     )
+    round_id = round_id.strip() or (fresh.rounds[-1].round_id if fresh.rounds else "")
+    membership = list(dict.fromkeys(i.item_id for i in fresh.items if i.item_id))
     prior_items = list(previous.items) if previous is not None else []
     prior_statuses = (
         list(previous.dimension_statuses) if previous is not None else []
@@ -1170,6 +1226,8 @@ def append_research_round(
         new_items=len(added),
         repeat_items=len(confirmed),
         section=section,
+        round_id=round_id,
+        item_ids=membership,
     )
     return RequirementsProfile(
         items=items,
@@ -1187,11 +1245,270 @@ def append_research_round(
                     dimension_statuses=[
                         dataclasses.replace(s) for s in r.dimension_statuses
                     ],
+                    item_ids=list(r.item_ids),
                 )
                 for r in (previous.rounds if previous is not None else [])
             ),
             record,
         ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Merging two copies of one project's research (Project workspace Phase 3)
+# ---------------------------------------------------------------------------
+#
+# A section seeded from a project brief is a FORK of the project's research:
+# both copies keep appending rounds, and the brief's write-back (and a pull
+# the other way) has to join them. The join replays each round one copy has
+# and the other lacks through ``append_research_round`` — so the item-level
+# rules (confirm in place, citations union, grounded OR, confidence max) and
+# the cumulative per-dimension view are the ones every round already goes
+# through, not a second statement of them. Two things a pure replay cannot
+# get right are reconciled afterwards, and only those two: an item's
+# EVIDENCE date (a fork's rounds interleave in time, and a replay can only
+# apply the sequential "the fresh round is the newer one" rule), and the
+# profile-level "latest round" facts (its date, its project, and each
+# dimension's latest error).
+
+
+def legacy_round_key(round_: ResearchRound) -> str:
+    """The key of a round recorded before ``round_id`` existed.
+
+    ``(section, research_date, round_index)`` — the only identity such a
+    record has — hashed to the shape of a real round id, so a replayed legacy
+    round can CARRY its key as its ``round_id`` once a merge renumbers it (a
+    key built from a round index would otherwise stop matching the moment the
+    index moves). Two genuine legacy rounds on one blank section, one day and
+    one index are indistinguishable by construction; the merge report says
+    whenever this key was used.
+    """
+    marker = repr(("legacy-round", round_.section, round_.research_date, round_.round_index))
+    return hashlib.sha256(marker.encode("utf-8")).hexdigest()[:32]
+
+
+def research_round_key(round_: ResearchRound) -> str:
+    """What identifies a round across copies of a profile."""
+    return round_.round_id or legacy_round_key(round_)
+
+
+@dataclass
+class ResearchMergeReport:
+    """What :func:`merge_research_profiles` did, as counts a report can show."""
+
+    rounds_added: int = 0
+    items_added: int = 0
+    items_confirmed: int = 0
+    # Replayed rounds that had no round id (keyed the legacy way).
+    legacy_rounds: int = 0
+    # Replayed rounds with no recorded membership: only the items they FIRST
+    # found could be attributed to them (re-confirmations are unknowable).
+    first_found_only: int = 0
+    # Items the other copy held that no replayable round claimed (a
+    # hand-edited file): carried as they were rather than dropped.
+    carried_without_round: int = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return dataclasses.asdict(self)
+
+    def notes(self) -> list[str]:
+        out: list[str] = []
+        if self.legacy_rounds:
+            out.append(
+                f"{self.legacy_rounds} research round(s) predate round identities "
+                "and were matched by section, date and round number."
+            )
+        if self.first_found_only:
+            out.append(
+                f"{self.first_found_only} older research round(s) recorded no "
+                "membership; only the findings they first reported were "
+                "attributed to them."
+            )
+        if self.carried_without_round:
+            out.append(
+                f"{self.carried_without_round} research finding(s) belonged to no "
+                "round the brief could replay and were carried as they were."
+            )
+        return out
+
+
+def _evidence_date(*items: ResearchItem) -> str:
+    """An item's date over several copies: the latest grounding, else the
+    earliest report — the ``research_date`` contract (it dates EVIDENCE,
+    never assertion), stated symmetrically so neither copy has to be the
+    newer one."""
+    grounded = [i.research_date for i in items if i.grounded and i.research_date]
+    if grounded:
+        return max(grounded)
+    reported = [i.research_date for i in items if i.research_date]
+    return min(reported) if reported else ""
+
+
+def _latest_round_errors(
+    statuses: list[DimensionStatus], rounds: list[ResearchRound]
+) -> None:
+    """Each cumulative status's error is its dimension's LATEST round's.
+
+    In place. A merged profile's rounds need not run in date order (a fork's
+    rounds interleave), so "latest" is by research date, ties to the later
+    record; for a profile whose rounds are in order this is exactly the
+    sequential rule ``_accumulate_statuses`` applies.
+    """
+    for status in statuses:
+        latest: tuple[str, int] | None = None
+        chosen: DimensionStatus | None = None
+        for position, round_ in enumerate(rounds):
+            for own in round_.dimension_statuses:
+                if own.dimension_id != status.dimension_id:
+                    continue
+                rank = (round_.research_date, position)
+                if latest is None or rank >= latest:
+                    latest, chosen = rank, own
+        if chosen is not None:
+            status.error = chosen.error
+            status.error_kind = chosen.error_kind
+
+
+def merge_research_profiles(
+    base: "RequirementsProfile | None",
+    incoming: "RequirementsProfile | None",
+) -> "tuple[RequirementsProfile | None, ResearchMergeReport]":
+    """Fold ``incoming``'s unseen rounds into ``base``. Pure; never mutates.
+
+    Rounds are identified by :func:`research_round_key`. Every round of
+    ``incoming`` that ``base`` does not hold is replayed, in ``incoming``'s
+    order, as a one-round profile — its own statuses, date and section, and
+    the items its membership names — through :func:`append_research_round`,
+    so it is numbered after ``base``'s rounds and its findings are confirmed
+    in place or added by the rule every round already follows. A round with
+    no recorded membership replays the items it FIRST found (``round_index``
+    equal to its own), which is all its record can attribute.
+
+    Then the two reconciliations a replay cannot do (see the section
+    comment): items held on both sides take both sides' evidence with the
+    symmetric date rule, items only ``incoming`` held keep ``incoming``'s own
+    dating, and the profile's date, project and per-dimension latest error
+    are recomputed from the merged rounds. ``base`` of ``None`` returns a copy
+    of ``incoming``; nothing new returns ``base`` itself — which is what makes
+    a repeated merge a no-op.
+    """
+    report = ResearchMergeReport()
+    if incoming is None or (not incoming.rounds and not incoming.items):
+        return base, report
+    if base is None:
+        copied = RequirementsProfile.from_dict(incoming.to_dict())
+        if copied is not None:
+            report.rounds_added = copied.round_count
+            report.items_added = len(copied.items)
+            report.legacy_rounds = sum(1 for r in copied.rounds if not r.round_id)
+        return copied, report
+
+    incoming_items: dict[str, ResearchItem] = {}
+    for item in incoming.items:
+        incoming_items.setdefault(item.item_id, item)
+    base_items = {item.item_id: item for item in base.items}
+    known = {research_round_key(r) for r in base.rounds}
+    acc = base
+    replayed = False
+    for round_ in incoming.rounds:
+        key = research_round_key(round_)
+        if key in known:
+            continue
+        known.add(key)
+        legacy = not round_.round_id
+        if legacy:
+            report.legacy_rounds += 1
+        if round_.item_ids:
+            members = [
+                incoming_items[item_id]
+                for item_id in round_.item_ids
+                if item_id in incoming_items
+            ]
+        else:
+            report.first_found_only += 1
+            members = [
+                item
+                for item in incoming.items
+                if item.round_index == round_.round_index
+            ]
+        one_round = RequirementsProfile(
+            items=[dataclasses.replace(item) for item in members],
+            dimension_statuses=[
+                dataclasses.replace(s) for s in round_.dimension_statuses
+            ],
+            research_date=round_.research_date,
+            project=dict(incoming.project) if incoming.project else None,
+        )
+        acc = append_research_round(
+            acc, one_round, section=round_.section, round_id=key
+        )
+        if legacy and not round_.item_ids:
+            # Membership was never recorded; claiming the first-found subset
+            # as the round's whole membership would overstate what is known.
+            acc.rounds[-1].item_ids = []
+        replayed = True
+        report.rounds_added += 1
+
+    merged_ids = {item.item_id for item in acc.items}
+    orphans = [
+        item
+        for item_id, item in incoming_items.items()
+        if item_id not in merged_ids
+    ]
+    if not replayed and not orphans:
+        return base, report
+
+    # The merged numbering of each incoming round, for an orphan's round index.
+    merged_index = {research_round_key(r): r.round_index for r in acc.rounds}
+    incoming_index = {r.round_index: research_round_key(r) for r in incoming.rounds}
+    items: list[ResearchItem] = []
+    for item in acc.items:
+        prior = base_items.get(item.item_id)
+        other = incoming_items.get(item.item_id)
+        if prior is not None and other is not None:
+            confirmed = _confirm_item(prior, other)
+            item = dataclasses.replace(
+                confirmed,
+                research_date=_evidence_date(prior, other),
+                round_index=prior.round_index or item.round_index,
+            )
+            if item != prior:
+                report.items_confirmed += 1
+        elif other is not None:
+            # Only the incoming copy held it: its own lineage dated it; the
+            # replay only decided where it sits in the merged numbering.
+            item = dataclasses.replace(other, round_index=item.round_index)
+            report.items_added += 1
+        items.append(item)
+    for orphan in orphans:
+        report.carried_without_round += 1
+        report.items_added += 1
+        key = incoming_index.get(orphan.round_index)
+        items.append(
+            dataclasses.replace(
+                orphan,
+                round_index=merged_index.get(key, 0) if key else 0,
+            )
+        )
+
+    statuses = [dataclasses.replace(s) for s in acc.dimension_statuses]
+    _latest_round_errors(statuses, acc.rounds)
+    for status in statuses:
+        owned = [i for i in items if i.dimension_id == status.dimension_id]
+        status.item_count = len(owned)
+        status.grounded_count = sum(1 for i in owned if i.grounded)
+    dates = [r.research_date for r in acc.rounds if r.research_date]
+    newest_incoming = (incoming.research_date or "") > (base.research_date or "")
+    project = incoming.project if newest_incoming else base.project
+    return (
+        RequirementsProfile(
+            items=items,
+            dimension_statuses=statuses,
+            research_date=max(dates) if dates else acc.research_date,
+            project=dict(project) if project else None,
+            rounds=acc.rounds,
+        ),
+        report,
     )
 
 
@@ -2380,6 +2697,9 @@ def run_requirements_research(
 
     # Every profile carries its round record from birth — a fan-out is one
     # round, and the runner renumbers it when folding it onto earlier ones.
+    # The round's identity is minted here, once, and every later append
+    # carries it: it is what lets a project brief tell a round two sections
+    # share from two genuine same-day rounds (Project workspace Phase 3).
     return append_research_round(
         None,
         RequirementsProfile(
@@ -2389,6 +2709,7 @@ def run_requirements_research(
             project=profile.to_dict(),
         ),
         section=section_label,
+        round_id=uuid.uuid4().hex,
     )
 
 

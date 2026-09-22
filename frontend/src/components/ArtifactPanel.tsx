@@ -111,6 +111,12 @@ interface Props {
   /** Bumped after a save or a brief export so the Project panel re-reads
    *  the folder. */
   projectSectionsNonce: number;
+  /** Update project brief (Project workspace Phase 3): merge this section
+   *  into the brief in its folder; resolves a one-line result. */
+  onRefreshProjectBrief: () => Promise<string>;
+  /** Pull project changes (Project workspace Phase 3): bring in what the
+   *  brief holds that this section lacks; resolves a one-line result. */
+  onPullProject: () => Promise<string>;
   lintIssues: LintIssue[];
   standards: StandardInfo[];
   profileComplete: boolean;
@@ -371,6 +377,8 @@ export default function ArtifactPanel({
   projectHome,
   onOpenSection,
   projectSectionsNonce,
+  onRefreshProjectBrief,
+  onPullProject,
   lintIssues,
   standards,
   profileComplete,
@@ -1732,6 +1740,8 @@ export default function ArtifactPanel({
         openNonce={drawerNonces?.projectPanel}
         onOpenSection={onOpenSection}
         onNextSection={() => setNextSectionOpen(true)}
+        onRefreshBrief={onRefreshProjectBrief}
+        onPull={onPullProject}
       />
       <ProjectFactsPanel
         items={projectFacts}

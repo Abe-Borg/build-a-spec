@@ -1543,7 +1543,11 @@ def test_a_round_records_the_section_that_ran_it_and_a_legacy_round_does_not():
     restored = RequirementsProfile.from_dict(json.loads(json.dumps(first.to_dict())))
     assert restored is not None and restored.rounds[0].section == "21 13 13"
 
-    # No stamp, no key: a legacy-shaped round serializes exactly as before.
+    # No stamp, no key. Every appended round records its own membership
+    # since Project workspace Phase 3 (``item_ids`` — what makes a round
+    # replayable into another copy of the profile), so that key is present;
+    # a round with no ``round_id`` carries none. A LOADED pre-Phase-3 round
+    # still serializes byte-identically — tests/test_brief_merge.py pins it.
     second = append_research_round(
         first, _round(items=[_ritem("r-b", "Rule B.")], date="2026-09-02")
     )
@@ -1551,7 +1555,9 @@ def test_a_round_records_the_section_that_ran_it_and_a_legacy_round_does_not():
     assert "section" not in second.to_dict()["rounds"][1]
     assert set(second.to_dict()["rounds"][1]) == {
         "round_index", "research_date", "dimension_statuses", "new_items", "repeat_items",
+        "item_ids",
     }
+    assert second.to_dict()["rounds"][1]["item_ids"] == ["r-b"]
 
     # The engine stamps a fan-out's profile at birth; the runner then folds
     # that whole profile in with no keyword, and the stamp must survive

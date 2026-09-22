@@ -176,8 +176,11 @@ from .spec_doc.docx_export import (
 )
 from .project_brief import (
     PROJECT_BRIEF_MEDIA_TYPE,
+    MergeReport,
     ProjectBrief,
     ProjectBriefError,
+    ProjectBriefMergeRefused,
+    ProjectBriefMismatchError,
     ProjectBriefTooLargeError,
     brief_bytes,
     brief_filename,
@@ -185,10 +188,13 @@ from .project_brief import (
     brief_manifest,
     build_project_brief,
     clean_next_section_header,
+    merge_project_brief,
     next_section_catalog,
     parse_brief_json,
     parse_project_brief,
+    read_brief_file,
     sections_drafted,
+    write_brief_atomically,
 )
 from .project_facts import ProjectFactError
 from .reference_docs import ReferenceDocError, prepare_reference_text
@@ -1727,6 +1733,18 @@ def _carried_research(session: SessionState) -> tuple[list[str], int]:
     if at_seed <= 0:
         return [], 0
     sources = [str(s) for s in (link.get("seeded_from") or []) if str(s).strip()]
+    # A pull (Project workspace Phase 3) carries rounds too, into a section
+    # that may never have been seeded at all, and each round records the
+    # section that ran it: name those sections as well, so the disclosure
+    # neither vanishes for a pulled-into section nor credits a sibling's
+    # research to the seed alone. A seeded section's own sources already
+    # cover its seed's stamps, so this adds nothing there.
+    profile = getattr(session.research, "profile_result", None)
+    own = " ".join(str(getattr(session.doc.doc, "number", "") or "").split())
+    for round_ in (getattr(profile, "rounds", None) or []):
+        stamp = " ".join(str(getattr(round_, "section", "") or "").split())
+        if stamp and stamp != own and stamp not in sources:
+            sources.append(stamp)
     return sources, at_seed
 
 
@@ -1745,10 +1763,12 @@ def _carried_research_note(
     for a session that carried nothing.
     """
     sources, at_seed = _carried_research(session)
-    if not sources or at_seed <= 0:
+    if at_seed <= 0:
         return "", ""
     total = profile.round_count
-    named = ", ".join(sources)
+    # Legacy rounds carry no section stamp, so a pull of one names no source;
+    # the disclosure still says the research was carried.
+    named = ", ".join(sources) or "other sections of this project"
     if total <= at_seed:
         return (
             f" (carried from {named}; {total} round(s); last research "
@@ -2390,6 +2410,399 @@ def _session_bundle(lease: sessions.WorkspaceLease | None = None) -> dict[str, A
         }
 
 
+# ---------------------------------------------------------------------------
+# The brief is a living file (Project workspace Phase 3)
+# ---------------------------------------------------------------------------
+#
+# Module level, not inside ``create_app``, because the native shell calls
+# the refresh directly at the end of a save (``main._CloseController``) —
+# the same implementation the route runs, so a save and the panel's Update
+# project brief can never refresh the brief two different ways.
+
+# One read-merge-write of a project brief at a time in this process: the
+# save-time refresh and a click on Update project brief (or a pull reading
+# the file) must not interleave into a lost update. Another app instance on
+# the same folder is not covered — there is no cross-process lock, and the
+# atomic replace means the loser's merge is lost, not a torn file.
+_BRIEF_FILE_LOCK = threading.Lock()
+
+
+def _build_brief_locked(session: SessionState) -> ProjectBrief:
+    """Build this session's brief under the caller's guard, stamping the
+    project link so exporting twice never mints two project ids and the
+    section file records which project it belongs to."""
+    ready = bool(_readiness_payload(session)["ready"])
+    brief = build_project_brief(session, ready=ready)
+    previous = session.project_link if isinstance(session.project_link, dict) else {}
+    session.project_link = sanitize_project_link(
+        {
+            "project_id": brief.project_id,
+            "name": brief.name,
+            "brief_updated_at": brief.updated_at,
+            "seeded_from": list(previous.get("seeded_from", []) or []),
+            "research_rounds_at_seed": int(
+                previous.get("research_rounds_at_seed", 0) or 0
+            ),
+            "sections": list(brief.sections),
+        }
+    )
+    return brief
+
+
+def _session_brief_locked(session: SessionState) -> ProjectBrief:
+    """This session's brief as a pure read (no link stamp) — the caller holds
+    the guard. What a refresh merges into the file and what a pull merges the
+    file into."""
+    return build_project_brief(
+        session, ready=bool(_readiness_payload(session)["ready"])
+    )
+
+
+def _record_brief_sync_locked(
+    session: SessionState,
+    merged: ProjectBrief,
+    *,
+    synced_at: str | None,
+    extra_carried_rounds: int = 0,
+) -> None:
+    """Record what this session now knows of the project brief (caller holds
+    the guard).
+
+    The registry becomes the merged one (the PROJECT SECTIONS block and the
+    panel read it). ``brief_updated_at`` — the brief this session last fully
+    agreed with — moves to ``synced_at`` only when the session holds
+    everything the file holds; otherwise it is left where it was. (Whether a
+    pull is worth offering is decided by a dry run against the file, never by
+    this timestamp alone — see ``_pull_dry_run``.) ``extra_carried_rounds``
+    counts research rounds a pull brought in: they were carried, not run
+    here, and the section's own count (``section_record``) and the
+    carried-research disclosure read them so.
+    """
+    link = session.project_link if isinstance(session.project_link, dict) else {}
+    if link.get("project_id") != merged.project_id:
+        return
+    session.project_link = sanitize_project_link(
+        {
+            **link,
+            "brief_updated_at": (
+                synced_at if synced_at is not None else link.get("brief_updated_at", "")
+            ),
+            "research_rounds_at_seed": int(link.get("research_rounds_at_seed", 0) or 0)
+            + max(0, int(extra_carried_rounds)),
+            "sections": [dict(record) for record in merged.sections],
+        }
+    )
+
+
+@dataclass
+class BriefSyncOutcome:
+    """What a refresh or a pull did — or why it did nothing. The route
+    serializes it; the native save folds it into its result."""
+
+    ok: bool
+    code: str = ""
+    error: str = ""
+    status_code: int = 200
+    report: dict[str, Any] | None = None
+    brief_updated_at: str = ""
+    pull_available: bool = False
+    written: bool = False
+
+    def payload(self) -> dict[str, Any]:
+        body: dict[str, Any] = {"ok": self.ok}
+        if not self.ok:
+            body.update({"code": self.code, "error": self.error})
+        body.update(
+            {
+                "report": self.report,
+                "brief_updated_at": self.brief_updated_at,
+                "pull_available": self.pull_available,
+                "written": self.written,
+            }
+        )
+        return body
+
+
+def _brief_sync_refusal(
+    code: str, error: str, *, status_code: int = 409, report: dict | None = None
+) -> BriefSyncOutcome:
+    return BriefSyncOutcome(
+        ok=False, code=code, error=error, status_code=status_code, report=report
+    )
+
+
+def _read_home_brief(home: dict[str, str]) -> ProjectBrief | BriefSyncOutcome:
+    """The brief in the project folder, parsed — or the refusal saying why not.
+
+    Disk I/O and a full parse: never under the guard. A brief that cannot be
+    read is never overwritten (another section's work may be in it), and one
+    that now belongs to another project (the file was replaced since the
+    folder was found) is never merged.
+    """
+    path = str(home.get("brief_path") or "")
+    try:
+        on_disk = read_brief_file(path)
+    except FileNotFoundError:
+        return _brief_sync_refusal(
+            "brief_missing",
+            "The project brief is no longer in the project folder, so it was "
+            "not updated. Export it again from this section to recreate it.",
+        )
+    except ProjectBriefError as exc:
+        return _brief_sync_refusal(
+            "brief_unreadable",
+            f"The project brief in the folder could not be read, so it was left "
+            f"untouched: {exc}",
+        )
+    except OSError as exc:
+        return _brief_sync_refusal(
+            "brief_unreadable",
+            "The project brief in the folder could not be read, so it was left "
+            f"untouched: {exc.strerror or exc}",
+        )
+    if on_disk.project_id != home.get("project_id"):
+        return _brief_sync_refusal(
+            "different_project",
+            "The brief in the project folder now belongs to a different "
+            "project; it was left untouched.",
+        )
+    return on_disk
+
+
+def _pull_dry_run(
+    section_brief: ProjectBrief, on_disk: ProjectBrief
+) -> MergeReport:
+    """What a pull from ``on_disk`` would do to this section — computed, never
+    applied. ``assets_changed`` is the honest "has the project changes this
+    section lacks" signal; the file's timestamp alone is not (every save of a
+    sibling rewrites its registry record)."""
+    _merged, report = merge_project_brief(
+        section_brief, on_disk, section_side="existing", apply_setup=False
+    )
+    return report
+
+
+def _pull_availability(
+    session: SessionState,
+    *,
+    home: dict[str, str] | None,
+    synced_with: str,
+    on_disk_updated_at: str,
+) -> dict[str, Any] | None:
+    """Whether the brief in the project folder holds assets this section
+    lacks — the Project panel's "Pull project changes" offer. ``None`` when
+    there is no home or no readable brief to ask.
+
+    A brief whose ``updated_at`` is the one this section last fully agreed
+    with (``project_link.brief_updated_at``) has nothing to offer by
+    construction, and is answered without reading it. Anything else is a dry
+    run of the pull itself — never the timestamp alone, because a sibling's
+    save rewrites its own registry record without adding an asset. Disk I/O
+    and the merge run off the guard; only the section snapshot is taken
+    under it (with ``ready=False``: the registry record is not what a pull
+    installs, so readiness is not worth computing here).
+    """
+    if home is None or not on_disk_updated_at:
+        return None
+    if synced_with and on_disk_updated_at == synced_with:
+        return {"available": False, "rounds": 0, "references": 0, "facts": 0}
+    on_disk = _read_home_brief(home)
+    if isinstance(on_disk, BriefSyncOutcome):
+        return None
+    with session.session_state_guard():
+        section_brief = build_project_brief(session, ready=False)
+    try:
+        report = _pull_dry_run(section_brief, on_disk)
+    except ProjectBriefError:
+        return None
+    return {
+        "available": report.assets_changed,
+        "rounds": int(report.research.get("rounds_added", 0) or 0),
+        "references": int(report.references.get("added", 0) or 0),
+        "facts": int(report.facts.get("added", 0) or 0)
+        + int(report.facts.get("retired", 0) or 0)
+        + int(report.facts.get("updated", 0) or 0),
+    }
+
+
+def _install_pull_locked(
+    session: SessionState,
+    section_brief: ProjectBrief,
+    merged: ProjectBrief,
+    report: MergeReport,
+) -> dict[str, int]:
+    """Install a pull's merged assets into the session (caller holds the guard).
+
+    Only the three append-only assets move, and each only when the merge
+    actually changed it — so a pull that brought nothing touches nothing:
+
+    - research: the runner restores the merged profile (the project-load
+      path — rounds appended, the next Research press is round N+1);
+    - references: the store reloads the merged list, which keeps every
+      document already here under its own id (``_merge_reference_docs``
+      minted the new ones past this store's counter, and the cap only ever
+      refuses what is NEW);
+    - facts: :meth:`ProjectFactStore.absorb`, refused while a turn owns the
+      ledger.
+
+    The document, the profile, the project type and the edition overrides
+    are never touched: the section's document is its own, and the report
+    names every difference instead. Returns the counts the route reports.
+    """
+    installed = {"rounds": 0, "references": 0, "facts": 0}
+    if merged.facts != section_brief.facts:
+        # First, because it is the one install that can refuse (a turn owns
+        # the ledger): refusing before anything else moved keeps a pull
+        # all-or-nothing.
+        before = {fact.pid for fact in session.facts.items}
+        session.facts.absorb(merged.facts)
+        installed["facts"] = sum(
+            1 for fact in session.facts.items if fact.pid not in before
+        )
+    if (
+        merged.research_profile is not None
+        and merged.research_profile != section_brief.research_profile
+    ):
+        profile = RequirementsProfile.from_dict(merged.research_profile)
+        if profile is not None:
+            held = session.research.profile_result
+            before_rounds = held.round_count if held is not None else 0
+            session.research.restore(profile)
+            installed["rounds"] = max(0, profile.round_count - before_rounds)
+    if merged.reference_docs != section_brief.reference_docs:
+        before_refs = {doc.rid for doc in session.references.docs}
+        session.references.load(
+            {
+                "reference_docs": [
+                    {key: value for key, value in doc.items() if key != "content_fingerprint"}
+                    for doc in merged.reference_docs
+                ],
+                "next_seq": session.references.next_seq,
+            }
+        )
+        installed["references"] = sum(
+            1 for doc in session.references.docs if doc.rid not in before_refs
+        )
+    return installed
+
+
+def refresh_project_brief(
+    lease: sessions.WorkspaceLease | None = None,
+) -> BriefSyncOutcome:
+    """Merge THIS section into the brief in its project folder and write it.
+
+    D2: runs at the end of every native save when a home is known (silently —
+    the save never fails on it), and from the Project panel's Update project
+    brief. Append-only (``merge_project_brief``): nothing another section
+    wrote into the brief is lost, and a merge that brings nothing new writes
+    nothing. Refused in a tour, without a home, and while anything runs (a
+    turn's provisional facts must never reach a file). The file is read and
+    written off the guard; the section is snapshotted under it, and the link
+    is updated under it again only if the session is still the same one.
+    """
+    lease = lease or sessions.get_workspace()
+    if lease.scope != "original":
+        return _brief_sync_refusal(
+            "tutorial_active",
+            "A tutorial workspace is active; end the tour to update your project's brief.",
+        )
+    session = lease.session
+    with session.session_state_guard():
+        home = (
+            dict(session.project_home)
+            if isinstance(session.project_home, dict)
+            else None
+        )
+        generation = session.generation
+    if home is None:
+        return _brief_sync_refusal(
+            "no_project_home",
+            "This section is not in a project folder. Save it beside its "
+            "project brief first.",
+        )
+    busy = sessions.busy_reasons(session)
+    if busy:
+        return _brief_sync_refusal(
+            "workspace_busy",
+            "The project brief was not updated while work was running "
+            f"({', '.join(busy)}); update it once that finishes.",
+        )
+    with _BRIEF_FILE_LOCK:
+        on_disk = _read_home_brief(home)
+        if isinstance(on_disk, BriefSyncOutcome):
+            return on_disk
+        with session.session_state_guard():
+            if session.generation != generation:
+                return _brief_sync_refusal(
+                    "stale_workspace",
+                    "The session changed before the project brief could be updated.",
+                )
+            busy = sessions.busy_reasons(session)
+            if busy:
+                return _brief_sync_refusal(
+                    "workspace_busy",
+                    "The project brief was not updated while work was running "
+                    f"({', '.join(busy)}); update it once that finishes.",
+                )
+            section_brief = _session_brief_locked(session)
+        try:
+            merged, report = merge_project_brief(on_disk, section_brief)
+            payload = brief_bytes(merged) if report.changed else b""
+        except ProjectBriefMismatchError as exc:
+            return _brief_sync_refusal("different_project", str(exc))
+        except ProjectBriefMergeRefused as exc:
+            return _brief_sync_refusal(
+                "merge_refused",
+                str(exc),
+                report=exc.report.to_dict() if exc.report is not None else None,
+            )
+        except ProjectBriefError as exc:
+            return _brief_sync_refusal("merge_refused", str(exc))
+        if report.changed:
+            try:
+                write_brief_atomically(str(home["brief_path"]), payload)
+            except (OSError, TypeError, ValueError) as exc:
+                # An environment failure (a read-only folder, a full disk),
+                # not a state conflict — so not a 409.
+                return _brief_sync_refusal(
+                    "write_failed",
+                    "The project brief could not be written, so the file was "
+                    f"left as it was: {getattr(exc, 'strerror', None) or exc}",
+                    status_code=500,
+                    report=report.to_dict(),
+                )
+        pending = _pull_dry_run(section_brief, merged)
+        synced = not pending.assets_changed
+        with session.session_state_guard():
+            if session.generation == generation:
+                _record_brief_sync_locked(
+                    session, merged, synced_at=merged.updated_at if synced else None
+                )
+            brief_updated_at = str(
+                (session.project_link or {}).get("brief_updated_at", "")
+                if isinstance(session.project_link, dict)
+                else ""
+            )
+    _trace_capture.app_event(
+        "project_brief",
+        action="refresh",
+        project_id=merged.project_id,
+        written=report.changed,
+        rounds_added=int(report.research.get("rounds_added", 0)),
+        references_added=int(report.references.get("added", 0)),
+        facts_added=int(report.facts.get("added", 0)),
+        conflicts=len(report.conflicts),
+        pull_available=not synced,
+    )
+    return BriefSyncOutcome(
+        ok=True,
+        report=report.to_dict(),
+        brief_updated_at=brief_updated_at,
+        pull_available=not synced,
+        written=report.changed,
+    )
+
+
 def _template_binding(lease: sessions.WorkspaceLease) -> dict[str, Any]:
     return {
         "workspace_id": lease.workspace_id,
@@ -2720,6 +3133,11 @@ def create_app(
             # The same staged load as load-file, with the bytes read from the
             # project folder instead of an upload.
             ("POST", "/api/project/open-section"),
+            # Project workspace Phase 3: each reads a brief (an upload or the
+            # project folder) and merges before it touches the session.
+            ("POST", "/api/project/brief/merge"),
+            ("POST", "/api/project/brief/refresh"),
+            ("POST", "/api/project/pull"),
             ("POST", "/api/research/start"),
             ("POST", "/api/research/stop"),
             ("POST", "/api/qc/start"),
@@ -6445,27 +6863,6 @@ def create_app(
             status_code=409,
         )
 
-    def _build_brief_locked(session: SessionState) -> ProjectBrief:
-        """Build this session's brief under the caller's guard, stamping the
-        project link so exporting twice never mints two project ids and the
-        section file records which project it belongs to."""
-        ready = bool(_readiness_payload(session)["ready"])
-        brief = build_project_brief(session, ready=ready)
-        previous = session.project_link if isinstance(session.project_link, dict) else {}
-        session.project_link = sanitize_project_link(
-            {
-                "project_id": brief.project_id,
-                "name": brief.name,
-                "brief_updated_at": brief.updated_at,
-                "seeded_from": list(previous.get("seeded_from", []) or []),
-                "research_rounds_at_seed": int(
-                    previous.get("research_rounds_at_seed", 0) or 0
-                ),
-                "sections": list(brief.sections),
-            }
-        )
-        return brief
-
     @app.get("/api/project/brief")
     def project_brief_export() -> Response:
         refusal = _brief_scope_refusal()
@@ -6673,6 +7070,275 @@ def create_app(
         )
         bundle = await run_in_threadpool(_session_bundle, sessions.get_workspace())
         return JSONResponse({"ok": True, "seed": seed, "session": bundle})
+
+    # --- The brief is a living file (Project workspace Phase 3) -------------
+    #
+    # Three triggers, one merge (``project_brief.merge_project_brief``):
+    # an export onto an existing brief merges instead of overwriting (the
+    # shell posts the file it found here), a save — or Update project brief —
+    # refreshes the brief in the project folder (``refresh_project_brief``),
+    # and a section pulls what its siblings added (``/api/project/pull``).
+
+    def _brief_sync_response(outcome: BriefSyncOutcome) -> JSONResponse:
+        if outcome.ok:
+            return JSONResponse(outcome.payload())
+        return _coded_error_response(outcome.payload(), status_code=outcome.status_code)
+
+    @app.post("/api/project/brief/merge")
+    async def project_brief_merge(file: UploadFile) -> JSONResponse:
+        """THIS section merged into an existing brief's bytes — answered, not
+        written. The native shell's export path when the file the Save dialog
+        named already exists: it posts that file here and writes back what
+        this answers, so an export can no longer silently overwrite the other
+        branch of a fork. Refused in a tour and while a turn streams (the
+        export's own refusals); an upload that is not a readable brief is a
+        400 ``brief_unreadable`` and another project's brief a 409
+        ``different_project`` — the shell asks before it replaces either.
+        """
+        refusal = _brief_scope_refusal()
+        if refusal is not None:
+            return refusal
+        entry_lease = sessions.get_workspace()
+        session = entry_lease.session
+        try:
+            data = await read_project_upload_bounded(file)
+        except ProjectPackageTooLargeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+        try:
+            existing = await run_in_threadpool(parse_project_brief, data)
+        except ProjectBriefTooLargeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+        except ProjectBriefError as exc:
+            return _coded_error_response(
+                {"ok": False, "code": "brief_unreadable", "error": str(exc)},
+                status_code=400,
+            )
+        with session.session_state_guard():
+            try:
+                sessions.workspace_manager().assert_active(entry_lease)
+            except sessions.WorkspaceConflictError:
+                return _stale_tutorial_response()
+            if session.turn_active:
+                return _coded_error_response(
+                    {
+                        "ok": False,
+                        "code": "turn_active",
+                        "error": (
+                            "Wait for the current reply to finish before "
+                            "exporting a project brief."
+                        ),
+                    },
+                    status_code=409,
+                )
+            generation = session.generation
+            section_brief = _build_brief_locked(session)
+        try:
+            merged, report = await run_in_threadpool(
+                merge_project_brief, existing, section_brief
+            )
+            payload = brief_bytes(merged)
+        except ProjectBriefMismatchError as exc:
+            return _coded_error_response(
+                {"ok": False, "code": "different_project", "error": str(exc)},
+                status_code=409,
+            )
+        except ProjectBriefMergeRefused as exc:
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "merge_refused",
+                    "error": str(exc),
+                    "report": exc.report.to_dict() if exc.report is not None else None,
+                },
+                status_code=409,
+            )
+        except ProjectBriefError as exc:
+            return _coded_error_response(
+                {"ok": False, "code": "merge_refused", "error": str(exc)},
+                status_code=409,
+            )
+        pending = await run_in_threadpool(_pull_dry_run, section_brief, merged)
+        with session.session_state_guard():
+            if session.generation == generation:
+                _record_brief_sync_locked(
+                    session,
+                    merged,
+                    synced_at=None if pending.assets_changed else merged.updated_at,
+                )
+        _trace_capture.app_event(
+            "project_brief",
+            action="merge_export",
+            project_id=merged.project_id,
+            changed=report.changed,
+            rounds_added=int(report.research.get("rounds_added", 0)),
+            references_added=int(report.references.get("added", 0)),
+            facts_added=int(report.facts.get("added", 0)),
+            conflicts=len(report.conflicts),
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                # The brief is UTF-8 JSON; carried as its text so the shell
+                # writes back exactly these bytes.
+                "brief": payload.decode("utf-8"),
+                "filename": brief_filename(merged),
+                "report": report.to_dict(),
+                "pull_available": pending.assets_changed,
+            }
+        )
+
+    @app.post("/api/project/brief/refresh")
+    def project_brief_refresh() -> JSONResponse:
+        """Update the brief in this section's project folder — the Project
+        panel's Update project brief, and the implementation every native save
+        runs when a home is known (``refresh_project_brief``). A plain ``def``:
+        the read, the merge and the atomic write run on a worker thread."""
+        return _brief_sync_response(refresh_project_brief(sessions.get_workspace()))
+
+    @app.post("/api/project/pull")
+    def project_pull() -> JSONResponse:
+        """Bring what this project's other sections added into THIS section.
+
+        The brief in the project folder is merged INTO the session: unseen
+        research rounds are replayed (the runner restores the merged profile,
+        so the next round is still round N+1), new reference documents are
+        attached (minted from this store's own counter — an id a deleted
+        document once held is never reused), and the facts ledger absorbs the
+        merged one. Profile and edition differences are REPORTED, never
+        applied — the document is the section's own; an edition two sections
+        disagree on becomes a project fact to resolve (D4). Refused in a
+        tour, without a home, and while anything runs. The file is read off
+        the guard; the merge and the install run under one guard acquisition
+        so a fact the panel records meanwhile can never be lost to the
+        absorb.
+        """
+        lease = sessions.get_workspace()
+        if lease.scope != "original":
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "tutorial_active",
+                    "error": "End the tour and return to your project before pulling project changes.",
+                },
+                status_code=409,
+            )
+        session = lease.session
+        with session.session_state_guard():
+            home = (
+                dict(session.project_home)
+                if isinstance(session.project_home, dict)
+                else None
+            )
+            generation = session.generation
+        if home is None:
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "no_project_home",
+                    "error": (
+                        "This section is not in a project folder. Save it beside "
+                        "its project brief first."
+                    ),
+                },
+                status_code=409,
+            )
+        busy = sessions.busy_reasons(session)
+        if busy:
+            return _coded_error_response(
+                {
+                    "ok": False,
+                    "code": "workspace_busy",
+                    "error": (
+                        "Wait for the current work to finish before pulling "
+                        f"project changes ({', '.join(busy)} still running)."
+                    ),
+                },
+                status_code=409,
+            )
+        with _BRIEF_FILE_LOCK:
+            on_disk = _read_home_brief(home)
+        if isinstance(on_disk, BriefSyncOutcome):
+            return _brief_sync_response(on_disk)
+        try:
+            with sessions.active_write(lease.workspace_id):
+                with session.session_state_guard():
+                    sessions.workspace_manager().assert_active(lease)
+                    if session.generation != generation:
+                        return _stale_tutorial_response()
+                    busy = sessions.busy_reasons(session)
+                    if busy:
+                        return _coded_error_response(
+                            {
+                                "ok": False,
+                                "code": "workspace_busy",
+                                "error": (
+                                    "Work started while the project brief was "
+                                    "being read — wait for it to finish, then "
+                                    f"pull again ({', '.join(busy)} still running)."
+                                ),
+                            },
+                            status_code=409,
+                        )
+                    section_brief = _session_brief_locked(session)
+                    try:
+                        merged, report = merge_project_brief(
+                            section_brief,
+                            on_disk,
+                            section_side="existing",
+                            apply_setup=False,
+                            fact_pid_floor=session.facts.next_seq,
+                            reference_mint_floor=session.references.next_seq,
+                        )
+                    except ProjectBriefMismatchError as exc:
+                        return _coded_error_response(
+                            {"ok": False, "code": "different_project", "error": str(exc)},
+                            status_code=409,
+                        )
+                    except ProjectBriefMergeRefused as exc:
+                        return _coded_error_response(
+                            {
+                                "ok": False,
+                                "code": "merge_refused",
+                                "error": str(exc),
+                                "report": (
+                                    exc.report.to_dict() if exc.report is not None else None
+                                ),
+                            },
+                            status_code=409,
+                        )
+                    installed = _install_pull_locked(session, section_brief, merged, report)
+                    _record_brief_sync_locked(
+                        session,
+                        merged,
+                        synced_at=on_disk.updated_at,
+                        extra_carried_rounds=installed["rounds"],
+                    )
+                    payload = _doc_payload(session, workspace=lease)
+        except sessions.WorkspaceConflictError:
+            return _stale_tutorial_response()
+        except ProjectFactError as exc:
+            return _coded_error_response(
+                {"ok": False, "code": "turn_active", "error": str(exc)},
+                status_code=409,
+            )
+        _trace_capture.app_event(
+            "project_brief",
+            action="pull",
+            project_id=merged.project_id,
+            rounds_added=installed["rounds"],
+            references_added=installed["references"],
+            facts_added=installed["facts"],
+            conflicts=len(report.conflicts),
+            setup_differences=len(report.setup),
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                "report": report.to_dict(),
+                "installed": installed,
+                **payload,
+            }
+        )
 
     def _next_section_busy_response(busy: list[str]) -> JSONResponse:
         return _coded_error_response(
@@ -7168,7 +7834,20 @@ def create_app(
             current_title=current_title,
             save_target=save_target,
         )
-        return JSONResponse({"ok": True, **listing})
+        pull = _pull_availability(
+            session,
+            home=home,
+            synced_with=str((link or {}).get("brief_updated_at", "") or ""),
+            on_disk_updated_at=str(listing.get("brief_updated_at", "") or ""),
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                **listing,
+                "pull_available": bool(pull and pull["available"]),
+                "pull_summary": pull,
+            }
+        )
 
     def _read_section_bytes(path: str) -> bytes:
         """The section file's bytes — worker thread only, size-bounded the

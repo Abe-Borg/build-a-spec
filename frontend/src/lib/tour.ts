@@ -322,14 +322,19 @@ export const TOUR: readonly TourChunk[] = [
       },
       {
         id: "project-panel",
-        capabilities: ["project.sections", "project.open-section"],
+        capabilities: [
+          "project.sections",
+          "project.open-section",
+          "project.brief-refresh",
+          "project.pull",
+        ],
         mode: "explanatory",
         anchor: "project-panel",
         drawer: "projectPanel",
         placement: "top",
         title: "The project's sections, one click apart",
         body:
-          "A project lives in one folder: its project brief beside one saved file per section. In the desktop app, once a section is saved beside its brief, this panel names the folder, lists every section the project has drafted with when each was exported and the facts and research rounds it recorded, marks the one you are in, and opens any sibling by its number in one click — offering to save the section being left first. Next section → starts the next one from the same list. Nothing about the folder is written into any file, so a project folder can be moved or shared whole. This practice copy lives in no folder, so it lists only what its project recorded, and its header is blank for the lint lesson, so no row is marked as the one you are in.",
+          "A project lives in one folder: its project brief beside one saved file per section. In the desktop app, once a section is saved beside its brief, this panel names the folder, lists every section the project has drafted with when each was exported and the facts and research rounds it recorded, marks the one you are in, and opens any sibling by its number in one click — offering to save the section being left first. Next section → starts the next one from the same list. The brief is a living file: every save adds what the section established — research rounds, reference documents, facts — without removing anything another section recorded, and Update project brief does the same on demand. When other sections have added work this one lacks, the panel offers Pull project changes, which brings it in and shows any difference in the project setup rather than applying it. Nothing about the folder is written into any file, so a project folder can be moved or shared whole. This practice copy lives in no folder, so it lists only what its project recorded — the update and pull controls appear only in a real project folder — and its header is blank for the lint lesson, so no row is marked as the one you are in.",
       },
       {
         id: "lint",

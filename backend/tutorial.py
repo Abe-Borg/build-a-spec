@@ -18,6 +18,7 @@ from .llm.conversation import SessionState, effective_discipline
 from .reference_extract import extract_reference_document
 from .spec_doc.docx_export import build_docx
 from .spec_doc.model import SpecSection, iter_paragraphs
+from .spec_doc.project import sanitize_project_link
 from .spec_modules import get_module
 from .templates import TemplateCatalog
 
@@ -398,7 +399,66 @@ def structural_practice_copy(source: SessionState) -> SessionState:
     clone.doc.commit_turn()
     _seed_tutorial_followups(clone, paragraph.uid)
     _seed_tutorial_project_facts(clone)
+    _seed_tutorial_project_link(clone)
     return clone
+
+
+# A fixed, valid (32-hex) project id for the practice project: deterministic,
+# so a second build of the fixture is the same fixture, and shaped like a
+# real one, so nothing downstream treats the practice link as malformed.
+TUTORIAL_PROJECT_ID = "5eed" + "0" * 28
+
+
+def _seed_tutorial_project_link(clone: SessionState) -> None:
+    """Put two sections on the Project panel for the tour to point at.
+
+    The panel renders only while the session is linked to a project, so
+    without a link the chapter's anchor could never resolve (the follow-ups
+    lesson again). Two registry records: 21 13 13 — the practice section
+    itself, as the registry knew it before this copy cleared its header for
+    the lint lesson, which is also the section the facts fixture records
+    its facts in — and 21 30 00, the sibling that fixture's coordination
+    fact points at. Deliberately NO project home: the tour never touches
+    disk, so the panel shows the registry without an Open action, which is
+    exactly the "not in a project folder" state a first-time user sees.
+    Bundled and deterministic, no model call.
+    """
+    clone.project_link = sanitize_project_link(
+        {
+            "project_id": TUTORIAL_PROJECT_ID,
+            "name": "Tutorial data center · Ashburn, Virginia",
+            "brief_updated_at": "2026-08-01T12:00:00+00:00",
+            "seeded_from": [],
+            "research_rounds_at_seed": 0,
+            "sections": [
+                {
+                    "number": "21 13 13",
+                    "title": "Wet-Pipe Sprinkler Systems",
+                    "module_id": clone.module.module_id,
+                    "discipline": effective_discipline(clone),
+                    "article_titles": ["SUMMARY", "REFERENCES", "SUBMITTALS"],
+                    "ready": False,
+                    "exported_at": "2026-08-01T11:00:00+00:00",
+                    "file_name": "21 13 13 Wet-Pipe Sprinkler Systems.baspec",
+                    "fact_count": 3,
+                    "research_rounds": 0,
+                },
+                {
+                    "number": "21 30 00",
+                    "title": "Fire Pumps",
+                    "module_id": clone.module.module_id,
+                    "discipline": effective_discipline(clone),
+                    "article_titles": ["SUMMARY", "FIRE PUMP", "CONTROLLERS"],
+                    "ready": False,
+                    "exported_at": "2026-08-01T12:00:00+00:00",
+                    "file_name": "21 30 00 Fire Pumps.baspec",
+                    "fact_count": 0,
+                    "research_rounds": 0,
+                },
+            ],
+        }
+    )
+    clone.project_home = None
 
 
 def _seed_tutorial_project_facts(clone: SessionState) -> None:

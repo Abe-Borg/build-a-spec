@@ -194,6 +194,7 @@ def test_untrusted_page_cannot_use_any_public_native_bridge(monkeypatch):
     assert controller.save_template("personal:" + "a" * 32) is False
     assert controller.save_project_brief()["ok"] is False
     assert controller.open_file("project") is None
+    assert controller.bind_project_home("f" * 32, 0)["ok"] is False
     assert controller.open_external_link("https://example.com/") is False
 
     assert window.destroyed is False
@@ -595,6 +596,84 @@ def test_open_file_unknown_kind_degrades_to_the_project_filter(
     (_, kwargs), = window.dialog_calls
 
     assert kwargs.get("file_types") == main._PROJECT_OPEN_FILE_TYPES
+
+
+def test_open_file_mints_a_token_only_for_a_project_open_and_bounds_the_map(
+    tmp_path, monkeypatch
+):
+    """A token names a picked path the frontend never holds (Project workspace
+    Phase 2). Only a project open can live in a project folder, so only it
+    mints one; the map keeps the newest few and evicts the oldest first."""
+    _fake_webview(monkeypatch)
+    project = tmp_path / "p.baspec"
+    project.write_bytes(b"PK\x03\x04 project")
+    window = _FakeWindow(dialog_path=str(project))
+    controller = _controller_with(window)
+
+    tokens = [
+        controller.open_file("project")["token"]
+        for _ in range(main._RECENT_OPENS_LIMIT + 2)
+    ]
+
+    assert all(len(token) == 32 for token in tokens)
+    assert len(set(tokens)) == len(tokens)
+    assert len(controller._recent_opens) == main._RECENT_OPENS_LIMIT
+    assert tokens[0] not in controller._recent_opens, "the oldest goes first"
+    assert tokens[-1] in controller._recent_opens
+    assert controller._recent_opens[tokens[-1]] == (str(project), "project")
+    # A master import, an attachment or a brief pick names no section folder.
+    for kind in ("docx", "reference", "project_brief", "template"):
+        assert controller.open_file(kind)["token"] == "", kind
+    # An evicted token is simply unknown.
+    evicted = controller.bind_project_home(tokens[0], 0)
+    assert evicted["ok"] is False and evicted["home"] is None
+
+
+def test_bind_project_home_refuses_an_unknown_token_and_binds_only_the_loaded_session(
+    tmp_path, monkeypatch
+):
+    """The token is single-use and the generation is the LOAD's: a session
+    replaced since the load is never handed the folder (the
+    remember_project_save_target posture)."""
+    from backend.project_brief import brief_bytes, build_project_brief
+
+    _fake_webview(monkeypatch)
+    session = sessions.get_session()
+    session.project_link = {
+        "project_id": "b" * 32,
+        "name": "P",
+        "brief_updated_at": "",
+        "seeded_from": [],
+        "research_rounds_at_seed": 0,
+        "sections": [],
+    }
+    (tmp_path / "p.basproject").write_bytes(
+        brief_bytes(build_project_brief(session, ready=False))
+    )
+    section = tmp_path / "21 13 13.baspec"
+    section.write_bytes(b"PK\x03\x04 section")
+    controller = _controller_with(_FakeWindow(dialog_path=str(section)))
+
+    unknown = controller.bind_project_home("f" * 32, session.generation)
+    assert unknown["ok"] is False and unknown["error"]
+
+    stale = controller.open_file("project")["token"]
+    fresh = controller.open_file("project")["token"]
+    loaded_generation = session.generation
+    session.invalidate_model_turn()  # something replaced the session since
+    refused = controller.bind_project_home(stale, loaded_generation)
+    assert refused["ok"] is False and refused["home"] is None
+    assert session.project_home is None
+
+    bound = controller.bind_project_home(fresh, session.generation)
+    assert bound == {
+        "ok": True,
+        "home": {"folder": str(tmp_path), "brief_name": "p.basproject"},
+        "error": "",
+    }
+    assert session.project_home["brief_path"] == str(tmp_path / "p.basproject")
+    # Single-use: a token cannot re-bind later, after the session moved on.
+    assert controller.bind_project_home(fresh, session.generation)["ok"] is False
 
 
 def test_open_file_cancelled_returns_none(monkeypatch):

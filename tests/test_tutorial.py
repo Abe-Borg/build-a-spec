@@ -1131,3 +1131,30 @@ def test_structural_practice_seeds_one_project_fact_per_panel_group_and_the_show
     again = structural_practice_copy(tutorial)
     assert [f.to_dict() for f in again.facts.items] == [f.to_dict() for f in facts]
     assert tutorial.facts.items == []
+
+
+def test_structural_practice_seeds_a_project_link_with_two_sections_and_no_home():
+    """The Project panel renders only while the session is linked to a
+    project, so the paper chapter's step needs a link to point at (Project
+    workspace Phase 2): two registry records — the practice section as the
+    registry knew it, 21 13 13 (where the facts fixture records its facts),
+    and 21 30 00, the sibling its coordination fact names. Deliberately no
+    home: the tour never touches disk. Bundled and deterministic."""
+    from backend.tutorial import TUTORIAL_PROJECT_ID
+
+    tutorial = build_showcase_session()
+    assert tutorial.project_link is None
+    scenario = structural_practice_copy(tutorial)
+    link = scenario.project_link
+    assert link["project_id"] == TUTORIAL_PROJECT_ID and len(TUTORIAL_PROJECT_ID) == 32
+    assert [s["number"] for s in link["sections"]] == ["21 13 13", "21 30 00"]
+    assert link["seeded_from"] == [] and link["research_rounds_at_seed"] == 0
+    assert all(s["file_name"].endswith(".baspec") for s in link["sections"])
+    assert scenario.project_home is None
+    # The facts fixture and the registry tell one story.
+    facts = scenario.facts.items
+    assert {f.recorded_in for f in facts} == {"21 13 13"}
+    assert facts[2].section == "21 30 00"
+    # Deterministic, and the tutorial base it was built from is untouched.
+    assert structural_practice_copy(tutorial).project_link == link
+    assert tutorial.project_link is None

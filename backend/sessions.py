@@ -771,6 +771,338 @@ def remember_project_save_target(
     return True
 
 
+# ---------------------------------------------------------------------------
+# The project folder (Project workspace Phase 2)
+#
+# A project lives in one folder: its ``.basproject`` beside one ``.baspec``
+# per section (decision D1). The folder is DISCOVERED from a file the native
+# shell just saved or opened — never declared, never persisted — so a folder
+# can be moved or shared whole. ``SessionState.project_home`` holds the
+# answer for the life of the session and dies with it, exactly like
+# ``save_target``.
+# ---------------------------------------------------------------------------
+
+
+class ProjectFolderEscape(ValueError):
+    """A registry ``file_name`` that resolves outside the project folder."""
+
+
+def _fold(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def find_project_home(anchor_path: str, project_id: str) -> dict[str, str] | None:
+    """The project home for a section file at ``anchor_path``, or ``None``.
+
+    Lists ``*.basproject`` directly in ``dirname(anchor_path)`` — no
+    recursion, no symlinks — in name order, and keeps the FIRST brief whose
+    project id is ``project_id``. A candidate that cannot be read is skipped,
+    never raised (``read_brief_on_disk``). A pure disk read: the caller runs
+    it outside the session guard and stores the answer through
+    :func:`remember_project_home`.
+    """
+    from .project_brief import PROJECT_BRIEF_EXTENSION, read_brief_on_disk
+
+    if not project_id or not anchor_path:
+        return None
+    try:
+        folder = os.path.dirname(os.path.abspath(os.fspath(anchor_path)))
+        with os.scandir(folder) as entries:
+            names = sorted(
+                entry.name
+                for entry in entries
+                if entry.name.lower().endswith(PROJECT_BRIEF_EXTENSION)
+                and not entry.is_symlink()
+            )
+    except (OSError, TypeError, ValueError):
+        return None
+    for name in names:
+        path = os.path.join(folder, name)
+        brief = read_brief_on_disk(path)
+        if brief is not None and brief.project_id == project_id:
+            return {
+                "folder": folder,
+                "brief_path": path,
+                "brief_name": name,
+                "project_id": project_id,
+            }
+    return None
+
+
+def discover_project_home(
+    session: SessionState, anchor_path: str
+) -> dict[str, str] | None:
+    """The folder ``anchor_path`` lives in, when it is THIS project's folder.
+
+    ``anchor_path`` is the absolute path of a ``.baspec`` just saved or
+    opened. A session with no project link belongs to no project yet (a
+    section that never exported or seeded), so it has no home however many
+    briefs sit beside its file. The link is one attribute read — the dict is
+    replaced wholesale, never mutated — and :func:`remember_project_home`
+    re-checks it under the guard before anything is stored.
+    """
+    link = session.project_link if isinstance(session.project_link, dict) else None
+    project_id = str((link or {}).get("project_id") or "")
+    return find_project_home(anchor_path, project_id)
+
+
+def remember_project_home(
+    session: SessionState,
+    home: dict[str, str] | None,
+    *,
+    generation: int | None = None,
+) -> bool:
+    """Store a discovered home (or its absence). Returns whether it stuck.
+
+    ``generation`` is the session generation the caller sampled before its
+    disk read — the ``remember_project_save_target`` guard, for the same
+    reason: a reset or load that landed meanwhile replaced the session, and
+    the replacement never asked to live in this folder. Taken under the
+    session guard; the link is re-checked there too, so a home is never
+    stored beside a link naming a different project.
+    """
+    with session.session_state_guard():
+        if generation is not None and session.generation != generation:
+            return False
+        if home is not None:
+            link = (
+                session.project_link
+                if isinstance(session.project_link, dict)
+                else {}
+            )
+            if str(link.get("project_id") or "") != str(home.get("project_id") or ""):
+                home = None
+        session.project_home = dict(home) if home else None
+        return True
+
+
+def project_home_payload(session: SessionState) -> dict[str, str] | None:
+    """The frontend's view of the home: ``{"folder", "brief_name"}`` or ``None``.
+
+    The folder is shown, the ``saveTarget.path`` precedent for an absolute
+    path the shell owns; the brief's full path and the project id stay
+    server-side. The frontend never sends a path back — it asks by section
+    number and the server resolves (``section_file_path``).
+    """
+    home = getattr(session, "project_home", None)
+    if not isinstance(home, dict) or not home.get("folder"):
+        return None
+    return {"folder": str(home["folder"]), "brief_name": str(home.get("brief_name", ""))}
+
+
+def section_file_path(home: dict[str, str], file_name: str) -> str:
+    """The resolved path of ``file_name`` beside the project's brief.
+
+    Raises :class:`ProjectFolderEscape` unless the resolved path sits
+    DIRECTLY in the folder: ``..``, an absolute or drive-qualified name, a
+    nested path, or a symlink pointing elsewhere all fail, because the check
+    runs on ``os.path.realpath`` of both sides (case-folded where the
+    platform is case-insensitive). A registry entry is data from a file
+    people share and hand-edit; it names a sibling, or it names nothing.
+    Returns the RESOLVED path, so the file read is the file checked.
+    """
+    folder = str(home.get("folder") or "")
+    name = str(file_name or "")
+    if not folder or not name:
+        raise ProjectFolderEscape("The section record names no file.")
+    try:
+        resolved = os.path.realpath(os.path.join(folder, name))
+        real_folder = os.path.realpath(folder)
+    except (OSError, ValueError) as exc:
+        # An embedded NUL, or a path the platform cannot represent: a name
+        # that cannot be resolved names nothing in the folder either.
+        raise ProjectFolderEscape(
+            f"The section file {name!r} is not in the project folder."
+        ) from exc
+    if os.path.normcase(os.path.dirname(resolved)) != os.path.normcase(real_folder):
+        raise ProjectFolderEscape(
+            f"The section file {name!r} is not in the project folder."
+        )
+    return resolved
+
+
+def _section_present(home: dict[str, str] | None, file_name: str) -> bool:
+    if not home or not file_name:
+        return False
+    try:
+        path = section_file_path(home, file_name)
+    except ProjectFolderEscape:
+        return False
+    return os.path.isfile(path)
+
+
+def project_registry(
+    link: dict[str, Any] | None, home: dict[str, str] | None
+) -> tuple[list[dict[str, Any]], Any, list[str]]:
+    """The project's section registry: the link joined with the brief on disk.
+
+    Returns ``(records, brief_on_disk_or_None, warnings)``. The one
+    derivation both the Project panel's listing and ``open-section``'s
+    number-to-file resolution read, so the row the user clicks and the file
+    the server opens can never disagree. Disk I/O: never under the guard.
+    """
+    from .project_brief import merge_section_registries, read_brief_on_disk
+
+    warnings: list[str] = []
+    disk = None
+    if home:
+        disk = read_brief_on_disk(str(home.get("brief_path") or ""))
+        if disk is None or disk.project_id != home.get("project_id"):
+            warnings.append(
+                "The project brief could not be read from the folder, so the "
+                "list shows the sections this section already knew about."
+            )
+            disk = None
+    link_sections = list((link or {}).get("sections", []) or [])
+    records = merge_section_registries(
+        link_sections, list(disk.sections) if disk is not None else []
+    )
+    return records, disk, warnings
+
+
+def project_sections_listing(
+    *,
+    link: dict[str, Any] | None,
+    home: dict[str, str] | None,
+    current_number: str,
+    current_title: str,
+    save_target: str,
+) -> dict[str, Any]:
+    """What the Project panel shows, from a snapshot taken under the guard.
+
+    Every registered section with ``present`` (its file sits beside the
+    brief) and ``is_current``; the open section as a row of its own when the
+    registry does not list it yet (``in_registry: false`` — it joins when
+    the section exports a brief); and the ``.baspec`` files in the folder no
+    record names, minus this section's own file. Presence is judged only
+    with a home: without one there is no folder to look in, and the panel
+    shows the rows without an action rather than calling every file
+    missing. Disk I/O: the caller holds no lock.
+    """
+    records, disk, warnings = project_registry(link, home)
+    current = _fold(current_number)
+    own_file = ""
+    if home and save_target:
+        try:
+            own_dir = os.path.normcase(
+                os.path.realpath(os.path.dirname(os.path.abspath(save_target)))
+            )
+            if own_dir == os.path.normcase(os.path.realpath(str(home["folder"]))):
+                own_file = os.path.basename(save_target)
+        except (OSError, TypeError, ValueError):
+            own_file = ""
+    rows: list[dict[str, Any]] = []
+    for record in records:
+        is_current = bool(current) and _fold(record.get("number")) == current
+        rows.append(
+            {
+                **record,
+                "present": _section_present(home, str(record.get("file_name") or "")),
+                "is_current": is_current,
+                "in_registry": True,
+            }
+        )
+    if current and not any(row["is_current"] for row in rows):
+        rows.append(
+            {
+                "number": current,
+                "title": _fold(current_title)[:160],
+                "module_id": "",
+                "discipline": "",
+                "article_titles": [],
+                "ready": False,
+                "exported_at": "",
+                "file_name": own_file,
+                "fact_count": 0,
+                "research_rounds": 0,
+                "present": _section_present(home, own_file),
+                "is_current": True,
+                "in_registry": False,
+            }
+        )
+    unregistered: list[str] = []
+    if home:
+        named = {
+            os.path.normcase(str(record.get("file_name") or ""))
+            for record in records
+            if record.get("file_name")
+        }
+        if own_file:
+            named.add(os.path.normcase(own_file))
+        try:
+            with os.scandir(str(home["folder"])) as entries:
+                unregistered = sorted(
+                    entry.name
+                    for entry in entries
+                    if entry.name.lower().endswith(".baspec")
+                    and not entry.is_symlink()
+                    and entry.is_file(follow_symlinks=False)
+                    and os.path.normcase(entry.name) not in named
+                )
+        except OSError:
+            warnings.append("The project folder could not be listed.")
+    project = None
+    if isinstance(link, dict) and link.get("project_id"):
+        project = {"project_id": link["project_id"], "name": link.get("name", "")}
+    elif disk is not None:
+        project = {"project_id": disk.project_id, "name": disk.name}
+    return {
+        "home": (
+            {"folder": str(home["folder"]), "brief_name": str(home.get("brief_name", ""))}
+            if home
+            else None
+        ),
+        "project": project,
+        "brief_updated_at": disk.updated_at if disk is not None else "",
+        "current_number": current,
+        "sections": rows,
+        "unregistered": unregistered,
+        "warnings": warnings,
+    }
+
+
+class SectionNotInRegistry(LookupError):
+    """``open-section`` was asked for a number no registry record names."""
+
+
+class SectionFileMissing(LookupError):
+    """The record names no file, or the file is not beside the brief."""
+
+
+def resolve_section_file(
+    link: dict[str, Any] | None, home: dict[str, str], number: str
+) -> str:
+    """The resolved path of section ``number``'s file in the project folder.
+
+    Looks the number up in :func:`project_registry` (the link first, the
+    brief on disk second — the same merge the panel lists), then resolves
+    its ``file_name`` through :func:`section_file_path`. Raises
+    :class:`SectionNotInRegistry`, :class:`SectionFileMissing` or
+    :class:`ProjectFolderEscape`; the route maps them to 404 / 404 / 400.
+    Disk I/O: the caller holds no lock.
+    """
+    wanted = _fold(number)
+    records, _disk, _warnings = project_registry(link, home)
+    record = next(
+        (entry for entry in records if _fold(entry.get("number")) == wanted), None
+    )
+    if record is None:
+        raise SectionNotInRegistry(
+            f"Section {wanted} is not in this project's registry."
+        )
+    file_name = str(record.get("file_name") or "")
+    if not file_name:
+        raise SectionFileMissing(
+            f"The project does not record a file for section {wanted}."
+        )
+    path = section_file_path(home, file_name)
+    if not os.path.isfile(path):
+        raise SectionFileMissing(
+            f"Section {wanted}'s file ({file_name}) is not beside the project brief."
+        )
+    return path
+
+
 def clone_session_for_tutorial(source: SessionState) -> SessionState:
     """Create a detached semantic clone while retaining the original object.
 

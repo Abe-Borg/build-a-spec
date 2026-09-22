@@ -389,6 +389,39 @@ invisible to CI and expensive to the user.
 - [ ] **In a tour, the button is absent**; with a turn streaming, it is
       disabled.
 
+### The project has a home (Project workspace Phase 2)
+
+- [ ] **Save beside a brief and see the panel.** In a section that has
+      exported a project brief (Export → *Export project brief*), save the
+      section into the same folder as the `.basproject`: the **Project**
+      panel appears above Project facts, opens itself, names the folder and
+      the brief with its "brief last updated" date, and marks the section
+      *current*. Now the other order: in a fresh section, save first and
+      then export the brief into that same folder. The panel shows the
+      project with no folder and says to save once more; press Save and it
+      names the folder. Close the app and reopen that file: the folder is
+      found again (the save wrote the project into the file).
+- [ ] **Open a sibling by number.** From that section press *Next section →*,
+      pick the next section, and save it: the first Save dialog opens in the
+      project folder. Export the brief again, then press *Open* on the first
+      section's row: the save prompt appears (*Save, then open*), and the
+      first section opens from its file with its conversation, document and
+      panels, the Project panel still showing the folder. A row whose file
+      was deleted says "file not found beside the brief" and has no *Open*;
+      a stray `.baspec` in the folder is listed under "Not in the registry".
+- [ ] **A moved folder still resolves.** Close the app, move (or rename) the
+      whole project folder, reopen the app, and *Open* a section file from
+      its new location: the Project panel names the new folder and *Open*
+      on a sibling works. Neither the `.baspec` nor the `.basproject` names
+      any folder (open one in a text editor / zip viewer to confirm).
+- [ ] **A browser session shows no panel.** In dev mode opened in a plain
+      browser (no shell bridge), a linked section shows no Project panel;
+      Open and New session → *New section in an existing project* still work
+      as before.
+- [ ] **In the tour** the paper chapter's Project panel step shows two
+      sections of a practice project with no folder, no *Open* and no
+      *Next section →*.
+
 ### State that must recover (v1.17.0)
 
 None of these have a DOM harness; the source-level pins in

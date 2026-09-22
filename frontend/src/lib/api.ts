@@ -14,6 +14,7 @@ import type {
   ProjectBriefInspection,
   ProjectBriefManifest,
   ProjectFact,
+  ProjectSectionsPayload,
   SeedReport,
   ImportResultPayload,
   KeyStatus,
@@ -509,6 +510,41 @@ export async function startNextSection(
   const session = (data.session ?? data) as SessionBundle & { seed: SeedReport };
   session.seed = data.seed as SeedReport;
   return session;
+}
+
+/**
+ * The Project panel's listing (Project workspace Phase 2): this project's
+ * section registry joined with the files beside its brief, plus the folder's
+ * unregistered .baspec files. A read; answers in a tutorial workspace too.
+ */
+export async function projectSections(): Promise<ProjectSectionsPayload> {
+  const resp = await fetch("/api/project/sections");
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `project sections failed (${resp.status})`);
+  }
+  return data as ProjectSectionsPayload;
+}
+
+/**
+ * Open a sibling section of this project by NUMBER — never a path. The
+ * server resolves the number through the registry to a file beside the
+ * brief and runs the exact load-file path, so the answer is a
+ * `ProjectLoadResult` (plus `section` and `home_kept`). Refused in a tour,
+ * while anything runs, and with no project folder; the save gate for the
+ * section being left runs in App before this is called.
+ */
+export async function openSection(number: string): Promise<ProjectLoadResult> {
+  const resp = await fetch("/api/project/open-section", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ number }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `open section failed (${resp.status})`);
+  }
+  return data as ProjectLoadResult;
 }
 
 /**

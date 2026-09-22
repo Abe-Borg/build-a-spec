@@ -12,7 +12,9 @@ import type {
   LintIssue,
   FollowUp,
   ProjectFact,
+  ProjectHome,
   ProjectLink,
+  ProjectLoadResult,
   OpenItem,
   QcApplyPreviewBasis,
   QcApplyPreviewResult,
@@ -65,6 +67,7 @@ import {
   installUpdate,
   UpdateInstallError,
   loadProjectFile,
+  openSection,
   redoDoc,
   resetSession,
   QcStartError,
@@ -138,6 +141,13 @@ import {
 let nextId = 0;
 const newId = () => `m${++nextId}`;
 
+/** The shell's token for each File the native Open dialog produced (Project
+ *  workspace Phase 2): an opaque name for the picked path, so a successful
+ *  load can ask the shell to bind that file's project folder without the
+ *  path ever reaching this side. Weakly held — a File nobody loads takes its
+ *  token with it. */
+const nativeOpenTokens = new WeakMap<File, string>();
+
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -163,6 +173,13 @@ export default function App() {
   // persists until a fact is retired, which is the whole point of it.
   const [projectFacts, setProjectFacts] = useState<ProjectFact[]>([]);
   const [projectLink, setProjectLink] = useState<ProjectLink | null>(null);
+  // The project folder this section's file lives in (Project workspace
+  // Phase 2). Server-owned like `saveTarget`: the doc payload carries it,
+  // and a save reports the answer it just found. Never inferred here.
+  const [projectHome, setProjectHome] = useState<ProjectHome | null>(null);
+  // Bumped after a save or a brief export so the Project panel re-reads the
+  // folder: a save can move the section into, or out of, its project folder.
+  const [projectSectionsNonce, setProjectSectionsNonce] = useState(0);
   const [briefStarting, setBriefStarting] = useState(false);
   const [lintIssues, setLintIssues] = useState<LintIssue[]>([]);
   const [standards, setStandards] = useState<StandardInfo[]>([]);
@@ -256,6 +273,7 @@ export default function App() {
     openItems: 0,
     followups: 0,
     projectFacts: 0,
+    projectPanel: 0,
   });
   // Consumed once per app launch, and owned here rather than in Chat because
   // the chat pane remounts on a new session (see sessionNonce below) — read
@@ -283,6 +301,7 @@ export default function App() {
     | { kind: "new-session" }
     | { kind: "install-update" }
     | { kind: "open-project"; file: File }
+    | { kind: "open-section"; number: string }
     | { kind: "start-template"; templateId: string }
     | {
         kind: "start-brief";
@@ -521,6 +540,7 @@ export default function App() {
         setFollowups(payload.followups ?? []);
         setProjectFacts(payload.project_facts ?? []);
         setProjectLink(payload.project_link ?? null);
+        setProjectHome(payload.project_home ?? null);
         setLintIssues(payload.lint);
         setStandards(payload.standards);
         setProfileComplete(payload.profile_complete);
@@ -1826,6 +1846,7 @@ export default function App() {
       openItems: 0,
       followups: 0,
       projectFacts: 0,
+      projectPanel: 0,
     });
     // A composer prefill staged by the old session's review queue. Nonce 0 is
     // what makes the remounted Composer ignore it instead of re-prefilling.
@@ -1864,6 +1885,8 @@ export default function App() {
     // The outgoing session's file. The refreshDoc below re-reads the server's
     // (cleared) answer; until it lands, null is the safe reading — Save asks.
     setSaveTarget(null);
+    // The outgoing section's project folder — the server cleared its half.
+    setProjectHome(null);
     setBaselineIndex(null);
     setFigures([]);
     setSuggestions([]);
@@ -1923,6 +1946,7 @@ export default function App() {
     profile_complete: boolean;
     draft_prerequisites?: DraftPrerequisites | null;
     project_save_target?: SaveTarget | null;
+    project_home?: ProjectHome | null;
     baseline_index?: number | null;
     figures?: Figure[];
     suggested_prompts?: string[];
@@ -1946,6 +1970,7 @@ export default function App() {
     setProfileComplete(payload.profile_complete);
     setDraftPrereqs(payload.draft_prerequisites ?? null);
     setSaveTarget(payload.project_save_target ?? null);
+    setProjectHome(payload.project_home ?? null);
     setBaselineIndex(payload.baseline_index ?? null);
     setImportReport(payload.import_report ?? null);
     setSourceAvailable(payload.source_available ?? false);
@@ -1987,6 +2012,7 @@ export default function App() {
         profile_complete: merged.profile_complete ?? false,
         draft_prerequisites: merged.draft_prerequisites ?? null,
         project_save_target: merged.project_save_target ?? null,
+        project_home: merged.project_home ?? null,
         baseline_index: merged.baseline_index ?? null,
         figures: merged.figures ?? [],
         suggested_prompts: merged.suggested_prompts ?? [],
@@ -2203,6 +2229,13 @@ export default function App() {
           setSaveTarget(
             result.target ? { path: result.target, name: result.name } : null,
           );
+          // The same save found (or lost) the section's project folder. A
+          // bound target is this session's, so its home is too; an unbound
+          // one means the session was replaced mid-save, and the
+          // replacement's folder is its own business (the refresh after a
+          // replacement brings it).
+          if (result.target) setProjectHome(result.home ?? null);
+          setProjectSectionsNonce((n) => n + 1);
         }
         return {
           ok: !!result?.ok,
@@ -2248,6 +2281,14 @@ export default function App() {
     if (api?.save_project_brief) {
       try {
         const result = await api.save_project_brief();
+        if (result?.ok) {
+          // Exporting stamps the project link server-side, so re-read it
+          // rather than guess here. It never binds the project folder: this
+          // section's saved file only carries the link after its next save,
+          // and that save is what finds the folder.
+          refreshDoc();
+          setProjectSectionsNonce((n) => n + 1);
+        }
         return {
           ok: !!result?.ok,
           cancelled: !!result?.cancelled,
@@ -2263,6 +2304,8 @@ export default function App() {
     }
     try {
       await downloadProjectBrief();
+      // The export stamped the project link server-side; re-read it.
+      refreshDoc();
       return { ok: true, cancelled: false, error: "" };
     } catch (e) {
       return {
@@ -2502,6 +2545,7 @@ export default function App() {
       setNewSessionOpen(true);
     } else if (gate.kind === "install-update") void performInstall(true);
     else if (gate.kind === "open-project") void doLoadProject(gate.file);
+    else if (gate.kind === "open-section") void doOpenSection(gate.number);
     else if (gate.kind === "start-template") {
       void doInstantiateTemplate(gate.templateId);
     } else if (gate.kind === "next-section") {
@@ -2542,6 +2586,85 @@ export default function App() {
 
   /** The actual project load (after the save gate). Rebuilds the transcript
    *  and re-inlines each figure by its stored message_index. */
+  /** Hydrate a loaded project — the one apply path for Open (a file the
+   *  user picked) and the Project panel's Open (a sibling section the server
+   *  resolved by number), so the two can never land differently. Returns
+   *  whether the payload was adopted. */
+  const applyLoadedProject = (
+    result: ProjectLoadResult,
+    fallbackName: string,
+  ): boolean => {
+    if (!adoptWorkspaceLease(result)) return false;
+    advanceWorkspaceEpoch();
+    // Opening a project replaces the whole session, so the panes must not
+    // carry the outgoing one's compare diff, review draft, QC accept-set or
+    // half-typed forms into it. Never reached inside the tutorial —
+    // onLoadProject ends the tour first, and the panel's Open is hidden there.
+    discardPaneState();
+    if (!applyDocPayload(result)) return false;
+    // The .baspec carries the original import's content-loss warnings, and
+    // with the imported-DOCX banner gone this is the only place they can
+    // still surface. Without it, reopening a project silently drops the
+    // one honest signal that the extraction left something behind.
+    const restored = result.import_report?.warnings ?? [];
+    if (restored.length) {
+      setImportNotice({
+        tone: "warn",
+        name: result.import_report?.filename ?? fallbackName,
+        lines: restored,
+      });
+    }
+    // A loaded project can restore legacy module/discipline compatibility
+    // fields; resync health while the document remains heading-authoritative.
+    refreshHealth();
+    refreshResearch();
+    refreshQc();
+    refreshReadiness();
+    // Rebuild the transcript and re-inline each figure into the assistant
+    // bubble that created it (matched by its stored message_index — the
+    // ordinal among assistant bubbles).
+    const rebuilt: ChatMessage[] = result.chat.map((m) => ({
+      id: newId(),
+      role: m.role,
+      text: m.text,
+    }));
+    const assistantPositions = rebuilt
+      .map((m, i) => (m.role === "assistant" ? i : -1))
+      .filter((i) => i >= 0);
+    for (const figure of result.figures ?? []) {
+      const at = assistantPositions[figure.message_index];
+      if (at !== undefined) {
+        const msg = rebuilt[at];
+        msg.figureIds = [...(msg.figureIds ?? []), figure.fid];
+      }
+    }
+    setMessages(rebuilt);
+    return true;
+  };
+
+  /** Bind the loaded session to the project folder of the file the native
+   *  Open dialog just read (Project workspace Phase 2). The shell holds the
+   *  path; this side holds only the token `open_file` returned, and the
+   *  generation the load reported — so a session replaced since the load is
+   *  never handed the folder. A folder that cannot be bound is a section
+   *  with no home, which the panel already says; nothing to report. */
+  const bindNativeProjectHome = async (
+    token: string,
+    generation: number | undefined,
+  ) => {
+    const api = window.pywebview?.api;
+    if (!api?.bind_project_home) return;
+    const epoch = workspaceEpochRef.current;
+    try {
+      const bound = await api.bind_project_home(token, generation);
+      if (workspaceEpochRef.current !== epoch || !bound?.ok) return;
+      setProjectHome(bound.home ?? null);
+      setProjectSectionsNonce((n) => n + 1);
+    } catch {
+      // See above: no home is an honest state, not an error.
+    }
+  };
+
   const doLoadProject = async (file: File) => {
     if (fileLoadingRef.current) return;
     fileLoadingRef.current = true;
@@ -2552,51 +2675,11 @@ export default function App() {
     setFileLoading({ kind: "open", name: file.name });
     try {
       const result = await loadProjectFile(file);
-      if (!adoptWorkspaceLease(result)) return;
-      advanceWorkspaceEpoch();
-      // Opening a project replaces the whole session, so the panes must not
-      // carry the outgoing one's compare diff, review draft, QC accept-set or
-      // half-typed forms into it. Never reached inside the tutorial —
-      // onLoadProject ends the tour first.
-      discardPaneState();
-      if (!applyDocPayload(result)) return;
-      // The .baspec carries the original import's content-loss warnings, and
-      // with the imported-DOCX banner gone this is the only place they can
-      // still surface. Without it, reopening a project silently drops the
-      // one honest signal that the extraction left something behind.
-      const restored = result.import_report?.warnings ?? [];
-      if (restored.length) {
-        setImportNotice({
-          tone: "warn",
-          name: result.import_report?.filename ?? file.name,
-          lines: restored,
-        });
-      }
-      // A loaded project can restore legacy module/discipline compatibility
-      // fields; resync health while the document remains heading-authoritative.
-      refreshHealth();
-      refreshResearch();
-      refreshQc();
-      refreshReadiness();
-      // Rebuild the transcript and re-inline each figure into the assistant
-      // bubble that created it (matched by its stored message_index — the
-      // ordinal among assistant bubbles).
-      const rebuilt: ChatMessage[] = result.chat.map((m) => ({
-        id: newId(),
-        role: m.role,
-        text: m.text,
-      }));
-      const assistantPositions = rebuilt
-        .map((m, i) => (m.role === "assistant" ? i : -1))
-        .filter((i) => i >= 0);
-      for (const figure of result.figures ?? []) {
-        const at = assistantPositions[figure.message_index];
-        if (at !== undefined) {
-          const msg = rebuilt[at];
-          msg.figureIds = [...(msg.figureIds ?? []), figure.fid];
-        }
-      }
-      setMessages(rebuilt);
+      if (!applyLoadedProject(result, file.name)) return;
+      // A file picked through the native Open dialog can name its project
+      // folder: the shell minted a token for its path when it read it.
+      const token = nativeOpenTokens.get(file);
+      if (token) await bindNativeProjectHome(token, result.generation);
     } catch (e) {
       setMessages((prev) => [
         ...prev,
@@ -2622,6 +2705,53 @@ export default function App() {
     else void doLoadProject(file);
   };
 
+  /** Open a sibling section of this project by number (the Project panel,
+   *  Phase 2). The server resolves the number to a file beside the brief
+   *  and runs the exact load-file path; this side runs the same apply as
+   *  Open, and says so when the sibling turned out to belong elsewhere. */
+  const doOpenSection = async (number: string) => {
+    if (fileLoadingRef.current) return;
+    fileLoadingRef.current = true;
+    setImportNotice(null);
+    setFileLoading({ kind: "open", name: `section ${number}` });
+    try {
+      const result = await openSection(number);
+      if (!applyLoadedProject(result, `Section ${number}`)) return;
+      if (result.home_kept === false) {
+        setImportNotice({
+          tone: "warn",
+          name: `Section ${number}`,
+          title: "Opened outside the project folder",
+          lines: [
+            "That file belongs to a different project (or to none), so this section is not shown as part of the folder it was opened from.",
+          ],
+        });
+      }
+    } catch (e) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          role: "assistant",
+          text: `Could not open section ${number}: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+          error: true,
+        },
+      ]);
+    } finally {
+      fileLoadingRef.current = false;
+      setFileLoading(null);
+    }
+  };
+
+  /** The Project panel's Open: offer to save the section being left, then
+   *  open the sibling. Hidden in a tour, so no tour to end first. */
+  const requestOpenSection = async (number: string) => {
+    if (await isUnsaved()) setSaveGate({ kind: "open-section", number });
+    else void doOpenSection(number);
+  };
+
   /**
    * Open a file through the native pywebview dialog, when the shell is
    * present. HTML `<input type="file">` is unreliable inside the webview
@@ -2645,7 +2775,11 @@ export default function App() {
       const binary = atob(picked.data_b64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      return new File([bytes], picked.name);
+      const file = new File([bytes], picked.name);
+      // A project open carries an opaque token for the picked path, so the
+      // load can bind its project folder without this side ever holding it.
+      if (picked.token) nativeOpenTokens.set(file, picked.token);
+      return file;
     } catch {
       return null; // dialog/read error — treat as a no-op, never throw
     }
@@ -2912,7 +3046,9 @@ export default function App() {
         title={
           saveGate?.kind === "open-project"
             ? "Open a different project?"
-            : saveGate?.kind === "start-template"
+            : saveGate?.kind === "open-section"
+              ? "Open another section of this project?"
+              : saveGate?.kind === "start-template"
               ? "Start from this template?"
               : saveGate?.kind === "start-brief" || saveGate?.kind === "next-section"
                 ? "Start the next section of the project?"
@@ -2926,7 +3062,7 @@ export default function App() {
             : "You have unsaved work in this session. Save it to a project file first, or continue without saving — this can't be undone."
         }
         saveLabel={
-          saveGate?.kind === "open-project"
+          saveGate?.kind === "open-project" || saveGate?.kind === "open-section"
             ? "Save, then open"
             : saveGate?.kind === "start-template"
               ? "Save, then use template"
@@ -2935,7 +3071,7 @@ export default function App() {
                 : "Save, then start"
         }
         discardLabel={
-          saveGate?.kind === "open-project"
+          saveGate?.kind === "open-project" || saveGate?.kind === "open-section"
             ? "Open without saving"
             : saveGate?.kind === "start-template"
               ? "Use template without saving"
@@ -2978,6 +3114,9 @@ export default function App() {
           onSupersedeProjectFact={supersedeProjectFactHandler}
           onExportProjectBrief={saveProjectBrief}
           onStartNextSection={(opts) => void requestStartNextSection(opts)}
+          projectHome={projectHome}
+          onOpenSection={(number) => void requestOpenSection(number)}
+          projectSectionsNonce={projectSectionsNonce}
           lintIssues={lintIssues}
           standards={standards}
           profileComplete={profileComplete}

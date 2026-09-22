@@ -695,9 +695,13 @@ function Dossier() {
               <b className="text-ink">Project briefs.</b> A{" "}
               <code className="text-ink">.basproject</code> is written locally
               when you export one and read locally when the next section starts
-              from it; no request is made either way. It carries the full text
-              of your attached reference documents and every recorded project
-              fact, so treat it as sensitive project data.
+              from it; no request is made either way. In the desktop app the
+              Project panel also reads the project folder locally — the brief
+              beside a section's saved file and the names of the section files
+              next to it — and never writes a path into any file. A brief
+              carries the full text of your attached reference documents and
+              every recorded project fact, so treat it as sensitive project
+              data.
             </>,
             <>
               <b className="text-ink">Telemetry, analytics, crash reports, usage
@@ -1304,7 +1308,7 @@ function Dossier() {
         <Runtime
           n={14}
           title="Exporting or starting from a project brief"
-          trigger="Next section → in the panel (no file: the brief is built in memory and the next section seeded from it); or Export → Export project brief; or New session → New section in an existing project."
+          trigger="Next section → in the panel (no file: the brief is built in memory and the next section seeded from it); or Export → Export project brief; or New session → New section in an existing project; or Open on a row of the Project panel."
           runs={
             <>
               Local serialization and parsing only. Exporting writes a{" "}
@@ -1319,7 +1323,13 @@ function Dossier() {
               the readiness checklist says research was carried rather than run
               here. A sibling section’s <b className="text-ink">.baspec</b> can
               stand in for the brief; it is read into a throwaway copy and never
-              becomes the session.
+              becomes the session. In the desktop app, a section saved or opened
+              beside its project’s brief learns that folder for as long as the
+              session lasts: the Project panel lists the brief’s registry and
+              the section files present, and its Open reads a sibling by number
+              through the same project-load path as Open — a name that resolves
+              outside the folder is refused. The folder is never recorded in
+              any file, so a project folder can be moved or shared whole.
             </>
           }
           sent="Nothing. No network call is made."

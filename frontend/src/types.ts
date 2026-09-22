@@ -349,6 +349,42 @@ export interface ProjectLink {
   sections: SectionRecord[];
 }
 
+/**
+ * The project folder this section's file lives in (Project workspace Phase
+ * 2): the folder holding the section's .baspec beside a .basproject whose
+ * project id matches the link. Discovered by the native shell on save/open,
+ * cleared on reset/load, never persisted — `DocPayload.project_home`. The
+ * folder is shown to the user; it is never sent back as an input.
+ */
+export interface ProjectHome {
+  folder: string;
+  brief_name: string;
+}
+
+/** One row of the Project panel: a registry record joined with the folder. */
+export interface ProjectSectionRow extends SectionRecord {
+  /** Its file sits beside the project brief (only judged with a home). */
+  present: boolean;
+  /** The section open right now. */
+  is_current: boolean;
+  /** False for the open section when the registry does not list it yet —
+   *  it joins when the section exports a brief. */
+  in_registry: boolean;
+}
+
+/** `GET /api/project/sections` — what the Project panel lists. */
+export interface ProjectSectionsPayload {
+  home: ProjectHome | null;
+  project: { project_id: string; name: string } | null;
+  /** When the brief in the folder was last written ("" without a home). */
+  brief_updated_at: string;
+  current_number: string;
+  sections: ProjectSectionRow[];
+  /** .baspec files in the folder that no registry record names. */
+  unregistered: string[];
+  warnings: string[];
+}
+
 /** What a project brief holds, as the manifest/inspect routes describe it. */
 export interface ProjectBriefManifest {
   project_id: string;
@@ -726,6 +762,10 @@ export interface SaveProjectResult {
   error: string;
   target: string;
   name: string;
+  /** The project folder this save found the section in, or null — meaningful
+   *  only beside a non-empty `target` (an unbound target means the session
+   *  was replaced mid-save). Older shells omit it. */
+  home?: ProjectHome | null;
 }
 
 /**
@@ -769,6 +809,13 @@ export interface DocPayload {
    * overwrite the project that was just discarded.
    */
   project_save_target: SaveTarget | null;
+  /**
+   * The project folder this section's file lives in, beside its brief, or
+   * null. Server-owned like the save target: discovered by the native shell
+   * on save/open, cleared on reset/load, so a panel that kept its own copy
+   * could list another project's sections beside a fresh session.
+   */
+  project_home: ProjectHome | null;
   /** Imported-master version index (Batch 5); null for from-scratch. */
   baseline_index: number | null;
   /** Chat-authored figures (diagrams/schematics/tables); [] when none. */
@@ -1781,6 +1828,12 @@ export interface ReleaseNotesPayload {
 
 export interface ProjectLoadResult extends DocPayload {
   chat: { role: Role; text: string }[];
+  /** `POST /api/project/open-section` only: the section number opened. */
+  section?: string;
+  /** `POST /api/project/open-section` only: whether the project folder
+   *  carried over — false when the sibling file belongs to another project,
+   *  or to none. */
+  home_kept?: boolean;
 }
 
 /* --- Reusable spec starters (templates) --- */
@@ -2246,7 +2299,16 @@ declare global {
          *  dialog was cancelled. `kind` picks the file filter. */
         open_file?: (
           kind: "project" | "docx" | "reference" | "template" | "project_brief",
-        ) => Promise<{ name: string; data_b64: string } | null>;
+        ) => Promise<{ name: string; data_b64: string; token?: string } | null>;
+        /** Bind the session to the project folder of a file `open_file`
+         *  just read (Project workspace Phase 2). `token` is the opaque name
+         *  `open_file` returned for a project open — the path never reaches
+         *  this side — and `generation` the one the load reported, so a
+         *  session replaced since the load is never handed the folder. */
+        bind_project_home?: (
+          token: string,
+          generation?: number,
+        ) => Promise<{ ok: boolean; home: ProjectHome | null; error: string }>;
         /** Native Save dialog for a portable reusable starter. */
         save_template?: (templateId: string) => Promise<boolean>;
         /** Native Save dialog for the project brief (.basproject). Fetched

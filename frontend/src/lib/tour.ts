@@ -22,7 +22,7 @@ import {
  * with instructions that no longer match the active scenario. A bump simply
  * discards stale records, which is the correct outcome.
  */
-export const TOUR_VERSION = 7;
+export const TOUR_VERSION = 8;
 
 export interface StarterPrompt {
   label: string;
@@ -103,7 +103,8 @@ export interface TourStep {
     | "qc"
     | "openItems"
     | "followups"
-    | "projectFacts";
+    | "projectFacts"
+    | "projectPanel";
   readiness?: TourReadiness;
   title: string;
   body: string;
@@ -318,6 +319,17 @@ export const TOUR: readonly TourChunk[] = [
         title: "What the project has settled travels to its next section",
         body:
           "Each section of a project is its own session, and the next one starts without this conversation. Facts the project has established — the edition the authority confirmed, an owner standard, the water-supply basis, what another section specifies — are recorded here the moment they are settled, grouped by how far they reach: project-wide, discipline-wide, or one section's coordination fact. The assistant reads them every turn, the research and Final QC teams are briefed with them, and a project brief carries them into the next section. Retiring one keeps it in the record with its reason; a fact the user contradicts is superseded in the same reply, never drafted around.",
+      },
+      {
+        id: "project-panel",
+        capabilities: ["project.sections", "project.open-section"],
+        mode: "explanatory",
+        anchor: "project-panel",
+        drawer: "projectPanel",
+        placement: "top",
+        title: "The project's sections, one click apart",
+        body:
+          "A project lives in one folder: its project brief beside one saved file per section. In the desktop app, once a section is saved beside its brief, this panel names the folder, lists every section the project has drafted with when each was exported and the facts and research rounds it recorded, marks the one you are in, and opens any sibling by its number in one click — offering to save the section being left first. Next section → starts the next one from the same list. Nothing about the folder is written into any file, so a project folder can be moved or shared whole. This practice copy lives in no folder, so it lists only what its project recorded, and its header is blank for the lint lesson, so no row is marked as the one you are in.",
       },
       {
         id: "lint",

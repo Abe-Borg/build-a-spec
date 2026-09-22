@@ -265,7 +265,7 @@ def test_the_ledger_prices_a_one_hour_subtotal_it_accrued():
     )
     snap = ledger.snapshot()
     assert snap["totals"]["cache_creation_1h_input_tokens"] == 400_000
-    assert snap["estimated_cost_usd"]["by_category"]["qc"] == 7.75
+    assert snap["estimated_cost_usd"]["by_category"]["qc"] == 6.2  # Opus 5.5: 0.6M x $5.00 + 0.4M x $8.00
 
 
 def test_usage_to_dict_reads_the_nested_one_hour_subtotal():

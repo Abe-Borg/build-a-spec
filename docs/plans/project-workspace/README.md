@@ -45,7 +45,7 @@ closed without merging is reconciled back to `not started` with a note.
 | Phase | File | Status | Commit/PR | Notes |
 |---|---|---|---|---|
 | plan | `../PROJECT_WORKSPACE_2026-09-22.md` | **complete** | PR #173 | assessment + plan; four Codex findings folded into Phases 3–4 |
-| 1 | (in the plan file) | **complete** | `b8bac2f` + `28bad83` (PR #174) | Next section →; **cut as v1.20.0** (merged; tag not yet pushed — see "Release policy") |
+| 1 | (in the plan file) | **complete** | `b8bac2f` + `28bad83` (PR #174) | Next section →; **cut as v1.20.0**, tagged by Abraham at `0a744ab` on 2026-09-22 — a tree that also holds Phase 2 (see "Release policy") |
 | handoff | this folder | **complete** | `aa119fa` (PR #175, merged `5b25df9`) | the program folder, the specs, the release policy |
 | 2 | `02_PROJECT_HOME.md` | **complete** | `7cf3893` + `3da1e64` (PR #176, merged `c6b7803`) | project folder + Project panel; desktop shell only, the browser keeps the file relay; 13 as-built deviations in the phase file |
 | 3 | `03_WRITE_BACK_MERGE.md` | **in review** | `4176a56` (PR #179) | the brief is a living file: save-time refresh, Update project brief, export-onto-existing merge, Pull project changes; 19 as-built deviations in the phase file |
@@ -70,6 +70,20 @@ every version since the last PUBLISHED release, so the closeout's tag build
 will cover 1.20.0's notes alongside the closeout's own. Tagging v1.20.0 now
 is harmless and simply ships the Next-section button early; skipping it
 loses nothing.
+
+**What happened (recorded 2026-09-22, during Phase 3).** Abraham tagged
+v1.20.0 at `0a744ab`, the PR #178 merge. Phase 2 had already merged
+(`c6b7803`), so the v1.20.0 build holds more than the Next-section button: it
+also carries Phase 2's project folder and Project panel, plus PRs #177 and
+#178. Its release notes describe the button, the Export-brief change and the
+Opus 5.5 move, but not Phase 2. The tag build was still running when this
+was written. For Phase 7 this means:
+
+- If v1.20.0 publishes, its entry is frozen (CLAUDE.md, "A released
+  version's entry is frozen"). The closeout ships as a new version with its
+  own entry.
+- The closeout entry is the only place Phase 2's draft notes can reach
+  users. It should say the Project panel arrived in 1.20.0, not call it new.
 
 ## How to hand this off
 

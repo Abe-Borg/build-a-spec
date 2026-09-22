@@ -140,6 +140,17 @@ export default function NextSectionDialog({
     };
   }, []);
 
+  /** A typed number the project already drafted: the catalog greys those,
+   *  and the typed path must not be a way around it — the server refuses
+   *  it too (409 section_already_drafted), so this is the early, visible
+   *  half of one rule. Whitespace-folded the way the server folds it. */
+  const fold = (value: string) => value.trim().split(/\s+/).join(" ");
+  const typedIsDrafted =
+    choice?.kind === "custom" &&
+    !!options &&
+    fold(number) !== "" &&
+    options.done.includes(fold(number));
+
   const header = (): { number: string; title: string } => {
     if (!options || !choice) return { number: "", title: "" };
     if (choice.kind === "catalog") {
@@ -258,6 +269,12 @@ export default function NextSectionDialog({
                       />
                     </span>
                   )}
+                  {typedIsDrafted && (
+                    <span role="alert" className="mt-1 block text-[11px] text-warn">
+                      Section {fold(number)} is already drafted in this project.
+                      Open that section instead, or pick a different number.
+                    </span>
+                  )}
                 </span>
               </label>
               <label
@@ -307,6 +324,7 @@ export default function NextSectionDialog({
                 onClick={start}
                 disabled={
                   !choice ||
+                  typedIsDrafted ||
                   (choice.kind === "custom" && !number.trim() && !title.trim())
                 }
                 data-capability="project.next-section"

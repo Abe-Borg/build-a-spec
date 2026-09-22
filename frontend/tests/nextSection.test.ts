@@ -69,6 +69,15 @@ test("the dialog offers a named pick, a typed header, and an unnamed page", () =
   assert.match(dialog, /nextSectionOptions\(\)/);
 });
 
+test("a typed number the project already drafted cannot be started", () => {
+  // The catalog greys drafted sections; the typed path must not be a way
+  // around it. The server refuses it too (409 section_already_drafted) —
+  // this is the visible half of one rule, not the only half.
+  assert.match(dialog, /options\.done\.includes\(fold\(number\)\)/);
+  assert.match(dialog, /disabled=\{\s*!choice \|\|\s*typedIsDrafted \|\|/);
+  assert.match(dialog, /is already drafted in this project/);
+});
+
 test("the client posts JSON to the one route and reads back the bundle", () => {
   const fn = /export async function startNextSection[\s\S]*?\n\}/.exec(api)?.[0];
   assert.ok(fn);

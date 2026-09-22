@@ -156,7 +156,8 @@ then the file dialog. Phase 1 of the project-workspace plan
   hidden — the open section, the effective discipline and the manifest of what
   will carry. On a hyperscale project 21 30 00 Fire Pumps is one click. Type a
   header the catalog does not list (the only option on the generic module,
-  which declares none), or **leave it unnamed** for a section that will start
+  which declares none) — a number the project already drafted is refused,
+  in the dialog and by the server — or **leave it unnamed** for a section that will start
   from an office master: a named page counts as content and the master import
   refuses it, so the choice is made in the dialog rather than discovered at the
   Import button. A named page opens with Draft full section available at once,

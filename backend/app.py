@@ -6761,6 +6761,26 @@ def create_app(
                     busy = sessions.busy_reasons(session)
                     if busy:
                         return _next_section_busy_response(busy)
+                    # A number the project already drafted is refused, and
+                    # refused HERE rather than only greyed in the dialog: the
+                    # typed-header path and a direct caller bypass the
+                    # catalog, and two sections with one number are not two
+                    # sections — build_project_brief upserts the registry by
+                    # number, so the later export would silently replace the
+                    # earlier section's record (Codex, PR #174).
+                    if number and number in sections_drafted(session):
+                        return _coded_error_response(
+                            {
+                                "ok": False,
+                                "code": "section_already_drafted",
+                                "error": (
+                                    f"Section {number} is already drafted in this "
+                                    "project. Open that section instead, or pick "
+                                    "a different number."
+                                ),
+                            },
+                            status_code=409,
+                        )
                     # The brief is built from the session about to be
                     # replaced, under the same guard as the seed. The link
                     # stamp is deliberate even though this session is going

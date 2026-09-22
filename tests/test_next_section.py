@@ -373,6 +373,44 @@ def test_the_route_refuses_a_bad_header_busy_work_and_a_tour():
         sessions.reset_session()
 
 
+def test_a_number_the_project_already_drafted_is_refused_not_greyed_only():
+    """The catalog greys a drafted section, but the typed path and a direct
+    caller bypass the catalog — and build_project_brief upserts the registry
+    by number, so a second "21 13 13" would replace the first's record on
+    the next export (Codex, PR #174). Refused server-side, in one rule."""
+    client = _client()
+    session = _rich_session(client)
+    before = _projection(session)
+
+    # The open section's own number …
+    resp = client.post(
+        "/api/project/next-section", json={"number": " 21  13 13 ", "title": "Again"}
+    )
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["code"] == "section_already_drafted"
+    assert "21 13 13" in resp.json()["error"]
+    assert _projection(session) == before, "a refusal replaces nothing"
+
+    # … and a number from the link's registry, after a real handoff.
+    seeded = client.post(
+        "/api/project/next-section", json={"number": "21 30 00", "title": "Fire Pumps"}
+    )
+    assert seeded.status_code == 200, seeded.text
+    again = client.post(
+        "/api/project/next-section", json={"number": "21 13 13", "title": "Wet-Pipe"}
+    )
+    assert again.status_code == 409, again.text
+    assert again.json()["code"] == "section_already_drafted"
+    still = sessions.get_session()
+    assert still.doc.doc.number == "21 30 00", "the fire-pump section is still open"
+    assert sections_drafted(still) == ["21 13 13", "21 30 00"]
+    # A different number is still fine, and an unnamed page always is.
+    fine = client.post("/api/project/next-section", json={"number": "21 12 00"})
+    assert fine.status_code == 200, fine.text
+    unnamed = client.post("/api/project/next-section")
+    assert unnamed.status_code == 200, unnamed.text
+
+
 def test_the_new_section_exports_a_brief_that_lists_both_sections():
     client = _client()
     _rich_session(client)

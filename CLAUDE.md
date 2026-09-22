@@ -10319,6 +10319,15 @@ no new SSE event.
   deduplicated, never `"(unnumbered)"` — an unnumbered section is not one
   the catalog can exclude. The open-catalog module (generic) gets `[]`, and
   the dialog then offers the typed header alone.
+- **A number the project already drafted is refused, server-side** (Codex,
+  PR #174). The catalog greys a drafted section, but the typed path and a
+  direct caller bypass the catalog — and `build_project_brief` upserts the
+  registry by number, so a second "21 13 13" would silently replace the
+  first section's record on the next export. The POST answers 409
+  `section_already_drafted` inside the guard (reading `sections_drafted`
+  from the session being replaced), and the dialog disables Start with the
+  same sentence the moment the typed number matches — the visible half of
+  one rule, never the only half. An unnamed page is never refused.
 - **The typed header is bounded where the registry is bounded.**
   `clean_next_section_header` folds whitespace and refuses past 40 / 160
   characters — the same widths `sanitize_section_record` applies — so a

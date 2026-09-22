@@ -129,6 +129,18 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "pairing the brief with a template."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Export project brief goes straight to Save",
+                        body=(
+                            "Export \u2192 Export project brief no longer "
+                            "opens a large window listing everything the "
+                            "brief carries before you can save it. It goes "
+                            "straight to the Save dialog. The brief still "
+                            "holds the full text of any attached reference "
+                            "documents, so treat the file as sensitive "
+                            "project data."
+                        ),
+                    ),
                 ),
             ),
             ReleaseSection(

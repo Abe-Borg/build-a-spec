@@ -10649,6 +10649,39 @@ No schema or protocol bump.
   the "qc" bucket now pins `settings.QC_MODEL` to Opus 5.5 itself, so an
   operator's override cannot turn it red.
 
+## Export project brief saves straight away — implemented notes (v1.20.0)
+
+Owner ask (Abraham, 2026-09-22): the brief export showed a huge modal, and
+all he needs is the brief on disk. Frontend only: no route, no SSE event, no
+dep, no project-format change.
+
+- **The Export menu's *Export project brief* entry writes directly.** It calls
+  the unchanged `App.saveProjectBrief` — `js_api.save_project_brief` (the
+  native Save dialog) in the shell, `downloadProjectBrief` in a browser — with
+  no confirm step and no manifest read first. **ERRATA**: "Project briefs"
+  (v1.17.0) says the brief entry "confirms with the manifest first", and "Next
+  section in one click" says the export confirm shares `BriefContents` with
+  `NextSectionDialog`. Neither holds any more: `BriefContents` now renders in
+  `NextSectionDialog` alone.
+- **The menu closes on click, so state lives beside it**, the pattern the
+  other exports already use: `exportTriggerBusy` (a spec download OR the
+  brief) labels and locks the Export trigger, and a failure gets its own
+  dismissible strip (`data-testid="brief-export-error"`). A cancelled Save
+  dialog is a decision and stays silent.
+- **The sensitivity disclosure moved, it was not dropped.** The modal said the
+  file carries the full text of attached reference documents; the menu
+  entry's tooltip says so now.
+- **`GET /api/project/brief/manifest` stays** (documented, tested API). Its
+  only frontend caller, `api.projectBriefManifest`, was deleted with the
+  modal, and `ArtifactPanel` no longer imports `ModalShell`.
+- **No capability or tour change.** `project.brief-export` stays on the menu
+  entry, so the three-place contract is untouched and `TOUR_VERSION` does not
+  move.
+- **Tests**: `frontend/tests/downloads.test.ts` gains a text-level pin — the
+  entry runs the export itself and keeps its capability id; no
+  `briefConfirmOpen`, `projectBriefManifest` or `<ModalShell` in the panel;
+  the error strip exists. Restoring the confirm step turns it red.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

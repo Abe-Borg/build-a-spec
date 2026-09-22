@@ -233,6 +233,14 @@ then the file dialog. Phase 1 of the project-workspace plan
 - **Template pairing stays on the New-session route.** The dialog says so.
   The file route also remains the way to continue a project on another
   machine or another day.
+- **Export project brief saves straight away.** Export → *Export project
+  brief* no longer opens the confirm dialog that listed what would travel
+  (described under v1.17.0 below); it goes straight to the native Save
+  dialog, or a download in a browser. The menu entry's tooltip keeps the
+  sensitivity note — the file carries the full text of attached reference
+  documents — and a failed export shows in its own dismissible strip under
+  the panel actions. `GET /api/project/brief/manifest` stays for API
+  callers; the app no longer reads it.
 
 ## Shipped in v1.17.0 (Project briefs — the next section starts where the last one left off)
 

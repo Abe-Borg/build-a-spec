@@ -4,7 +4,15 @@ Owner: Abraham.
 
 ## Active
 
-**[Deep-dive remediation](deep-dive-remediation/README.md)** — the only live
+**[Project workspace](PROJECT_WORKSPACE_2026-09-22.md)** — proposed
+2026-09-22, awaiting Abraham's review. Carry a project's work (research,
+location, system and project facts, references, editions) across its spec
+sections as a first-class project: next section in one click, a project
+folder with a Project panel, an append-only write-back merge, a harvest pass,
+and a measured relevance trim. Part 1 of the file records what v1.17.0's
+project briefs already do; Part 2 is the plan.
+
+**[Deep-dive remediation](deep-dive-remediation/README.md)** — the other live
 program. Six phases, 24 chunks; **Phase 1 is complete** (direct server-tool
 callers; continuation containers in research, QC and chat; server-tool
 pairing plus legacy history repair) and **Phase 2 is nearly done** — 2.2 (QC

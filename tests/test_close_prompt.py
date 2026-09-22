@@ -9,10 +9,13 @@ the unsaved-progress predicate, the shared save-payload helpers, and the
 from __future__ import annotations
 
 import enum
+import io
 import re
 import sys
 import time
 import types
+
+import pytest
 
 from backend import sessions
 from backend.llm.conversation import SessionState
@@ -134,6 +137,10 @@ class _FakeWindow:
         self._evaluate_return = evaluate_return
         self._dialog_path = dialog_path
         self.current_url = current_url
+        # pywebview's yes/no dialog (Project workspace Phase 3: an export onto
+        # a file that is not this project's brief asks before replacing it).
+        self.confirm_answer = False
+        self.confirm_calls: list[tuple[str, str]] = []
 
     def evaluate_js(self, js: str):
         self.evaluated.append(js)
@@ -147,6 +154,10 @@ class _FakeWindow:
     def create_file_dialog(self, *args, **kwargs):
         self.dialog_calls.append((args, kwargs))
         return self._dialog_path
+
+    def create_confirmation_dialog(self, title: str, message: str) -> bool:
+        self.confirm_calls.append((title, message))
+        return self.confirm_answer
 
     def get_current_url(self) -> str:
         return self.current_url
@@ -959,6 +970,107 @@ def test_save_project_brief_refuses_a_browser_session_and_a_tour(monkeypatch):
     assert window.dialog_calls == []
 
 
+def test_export_onto_an_existing_brief_merges(monkeypatch, tmp_path):
+    """Project workspace Phase 3: an export onto a brief that already exists
+    MERGES instead of overwriting — that file may hold the other branch of a
+    fork. A file that is another project's brief (or no brief at all) is
+    replaced only after the user says so."""
+    import json
+
+    from backend.project_brief import parse_project_brief
+    from tests.test_project_brief import _client, _rich_session
+
+    _fake_webview(monkeypatch)
+    client = _client()
+    _rich_session(client)
+
+    def fetch(backend, path, **kwargs):
+        resp = client.get(path)
+        assert resp.status_code == 200, resp.text
+        return resp.content, "buildaspec-project.basproject"
+
+    posted: list[str] = []
+    from backend.app import _BRIEF_FILE_LOCK
+
+    def post(backend, path, *, payload, filename="upload.bin"):
+        assert backend.api_token == "token"
+        # Read → merge → write runs under the save-time refresh's lock …
+        assert _BRIEF_FILE_LOCK.locked(), "the export merge must hold the brief lock"
+        posted.append(path)
+        resp = client.post(path, files={"file": (filename, payload, "application/json")})
+        return resp.status_code, resp.json()
+
+    monkeypatch.setattr(main, "_fetch_backend_bytes", fetch)
+    monkeypatch.setattr(main, "_post_backend_file", post)
+    target = tmp_path / "project.basproject"
+    window = _FakeWindow(dialog_path=str(target))
+    # … while the question is asked with it released: a native modal must
+    # never hold a lock another save waits on.
+    locked_while_asking: list[bool] = []
+    answer_confirm = window.create_confirmation_dialog
+
+    def confirm(title, message):
+        locked_while_asking.append(_BRIEF_FILE_LOCK.locked())
+        return answer_confirm(title, message)
+
+    window.create_confirmation_dialog = confirm
+    controller = main._CloseController(None, backend=_fake_backend())
+    controller._bind(window)
+
+    # A fresh path: the plain export, no merge.
+    first = controller.save_project_brief()
+    assert first["ok"] is True and posted == []
+    assert first["brief_refreshed"] is False
+
+    # The other branch writes into the file …
+    other_branch = json.loads(target.read_text(encoding="utf-8"))
+    other_branch["facts"].append(
+        {
+            "pid": "pf-9",
+            "statement": "Recorded by the other branch.",
+            "scope": "project",
+            "status": "confirmed",
+            "source_kind": "user",
+            "recorded_in": "21 30 00",
+        }
+    )
+    target.write_text(json.dumps(other_branch), encoding="utf-8")
+
+    # … and the next export onto it keeps that work.
+    merged = controller.save_project_brief()
+    assert merged["ok"] is True, merged
+    assert posted == ["/api/project/brief/merge"]
+    assert merged["brief_refreshed"] is True and merged["brief_written"] is True
+    assert merged["pull_available"] is True
+    statements = [f["statement"] for f in parse_project_brief(target.read_bytes()).facts]
+    assert "Recorded by the other branch." in statements
+    assert "Data halls are Ordinary Hazard Group 2." in statements
+    assert window.confirm_calls == []
+
+    # Another project's brief: asked, and "no" leaves the file untouched.
+    stranger = dict(other_branch, project_id="f" * 32)
+    target.write_text(json.dumps(stranger), encoding="utf-8")
+    before = target.read_bytes()
+    declined = controller.save_project_brief()
+    assert declined["ok"] is False and declined["cancelled"] is True
+    assert target.read_bytes() == before
+    (title, message) = window.confirm_calls[-1]
+    assert "DIFFERENT project" in message
+    # "Yes" replaces it with this project's brief.
+    window.confirm_answer = True
+    replaced = controller.save_project_brief()
+    assert replaced["ok"] is True
+    assert parse_project_brief(target.read_bytes()).project_id != "f" * 32
+
+    # Not a brief at all: asked the same way.
+    target.write_bytes(b"not a brief")
+    window.confirm_answer = False
+    kept = controller.save_project_brief()
+    assert kept["cancelled"] is True and target.read_bytes() == b"not a brief"
+    assert "not a project brief" in window.confirm_calls[-1][1]
+    assert locked_while_asking == [False, False, False]
+
+
 def test_open_file_project_brief_filter_offers_a_brief_or_a_sibling_project(
     tmp_path, monkeypatch
 ):
@@ -997,3 +1109,77 @@ def test_the_disposition_helper_keeps_a_brief_a_brief_and_word_a_docx():
     # The Word default is untouched — and it is why the keyword exists.
     assert main._filename_from_disposition('attachment; filename="x.basproject"') == "x.basproject.docx"
     assert main._filename_from_disposition("") == main._OPEN_IN_WORD_FALLBACK_NAME
+
+
+def test_post_backend_file_sends_a_multipart_body_the_merge_route_reads(monkeypatch):
+    """The shell hand-builds its multipart upload (urllib has no encoder), so
+    the body it would send is replayed through the real route: a brief goes
+    in, a merged brief comes out — the route parsed the part."""
+    import json
+    import urllib.error
+
+    from backend.app import _DESKTOP_TOKEN_HEADER
+    from tests.test_project_brief import _client, _rich_session
+
+    client = _client()
+    _rich_session(client)
+    exported = client.get("/api/project/brief").content
+    captured: dict = {}
+
+    class _Answer:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            request = captured["request"]
+            resp = client.post(
+                "/api/project/brief/merge",
+                content=request.data,
+                headers={"Content-Type": request.get_header("Content-type")},
+            )
+            captured["status"] = resp.status_code
+            return resp.content
+
+    def fake_urlopen(request, timeout=0):
+        captured["request"] = request
+        return _Answer()
+
+    monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
+    status, answer = main._post_backend_file(
+        _fake_backend(),
+        "/api/project/brief/merge",
+        payload=exported,
+        filename="C:\\Users\\me\\Client X.basproject",
+    )
+    request = captured["request"]
+    assert request.get_method() == "POST"
+    assert request.full_url == "http://127.0.0.1:1/api/project/brief/merge"
+    assert request.get_header(_DESKTOP_TOKEN_HEADER.capitalize()) == "token"
+    assert b'filename="CUsersmeClientX.basproject"' in request.data, "no path or space in the header"
+    assert captured["status"] == 200 and status == 200
+    assert answer["ok"] is True and json.loads(answer["brief"])["kind"] == "buildaspec-project-brief"
+
+    # An error response is an ANSWER (the caller decides what a 409 means) …
+    def refusing(request, timeout=0):
+        raise urllib.error.HTTPError(
+            request.full_url, 409, "Conflict", {}, io.BytesIO(b'{"ok": false, "code": "different_project"}')
+        )
+
+    monkeypatch.setattr(main.urllib.request, "urlopen", refusing)
+    assert main._post_backend_file(_fake_backend(), "/x", payload=b"") == (
+        409,
+        {"ok": False, "code": "different_project"},
+    )
+
+    # … while an unreachable server, or a non-JSON answer, is an error.
+    def unreachable(request, timeout=0):
+        raise urllib.error.URLError("refused")
+
+    monkeypatch.setattr(main.urllib.request, "urlopen", unreachable)
+    with pytest.raises(RuntimeError, match="could not be reached"):
+        main._post_backend_file(_fake_backend(), "/x", payload=b"")

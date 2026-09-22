@@ -422,6 +422,47 @@ invisible to CI and expensive to the user.
       sections of a practice project with no folder, no *Open* and no
       *Next section →*.
 
+### The brief is a living file (Project workspace Phase 3)
+
+- [ ] **Save twice from two sections, then read the brief.** With two
+      sections of one project in their folder (the Phase 2 rows above), open
+      the first, record a project fact in Project facts, and Save. Open the
+      second, record a different fact, attach a reference document, and
+      Save. Open the `.basproject` in a text editor: BOTH facts and the new
+      document are in it, and nothing that was there before is gone. Save the
+      second section again without changing anything: the file's bytes (and
+      its `updated_at`) do not change.
+- [ ] **Update project brief.** In the Project panel press *Update project
+      brief*: it says what it added (or that the brief already had
+      everything). Rename the `.basproject` away and press it again: an error
+      in the panel, and a Save still succeeds with a notice saying the brief
+      was not updated.
+- [ ] **Export onto the existing file.** Export → *Export project brief* and
+      pick the project's existing `.basproject`. Windows' Save dialog first
+      asks whether to replace it; answer *Yes*. The export then merges
+      instead of replacing: the other section's facts are still in the file
+      afterwards. Export onto a `.basproject` of a DIFFERENT project: after
+      Windows' question, the app asks "Replace the file?"; *No* leaves that
+      file byte-identical, *Yes* replaces it. Export onto a text file renamed
+      `.basproject`: the same two questions.
+- [ ] **Pull into the older section.** After the second section saved its
+      fact and document, open the first: the Project panel header says
+      "changes to pull" and the panel offers *Pull project changes* with what
+      it would bring. Pull: the second section's fact and document appear
+      (the document with the next free id; a fact citing it follows it), a
+      chat marker says what came in, and the offer disappears. If the second
+      section recorded a different NFPA 13 edition, the notice strip lists
+      the disagreement and an "assumed" project fact reads "Sections
+      disagree on the NFPA 13 edition … Resolve before issue." — the first
+      section's own edition and profile are unchanged. A retained Final QC
+      report now reads stale. With a turn streaming, *Pull* is disabled.
+- [ ] **A hand-edited brief with a bad reference.** Edit the `.basproject`
+      so a fact cites `ref-99` (a document it does not hold) and Pull: the
+      fact arrives citing the project brief and the section that recorded
+      it, and the notice strip says a carried fact's source could not be
+      found. Edit it again so two documents share one `rid`: Pull and Save
+      both refuse to merge it, and the file is left exactly as it was.
+
 ### State that must recover (v1.17.0)
 
 None of these have a DOM harness; the source-level pins in

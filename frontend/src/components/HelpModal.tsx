@@ -361,6 +361,8 @@ function Workflows() {
           "New session → New section in an existing project → pick that file (or the finished section's .baspec directly — the brief is built from it). Read the manifest card, set the discipline if it differs, then start with a blank page or pair the brief with a template.",
           "The new section opens with the profile filled, the standards strip showing the carried editions, the references attached, the Project facts panel seeded, and the readiness checklist passing research as carried from the earlier section. Import a master afterwards if the section starts from one; the setup survives.",
           "Press Research once you have named the section: the round is briefed on everything already established and looks only for what is new, changed, or wrong here. Facts you settle in this section are recorded in the same panel, so the third section starts further along still.",
+          "The brief keeps itself current: every save of a section that lives beside its brief adds what that section established — research rounds, reference documents, facts — and never removes what another section recorded (Update project brief in the Project panel does the same on demand). Exporting a brief onto an existing one merges the two instead of overwriting.",
+          "When other sections have added work this one lacks, the Project panel offers Pull project changes: it brings in their facts, research rounds and documents, and lists — but never applies — any difference in the project setup, such as a city or an edition two sections record differently. An edition disagreement also becomes a project fact to resolve before issue.",
         ]}
       />
       <Recipe

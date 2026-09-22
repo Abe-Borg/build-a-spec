@@ -401,6 +401,13 @@ class ReferenceDocStore:
 
     # -- persistence --------------------------------------------------------
 
+    @property
+    def next_seq(self) -> int:
+        """The next ``ref-N`` this store would mint — the floor a project
+        brief merge into it mints past (Project workspace Phase 3), so an id
+        a deleted document once held is never handed to a different one."""
+        return self._next_seq
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "reference_docs": [doc.to_dict() for doc in self.docs],

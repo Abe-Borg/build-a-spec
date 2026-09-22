@@ -28,6 +28,7 @@ export function ModalShell({
   onEscape,
   children,
   wide,
+  xwide,
   marker,
 }: {
   title: string;
@@ -35,6 +36,9 @@ export function ModalShell({
   onEscape?: () => void;
   children: ReactNode;
   wide?: boolean;
+  /** Wider still, for a review sheet whose rows carry quoted evidence (the
+   *  fact harvest). Wins over `wide`. */
+  xwide?: boolean;
   marker?: string;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -53,7 +57,7 @@ export function ModalShell({
         tabIndex={-1}
         className={
           "w-full rounded-2xl border border-edge bg-surface shadow-2xl outline-none " +
-          (wide ? "max-w-lg" : "max-w-md")
+          (xwide ? "max-w-3xl" : wide ? "max-w-lg" : "max-w-md")
         }
         onClick={(e) => e.stopPropagation()}
       >

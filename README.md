@@ -303,6 +303,87 @@ document payload). `GET /api/project/sections` gains `pull_available` and
 `pull_summary`, and a native save's result gains `brief_refreshed`,
 `brief_written`, `brief_error`, `brief_report` and `pull_available`.
 
+### Harvest: nothing settled is left in the transcript (Phase 4)
+
+A project fact reaches the next section only if it was **recorded** — by the
+assistant in the turn that settled it, or by you in the Project facts panel.
+Whatever neither caught (the demand agreed three replies ago, the water-supply
+basis a confirmed provision states, the reason you gave for dismissing a Final
+QC finding) stayed in the conversation and the document, which are exactly
+the two things a project brief never carries. Phase 4 adds a way to find those
+facts, and makes every recorded fact name a source that exists.
+
+- **Harvest facts…** in the Project facts panel opens a dialog that says what
+  it will read and that it is **one paid model call** — nothing runs until you
+  press **Run the harvest**, and nothing runs on its own: not on export, not
+  on save, not on Next section. The call reads the conversation's **text**
+  since the last committed harvest (your words and the assistant's — never
+  tool payloads, thinking, fetched pages or reference-document bodies), every
+  provision of the draft with its status, and the reasons you wrote for
+  dismissing Final QC findings, plus the facts, project setup and standards
+  already recorded so it proposes only what is new.
+- **You review every proposal before anything is saved.** Each shows the fact,
+  its scope and status, its source (a reply `turn:N`, a research finding, an
+  attached document or a Final QC finding), and the line it rests on, quoted
+  from what was read — a quote that is not found there is flagged for you to
+  check. Tick, edit or reject each one; **Record** saves the ticked ones in one
+  batch, all or nothing. A proposal repeating a recorded fact is left off the
+  sheet (and counted). A proposal whose source does not exist starts unchecked
+  with the reason; fix it and tick it, and if the server still refuses it the
+  sheet stays open with the reason beside the row — correcting a typo never
+  costs another call. Recording nothing is an answer too: it marks the replies
+  read, so the next harvest starts after them.
+- **The sheet is bound to the project as it was.** If a fact is recorded, the
+  document changes, replies it read are removed (deleting an attached document
+  forgets the replies that read it) or the session is replaced while you
+  review, recording is refused rather than applied to a project the proposals
+  no longer describe (a harvest whose project changed while the call ran says
+  so at once). A reply added after the harvest ran does not count as a change.
+  An unrecorded sheet expires after 15 minutes.
+- **The nudges.** The Project facts panel shows "N replies since facts were
+  last harvested"; Next section → and the Export menu's brief entry show the
+  same line with **Harvest first**, which opens the dialog over what you were
+  doing and returns you there — neither ever runs it. The panel now appears
+  for any section with something to harvest — a reply since the last harvest,
+  a provision in the draft, or a Final QC dismissal reason — not only one that
+  already has facts, so an imported master edited by hand, with no
+  conversation at all, can still be harvested. With nothing to read, **Harvest
+  facts…** is disabled and says why.
+- **A fact's source has to exist.** Recording a fact — by the assistant, in
+  the panel, or from a harvest — now checks that its cited research finding,
+  attached document, Final QC finding or reply is really there; one that
+  names nothing is refused (the assistant is told why and corrects it). A
+  reply is matched to the one the fact was recorded against, not merely its
+  number: when deleting a document forgets the replies that read it, the
+  replies that follow take their numbers, and a fact citing a forgotten reply
+  stays unresolved rather than quietly pointing at whatever reply holds the
+  number now — as does a fact carried in from another section, whose replies
+  are that section's. A fact recorded before this check, carried in from
+  another section, or whose document or reply has since been removed is
+  **flagged "source not found" in the panel, never rewritten**, and the flag
+  clears if the source comes back.
+- **Metered on its own line.** The harvest shows in Settings → Usage as
+  "Fact harvest", priced at the interview model's rates, whatever it produced
+  — a declined or malformed reply is still a paid one. Recording harvested
+  facts makes a retained Final QC report read stale, exactly as recording a
+  fact by hand does (the facts are one of its inputs).
+- **Not in the guided tour** — the practice copy is not your session.
+  `BUILD_A_SPEC_HARVEST_EFFORT` (default `medium`) sets the call's reasoning
+  effort: it extracts what was settled, it drafts nothing.
+
+Routes: `POST /api/project/facts/harvest` (runs the call and answers the review
+sheet with a single-use token; records nothing; 409 in a tour or while a reply
+streams, 400 with no key or nothing to read, 502 when the model declines or
+answers without proposals, 409 `harvest_stale` when the project changed while
+it ran) and `POST /api/project/facts/harvest/commit {token, accepted, edits}`
+(records the ticked proposals; 400 `invalid_fact` with a reason per proposal,
+the token surviving; 409 `harvest_stale` / `harvest_expired` / `turn_active`).
+The document payload gains `harvest` (`replies_since`, `last_bubble`,
+`replies_total`, and `harvestable` — whether a harvest would read anything),
+every fact carries `unresolved_ref: true` when its source names nothing, a
+fact citing a reply carries `source_digest` (the identity of the reply it was
+recorded against), and a saved section records how far its last harvest read.
+
 ## Chat history compaction (in progress)
 
 Every chat turn re-sends the whole conversation, and nothing bounded it: a
@@ -1543,6 +1624,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          (the project folder, Project workspace Phase 2),
                          POST /api/project/brief/merge|refresh +
                          POST /api/project/pull (the living brief, Phase 3),
+                         POST /api/project/facts/harvest (+ commit) (the
+                         fact harvest, Phase 4),
                          /api/release-notes (+ seen),
                          /api/session/unsaved|bundle, /api/usage,
                          /api/update/check|install,
@@ -1553,6 +1636,11 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
   tutorial.py            tutorial coverage analysis, the bundled showcase (the
                          tour's only source), and the per-chapter practice-copy
                          builders — all deterministic, no model calls
+  harvest.py             the fact harvest (Project workspace Phase 4): one
+                         opt-in paid call proposing the project facts a section
+                         settled, a strict output tool, the review sheet's
+                         checks, the single-use preview cache, and the
+                         `harvest` status every document payload carries
   qc/
     schema.py            QC lens definitions + submit_qc_findings/consolidation/
                          verdict strict tools + observable reviewed-check and
@@ -1796,6 +1884,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_CONTEXT_WINDOW` | `1000000` | The context gauge's window (the header's "142k / 1M" pill). Pair it with a model override whose window differs; it changes nothing about what is sent. |
 | `BUILD_A_SPEC_INTERVIEW_EFFORT` | `high` | Adaptive-thinking effort for interview turns (`low`/`medium`/`high`/`max`/`xhigh`). |
 | `BUILD_A_SPEC_TEMPLATE_EFFORT` | `medium` | Adaptive-thinking effort for the template studio's AI-generalize pass (a bounded mechanical rewrite the structural contract polices). |
+| `BUILD_A_SPEC_HARVEST_EFFORT` | `medium` | Adaptive-thinking effort for the Project facts panel's fact harvest (one paid call that extracts facts the session settled; it drafts nothing, and every proposal is reviewed before anything is recorded). |
 | `BUILD_A_SPEC_THINKING_DISPLAY` | `summarized` | Thinking-summary streaming: `summarized` streams a readable reasoning summary (the "see what the model is thinking" strip); `omitted` streams empty thinking. Degrades to `omitted` automatically if a model rejects the display key. |
 | `BUILD_A_SPEC_CHAT_CACHE_TTL` | `1h` | Prompt-cache lifetime for a chat request's *cross-turn* breakpoints — the system block and the committed-history boundary (`5m` or `1h`). One hour by default because an interview turn is a person reading and typing, which routinely outlives 5 minutes, and a lapsed entry is re-written at full price rather than read at 0.1×. The request tail is always written at the shortest TTL and is not configurable: its entry is keyed on context that is stripped at commit, so nothing after this turn can read it. An unsupported value logs a warning and falls back to the default. |
 | `BUILD_A_SPEC_CHAT_MAX_SEARCHES` | `8` | Interview web_search allowance per continuation round. |

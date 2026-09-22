@@ -263,6 +263,13 @@ INTERVIEW_EFFORT = _effort_env("BUILD_A_SPEC_INTERVIEW_EFFORT", "high")
 # site so every model call in the app states its effort the same way.
 TEMPLATE_EFFORT = _effort_env("BUILD_A_SPEC_TEMPLATE_EFFORT", "medium")
 
+# The fact harvest (Project workspace Phase 4) EXTRACTS — it reads a
+# conversation, a draft and a handful of dismissal reasons and proposes the
+# project facts already settled in them, each with the line it rests on. It
+# drafts nothing and adjudicates nothing, so "medium" is the depth; the user
+# reviews every proposal before anything is recorded anyway.
+HARVEST_EFFORT = _effort_env("BUILD_A_SPEC_HARVEST_EFFORT", "medium")
+
 # Thinking-summary display. Sonnet 5 defaults to ``omitted`` — thinking
 # blocks stream with empty text, so a reasoning-heavy turn looks like a long
 # silent pause. ``summarized`` streams a readable summary of the model's

@@ -248,6 +248,7 @@ def save_project(
     template_origin: dict[str, Any] | None = None,
     project_facts: dict[str, Any] | None = None,
     project_link: dict[str, Any] | None = None,
+    last_harvest_bubble: int = 0,
 ) -> dict[str, Any]:
     payload = {
         "kind": PROJECT_KIND,
@@ -310,7 +311,29 @@ def save_project(
     safe_project_link = sanitize_project_link(project_link)
     if safe_project_link is not None:
         payload["project_link"] = safe_project_link
+    # How far the last committed fact harvest read (Project workspace
+    # Phase 4). Optional the same way — omitted at 0, which is also what an
+    # absent key restores to — so a section never harvested writes no key.
+    marker = restore_harvest_marker(last_harvest_bubble, history)
+    if marker:
+        payload["last_harvest_bubble"] = marker
     return payload
+
+
+def restore_harvest_marker(value: Any, history: list[dict[str, Any]]) -> int:
+    """The harvest marker, made safe for the history it counts.
+
+    Lenient like every optional key here: anything but a non-negative int
+    (``bool`` excluded — it IS an int) reads as 0, and a count past the
+    replies ``history`` holds is clamped to them, so a hand-edited file can
+    neither hide replies from the next harvest nor report a negative count.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return 0
+    replies = sum(
+        1 for entry in chat_transcript(history) if entry["role"] == "assistant"
+    )
+    return min(value, replies)
 
 
 _PROJECT_LINK_KEYS = {
@@ -551,6 +574,12 @@ def load_project(data: Any, session) -> None:
 
     session.history.clear()
     session.history.extend(history)
+    # Assigned unconditionally (load_project never calls reset()): a file
+    # without the key starts its harvest window at the first reply.
+    if hasattr(session, "last_harvest_bubble"):
+        session.last_harvest_bubble = restore_harvest_marker(
+            data.get("last_harvest_bubble"), history
+        )
     session.doc.load(doc_data)
     # Module resolution: a present-but-unknown id degrades to the current
     # default (the Spec Critic registry posture — a file from a build with more

@@ -327,6 +327,83 @@ export interface ProjectFact {
   /** When the panel last edited it in place — between two edited copies of
    *  one fact, the later edit wins a merge. */
   edited_at?: string;
+  /** Set by the server when `source_ref` names nothing this section holds
+   *  (Project workspace Phase 4): a fact recorded before sources were
+   *  checked, carried in from a brief, or whose document was since removed.
+   *  Flagged, never rewritten — derived per read, so it clears the moment
+   *  the source exists again. Absent when the source resolves. */
+  unresolved_ref?: boolean;
+}
+
+/** How far the last committed fact harvest read (Project workspace Phase 4).
+ *  Server-derived from the reply count and the persisted marker; a marker a
+ *  shorter history can no longer reach reads as "everything read". */
+export interface HarvestStatus {
+  /** Replies since the last committed harvest — the hint's number. */
+  replies_since: number;
+  /** The reply the last committed harvest read up to (0 = never). */
+  last_bubble: number;
+  /** Replies the conversation holds. */
+  replies_total: number;
+  /** Whether a harvest would read anything at all: a reply since the last
+   *  harvest, a provision, or a Final QC dismissal reason — the server's own
+   *  check before it runs a call. The panel's door follows it; the hint
+   *  counts replies alone. */
+  harvestable: boolean;
+}
+
+/** One proposed fact on the harvest's review sheet, exactly as the server
+ *  assessed it. `problem` is empty when the proposal can be recorded as it
+ *  stands; otherwise it says what to fix (an over-long statement, a source
+ *  that names nothing this section holds). The quoted `evidence` is the
+ *  model's and is never editable. */
+export interface HarvestProposal {
+  /** What the commit's `accepted` names. */
+  index: number;
+  statement: string;
+  detail: string;
+  scope: ProjectFact["scope"];
+  section: string;
+  status: "confirmed" | "assumed";
+  source_kind: "user" | "research" | "reference" | "qc" | "model";
+  source_ref: string;
+  evidence: string;
+  problem: string;
+  /** Whether the quoted line appears in what the call read. Advisory: a
+   *  quote that is not found is flagged for a human to check. */
+  evidence_found: boolean;
+}
+
+/** `POST /api/project/facts/harvest` — the review sheet. Records nothing. */
+export interface HarvestPreview {
+  ok: true;
+  /** Single-use; names this sheet at commit. */
+  token: string;
+  proposals: HarvestProposal[];
+  /** Proposals dropped because an active fact already says them. */
+  dropped_duplicates: number;
+  /** The oldest unread replies (or the start of one) were cut for length. */
+  transcript_truncated: boolean;
+  turns_read: number;
+  turns_dropped: number;
+  first_turn: number;
+  last_turn: number;
+  replies_total: number;
+  /** Where the marker stood: replies up to this were harvested before. */
+  since_bubble: number;
+  provisions: number;
+  dismissals: number;
+  usage: Record<string, number>;
+  estimated_cost_usd: number;
+}
+
+/** `POST /api/project/facts/harvest/commit` — what was recorded. */
+export interface HarvestCommitResult {
+  ok: true;
+  project_facts: ProjectFact[];
+  harvest: HarvestStatus;
+  recorded: string[];
+  already_recorded: string[];
 }
 
 /** One section of a project, as its brief's registry records it. */
@@ -898,6 +975,10 @@ export interface DocPayload {
   /** This session's project link; null when it neither exported a brief
    *  nor was seeded from one. */
   project_link: ProjectLink | null;
+  /** Replies since the last committed fact harvest (Project workspace
+   *  Phase 4) — the hint the Project facts panel, Next section and the
+   *  brief export show. */
+  harvest?: HarvestStatus;
   lint: LintIssue[];
   standards: StandardInfo[];
   profile_complete: boolean;

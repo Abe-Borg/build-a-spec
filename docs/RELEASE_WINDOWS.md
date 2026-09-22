@@ -463,6 +463,71 @@ invisible to CI and expensive to the user.
       found. Edit it again so two documents share one `rid`: Pull and Save
       both refuse to merge it, and the file is left exactly as it was.
 
+### Harvest: nothing settled is left in the transcript (Project workspace Phase 4)
+
+- [ ] **A real harvest on a real section (paid, owner-run).** In a section
+      with a conversation that settled things the assistant never recorded
+      (ask it to "just agree and carry on" without recording facts), open
+      the Project facts panel: it reads "N replies since facts were last
+      harvested". Press *Harvest facts…*: the dialog says what it will read
+      and that it is one paid call, and NOTHING is spent until *Run the
+      harvest*. Run it: the sheet lists proposals, each with its source and
+      the line it rests on; a quote the app could not find in what was read
+      is flagged. Untick one, edit another's statement, and *Record*: only
+      the ticked ones land in Project facts; Settings → Usage shows a
+      "Fact harvest" line; the panel's hint drops to nothing. Run it again at
+      once: it reads no new replies.
+- [ ] **A proposal with a bad source is refused.** On the sheet, edit a
+      proposal's source to `ref-99` (no such document), tick it and
+      *Record*: nothing is recorded, the row says why, and the sheet stays
+      open — correct the source (or clear it and set the kind to "you said
+      it") and *Record* succeeds without running the call again. In the
+      panel, *+ Add a fact* is unaffected; in chat, ask the assistant to
+      record a fact citing a research finding that does not exist: it is told
+      the source names nothing and records it correctly instead.
+- [ ] **Commit, then the Final QC stale marker.** With a retained Final QC
+      report showing current, harvest and record one fact: the Final QC
+      drawer and the readiness card now read stale (facts are one of its
+      inputs). Record none on the next harvest (*Record none — mark these
+      replies read*): nothing changes except the hint.
+- [ ] **The nudges never run it.** With replies waiting, open *Next
+      section →*: a warning line says how many replies are unharvested with
+      *Harvest first* — press it, the harvest dialog opens over Next section,
+      Escape closes only the harvest, and Next section is still there. Open
+      the Export menu: the same line sits under *Export project brief* and
+      opens the same dialog. Neither spends anything until *Run*.
+- [ ] **Stale while reviewing.** Run a harvest, leave the sheet open, and in
+      the panel add a fact by hand (or have the assistant change the
+      document): *Record* is refused as stale and nothing is recorded. A
+      reply that changes neither the document nor the facts does not make it
+      stale. Leave a sheet open for more
+      than 15 minutes: *Record* says the preview expired.
+- [ ] **A fact whose source is gone is flagged, not changed.** Record a fact
+      citing an attached document, then delete that document: the fact shows
+      "⚠ source not found" with its original source in the tooltip, still
+      editable and retirable. Attaching the same file again does not clear
+      it — a re-attached document gets a new id, and the fact keeps exactly
+      the source it was recorded with; retire it, or record it again
+      against the new id.
+- [ ] **A fact tied to a forgotten reply stays flagged.** Attach a document,
+      ask a question that makes the assistant read it (reply 2), then settle
+      something in one more exchange (reply 3). Harvest, and accept a
+      proposal whose source is `turn:3`: it shows no flag in the panel.
+      Delete the document: the conversation forgets replies 2 and 3, and the
+      fact shows "⚠ source not found". Ask two new questions: the new replies
+      take the numbers 2 and 3, and the fact STILL shows "⚠ source not
+      found" — it names the reply it was recorded against, not whatever holds
+      the number now. A harvested fact citing reply 1 stays unflagged
+      throughout.
+- [ ] **A draft with no conversation can still be harvested.** Import a
+      master (or open a project whose chat is empty) and edit a provision by
+      hand, without sending a message: the Project facts panel is there with
+      *Harvest facts…* enabled, and the dialog says no replies are waiting
+      but the draft will be read. A brand-new empty session shows no panel
+      at all; if facts exist but there is nothing to read, *Harvest facts…*
+      is disabled and its tooltip says why.
+- [ ] **In the tour** the Project facts step never shows *Harvest facts…*.
+
 ### State that must recover (v1.17.0)
 
 None of these have a DOM harness; the source-level pins in

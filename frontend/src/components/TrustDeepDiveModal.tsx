@@ -509,7 +509,8 @@ function Dossier() {
                 No model runs that you did not start — with one disclosed
                 follow-up.
               </b>{" "}
-              No auto-research, no silent re-draft, no scheduled job: every
+              No auto-research, no silent re-draft, no automatic fact harvest,
+              no scheduled job: every
               model call — and therefore every cent of spend — traces back to a
               message you sent or a button you pressed. The one automatic
               model turn is the <b className="text-ink">completion debrief</b>:
@@ -617,7 +618,7 @@ function Dossier() {
               <>
                 Claude Sonnet 5 <Mono>(claude-sonnet-5)</Mono>
               </>,
-              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “high” for both the interview and research.",
+              "Fast enough to hold a conversation while being strong enough to draft and to run the research fan-out. Reasoning effort is set to “high” for both the interview and research. The fact harvest runs on it too, at “medium” — it extracts what was settled; it drafts nothing.",
             ],
             [
               "Final QC only",
@@ -1360,6 +1361,55 @@ function Dossier() {
             </>
           }
         />
+
+        <Runtime
+          n={15}
+          title="Harvesting project facts"
+          trigger="Harvest facts… in the Project facts panel — or “Harvest first” in Next section, or the hint under Export project brief, which only open the same dialog — then Run the harvest."
+          runs={
+            <>
+              One model call that reads what this section settled and{" "}
+              <b className="text-ink">proposes</b> the project facts nobody
+              recorded — each with its source and the line it rests on, quoted
+              from what was read (a quote not found there is flagged for you to
+              check). Nothing is recorded by the call: you tick, edit or reject
+              every proposal on a review sheet, and only what you accept is
+              recorded, in one batch. A proposal that repeats a recorded fact is
+              left off the sheet and counted; one citing a research finding,
+              attached document, Final QC finding or reply that does not exist
+              cannot be recorded until you correct it — the same check every
+              fact now passes, whether the assistant records it in a turn or you
+              add it in the panel. The sheet is bound to the project as it was:
+              if a fact was recorded or the document changed meanwhile, it is
+              refused rather than recorded against a project it no longer
+              describes. Recording advances a marker, so the next harvest reads
+              only the replies after it.
+            </>
+          }
+          sent={
+            <>
+              The <b className="text-ink">text</b> of the conversation since the
+              last harvest (your words and the assistant’s — never tool payloads,
+              thinking, fetched pages or reference-document bodies), every
+              provision of the draft with its status, the reasons you wrote for
+              dismissing Final QC findings, and the facts, project setup and
+              standards already recorded (so nothing is proposed twice) — each
+              framed and marked as data, never instructions. Figures, follow-ups
+              and the Final QC report itself are not sent.
+            </>
+          }
+          model="Claude Sonnet 5, effort “medium” — one call, only when you press Run; never on export, save or Next section."
+          bounds={
+            <>
+              One request with one output tool and a cap of 40 proposals; a very
+              long conversation loses its oldest unread replies first, and the
+              sheet says so. The call is metered under its own “Fact harvest”
+              line whatever it produced — a declined or malformed reply is still
+              a paid one — and a proposal you have not ticked is never sent back,
+              not even your edits to it. Not available in the guided tour.
+            </>
+          }
+        />
       </Section>
 
       <Section
@@ -1394,6 +1444,11 @@ function Dossier() {
               "Read a reference document",
               "Open the text of a document you attached.",
               "Read-only; the text is removed from stored history afterwards.",
+            ],
+            [
+              "Record project facts",
+              "Record a fact the project has settled, or retire one it has contradicted.",
+              "Every fact names its source, and the source must exist in this section — a research finding, an attached document, a Final QC finding, or one of the conversation’s replies. One that names nothing is refused as an error the model must correct; a retired fact stays in the record with its reason.",
             ],
             [
               "Web search / web fetch",

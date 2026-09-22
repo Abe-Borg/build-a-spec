@@ -450,6 +450,41 @@ def _qc_dismissals(session: Any) -> tuple[tuple[str, str, str], ...]:
     return tuple(out)
 
 
+def _has_provisions(doc: Any) -> bool:
+    return any(article.paragraphs for part in doc.parts for article in part.articles)
+
+
+def harvest_status(session: Any) -> dict[str, Any]:
+    """The harvest's hint and door, for the panel, Next section and the
+    Export menu.
+
+    ``replies_since`` counts the replies since the last committed harvest —
+    the hint the three doors share; ``last_bubble`` is clamped to the
+    conversation it counts, so a marker a shorter history can no longer
+    reach reads as "everything read", never as a negative count.
+    ``harvestable`` is whether a harvest would read anything at all: a reply
+    since the marker, a provision, or a Final QC dismissal reason — exactly
+    what :meth:`HarvestInputs.has_material` asks before the route will run a
+    call. The panel's door follows it, not the reply count, so a section with
+    no reply to read (an imported master edited by hand) can still be
+    harvested (Codex, PR #185).
+    """
+    # Late, like build_harvest_request's: conversation imports project_facts.
+    from .llm.conversation import assistant_bubble_count
+
+    total = assistant_bubble_count(session.history)
+    last = max(0, min(int(getattr(session, "last_harvest_bubble", 0) or 0), total))
+    since = total - last
+    return {
+        "replies_since": since,
+        "last_bubble": last,
+        "replies_total": total,
+        "harvestable": bool(
+            since or _has_provisions(session.doc.doc) or _qc_dismissals(session)
+        ),
+    }
+
+
 def build_harvest_request(session: Any) -> HarvestInputs:
     """Capture what one harvest call reads. The CALLER holds the session guard.
 

@@ -21,6 +21,7 @@ import {
 } from "../src/lib/api.ts";
 import {
   buildHarvestCommit,
+  canHarvest,
   commitLabel,
   describeHarvestRead,
   draftOfProposal,
@@ -124,6 +125,28 @@ test("the hint is one wording, and says nothing when nothing is waiting", () => 
     harvestHint({ replies_since: 5, last_bubble: 0, replies_total: 5 }),
     "5 replies not yet harvested for facts",
   );
+});
+
+test("the door follows what the harvest can read, not the reply hint", () => {
+  // Unknown (no payload yet) and nothing-to-read keep the door closed.
+  assert.equal(canHarvest(null), false);
+  assert.equal(
+    canHarvest({ replies_since: 0, last_bubble: 0, replies_total: 0, harvestable: false }),
+    false,
+  );
+  // A draft with no reply to read (an imported master edited by hand) is
+  // still worth harvesting — the server says so, and there is no hint.
+  const draftOnly = { replies_since: 0, last_bubble: 0, replies_total: 0, harvestable: true };
+  assert.equal(canHarvest(draftOnly), true);
+  assert.equal(harvestHint(draftOnly), "");
+
+  // The panel renders, and its button is enabled, on that flag — never on
+  // the hint alone, which would hide the only unconditional door.
+  const panel = read("../src/components/ProjectFactsPanel.tsx");
+  assert.match(panel, /const harvestable = harvestAvailable && canHarvest\(harvest\);/);
+  assert.match(panel, /if \(items\.length === 0 && link === null && !harvestable\) return null;/);
+  assert.doesNotMatch(panel, /&& !hint\) return null/);
+  assert.match(panel, /disabled=\{busy \|\| !harvestable\}\s*onClick=\{onHarvest\}/);
 });
 
 test("the sheet's header says what was read, and what was left out", () => {

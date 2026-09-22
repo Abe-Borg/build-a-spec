@@ -13,16 +13,19 @@
  *
  * Rendered whenever the ledger holds anything, or the session is linked to
  * a project (a seeded section with no facts yet still shows where it came
- * from and the Add form), or — outside a tour — replies are waiting to be
- * harvested (Project workspace Phase 4): the harvest is how a section that
- * never recorded a fact finds the ones it settled, so its door cannot hide
- * behind an empty ledger. "Harvest facts…" only OPENS the dialog; the paid
- * call runs there, when the user presses Run.
+ * from and the Add form), or — outside a tour — there is anything to
+ * harvest (Project workspace Phase 4): a reply since the last harvest, a
+ * provision, or a Final QC dismissal reason, which is the server's own
+ * check (`harvestable`). The harvest is how a section that never recorded a
+ * fact finds the ones it settled, so its door cannot hide behind an empty
+ * ledger — nor behind an empty conversation, since a draft edited by hand
+ * settles facts too. "Harvest facts…" only OPENS the dialog; the paid call
+ * runs there, when the user presses Run.
  */
 import { useEffect, useRef, useState } from "react";
 
 import type { ProjectFactInput } from "../lib/api";
-import { harvestHint } from "../lib/harvest";
+import { canHarvest, harvestHint } from "../lib/harvest";
 import {
   factCounts,
   factProvenance,
@@ -213,8 +216,8 @@ export default function ProjectFactsPanel({
   currentDiscipline: string;
   busy: boolean;
   openNonce?: number;
-  /** Replies since the last committed harvest; null before the first
-   *  payload. */
+  /** Replies since the last committed harvest, and whether there is
+   *  anything to harvest at all; null before the first payload. */
   harvest: HarvestStatus | null;
   /** False in a tour: the practice copy is not the user's session, and the
    *  server refuses the call there anyway. */
@@ -285,7 +288,10 @@ export default function ProjectFactsPanel({
   }, [openNonce]);
 
   const hint = harvestAvailable ? harvestHint(harvest) : "";
-  if (items.length === 0 && link === null && !hint) return null;
+  // The door follows what the harvest can read, not the reply hint: a draft
+  // with no reply to read is still worth harvesting (Codex, PR #185).
+  const harvestable = harvestAvailable && canHarvest(harvest);
+  if (items.length === 0 && link === null && !harvestable) return null;
 
   const summary =
     counts.active === 0
@@ -359,7 +365,7 @@ export default function ProjectFactsPanel({
                   className="ml-1 text-warn"
                   title={`This fact cites ${fact.source_kind}${
                     fact.source_ref ? ` ${fact.source_ref}` : ""
-                  }, which names nothing this section holds — it was recorded before sources were checked, carried in from another section, or its document or finding has since been removed. The fact is kept exactly as recorded; retire it if it no longer holds.`}
+                  }, which names nothing this section holds — it was recorded before sources were checked, carried in from another section, or the document, finding or reply it names has since been removed. A reply is matched to the one the fact was recorded against, not merely its number. The fact is kept exactly as recorded; retire it if it no longer holds.`}
                 >
                   · ⚠ source not found
                 </span>
@@ -514,7 +520,7 @@ export default function ProjectFactsPanel({
             {counts.active === 0 && !adding && (
               <p className="px-1 text-[11px] text-ink-faint">
                 Nothing recorded yet. The assistant records facts as they are settled; you can add
-                one by hand.
+                one by hand{harvestable ? ", or harvest the ones this section settled" : ""}.
               </p>
             )}
           </div>
@@ -557,13 +563,15 @@ export default function ProjectFactsPanel({
             <div className="mt-1 flex flex-wrap items-baseline gap-x-2 px-1 text-[10px]">
               <button
                 className={smallBtn}
-                disabled={busy}
+                disabled={busy || !harvestable}
                 onClick={onHarvest}
                 data-capability="project.facts-harvest"
                 title={
                   busy
                     ? "The assistant is replying — try again in a moment"
-                    : "Propose the facts this section settled but nobody recorded — you review every one before anything is saved. One paid call, run only when you press Run."
+                    : !harvestable
+                      ? "Nothing to harvest yet: no reply since the last harvest, no provision in the draft, and no Final QC dismissal reason"
+                      : "Propose the facts this section settled but nobody recorded — you review every one before anything is saved. One paid call, run only when you press Run."
                 }
               >
                 Harvest facts…

@@ -97,6 +97,16 @@ export function harvestHint(status: HarvestStatus | null | undefined): string {
     : `${replies} not yet harvested for facts`;
 }
 
+/** Whether the harvest has anything to read — the server's `harvestable`: a
+ *  reply since the last harvest, a provision, or a Final QC dismissal
+ *  reason, the route's own check. The panel's door follows this rather than
+ *  the reply hint, so a section with a draft but no reply to read (an
+ *  imported master edited by hand) can still be harvested. Unknown (no
+ *  payload yet) reads as closed. */
+export function canHarvest(status: HarvestStatus | null | undefined): boolean {
+  return status?.harvestable === true;
+}
+
 /** What the call read, one line for the sheet's header. */
 export function describeHarvestRead(preview: HarvestPreview): string {
   const parts: string[] = [];

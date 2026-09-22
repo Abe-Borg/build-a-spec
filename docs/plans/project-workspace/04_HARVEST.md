@@ -239,15 +239,21 @@ running the pass.
   Final QC finding or reply that does not exist cannot be recorded until
   you correct it, and fixing one never costs another call. It is one paid
   model call, runs only when you press Run, and shows in Settings → Usage
-  as "Fact harvest". Next section and the Export menu say how many replies
-  have gone unharvested and offer to harvest first — they never run it.
+  as "Fact harvest". It is there whenever the section has something to
+  read — a reply, a provision or a dismissal reason — so a master you
+  imported and edited by hand can be harvested too. Next section and the
+  Export menu say how many replies have gone unharvested and offer to
+  harvest first — they never run it.
 - **A fact's source has to exist.** Recording a fact — by the assistant,
   in the panel or from a harvest — now checks that its cited research
   finding, attached document, Final QC finding or reply is really there;
-  the assistant is told why and corrects it. A fact recorded before this
-  check, carried in from another section, or whose document was removed is
-  marked "source not found" in the panel and otherwise left exactly as it
-  was.
+  the assistant is told why and corrects it. A fact that cites a reply is
+  tied to that very reply, not just its number: when removing a document
+  forgets the replies that read it, a later reply taking the number does
+  not pass for the one the fact cited. A fact recorded before this check,
+  carried in from another section, or whose document or reply was removed
+  is marked "source not found" in the panel and otherwise left exactly as
+  it was.
 
 ## Deviations from the plan
 
@@ -356,7 +362,8 @@ As built, 2026-09-22:
     *Run the harvest* makes it. After a commit, the done state says what was
     recorded before the dialog closes (back to whatever opened it — Next
     section stacks under it, and Escape closes only the top dialog).
-19. **The Project facts panel renders when replies are waiting**, outside
+19. **The Project facts panel renders when replies are waiting** (widened
+    by 25), outside
     a tour, not only when facts exist or the section is linked — the harvest
     is how a section that never recorded a fact finds the ones it settled,
     so its door cannot hide behind an empty ledger. The harvest button is
@@ -384,3 +391,46 @@ As built, 2026-09-22:
     the facts store. The harvest already honours that plan's standing rule:
     it reads `session.history` (the full record, never a compacted view), so
     `turn:N` stays the Nth assistant bubble of the saved conversation.
+
+From the Codex review of PR #185, 2026-09-22:
+
+24. **A reply source is pinned to the reply it cited.** The spec's `turn:N`
+    check was a range check (`1 ≤ N ≤` the committed replies), but a reply is
+    named by POSITION and `delete_reference_if_idle` truncates the history
+    without touching the generation — the replies that follow take over the
+    discarded numbers, so a fact citing a discarded `turn:3` read as resolved
+    again once an unrelated reply 3 existed, its provenance silently changed
+    and its flag cleared. A fact carried in from another section had the
+    same hole: its `turn:N` names that section's conversation. Every
+    committed reply now has an identity (`project_facts.reply_digests` over
+    `chat_transcript`: the reply's text and its prompt's, neither of which
+    changes once committed), `FactSources` carries them as `turn_digests`
+    (`turn_count` is their length), the resolver hook returns a
+    `ResolvedSource` (ref + digest), and `record` / `update` stamp
+    `ProjectFact.source_digest` — serialized only when set, so every other
+    fact keeps its bytes. `annotate_fact_sources` checks a recorded fact
+    against the reply it was pinned to; a turn-cited fact with no pin
+    (recorded before this) cannot be matched to a reply and is flagged —
+    none shipped: the released tool never offered `turn:N`. An edit that
+    keeps naming `turn:N` keeps its pin — re-sending the same ref is no
+    change at all (`update()` re-checks a source only when the kind or ref
+    really differs, as its docstring promised), and a kind change alone
+    keeps it too — and a merged edit carries it. The
+    harvest binding gains the identity of the replies the preview could cite
+    (the first `bubble_count` digests, hashed), so a commit after a
+    truncation is `harvest_stale` instead of pinning a proposal to a reply it
+    never read; a reply ADDED after the preview changes no number it used
+    and leaves the binding alone.
+25. **The panel's door follows what the harvest can read, not the reply
+    hint.** Deviation 19 rendered the panel for facts, a link, or replies
+    waiting — so an unlinked section with no facts and no reply (an imported
+    master edited by hand) hid the only unconditional door, while
+    `HarvestInputs.has_material()` would have run a call on its provisions or
+    its QC dismissal reasons. `harvest_status` moved from `conversation.py`
+    to `harvest.py`, beside `has_material`, and asks the same question ahead
+    of time: the payload's `harvest` gains `harvestable` (a reply since the
+    marker, a provision, or a dismissal reason). The panel renders on it,
+    and *Harvest facts…* is disabled — saying why — without it. Next
+    section's and the Export menu's nudges stay reply-based: they count what
+    is unread, and a draft's provisions have no marker to be read against,
+    so a provisions-based nudge could never be dismissed.

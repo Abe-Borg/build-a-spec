@@ -345,6 +345,11 @@ export interface HarvestStatus {
   last_bubble: number;
   /** Replies the conversation holds. */
   replies_total: number;
+  /** Whether a harvest would read anything at all: a reply since the last
+   *  harvest, a provision, or a Final QC dismissal reason — the server's own
+   *  check before it runs a call. The panel's door follows it; the hint
+   *  counts replies alone. */
+  harvestable: boolean;
 }
 
 /** One proposed fact on the harvest's review sheet, exactly as the server

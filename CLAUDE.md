@@ -197,11 +197,13 @@ backend/
                            with no key or nothing to read; meters "harvest"
                            through add_usage_if_current whatever it produced;
                            re-checks _harvest_binding — the template binding +
-                           facts_len — when the call returns) and
+                           facts_len + the identity of the replies the
+                           preview read — when the call returns) and
                            .../harvest/commit (the token survives
                            invalid_fact and turn_active, is dropped on a stale
                            binding); _doc_payload gains `harvest`
-                           (harvest_status) and its project_facts come from
+                           (harvest.harvest_status, incl. `harvestable`) and
+                           its project_facts come from
                            SessionState.facts_payload() (unresolved_ref)
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
@@ -544,9 +546,16 @@ backend/
                            section number for `brief`); source_resolver() is
                            the resolve= hook record (BEFORE the duplicate
                            check) / supersede / apply / update (only when the
-                           source changes) accept; annotate_fact_sources flags
-                           an unresolvable one unresolved_ref, never rewriting
-                           it
+                           source changes) accept, returning a ResolvedSource
+                           (ref + the reply's digest); a turn:N ref is PINNED
+                           to the reply it named (ProjectFact.source_digest,
+                           reply_digests over chat_transcript — a reply's text
+                           and its prompt's), so a reply a truncation
+                           discarded, or another section's, never passes for
+                           whatever now holds the number; an edit that keeps
+                           naming turn:N keeps the pin; annotate_fact_sources
+                           flags an unresolvable one unresolved_ref, never
+                           rewriting it
   project_brief.py         [v1.17.0] the .basproject: ProjectBrief +
                            build_project_brief (pure read; reuses the link's
                            project_id) / brief_bytes / brief_filename /
@@ -614,7 +623,12 @@ backend/
                            commit_records re-checks the accepted rows after
                            edits (never the evidence) and refuses collisions;
                            HarvestPreviews is the template cache's shape
-                           (TTL + byte cap + a count cap)
+                           (TTL + byte cap + a count cap); harvest_status is
+                           the payload's `harvest` (replies since the marker —
+                           the hint — and `harvestable`, has_material's
+                           question asked ahead of time: a reply, a provision
+                           or a dismissal reason, so the panel's door opens
+                           for a draft with no conversation)
   suggestions.py           [Batch 9] model-driven reply chips: MAX_PROMPTS/
                            MAX_PROMPT_CHARS, SuggestError, validate_prompts (strict,
                            fold-whitespace/dedupe/cap; empty list valid) +
@@ -961,11 +975,11 @@ backend/
                            + commit_harvest_if_idle (one apply, the marker
                            advanced — never backwards — even for zero
                            records) + facts_payload() (the ONE annotated
-                           ledger view) + fact_sources(session) /
-                           harvest_status(session), assistant_bubble_count
-                           made public, and the resolver in the
-                           record_project_facts dispatch and every panel
-                           fact helper
+                           ledger view) + fact_sources(session) (its
+                           turn_digests pin reply sources),
+                           assistant_bubble_count made public, and the
+                           resolver in the record_project_facts dispatch and
+                           every panel fact helper
 frontend/src/
   App.tsx                  state owner: messages[], doc, open items, lint issues,
                            standards, changed ids, health, usage, qc, readiness,
@@ -11393,6 +11407,47 @@ additive `.baspec` key.
   `sessionBundle.test.ts` contract caught `applySessionBundle` dropping the
   new `harvest` field — a Next-section start would have kept the outgoing
   section's hint.
+- **A reply is named by position, so a reply source is PINNED** (caught in
+  review on PR #185, Codex). `turn:N` is the Nth assistant bubble, and
+  `delete_reference_if_idle` truncates history without touching the
+  generation: the replies that follow take over the discarded numbers. A
+  range-only check therefore let a fact citing a discarded `turn:3` read as
+  resolved again the moment an unrelated reply 3 existed — its provenance
+  silently changed and its flag cleared. The same held for a fact carried
+  in from another section, whose `turn:N` names THAT conversation's reply.
+  `project_facts.reply_digests(chat_transcript(history))` gives every
+  committed reply an identity (its text plus its prompt's — neither changes
+  once committed; every later history rewrite touches tool payloads, never
+  text); `FactSources.turn_digests` carries them (`turn_count` is now its
+  length); the store's resolver hook returns a `ResolvedSource` (ref +
+  digest) and `record` / `update` stamp `ProjectFact.source_digest`
+  (serialized only when set, dropped on load from anything but a reply
+  source); `annotate_fact_sources` checks a recorded fact against the digest
+  it was pinned with, so a fact with none (recorded before this) cannot be
+  matched to a reply and is flagged. An edit that keeps naming `turn:N`
+  KEEPS its pin: re-sending the same ref is no change at all (`update()` now
+  re-checks a source only when the kind or ref really differs — what its
+  docstring always promised, so a fact whose reply is gone can still be
+  reworded), and a kind change alone keeps it too — re-pinning there would
+  let an edit quietly point a flagged fact at whatever reply now holds the
+  number. A merged edit carries its pin with it. The harvest binding gained the
+  identity of the replies the preview could cite (the first `bubble_count`
+  digests, hashed), so a commit after a truncation is `harvest_stale` rather
+  than pinning a proposal to a reply it never read; replies ADDED after the
+  preview change no number it used and leave the binding alone.
+- **The panel's door follows `harvestable`, not the reply hint** (same
+  review). The first cut rendered the panel for facts, a link, or the
+  reply-count hint, so an unlinked section with no facts and no reply — an
+  imported master edited by hand — hid the only unconditional door while
+  `HarvestInputs.has_material()` would have run a call on its provisions or
+  its QC dismissal reasons. `harvest_status` moved from `conversation.py` to
+  `harvest.py`, beside `has_material`, and asks the same question ahead of
+  time (`harvestable`: a reply since the marker, a provision, or a dismissal
+  reason); `lib/harvest.canHarvest` reads it, the panel renders on it and
+  disables *Harvest facts…* (saying why) without it. The Next section and
+  Export nudges stay reply-based: they count what is unread, and a draft's
+  provisions have no marker to be "read" against, so a provisions-based
+  nudge could never be dismissed.
 - **One-time cache consequence.** The `record_project_facts` tool
   description and `_PROJECT_FACTS_POLICY` both changed, and tools render
   ahead of the system prompt, so every chat session's cached prefix is
@@ -11411,15 +11466,20 @@ additive `.baspec` key.
   into the facts store. The harvest already reads `session.history`, the
   full record, never a compacted view, as that plan's standing rule
   requires.
-- **Tests**: `tests/test_harvest.py` (40) and `frontend/tests/harvest.test.ts`
-  (11, registered in `package.json`), plus the wipe-sweep probe. Eleven
+- **Tests**: `tests/test_harvest.py` (49) and `frontend/tests/harvest.test.ts`
+  (12, registered in `package.json`), plus the wipe-sweep probe. Eleven
   backend mechanisms were reverted in place, each turning its own test red
   (the tool-dispatch resolver, the panel resolver, transcript frame
   neutralization, the reference-delete clamp, the commit-time marker, the
   duplicate drop, the post-call binding re-check, metering a failed call, the
   payload flag, the transcript cap, the token surviving a fixable error), and
   four frontend ones (unticked edits riding along, the QC refresh, problem
-  rows pre-ticked, the session bundle dropping the hint).
+  rows pre-ticked, the session bundle dropping the hint). The review fixes
+  added eight more backend ones (the digest compare, the annotator passing
+  the pin, an edit keeping it, the resolver hook stamping it, the load
+  keeping it, a merged edit carrying it, the binding's reply identity, the
+  `harvestable` flag) and two frontend ones (the panel rendering on the
+  hint, `canHarvest` counting replies).
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

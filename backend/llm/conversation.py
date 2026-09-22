@@ -160,6 +160,7 @@ from ..project_facts import (
     ProjectFactError,
     ProjectFactStore,
     annotate_fact_sources,
+    reply_digests,
     source_resolver,
     validate_record_payload,
 )
@@ -2015,8 +2016,10 @@ def fact_sources(session: SessionState) -> FactSources:
     needs the answer coherent with what it is about to write holds the
     session guard. Research ids are the profile's items; reference ids the
     attached documents; QC ids the retained review's survivors and disputed
-    candidates (``QCResult.finding()``'s set); the turn count the committed
-    replies; the section numbers the project's registry plus this section.
+    candidates (``QCResult.finding()``'s set); the turn digests one identity
+    per committed reply (so ``turn:N`` is checked against the reply a fact
+    was pinned to, not merely its number); the section numbers the project's
+    registry plus this section.
     """
     profile = getattr(session.research, "profile_result", None)
     research_ids = frozenset(
@@ -2044,21 +2047,9 @@ def fact_sources(session: SessionState) -> FactSources:
         research_ids=research_ids,
         reference_ids=reference_ids,
         qc_ids=qc_ids,
-        turn_count=assistant_bubble_count(session.history),
+        turn_digests=reply_digests(chat_transcript(session.history)),
         section_numbers=frozenset(numbers),
     )
-
-
-def harvest_status(session: SessionState) -> dict[str, int]:
-    """The panel's harvest hint: replies since the last committed harvest.
-
-    ``last_bubble`` is clamped to the conversation it counts, so a marker a
-    shorter history can no longer reach reads as "everything read", never as
-    a negative count.
-    """
-    total = assistant_bubble_count(session.history)
-    last = max(0, min(int(session.last_harvest_bubble or 0), total))
-    return {"replies_since": total - last, "last_bubble": last, "replies_total": total}
 
 
 def _turn_context_text(session: SessionState) -> str:

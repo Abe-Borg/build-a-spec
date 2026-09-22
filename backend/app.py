@@ -128,7 +128,6 @@ from .llm.conversation import (
     SessionState,
     effective_discipline,
     fact_sources,
-    harvest_status,
     standards_payload,
     stream_user_turn,
 )
@@ -199,12 +198,13 @@ from .project_brief import (
     sections_drafted,
     write_brief_atomically,
 )
-from .project_facts import ProjectFactError, fact_match_key
+from .project_facts import ProjectFactError, fact_match_key, reply_digests
 from .harvest import (
     HARVEST_PREVIEWS,
     HarvestError,
     build_harvest_request,
     commit_records,
+    harvest_status,
     prepare_preview,
     run_harvest,
 )
@@ -5268,12 +5268,28 @@ def create_app(
     # frontend reaches the first only from the Harvest dialog's Run button.
 
     def _harvest_binding(
-        lease: sessions.WorkspaceLease, session: SessionState
+        lease: sessions.WorkspaceLease, session: SessionState, *, replies: int
     ) -> dict[str, Any]:
-        """The state a preview describes: the template binding plus the
-        ledger's length, so a fact recorded meanwhile (by a turn or by hand)
-        makes the preview's duplicate filtering stale."""
-        return {**_template_binding(lease), "facts_len": len(session.facts.items)}
+        """The state a preview describes: the template binding, the ledger's
+        length (a fact recorded meanwhile, by a turn or by hand, makes the
+        preview's duplicate filtering stale), and the identity of the first
+        ``replies`` replies — the ones its ``turn:N`` sources may name. A
+        history truncation (a reference deleted) discards replies without
+        touching the generation, and the replies that follow take over their
+        numbers, so a commit would otherwise pin a proposal to a reply it
+        never read (Codex, PR #185). Replies ADDED since the preview leave the
+        binding alone: no number it used changes."""
+        digests = reply_digests(chat_transcript(session.history))
+        read = (
+            hashlib.sha256("".join(digests[:replies]).encode("ascii")).hexdigest()
+            if len(digests) >= replies
+            else None
+        )
+        return {
+            **_template_binding(lease),
+            "facts_len": len(session.facts.items),
+            "replies": read,
+        }
 
     def _harvest_refusal(
         code: str, message: str, *, status_code: int = 409, **extra: Any
@@ -5319,7 +5335,7 @@ def create_app(
             if session.turn_active:
                 return _harvest_refusal("turn_active", _HARVEST_TURN_REFUSAL)
             inputs = build_harvest_request(session)
-            binding = _harvest_binding(lease, session)
+            binding = _harvest_binding(lease, session, replies=inputs.bubble_count)
             generation = session.generation
         if not inputs.has_material():
             return _harvest_refusal(
@@ -5368,7 +5384,7 @@ def create_app(
             # Re-checked now rather than only at commit: a sheet that could
             # never commit is worse than saying so while the user is looking.
             if session.generation != generation or _harvest_binding(
-                lease, session
+                lease, session, replies=inputs.bubble_count
             ) != binding:
                 _trace_capture.app_event(
                     "harvest", action="preview", ok=False, error_kind="harvest_stale"
@@ -5450,15 +5466,21 @@ def create_app(
                     sessions.workspace_manager().assert_fresh(lease)
                     if session.turn_active:
                         return _harvest_refusal("turn_active", _HARVEST_TURN_REFUSAL)
-                    if _harvest_binding(lease, session) != pending.binding:
+                    if (
+                        _harvest_binding(
+                            lease, session, replies=pending.bubble_count
+                        )
+                        != pending.binding
+                    ):
                         HARVEST_PREVIEWS.discard(body.token)
                         return _harvest_refusal(
                             "harvest_stale",
                             "The project changed after this harvest was "
                             "previewed — a fact was recorded, the document "
-                            "changed, or the session was replaced — so its "
-                            "proposals may no longer hold. Nothing was "
-                            "recorded; run the harvest again.",
+                            "changed, replies it read were removed, or the "
+                            "session was replaced — so its proposals may no "
+                            "longer hold. Nothing was recorded; run the "
+                            "harvest again.",
                         )
                     records, errors = commit_records(
                         pending.proposals,

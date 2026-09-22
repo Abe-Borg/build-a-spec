@@ -509,6 +509,23 @@ invisible to CI and expensive to the user.
       it — a re-attached document gets a new id, and the fact keeps exactly
       the source it was recorded with; retire it, or record it again
       against the new id.
+- [ ] **A fact tied to a forgotten reply stays flagged.** Attach a document,
+      ask a question that makes the assistant read it (reply 2), then settle
+      something in one more exchange (reply 3). Harvest, and accept a
+      proposal whose source is `turn:3`: it shows no flag in the panel.
+      Delete the document: the conversation forgets replies 2 and 3, and the
+      fact shows "⚠ source not found". Ask two new questions: the new replies
+      take the numbers 2 and 3, and the fact STILL shows "⚠ source not
+      found" — it names the reply it was recorded against, not whatever holds
+      the number now. A harvested fact citing reply 1 stays unflagged
+      throughout.
+- [ ] **A draft with no conversation can still be harvested.** Import a
+      master (or open a project whose chat is empty) and edit a provision by
+      hand, without sending a message: the Project facts panel is there with
+      *Harvest facts…* enabled, and the dialog says no replies are waiting
+      but the draft will be read. A brand-new empty session shows no panel
+      at all; if facts exist but there is nothing to read, *Harvest facts…*
+      is disabled and its tooltip says why.
 - [ ] **In the tour** the Project facts step never shows *Harvest facts…*.
 
 ### State that must recover (v1.17.0)

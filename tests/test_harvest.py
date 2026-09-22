@@ -49,6 +49,7 @@ from backend.project_facts import (
     ProjectFactError,
     annotate_fact_sources,
     resolve_fact_source,
+    source_resolver,
 )
 from backend.qc.engine import QCFinding
 from backend.spec_doc.project import load_project
@@ -311,7 +312,7 @@ _SOURCES = FactSources(
     research_ids=frozenset({"r-1"}),
     reference_ids=frozenset({"ref-1", "ref-3"}),
     qc_ids=frozenset({"qc-kept"}),
-    turn_count=3,
+    turn_digests=("1" * 32, "2" * 32, "3" * 32),
     section_numbers=frozenset({"21 13 13", "21 30 00"}),
 )
 
@@ -549,6 +550,279 @@ def test_an_existing_unresolvable_fact_is_left_alone_and_flagged(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# A reply source names ONE reply (Codex, PR #185)
+# ---------------------------------------------------------------------------
+
+
+def _reading_exchange(session: SessionState, user: str, reply: str, rid: str) -> None:
+    """Commit one exchange whose reply read attached document ``rid``: the
+    turn a delete of that document truncates the conversation back to."""
+    tool_id = f"toolu_read_{len(session.history)}"
+    session.history.extend(
+        [
+            {"role": "user", "content": [{"type": "text", "text": user}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Reading it."},
+                    {
+                        "type": "tool_use",
+                        "id": tool_id,
+                        "name": "read_reference_doc",
+                        "input": {"ref_id": rid},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": tool_id, "content": "(elided)"}
+                ],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": reply}]},
+        ]
+    )
+
+
+def _flags(client) -> dict[str, bool]:
+    """``statement -> flagged`` for every fact the document payload carries."""
+    return {
+        fact["statement"]: bool(fact.get("unresolved_ref"))
+        for fact in client.get("/api/doc").json()["project_facts"]
+    }
+
+
+def _pinned_session(client) -> SessionState:
+    """Three replies, the second of which read ``ref-1``; one fact cites
+    reply 1 (before anything a delete discards) and one cites reply 3."""
+    session = _session(client)
+    _exchange(session, "Are the halls wet?", "Yes — wet pipe throughout.")
+    _reading_exchange(session, "Read the owner standard.", "It wants OH2.", "ref-1")
+    _exchange(session, "And the riser?", "One riser per hall.")
+    for statement, ref in (
+        ("Data halls are wet pipe.", "turn:1"),
+        ("One riser serves each hall.", "turn:3"),
+    ):
+        resp = client.post(
+            "/api/project-facts", json={"statement": statement, "source_ref": ref}
+        )
+        assert resp.status_code == 200, resp.text
+    return session
+
+
+def test_a_reply_source_stays_pinned_after_its_reply_is_discarded():
+    client = _client()
+    session = _pinned_session(client)
+    pinned = next(f for f in session.facts.active() if f.source_ref == "turn:3")
+    assert len(pinned.source_digest) == 32
+    assert _flags(client)["One riser serves each hall."] is False
+
+    # Deleting the document discards the turn that read it and every later
+    # one: replies 2 and 3 are gone.
+    assert client.delete("/api/reference/ref-1").status_code == 200
+    assert fact_sources(session).turn_count == 1
+    flags = _flags(client)
+    assert flags["One riser serves each hall."] is True
+    assert flags["Data halls are wet pipe."] is False, "reply 1 was never discarded"
+
+    # New replies take over the numbers 2 and 3. The fact still cites the
+    # reply it was recorded against, which none of them is.
+    _exchange(session, "What about the pump?", "A diesel pump.")
+    _exchange(session, "Jockey pump too?", "Yes, a jockey pump.")
+    assert fact_sources(session).turn_count == 3
+    flags = _flags(client)
+    assert flags["One riser serves each hall."] is True
+    assert flags["Data halls are wet pipe."] is False
+    # Flagged, never rewritten.
+    assert (pinned.source_kind, pinned.source_ref) == ("user", "turn:3")
+
+
+def test_an_edit_keeps_the_pin_until_it_names_another_reply():
+    client = _client()
+    session = _pinned_session(client)
+    assert client.delete("/api/reference/ref-1").status_code == 200
+    pid = next(f.pid for f in session.facts.active() if f.source_ref == "turn:3")
+    # Re-sending the ref it already names is not a change: the wording of a
+    # fact whose reply is gone can still be corrected.
+    reworded = client.patch(
+        f"/api/project-facts/{pid}",
+        json={"detail": "Per the owner standard.", "source_ref": "turn:3"},
+    )
+    assert reworded.status_code == 200, reworded.text
+    assert _flags(client)["One riser serves each hall."] is True
+    _exchange(session, "What about the pump?", "A diesel pump.")
+    _exchange(session, "Jockey pump too?", "Yes, a jockey pump.")
+
+    # An edit that sends the same ref keeps naming reply 3 — still the
+    # discarded one, whatever now holds the number.
+    same_ref = client.patch(
+        f"/api/project-facts/{pid}",
+        json={"statement": "One riser serves each data hall.", "source_ref": "turn:3"},
+    )
+    assert same_ref.status_code == 200, same_ref.text
+    assert _flags(client)["One riser serves each data hall."] is True
+    # So does one that changes only the kind (the store's own edit path).
+    assert (
+        session.facts.update(
+            pid, {"source_kind": "model"}, resolve=source_resolver(fact_sources(session))
+        )
+        == "ok"
+    )
+    assert _flags(client)["One riser serves each data hall."] is True
+
+    # Naming a reply that exists pins the fact to THAT reply.
+    repointed = client.patch(f"/api/project-facts/{pid}", json={"source_ref": "turn:2"})
+    assert repointed.status_code == 200, repointed.text
+    assert _flags(client)["One riser serves each data hall."] is False
+    fact = session.facts.get(pid)
+    assert fact.source_digest == fact_sources(session).turn_digests[1]
+
+
+def test_a_reply_source_carried_from_another_section_names_none_of_this_ones():
+    client = _client()
+    _pinned_session(client)
+    resp = client.post(
+        "/api/project/next-section", json={"number": "21 30 00", "title": "Fire Pumps"}
+    )
+    assert resp.status_code == 200, resp.text
+    seeded = sessions.get_session()
+    assert fact_sources(seeded).turn_count == 0
+    assert _flags(client)["Data halls are wet pipe."] is True
+
+    # This section's own reply 1 is not 21 13 13's reply 1.
+    _exchange(seeded, "Which pump?", "An electric fire pump.")
+    assert _flags(client)["Data halls are wet pipe."] is True
+    # ...while a fact recorded HERE, citing this conversation, resolves.
+    resp = client.post(
+        "/api/project-facts",
+        json={"statement": "The fire pump is electric.", "source_ref": "turn:1"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert _flags(client)["The fire pump is electric."] is False
+
+
+def test_the_pin_is_checked_serialized_and_kept_only_on_a_reply_source():
+    sources = FactSources(turn_digests=("a" * 32, "b" * 32))
+    assert resolve_fact_source("user", "turn:2", sources=sources, digest="b" * 32) == "turn:2"
+    for digest in ("a" * 32, ""):
+        # Another reply's identity, or none at all (recorded before replies
+        # were pinned): the reply it cited cannot be matched.
+        with pytest.raises(ProjectFactError, match="no longer names the reply"):
+            resolve_fact_source("user", "turn:2", sources=sources, digest=digest)
+    # Only a reply source carries a digest: a document or research ref never
+    # does, and a stray one is dropped on load.
+    assert sources.digest_for("user", "turn:1") == "a" * 32
+    assert sources.digest_for("reference", "turn:1") == ""
+    assert sources.digest_for("user", "turn:9") == ""
+    from backend.project_facts import ProjectFact
+
+    kept = ProjectFact.from_dict(
+        {"pid": "pf-1", "statement": "x", "source_ref": "turn:1", "source_digest": "a" * 32}
+    )
+    assert kept.to_dict()["source_digest"] == "a" * 32
+    stray = ProjectFact.from_dict(
+        {
+            "pid": "pf-2",
+            "statement": "y",
+            "source_kind": "reference",
+            "source_ref": "ref-1",
+            "source_digest": "a" * 32,
+        }
+    )
+    assert "source_digest" not in stray.to_dict()
+    malformed = ProjectFact.from_dict(
+        {"pid": "pf-3", "statement": "z", "source_ref": "turn:1", "source_digest": "nope"}
+    )
+    assert malformed.source_digest == ""
+
+
+def test_a_merged_edit_carries_its_pin():
+    from backend.project_facts import merge_facts
+
+    base = {
+        "pid": "pf-1",
+        "statement": "One riser serves each hall.",
+        "source_ref": "turn:1",
+        "source_digest": "a" * 32,
+        "uid": "f" * 32,
+        "recorded_in": "21 13 13",
+    }
+    # The same fact, re-pointed at another reply in a later edit elsewhere.
+    edited = {
+        **base,
+        "source_ref": "turn:2",
+        "source_digest": "b" * 32,
+        "edited_at": "2026-09-22T10:00:00+00:00",
+    }
+    merged, _report = merge_facts([base], [edited])
+    assert len(merged) == 1
+    assert (merged[0]["source_ref"], merged[0]["source_digest"]) == ("turn:2", "b" * 32)
+
+
+def test_a_reply_source_keeps_its_pin_through_a_save_and_reload():
+    client = _client()
+    session = _pinned_session(client)
+    project = client.get("/api/project/save")
+    assert project.status_code == 200
+    sessions.reset_session()
+    assert _flags(client) == {} and session.history == []
+    loaded = client.post(
+        "/api/project/load-file",
+        files={"file": ("p.baspec", project.content, "application/zip")},
+    )
+    assert loaded.status_code == 200, loaded.text
+    reloaded = sessions.get_session()
+    pinned = next(f for f in reloaded.facts.active() if f.source_ref == "turn:3")
+    assert len(pinned.source_digest) == 32
+    flags = _flags(client)
+    assert flags["Data halls are wet pipe."] is False
+    assert flags["One riser serves each hall."] is False
+
+
+def test_a_commit_refuses_a_preview_whose_replies_were_discarded(monkeypatch):
+    client = _client()
+    session = _session(client)
+    _exchange(session, "Are the halls wet?", "Yes — wet pipe throughout.")
+    _reading_exchange(session, "Read the owner standard.", "It wants OH2.", "ref-1")
+    _exchange(session, "And the riser?", "One riser per hall.")
+    resp, _fake = _preview(
+        client,
+        monkeypatch,
+        harvest_proposal("One riser serves each hall.", source_ref="turn:3"),
+    )
+    assert resp.status_code == 200, resp.text
+    token = resp.json()["token"]
+    # The replies the preview read are discarded, and new ones take their
+    # numbers: turn:3 now names a reply the harvest never read.
+    assert client.delete("/api/reference/ref-1").status_code == 200
+    _exchange(session, "What about the pump?", "A diesel pump.")
+    _exchange(session, "Jockey pump too?", "Yes, a jockey pump.")
+    stale = client.post(
+        "/api/project/facts/harvest/commit", json={"token": token, "accepted": [0]}
+    )
+    assert stale.status_code == 409 and stale.json()["code"] == "harvest_stale"
+    assert "One riser serves each hall." not in _statements(session)
+
+
+def test_a_reply_added_after_the_preview_does_not_stale_it(monkeypatch):
+    client = _client()
+    session = _session(client)
+    _conversation(session, 2)
+    resp, _fake = _preview(
+        client, monkeypatch, harvest_proposal("Answer 2 holds.", source_ref="turn:2")
+    )
+    token = resp.json()["token"]
+    _exchange(session, "One more?", "One more reply.")
+    ok = client.post(
+        "/api/project/facts/harvest/commit", json={"token": token, "accepted": [0]}
+    )
+    assert ok.status_code == 200, ok.text
+    fact = next(f for f in session.facts.active() if f.statement == "Answer 2 holds.")
+    assert fact.source_digest == fact_sources(session).turn_digests[1]
+    assert _flags(client)["Answer 2 holds."] is False
+
+
+# ---------------------------------------------------------------------------
 # The preview
 # ---------------------------------------------------------------------------
 
@@ -599,6 +873,7 @@ def test_preview_returns_proposals_and_meters_under_harvest(monkeypatch):
         "replies_since": 2,
         "last_bubble": 0,
         "replies_total": 2,
+        "harvestable": True,
     }
 
 
@@ -698,6 +973,68 @@ def test_nothing_to_harvest_is_refused_without_a_call(monkeypatch):
     assert resp.status_code == 400
     assert resp.json()["code"] == "nothing_to_harvest"
     assert fake.messages.requests == []
+
+
+def test_the_door_opens_whenever_the_route_would_read_something(monkeypatch):
+    """``harvestable`` is the route's own question (``has_material``), asked
+    ahead of time: the panel's door follows it, so a section with no reply
+    to read — an imported master edited by hand — can still be harvested
+    (Codex, PR #185)."""
+    client = _client()
+    session = sessions.get_session()
+    assert client.get("/api/doc").json()["harvest"] == {
+        "replies_since": 0,
+        "last_bubble": 0,
+        "replies_total": 0,
+        "harvestable": False,
+    }
+    fake = _patch_harvest(monkeypatch)
+    refused = client.post("/api/project/facts/harvest")
+    assert refused.status_code == 400 and refused.json()["code"] == "nothing_to_harvest"
+    assert fake.messages.requests == []
+
+    # A provision, and still no reply: nothing to hint about, something to read.
+    edited = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {"action": "add_article", "target_id": "pt1", "text": "SUMMARY"},
+                {
+                    "action": "add_paragraph",
+                    "target_id": "pt1.a1",
+                    "text": "Data halls are protected by wet-pipe sprinklers.",
+                    "status": "confirmed",
+                },
+            ]
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    status = client.get("/api/doc").json()["harvest"]
+    assert status["replies_since"] == 0 and status["harvestable"] is True
+    resp, fake = _preview(client, monkeypatch, harvest_proposal("Data halls are wet pipe."))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["provisions"] == 1 and resp.json()["turns_read"] == 0
+
+    # A Final QC dismissal reason alone opens it too.
+    sessions.reset_session()
+    session = sessions.get_session()
+    assert client.get("/api/doc").json()["harvest"]["harvestable"] is False
+    finding = QCFinding(
+        finding_id="qc-dismissed",
+        lens_id="coordination_consistency",
+        severity="medium",
+        element_id="",
+        title="Pump room ventilation",
+        issue="i",
+        rationale="r",
+    )
+    finding.status = "dismissed"
+    finding.dismiss_reason = "Ventilation is by the mechanical engineer of record."
+    session.qc.result = SimpleNamespace(findings=[finding], disputed=[], refuted=[])
+    assert client.get("/api/doc").json()["harvest"]["harvestable"] is True
+    resp, _fake = _preview(client, monkeypatch, harvest_proposal("Ventilation is by others."))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["dismissals"] == 1
 
 
 def test_the_preview_is_refused_in_a_tour_without_a_key_and_mid_turn(monkeypatch):
@@ -833,7 +1170,12 @@ def test_commit_is_one_batch_and_a_bad_edit_rolls_it_back(monkeypatch):
     assert (riser.scope, riser.section, riser.status) == ("section", "21 30 00", "assumed")
     vcc = added["The county enforces the 2021 VCC."]
     assert (vcc.source_kind, vcc.source_ref, vcc.status) == ("user", "", "assumed")
-    assert body["harvest"] == {"replies_since": 0, "last_bubble": 2, "replies_total": 2}
+    assert body["harvest"] == {
+        "replies_since": 0,
+        "last_bubble": 2,
+        "replies_total": 2,
+        "harvestable": True,  # the draft's provisions are still there to read
+    }
     assert [f["statement"] for f in body["project_facts"]][-3:] == [
         "Sprinkler demand is 1,200 gpm at the base of riser.",
         "The riser room is shared with the fire pump.",
@@ -946,6 +1288,7 @@ def test_the_marker_advances_only_on_commit_and_persists(monkeypatch):
         "replies_since": 0,
         "last_bubble": 3,
         "replies_total": 3,
+        "harvestable": True,
     }
 
     payload = sessions.project_payload(session)
@@ -1024,6 +1367,8 @@ def test_the_marker_clamps_when_a_reference_delete_truncates_history():
         "replies_since": 0,
         "last_bubble": 1,
         "replies_total": 1,
+        # Reply 1 was read, and there is no draft or review to read either.
+        "harvestable": False,
     }
 
 

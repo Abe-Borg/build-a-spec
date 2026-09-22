@@ -55,7 +55,7 @@ import re
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, NamedTuple, Sequence
 
 FACT_SCOPES = ("project", "discipline", "section")
 FACT_STATUSES = ("confirmed", "assumed", "superseded")
@@ -100,12 +100,27 @@ class ProjectFactError(ValueError):
     """A malformed ``record_project_facts`` request. Reported to the model to fix."""
 
 
-# A resolver: ``(source_kind, source_ref) -> normalized source_ref``, raising
+class ResolvedSource(NamedTuple):
+    """What a resolver settles for one ``(source_kind, source_ref)``.
+
+    ``ref`` is the normalized ref; ``digest`` is the identity of the reply a
+    ``turn:N`` ref names at this moment (:func:`reply_digests`), ``""`` for
+    every other kind of source. A reply is named by its position, and a
+    position is not an identity: once a history truncation discards reply N,
+    the next reply takes the number (Codex, PR #185). The digest is what
+    pins the fact to the reply it actually cited.
+    """
+
+    ref: str
+    digest: str = ""
+
+
+# A resolver: ``(source_kind, source_ref) -> ResolvedSource``, raising
 # :class:`ProjectFactError` when the ref names nothing. The store takes one
 # as an optional hook (see :func:`resolve_fact_source`) so the source check
 # runs exactly where a fact's kind and ref are settled — including a
 # replacement that inherits the kind of the fact it supersedes.
-SourceResolver = Callable[[str, str], str]
+SourceResolver = Callable[[str, str], ResolvedSource]
 
 
 def _clean_str(value: Any, limit: int, what: str) -> str:
@@ -143,6 +158,15 @@ _FACT_UID_RE = re.compile(r"^[0-9a-f]{32}$")
 def _fact_uid(value: Any) -> str:
     text = str(value or "").strip()
     return text if _FACT_UID_RE.fullmatch(text) else ""
+
+
+# The identity of the reply a ``turn:N`` source names (:func:`reply_digests`).
+_REPLY_DIGEST_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _reply_digest(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if _REPLY_DIGEST_RE.fullmatch(text) else ""
 
 
 def _now_stamp() -> str:
@@ -193,6 +217,14 @@ class ProjectFact:
     # keeps its bytes, and merges by its statement.
     uid: str = ""
     edited_at: str = ""
+    # Project workspace Phase 4. For a ``turn:N`` source only: the identity
+    # of the reply the ref named when it was recorded (:func:`reply_digests`).
+    # A reply is named by position, and a history truncation hands the
+    # position to the next reply; the digest keeps the fact pinned to the
+    # one it cited, so a discarded reply — or another section's — never
+    # passes for it. Serialized only when set, so every other fact keeps
+    # its bytes.
+    source_digest: str = ""
 
     @property
     def active(self) -> bool:
@@ -215,6 +247,7 @@ class ProjectFact:
             "supersede_reason": self.supersede_reason,
             **({"uid": self.uid} if self.uid else {}),
             **({"edited_at": self.edited_at} if self.edited_at else {}),
+            **({"source_digest": self.source_digest} if self.source_digest else {}),
         }
 
     @classmethod
@@ -234,6 +267,9 @@ class ProjectFact:
         source_kind = str(data.get("source_kind", "user") or "user")
         if source_kind not in FACT_SOURCE_KINDS:
             raise ValueError(f"unknown fact source kind {source_kind!r}")
+        source_ref = " ".join(str(data.get("source_ref", "") or "").split())[
+            :MAX_SOURCE_REF_CHARS
+        ]
         return cls(
             pid=pid,
             statement=statement[:MAX_STATEMENT_CHARS],
@@ -247,9 +283,7 @@ class ProjectFact:
             ),
             status=status,
             source_kind=source_kind,
-            source_ref=" ".join(str(data.get("source_ref", "") or "").split())[
-                :MAX_SOURCE_REF_CHARS
-            ],
+            source_ref=source_ref,
             recorded_in=" ".join(str(data.get("recorded_in", "") or "").split())[
                 :MAX_SECTION_CHARS
             ],
@@ -260,6 +294,12 @@ class ProjectFact:
             )[:MAX_REASON_CHARS],
             uid=_fact_uid(data.get("uid")),
             edited_at=str(data.get("edited_at", "") or "")[:40],
+            # Only a reply source has a reply to be pinned to.
+            source_digest=(
+                _reply_digest(data.get("source_digest"))
+                if is_turn_ref(source_kind, source_ref)
+                else ""
+            ),
         )
 
 
@@ -378,8 +418,9 @@ class ProjectFactStore:
         source_ref = _clean_str(
             payload.get("source_ref"), MAX_SOURCE_REF_CHARS, "source_ref"
         )
+        source_digest = ""
         if resolve is not None:
-            source_ref = resolve(str(source_kind), source_ref)
+            source_ref, source_digest = resolve(str(source_kind), source_ref)
         key = _match_key(statement)
         for item in self.items:
             if item.active and _match_key(item.statement) == key:
@@ -404,6 +445,7 @@ class ProjectFactStore:
             recorded_in=_clean_str(recorded_in, MAX_SECTION_CHARS, "recorded_in"),
             recorded_at=str(recorded_at or "")[:40],
             uid=uuid.uuid4().hex,
+            source_digest=source_digest,
         )
         self._next_seq += 1
         self.items.append(fact)
@@ -578,9 +620,15 @@ class ProjectFactStore:
         beside the old statement (Codex, PR #179).
 
         ``resolve`` checks the source only when the edit CHANGES it (the ref
-        or the kind): a fact recorded before sources were checked, whose ref
-        names nothing, stays editable — its wording can be corrected without
-        first being made to cite something.
+        or the kind — re-sending the same ref is not a change): a fact
+        recorded before sources were checked, whose ref names nothing, stays
+        editable — its wording can be corrected without first being made to
+        cite something. A ``turn:N`` source stays pinned to the reply it was
+        recorded against (``source_digest``) for as long as the edit keeps
+        naming ``turn:N``; only naming a different reply pins it again.
+        Re-pinning on a kind change alone would let an edit quietly point a
+        fact whose reply was discarded at whatever reply now holds the
+        number (Codex, PR #185).
         """
         fact = self.get(pid)
         if fact is None:
@@ -630,10 +678,24 @@ class ProjectFactStore:
             candidate.source_ref = _clean_str(
                 changes["source_ref"], MAX_SOURCE_REF_CHARS, "source_ref"
             )
-        if resolve is not None and (
-            "source_ref" in changes or "source_kind" in changes
+        if (candidate.source_kind, candidate.source_ref) != (
+            fact.source_kind,
+            fact.source_ref,
         ):
-            candidate.source_ref = resolve(candidate.source_kind, candidate.source_ref)
+            digest = ""
+            if resolve is not None:
+                candidate.source_ref, digest = resolve(
+                    candidate.source_kind, candidate.source_ref
+                )
+            if (
+                candidate.source_ref == fact.source_ref
+                and is_turn_ref(fact.source_kind, fact.source_ref)
+                and is_turn_ref(candidate.source_kind, candidate.source_ref)
+            ):
+                # Only the kind changed: still naming the reply it named,
+                # so still pinned to it.
+                digest = fact.source_digest
+            candidate.source_digest = digest
         if candidate.scope == "section":
             candidate.section = candidate.section or fact.recorded_in
         else:
@@ -657,6 +719,7 @@ class ProjectFactStore:
         fact.status = candidate.status
         fact.source_kind = candidate.source_kind
         fact.source_ref = candidate.source_ref
+        fact.source_digest = candidate.source_digest
         fact.edited_at = str(edited_at or _now_stamp())[:40]
         return "ok"
 
@@ -1341,6 +1404,7 @@ def merge_facts(
                     twin.status = fact.status
                     twin.source_kind = fact.source_kind
                     twin.source_ref = carried_ref(fact)
+                    twin.source_digest = fact.source_digest
                     twin.edited_at = fact.edited_at
                     # The edit carries the identity it was stamped with: once
                     # the statement changes, a legacy twin could no longer
@@ -1485,6 +1549,47 @@ def merge_facts(
 # pass prints ahead of every exchange so a proposal can cite the one it came
 # from.
 _TURN_REF_RE = re.compile(r"turn\s*:\s*(\d{1,6})", re.IGNORECASE)
+
+
+def is_turn_ref(kind: str, ref: str) -> bool:
+    """Whether ``(kind, ref)`` names a reply: a ``user`` / ``model`` source
+    whose ref is a ``turn:N`` locator."""
+    return str(kind or "") in ("user", "model") and bool(
+        _TURN_REF_RE.fullmatch(" ".join(str(ref or "").split()))
+    )
+
+
+def reply_digests(transcript: Iterable[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Each committed reply's identity, in order — ``turn:N`` is entry N-1.
+
+    ``transcript`` is ``chat_transcript(history)``: the text-only reduction
+    ``assistant_bubble_count`` counts and the harvest numbers its turns by,
+    so the Nth digest is the Nth reply's. A reply is identified by its text
+    and the text that prompted it. Once committed, neither ever changes (the
+    context block is stripped before commit, and every later rewrite of
+    history — outline and PDF elision, the server-tool pairing repair —
+    touches tool payloads, never text). A reply regenerated word for word
+    from the same prompt is, for provenance, the same reply; any other reply
+    that takes over a number after a truncation is not.
+    """
+    digests: list[str] = []
+    prompt: list[str] = []
+    for entry in transcript:
+        role = entry.get("role")
+        text = str(entry.get("text", "") or "")
+        if role == "user":
+            prompt.append(text)
+            continue
+        if role != "assistant":
+            continue
+        material = json.dumps(
+            ["\n\n".join(prompt), text], ensure_ascii=False, separators=(",", ":")
+        )
+        digests.append(hashlib.sha256(material.encode("utf-8")).hexdigest()[:32])
+        prompt = []
+    return tuple(digests)
+
+
 # The provenance the write-back merge writes for a fact the brief itself
 # carries (``project_brief._edition_conflict_fact`` and ``merge_facts``'s
 # unresolvable-source fallback): "project brief", or "project brief; <who>".
@@ -1508,13 +1613,33 @@ class FactSources:
     # ``QCResult.finding()``'s set. A refuted or inconclusive candidate is an
     # audit record, not something a settled decision can rest on.
     qc_ids: frozenset[str] = frozenset()
-    # Committed assistant replies; ``turn:N`` is valid for 1 <= N <= this.
-    turn_count: int = 0
+    # One identity per committed assistant reply (:func:`reply_digests`), in
+    # order: ``turn:N`` names entry N-1, and is valid for
+    # ``1 <= N <= turn_count``.
+    turn_digests: tuple[str, ...] = ()
     # Sections the project knows: its registry, plus this section.
     section_numbers: frozenset[str] = frozenset()
 
+    @property
+    def turn_count(self) -> int:
+        """Committed assistant replies."""
+        return len(self.turn_digests)
 
-def resolve_fact_source(kind: str, ref: str, *, sources: FactSources) -> str:
+    def digest_for(self, kind: str, ref: str) -> str:
+        """The identity of the reply ``(kind, ref)`` names now; ``""`` when it
+        names no reply of this conversation."""
+        if not is_turn_ref(kind, ref):
+            return ""
+        match = _TURN_REF_RE.fullmatch(" ".join(str(ref or "").split()))
+        number = int(match.group(1)) if match else 0
+        if 1 <= number <= self.turn_count:
+            return self.turn_digests[number - 1]
+        return ""
+
+
+def resolve_fact_source(
+    kind: str, ref: str, *, sources: FactSources, digest: str | None = None
+) -> str:
     """Resolve ``ref`` for a fact of ``kind``; return the normalized ref.
 
     - ``research`` → an item id (``r-…``) the section's research profile
@@ -1525,7 +1650,13 @@ def resolve_fact_source(kind: str, ref: str, *, sources: FactSources) -> str:
       provenance this exists to stop.
     - ``user`` / ``model`` → empty, or ``turn:N`` naming a committed reply
       of this conversation. Anything else (a free-text note) belongs in the
-      fact's ``detail``.
+      fact's ``detail``. ``digest`` is for checking a fact ALREADY recorded:
+      its ``source_digest``, which must still be the identity of reply N —
+      a reply discarded by a history truncation, or one of another section's
+      conversation, is not reply N of this one, whatever now holds the
+      number. A fact recorded before replies were pinned has no digest and
+      cannot be matched to a reply, so it does not resolve. ``None`` (the
+      default) is a ref being recorded now, whose reply the caller pins.
     - ``brief`` (never recordable; checked only to flag a loaded fact) → the
       merge's own provenance ("project brief", "project brief; …") or a
       section number the project knows.
@@ -1556,6 +1687,12 @@ def resolve_fact_source(kind: str, ref: str, *, sources: FactSources) -> str:
             raise ProjectFactError(
                 f"'turn:{number}' is not a reply of this conversation ({span}). "
                 "Leave source_ref empty instead."
+            )
+        if digest is not None and digest != sources.turn_digests[number - 1]:
+            raise ProjectFactError(
+                f"'turn:{number}' no longer names the reply this fact was "
+                "recorded against: that reply was removed from the conversation, "
+                "belongs to another section's conversation, or was never pinned."
             )
         return f"turn:{number}"
     if kind == "research":
@@ -1620,8 +1757,15 @@ def resolve_fact_source(kind: str, ref: str, *, sources: FactSources) -> str:
 
 
 def source_resolver(sources: FactSources) -> SourceResolver:
-    """The store hook form of :func:`resolve_fact_source` for one snapshot."""
-    return lambda kind, ref: resolve_fact_source(kind, ref, sources=sources)
+    """The store hook form of :func:`resolve_fact_source` for one snapshot:
+    the normalized ref, plus — for a ``turn:N`` ref — the identity of the
+    reply it names, which the store pins to the fact."""
+
+    def resolve(kind: str, ref: str) -> ResolvedSource:
+        normalized = resolve_fact_source(kind, ref, sources=sources)
+        return ResolvedSource(normalized, sources.digest_for(kind, normalized))
+
+    return resolve
 
 
 def annotate_fact_sources(
@@ -1631,10 +1775,12 @@ def annotate_fact_sources(
     whose source does not resolve, and nothing else changed.
 
     Flag, never rewrite: a fact recorded before sources were checked (or
-    carried in from a brief, or whose document was since removed) keeps
-    exactly what it was recorded with. The flag is derived per read, so it
-    clears the moment the source exists again — a research round that
-    re-mints the item, a document attached again.
+    carried in from a brief, or whose document or reply was since removed)
+    keeps exactly what it was recorded with. The flag is derived per read, so
+    it clears the moment the source exists again — a research round that
+    re-mints the item, a document attached again. A reply source is checked
+    against the reply it was pinned to, never merely its number, so a reply
+    that takes over a discarded one's number does not clear the flag.
     """
     out: list[dict[str, Any]] = []
     for entry in snapshot:
@@ -1644,6 +1790,7 @@ def annotate_fact_sources(
                 str(item.get("source_kind", "") or ""),
                 str(item.get("source_ref", "") or ""),
                 sources=sources,
+                digest=str(item.get("source_digest", "") or ""),
             )
         except ProjectFactError:
             item["unresolved_ref"] = True

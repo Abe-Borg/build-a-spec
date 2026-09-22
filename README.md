@@ -334,22 +334,34 @@ facts, and makes every recorded fact name a source that exists.
   costs another call. Recording nothing is an answer too: it marks the replies
   read, so the next harvest starts after them.
 - **The sheet is bound to the project as it was.** If a fact is recorded, the
-  document changes or the session is replaced while you review, recording is
-  refused rather than applied to a project the proposals no longer describe
-  (a harvest whose project changed while the call ran says so at once). An
-  unrecorded sheet expires after 15 minutes.
+  document changes, replies it read are removed (deleting an attached document
+  forgets the replies that read it) or the session is replaced while you
+  review, recording is refused rather than applied to a project the proposals
+  no longer describe (a harvest whose project changed while the call ran says
+  so at once). A reply added after the harvest ran does not count as a change.
+  An unrecorded sheet expires after 15 minutes.
 - **The nudges.** The Project facts panel shows "N replies since facts were
   last harvested"; Next section → and the Export menu's brief entry show the
   same line with **Harvest first**, which opens the dialog over what you were
   doing and returns you there — neither ever runs it. The panel now appears
-  for any section with replies waiting, not only one that already has facts.
+  for any section with something to harvest — a reply since the last harvest,
+  a provision in the draft, or a Final QC dismissal reason — not only one that
+  already has facts, so an imported master edited by hand, with no
+  conversation at all, can still be harvested. With nothing to read, **Harvest
+  facts…** is disabled and says why.
 - **A fact's source has to exist.** Recording a fact — by the assistant, in
   the panel, or from a harvest — now checks that its cited research finding,
   attached document, Final QC finding or reply is really there; one that
-  names nothing is refused (the assistant is told why and corrects it). A fact
-  recorded before this check, carried in from another section, or whose
-  document has since been removed is **flagged "source not found" in the
-  panel, never rewritten**, and the flag clears if the source comes back.
+  names nothing is refused (the assistant is told why and corrects it). A
+  reply is matched to the one the fact was recorded against, not merely its
+  number: when deleting a document forgets the replies that read it, the
+  replies that follow take their numbers, and a fact citing a forgotten reply
+  stays unresolved rather than quietly pointing at whatever reply holds the
+  number now — as does a fact carried in from another section, whose replies
+  are that section's. A fact recorded before this check, carried in from
+  another section, or whose document or reply has since been removed is
+  **flagged "source not found" in the panel, never rewritten**, and the flag
+  clears if the source comes back.
 - **Metered on its own line.** The harvest shows in Settings → Usage as
   "Fact harvest", priced at the interview model's rates, whatever it produced
   — a declined or malformed reply is still a paid one. Recording harvested
@@ -367,8 +379,10 @@ it ran) and `POST /api/project/facts/harvest/commit {token, accepted, edits}`
 (records the ticked proposals; 400 `invalid_fact` with a reason per proposal,
 the token surviving; 409 `harvest_stale` / `harvest_expired` / `turn_active`).
 The document payload gains `harvest` (`replies_since`, `last_bubble`,
-`replies_total`), every fact carries `unresolved_ref: true` when its source
-names nothing, and a saved section records how far its last harvest read.
+`replies_total`, and `harvestable` — whether a harvest would read anything),
+every fact carries `unresolved_ref: true` when its source names nothing, a
+fact citing a reply carries `source_digest` (the identity of the reply it was
+recorded against), and a saved section records how far its last harvest read.
 
 ## Chat history compaction (in progress)
 
@@ -1565,7 +1579,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
   harvest.py             the fact harvest (Project workspace Phase 4): one
                          opt-in paid call proposing the project facts a section
                          settled, a strict output tool, the review sheet's
-                         checks and the single-use preview cache
+                         checks, the single-use preview cache, and the
+                         `harvest` status every document payload carries
   qc/
     schema.py            QC lens definitions + submit_qc_findings/consolidation/
                          verdict strict tools + observable reviewed-check and

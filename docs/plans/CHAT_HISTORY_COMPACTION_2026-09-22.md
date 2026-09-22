@@ -113,7 +113,7 @@ see Phase 5.
 |---|---|---|---|---|
 | plan | this file | **complete** | `72a3b2f` (PR #182, merged `7edddd3`) | |
 | 1 | Stale outlines out of saved history + history composition | **complete** | `43a8ad8` (PR #182, merged `7edddd3`) | commit-time + load-time elision; Developer tools row; offline profiler |
-| 2 | Fetched web-page text out of saved history | **in review** | PR #183 | commit-time + load-time elision; live canary built, its one request (the owner's run) gates the merge — see Phase 2 → Canary result |
+| 2 | Fetched web-page text out of saved history | **in review** | `a6e5fea` (PR #183) | commit-time + load-time elision; live canary built, its one request (the owner's run) gates the merge — see Phase 2 → Canary result |
 | 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | not started | | gated: D1, D3; ship both halves together |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |
 | 5 | Within-turn outline trim (optional) | not started | | changes what the model sees mid-turn; measure first |

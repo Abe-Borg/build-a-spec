@@ -71,22 +71,69 @@ package part. Inside the body:
 
 * a provision the user did not touch is emitted as a **byte-identical clone**
   of its source element;
-* a provision they edited keeps its `w:pPr` and its dominant run's `w:rPr`,
-  so style, font, size, indent, spacing and numbering are exact and only the
-  words change;
+* a provision they edited keeps its `w:pPr` **and its own runs**: the new
+  words are spliced into the runs already there (`spec_doc/source_splice.py`,
+  the word-level splice of the Redline-on-your-original plan), so style,
+  font, size, indent, spacing and numbering are exact, a bold or italic
+  phrase they did not change stays bold or italic, and the tab after a typed
+  letter stays a tab. A provision that is only **relettered** (a sibling was
+  added or removed above it) is an edit of one token, so it keeps all of
+  that too;
 * a **preserved block** (table, picture, embedded object, content control) is
   emitted verbatim;
-* a provision they added is cloned from the nearest kin at its own depth;
+* a provision they added is cloned from the nearest kin **of its own kind**
+  (a provision from a provision at its depth, an article heading from an
+  article heading, first looking back to the last one emitted, then to the
+  first in the upload), and takes that kin's label convention (Word-numbered
+  or typed) and separator (a typed letter's tab, an article number's
+  `1.01` width or ` - ` dash). It never copies the kin's identity (`w14:paraId`
+  / `w14:textId`, which Word expects to be unique), bookmarks, comment
+  anchors or section break;
 * blank spacer paragraphs travel with the provision below them, so spacing
   survives a reorder;
 * body content the tree never modelled that sits ABOVE a modelled element —
   a cover page, a revision history, a table of contents, a picture-only
   paragraph, a page break — travels with the element below it too, so a
-  cover page stays ahead of the section it introduces and an unmodelled
-  block never migrates to the end of the file;
-* body content the semantic tree never modelled (`END OF SECTION`, anything
-  after it) is emitted after the walk — but an element the tree DID model and
-  the walk did not reach was deleted by the user, and must not come back.
+  cover page stays ahead of the section it introduces. When that element is
+  deleted, its blank spacers go with it and everything else stays where it
+  was: an unmodelled block never migrates to the end of the file;
+* body content after the last modelled element (`END OF SECTION`, an
+  appendix, the blank lines, page breaks and section breaks between them) is
+  carried through verbatim, in place — but an element the tree DID model and
+  the walk did not reach was deleted by the user, and must not come back;
+* a PART's `(Not used.)` line (the importer skips it) is dropped once that
+  PART has an article, and kept while it has none.
+
+**Section breaks belong to the content above them.** A Word section break is
+the end of a section, so no edit to what sits below it moves or removes it,
+and no edit loses or duplicates one:
+
+* an empty paragraph holding a break (`w:pPr/w:sectPr`) stays after the
+  content above it — deleting or moving the provision below it never takes
+  it along;
+* a provision that holds the break in its own `w:pPr` keeps it while it
+  stays in place; deleted or moved away, it leaves an **empty paragraph
+  holding the break where it was** (its own paragraph properties, without
+  its text, its `w14` ids, or — when it was Word-numbered — its list
+  numbering, `w:numId 0`, since Word prints the number of an empty numbered
+  paragraph);
+* a clone never copies a break (clone hygiene, above);
+* a provision **added** right after the content that ends a section lands
+  after its break — at the top of the next section — because the break stays
+  with the content that was above it. (Pressing Enter at the end of that
+  paragraph in Word would keep the new text in the section instead; moving a
+  break is a Word edit.)
+* where "in place" is ambiguous after a reorder, the break goes to the gap
+  that keeps the most elements on the side they were on — above it before,
+  below it after — preferring the gap right after the nearest surviving
+  element that was above it. Breaks never cross each other, so sections keep
+  their order. A section whose content was all deleted keeps its break (and
+  so an empty page); removing it is a Word edit.
+
+**Article numbers keep the master's format.** A heading typed `1.01 SUMMARY`
+or `1.2 - SUBMITTALS` is reproduced in that form (width, trailing dot, dash
+and the whitespace around them), so an export with no edits no longer
+rewrites it as `1.1 SUMMARY`, and a renumbered heading keeps its form.
 
 **The section identity is read in the front matter, once.** The body before
 the first PART or article heading is the front matter. A `SECTION 21 05 00`
@@ -114,12 +161,37 @@ a Word field: its paragraphs are locked `field` blocks, never parsed as
 articles. Text-box content is read into the projection (a cover page is
 routinely built from text boxes) though the paragraph stays an `image` block.
 
-**Two limits are inherent and are disclosed rather than worked around.**
-Intra-paragraph emphasis on an edited provision is best-effort: a bolded
-phrase is a run boundary attached to words that no longer exist, so an edited
-provision takes its dominant run properties. And a revision-bearing paragraph
-is rewritten rather than cloned, because the importer showed the Accept-All
-view and cloning the original markup would export text the user never saw.
+**Two limits remain, and are disclosed rather than worked around.**
+The formatting of *new* words is inherited from a neighbour: a word typed
+over others takes the formatting of the first character it replaced, and an
+inserted word the formatting of the character before it — what Word itself
+does. Unchanged words keep their own. A paragraph the splice cannot yet map
+(a hyperlink, field, content control, comment or note reference, `w:sym` or
+drawing inside it) is still rebuilt from its first run's properties; the
+export's `export` diagnostics event counts those fallbacks by reason
+(`render.fallback`), which is the evidence the splice's eligibility widens
+from. And a revision-bearing paragraph is rewritten rather than cloned,
+because the importer showed the Accept-All view and cloning the original
+markup would export text the user never saw.
+
+**The splice's rules.** The source paragraph's visible characters are mapped
+to the nodes that produce them — `w:t` characters, `w:tab`/`w:ptab` (`\t`),
+a text-wrapping `w:br` or a `w:cr` (`\n`), `w:noBreakHyphen` (`-`) —
+python-docx `CT_R.text`'s rules, which is what the importer read (the map is
+checked against the importer's reading and refused on a mismatch). Words are
+diffed without their whitespace, since the importer folded it: whitespace
+between two surviving words is the source's; a replaced block keeps the
+source whitespace on both sides; an inserted block keeps the source
+whitespace before it; a deleted block takes the whitespace after it, or
+before it at the end of the paragraph. Bookmarks and `w:proofErr` markers are
+never deleted, only positioned; a zero-width run node (`w:lastRenderedPageBreak`,
+`w:softHyphen`, a page break) goes with the characters around it, except on
+the edge of a deleted span, where it is kept — a page break before a
+relettered label does not die with the old letter. The edit script is a list
+of keep / delete / insert steps whose keep and delete ranges partition the
+source in order, so rendering keep + insert gives this export and rendering
+delete as `w:del` and insert as `w:ins` gives the planned redline — the
+redline's Accept All equals this export by construction.
 
 **Mechanics.** `spec_doc/source_format.py` records, per semantic element, the
 source body-child index it came from and whether its label was Word's
@@ -127,10 +199,16 @@ source body-child index it came from and whether its label was Word's
 first wins, because a map `from_dict` refuses would fail every later project
 save. Beside the anchors it keeps the header/footer text, the front-matter
 text and `header_source`. That is all it records — the retained bytes are
-the format store. `spec_doc/source_render.py` reads it
-back, rebuilds the body, and hands the result to `replace_document_xml_raw`.
-The map is bound to the upload by SHA-256; read beside different bytes its
-origin indexes address whatever now sits there, so the export refuses.
+the format store. `spec_doc/source_render.py` reads it back: it walks the
+current tree into the elements to emit, assigns every unmodelled body child
+to exactly one place (leading content of the element below it, a group
+bound to its position — everything up to a section break, or what a deleted
+element leaves behind — or the trailing content after the last modelled
+element), places the position-bound groups, renders each element (clone,
+splice through `spec_doc/source_splice.py`, fallback, or kin clone), and
+hands the result to `replace_document_xml_raw`. The map is bound to the
+upload by SHA-256; read beside different bytes its origin indexes address
+whatever now sits there, so the export refuses.
 
 **Preserved blocks are a document-model property**, not a capability report:
 `Paragraph.locked` carries a `model.LOCK_REASONS` code, is persisted with the
@@ -160,12 +238,14 @@ suites still pin it.
 | Exact original | `GET /api/import/original` | Immutable imported bytes | The response is byte-for-byte identical to the retained upload. |
 | Exact source no-op | `GET /api/export/docx?mode=source` when the semantic body matches the imported baseline | Immutable imported bytes | Returns the exact same bytes, without rebuilding XML or ZIP. Status, provenance, standards, project-profile, and other metadata-only changes do not make this a body mutation. |
 | Source-preserving patched DOCX | `GET /api/export/docx?mode=source` after a proven-safe body change | Clone of the imported package | Only approved `word/document.xml` text slices or numbered-island paragraph spans change. Unchanged member payloads, local records, inter-record gaps, archive comment, and trailing bytes remain exact. Central-directory records change only for the replacement metadata and required local-header offsets. The proposed output is independently audited before return. |
-| Appearance-preserving DOCX | `GET /api/export/docx?mode=preserved`, and the default for an imported document that has released the byte-exact claim (i.e. every import) | Clone of the imported package with a rebuilt body | Every package part except `word/document.xml` is byte-identical. Untouched provisions are byte-identical elements; edited ones keep their paragraph and run properties; preserved blocks are verbatim. See the section above. |
+| Appearance-preserving DOCX | `GET /api/export/docx?mode=preserved`, and the default for an imported document that has released the byte-exact claim (i.e. every import) | Clone of the imported package with a rebuilt body | Every package part except `word/document.xml` is byte-identical. Untouched provisions are byte-identical elements; edited ones keep their paragraph properties and their own runs (unchanged words keep their formatting); preserved blocks are verbatim; section breaks survive every edit. See the section above. |
 | Normalized DOCX | `GET /api/export/docx?mode=normalized` | Current SectionFormat tree | Generates a new DOCX with Build-a-Spec styles, schedules, and genuine Word automatic numbering. It does not preserve source-package formatting or opaque parts. Fresh projects default to this mode. |
 | Normalized redline | `GET /api/export/docx?redline=master` or `GET /api/export/docx?redline=version&base=N` | Semantic baseline/version and current SectionFormat tree | Generates a new DOCX containing Word `w:ins`/`w:del` markup. It is a semantic provision redline, not a source-package redline. It never adds tracked changes to the retained source. |
 
 Redline display labels remain positional literal text so a move or a preceding
-deletion does not create misleading tracked-numbering noise. Accept-All is
+deletion does not create misleading tracked-numbering noise; they are numbered
+the way the panel numbers provisions (`model.labelled_paragraphs`), so a
+preserved block takes no letter and shifts no sibling's. Accept-All is
 text-faithful to the current semantic document, and Reject-All is text-faithful
 to the selected semantic baseline. Clean normalized exports, in contrast, use
 genuine Word numbering definitions and `w:numPr` bindings.

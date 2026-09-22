@@ -22,6 +22,7 @@ import io
 import zipfile
 
 from docx import Document
+from docx.enum.text import WD_BREAK
 from docx.oxml.ns import qn
 from docx.shared import Pt
 from fastapi.testclient import TestClient
@@ -768,3 +769,716 @@ def test_collapsed_whitespace_does_not_count_as_an_edit(tmp_path):
     assert before == after
     # The original spacing survives, because the element was never rewritten.
     assert "A. Provide isolators.  Comply with ASHRAE." in _texts(exported)
+
+
+# ---------------------------------------------------------------------------
+# Redline on your original, Phase 0 — the formatted export's findings
+#
+# docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md, "Findings". The redline's
+# Accept All must equal this export, so every defect here would otherwise be
+# reproduced faithfully into it. Each was reproduced before it was fixed.
+# ---------------------------------------------------------------------------
+
+
+_W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
+
+
+def _save(document) -> bytes:
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def _parse(tmp_path, source: bytes, name: str = "master.docx"):
+    path = tmp_path / name
+    path.write_bytes(source)
+    return parse_master_docx(path)
+
+
+def _paragraphs(payload: bytes):
+    return Document(io.BytesIO(payload)).paragraphs
+
+
+def _paragraph(payload: bytes, prefix: str):
+    matches = [p for p in _paragraphs(payload) if p.text.startswith(prefix)]
+    assert len(matches) == 1, [p.text for p in _paragraphs(payload)]
+    return matches[0]
+
+
+def _section_breaks(payload: bytes) -> list:
+    """Every body paragraph that ends a Word section (``w:pPr/w:sectPr``)."""
+    return [
+        child
+        for child in _body_children(payload)
+        if child.tag == qn("w:p")
+        and child.find(f"{qn('w:pPr')}/{qn('w:sectPr')}") is not None
+    ]
+
+
+def _child_texts(payload: bytes) -> list[str]:
+    """One entry per body child: its text, "<break>" for an empty paragraph
+    holding a section break, "" for any other empty paragraph, and the tag
+    name for a non-paragraph."""
+    texts = []
+    for child in _body_children(payload):
+        if child.tag != qn("w:p"):
+            texts.append(etree.QName(child).localname)
+            continue
+        text = "".join(child.itertext())
+        if not text and child.find(f"{qn('w:pPr')}/{qn('w:sectPr')}") is not None:
+            text = "<break>"
+        texts.append(text)
+    return texts
+
+
+def _hold_break(paragraph, document) -> None:
+    """Give ``paragraph`` a section break (a copy of the body's sectPr)."""
+    import copy as _copy
+
+    paragraph._p.get_or_add_pPr().append(_copy.deepcopy(document.sections[0]._sectPr))
+
+
+def _typed_letter_master() -> bytes:
+    """Typed letters with a TAB after them and a bolded phrase — the shape of
+    an office master that does not use Word numbering."""
+    document = Document()
+    for line in (
+        "SECTION 23 05 48",
+        "VIBRATION CONTROLS",
+        "PART 1 - GENERAL",
+        "1.1\tSUMMARY",
+    ):
+        document.add_paragraph(line)
+    provision = document.add_paragraph()
+    provision.add_run("A.\tSection includes ")
+    provision.add_run("vibration isolation").bold = True
+    provision.add_run(" for mechanical equipment.")
+    document.add_paragraph("B.\tRelated requirements are specified elsewhere.")
+    document.add_paragraph("END OF SECTION")
+    return _save(document)
+
+
+def test_a_relettered_provision_keeps_its_tab_and_emphasis(tmp_path):
+    """Finding #1. Inserting a provision at the top reletters every sibling
+    below it, and each relettered provision used to be rebuilt from its
+    first run: the tab after the letter became a space and the bold phrase
+    was lost. The new provision got "A. " where the master uses a tab."""
+    source = _typed_letter_master()
+    imported = _parse(tmp_path, source)
+    article = imported.section.parts[0].articles[0]
+    section, _ = apply_edits(
+        imported.section,
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": article.uid,
+                "position": 0,
+                "text": "Provide seismic restraints.",
+            }
+        ],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    texts = [p.text for p in _paragraphs(exported)]
+    assert "A.\tProvide seismic restraints." in texts
+    assert "B.\tSection includes vibration isolation for mechanical equipment." in texts
+    assert "C.\tRelated requirements are specified elsewhere." in texts
+    relettered = _paragraph(exported, "B.\tSection")
+    assert [run.text for run in relettered.runs if run.bold] == [
+        "vibration isolation"
+    ]
+
+
+def test_an_edited_provision_keeps_emphasis_on_its_unchanged_words(tmp_path):
+    """The plan's new test: an edit changes words, not the formatting of the
+    words around them. A replaced word takes the formatting of the word it
+    replaced, which is what Word itself does when you type over a selection."""
+    source = _typed_letter_master()
+    imported = _parse(tmp_path, source)
+    first = imported.section.parts[0].articles[0].paragraphs[0]
+
+    outside, _ = apply_edits(
+        imported.section,
+        [
+            {
+                "action": "replace",
+                "target_id": first.uid,
+                "text": "Section includes vibration isolation for HVAC equipment.",
+            }
+        ],
+    )
+    exported = _render(source, outside, imported.format_map)
+    edited = _paragraph(exported, "A.\t")
+    assert edited.text == "A.\tSection includes vibration isolation for HVAC equipment."
+    assert [run.text for run in edited.runs if run.bold] == ["vibration isolation"]
+
+    inside, _ = apply_edits(
+        imported.section,
+        [
+            {
+                "action": "replace",
+                "target_id": first.uid,
+                "text": "Section includes seismic isolation for mechanical equipment.",
+            }
+        ],
+    )
+    exported = _render(source, inside, imported.format_map)
+    edited = _paragraph(exported, "A.\t")
+    assert edited.text == (
+        "A.\tSection includes seismic isolation for mechanical equipment."
+    )
+    assert "".join(run.text for run in edited.runs if run.bold) == (
+        "seismic isolation"
+    )
+    assert not any(run.bold for run in edited.runs if "mechanical" in run.text)
+
+
+def _break_master(*, held: bool) -> bytes:
+    """A section break between SUMMARY and SCHEDULE: in its own empty
+    paragraph, or held in the pPr of the last provision above it (how Word
+    usually saves one)."""
+    document = Document()
+    for line in (
+        "SECTION 23 05 48",
+        "VIBRATION CONTROLS",
+        "PART 1 - GENERAL",
+        "1.1 SUMMARY",
+        "A. Section includes vibration isolation.",
+    ):
+        document.add_paragraph(line)
+    last = document.add_paragraph("B. Related requirements.")
+    if held:
+        _hold_break(last, document)
+    else:
+        _hold_break(document.add_paragraph(), document)
+    for line in (
+        "1.2 SCHEDULE",
+        "A. Provide isolators as scheduled.",
+        "END OF SECTION",
+    ):
+        document.add_paragraph(line)
+    return _save(document)
+
+
+def test_deleting_the_provision_below_a_section_break_keeps_the_break(tmp_path):
+    """Finding #2. The empty paragraph holding the break was treated as a
+    spacer, and spacers die with the element below them: the document went
+    from two Word sections to one — how a landscape schedule turns portrait."""
+    source = _break_master(held=False)
+    imported = _parse(tmp_path, source)
+    schedule = imported.section.parts[0].articles[1]
+    section, _ = apply_edits(
+        imported.section, [{"action": "delete", "target_id": schedule.uid}]
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    assert len(_section_breaks(exported)) == 1
+    texts = _child_texts(exported)
+    assert texts[texts.index("B. Related requirements.") + 1] == "<break>"
+
+
+def test_moving_the_provision_below_a_section_break_leaves_the_break(tmp_path):
+    """A break belongs to the content above it: moving what sits below it
+    must not carry it along (it used to travel as the moved element's
+    leading spacer)."""
+    document = Document()
+    for line in (
+        "SECTION 23 05 48",
+        "VIBRATION CONTROLS",
+        "PART 1 - GENERAL",
+        "1.1 SUMMARY",
+        "A. First provision.",
+        "B. Second provision.",
+    ):
+        document.add_paragraph(line)
+    _hold_break(document.add_paragraph(), document)
+    document.add_paragraph("C. Third provision.")
+    document.add_paragraph("D. Fourth provision.")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    article = imported.section.parts[0].articles[0]
+    third = article.paragraphs[2]
+    assert third.text == "Third provision."
+    section, _ = apply_edits(
+        imported.section, [{"action": "move", "target_id": third.uid, "position": 0}]
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    assert _child_texts(exported)[4:9] == [
+        "A. Third provision.",
+        "B. First provision.",
+        "C. Second provision.",
+        "<break>",
+        "D. Fourth provision.",
+    ]
+
+
+def test_moving_the_provision_above_a_section_break_leaves_the_break(tmp_path):
+    source = _break_master(held=False)
+    imported = _parse(tmp_path, source)
+    summary = imported.section.parts[0].articles[0]
+    section, _ = apply_edits(
+        imported.section,
+        [{"action": "move", "target_id": summary.paragraphs[1].uid, "position": 0}],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    texts = _child_texts(exported)
+    assert texts[4:8] == [
+        "A. Related requirements.",
+        "B. Section includes vibration isolation.",
+        "<break>",
+        "1.2 SCHEDULE",
+    ]
+
+
+def test_adding_a_provision_after_a_break_holder_does_not_copy_the_break(
+    tmp_path,
+):
+    """Finding #3. The new provision was cloned from the paragraph holding
+    the break, pPr and all: one section break became two."""
+    source = _break_master(held=True)
+    imported = _parse(tmp_path, source)
+    summary = imported.section.parts[0].articles[0]
+    section, _ = apply_edits(
+        imported.section,
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": summary.uid,
+                "text": "Provide seismic restraints.",
+            }
+        ],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    breaks = _section_breaks(exported)
+    assert len(breaks) == 1
+    assert "".join(breaks[0].itertext()) == "B. Related requirements."
+    added = next(
+        child
+        for child in _body_children(exported)
+        if "Provide seismic restraints." in "".join(child.itertext())
+    )
+    assert added.find(f"{qn('w:pPr')}/{qn('w:sectPr')}") is None
+
+
+def test_deleting_a_break_holder_leaves_an_empty_paragraph_holding_it(tmp_path):
+    source = _break_master(held=True)
+    imported = _parse(tmp_path, source)
+    holder = imported.section.parts[0].articles[0].paragraphs[1]
+    assert holder.text == "Related requirements."
+    section, _ = apply_edits(
+        imported.section, [{"action": "delete", "target_id": holder.uid}]
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    breaks = _section_breaks(exported)
+    assert len(breaks) == 1
+    assert breaks[0].find(qn("w:r")) is None  # empty: nothing but the break
+    texts = _child_texts(exported)
+    assert texts[4:7] == [
+        "A. Section includes vibration isolation.",
+        "<break>",
+        "1.2 SCHEDULE",
+    ]
+
+
+def test_moving_a_break_holder_leaves_the_break_where_it_was(tmp_path):
+    source = _break_master(held=True)
+    imported = _parse(tmp_path, source)
+    holder = imported.section.parts[0].articles[0].paragraphs[1]
+    section, _ = apply_edits(
+        imported.section,
+        [{"action": "move", "target_id": holder.uid, "position": 0}],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    texts = _child_texts(exported)
+    assert texts[4:8] == [
+        "A. Related requirements.",
+        "B. Section includes vibration isolation.",
+        "<break>",
+        "1.2 SCHEDULE",
+    ]
+    assert len(_section_breaks(exported)) == 1
+
+
+def test_a_deleted_auto_numbered_break_holder_leaves_no_orphan_number(tmp_path):
+    """The empty paragraph that keeps the break must not keep the list
+    numbering too: Word prints the number of an empty numbered paragraph."""
+    from tests.test_importer import _define_numbering, _numbered
+
+    document = Document()
+    document.add_paragraph("SECTION 23 05 48")
+    document.add_paragraph("VIBRATION CONTROLS")
+    document.add_paragraph("PART 1 - GENERAL")
+    _define_numbering(document, 50, {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3.")})
+    _numbered(document, "SUMMARY", 1, "50")
+    _numbered(document, "Section includes vibration isolation.", 2, "50")
+    holder = _numbered(document, "Related requirements.", 2, "50")
+    _hold_break(holder, document)
+    _numbered(document, "SCHEDULE", 1, "50")
+    _numbered(document, "Provide isolators as scheduled.", 2, "50")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    summary = imported.section.parts[0].articles[0]
+    assert [p.text for p in summary.paragraphs] == [
+        "Section includes vibration isolation.",
+        "Related requirements.",
+    ]
+    section, _ = apply_edits(
+        imported.section,
+        [{"action": "delete", "target_id": summary.paragraphs[1].uid}],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    breaks = _section_breaks(exported)
+    assert len(breaks) == 1
+    num_id = breaks[0].find(f"{qn('w:pPr')}/{qn('w:numPr')}/{qn('w:numId')}")
+    assert num_id is not None and num_id.get(qn("w:val")) == "0"
+
+
+def test_a_cloned_template_carries_no_break_identity_or_anchors(tmp_path):
+    """Clone hygiene: a new provision is cloned from its kin's formatting,
+    never its identity (w14 ids Word expects to be unique), its bookmarks,
+    its comment anchors, or its section break."""
+    document = Document()
+    for line in (
+        "SECTION 23 05 48",
+        "VIBRATION CONTROLS",
+        "PART 1 - GENERAL",
+        "1.1 SUMMARY",
+    ):
+        document.add_paragraph(line)
+    template = document.add_paragraph()
+    template._p.set(f"{{{_W14_NS}}}paraId", "1A2B3C4D")
+    template._p.set(f"{{{_W14_NS}}}textId", "4D3C2B1A")
+    start = etree.SubElement(template._p, qn("w:bookmarkStart"))
+    start.set(qn("w:id"), "7")
+    start.set(qn("w:name"), "_Ref7")
+    comment = etree.SubElement(template._p, qn("w:commentRangeStart"))
+    comment.set(qn("w:id"), "3")
+    template.add_run("A. Section includes vibration isolation.")
+    end = etree.SubElement(template._p, qn("w:bookmarkEnd"))
+    end.set(qn("w:id"), "7")
+    comment_end = etree.SubElement(template._p, qn("w:commentRangeEnd"))
+    comment_end.set(qn("w:id"), "3")
+    _hold_break(template, document)
+    document.add_paragraph("1.2 SCHEDULE")
+    document.add_paragraph("END OF SECTION")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    summary = imported.section.parts[0].articles[0]
+    section, _ = apply_edits(
+        imported.section,
+        [
+            {
+                "action": "add_paragraph",
+                "target_id": summary.uid,
+                "text": "Provide seismic restraints.",
+            }
+        ],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    added = next(
+        child
+        for child in _body_children(exported)
+        if "Provide seismic restraints." in "".join(child.itertext())
+    )
+    assert added.get(f"{{{_W14_NS}}}paraId") is None
+    assert added.get(f"{{{_W14_NS}}}textId") is None
+    for tag in ("w:bookmarkStart", "w:bookmarkEnd", "w:commentRangeStart", "w:commentRangeEnd"):
+        assert added.find(f".//{qn(tag)}") is None, tag
+    assert added.find(f"{qn('w:pPr')}/{qn('w:sectPr')}") is None
+    kept = next(
+        child
+        for child in _body_children(exported)
+        if "Section includes vibration" in "".join(child.itertext())
+    )
+    assert kept.get(f"{{{_W14_NS}}}paraId") == "1A2B3C4D"
+    assert kept.find(f".//{qn('w:bookmarkStart')}") is not None
+
+
+def _not_used_master() -> bytes:
+    document = Document()
+    for line in (
+        "SECTION 23 05 48",
+        "VIBRATION CONTROLS",
+        "PART 1 - GENERAL",
+        "1.1 SUMMARY",
+        "A. Section includes vibration isolation.",
+        "PART 2 - PRODUCTS",
+        "(Not used.)",
+        "PART 3 - EXECUTION",
+        "(Not used.)",
+        "END OF SECTION",
+    ):
+        document.add_paragraph(line)
+    return _save(document)
+
+
+def test_a_part_that_now_has_articles_drops_its_not_used_line(tmp_path):
+    """Finding #4. The importer skips a PART's "(Not used.)" line, so the
+    export carried it as leading content of the next PART heading — and a
+    PART that gained an article printed "2.1 ISOLATORS" then "(Not used.)"."""
+    source = _not_used_master()
+    imported = _parse(tmp_path, source)
+    assert _child_texts(_render(source, imported.section, imported.format_map)).count(
+        "(Not used.)"
+    ) == 2
+
+    products, _ = apply_edits(
+        imported.section,
+        [{"action": "add_article", "target_id": "pt2", "text": "ISOLATORS"}],
+    )
+    texts = _child_texts(_render(source, products, imported.format_map))
+    assert texts[5:8] == ["PART 2 - PRODUCTS", "2.1 ISOLATORS", "PART 3 - EXECUTION"]
+    # PART 3 still has no article, so its line stays.
+    assert texts[8] == "(Not used.)"
+
+    both, _ = apply_edits(
+        products,
+        [{"action": "add_article", "target_id": "pt3", "text": "INSTALLATION"}],
+    )
+    texts = _child_texts(_render(source, both, imported.format_map))
+    assert "(Not used.)" not in texts
+    assert texts[5:10] == [
+        "PART 2 - PRODUCTS",
+        "2.1 ISOLATORS",
+        "PART 3 - EXECUTION",
+        "3.1 INSTALLATION",
+        "END OF SECTION",
+    ]
+
+
+def test_unmodelled_content_above_a_deleted_provision_stays_in_place(tmp_path):
+    """The migration issue: a picture-only paragraph (never modelled — it
+    has no text) above a provision the user deleted used to be swept to the
+    end of the section."""
+    from tests.docx_fidelity_helpers import _png_bytes
+
+    document = Document()
+    for line in (
+        "SECTION 23 05 48",
+        "VIBRATION CONTROLS",
+        "PART 1 - GENERAL",
+        "1.1 SUMMARY",
+        "A. Section includes vibration isolation.",
+    ):
+        document.add_paragraph(line)
+    document.add_picture(io.BytesIO(_png_bytes()))
+    document.add_paragraph("B. See the figure above.")
+    document.add_paragraph("C. Related requirements.")
+    document.add_paragraph("END OF SECTION")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    article = imported.section.parts[0].articles[0]
+    assert [p.text for p in article.paragraphs] == [
+        "Section includes vibration isolation.",
+        "See the figure above.",
+        "Related requirements.",
+    ]
+    section, _ = apply_edits(
+        imported.section,
+        [{"action": "delete", "target_id": article.paragraphs[1].uid}],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    children = _body_children(exported)
+    picture = next(
+        i for i, child in enumerate(children) if child.find(f".//{qn('w:drawing')}") is not None
+    )
+    texts = _child_texts(exported)
+    assert texts[picture - 1] == "A. Section includes vibration isolation."
+    assert texts[picture + 1] == "B. Related requirements."
+
+
+def test_article_numbers_keep_the_masters_format(tmp_path):
+    """Found while building Phase 0: a master numbering its articles "1.01"
+    or writing "1.2 - TITLE" had every untouched article heading rewritten
+    as "1.1 TITLE" on an export with no edits at all."""
+    document = Document()
+    for line in (
+        "SECTION 23 05 48",
+        "VIBRATION CONTROLS",
+        "PART 1 - GENERAL",
+        "1.01\tSUMMARY",
+        "A. Section includes vibration isolation.",
+        "1.02 - SUBMITTALS",
+        "A. Product data.",
+        "1.03. QUALITY ASSURANCE",
+        "A. Installer qualifications.",
+        "END OF SECTION",
+    ):
+        document.add_paragraph(line)
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+
+    untouched = _render(source, imported.section, imported.format_map)
+    before = [etree.tostring(el) for el in _body_children(source)]
+    assert [etree.tostring(el) for el in _body_children(untouched)] == before
+
+    section, _ = apply_edits(
+        imported.section,
+        [
+            {
+                "action": "add_article",
+                "target_id": "pt1",
+                "position": 0,
+                "text": "GENERAL REQUIREMENTS",
+            }
+        ],
+    )
+    texts = [p.text for p in _paragraphs(_render(source, section, imported.format_map))]
+    assert texts[3:9] == [
+        "1.01\tGENERAL REQUIREMENTS",
+        "1.02\tSUMMARY",
+        "A. Section includes vibration isolation.",
+        "1.03 - SUBMITTALS",
+        "A. Product data.",
+        "1.04. QUALITY ASSURANCE",
+    ]
+
+
+def test_a_new_article_is_cloned_from_an_article_heading(tmp_path):
+    """Found while building Phase 0: a new article was cloned from whatever
+    was emitted last — usually a provision — so it looked like one."""
+    document = Document()
+    for line, style in (
+        ("SECTION 23 05 48", None),
+        ("VIBRATION CONTROLS", None),
+        ("PART 1 - GENERAL", "Heading 1"),
+        ("1.1 SUMMARY", "Heading 2"),
+        ("A. Section includes vibration isolation.", None),
+        ("B. Related requirements.", None),
+        ("END OF SECTION", None),
+    ):
+        document.add_paragraph(line, style=style)
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    section, _ = apply_edits(
+        imported.section,
+        [{"action": "add_article", "target_id": "pt1", "text": "SUBMITTALS"}],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    added = _paragraph(exported, "1.2 SUBMITTALS")
+    assert added.style.name == "Heading 2"
+
+
+def test_a_new_article_in_an_auto_numbered_master_types_no_number(tmp_path):
+    """Word renders an auto-numbered heading's "1.2" itself; typing one into
+    the text as well printed it twice."""
+    from tests.test_importer import _define_numbering, _numbered
+
+    document = Document()
+    document.add_paragraph("SECTION 23 05 48")
+    document.add_paragraph("VIBRATION CONTROLS")
+    document.add_paragraph("PART 1 - GENERAL")
+    _define_numbering(document, 50, {1: ("decimal", "%1.%2"), 2: ("upperLetter", "%3.")})
+    _numbered(document, "SUMMARY", 1, "50")
+    _numbered(document, "Section includes vibration isolation.", 2, "50")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+    section, _ = apply_edits(
+        imported.section,
+        [{"action": "add_article", "target_id": "pt1", "text": "SUBMITTALS"}],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    added = _paragraph(exported, "SUBMITTALS")
+    assert added.text == "SUBMITTALS"
+    assert added._p.find(f"{qn('w:pPr')}/{qn('w:numPr')}") is not None
+
+
+def test_content_after_the_last_provision_is_carried_verbatim(tmp_path):
+    """Found while building Phase 0: blank lines, page breaks and section
+    breaks after the last provision (around END OF SECTION, before an
+    appendix) were dropped on an export with no edits at all."""
+    document = Document()
+    for line in (
+        "SECTION 23 05 48",
+        "VIBRATION CONTROLS",
+        "PART 1 - GENERAL",
+        "1.1 SUMMARY",
+        "A. Section includes vibration isolation.",
+        "",
+        "END OF SECTION",
+    ):
+        document.add_paragraph(line)
+    _hold_break(document.add_paragraph(), document)
+    document.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+    document.add_paragraph("APPENDIX - KEEP")
+    source = _save(document)
+    imported = _parse(tmp_path, source)
+
+    exported = _render(source, imported.section, imported.format_map)
+
+    before = [etree.tostring(el) for el in _body_children(source)]
+    assert [etree.tostring(el) for el in _body_children(exported)] == before
+
+
+def test_a_no_op_export_changes_only_what_the_tree_changed():
+    """Every corpus master, exported with no edits. Content the tree does not
+    model must come through untouched and in place; the one element allowed
+    to differ is a provision whose label the tree itself renumbered (the
+    fidelity fixture mixes typed letters with a Word-numbered sibling).
+
+    Compared as exclusive C14N: LibreOffice repeats a namespace declaration
+    the document root already makes, and lxml drops the redundant copy when
+    an element is re-parented — the same XML, spelled differently.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from tests.docx_corpus import build_case, corpus_cases
+
+    def canonical(element) -> bytes:
+        return etree.tostring(element, method="c14n", exclusive=True)
+
+    workspace = Path(tempfile.mkdtemp())
+    for case in corpus_cases():
+        source = build_case(case, workspace)
+        path = workspace / f"{case.case_id}.docx"
+        path.write_bytes(source)
+        imported = parse_master_docx(path)
+        exported = _render(source, imported.section, imported.format_map)
+        before = [canonical(el) for el in _body_children(source)]
+        after = [canonical(el) for el in _body_children(exported)]
+        assert len(before) == len(after), case.case_id
+        anchored = {
+            anchor.origin_index for anchor in imported.format_map.anchors
+        }
+        differing = [i for i, (a, b) in enumerate(zip(before, after)) if a != b]
+        assert set(differing) <= anchored, (case.case_id, differing)
+        assert len(differing) <= 1, (case.case_id, differing)
+
+
+def test_a_control_character_in_a_provision_exports_as_a_visible_escape(tmp_path):
+    """XML 1.0 cannot carry a vertical tab; the export used to raise instead
+    of writing the file (the other exporters escape such characters)."""
+    source = _typed_letter_master()
+    imported = _parse(tmp_path, source)
+    first = imported.section.parts[0].articles[0].paragraphs[0]
+    section, _ = apply_edits(
+        imported.section,
+        [{"action": "replace", "target_id": first.uid, "text": "Bad \x0b char."}],
+    )
+
+    exported = _render(source, section, imported.format_map)
+
+    assert "A.\tBad \\u000B char." in [p.text for p in _paragraphs(exported)]

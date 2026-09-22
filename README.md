@@ -303,6 +303,66 @@ document payload). `GET /api/project/sections` gains `pull_available` and
 `pull_summary`, and a native save's result gains `brief_refreshed`,
 `brief_written`, `brief_error`, `brief_report` and `pull_available`.
 
+## Redline on your original (in progress)
+
+The redline-on-your-original program
+(`docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`) will export a copy of the
+Word file you imported with every change Build-a-Spec made shown as Word
+tracked changes — Accept All gives the updated section, Reject All gives your
+original back. Its first phase fixes the export that redline has to agree
+with, and ships on its own; which release carries it is not decided yet.
+Until then this section says what `master` already does beyond v1.20.0.
+
+### Export Word (keeps your formatting) keeps more of it (Phase 0)
+
+- **An edited provision keeps its own formatting.** The new words are
+  written into the provision's original runs instead of the whole paragraph
+  being rebuilt from its first run, so a bold or italic phrase you did not
+  change stays bold or italic. New words take the formatting Word would give
+  them: a word typed over others takes the formatting of the first character
+  it replaced, an inserted word the formatting of the character before it.
+- **Relettered provisions keep everything but the old letter.** Add or remove
+  a provision near the top of an article in a master with typed letters
+  ("A.", "B."), and every provision below it changes only its letter — the
+  tab after the letter and any emphasis stay. A new provision uses the
+  master's tab after its letter, not a space.
+- **Section breaks survive editing.** A Word section break belongs to the
+  content above it, so deleting or moving the provision below it no longer
+  removes or moves it (a landscape schedule page stays landscape), adding a
+  provision after a section's last paragraph no longer duplicates it, and
+  deleting or moving a provision that ends a section leaves an empty
+  paragraph holding the break where it was. A provision added right after a
+  section's last paragraph lands at the top of the next section; moving a
+  break is a Word edit.
+- **A "(Not used.)" line disappears once its PART has an article.**
+- **A new article looks like an article heading.** It is cloned from one of
+  the master's article headings rather than from a provision, and in a
+  master whose articles Word numbers it carries only Word's number, not a
+  typed one beside it.
+- **Article numbers keep the master's format** — `1.01 SUMMARY`,
+  `1.2. SUBMITTALS`, `1.3 - QUALITY ASSURANCE` come back as written, and
+  renumbered ones keep their form. An export with no edits used to rewrite
+  every `1.01` as `1.1`.
+- **Nothing drifts to the end of the file.** The blank lines, page breaks
+  and section breaks after END OF SECTION stay where they were, and a picture
+  or other content the app does not model that sits above a provision you
+  delete stays in place.
+- **A new provision copies its neighbour's formatting, never its identity** —
+  no bookmarks, comment anchors or Word paragraph ids come with it.
+- **An odd control character in a provision** (pasted from another program)
+  exports as a visible `\uXXXX` escape instead of failing the export.
+- **The compare view and *Redline of extracted provisions* letter provisions
+  the way the panel does**: a preserved table takes no letter, so the
+  provision after it is "B.", not "C.".
+
+Still true: a provision whose paragraph holds a hyperlink, a field, a content
+control, a comment or footnote reference, a symbol or a drawing is rebuilt
+from its first run's formatting when you edit it, and so is a paragraph with
+pending tracked changes. Each export's diagnostics event (Settings →
+Developer tools) records the mode that ran and counts what the export did —
+provisions cloned, spliced, rebuilt by reason, added, preserved — never their
+text.
+
 ## Shipped in v1.20.0 (Next section in one click)
 
 **The project brief was a file relay.** Everything a section pays for could
@@ -1542,6 +1602,13 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
     source_audit.py      bounded package-preservation comparison
     source_patch.py      capability probes + shared final-state gate +
                          fail-closed clone-and-patch preserved DOCX export
+    source_render.py     appearance-preserving export: rebuilds the body from
+                         the tree, cloning formatting from the retained upload
+                         (untouched provisions byte-identical, edits spliced,
+                         section breaks kept with the content above them)
+    source_splice.py     the word-level splice: an edit written into a
+                         paragraph's own runs — shared with the planned
+                         redline on your original
     linting.py           deterministic lint: stale editions, placeholders, structure
                                                                   [ported from Spec Critic]
     diffing.py           deterministic version diff (uid join, word-level runs,

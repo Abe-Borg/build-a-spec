@@ -387,3 +387,36 @@ def test_serialization_shape():
     changed = next(e for e in data["elements"] if e["kind"] == "changed")
     assert isinstance(changed["runs"], list)
     assert {r["op"] for r in changed["runs"]} <= {"equal", "ins", "del"}
+
+
+def test_diff_letters_skip_preserved_blocks_like_the_panel_does():
+    """Redline on your original, Phase 0: a preserved table takes no letter.
+
+    The panel and the formatted export number provisions through
+    ``labelled_paragraphs``, which skips locked blocks; the diff counted
+    every sibling, so after a preserved table the compare view and the
+    redline said "C." where the panel said "B." — and the letters a deleted
+    provision is shown with must come from the BASE list the same way.
+    """
+    from backend.spec_doc.model import Paragraph
+
+    base = _section(_seed())
+    article = base.parts[0].articles[0]
+    table = Paragraph(
+        uid=f"{article.uid}.p{article.next_seq}",
+        text="Equipment | Deflection",
+        locked="table",
+    )
+    article.next_seq += 1
+    article.paragraphs.insert(1, table)
+    cur = SpecSection.from_dict(base.to_dict())
+    cur_article = cur.parts[0].articles[0]
+    deleted = cur_article.paragraphs.pop(2)  # the provision after the table
+    assert deleted.text == "Related sections: 21 13 19."
+
+    diff = diff_sections(base, cur)
+    rows = [e for e in diff.elements if e.node_type == "paragraph"]
+    labels = {(e.uid, e.kind): e.label for e in rows}
+    assert labels[(article.paragraphs[0].uid, "unchanged")] == "A."
+    assert labels[(table.uid, "unchanged")] == ""
+    assert labels[(deleted.uid, "deleted")] == "B."

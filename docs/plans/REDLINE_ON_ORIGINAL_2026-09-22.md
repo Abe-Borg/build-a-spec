@@ -1,7 +1,9 @@
 # Redline on your original — tracked changes in the Word file you imported
 
-**Status:** proposed 2026-09-22. **Awaiting:** the owner's decisions (see
-"Decisions" below). Nothing is built yet.
+**Status:** Phase 0 built 2026-09-22 in PR #PRNUM — not yet released; the
+owner picks the release (its note is under "Release-note drafts"). All six
+decisions ratified 2026-09-22 (see "Decisions"). **Phase 1 is next and not
+started** — start from "Phase 0 — as built" under "Phases".
 **Builds on:** the v1.14.0 appearance-preserving export (`source_render.py`),
 the Batch 5 diff engine and redline writer (`diffing.py`, `docx_export.py`),
 and the retained upload + formatting map every import already keeps.
@@ -485,6 +487,102 @@ release note.
 
 **Size:** one medium PR.
 
+#### Phase 0 — as built
+
+**Built in PR #PRNUM (2026-09-22); not yet released.** No VERSION bump, no
+`release_notes.py` entry. The contract is in `docs/DOCX_FIDELITY.md` →
+"Appearance-preserving export"; the why and the traps are in `CLAUDE.md` →
+"The formatted export stops losing things". Code: `spec_doc/source_splice.py`
+(new — the D-2 splice), `spec_doc/source_render.py` (rewritten: `_Walker`
+collects what to emit, `_Assembler` places the unmodelled content and
+section breaks and renders), `diffing._letters`, the redline writer's label
+prefix, and the `export` trace event (`mode` is now the mode that ran, plus
+`render` counts). Tests: `tests/test_source_splice.py`, the Phase 0 block of
+`tests/test_preserving_export.py`, and one each in `test_diffing.py`,
+`test_redline_export.py` and `test_diagnostics.py`.
+
+Deviations from the text above:
+
+1. **Five more defects of the same export were fixed**, each found while
+   building it and each with its own test: article numbers rewritten on an
+   export with no edits (`1.01` → `1.1`, `1.2 - X` → `1.2 X`); blank lines,
+   page breaks and section-break paragraphs after the last provision
+   dropped (the old trailing sweep skipped blanks); a new article cloned
+   from a provision (so it looked like one, and in a Word-numbered master
+   printed a typed number beside Word's); a control character in a
+   provision failing the export with a 500; and the `export` event logging
+   `normalized` while the preserving render ran.
+2. **The limits shrink to two, not one.** New words inherit their
+   neighbour's formatting, as planned. But a paragraph with pending tracked
+   changes is still rewritten from its first run rather than spliced —
+   splicing it means accepting its revisions first, which is D-5 territory —
+   and a paragraph outside the splice's eligibility (hyperlink, field,
+   content control, comment or note reference, `w:sym`, drawing) still takes
+   the fallback. The `export` event's `render.fallback` counts both by
+   reason.
+3. **Eligibility is slightly wider than D-2's list.**
+   `w:lastRenderedPageBreak`, `w:softHyphen` and a page or column `w:br`
+   are zero-width run nodes (Word writes the first on every save; excluding
+   it would send most Word-saved paragraphs to the fallback), and XML
+   comments and processing instructions count as markers. A zero-width node
+   on the EDGE of a deleted span is kept, so a page break in front of a
+   relettered label survives.
+4. **Break placement is gap scoring, not an LIS.** Phase 0 detects no
+   moves, so where a break goes after a reorder is `_Assembler._place`'s
+   call: the gap that keeps the most emitted elements on their side (above
+   it before, below it after), ties to the gap right after the nearest
+   surviving element that was above it. **Phase 1 must place the redline's
+   breaks by this same rule** (call `_place`, or prove its LIS agrees), or
+   Accept All will differ from this export exactly on reordered sections.
+5. **A break is never dropped**, although D-3 permits it when the content on
+   both sides was deleted. An emptied section keeps its break, and so an
+   empty page. Phase 1 cannot delete a paragraph mark holding `w:sectPr`, so
+   the clean export must not either.
+6. **What a displaced break holder leaves is its `w:pPr` only** — no runs,
+   bookmarks or `w14` ids — plus `w:numId 0` when it was Word-numbered
+   (`_cancel_numbering`; Word prints the number of an empty numbered
+   paragraph). This holds for a moved holder as well as a deleted one. For
+   Phase 1: the old copy keeps its paragraph mark and `w:sectPr` (D-3), and
+   its Accept All view must equal this leftover, so a Word-numbered holder
+   needs a `w:pPrChange` recording the numbering cancel, and the old copy
+   gives up its bookmarks and ids (D-6 already says so).
+7. **Open question for the owner:** a provision added right after the last
+   paragraph of a section lands after the break, at the top of the next
+   section, because the break stays with the content above it. Word's Enter
+   at the end of that paragraph would keep the new text in the section.
+   Documented in DOCX_FIDELITY as current behaviour; change it only if the
+   owner prefers Word's.
+
+What Phase 1 starts from:
+
+- `source_splice.plan_splice(source, target)` returns keep / delete / insert
+  `SpliceOp`s whose keep and delete ranges partition the source in order
+  (`style_at` picks a new word's formatting). `map_paragraph(element,
+  expected_text=)` returns `(ParagraphMap, "")` or `(None, reason)`, and
+  `_pieces(pmap, ops)` is the per-op run slicing `render_clean` uses. Add
+  `render_redline` beside `render_clean` over the same pieces: delete →
+  `w:del` with `w:delText`, insert → `w:ins`.
+- `_Assembler.assemble()` already decides, per body child: clone, splice,
+  fallback, new, carried, or dropped. D-1's record list is a refactor of
+  it, not a second walk.
+- The clean fallback is `_write_paragraph_text`: it keeps `w:pPr`, drops
+  every other child (bookmarks included) and writes one run with the first
+  run's `w:rPr`. The redline fallback's accept view must equal it.
+
+Found, not done (outside Phase 0):
+
+- `iter_paragraphs` refs — the open-items list, lint issues, Final QC's
+  `reviewed_ref`, the export schedules — still count preserved blocks, so
+  after a table they can disagree with the panel's letters (the review queue
+  reads the serialized labels and already agrees).
+- The normalized clean export still gives a preserved block a letter.
+- The appearance-preserving export of a non-spec import (a memo) still
+  prints `PART 1 - GENERAL` and `1.1 IMPORTED CONTENT`, scaffolding the file
+  never had and the panel hides.
+- A template clone keeps the template's own revision marks (`w:pPrChange`,
+  a tracked paragraph mark in `w:pPr/w:rPr`). Outside D-6's hygiene list;
+  it matters only for masters with pending revisions.
+
 ### Phase 1 — Redline on your original
 
 **Scope:**
@@ -599,27 +697,19 @@ release note.
   - Reject All looks like the original;
   - the overwrite-the-master workflow works end to end.
 
-## Decisions (recommended defaults in bold)
+## Decisions (ratified as recommended, 2026-09-22 — binding)
 
-1. **Moves:** **delete plus insert in Phase 1, native Word moves in
-   Phase 2**. The alternative is native moves from day one: more risk up
-   front for a prettier first release.
-2. **Typed letters:** **track the letter changes**. This is required for
-   "Reject All = your original"; Word-numbered masters have no such noise.
-3. **Masters with pending tracked changes:** **refuse, and name the fix, in
-   Phase 1**. The alternative is layering our changes over theirs, which
-   loses "Reject All = original".
-4. **Track Changes switched on inside the file:** **off**. With it on, edits
-   you make in Word while reviewing are also tracked. The catch: after
-   Accept All you must turn it off before saving the file as your master, or
-   the next person's edits get tracked too. Either way, every Build-a-Spec
-   change is visible as a tracked change. Your wording ("with tracked
-   changes on") could mean either, so this one is yours.
-5. **Author shown on each change:** **"Build-a-Spec"**. That matches today's
-   redline and makes Word's "Reject all changes by Build-a-Spec" meaningful.
-   The alternative is your name, set once in Settings.
-6. **Phase 0 changes the shipped formatted export:** **yes**. It is strictly
-   better output, and it is what makes Accept All trustworthy.
+Abraham answered all six on 2026-09-22, each as recommended. They are
+binding on every phase; changing one is a new decision, recorded here.
+
+| # | Decision | Ratified |
+|---|---|---|
+| 1 | Moves | **Delete plus insert in Phase 1, native Word "Moved" marks in Phase 2.** The alternative was native moves from day one: more risk up front for a prettier first release. |
+| 2 | Typed letters ("A." → "B.") | **Track the letter changes.** Required for "Reject All = your original"; Word-numbered masters have no such noise. |
+| 3 | Masters that already carry tracked changes | **Refuse in Phase 1, and name the fix** (accept or reject them in Word, save, re-import). Layering our changes over theirs would lose "Reject All = original". |
+| 4 | Track Changes switched on inside the exported file | **Off.** With it on, edits made in Word while reviewing would also be tracked, and it would have to be switched off again before the file becomes the master. Every Build-a-Spec change is a tracked change either way. |
+| 5 | Author shown on each change | **"Build-a-Spec".** Matches today's redline and makes Word's "Reject all changes by Build-a-Spec" meaningful. The alternative was the user's name, set once in Settings. |
+| 6 | Phase 0 may change the shipped *Export Word (keeps your formatting)* output | **Yes.** It is strictly better output, and it is what makes Accept All trustworthy. |
 
 ## Risks
 
@@ -636,12 +726,16 @@ release note.
 
 ## Release-note drafts
 
-- **Phase 0:** "Editing an imported spec keeps more of your formatting.
+- **Phase 0:** "Export Word (keeps your formatting) keeps more of it.
   Provisions that get relettered when you add or remove one above them keep
   their tab and any bold or italic, and so do the unchanged words of a
-  provision you edit. Word section breaks survive deleting the provision
-  below them, and a '(Not used.)' line disappears once its PART has an
-  article."
+  provision you edit. Word section breaks survive your edits — deleting or
+  moving the provision below one no longer removes or moves it, and adding a
+  provision no longer duplicates one — and a '(Not used.)' line disappears
+  once its PART has an article. Article numbers keep your master's format
+  (1.01 stays 1.01), a new article looks like your other article headings,
+  and the blank lines, page breaks and pictures around what you change stay
+  where they were."
 - **Phase 1:** "Redline on your original. Export a copy of the Word file you
   imported with every change Build-a-Spec made shown as Word tracked
   changes; your fonts, headers, footers and numbering are untouched. In

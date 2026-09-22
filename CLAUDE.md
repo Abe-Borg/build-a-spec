@@ -685,7 +685,11 @@ backend/
                            base position, moves unmarked), word-level token_runs
                            (re.findall \S+\s* + SequenceMatcher, byte-exact
                            reconstruction), status_changes (status-only, no marks),
-                           stats; feeds the redline writer + the compare view
+                           stats; feeds the redline writer + the compare view.
+                           Paragraph letters come from _letters →
+                           model.labelled_paragraphs (a preserved block takes
+                           no letter and shifts none — the panel's numbering;
+                           Redline on your original, Phase 0)
   spec_doc/importer.py     [PORT: Spec Critic src/input/extractor.py mechanics]
                            Accept-All tracked-changes text (text boxes
                            included, mc:Fallback copies skipped), content-loss
@@ -749,18 +753,59 @@ backend/
                            etree.fromstring — the Accept-All reader needs
                            python-docx's element classes or every paragraph
                            reads empty and silently takes the rewrite path);
-                           edited = w:pPr + dominant w:rPr kept; locked = the
-                           origin block verbatim; new = cloned from nearest kin
-                           at its depth; UNMODELLED content directly above a
-                           modelled element — blank spacers, but also a cover
-                           page, a TOC, a picture-only or page-break paragraph
-                           — travels with the element below it (a blank is a
-                           paragraph with no text AND no drawing/pict/object/
-                           txbxContent/sdt); trailing UNANCHORED children
-                           survive (END OF SECTION) while anchored-but-
-                           unreached ones stay deleted; header_source
-                           front_matter/chrome synthesizes NO header (the
-                           identity already sits in carried-through content)
+                           edited = w:pPr + its OWN runs (the source_splice
+                           word-level splice; a paragraph it cannot map falls
+                           back to the first run's w:rPr); locked = the origin
+                           block verbatim; new = cloned from the nearest kin OF
+                           ITS KIND (_Walker: provision at its depth / article
+                           heading / part heading — last emitted, then first in
+                           the upload), taking its label kind and separator
+                           ("A.<tab>", "1.01", " - "), never its sectPr, w14 ids,
+                           bookmarks or comment anchors (clone hygiene). A
+                           manual article heading keeps the master's number
+                           format (_article_style). _Assembler assigns every
+                           unmodelled body child to exactly ONE place: the tail
+                           leading the element below it (a blank is a paragraph
+                           with no text AND no drawing/pict/object/txbxContent/
+                           sdt; a deleted element's blanks die with it and its
+                           other content stays put), a position-bound _Group
+                           (everything up to a run's last SECTION BREAK — a
+                           break belongs to the content above it — or what a
+                           deleted element leaves behind), or the trailing run
+                           after the last anchored element (verbatim: blanks,
+                           page and section breaks included). A provision
+                           holding a break in its own w:pPr keeps it in place;
+                           displaced (deleted/moved) it leaves an empty
+                           paragraph with its w:pPr (no w14 ids; numId 0 when
+                           Word-numbered). _place scores each gap by how many
+                           emitted elements it keeps on their side, ties to
+                           "right after the nearest surviving element above";
+                           groups never cross. A PART's "(Not used.)" drops
+                           once it has an article. No edit ever drops a break.
+                           header_source front_matter/chrome synthesizes NO
+                           header (the identity already sits in carried-
+                           through content). stats= fills the export event's
+                           render counts (cloned/spliced/fallback by reason/…)
+  spec_doc/source_splice.py
+                           [Redline on your original, D-2; built in Phase 0]
+                           the word-level splice shared with the Phase 1
+                           redline. plan_splice(source, target) is PURE: a
+                           keep/delete/insert edit script whose keep+delete
+                           ranges partition the source (Reject All = source)
+                           and whose keep+insert words are the target's
+                           (Accept All = the edit); words compared without
+                           whitespace, source whitespace kept beside survivors
+                           (the tab after a relettered letter), new text
+                           formatted the way Word would (overtype → first
+                           replaced char; insert → char before). map_paragraph
+                           maps chars to runs by CT_R.text's rules, checked
+                           against the importer's reading; conservative
+                           eligibility with a closed FALLBACK_REASONS
+                           vocabulary. render_clean keeps original runs
+                           (split with w:rPr copied), bookmarks/proofErr never
+                           deleted, zero-width run nodes kept on a deletion's
+                           edge. append_text is the one text writer (w:tab /
+                           w:br, xml_safe_text escapes)
   spec_doc/xml_text.py     XML 1.0-safe artifact text: the handful of code points
                            XML cannot carry (C0 controls, lone surrogates)
                            render as VISIBLE \uXXXX escapes rather than being
@@ -1198,7 +1243,13 @@ tests/
   test_diffing.py          [Batch 5] diff_sections units: identical/insert/delete/
                            text-edit (byte-exact run invariants) / nested / article
                            title / move-not-marked / status-only / section header /
-                           vs-empty / token_runs whitespace / serialization
+                           vs-empty / token_runs whitespace / serialization /
+                           letters that skip preserved blocks
+  test_source_splice.py    [Redline on your original, Phase 0] plan_splice's
+                           contract (partition, words, whitespace rules, Word's
+                           formatting rules, 600 seeded random edits), the
+                           character map vs the importer, named refusals, runs
+                           kept, markers placed, zero-width nodes
   test_redline_export.py   [Batch 5] Accept-All==cur & Reject-All==base round-trip
                            (real importer + custom reject reader), XML shapes
                            (author/date/unique id, w:delText not w:t, para-mark
@@ -11052,6 +11103,196 @@ No new dep, no new env knob, no new SSE event, no project-format bump.
   merge → 1, the save-time refresh → 1; and the review fixes the same way:
   the pre-edit uid stamp → 1, effective-uid matching → 1, the twin's uid
   adoption → 1, the pid-joined change count → 1.
+
+## The formatted export stops losing things — implemented notes (Redline on your original, Phase 0)
+
+Phase 0 of `docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`, the program that
+puts the redline INTO the Word file the user imported (that is Phase 1, not
+started). Phase 0 fixes today's *Export Word (keeps your formatting)*
+because the redline's Accept All must equal it: left alone, the redline
+would have faithfully reproduced every bug below, two of them as tracked
+section-break changes nobody made. The owner ratified all six of the plan's
+decisions on 2026-09-22 (the plan's Decisions table; #6 is what licensed
+changing the shipped export's output). No new route, SSE event, dep, env
+knob or project-format change, and no VERSION bump — which release carries
+it is the owner's call; the user-facing note waits in the plan's
+"Release-note drafts". The contract itself lives in `docs/DOCX_FIDELITY.md`
+under "Appearance-preserving export"; this section is the why and the traps,
+not a third copy of it. The plan's "Phase 0 — as built" note is where the
+next session starts: the PR, the deviations, and what Phase 1 inherits.
+
+- **The splice is the core, and its planner is pure.**
+  `spec_doc/source_splice.py` (new). `plan_splice(source, target)` returns
+  keep / delete / insert `SpliceOp`s over the SOURCE characters, and keep
+  plus delete partition them in order — pinned over 600 seeded random edits:
+  keep + delete gives the source exactly, keep + insert gives the target's
+  words (the whitespace between survivors is the source's; see below).
+  The clean export renders keep + insert (`render_clean`); Phase 1 renders
+  the SAME script with delete as `w:del` and insert as `w:ins`, which is how
+  Accept All equals this export by construction rather than by a second
+  implementation happening to agree with the first. Keep XML out of the
+  planner: the invariants are testable only because it has none.
+- **Words are diffed without their whitespace, because the importer folded
+  it.** A double space after a period (most office masters) or the tab
+  after a typed letter is not an edit, so whitespace is assigned by RULE
+  rather than by the diff: between two surviving words it is the source's;
+  a replaced block keeps the source whitespace on both sides; an inserted
+  block keeps the source whitespace before it; a deleted block takes the
+  whitespace after it — before it, at the end of the paragraph, or the
+  paragraph would end in a space. The tab after a letter survives
+  relettering precisely because "A." → "B." is a one-word REPLACE, which
+  keeps both sides.
+- **New words take the formatting Word itself would give them**
+  (`SpliceOp.style_at`): a word typed over others the formatting of the
+  first character it replaced, an inserted word that of the character
+  before it. Unchanged words ARE the original runs — split at word
+  boundaries where needed, `w:rPr` copied — which is what keeps a bold
+  phrase bold. The old writer rebuilt every edited paragraph from its first
+  run's properties, so every edit, and every provision merely RELETTERED by
+  an insert above it, lost its emphasis and the tab after its letter
+  (finding #1).
+- **The character map reads what the importer read, and says so when it
+  does not.** `map_paragraph` follows python-docx `CT_R.text`: `w:t`,
+  `w:tab`/`w:ptab` as "\t", a text-wrapping `w:br` or `w:cr` as "\n",
+  `w:noBreakHyphen` as "-"; a page or column `w:br`,
+  `w:lastRenderedPageBreak` and `w:softHyphen` are zero-width. It is checked
+  against `_accept_all_paragraph_text`, and a disagreement is
+  `text_mismatch` — never a guess. Eligibility is the plan's conservative
+  set; everything else returns a reason from the closed `FALLBACK_REASONS`
+  vocabulary and takes the fallback (`_write_paragraph_text` — the old
+  behaviour, now the exception). A zero-width node on the EDGE of a deleted
+  span is kept (a page break in front of a relettered label must not die
+  with the old letter); one strictly inside is dropped. Bookmarks and
+  `w:proofErr` are never deleted, only positioned.
+- **The export event now says what ran and how it went.** The `export`
+  trace event's `mode` is the mode that actually RAN
+  (`_ExportInputs.selected_mode`): an imported document's default request
+  used to log `normalized` while the preserving render ran. And it gains a
+  `render` block from `render_preserving_docx(stats=)` — cloned, spliced,
+  fallback BY REASON, inserted, preserved, `break_leftovers`,
+  `not_used_dropped`. Counts only, never provision text (pinned).
+  `render.fallback` is the evidence the splice's eligibility widens from:
+  the plan's "measure the fallback rate, then widen".
+- **A new element is cloned from kin of its OWN kind**
+  (`_Walker.template_for`): a provision from a provision at its depth, an
+  article heading from an article heading — the last one emitted, then the
+  first in the upload, then any. The old renderer gave an article (depth
+  `None`) whatever paragraph was emitted last, so a new article in a master
+  was cloned from a provision, looked like one, and in an auto-numbered
+  master printed a typed "1.3" beside Word's own number. A new provision
+  takes its kin's label kind (Word-numbered → title only) and separator
+  (`_label_separator`: the master's tab, not "A. " with a space); a new
+  article its kin's number format.
+- **Article numbers keep the master's format** (`_ArticleStyle` over
+  `_ARTICLE_HEADING_RE`): the `1.01` width, a trailing dot, the separator
+  (" - " included). Not one of the plan's findings: a no-op export used to
+  rewrite `1.01 SUMMARY` as `1.1 SUMMARY` on every heading, and an export
+  with no edits that changes every article heading is not a no-op.
+- **Clone hygiene is four things, on every template clone**
+  (`_strip_break`, `_strip_identity`, and `_write_paragraph_text` replacing
+  everything but `w:pPr`): no `w:sectPr` (finding #3 — the clone of a
+  Word-saved section-ending paragraph carried its break, so adding one
+  provision made two sections), no `w14:paraId`/`w14:textId` (Word expects
+  them unique and regenerates them when absent), no bookmarks, no comment
+  anchors. It does NOT strip a template's own revision marks
+  (`w:pPrChange`, a tracked paragraph mark) — pre-existing, outside the
+  plan's hygiene list, and recorded as a follow-up in the as-built note.
+- **Every unmodelled body child is assigned to exactly ONE place before
+  anything is emitted** (`_Assembler._classify_runs`): leading content of
+  the element below it, a `_Group` bound to a POSITION in the upload, or
+  the trailing content after the last anchored element. That single
+  assignment is what made the section-break bugs structural rather than
+  patchable — the old renderer decided spacers per element and swept
+  whatever was left over to the end of the body.
+- **A section break belongs to the content above it, and no edit loses
+  one.** Two shapes. An EMPTY paragraph holding `w:pPr/w:sectPr` was a
+  "blank" to `_is_blank_paragraph`, so it travelled with — and died with —
+  the provision below it (finding #2: two Word sections became one, which
+  is how a landscape schedule page turns portrait); it is now bound to its
+  position together with everything above it in its run. A provision
+  holding the break in its OWN `w:pPr` keeps it while it stays in place,
+  and when deleted or moved away leaves an empty paragraph holding it
+  (`_render_leftover`: its `w:pPr` only, `w14` ids stripped, and
+  `w:numId 0` when it was Word-numbered — Word prints the number of an
+  empty numbered paragraph, `_cancel_numbering` inserts it at its schema
+  position). The redline's Accept All must reproduce exactly that, which is
+  why the plan's D-3 never deletes a paragraph mark holding `w:sectPr`.
+- **Where "in place" is ambiguous, `_place` scores the gaps.** After a
+  reorder a break's old neighbours can be anywhere. Each gap between
+  emitted items is scored by how many of them it keeps on their side —
+  above the break before it, below after it; ties go to the gap right
+  after the nearest surviving element that was above, then right after any
+  element from above, then the earliest. Groups are placed in upload order
+  behind a floor, so breaks never cross and sections keep their order.
+  Deliberate consequence, stated in DOCX_FIDELITY: a provision ADDED right
+  after a section's last content lands after the break, at the top of the
+  next section (Word's Enter at the end of that paragraph would keep it in
+  the section). It is an open question for the owner, not a bug.
+- **The plan PERMITTED dropping a break when the content on both sides of
+  it was deleted; Phase 0 never does.** An emptied section keeps its break
+  (and so an empty page). The Phase 1 redline cannot delete a paragraph
+  mark holding `w:sectPr`, so the clean export must not either — Accept
+  All has to be able to reproduce it.
+- **Stale "(Not used.)"** (`_is_stale_not_used`): the importer skips the
+  line, so it was unmodelled content carried as leading content of the
+  next PART heading, and printed under a newly added `2.1` (finding #4).
+  Dropped once its PART has an article, kept while it has none, and never
+  when the line itself holds a break.
+- **Unmodelled content above a deleted provision stays put** (the plan's
+  migration issue): the provision's blank spacers go with it; anything
+  else becomes a position-bound group instead of reaching the old
+  `trailing()` sweep at the end of the body. And content after the last
+  provision is carried verbatim, in place: that sweep skipped blanks, so the
+  blank lines — and an empty section-break paragraph — between
+  `END OF SECTION` and an appendix were silently dropped.
+- **A control character in a provision exports as a visible escape**
+  (`append_text` → `xml_safe_text`, the `xml_text.py` posture). It used to
+  raise lxml's "All strings must be XML compatible" — a `ValueError`, not a
+  `SourceRenderError` — so the route's 409 never caught it and the export
+  was a 500.
+- **The diff numbers provisions the way the panel does.** `diffing._letters`
+  goes through `model.labelled_paragraphs`, so a preserved block takes no
+  letter and shifts none; after a table the compare view and the normalized
+  redline used to show "C." where the panel showed "B.". The redline
+  writer's `\t` after the label is now conditional
+  (`_render_redline_paragraph`) — a preserved block's empty label wrote a
+  stray leading tab.
+- **The corpus no-op test compares with EXCLUSIVE C14N, deliberately.**
+  `test_a_no_op_export_changes_only_what_the_tree_changed` exports every
+  corpus master untouched and compares body elements canonicalized with
+  `method="c14n", exclusive=True`: LibreOffice writes redundant namespace
+  declarations on inner elements that lxml drops on re-parenting —
+  semantically identical, byte-different. Bytes or inclusive C14N fail a
+  correct export.
+- **Follow-ups found, not done** (each is outside Phase 0's list, and each
+  is in the as-built note): `iter_paragraphs` refs — the open-items list,
+  lint issues, Final QC's `reviewed_ref`, the export schedules — still count
+  preserved blocks, so after a table they can disagree with the panel (the
+  frontend review queue reads the serialized labels and already agrees); the
+  normalized clean export still gives a preserved block a letter; the
+  appearance-preserving export of a non-spec import still prints
+  `PART 1 - GENERAL` / `1.1 IMPORTED CONTENT` scaffolding the panel hides;
+  a template clone keeps its own revision marks.
+- **Tests: 36 new.** `tests/test_source_splice.py` (15 — the partition
+  invariants over 600 seeded random edits, the Word formatting rules, the
+  whitespace rules, the map against the importer, each refusal by name);
+  `tests/test_preserving_export.py` (+18 — the four findings and the
+  migration issue each rebuilt as a FAILING test first from the plan's
+  descriptions, then the section-break matrix, clone hygiene, article format
+  and kin, trailing content, the corpus no-op, the control character); one
+  each in `test_diffing.py`, `test_redline_export.py` and
+  `test_diagnostics.py`. `test_an_untouched_document_round_trips_element_
+  for_element` stayed green throughout. Twenty-two mechanisms were reverted
+  in place to prove them load-bearing: the splice → 4 red, the kin separator
+  → 1, binding an empty break to its position → 2, the holder leftover → 3,
+  the numbering cancel → 1, clone break hygiene → 2, clone identity hygiene
+  → 1, the "(Not used.)" drop → 1, orphans staying in place → 1, trailing
+  content verbatim → 2, the article format → 1, kind-aware article
+  templates → 2, a new article's label kind → 1, `xml_safe_text` → 1, the
+  diff letters → 2, the redline's empty-label prefix → 1, the event's mode
+  → 1, the event's render counts → 1, gap scoring → 2, the zero-width edge
+  rule → 1, the text-mismatch refusal → 1, the end-of-paragraph deletion gap
+  → 1.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

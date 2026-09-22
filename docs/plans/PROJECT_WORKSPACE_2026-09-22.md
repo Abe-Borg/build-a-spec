@@ -1,9 +1,94 @@
 # Project workspace — carry a project's work across its sections
 
-Owner: Abraham. Drafted 2026-09-22 against `d5c9034` (v1.19.1). Status:
-**decisions D1–D5 ratified as recommended (Abraham, 2026-09-22); Phase 1
-shipped in v1.20.0; Phases 2–6 not started.** Phase 1's as-built deviations
-are recorded under its heading below.
+Owner: Abraham. Drafted 2026-09-22 against `d5c9034` (v1.19.1). This file is
+the program's **handoff document**: a fresh session reads it, picks the next
+incomplete phase from the implementation record below, builds that one phase,
+and marks it complete here before stopping. Nothing about where the program
+stands lives anywhere else.
+
+## Implementation record
+
+Update this table as phases land. A phase is complete only when its PR is
+merged, its release-notes entry is in `backend/release_notes.py`, and its
+as-built deviations are recorded under the phase heading in Part 2.
+
+| Phase | Status | Commit/PR | Version | Notes |
+|---|---|---|---|---|
+| plan | **complete** | PR #173 | — | Part 1 assessment + this plan; four Codex findings folded into Phases 3–4 (round identity, rid re-minting, the statement-only fact key, the source-ref resolver) |
+| 1 | **complete** | `b8bac2f` + `28bad83` (PR #174) | 1.20.0 | Next section →; three as-built deviations under the heading; an already-drafted number refused server-side (Codex) |
+| 2 | not started | | | **next up** — needs D1 (ratified: a folder); desktop shell only |
+| 3 | not started | | | after Phase 2 for the auto trigger; the merge itself is pure and can be built first |
+| 4 | not started | | | independent of 2–3 — may run beside them |
+| 5 | not started | | | gated on a measurement from a real second section |
+| 6 | not started | | | optional, D5: deferred until a second project for the same client exists |
+
+Decisions D1–D5 were **ratified as recommended by Abraham on 2026-09-22**
+("i trust you homie … just handle it") and are binding for every phase.
+
+## How to hand this off
+
+Give a fresh coding agent this prompt from the repository root:
+
+```text
+Read these files completely before touching code:
+
+1. CLAUDE.md
+2. docs/plans/PROJECT_WORKSPACE_2026-09-22.md
+
+Implement exactly ONE phase in this session: the first phase whose Status in
+the implementation record is "not started" and whose dependencies (the
+"Depends on" line under its heading, and the Order and sizing table) are
+satisfied. Decisions D1-D5 are ratified and binding; the phase's design text
+is the spec, and its as-built deviations are recorded under its heading, not
+by rewriting the text. If current code makes part of the design unsafe, stop
+and explain the conflict with concrete code evidence.
+
+Keep tests hermetic: no network and no real API key. Use tests/fakes.py for
+provider behavior. Every phase ships as ONE pull request that also cuts a
+release: a new entry at the top of RELEASE_NOTES in backend/release_notes.py,
+the version bumped in backend/settings.py, frontend/package.json, BOTH root
+version fields of frontend/package-lock.json and the README headline, a
+"Shipped in vX.Y.Z" section in README.md, a CLAUDE.md implemented-notes
+section, and manual QA rows in docs/RELEASE_WINDOWS.md. A new user-facing
+control is a three-place capability edit (frontend/src/lib/capabilities.ts,
+the control's data-capability, a tour step) or npm test fails.
+
+Before pushing: ruff check ., the full pytest suite, npm test, npm run build,
+python packaging/windows/check_release_version.py --tag vX.Y.Z, and
+python packaging/windows/render_release_notes.py --version X.Y.Z (with
+--notes-out and --body-out to a scratch dir). Push, open the PR, reply to
+every Codex thread with the fixing commit, and resolve them.
+
+Before stopping, mark the phase complete in the implementation record with
+the commit, PR, version and any deviations. Never push the git tag: the
+owner tags and pushes after the merge (git tag vX.Y.Z && git push --tags).
+```
+
+One phase is one reviewable pull request and one session. Phases 2 → 3 are a
+chain; Phase 4 is independent of both; Phase 5 waits on a measurement; Phase 6
+is optional. See "Order and sizing" at the end of Part 2.
+
+## Program rules
+
+- `CLAUDE.md` is binding — in particular turn atomicity across every store,
+  strip-at-commit, snapshot-before-expensive-work, the event-loop rule (an
+  `async def` handler never does seconds of CPU inline), and the
+  never-rewrite rule for implemented notes (append a new section; correct an
+  old one in an errata bullet).
+- **The transcript and the document never travel** between sections, in any
+  form. A model-written summary of a session is not a carry-over asset.
+- **Every carried asset keeps its provenance.** A brief carries records, never
+  prose the model wrote on the way out; a merged fact keeps who recorded it
+  and where; a harvested fact must resolve to something real.
+- **Nothing is deleted by a merge.** Supersede with a reason; re-mint an id
+  that collides; name what was dropped at a cap.
+- **Paid work is opt-in and previewed.** The harvest pass never fires on its
+  own and commits nothing the user did not accept.
+- **Every path stays fail-closed on the import gate.** A named page counts as
+  content; the choice to leave a page unnamed for an office-master import
+  belongs in the dialog (Phase 1 precedent).
+- Windows is the primary target. Paths that only the desktop shell can know
+  (Phase 2's project home) are local-only and never persisted into any file.
 
 The ask: finish the common work on the fire-sprinkler section (21 13 13) —
 the client and jurisdiction research, the location facts, the system facts,
@@ -88,7 +173,7 @@ keeps the standing rules (no transcript or document ever travels; a brief
 carries provenance, never a model summary; every failure path is disclosed,
 never silent).
 
-### Decisions to confirm before Phase 2 (recommendation in bold)
+### Decisions (ratified as recommended, 2026-09-22 — binding)
 
 | # | Decision | Recommendation |
 |---|---|---|

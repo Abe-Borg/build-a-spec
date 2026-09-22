@@ -1,7 +1,7 @@
 # Phase 2 — The project has a home: a project folder and a Project panel
 
-**Status:** not started. **Depends on:** Phase 1 (complete, v1.20.0). D1 is
-ratified: a project is a folder.
+**Status:** in review (`7cf3893`, PR #176). **Depends on:** Phase 1
+(complete, v1.20.0). D1 is ratified: a project is a folder.
 
 ## Goal
 

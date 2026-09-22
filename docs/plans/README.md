@@ -6,7 +6,7 @@ Owner: Abraham.
 
 **[Project workspace](project-workspace/README.md)** — the live program
 (decisions ratified 2026-09-22; Phase 1 shipped in v1.20.0, PR #174; Phase 2
-is next; one release for Phases 2–6 at the end). Carry a project's work
+is in review, PR #176; one release for Phases 2–6 at the end). Carry a project's work
 (research, location, system and project facts, references, editions)
 across its spec sections as a first-class project: a project folder with a
 Project panel, an append-only write-back merge, a harvest pass, a measured

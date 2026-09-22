@@ -1,9 +1,16 @@
 # Project workspace — carry a project's work across its sections
 
-Owner: Abraham. Drafted 2026-09-22 against `d5c9034` (v1.19.1). Status:
-**decisions D1–D5 ratified as recommended (Abraham, 2026-09-22); Phase 1
-shipped in v1.20.0; Phases 2–6 not started.** Phase 1's as-built deviations
-are recorded under its heading below.
+Owner: Abraham. Drafted 2026-09-22 against `d5c9034` (v1.19.1).
+
+**This file is the design RECORD, not the handoff.** The program's handoff
+— the implementation record, the prompt a fresh session starts from, the
+release policy (one release at the end, cut by Phase 7), the ratified
+decisions and the program rules — lives in
+[`project-workspace/README.md`](project-workspace/README.md), and each
+remaining phase has a full spec file beside it (`02_PROJECT_HOME.md` …
+`07_RELEASE_CLOSEOUT.md`). Where a phase file and Part 2 below differ, the
+phase file wins and records the difference. Phase 1 shipped in v1.20.0
+(PR #174); its as-built deviations are under its heading below.
 
 The ask: finish the common work on the fire-sprinkler section (21 13 13) —
 the client and jurisdiction research, the location facts, the system facts,
@@ -88,7 +95,7 @@ keeps the standing rules (no transcript or document ever travels; a brief
 carries provenance, never a model summary; every failure path is disclosed,
 never silent).
 
-### Decisions to confirm before Phase 2 (recommendation in bold)
+### Decisions (ratified as recommended, 2026-09-22 — binding)
 
 | # | Decision | Recommendation |
 |---|---|---|

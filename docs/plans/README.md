@@ -4,13 +4,19 @@ Owner: Abraham.
 
 ## Active
 
-**[Project workspace](PROJECT_WORKSPACE_2026-09-22.md)** — proposed
-2026-09-22, awaiting Abraham's review. Carry a project's work (research,
-location, system and project facts, references, editions) across its spec
-sections as a first-class project: next section in one click, a project
-folder with a Project panel, an append-only write-back merge, a harvest pass,
-and a measured relevance trim. Part 1 of the file records what v1.17.0's
-project briefs already do; Part 2 is the plan.
+**[Project workspace](project-workspace/README.md)** — the live program
+(decisions ratified 2026-09-22; Phase 1 shipped in v1.20.0, PR #174; Phase 2
+is next; one release for Phases 2–6 at the end). Carry a project's work
+(research, location, system and project facts, references, editions)
+across its spec sections as a first-class project: a project folder with a
+Project panel, an append-only write-back merge, a harvest pass, a measured
+relevance trim, an optional client library, and the release closeout. The
+folder's README carries the handoff prompt, the implementation record, the
+release policy, the binding decisions and the program rules; one spec file
+per phase sits beside it. The assessment and the original one-file plan
+are [`PROJECT_WORKSPACE_2026-09-22.md`](PROJECT_WORKSPACE_2026-09-22.md).
+A fresh session starts from the folder README's "How to hand this off"
+section, not here.
 
 **[Deep-dive remediation](deep-dive-remediation/README.md)** — the other live
 program. Six phases, 24 chunks; **Phase 1 is complete** (direct server-tool

@@ -804,8 +804,11 @@ backend/
                            vocabulary. render_clean keeps original runs
                            (split with w:rPr copied), bookmarks/proofErr never
                            deleted, zero-width run nodes kept on a deletion's
-                           edge. append_text is the one text writer (w:tab /
-                           w:br, xml_safe_text escapes)
+                           edge, and words prepended to a paragraph placed
+                           after the zero-width content leading its first word
+                           (a leading page break stays leading; the redline
+                           must share the rule). append_text is the one text
+                           writer (w:tab / w:br, xml_safe_text escapes)
   spec_doc/xml_text.py     XML 1.0-safe artifact text: the handful of code points
                            XML cannot carry (C0 controls, lone surrogates)
                            render as VISIBLE \uXXXX escapes rather than being
@@ -1258,7 +1261,8 @@ tests/
                            contract (partition, words, whitespace rules, Word's
                            formatting rules, 600 seeded random edits), the
                            character map vs the importer, named refusals, runs
-                           kept, markers placed, zero-width nodes
+                           kept, markers placed, zero-width nodes, a leading
+                           page break staying ahead of prepended words
   test_redline_export.py   [Batch 5] Accept-All==cur & Reject-All==base round-trip
                            (real importer + custom reject reader), XML shapes
                            (author/date/unique id, w:delText not w:t, para-mark
@@ -11289,6 +11293,22 @@ next session starts: the PR, the deviations, and what Phase 1 inherits.
   span is kept (a page break in front of a relettered label must not die
   with the old letter); one strictly inside is dropped. Bookmarks and
   `w:proofErr` are never deleted, only positioned.
+- **Words prepended to a paragraph go AFTER the zero-width content that
+  leads it** (caught in review on PR #184, Codex). Zero-width content sits
+  between two characters, so where an insertion lands beside it is a
+  choice, and the script cannot make it (an insert carries no offset).
+  `_pieces` makes it: an insertion before the paragraph's FIRST word
+  flushes the zero-width content in front of that word first, so a leading
+  page or column break still starts the paragraph on a new page, instead of
+  stranding the prepended words on the page before, and a bookmark opening
+  over the text still wraps them. "Before the first word", not "at offset
+  0": a leading tab is kept where it was and the break still leads the words.
+  **Leading only, deliberately.** Everywhere else zero-width content stays
+  with what FOLLOWS it; doing the flush at every insertion would put words
+  appended to a paragraph that ENDS in a page break onto the next page (the
+  second revert proof below). Phase 1's redline must place its `w:ins` by
+  the same rule, or Accept All would move a page break, so the plan's
+  as-built note carries it.
 - **The export event now says what ran and how it went.** The `export`
   trace event's `mode` is the mode that actually RAN
   (`_ExportInputs.selected_mode`): an imported document's default request
@@ -11398,16 +11418,17 @@ next session starts: the PR, the deviations, and what Phase 1 inherits.
   appearance-preserving export of a non-spec import still prints
   `PART 1 - GENERAL` / `1.1 IMPORTED CONTENT` scaffolding the panel hides;
   a template clone keeps its own revision marks.
-- **Tests: 36 new.** `tests/test_source_splice.py` (15 — the partition
+- **Tests: 37 new.** `tests/test_source_splice.py` (16 — the partition
   invariants over 600 seeded random edits, the Word formatting rules, the
-  whitespace rules, the map against the importer, each refusal by name);
+  whitespace rules, the map against the importer, each refusal by name, the
+  leading-break placement with its trailing and middle controls);
   `tests/test_preserving_export.py` (+18 — the four findings and the
   migration issue each rebuilt as a FAILING test first from the plan's
   descriptions, then the section-break matrix, clone hygiene, article format
   and kin, trailing content, the corpus no-op, the control character); one
   each in `test_diffing.py`, `test_redline_export.py` and
   `test_diagnostics.py`. `test_an_untouched_document_round_trips_element_
-  for_element` stayed green throughout. Twenty-two mechanisms were reverted
+  for_element` stayed green throughout. Twenty-three mechanisms were reverted
   in place to prove them load-bearing: the splice → 4 red, the kin separator
   → 1, binding an empty break to its position → 2, the holder leftover → 3,
   the numbering cancel → 1, clone break hygiene → 2, clone identity hygiene
@@ -11417,7 +11438,8 @@ next session starts: the PR, the deviations, and what Phase 1 inherits.
   diff letters → 2, the redline's empty-label prefix → 1, the event's mode
   → 1, the event's render counts → 1, gap scoring → 2, the zero-width edge
   rule → 1, the text-mismatch refusal → 1, the end-of-paragraph deletion gap
-  → 1.
+  → 1, the leading-break placement → 1 (and the flush applied at every
+  insertion instead → 1, on the trailing case).
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

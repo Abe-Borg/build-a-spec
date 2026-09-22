@@ -552,6 +552,16 @@ Deviations from the text above:
    at the end of that paragraph would keep the new text in the section.
    Documented in DOCX_FIDELITY as current behaviour; change it only if the
    owner prefers Word's.
+8. **Words prepended to a paragraph go after the zero-width content in
+   front of its first word** (caught in review on PR #184). D-2 does not
+   say where an insertion lands beside a page break or a bookmark, and the
+   script cannot say it (an insert carries no offset), so `_pieces` decides:
+   an insertion before the first word goes after the zero-width content
+   leading that word, so a leading page or column break still starts the
+   paragraph on a new page and a bookmark opening over the text still wraps
+   it. Everywhere else zero-width content stays with what follows it (a
+   break at the end stays after words appended there, which is why the rule
+   is leading-only).
 
 What Phase 1 starts from:
 
@@ -561,7 +571,11 @@ What Phase 1 starts from:
   expected_text=)` returns `(ParagraphMap, "")` or `(None, reason)`, and
   `_pieces(pmap, ops)` is the per-op run slicing `render_clean` uses. Add
   `render_redline` beside `render_clean` over the same pieces: delete →
-  `w:del` with `w:delText`, insert → `w:ins`.
+  `w:del` with `w:delText`, insert → `w:ins`. `_pieces` also places
+  zero-width content beside an insertion (deviation 8); the redline's walk
+  must place it the same way, or Accept All moves a leading page break. The
+  simplest route is to have `_pieces` emit the deleted content too, as its
+  own piece kind that `render_clean` skips.
 - `_Assembler.assemble()` already decides, per body child: clone, splice,
   fallback, new, carried, or dropped. D-1's record list is a refactor of
   it, not a second walk.

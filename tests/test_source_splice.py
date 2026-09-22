@@ -284,6 +284,95 @@ def test_markers_keep_their_places_and_a_leading_page_break_survives():
     assert _accept_all_paragraph_text(spliced) == "B.\tProvide isolators."
 
 
+def _layout(element) -> list[str]:
+    """The paragraph's content in document order: ``<page>`` / ``<column>``
+    for a break, ``[name]`` / ``[/name]`` for a bookmark, text otherwise."""
+    names = {}
+    tokens: list[str] = []
+    for node in element.iter():
+        if node.tag == qn("w:bookmarkStart"):
+            names[node.get(qn("w:id"))] = node.get(qn("w:name"))
+            tokens.append(f"[{node.get(qn('w:name'))}]")
+        elif node.tag == qn("w:bookmarkEnd"):
+            tokens.append(f"[/{names.get(node.get(qn('w:id')), '?')}]")
+        elif node.tag == qn("w:br") and node.get(qn("w:type")) in ("page", "column"):
+            tokens.append(f"<{node.get(qn('w:type'))}>")
+        elif node.tag == qn("w:tab"):
+            tokens.append("\t")
+        elif node.tag == qn("w:t") and node.text:
+            tokens.append(node.text)
+    # Adjacent text tokens are one run of text to the reader.
+    merged: list[str] = []
+    for token in tokens:
+        plain = not token.startswith(("<", "["))
+        if plain and merged and not merged[-1].startswith(("<", "[")):
+            merged[-1] += token
+        else:
+            merged.append(token)
+    return merged
+
+
+def test_words_prepended_to_a_paragraph_join_it_after_its_leading_break():
+    """A page or column break in front of a paragraph's first word starts the
+    paragraph on a new page or column. Words prepended to the paragraph join
+    it there; they are not stranded on the page before the break (Codex
+    review on PR #184). The rule is about LEADING content only: a break at
+    the end of a paragraph stays after words appended to it."""
+    own_run = _paragraph()
+    own_run.add_run().add_break(WD_BREAK.PAGE)
+    own_run.add_run("Provide isolators.")
+    spliced, reason = splice_paragraph(own_run._p, "Also Provide isolators.")
+    assert reason == ""
+    assert _layout(spliced) == ["<page>", "Also Provide isolators."]
+
+    same_run = _paragraph()
+    run = same_run.add_run()
+    run.add_break(WD_BREAK.COLUMN)
+    etree.SubElement(run._r, qn("w:t")).text = "Provide isolators."
+    spliced, reason = splice_paragraph(same_run._p, "Also Provide isolators.")
+    assert reason == ""
+    assert _layout(spliced) == ["<column>", "Also Provide isolators."]
+
+    # "Before the first word", not "at offset 0": leading whitespace is kept
+    # where it was, and the break still leads the words.
+    indented = _paragraph()
+    indented.add_run("\t")
+    indented.add_run().add_break(WD_BREAK.PAGE)
+    indented.add_run("Provide isolators.")
+    spliced, reason = splice_paragraph(indented._p, "Also Provide isolators.")
+    assert reason == ""
+    assert _layout(spliced) == ["\t", "<page>", "Also Provide isolators."]
+
+    # A bookmark opening in front of the first word still wraps all of it.
+    bookmarked = _paragraph()
+    start = etree.SubElement(bookmarked._p, qn("w:bookmarkStart"))
+    start.set(qn("w:id"), "7")
+    start.set(qn("w:name"), "_Toc7")
+    bookmarked.add_run("SUMMARY")
+    end = etree.SubElement(bookmarked._p, qn("w:bookmarkEnd"))
+    end.set(qn("w:id"), "7")
+    spliced, reason = splice_paragraph(bookmarked._p, "GENERAL SUMMARY")
+    assert reason == ""
+    assert _layout(spliced) == ["[_Toc7]", "GENERAL SUMMARY", "[/_Toc7]"]
+
+    # The end is not the start: a trailing break stays after appended words.
+    trailing = _paragraph()
+    trailing.add_run("Provide isolators.")
+    trailing.add_run().add_break(WD_BREAK.PAGE)
+    spliced, reason = splice_paragraph(trailing._p, "Provide isolators. Comply.")
+    assert reason == ""
+    assert _layout(spliced) == ["Provide isolators. Comply.", "<page>"]
+
+    # And a break in front of a later word stays in front of that word.
+    middle = _paragraph()
+    middle.add_run("Provide ")
+    middle.add_run().add_break(WD_BREAK.PAGE)
+    middle.add_run("isolators.")
+    spliced, reason = splice_paragraph(middle._p, "Provide spring isolators.")
+    assert reason == ""
+    assert _layout(spliced) == ["Provide spring ", "<page>", "isolators."]
+
+
 def test_a_zero_width_node_inside_a_deleted_word_goes_with_it():
     paragraph = _paragraph()
     run = paragraph.add_run("Provide spring")

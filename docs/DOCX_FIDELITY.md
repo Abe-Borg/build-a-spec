@@ -187,7 +187,15 @@ before it at the end of the paragraph. Bookmarks and `w:proofErr` markers are
 never deleted, only positioned; a zero-width run node (`w:lastRenderedPageBreak`,
 `w:softHyphen`, a page break) goes with the characters around it, except on
 the edge of a deleted span, where it is kept — a page break before a
-relettered label does not die with the old letter. The edit script is a list
+relettered label does not die with the old letter. Zero-width content sits
+between two characters, so an insertion beside it needs a rule: words
+inserted before a paragraph's first word go after the zero-width content in
+front of that word (a leading page or column break starts the paragraph on a
+new page or column, and prepended words join it there rather than being
+stranded on the page before; a bookmark opening over the text still wraps
+them). Anywhere else, zero-width content stays with what follows it — a break
+in front of a later word stays in front of that word, and a break at the end
+of a paragraph stays after words appended there. The edit script is a list
 of keep / delete / insert steps whose keep and delete ranges partition the
 source in order, so rendering keep + insert gives this export and rendering
 delete as `w:del` and insert as `w:ins` gives the planned redline — the

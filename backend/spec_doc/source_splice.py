@@ -35,7 +35,10 @@ The edit script is a list of :class:`SpliceOp` over the SOURCE characters:
 ``insert`` texts. The clean export renders keep + insert; Phase 1's redline
 renders the same script with ``delete`` as ``w:del`` and ``insert`` as
 ``w:ins`` — which is how "Accept All equals the formatted export" holds by
-construction.
+construction. One placement rule lives in the rendering rather than the
+script, and the redline must share it: words inserted before a paragraph's
+first word go after the zero-width content in front of that word (a leading
+page break, a bookmark opening over the text); see :func:`_pieces`.
 
 Eligibility is deliberately conservative (widen with corpus evidence, per
 the plan): a plain paragraph whose children are runs, bookmarks and
@@ -443,18 +446,45 @@ def _text_node(text: str):
     return node
 
 
+def _zero_width_piece(atom: _Atom) -> tuple:
+    if atom.run < 0:
+        return ("marker", copy.deepcopy(atom.node))
+    return ("run", atom.run, copy.deepcopy(atom.node))
+
+
 def _pieces(pmap: ParagraphMap, ops: list[SpliceOp]) -> list:
     """The rendered content, in order: ``("run", run_index, node)`` for
     source content, ``("marker", node)`` for a paragraph-level marker,
-    ``("new", text, style_at)`` for inserted text."""
+    ``("new", text, style_at)`` for inserted text.
+
+    Zero-width content (a page or column break, a bookmark, Word's layout
+    cache) sits BETWEEN two characters, so where an insertion lands beside
+    it is a choice, made here. Content in front of the paragraph's first
+    word leads the paragraph: a break there starts it on a new page or
+    column, a bookmark there opens over its text. Words inserted before
+    that first word therefore go AFTER it, or they would be stranded on the
+    page before the break (Codex review on PR #184). Everywhere else,
+    zero-width content stays with what follows it: a break in front of a
+    later word stays in front of that word, and a break at the end stays
+    after words appended there. The Phase 1 redline must place its ``w:ins``
+    the same way, or Accept All would move a page break.
+    """
     atoms = pmap.atoms
+    spans = word_spans(pmap.text)
+    first_word = spans[0][0] if spans else -1
     pieces: list = []
     cursor = 0
     consumed = 0  # characters of atoms[cursor] already assigned
+    position = 0  # the source offset the keep and delete steps have reached
     for op in ops:
         if op.op == OP_INSERT:
+            if position == first_word:
+                while cursor < len(atoms) and not atoms[cursor].text:
+                    pieces.append(_zero_width_piece(atoms[cursor]))
+                    cursor += 1
             pieces.append(("new", op.text, op.style_at))
             continue
+        position = op.end
         keep = op.op == OP_KEEP
         while cursor < len(atoms):
             atom = atoms[cursor]
@@ -492,10 +522,8 @@ def _pieces(pmap: ParagraphMap, ops: list[SpliceOp]) -> list:
     for atom in atoms[cursor:]:
         # Only zero-width content can remain: every character is covered by
         # a keep or delete step.
-        if atom.run < 0:
-            pieces.append(("marker", copy.deepcopy(atom.node)))
-        elif not atom.text:
-            pieces.append(("run", atom.run, copy.deepcopy(atom.node)))
+        if atom.run < 0 or not atom.text:
+            pieces.append(_zero_width_piece(atom))
     return pieces
 
 

@@ -471,18 +471,21 @@ def _render_redline_article(document, element: ElementDiff, ids, author, date):
 def _render_redline_paragraph(document, element: ElementDiff, ids, author, date):
     p = document.add_paragraph()
     _redline_paragraph_format(p, element.depth)
-    label = element.label
+    # A preserved block takes no letter (``labelled_paragraphs``), so it gets
+    # neither a label nor the tab that would follow one.
+    prefix = f"{element.label}\t" if element.label else ""
     if element.kind == "inserted":
-        _append_ins(p, f"{label}\t{element.cur_text}", ids, author, date)
+        _append_ins(p, f"{prefix}{element.cur_text}", ids, author, date)
         _mark_paragraph(p, "w:ins", ids, author, date)
     elif element.kind == "deleted":
-        _append_del(p, f"{label}\t{element.base_text}", ids, author, date)
+        _append_del(p, f"{prefix}{element.base_text}", ids, author, date)
         _mark_paragraph(p, "w:del", ids, author, date)
     elif element.kind == "changed":
-        _append_equal(p, f"{label}\t")
+        if prefix:
+            _append_equal(p, prefix)
         _append_runs(p, element.runs or [], ids, author, date)
     else:  # unchanged
-        _append_equal(p, f"{label}\t{element.cur_text}")
+        _append_equal(p, f"{prefix}{element.cur_text}")
 
 
 def _render_redline_body(

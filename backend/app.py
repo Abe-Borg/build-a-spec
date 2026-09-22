@@ -4859,8 +4859,16 @@ def create_app(
             qc_result=qc_result,
         )
 
-    def _render_export(inputs: _ExportInputs) -> Response:
-        """Render a captured snapshot. Runs WITHOUT the session guard."""
+    def _render_export(
+        inputs: _ExportInputs, stats: dict | None = None
+    ) -> Response:
+        """Render a captured snapshot. Runs WITHOUT the session guard.
+
+        ``stats`` collects the appearance-preserving render's counts
+        (cloned / spliced / fallback by reason / inserted ...) for the
+        export's trace event — the fallback rate the splice's eligibility
+        is widened from. Counts only, never provision text.
+        """
         redline_diff = (
             diff_sections(inputs.redline_base, inputs.current)
             if inputs.redline_base is not None
@@ -4872,6 +4880,7 @@ def create_app(
                     source_bytes=inputs.source_bytes,
                     format_map=inputs.format_map,
                     current=inputs.current,
+                    stats=stats,
                 )
             except SourceRenderError as exc:
                 return JSONResponse(
@@ -4942,17 +4951,26 @@ def create_app(
         # so holding it across the render blocked the turn, and the stop.
         with session.session_state_guard():
             captured = _capture_export_inputs(session, redline, base, mode)
+        render_stats: dict = {}
         response = (
             captured
             if isinstance(captured, JSONResponse)
-            else _render_export(captured)
+            else _render_export(captured, render_stats)
         )
         _trace_capture.app_event(
             "export",
             kind="docx",
-            mode=mode or "normalized",
+            # The mode that actually ran: an imported document's default
+            # export is ``preserved``, which the requested value (usually
+            # none) used to report as "normalized".
+            mode=(
+                captured.selected_mode
+                if isinstance(captured, _ExportInputs)
+                else mode or "normalized"
+            ),
             redline=redline or "",
             ok=response.status_code == 200,
+            **({"render": render_stats} if render_stats else {}),
         )
         return response
 

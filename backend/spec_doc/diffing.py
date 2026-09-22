@@ -55,6 +55,7 @@ from .model import (
     SpecSection,
     _paragraph_label,
     iter_paragraphs,
+    labelled_paragraphs,
 )
 
 _TOKEN_RE = re.compile(r"\S+\s*")
@@ -251,7 +252,8 @@ def _merge_by_uid(
     ``role`` in ``both`` / ``inserted`` / ``deleted``. Survivors and inserts
     follow cur order; deleted (base-only) nodes are spliced in right after
     the surviving base node that precedes them (or at the front). ``index``
-    fields are ``-1`` when not applicable and drive positional labels.
+    fields are raw sibling positions, ``-1`` when not applicable; display
+    letters come from ``_letters``, which skips preserved blocks.
     """
     base_by_uid = {node.uid: (i, node) for i, node in enumerate(base_nodes)}
     cur_uids = {node.uid for node in cur_nodes}
@@ -288,6 +290,20 @@ def _merge_by_uid(
 # ---------------------------------------------------------------------------
 
 
+def _letters(depth: int, nodes: list[Paragraph]) -> dict[str, str]:
+    """uid -> display letter, numbered the way the panel numbers them.
+
+    ``labelled_paragraphs`` skips a preserved block (it takes no letter and
+    shifts no sibling), so after a preserved table the compare view and the
+    redline say "B." where the panel does — counting every sibling said
+    "C." (Redline on your original, Phase 0).
+    """
+    return {
+        node.uid: "" if position < 0 else _paragraph_label(depth, position)
+        for node, position in labelled_paragraphs(nodes)
+    }
+
+
 def _diff_paragraphs(
     base_nodes: list[Paragraph],
     cur_nodes: list[Paragraph],
@@ -297,12 +313,14 @@ def _diff_paragraphs(
     elements: list[ElementDiff],
     status_changes: list[StatusChange],
 ) -> None:
-    for role, cur_node, base_node, cur_index, base_index in _merge_by_uid(
+    cur_letters = _letters(depth, cur_nodes)
+    base_letters = _letters(depth, base_nodes)
+    for role, cur_node, base_node, _cur_index, _base_index in _merge_by_uid(
         base_nodes, cur_nodes
     ):
         if role == "both":
             uid = cur_node.uid
-            label = _paragraph_label(depth, cur_index)
+            label = cur_letters[uid]
             if _norm(base_node.text) != _norm(cur_node.text):
                 elements.append(
                     ElementDiff(
@@ -358,7 +376,7 @@ def _diff_paragraphs(
                     node_type="paragraph",
                     kind="inserted",
                     depth=depth,
-                    label=_paragraph_label(depth, cur_index),
+                    label=cur_letters[uid],
                     ref_cur=cur_refs.get(uid, ""),
                     cur_text=cur_node.text,
                 )
@@ -380,7 +398,7 @@ def _diff_paragraphs(
                     node_type="paragraph",
                     kind="deleted",
                     depth=depth,
-                    label=_paragraph_label(depth, base_index),
+                    label=base_letters[uid],
                     ref_base=base_refs.get(uid, ""),
                     base_text=base_node.text,
                 )

@@ -9,36 +9,58 @@ The contract (decided with Abraham, 2026-08-21):
 
     * a provision you did not touch is emitted as a byte-identical clone of
       its source element;
-    * a provision you edited keeps its paragraph properties and its run
-      properties, and only the words change;
+    * a provision you edited keeps its paragraph properties and its own
+      runs: the new words are spliced into the runs that were already there
+      (``source_splice``, D-2 of the Redline-on-your-original plan), so a
+      bold phrase you did not change stays bold and the tab after a typed
+      letter stays a tab — relettering included;
     * a preserved block (table, picture, embedded object, content control)
       is emitted verbatim;
-    * a provision you added is cloned from the nearest kin at its own depth,
-      so new content looks like the content around it;
-    * blank spacer paragraphs travel with the provision they precede.
+    * a provision you added is cloned from the nearest kin of its own kind
+      (a provision from a provision at its depth, an article heading from an
+      article heading), taking its formatting, its label convention and its
+      separator — never its identity, bookmarks, comment anchors or section
+      break;
+    * body content the tree never modelled travels with the element below
+      it — blank spacers, a cover page, a picture-only paragraph, a page
+      break — except a SECTION BREAK, which belongs to the content above it
+      (see "Section breaks" below).
 
 What is deliberately NOT promised is the older mode's byte-exact whole-file
 clone. That promise bought so little editing surface (three of twenty-seven
 body operations on a clean master) that it was the feature's real defect.
 
-Two limits are inherent and are disclosed rather than worked around:
+Two limits remain, and are disclosed rather than worked around:
 
-* **Intra-paragraph emphasis on an edited provision is best-effort.** Word
-  splits a paragraph into runs, and a bolded phrase is a run boundary. When
-  the words change there is no correct place to put a boundary that was
-  attached to words that no longer exist, so an edited provision is emitted
-  with its dominant run properties. Paragraph-level formatting — style,
-  font, size, indent, spacing, numbering — is exact either way.
+* **New words inherit their formatting from a neighbour.** A word typed
+  over others takes the formatting of the first character it replaced, and
+  an inserted word the formatting of the character before it — what Word
+  itself does. Unchanged words keep their own. A paragraph the splice cannot
+  map (a hyperlink, field, content control, comment or note reference,
+  symbol or drawing inside it) is rebuilt from its first run's properties
+  instead; the export's diagnostics count those fallbacks by reason.
 * **A revision-bearing paragraph is rewritten, never cloned.** The importer
   showed the Accept-All view, so cloning the original markup would export
   text the user never saw. Those paragraphs take the rewrite path even when
   their text is unchanged.
+
+Section breaks (Phase 0 of the Redline-on-your-original plan): a Word
+section break is the END of a section — the content above it — so it never
+moves or disappears because of an edit to what sits below it. An empty
+paragraph holding a break stays after the content above it; a provision that
+holds one in its own ``w:pPr`` keeps it while it stays in place, and when it
+is deleted or moved away an empty paragraph holding the break is left where
+it was; a clone never copies one. No edit loses a break. Where "in place"
+is ambiguous after a reorder, the break goes where it best separates the
+content that was above it from the content that was below it.
 """
 
 from __future__ import annotations
 
 import copy
+import re
 import zipfile
+from dataclasses import dataclass, field
 from io import BytesIO
 
 from docx.oxml import parse_xml
@@ -63,6 +85,7 @@ from .source_format import (
     SECTION_TITLE_UID,
     SourceFormatMap,
 )
+from .source_splice import FALLBACK_REVISIONS, append_text, splice_paragraph
 
 _DOCUMENT_PART = "word/document.xml"
 
@@ -70,12 +93,12 @@ _W_P = qn("w:p")
 _W_PPR = qn("w:pPr")
 _W_R = qn("w:r")
 _W_RPR = qn("w:rPr")
-_W_T = qn("w:t")
-_W_TAB = qn("w:tab")
-_W_BR = qn("w:br")
 _W_SECTPR = qn("w:sectPr")
 _W_NUMPR = qn("w:numPr")
-_XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
+_W_NUMID = qn("w:numId")
+_W_VAL = qn("w:val")
+_W14_PARA_ID = "{http://schemas.microsoft.com/office/word/2010/wordml}paraId"
+_W14_TEXT_ID = "{http://schemas.microsoft.com/office/word/2010/wordml}textId"
 # A paragraph carrying any of these is layout, not a spacer: a picture, a
 # text box (most cover pages), an embedded object, a content control. It is
 # never dropped as a blank, and it travels with the element below it.
@@ -86,6 +109,56 @@ _LAYOUT_TAGS = (
     qn("w:txbxContent"),
     qn("w:sdt"),
 )
+# ``w:pPr`` children in schema order (CT_PPr), for inserting ``w:numPr``
+# where Word expects it.
+_PPR_ORDER = tuple(
+    qn(f"w:{name}")
+    for name in (
+        "pStyle",
+        "keepNext",
+        "keepLines",
+        "pageBreakBefore",
+        "framePr",
+        "widowControl",
+        "numPr",
+        "suppressLineNumbers",
+        "pBdr",
+        "shd",
+        "tabs",
+        "suppressAutoHyphens",
+        "kinsoku",
+        "wordWrap",
+        "overflowPunct",
+        "topLinePunct",
+        "autoSpaceDE",
+        "autoSpaceDN",
+        "bidi",
+        "adjustRightInd",
+        "snapToGrid",
+        "spacing",
+        "ind",
+        "contextualSpacing",
+        "mirrorIndents",
+        "suppressOverlap",
+        "jc",
+        "textDirection",
+        "textAlignment",
+        "textboxTightWrap",
+        "outlineLvl",
+        "divId",
+        "cnfStyle",
+        "rPr",
+        "sectPr",
+        "pPrChange",
+    )
+)
+# An article heading as the importer's ``_ARTICLE_RE`` reads it, with the
+# pieces the export must reproduce: the ordinal's width ("1.01" vs "1.1"), a
+# trailing dot, and the raw separator (a tab, a space, " - ").
+_ARTICLE_HEADING_RE = re.compile(r"^([1-5])\.(\d{1,2})(\.?)(\s+[-–—]?\s*)(\S.*)$")
+_LEADING_TOKEN_RE = re.compile(r"\S+(\s+)")
+# The line the importer skips under a PART with no articles.
+_NOT_USED = "(not used.)"
 
 
 class SourceRenderError(ValueError):
@@ -106,53 +179,76 @@ def _is_blank_paragraph(element) -> bool:
     return all(element.find(f".//{tag}") is None for tag in _LAYOUT_TAGS)
 
 
-def _template_run_properties(paragraph_element):
-    """The ``w:rPr`` an edited or synthesized run should carry.
+def _holds_break(element) -> bool:
+    """A paragraph whose mark ends a Word section."""
+    return (
+        element.tag == _W_P
+        and element.find(f"{_W_PPR}/{_W_SECTPR}") is not None
+    )
 
-    The FIRST run's properties, because a spec provision's first run is its
-    body text — a trailing run is as likely to be a stray formatting island
-    left by an editor as it is to be meaningful.
+
+def _strip_break(element) -> None:
+    properties = element.find(_W_PPR)
+    if properties is None:
+        return
+    for sect_pr in properties.findall(_W_SECTPR):
+        properties.remove(sect_pr)
+
+
+def _strip_identity(element) -> None:
+    """Drop the ``w14`` ids Word expects to be unique; it regenerates them."""
+    for attribute in (_W14_PARA_ID, _W14_TEXT_ID):
+        if attribute in element.attrib:
+            del element.attrib[attribute]
+
+
+def _cancel_numbering(element) -> None:
+    """``w:numId 0`` — "no numbering", whatever the paragraph style says.
+
+    Word prints the number of an empty numbered paragraph, so an empty
+    paragraph left holding a section break must not stay in the list.
     """
-    for run in paragraph_element.iterchildren(_W_R):
-        run_properties = run.find(_W_RPR)
-        if run_properties is not None:
-            return copy.deepcopy(run_properties)
-        return None
-    return None
+    properties = element.find(_W_PPR)
+    if properties is None:
+        properties = etree.Element(_W_PPR)
+        element.insert(0, properties)
+    numbering = properties.find(_W_NUMPR)
+    if numbering is None:
+        numbering = etree.Element(_W_NUMPR)
+        after = _PPR_ORDER[_PPR_ORDER.index(_W_NUMPR) + 1 :]
+        successor = next(
+            (child for child in properties if child.tag in after), None
+        )
+        if successor is None:
+            properties.append(numbering)
+        else:
+            successor.addprevious(numbering)
+    for child in list(numbering):
+        numbering.remove(child)
+    etree.SubElement(numbering, _W_NUMID).set(_W_VAL, "0")
 
 
 def _write_paragraph_text(paragraph_element, text: str) -> None:
     """Replace a cloned paragraph's inline content with ``text``.
 
-    ``w:pPr`` survives untouched — that is the whole of the paragraph-level
-    promise (style, numbering, indent, spacing, and the run defaults the
-    style carries). Everything else is rebuilt from the dominant run's
-    properties, so an edited provision keeps its typeface and size but not
-    a bold phrase whose words may no longer exist.
+    The fallback for a paragraph the splice cannot map, and the writer for a
+    new provision. ``w:pPr`` survives untouched — that is the whole of the
+    paragraph-level promise (style, numbering, indent, spacing, and the run
+    defaults the style carries). Everything else is rebuilt from the first
+    run's properties.
     """
-    run_properties = _template_run_properties(paragraph_element)
+    run_properties = None
+    for run in paragraph_element.iterchildren(_W_R):
+        found = run.find(_W_RPR)
+        run_properties = copy.deepcopy(found) if found is not None else None
+        break
     for child in list(paragraph_element):
         if child.tag != _W_PPR:
             paragraph_element.remove(child)
-    # Tabs and line breaks are real Word markup, not characters; a provision
-    # carrying them would otherwise export as a literal control character.
-    segments = text.split("\t")
     run = etree.SubElement(paragraph_element, _W_R)
     if run_properties is not None:
         run.append(run_properties)
-    for index, segment in enumerate(segments):
-        if index:
-            etree.SubElement(run, _W_TAB)
-        lines = segment.split("\n")
-        for line_index, line in enumerate(lines):
-            if line_index:
-                etree.SubElement(run, _W_BR)
-            if not line:
-                continue
-            node = etree.SubElement(run, _W_T)
-            node.text = line
-            if line != line.strip():
-                node.set(_XML_SPACE, "preserve")
+    append_text(run, text)
 
 
 def _blank_template(numbered: bool):
@@ -163,36 +259,111 @@ def _blank_template(numbered: bool):
     return paragraph
 
 
-class _BodyRenderer:
-    def __init__(self, body_children: list, format_map: SourceFormatMap):
-        self._children = body_children
+# ---------------------------------------------------------------------------
+# The walk: the current tree, in document order
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Item:
+    """One element the export emits, in current document order."""
+
+    uid: str
+    kind: str  # "section" | "part" | "article" | "paragraph"
+    origin: int  # NO_ORIGIN when the element is new
+    mode: str  # "text" | "verbatim" | "locked" | "new"
+    text: str = ""
+    template: int | None = None
+
+
+def _classify(uid: str) -> tuple[str, int | None]:
+    """``(kind, depth)`` from the stable id's shape."""
+    if uid in ("sec", SECTION_TITLE_UID):
+        return "section", None
+    if re.fullmatch(r"pt\d+", uid):
+        return "part", None
+    if re.fullmatch(r"pt\d+\.a\d+", uid):
+        return "article", None
+    return "paragraph", uid.count(".p") - 1
+
+
+@dataclass(frozen=True)
+class _ArticleStyle:
+    padded: bool = False
+    dot: str = ""
+    separator: str = " "
+
+
+def _article_style(element) -> _ArticleStyle:
+    """How a master writes its article numbers: ``1.01`` or ``1.1``, a
+    trailing dot, and what separates the number from the title."""
+    if element is None or element.tag != _W_P:
+        return _ArticleStyle()
+    match = _ARTICLE_HEADING_RE.match(_accept_all_paragraph_text(element).strip())
+    if not match:
+        return _ArticleStyle()
+    _part, ordinal, dot, separator, _title = match.groups()
+    return _ArticleStyle(
+        padded=len(ordinal) == 2 and ordinal.startswith("0"),
+        dot=dot,
+        separator=separator,
+    )
+
+
+def _article_heading(
+    part_number: int, index: int, title: str, style: _ArticleStyle
+) -> str:
+    ordinal = f"{index + 1:02d}" if style.padded else str(index + 1)
+    return f"{part_number}.{ordinal}{style.dot}{style.separator}{title}".rstrip()
+
+
+def _label_separator(element) -> str:
+    """The whitespace a master writes after a typed label — usually a tab."""
+    if element is None or element.tag != _W_P:
+        return " "
+    match = _LEADING_TOKEN_RE.match(_accept_all_paragraph_text(element).lstrip())
+    return match.group(1) if match else " "
+
+
+class _Walker:
+    """Collects the export's items and chooses templates for new ones.
+
+    A new element is cloned from its nearest kin OF ITS OWN KIND — a
+    provision from a provision at its depth, an article heading from an
+    article heading — preferring the last one emitted before it, then the
+    first one in the upload. Cloning from "whatever came last" made a new
+    article look like the provision above it.
+    """
+
+    def __init__(self, children: list, format_map: SourceFormatMap):
+        self._children = children
         self._map = format_map
-        self._claimed: set[int] = set()
-        # Every source element the import DID model. The distinction matters
-        # at the end of the render: an anchored element the walk never
-        # reached was deleted by the user, while an unanchored one is content
-        # the tree does not model and must not lose.
-        self._anchored = {
-            anchor.origin_index
-            for anchor in format_map.anchors
-            if anchor.origin_index != NO_ORIGIN
-        }
-        self._emitted_blanks: set[int] = set()
-        self.output: list = []
-        # Depth -> the last origin paragraph seen at that depth, so a newly
-        # added provision can be cloned from its nearest kin rather than from
-        # whatever happened to be adjacent.
-        self._depth_templates: dict[int, int] = {}
-        self._last_template: int | None = None
-        # The label convention each template ACTUALLY used, recorded rather
-        # than re-inferred. Absence of ``w:numPr`` does not mean "manual
-        # label": an unstructured import has no labels at all, and inventing
-        # one for its new siblings prints a "B." the document never had.
-        self._depth_label_kinds: dict[int, str] = {}
-        self._last_label_kind: str = ""
+        self.items: list[_Item] = []
+        self._last: dict[tuple, int] = {}
+        self._last_any: int | None = None
+        self._first: dict[tuple, int] = {}
+        self._kind_at: dict[int, str] = {}
+        for anchor in sorted(format_map.anchors, key=lambda a: a.origin_index):
+            index = anchor.origin_index
+            if anchor.label_kind and 0 <= index < len(children):
+                self._kind_at.setdefault(index, anchor.label_kind)
+            if anchor.locked or not 0 <= index < len(children):
+                continue
+            if children[index].tag != _W_P:
+                continue
+            for key in self._keys(*_classify(anchor.uid)):
+                self._first.setdefault(key, index)
+
+    @staticmethod
+    def _keys(kind: str, depth: int | None) -> list[tuple]:
+        if kind == "paragraph":
+            return [("paragraph", depth), ("paragraph",)]
+        if kind in ("part", "article"):
+            return [(kind,)]
+        return []
 
     # -- source access ---------------------------------------------------
-    def _origin(self, uid: str) -> int:
+    def origin(self, uid: str) -> int:
         anchor = self._map.anchor(uid)
         if anchor is None or anchor.origin_index == NO_ORIGIN:
             return NO_ORIGIN
@@ -200,160 +371,122 @@ class _BodyRenderer:
             return NO_ORIGIN
         return anchor.origin_index
 
-    def _label_kind(self, uid: str) -> str:
+    def label_kind(self, uid: str) -> str:
         anchor = self._map.anchor(uid)
         return anchor.label_kind if anchor is not None else ""
 
-    def _emit_leading_blanks(self, origin_index: int) -> None:
-        """Carry the unmodelled content that directly preceded this element.
-
-        Blank spacers, but also everything the tree never modelled: a cover
-        page, a revision history, a table of contents, a picture-only
-        paragraph, a page break. Attaching them to the FOLLOWING element
-        rather than replaying them at fixed positions is what makes them
-        survive a reorder (the spacing above an article travels with the
-        article when it moves) and what keeps a cover page ahead of the
-        section it introduces. The walk stops at the nearest modelled
-        element: content between two provisions belongs to the later one.
-        """
-        run: list[int] = []
-        cursor = origin_index - 1
-        while cursor >= 0 and cursor not in self._claimed:
-            if cursor in self._anchored or cursor in self._emitted_blanks:
-                break
-            child = self._children[cursor]
-            if child.tag == _W_SECTPR:
-                break
-            run.append(cursor)
-            cursor -= 1
-        for index in reversed(run):
-            self._emitted_blanks.add(index)
-            self.output.append(copy.deepcopy(self._children[index]))
-
-    # -- emission --------------------------------------------------------
-    def emit_locked(self, uid: str) -> bool:
-        """Emit a preserved block exactly as it arrived."""
-        origin_index = self._origin(uid)
-        if origin_index == NO_ORIGIN:
-            return False
-        self._claimed.add(origin_index)
-        self._emit_leading_blanks(origin_index)
-        self.output.append(copy.deepcopy(self._children[origin_index]))
-        return True
-
-    def emit_verbatim(self, uid: str) -> bool:
-        """Emit an anchored element exactly as it arrived, whatever it says.
-
-        Used where the CALLER knows the content is unchanged but cannot
-        reconstruct the original wording — the section header, whose line has
-        several legitimate forms the parse folds into one number and title.
-        """
-        origin_index = self._origin(uid)
-        if origin_index == NO_ORIGIN:
-            return False
-        self._claimed.add(origin_index)
-        self._emit_leading_blanks(origin_index)
-        self.output.append(copy.deepcopy(self._children[origin_index]))
-        return True
-
-    def emit_text(self, uid: str, text: str, *, depth: int | None = None) -> None:
-        origin_index = self._origin(uid)
-        if origin_index != NO_ORIGIN:
-            self._claimed.add(origin_index)
-            self._emit_leading_blanks(origin_index)
-            source = self._children[origin_index]
-            if source.tag == _W_P:
-                recorded = self._label_kind(uid)
-                if depth is not None:
-                    self._depth_templates[depth] = origin_index
-                    if recorded:
-                        self._depth_label_kinds[depth] = recorded
-                self._last_template = origin_index
-                if recorded:
-                    self._last_label_kind = recorded
-                # Compare the NORMALIZED forms. The importer folds runs of
-                # whitespace (`" ".join(text.split())`), so a source
-                # paragraph containing a double space after a period — which
-                # is most office masters — would otherwise never match its
-                # own semantic text, take the rewrite path, and have its
-                # inline runs collapsed on a no-op export. Caught in review
-                # on PR #141 (Codex).
-                unchanged = _normalized(
-                    _accept_all_paragraph_text(source)
-                ) == _normalized(text)
-                if unchanged and not _element_has_tracked_changes(source):
-                    # The untouched-provision guarantee: a byte-identical
-                    # clone, markup and all.
-                    self.output.append(copy.deepcopy(source))
-                    return
-                clone = copy.deepcopy(source)
-                _write_paragraph_text(clone, text)
-                self.output.append(clone)
-                return
-            # An anchored non-paragraph (a table claimed by an editable
-            # element) can only be emitted as itself.
-            self.output.append(copy.deepcopy(source))
-            return
-        template_index = None
-        if depth is not None:
-            template_index = self._depth_templates.get(depth)
-        if template_index is None:
-            template_index = self._last_template
-        if template_index is None:
-            clone = _blank_template(False)
-        else:
-            clone = copy.deepcopy(self._children[template_index])
-        _write_paragraph_text(clone, text)
-        self.output.append(clone)
-
-    def template_label_kind(self, depth: int) -> str:
-        """The label convention a NEW provision at ``depth`` inherits.
-
-        A clone of an auto-numbered sibling is auto-numbered too, and Word
-        will render its label — so writing one into the text as well would
-        print it twice.
-        """
-        recorded = self._depth_label_kinds.get(depth) or self._last_label_kind
+    def _label_kind_at(self, index: int) -> str:
+        recorded = self._kind_at.get(index)
         if recorded:
             return recorded
-        index = self._depth_templates.get(depth)
-        if index is None:
-            index = self._last_template
-        if index is None:
-            return LABEL_MANUAL
         element = self._children[index]
         if element.tag == _W_P and element.find(f"{_W_PPR}/{_W_NUMPR}") is not None:
             return LABEL_AUTO
         return LABEL_MANUAL
 
-    def trailing(self) -> list:
-        """Body content the tree never modelled, in source order.
+    # -- templates -------------------------------------------------------
+    def template_for(self, kind: str, depth: int | None = None) -> int | None:
+        if kind == "paragraph":
+            order = [
+                self._last.get(("paragraph", depth)),
+                self._first.get(("paragraph", depth)),
+                self._last.get(("paragraph",)),
+                self._first.get(("paragraph",)),
+            ]
+        else:
+            order = [self._last.get((kind,)), self._first.get((kind,))]
+        for index in order:
+            if index is not None:
+                return index
+        return self._last_any
 
-        This is what keeps ``END OF SECTION`` — and anything the parse
-        stopped at — in the exported file. Dropping it would be silent
-        content loss the byte-exact mode could never have caused.
+    def template_label_kind(self, kind: str, depth: int | None = None) -> str:
+        """The label convention a NEW element inherits from its template.
 
-        An ANCHORED element that the walk did not reach is excluded, and
-        that exclusion is what makes deletion work: the user removed it, so
-        replaying it here would quietly undo the edit.
+        A clone of an auto-numbered sibling is auto-numbered too, and Word
+        will render its label — so writing one into the text as well would
+        print it twice. Absence of ``w:numPr`` does not mean "manual": an
+        unstructured import records no label at all.
         """
-        remainder = []
-        for index, child in enumerate(self._children):
-            if index in self._claimed or index in self._emitted_blanks:
-                continue
-            if index in self._anchored:
-                continue
-            if child.tag == _W_SECTPR:
-                continue
-            if _is_blank_paragraph(child):
-                continue
-            remainder.append(copy.deepcopy(child))
-        return remainder
+        index = self.template_for(kind, depth)
+        if index is None:
+            return LABEL_MANUAL
+        return self._label_kind_at(index)
+
+    def template_separator(self, kind: str, depth: int | None = None) -> str:
+        index = self.template_for(kind, depth)
+        if index is None or self._label_kind_at(index) != LABEL_MANUAL:
+            return " "
+        return _label_separator(self._children[index])
+
+    def template_article_style(self) -> _ArticleStyle:
+        index = self.template_for("article")
+        if index is None or self._label_kind_at(index) != LABEL_MANUAL:
+            return _ArticleStyle()
+        return _article_style(self._children[index])
+
+    def article_style_of(self, uid: str) -> _ArticleStyle:
+        index = self.origin(uid)
+        if index == NO_ORIGIN:
+            return _ArticleStyle()
+        return _article_style(self._children[index])
+
+    def _remember(self, kind: str, depth: int | None, index: int) -> None:
+        for key in self._keys(kind, depth):
+            self._last[key] = index
+        self._last_any = index
+
+    # -- items -----------------------------------------------------------
+    def add_verbatim(self, uid: str, kind: str) -> bool:
+        """An anchored element exactly as it arrived, whatever it says.
+
+        Used where the CALLER knows the content is unchanged but cannot
+        reconstruct the original wording — the section header, whose line
+        has several legitimate forms the parse folds into one number and
+        title.
+        """
+        index = self.origin(uid)
+        if index == NO_ORIGIN:
+            return False
+        self.items.append(_Item(uid, kind, index, "verbatim"))
+        return True
+
+    def add_locked(self, uid: str) -> bool:
+        """A preserved block exactly as it arrived."""
+        index = self.origin(uid)
+        if index == NO_ORIGIN:
+            return False
+        self.items.append(_Item(uid, "paragraph", index, "locked"))
+        return True
+
+    def add_text(
+        self, uid: str, kind: str, text: str, *, depth: int | None = None
+    ) -> None:
+        index = self.origin(uid)
+        if index != NO_ORIGIN:
+            if self._children[index].tag == _W_P:
+                self._remember(kind, depth, index)
+                self.items.append(_Item(uid, kind, index, "text", text))
+            else:
+                # An anchored non-paragraph (a table claimed by an editable
+                # element) can only be emitted as itself.
+                self.items.append(_Item(uid, kind, index, "verbatim"))
+            return
+        self.items.append(
+            _Item(
+                uid,
+                kind,
+                NO_ORIGIN,
+                "new",
+                text,
+                template=self.template_for(kind, depth),
+            )
+        )
 
 
 def _render_body(
     section: SpecSection,
-    renderer: _BodyRenderer,
+    walker: _Walker,
     format_map: SourceFormatMap,
 ) -> None:
     if section.number or section.title:
@@ -368,9 +501,9 @@ def _render_body(
             section.number == format_map.section_number
             and section.title == format_map.section_title
         )
-        if unchanged_identity and renderer.emit_verbatim("sec"):
-            renderer.emit_verbatim(SECTION_TITLE_UID)
-            return _render_parts(section, renderer)
+        if unchanged_identity and walker.add_verbatim("sec", "section"):
+            walker.add_verbatim(SECTION_TITLE_UID, "section")
+            return _render_parts(section, walker)
         if format_map.header_source in (
             HEADER_SOURCE_FRONT_MATTER,
             HEADER_SOURCE_CHROME,
@@ -380,21 +513,20 @@ def _render_body(
             # page header/footer — so there is no header element to rewrite
             # and inventing one would print the section twice. A changed
             # identity is reported by the stale-identifier lint instead.
-            return _render_parts(section, renderer)
+            return _render_parts(section, walker)
         header = " ".join(part for part in ("SECTION", section.number) if part)
-        if renderer._origin(SECTION_TITLE_UID) != NO_ORIGIN:
-            renderer.emit_text("sec", header.strip())
-            renderer.emit_text(SECTION_TITLE_UID, section.title)
+        if walker.origin(SECTION_TITLE_UID) != NO_ORIGIN:
+            walker.add_text("sec", "section", header.strip())
+            walker.add_text(SECTION_TITLE_UID, "section", section.title)
         else:
             combined = f"{header} {section.title}".strip() if section.title else header
-            renderer.emit_text("sec", combined.strip())
-    _render_parts(section, renderer)
+            walker.add_text("sec", "section", combined.strip())
+    _render_parts(section, walker)
 
 
-def _render_parts(section: SpecSection, renderer: _BodyRenderer) -> None:
-
+def _render_parts(section: SpecSection, walker: _Walker) -> None:
     for part in section.parts:
-        if not part.articles and renderer._origin(part.uid) == NO_ORIGIN:
+        if not part.articles and walker.origin(part.uid) == NO_ORIGIN:
             # SectionFormat always has three parts; the master may not have
             # written all three. Emitting a heading the upload never carried
             # would ADD content to the user's file.
@@ -402,12 +534,15 @@ def _render_parts(section: SpecSection, renderer: _BodyRenderer) -> None:
         # ``Part.title`` already carries the whole heading line
         # ("PART 1 - GENERAL"), so an auto-numbered master is the only case
         # that needs the number stripped back off.
-        if renderer._label_kind(part.uid) == LABEL_AUTO:
-            renderer.emit_text(part.uid, _part_title_only(part))
+        label_kind = walker.label_kind(part.uid) or walker.template_label_kind(
+            "part"
+        )
+        if label_kind == LABEL_AUTO:
+            walker.add_text(part.uid, "part", _part_title_only(part))
         else:
-            renderer.emit_text(part.uid, part.title)
+            walker.add_text(part.uid, "part", part.title)
         for article_index, article in enumerate(part.articles):
-            _render_article(part.number, article_index, article, renderer)
+            _render_article(part.number, article_index, article, walker)
 
 
 def _part_title_only(part) -> str:
@@ -417,19 +552,31 @@ def _part_title_only(part) -> str:
 
 
 def _render_article(
-    part_number: int, index: int, article: Article, renderer: _BodyRenderer
+    part_number: int, index: int, article: Article, walker: _Walker
 ) -> None:
-    number = f"{part_number}.{index + 1}"
-    if renderer._label_kind(article.uid) == LABEL_AUTO:
-        renderer.emit_text(article.uid, article.title)
+    label_kind = walker.label_kind(article.uid)
+    if label_kind:
+        style = walker.article_style_of(article.uid)
     else:
-        renderer.emit_text(article.uid, f"{number} {article.title}".strip())
+        label_kind = walker.template_label_kind("article")
+        style = walker.template_article_style()
+    if label_kind == LABEL_AUTO:
+        walker.add_text(article.uid, "article", article.title)
+    else:
+        # The master's own number format — "1.01" stays "1.01", "1.1 -
+        # TITLE" keeps its dash — or an untouched heading is rewritten on
+        # an export with no edits at all.
+        walker.add_text(
+            article.uid,
+            "article",
+            _article_heading(part_number, index, article.title, style),
+        )
     for paragraph, label_index in labelled_paragraphs(article.paragraphs):
-        _render_paragraph(paragraph, 0, label_index, renderer)
+        _render_paragraph(paragraph, 0, label_index, walker)
 
 
 def _render_paragraph(
-    paragraph: Paragraph, depth: int, index: int, renderer: _BodyRenderer
+    paragraph: Paragraph, depth: int, index: int, walker: _Walker
 ) -> None:
     if paragraph.locked:
         # A locked block with no source behind it cannot be invented: writing
@@ -438,22 +585,312 @@ def _render_paragraph(
         # the importer no longer lets a preserved block become a parent, but
         # a project saved before that fix can still carry one, and dropping
         # provisions on the floor is exactly the failure this guards.
-        renderer.emit_locked(paragraph.uid)
+        walker.add_locked(paragraph.uid)
         for child, child_label in labelled_paragraphs(paragraph.children):
-            _render_paragraph(child, depth, child_label, renderer)
+            _render_paragraph(child, depth, child_label, walker)
         return
-    label_kind = renderer._label_kind(paragraph.uid)
+    label_kind = walker.label_kind(paragraph.uid)
+    separator = " "
     if not label_kind:
-        label_kind = renderer.template_label_kind(depth)
-    if label_kind == LABEL_AUTO:
-        text = paragraph.text
-    elif label_kind == LABEL_MANUAL:
-        text = f"{_paragraph_label(depth, index)} {paragraph.text}"
+        label_kind = walker.template_label_kind("paragraph", depth)
+        # A new provision writes its kin's separator — the master's tab, not
+        # a space. (An edited one keeps its own through the splice.)
+        separator = walker.template_separator("paragraph", depth)
+    if label_kind == LABEL_MANUAL:
+        text = f"{_paragraph_label(depth, index)}{separator}{paragraph.text}"
     else:
         text = paragraph.text
-    renderer.emit_text(paragraph.uid, text, depth=depth)
+    walker.add_text(paragraph.uid, "paragraph", text, depth=depth)
     for child, child_label in labelled_paragraphs(paragraph.children):
-        _render_paragraph(child, depth + 1, child_label, renderer)
+        _render_paragraph(child, depth + 1, child_label, walker)
+
+
+# ---------------------------------------------------------------------------
+# Assembly: unmodelled content, section breaks, and the render
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Group:
+    """Content bound to a POSITION in the upload rather than to an element.
+
+    ``position`` is a source body index (a half-step between two indexes is
+    "right after" the lower one). Every emitted element whose origin sits
+    before it is "above" the group; every one after it is "below".
+    """
+
+    position: float
+    members: list[int] = field(default_factory=list)
+    holder: int | None = None  # a provision whose own w:pPr holds the break
+    leftover: bool = False  # emit an empty paragraph holding the holder's break
+    gap: int = 0
+
+
+class _Assembler:
+    def __init__(
+        self,
+        children: list,
+        format_map: SourceFormatMap,
+        walker: _Walker,
+        section: SpecSection,
+    ):
+        self._children = children
+        self._walker = walker
+        self.items = walker.items
+        self.stats: dict = {
+            "cloned": 0,
+            "spliced": 0,
+            "fallback": {},
+            "inserted": 0,
+            "preserved": 0,
+            "break_leftovers": 0,
+            "not_used_dropped": 0,
+        }
+        anchored: dict[int, str] = {}
+        for anchor in format_map.anchors:
+            if 0 <= anchor.origin_index < len(children):
+                anchored.setdefault(anchor.origin_index, anchor.uid)
+        self._anchored = anchored
+        self._anchored_order = sorted(anchored)
+        self._position: dict[int, int] = {}
+        for index, item in enumerate(self.items):
+            if item.origin != NO_ORIGIN:
+                self._position.setdefault(item.origin, index)
+        self._parts_with_articles = {
+            part.uid for part in section.parts if part.articles
+        }
+        self._dropped: set[int] = set()
+        self._tails: dict[int, list[int]] = {}
+        self._trailing: list[int] = []
+        self._strip_break: set[int] = set()
+        self._groups: list[_Group] = []
+
+    # -- classification ----------------------------------------------------
+    def _is_stale_not_used(self, index: int, above: int) -> bool:
+        """A PART's "(Not used.)" line once that PART has an article.
+
+        The importer skips the line, so it is unmodelled content; left alone
+        the export printed "2.1 ISOLATORS" and then "(Not used.)" under it.
+        A line that also holds a section break is never dropped — no edit
+        loses a break.
+        """
+        element = self._children[index]
+        if element.tag != _W_P or _holds_break(element):
+            return False
+        if _normalized(_accept_all_paragraph_text(element)).casefold() != _NOT_USED:
+            return False
+        uid = self._anchored.get(above, "")
+        return _classify(uid)[0] == "part" and uid in self._parts_with_articles
+
+    def _classify_runs(self) -> None:
+        """Assign every unmodelled body child to exactly one place.
+
+        The children between two anchored elements lead the later one (they
+        travel with it), except that everything up to and including the LAST
+        section break among them is bound to its position: a break is the
+        end of the section above it, not the start of the element below.
+        Everything after the last anchored element is trailing content —
+        ``END OF SECTION``, an appendix — carried verbatim, blanks, page
+        breaks and section breaks included.
+        """
+        previous = -1
+        boundaries = self._anchored_order + [len(self._children)]
+        for origin in boundaries:
+            between = list(range(previous + 1, origin))
+            for index in between:
+                if self._is_stale_not_used(index, previous):
+                    self._dropped.add(index)
+            between = [i for i in between if i not in self._dropped]
+            if origin == len(self._children):
+                self._trailing = between
+                break
+            breaks = [i for i in between if _holds_break(self._children[i])]
+            if breaks:
+                last = breaks[-1]
+                cut = between.index(last) + 1
+                self._groups.append(_Group(position=last, members=between[:cut]))
+                between = between[cut:]
+            if origin in self._position:
+                self._tails[origin] = between
+            else:
+                # The element below was deleted. Its spacers go with it; what
+                # the tree never modelled (a picture-only paragraph, a body
+                # bookmark) stays where it was instead of being swept to the
+                # end of the file.
+                kept = [i for i in between if not _is_blank_paragraph(self._children[i])]
+                if kept:
+                    self._groups.append(_Group(position=origin - 0.5, members=kept))
+            previous = origin
+        for origin in self._anchored_order:
+            if _holds_break(self._children[origin]):
+                self._groups.append(
+                    _Group(
+                        position=origin + 0.5,
+                        holder=origin,
+                        leftover=origin not in self._position,
+                    )
+                )
+
+    # -- placement ---------------------------------------------------------
+    def _nearest_emitted_above(self, position: float) -> int | None:
+        found = None
+        for origin in self._anchored_order:
+            if origin >= position:
+                break
+            if origin in self._position:
+                found = origin
+        return found
+
+    def _place(self) -> None:
+        """Choose each group's gap in the output.
+
+        A gap is scored by how many emitted elements it keeps on the right
+        side: those that were above the group's position before it, those
+        that were below it after it. The best-scoring gap wins; among ties,
+        the one right after the nearest surviving element that was above it
+        in the upload ("a break belongs to the content above it"), then any
+        gap right after an element from above, then the earliest. Groups are
+        placed in upload order and never cross each other, so sections keep
+        their order.
+        """
+        count = len(self.items)
+        origins = [item.origin for item in self.items]
+        floor = 0
+        for group in sorted(self._groups, key=lambda g: g.position):
+            above = [
+                origin != NO_ORIGIN and origin < group.position for origin in origins
+            ]
+            below = [
+                origin != NO_ORIGIN and origin > group.position for origin in origins
+            ]
+            before = [0] * (count + 1)
+            for index in range(count):
+                before[index + 1] = before[index] + above[index]
+            after = [0] * (count + 1)
+            for index in range(count - 1, -1, -1):
+                after[index] = after[index + 1] + below[index]
+            scores = [before[gap] + after[gap] for gap in range(count + 1)]
+            best = max(scores[floor:])
+            candidates = [
+                gap for gap in range(floor, count + 1) if scores[gap] == best
+            ]
+            chosen = None
+            nearest = self._nearest_emitted_above(group.position)
+            if nearest is not None and self._position[nearest] + 1 in candidates:
+                chosen = self._position[nearest] + 1
+            if chosen is None:
+                after_above = [gap for gap in candidates if gap and above[gap - 1]]
+                chosen = after_above[0] if after_above else candidates[0]
+            group.gap = chosen
+            floor = chosen
+            if group.holder is not None and not group.leftover:
+                if chosen == self._position[group.holder] + 1:
+                    # The holder is still where its break belongs: it keeps
+                    # it, in its own w:pPr, and nothing else is emitted.
+                    group.holder = None
+                else:
+                    self._strip_break.add(group.holder)
+                    group.leftover = True
+            if group.leftover:
+                self.stats["break_leftovers"] += 1
+
+    # -- rendering ---------------------------------------------------------
+    def _render_leftover(self, holder: int):
+        """An empty paragraph holding a displaced provision's section break.
+
+        The provision's own paragraph properties, so the break keeps its
+        place and spacing — minus its text, its identity (the provision may
+        still exist elsewhere) and its list numbering.
+        """
+        paragraph = copy.deepcopy(self._children[holder])
+        for child in list(paragraph):
+            if child.tag != _W_PPR:
+                paragraph.remove(child)
+        _strip_identity(paragraph)
+        uid = self._anchored.get(holder, "")
+        if self._walker.label_kind(uid) == LABEL_AUTO:
+            _cancel_numbering(paragraph)
+        return paragraph
+
+    def _render_group(self, group: _Group) -> list:
+        rendered = [copy.deepcopy(self._children[i]) for i in group.members]
+        if group.leftover and group.holder is not None:
+            rendered.append(self._render_leftover(group.holder))
+        return rendered
+
+    def _render_item(self, item: _Item):
+        if item.mode in ("verbatim", "locked"):
+            self.stats["preserved"] += 1
+            element = copy.deepcopy(self._children[item.origin])
+        elif item.mode == "new":
+            self.stats["inserted"] += 1
+            if item.template is None:
+                element = _blank_template(False)
+            else:
+                element = copy.deepcopy(self._children[item.template])
+                # Clone hygiene: the kin's formatting, never its identity.
+                _strip_break(element)
+                _strip_identity(element)
+            _write_paragraph_text(element, item.text)
+            return element
+        else:
+            element = self._render_text(item)
+        if item.origin in self._strip_break:
+            _strip_break(element)
+        return element
+
+    def _render_text(self, item: _Item):
+        source = self._children[item.origin]
+        source_text = _accept_all_paragraph_text(source)
+        revised = _element_has_tracked_changes(source)
+        if not revised and _normalized(source_text) == _normalized(item.text):
+            # Compare the NORMALIZED forms. The importer folds runs of
+            # whitespace, so a source paragraph containing a double space
+            # after a period — which is most office masters — would otherwise
+            # never match its own semantic text. Caught in review on PR #141
+            # (Codex). This is the untouched-provision guarantee: a
+            # byte-identical clone, markup and all.
+            self.stats["cloned"] += 1
+            return copy.deepcopy(source)
+        spliced, reason = (
+            (None, FALLBACK_REVISIONS)
+            if revised
+            else splice_paragraph(source, item.text, expected_text=source_text)
+        )
+        if spliced is not None:
+            self.stats["spliced"] += 1
+            return spliced
+        fallbacks = self.stats["fallback"]
+        fallbacks[reason] = fallbacks.get(reason, 0) + 1
+        clone = copy.deepcopy(source)
+        _write_paragraph_text(clone, item.text)
+        return clone
+
+    def assemble(self) -> list:
+        self._classify_runs()
+        self._place()
+        self.stats["not_used_dropped"] = len(self._dropped)
+        by_gap: dict[int, list[_Group]] = {}
+        for group in sorted(self._groups, key=lambda g: g.position):
+            if group.members or group.leftover:
+                by_gap.setdefault(group.gap, []).append(group)
+        output: list = []
+        emitted_tails: set[int] = set()
+        for gap in range(len(self.items) + 1):
+            for group in by_gap.get(gap, ()):
+                output.extend(self._render_group(group))
+            if gap == len(self.items):
+                break
+            item = self.items[gap]
+            if item.origin != NO_ORIGIN and item.origin not in emitted_tails:
+                emitted_tails.add(item.origin)
+                output.extend(
+                    copy.deepcopy(self._children[i])
+                    for i in self._tails.get(item.origin, ())
+                )
+            output.append(self._render_item(item))
+        output.extend(copy.deepcopy(self._children[i]) for i in self._trailing)
+        return output
 
 
 def render_preserving_docx(
@@ -461,8 +898,16 @@ def render_preserving_docx(
     source_bytes: bytes,
     format_map: SourceFormatMap,
     current: SpecSection,
+    stats: dict | None = None,
 ) -> bytes:
-    """Return the upload with a rebuilt body carrying ``current``."""
+    """Return the upload with a rebuilt body carrying ``current``.
+
+    ``stats``, when given, is filled with counts for the export's
+    diagnostics: elements cloned, spliced, rebuilt by the fallback (by
+    reason), inserted and preserved; empty paragraphs left holding a
+    displaced provision's section break (``break_leftovers``); stale
+    "(Not used.)" lines dropped. Counts only — never provision text.
+    """
     if not isinstance(source_bytes, bytes):
         raise TypeError("source_bytes must be bytes")
     if format_map is None:
@@ -507,10 +952,14 @@ def render_preserving_docx(
     trailing_sect_pr = (
         children[-1] if children and children[-1].tag == _W_SECTPR else None
     )
+    content = children[:-1] if trailing_sect_pr is not None else children
 
-    renderer = _BodyRenderer(children, format_map)
-    _render_body(current, renderer, format_map)
-    rendered = renderer.output + renderer.trailing()
+    walker = _Walker(content, format_map)
+    _render_body(current, walker, format_map)
+    assembler = _Assembler(content, format_map, walker, current)
+    rendered = assembler.assemble()
+    if stats is not None:
+        stats.update(assembler.stats)
 
     for child in list(body):
         body.remove(child)

@@ -1270,6 +1270,47 @@ def test_capture_sites_leave_events(trace_env):
     assert reset["had_content"] is False  # the undo returned it to empty
 
 
+def test_an_export_records_the_mode_that_ran_and_the_splice_counts(trace_env):
+    """Redline on your original, D-2: "Diagnostics record the fallback rate
+    so we can see what to widen next." And an imported document's default
+    export is ``preserved`` — which the event used to report as
+    "normalized", because it echoed the (absent) requested mode."""
+    from tests.test_preserving_export import _import, _master_bytes
+
+    client = TestClient(create_app())
+    _import(client, _master_bytes())
+    doc = client.get("/api/doc").json()["doc"]
+    first = doc["parts"][0]["articles"][0]["paragraphs"][0]["id"]
+    edit = client.post(
+        "/api/doc/edit",
+        json={
+            "ops": [
+                {
+                    "action": "replace",
+                    "target_id": first,
+                    "text": "Section includes seismic isolation for mechanical equipment.",
+                }
+            ]
+        },
+    )
+    assert edit.status_code == 200
+    assert client.get("/api/export/docx").status_code == 200
+
+    events = _wait_events(
+        lambda evs: any(
+            e["type"] == "export" and e.get("kind") == "docx" for e in evs
+        )
+    )
+    export = next(
+        e for e in events if e["type"] == "export" and e.get("kind") == "docx"
+    )
+    assert export["mode"] == "preserved"
+    assert export["render"]["spliced"] == 1
+    assert export["render"]["cloned"] >= 1
+    assert export["render"]["fallback"] == {}
+    assert "seismic" not in json.dumps(export)
+
+
 def test_round_end_and_prompt_refs_are_recorded_per_turn(
     monkeypatch, trace_env
 ):

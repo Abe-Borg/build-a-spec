@@ -160,19 +160,50 @@ ships with an explicit action even in the browser.*
 - **`merge_project_brief(existing, fresh) -> ProjectBrief`** in
   `project_brief.py`, pure and deterministic, the `append_research_round`
   posture applied to every asset:
-  - *Research*: rounds identified by a content fingerprint (section stamp,
-    date, dimension roster, item ids); unseen rounds append and renumber;
-    items merge by `item_id` with the existing confirm-in-place rule
-    (citations union, grounded OR, confidence max, evidence-dated).
+  - *Research*: a round has no stable identity today. `ResearchRound`
+    serializes only its index, date, dimension statuses, counts and section
+    stamp; the item ids live cumulatively on the profile. So no fingerprint
+    can be derived from the current record: two genuine same-day rounds on
+    one section and roster would collide and one would be lost, and a
+    fingerprint over the profile's cumulative item ids would drift as each
+    fork adds research, duplicating inherited rounds. Phase 3 therefore
+    FIRST adds two additive fields, serialized only when set (the `section`
+    precedent, so a legacy profile's bytes and the QC research fingerprint
+    over them are untouched): `round_id`, a uuid minted at the round's birth
+    in `run_requirements_research` and kept verbatim by
+    `append_research_round`, and `item_ids`, the round's own membership
+    (new and re-confirmed). Rounds then merge by `round_id`; a legacy round
+    with no id is keyed on (section, date, index) and the manifest says so;
+    unseen rounds append and renumber; items merge by `item_id` with the
+    existing confirm-in-place rule (citations union, grounded OR,
+    confidence max, evidence-dated).
   - *Facts*: `pf-N` ids are per-session and collide across forks, so the
-    join key is the store's own duplicate key (normalized statement + scope +
-    bound discipline); incoming facts are re-minted past the existing
-    `_next_seq` with `superseded_by` links rewritten; a supersede on either
-    side is terminal and wins; a fact pulled in this way is stamped
+    join key is the store's own duplicate key — and that key is the
+    normalized STATEMENT alone (`_match_key`): `record()` refuses a second
+    active fact with the same statement whatever its scope or bound
+    discipline, and the merge must never build a store `record()` would
+    refuse. Two active facts with one statement at different scopes are
+    resolved deterministically: the wider scope is retained (project >
+    discipline > section; tie → the earlier `recorded_at`), the other folds
+    in as superseded with the reason "Merged: the same fact was recorded at
+    <scope> by <section>" and its link pointing at the retained one, and
+    the manifest reports the disagreement — the audit posture, nothing
+    deleted. Incoming facts are re-minted past the existing `_next_seq`
+    with `superseded_by` links rewritten; a supersede on either side is
+    terminal and wins; a fact pulled in this way is stamped
     `source_kind="brief"` — the reserved value, finally used — with
     `source_ref` naming the section that recorded it.
-  - *References*: by `content_fingerprint`; the cap applies and drops are
-    named.
+  - *References*: identity is `content_fingerprint`, but the ids are not
+    stable across forks either — `ReferenceDocStore.add` mints `ref-N` from
+    a per-session counter and `get()` / `read_reference_doc` resolve the
+    FIRST match, so two seeded forks can hand the same rid to different
+    documents. A document already present by fingerprint keeps the
+    EXISTING rid (so an open section's `source_item_id` chips stay valid
+    on a pull); a new incoming document whose rid collides is re-minted
+    past the existing `_next_seq`, and every incoming fact `source_ref`
+    naming the old rid is rewritten to the new one, exactly as `pf-N` is
+    handled. A merged store with a duplicate rid is a merge failure that
+    is reported and never written. The cap applies and drops are named.
   - *Profile / edition overrides*: D4.
   - *Sections registry*: by number (already the rule).
   - Idempotent: merging the same fresh brief twice is a no-op.
@@ -189,10 +220,16 @@ ships with an explicit action even in the browser.*
   *reported*, never applied — the document is the section's own. Offered by
   the Project panel when the brief is newer than the session's
   `project_link.brief_updated_at`, and once on open.
-- Tests: the fork scenario end to end (S1 rounds 1–2 → seed S2 → both add
-  facts and a round → merge = union, no duplicates, supersedes win, pids
-  renumbered with links intact, readiness unchanged); idempotence; the
-  overwrite that can no longer lose a branch; pull applying only the three
+- Tests: the two additive research fields round-tripping and a legacy
+  profile's bytes unchanged (plus the QC research fingerprint over them);
+  the fork scenario end to end (S1 rounds 1–2 → seed S2 → both add facts,
+  a reference and a round on the same day → merge = union, no duplicate
+  rounds, rids and pids re-minted with every `source_ref` and
+  `superseded_by` link intact, the existing section's own rids untouched,
+  supersedes win, a same-statement scope conflict resolved to the wider
+  scope with the loser superseded and the manifest warning, readiness
+  unchanged); idempotence; the overwrite that can no longer lose a
+  branch; pull applying only the three
   append assets; the save that reports a merge failure and still writes the
   `.baspec`.
 
@@ -214,8 +251,24 @@ commit.*
 - **Review sheet** in the Project facts panel: accept / edit / reject per
   proposal; commit through one new batch form of the existing facts route
   (all-or-nothing, the store's `apply()` contract). A proposal that
-  duplicates an active fact is dropped before it is shown; an unknown
-  `source_ref` is refused by the validator the tool already has.
+  duplicates an active fact is dropped before it is shown.
+- **A source reference is RESOLVED, not just length-bounded.** Today
+  `ProjectFactStore.record()` only normalizes and bounds `source_ref`;
+  nothing checks that it names anything, so a harvested proposal citing a
+  research item, reference or QC finding that does not exist would commit
+  with fabricated provenance. Phase 4 adds `resolve_fact_source(kind, ref,
+  session)`: `research` → an `r-…` item present in the profile;
+  `reference` → a `ref-…` in the store; `qc` → a finding id in the retained
+  result (survivors and disputed, the `QCResult.finding()` set); `user` and
+  `model` → a transcript locator the harvest itself minted (`turn:N`, the
+  assistant-bubble ordinal the follow-ups store already counts) or empty;
+  `brief` → a section number in the link's registry. The harvest commit
+  REFUSES an unresolvable ref; the chat tool returns it as an `is_error`
+  result the model corrects (the `apply_spec_edits` posture, and a small
+  behaviour change to state in the release note); the panel form shows the
+  validation message. A fact that already carries an unresolvable ref
+  (recorded before this phase, or carried in from a brief) is left alone
+  and marked in the panel, never rewritten.
 - **Offered, never forced**: a *Harvest facts…* button in the panel, and a
   one-line offer in the Next-section and Export-brief flows when there are
   assistant replies since the last harvest ("14 replies since facts were
@@ -225,8 +278,10 @@ commit.*
   facts card and the "no model runs on its own" scoping gain the harvest
   line, because the dossier is a contract.
 - Tests (hermetic, `tests/fakes.py`): the request carries text only, the
-  strict tool, and the current facts; a duplicate proposal is dropped; an
-  unknown ref is refused; commit is one batch and a bad payload rolls it
+  strict tool, and the current facts; a duplicate proposal is dropped; each
+  source kind resolving and refusing (a missing research item, reference,
+  QC finding and transcript turn), the tool's `is_error` self-correction
+  and the panel message; commit is one batch and a bad payload rolls it
   back; the marker advances only on commit; readiness and QC staleness
   refresh after commit (facts are a hashed QC input).
 

@@ -129,6 +129,36 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                             "pairing the brief with a template."
                         ),
                     ),
+                    ReleaseItem(
+                        title="Export project brief goes straight to Save",
+                        body=(
+                            "Export \u2192 Export project brief no longer "
+                            "opens a large window listing everything the "
+                            "brief carries before you can save it. It goes "
+                            "straight to the Save dialog. The brief still "
+                            "holds the full text of any attached reference "
+                            "documents, so treat the file as sensitive "
+                            "project data."
+                        ),
+                    ),
+                ),
+            ),
+            ReleaseSection(
+                title="Final QC",
+                items=(
+                    ReleaseItem(
+                        title="Final QC now runs on Claude Opus 5.5",
+                        body=(
+                            "The reviewers behind Final QC moved from Claude "
+                            "Opus 5 to the newer Claude Opus 5.5, which "
+                            "Anthropic prices 20% lower. Same five lenses, "
+                            "same verifier panels, same reasoning depth. "
+                            "A Final QC result you ran before this update "
+                            "will read as out of date once, because the "
+                            "model is part of what a review records. Run "
+                            "Final QC again before you rely on it."
+                        ),
+                    ),
                 ),
             ),
         ),

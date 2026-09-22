@@ -412,7 +412,7 @@ function HowItWorks() {
           },
           {
             t: "Two models, one job each",
-            d: "The interview and drafting run on Claude Sonnet 5. Final QC runs a fleet of Claude Opus 5 reviewers — the one place a second model appears.",
+            d: "The interview and drafting run on Claude Sonnet 5. Final QC runs a fleet of Claude Opus 5.5 reviewers — the one place a second model appears.",
           },
           {
             t: "Domain knowledge lives in spec modules",
@@ -498,7 +498,7 @@ function WhyTrustIt({ onDeepDive }: { onDeepDive: () => void }) {
           },
           {
             t: "QC findings are adversarially verified",
-            d: "Every candidate finding faces a panel of independent Opus 5 refuters — three for critical and high findings, two for medium and low. A finding survives only when every seat upholds it. A majority refuting kills it — except that a critical or high finding is only refuted when at least one refuting seat backs the refutation with a validated citation. Anything else — a split panel, or a critical/high refutation no seat could cite evidence for — is recorded as disputed and blocks issue readiness until you adjudicate it yourself. Refuted and disputed findings stay in the report rather than being quietly deleted.",
+            d: "Every candidate finding faces a panel of independent Opus 5.5 refuters — three for critical and high findings, two for medium and low. A finding survives only when every seat upholds it. A majority refuting kills it — except that a critical or high finding is only refuted when at least one refuting seat backs the refutation with a validated citation. Anything else — a split panel, or a critical/high refutation no seat could cite evidence for — is recorded as disputed and blocks issue readiness until you adjudicate it yourself. Refuted and disputed findings stay in the report rather than being quietly deleted.",
           },
           {
             t: "The checks that gate a section aren’t model output",
@@ -616,7 +616,7 @@ function About({
         </div>
         <div className="flex gap-3">
           <dt className="w-28 flex-none text-ink-faint">Final QC</dt>
-          <dd className="text-ink">Claude Opus 5</dd>
+          <dd className="text-ink">Claude Opus 5.5</dd>
         </div>
         <div className="flex gap-3">
           <dt className="w-28 flex-none text-ink-faint">Scope</dt>

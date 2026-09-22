@@ -10,7 +10,6 @@ import type {
   FileLoading,
   FollowUp,
   ImportNotice,
-  ProjectBriefManifest,
   ProjectFact,
   ProjectHome,
   ProjectLink,
@@ -38,16 +37,14 @@ import type {
 import FollowUpsPanel from "./FollowUpsPanel";
 import ProjectFactsPanel from "./ProjectFactsPanel";
 import ProjectPanel from "./ProjectPanel";
-import { ModalShell, primaryBtn, quietBtn } from "./ModalShell";
 import {
   ORIGINAL_UPLOAD_URL,
   downloadAttachment,
   exportDocxUrl,
-  projectBriefManifest,
 } from "../lib/api";
 import type { ProjectFactInput } from "../lib/api";
 import type { NextSectionRequest } from "../types";
-import NextSectionDialog, { BriefContents } from "./NextSectionDialog";
+import NextSectionDialog from "./NextSectionDialog";
 import { useDownloads } from "../lib/useDownloads";
 import IssuesDrawer, { StandardsStrip } from "./IssuesDrawer";
 import QCDrawer from "./QCDrawer";
@@ -126,6 +123,8 @@ interface Props {
   qc: QcSnapshot | null;
   readiness: ReadinessPayload | null;
   usage: UsageSummary | null;
+  /** The configured Final QC model id (`health.qc_model`). */
+  qcModel?: string;
   changedIds: ReadonlySet<string>;
   /** The file this session already saved itself to, or null when it never
    *  has. Null draws a plain Save that asks where; a target draws Save (which
@@ -387,6 +386,7 @@ export default function ArtifactPanel({
   qc,
   readiness,
   usage,
+  qcModel,
   changedIds,
   saveTarget,
   onSaveProject,
@@ -488,36 +488,26 @@ export default function ArtifactPanel({
   const exportsBusy = exports.busy !== null;
   const exportItem =
     "block w-full px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink disabled:opacity-50";
-  // Export project brief: a confirm modal that first shows what THIS session
-  // would export (the manifest route), then hands the write to the host —
-  // native Save dialog or download. A refusal is the server's own message.
-  const [briefConfirmOpen, setBriefConfirmOpen] = useState(false);
   // Next section (v1.20.0): the dialog collects the choice; App does the rest.
   const [nextSectionOpen, setNextSectionOpen] = useState(false);
-  const [briefManifest, setBriefManifest] = useState<ProjectBriefManifest | null>(null);
-  const [briefManifestError, setBriefManifestError] = useState("");
+  // Export project brief: straight to the host's write — the native Save
+  // dialog, else a download. No confirm step (owner decision, 2026-09-22).
+  // The menu closes on click, so the busy state rides the Export trigger and
+  // a failure gets its own dismissible strip, like the other exports. A
+  // cancelled Save dialog is a decision, not an error; a refusal is the
+  // server's own message.
   const [briefBusy, setBriefBusy] = useState(false);
   const [briefError, setBriefError] = useState("");
-  const openBriefConfirm = () => {
-    setExportMenuOpen(false);
-    setBriefConfirmOpen(true);
-    setBriefManifest(null);
-    setBriefManifestError("");
-    setBriefError("");
-    projectBriefManifest()
-      .then(setBriefManifest)
-      .catch((error: unknown) =>
-        setBriefManifestError(error instanceof Error ? error.message : String(error)),
-      );
-  };
+  // The Export trigger's busy state: a spec download OR the brief export.
+  const exportTriggerBusy = exportsBusy || briefBusy;
   const runBriefExport = async () => {
+    setExportMenuOpen(false);
     if (briefBusy) return;
     setBriefBusy(true);
     setBriefError("");
     try {
       const result = await onExportProjectBrief();
-      if (result.ok) setBriefConfirmOpen(false);
-      else if (!result.cancelled) {
+      if (!result.ok && !result.cancelled) {
         setBriefError(result.error || "The project brief could not be exported.");
       }
     } finally {
@@ -943,19 +933,21 @@ export default function ArtifactPanel({
             <button
               className={
                 actionButton +
-                (hasContent && !busy && !exportsBusy
+                (hasContent && !busy && !exportTriggerBusy
                   ? ""
                   : " pointer-events-none opacity-40")
               }
               onClick={() => setExportMenuOpen((open) => !open)}
-              disabled={!hasContent || busy || exportsBusy}
+              disabled={!hasContent || busy || exportTriggerBusy}
               title={
-                exportsBusy
-                  ? "Preparing the export…"
-                  : "Export the section as .docx"
+                briefBusy
+                  ? "Exporting the project brief…"
+                  : exportsBusy
+                    ? "Preparing the export…"
+                    : "Export the section as .docx"
               }
             >
-              {exportsBusy ? "Preparing…" : "Export ▾"}
+              {exportTriggerBusy ? "Preparing…" : "Export ▾"}
             </button>
             {exportMenuOpen && (
               <div
@@ -1155,8 +1147,9 @@ export default function ArtifactPanel({
                 {!tutorialActive && (
                   <button
                     className="block w-full border-t border-edge/60 px-3 py-1.5 text-left text-ink-dim hover:bg-surface hover:text-ink"
-                    onClick={openBriefConfirm}
-                    title="Write a .basproject carrying this project's profile, edition overrides, research, attached references and recorded facts — never the conversation or this document — so the next section of the same project starts where this one left off"
+                    onClick={() => void runBriefExport()}
+                    disabled={briefBusy}
+                    title="Save a .basproject carrying this project's profile, edition overrides, research, attached references and recorded facts — never the conversation or this document — so the next section of the same project starts where this one left off. It holds the full text of attached reference documents, so treat it as sensitive project data."
                     data-capability="project.brief-export"
                   >
                     Export project brief (.basproject)…
@@ -1443,6 +1436,25 @@ export default function ArtifactPanel({
         </div>
       )}
 
+      {briefError && (
+        <div
+          className="flex items-start justify-between gap-3 border-b border-warn/40 bg-warn/10 px-5 py-2 text-[11px]"
+          role="alert"
+          data-testid="brief-export-error"
+        >
+          <span className="min-w-0 text-warn">
+            Project brief export failed — {briefError}
+          </span>
+          <button
+            className="shrink-0 text-[11px] text-ink-faint hover:text-ink"
+            onClick={() => setBriefError("")}
+            title="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {openInWordError && (
         <div
           className="flex items-start justify-between gap-3 border-b border-warn/40 bg-warn/10 px-5 py-2 text-[11px]"
@@ -1670,6 +1682,7 @@ export default function ArtifactPanel({
         onAskModel={onAskModel}
         onJump={scrollToElement}
         openNonce={drawerNonces?.qc}
+        qcModel={qcModel}
       />
 
       <IssuesDrawer issues={lintIssues} onJump={scrollToElement} />
@@ -1762,59 +1775,6 @@ export default function ArtifactPanel({
             onStartNextSection(opts);
           }}
         />
-      )}
-      {briefConfirmOpen && (
-        <ModalShell
-          title="Export project brief"
-          onClose={() => setBriefConfirmOpen(false)}
-        >
-          <div data-capability="project.brief-export">
-            <p className="text-sm leading-relaxed text-ink-dim">
-              A <b className="text-ink">.basproject</b> carries what the next
-              section of this project should start with. It never carries the
-              conversation, this document, figures, the Final QC report or an
-              imported Word source — and excluded standards stay a per-section
-              decision.
-            </p>
-            {briefManifest ? (
-              <BriefContents manifest={briefManifest} />
-            ) : briefManifestError ? (
-              <p role="alert" className="mt-3 text-xs text-err">
-                {briefManifestError}
-              </p>
-            ) : (
-              <p className="mt-3 text-xs text-ink-faint">
-                Reading what this session would export…
-              </p>
-            )}
-            <p className="mt-3 text-[11px] text-ink-faint">
-              The file carries the full text of attached reference documents and
-              every recorded fact, so treat it as sensitive project data.
-            </p>
-            {briefError && (
-              <p role="alert" className="mt-2 text-xs text-err">
-                {briefError}
-              </p>
-            )}
-            <div className="mt-4 flex gap-2">
-              <button
-                type="button"
-                className={primaryBtn}
-                onClick={() => void runBriefExport()}
-                disabled={briefBusy || !briefManifest}
-              >
-                {briefBusy ? "Exporting…" : "Export project brief"}
-              </button>
-              <button
-                type="button"
-                className={quietBtn}
-                onClick={() => setBriefConfirmOpen(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </ModalShell>
       )}
 
       <StandardsStrip standards={standards} onEditDoc={onEditDoc} busy={busy} />

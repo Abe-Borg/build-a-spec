@@ -1026,6 +1026,10 @@ frontend/src/
                            pullNoticeLines passes the server's conflict and
                            warning lines through verbatim, each once — a
                            difference is never worded client-side
+  lib/qcModel.ts           qcModelLabel: health.qc_model → the display name
+                           the QC drawer's consent copy renders, plus whether
+                           it may claim to out-reason the drafter (known
+                           Opus/Fable ids only; unknown ids shown verbatim)
   lib/qcRemediation.ts     pure helpers for the compact remediation queue
                            (buckets, safe-fix vs advisory ordering); the
                            backend stays the authority on applicability
@@ -10730,6 +10734,82 @@ them by number. No release: Phases 2–6 ship together (Phase 7), so
   session), the post-read size bound by a `getsize` that under-reports;
   each was reverted in place → exactly its own test red, as was the
   export-time binding removed above.
+
+## Final QC moves to Opus 5.5 — implemented notes (v1.20.0)
+
+`settings.QC_MODEL` now defaults to `MODEL_OPUS_55` (`claude-opus-5-5`),
+priced $4/$20 (cache read 0.40, 5m write 5.00, 1h write 8.00 — the 0.1× /
+1.25× / 2.0× multipliers every other row uses) and added to
+`_STRICT_CAPABLE_MODELS` — the "a new QC model must land in both" rule.
+`MODEL_OPUS_5` stays in both tables so a retained report and a
+`BUILD_A_SPEC_QC_MODEL=claude-opus-5` override are still priced and strict.
+No schema or protocol bump.
+
+- **None of Opus 5.5's breaking changes reach this app, and this was
+  checked, not assumed.** Thinking cannot be disabled: QC always sends
+  adaptive. Its default effort drops to `medium`: QC always states effort
+  per phase (`QC_LENS_EFFORT` high / `QC_VERIFIER_EFFORT` medium), so the
+  new default never applies. Forced `tool_choice` `any`/`tool` 400s: no
+  request anywhere in `backend/` sends `tool_choice`. Thinking blocks are
+  bound to the model: continuations stay on one model. Computer use: the
+  app does not use it.
+- **Every retained Final QC result reads stale once**, because `model` is
+  in the hashed `input_manifest.configuration`. That is the v1.8.0 posture,
+  and the release note says so. Re-run before relying on an old result.
+- **Frozen history, deliberately not rewritten.** Earlier sections of this
+  file that say "Opus 5" describe what shipped at the time. So do the
+  engine/module docstrings that name Opus 5 as the QC model. The
+  user-facing copy (Help, the trust dossier, README) was updated, because
+  those surfaces are contracts.
+- **The paid-run consent copy names the CONFIGURED model, never a
+  hardcoded one** (caught in review on PR #177, Codex). The QC drawer's cost
+  line, its tooltips and the launch confirmation hardcoded the default, so a
+  `BUILD_A_SPEC_QC_MODEL` override got consent text describing a model the
+  run would not call — and credited it with out-reasoning the drafter.
+  `/api/health` now reports `qc_model` (`settings.QC_MODEL`), threaded
+  App → ArtifactPanel → QCDrawer, and `lib/qcModel.ts` (`qcModelLabel`)
+  turns it into a display name plus a `strongerThanDrafter` flag (true only
+  for the Opus/Fable ids it knows; an unknown id is shown verbatim and makes
+  no strength claim; absent → the shipped default). Help and the trust
+  dossier still quote the shipped default on purpose — they describe the
+  app, not one run. Pinned by `frontend/tests/qcModel.test.ts` (no model
+  name hardcoded in QCDrawer's code) and
+  `test_health_names_the_configured_qc_model`. The ledger test that prices
+  the "qc" bucket now pins `settings.QC_MODEL` to Opus 5.5 itself, so an
+  operator's override cannot turn it red.
+
+## Export project brief saves straight away — implemented notes (v1.20.0)
+
+Owner ask (Abraham, 2026-09-22): the brief export showed a huge modal, and
+all he needs is the brief on disk. Frontend only: no route, no SSE event, no
+dep, no project-format change.
+
+- **The Export menu's *Export project brief* entry writes directly.** It calls
+  the unchanged `App.saveProjectBrief` — `js_api.save_project_brief` (the
+  native Save dialog) in the shell, `downloadProjectBrief` in a browser — with
+  no confirm step and no manifest read first. **ERRATA**: "Project briefs"
+  (v1.17.0) says the brief entry "confirms with the manifest first", and "Next
+  section in one click" says the export confirm shares `BriefContents` with
+  `NextSectionDialog`. Neither holds any more: `BriefContents` now renders in
+  `NextSectionDialog` alone.
+- **The menu closes on click, so state lives beside it**, the pattern the
+  other exports already use: `exportTriggerBusy` (a spec download OR the
+  brief) labels and locks the Export trigger, and a failure gets its own
+  dismissible strip (`data-testid="brief-export-error"`). A cancelled Save
+  dialog is a decision and stays silent.
+- **The sensitivity disclosure moved, it was not dropped.** The modal said the
+  file carries the full text of attached reference documents; the menu
+  entry's tooltip says so now.
+- **`GET /api/project/brief/manifest` stays** (documented, tested API). Its
+  only frontend caller, `api.projectBriefManifest`, was deleted with the
+  modal, and `ArtifactPanel` no longer imports `ModalShell`.
+- **No capability or tour change.** `project.brief-export` stays on the menu
+  entry, so the three-place contract is untouched and `TOUR_VERSION` does not
+  move.
+- **Tests**: `frontend/tests/downloads.test.ts` gains a text-level pin — the
+  entry runs the export itself and keeps its capability id; no
+  `briefConfirmOpen`, `projectBriefManifest` or `<ModalShell` in the panel;
+  the error strip exists. Restoring the confirm step turns it red.
 
 ## The brief is a living file — implemented notes (Project workspace Phase 3)
 

@@ -3193,6 +3193,7 @@ export default function App() {
           qc={qc}
           readiness={readiness}
           usage={usage}
+          qcModel={health?.qc_model}
           changedIds={changedIds}
           saveTarget={saveTarget}
           onSaveProject={onSaveProject}

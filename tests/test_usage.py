@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -253,7 +254,10 @@ def test_a_subtotal_larger_than_its_total_is_clamped_not_inverted():
     assert cache_write_split({"cache_creation_1h_input_tokens": -5}) == (0, 0)
 
 
-def test_the_ledger_prices_a_one_hour_subtotal_it_accrued():
+def test_the_ledger_prices_a_one_hour_subtotal_it_accrued(monkeypatch):
+    # Pinned: "qc" prices at settings.QC_MODEL, which an operator may
+    # override (BUILD_A_SPEC_QC_MODEL); the literal below is Opus 5.5's.
+    monkeypatch.setattr(settings, "QC_MODEL", settings.MODEL_OPUS_55)
     ledger = UsageLedger()
     ledger.add(
         "qc",
@@ -264,7 +268,7 @@ def test_the_ledger_prices_a_one_hour_subtotal_it_accrued():
     )
     snap = ledger.snapshot()
     assert snap["totals"]["cache_creation_1h_input_tokens"] == 400_000
-    assert snap["estimated_cost_usd"]["by_category"]["qc"] == 7.75
+    assert snap["estimated_cost_usd"]["by_category"]["qc"] == 6.2  # Opus 5.5: 0.6M x $5.00 + 0.4M x $8.00
 
 
 def test_usage_to_dict_reads_the_nested_one_hour_subtotal():
@@ -632,3 +636,28 @@ def test_project_load_clears_the_context_gauge(monkeypatch):
     assert client.post("/api/project/load", json=project).json()["ok"] is True
     # A loaded project has no measurement until its first turn commits.
     assert client.get("/api/usage").json()["context"] is None
+
+
+def test_final_qc_defaults_to_opus_5_5_priced_and_strict():
+    """A QC model missing from PRICING is metered at Sonnet 5's rates, and one
+    missing from the strict list silently loses ``strict: true`` — neither
+    raises, so the default has to be pinned in both tables."""
+    from backend.research.schema import _STRICT_CAPABLE_MODELS
+
+    if not os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip():
+        assert settings.QC_MODEL == settings.MODEL_OPUS_55 == "claude-opus-5-5"
+    rates = settings.PRICING[settings.MODEL_OPUS_55]
+    assert rates["input"] * 1_000_000 == pytest.approx(4.0)
+    assert rates["output"] * 1_000_000 == pytest.approx(20.0)
+    assert settings.MODEL_OPUS_55 in _STRICT_CAPABLE_MODELS
+    # Opus 5 stays priced and strict: retained reports and overrides use it.
+    assert settings.MODEL_OPUS_5 in settings.PRICING
+    assert settings.MODEL_OPUS_5 in _STRICT_CAPABLE_MODELS
+
+
+def test_health_names_the_configured_qc_model(monkeypatch):
+    """The QC drawer's paid-run consent copy names this model, so it must be
+    the one the backend will actually call — an override included."""
+    monkeypatch.setattr(settings, "QC_MODEL", settings.MODEL_OPUS_5)
+    body = TestClient(create_app()).get("/api/health").json()
+    assert body["qc_model"] == "claude-opus-5"

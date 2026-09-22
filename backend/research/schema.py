@@ -155,6 +155,7 @@ _STRICT_CAPABLE_MODELS = frozenset(
         settings.MODEL_SONNET_5,
         settings.MODEL_OPUS_48,
         settings.MODEL_OPUS_5,
+        settings.MODEL_OPUS_55,
         settings.MODEL_FABLE_5,
     }
 )

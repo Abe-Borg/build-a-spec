@@ -419,16 +419,6 @@ export async function supersedeProjectFact(
   return projectFactsFrom(resp, "retire fact");
 }
 
-/** What THIS session would export as a project brief — the confirm modal. */
-export async function projectBriefManifest(): Promise<ProjectBriefManifest> {
-  const resp = await fetch("/api/project/brief/manifest");
-  const data = await resp.json();
-  if (!resp.ok || !data.ok) {
-    throw new Error(data.error ?? `brief manifest failed (${resp.status})`);
-  }
-  return data.manifest as ProjectBriefManifest;
-}
-
 /**
  * Read a .basproject — or a sibling section's .baspec, from which the brief
  * is built — without touching the session: the New-section dialog's preview.

@@ -753,3 +753,50 @@ def test_an_export_renders_the_snapshot_it_captured_not_a_later_document(
     assert "SECTION 21 13 13" in texts
     assert "SUMMARY" in " ".join(texts)
     assert "LATER ARTICLE" not in " ".join(texts)
+
+
+def test_a_preserved_block_takes_no_literal_label_in_the_redline():
+    """The normalized redline writes the diff's literal labels; a locked
+    block has none (Redline on your original, Phase 0), so it gets neither a
+    letter nor the tab that would follow one."""
+    from backend.spec_doc.model import Paragraph, apply_edits
+
+    base = SpecSection.empty()
+    base.number = "21 13 13"
+    base.title = "WET-PIPE SPRINKLER SYSTEMS"
+    base, _ = apply_edits(
+        base, [{"action": "add_article", "target_id": "pt1", "text": "SUMMARY"}]
+    )
+    article = base.parts[0].articles[0]
+    base, _ = apply_edits(
+        base,
+        [
+            {"action": "add_paragraph", "target_id": article.uid, "text": "Intro."},
+        ],
+    )
+    article = base.parts[0].articles[0]
+    article.paragraphs.append(
+        Paragraph(uid=f"{article.uid}.p{article.next_seq}", text="Grid | Cells", locked="table")
+    )
+    article.next_seq += 1
+    base, _ = apply_edits(
+        base,
+        [{"action": "add_paragraph", "target_id": article.uid, "text": "After."}],
+    )
+    cur, _ = apply_edits(
+        base,
+        [
+            {
+                "action": "replace",
+                "target_id": base.parts[0].articles[0].paragraphs[2].uid,
+                "text": "After the table.",
+            }
+        ],
+    )
+
+    payload = build_docx(cur, redline=diff_sections(base, cur))
+
+    texts = [p.text for p in Document(io.BytesIO(payload)).paragraphs]
+    assert "Grid | Cells" in texts
+    assert any(text.startswith("B.\t") for text in texts)
+    assert not any(text.startswith("C.\t") for text in texts)

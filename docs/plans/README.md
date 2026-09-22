@@ -39,14 +39,18 @@ plus Phases 3–6. Its README carries the handoff prompt, the
 frozen decisions, the finding-coverage matrix, the dependency edges and the
 phase gates; start there, not here.
 
-**[Redline on your original](REDLINE_ON_ORIGINAL_2026-09-22.md)**: proposed
-2026-09-22 and awaiting the owner's decisions; nothing is built yet. It adds a
-tracked-changes copy of the Word file you imported: every non-body part stays
-byte-identical, Reject All gives back the upload, and Accept All gives
-*Export Word (keeps your formatting)*. The export checks both halves itself and
-refuses when either check fails. Phase 0 fixes four bugs found in today's
-formatted export along the way: relettered provisions lose their tab and bold,
-a section break is dropped or duplicated, and a "(Not used.)" line goes stale.
+**[Redline on your original](REDLINE_ON_ORIGINAL_2026-09-22.md)**: opened
+2026-09-22; all six decisions ratified the same day. **Phase 0 is built (PR
+#184) and not yet released** — the owner picks its release. Phase 1 is next
+and not started; a fresh session starts from the plan's "Phase 0 — as built"
+note. The program adds a tracked-changes copy of the Word file you imported:
+every non-body part stays byte-identical, Reject All gives back the upload,
+and Accept All gives *Export Word (keeps your formatting)*. The export checks
+both halves itself and refuses when either check fails. Phase 0 fixed the four
+bugs found in today's formatted export along the way — relettered provisions
+lost their tab and bold, a section break was dropped or duplicated, and a
+"(Not used.)" line went stale — plus five more of the same export's defects it
+turned up.
 
 ## Retired
 

@@ -275,10 +275,10 @@ invisible to CI and expensive to the user.
       turn streams, undo after a delete.
 - [ ] "Ask model" round-trips and the queue recomputes on turn completion.
 
-### Final QC (v0.9.0; model updated v1.8.0, adjudication v1.9.0)
+### Final QC (v0.9.0; model updated v1.8.0 and v1.20.0, adjudication v1.9.0)
 
 - [ ] A live run on the configured QC model (`settings.QC_MODEL`, currently
-      Opus 5). The Review Room's three stages read honestly — specialists,
+      Opus 5.5). The Review Room's three stages read honestly — specialists,
       then candidate panels, then local fix validation — findings are real,
       and a refusal fails its lens clean without taking the others down.
       `tools/qc_verifier_canary.py --run` is the cheap standing check that the

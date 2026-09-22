@@ -131,6 +131,24 @@ RELEASE_NOTES: tuple[ReleaseNote, ...] = (
                     ),
                 ),
             ),
+            ReleaseSection(
+                title="Final QC",
+                items=(
+                    ReleaseItem(
+                        title="Final QC now runs on Claude Opus 5.5",
+                        body=(
+                            "The reviewers behind Final QC moved from Claude "
+                            "Opus 5 to the newer Claude Opus 5.5, which "
+                            "Anthropic prices 20% lower. Same five lenses, "
+                            "same verifier panels, same reasoning depth. "
+                            "A Final QC result you ran before this update "
+                            "will read as out of date once, because the "
+                            "model is part of what a review records. Run "
+                            "Final QC again before you rely on it."
+                        ),
+                    ),
+                ),
+            ),
         ),
     ),
     ReleaseNote(

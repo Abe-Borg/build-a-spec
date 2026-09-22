@@ -916,6 +916,10 @@ frontend/src/
                            session field as a load fallback) +
                            formatProjectHeading ("Discipline · Project Type ·
                            City, Region", never country)
+  lib/qcModel.ts           qcModelLabel: health.qc_model → the display name
+                           the QC drawer's consent copy renders, plus whether
+                           it may claim to out-reason the drafter (known
+                           Opus/Fable ids only; unknown ids shown verbatim)
   lib/qcRemediation.ts     pure helpers for the compact remediation queue
                            (buckets, safe-fix vs advisory ordering); the
                            backend stays the authority on applicability
@@ -10601,6 +10605,49 @@ them by number. No release: Phases 2–6 ship together (Phase 7), so
   session), the post-read size bound by a `getsize` that under-reports;
   each was reverted in place → exactly its own test red, as was the
   export-time binding removed above.
+
+## Final QC moves to Opus 5.5 — implemented notes (v1.20.0)
+
+`settings.QC_MODEL` now defaults to `MODEL_OPUS_55` (`claude-opus-5-5`),
+priced $4/$20 (cache read 0.40, 5m write 5.00, 1h write 8.00 — the 0.1× /
+1.25× / 2.0× multipliers every other row uses) and added to
+`_STRICT_CAPABLE_MODELS` — the "a new QC model must land in both" rule.
+`MODEL_OPUS_5` stays in both tables so a retained report and a
+`BUILD_A_SPEC_QC_MODEL=claude-opus-5` override are still priced and strict.
+No schema or protocol bump.
+
+- **None of Opus 5.5's breaking changes reach this app, and this was
+  checked, not assumed.** Thinking cannot be disabled: QC always sends
+  adaptive. Its default effort drops to `medium`: QC always states effort
+  per phase (`QC_LENS_EFFORT` high / `QC_VERIFIER_EFFORT` medium), so the
+  new default never applies. Forced `tool_choice` `any`/`tool` 400s: no
+  request anywhere in `backend/` sends `tool_choice`. Thinking blocks are
+  bound to the model: continuations stay on one model. Computer use: the
+  app does not use it.
+- **Every retained Final QC result reads stale once**, because `model` is
+  in the hashed `input_manifest.configuration`. That is the v1.8.0 posture,
+  and the release note says so. Re-run before relying on an old result.
+- **Frozen history, deliberately not rewritten.** Earlier sections of this
+  file that say "Opus 5" describe what shipped at the time. So do the
+  engine/module docstrings that name Opus 5 as the QC model. The
+  user-facing copy (Help, the trust dossier, README) was updated, because
+  those surfaces are contracts.
+- **The paid-run consent copy names the CONFIGURED model, never a
+  hardcoded one** (caught in review on PR #177, Codex). The QC drawer's cost
+  line, its tooltips and the launch confirmation hardcoded the default, so a
+  `BUILD_A_SPEC_QC_MODEL` override got consent text describing a model the
+  run would not call — and credited it with out-reasoning the drafter.
+  `/api/health` now reports `qc_model` (`settings.QC_MODEL`), threaded
+  App → ArtifactPanel → QCDrawer, and `lib/qcModel.ts` (`qcModelLabel`)
+  turns it into a display name plus a `strongerThanDrafter` flag (true only
+  for the Opus/Fable ids it knows; an unknown id is shown verbatim and makes
+  no strength claim; absent → the shipped default). Help and the trust
+  dossier still quote the shipped default on purpose — they describe the
+  app, not one run. Pinned by `frontend/tests/qcModel.test.ts` (no model
+  name hardcoded in QCDrawer's code) and
+  `test_health_names_the_configured_qc_model`. The ledger test that prices
+  the "qc" bucket now pins `settings.QC_MODEL` to Opus 5.5 itself, so an
+  operator's override cannot turn it red.
 
 ## Source-of-truth pointers into Claude-Spec-Critic
 

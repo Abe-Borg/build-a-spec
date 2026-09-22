@@ -36,6 +36,15 @@ MODEL_FABLE_5 = "claude-fable-5"
 # strong at). Thinking is on by default on Opus 5; requests state adaptive
 # thinking + an effort level, never a manual budget (a manual budget 400s).
 MODEL_OPUS_5 = "claude-opus-5"
+# Opus 5.5 superseded Opus 5 as the Final-QC default (2026-09-22): same 1M
+# context, 128K output, tokenizer and feature set, at $4/$20 instead of
+# $5/$25. The breaking changes vs Opus 5 do not touch this app: thinking
+# cannot be disabled (QC always sends adaptive), its default effort is
+# "medium" (QC always states effort explicitly), and forced tool_choice
+# any/tool 400s (no request in the app sends tool_choice). Opus 5 stays in
+# PRICING and the strict-capable list so retained reports and a
+# BUILD_A_SPEC_QC_MODEL override on it are still priced and strict.
+MODEL_OPUS_55 = "claude-opus-5-5"
 
 INTERVIEW_MODEL_DEFAULT = MODEL_SONNET_5
 INTERVIEW_MODEL = (
@@ -296,18 +305,18 @@ RESEARCH_MODEL = (
 RESEARCH_MAX_TOKENS = _int_env("BUILD_A_SPEC_RESEARCH_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)
 RESEARCH_EFFORT = _effort_env("BUILD_A_SPEC_RESEARCH_EFFORT", "high")
 
-# --- Final QC (the pre-issue review pass, on Opus 5) -------------------------
+# --- Final QC (the pre-issue review pass, on Opus 5.5) -----------------------
 
 # The one model other than Sonnet 5 in the app (frozen decision). A
 # user-triggered lens fan-out + adversarial verification pass before a
-# section goes out the door. Opus 5 runs adaptive thinking by default;
+# section goes out the door. Opus 5.5 runs adaptive thinking by default;
 # depth is set via output_config effort.
 #
 # Effort is "high" (2026-07-28, was "xhigh"): a run fans out to ~40 calls —
 # five lenses plus two or three verifier seats per finding — so xhigh's extra
 # reasoning depth compounded across the whole fan-out, and thinking bills as
 # output. Same reasoning that dialed RESEARCH_EFFORT back at four calls.
-QC_MODEL = os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip() or MODEL_OPUS_5
+QC_MODEL = os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip() or MODEL_OPUS_55
 QC_MAX_TOKENS = _int_env("BUILD_A_SPEC_QC_MAX_TOKENS", MODEL_MAX_OUTPUT_TOKENS, minimum=1)
 QC_EFFORT = _effort_env("BUILD_A_SPEC_QC_EFFORT", "high")
 
@@ -464,8 +473,8 @@ QC_MAX_FETCHES_LENS = _int_env("BUILD_A_SPEC_QC_MAX_FETCHES_LENS", 4, minimum=1)
 # verifier requests are the app's only one-hour writes today (v1.8.0), and
 # Chunk 4.2 puts the interview on them too.
 #
-# Opus 5 ($5/$25) is the Final-QC model; Fable 5 ($10/$50) is retained
-# because BUILD_A_SPEC_QC_MODEL can still select it. Web search bills
+# Opus 5.5 ($4/$20) is the Final-QC model; Opus 5 ($5/$25) and Fable 5
+# ($10/$50) are retained because BUILD_A_SPEC_QC_MODEL can still select them. Web search bills
 # $10 / 1,000 requests ($0.01 each); web fetch has no per-request fee (token
 # cost only). Keep this current when Anthropic's list pricing moves.
 #
@@ -500,6 +509,13 @@ PRICING: dict[str, dict[str, float]] = {
         "cache_read": 0.50 / 1_000_000,
         "cache_write": 6.25 / 1_000_000,
         "cache_write_1h": 10.00 / 1_000_000,
+    },
+    MODEL_OPUS_55: {
+        "input": 4.0 / 1_000_000,
+        "output": 20.0 / 1_000_000,
+        "cache_read": 0.40 / 1_000_000,
+        "cache_write": 5.00 / 1_000_000,
+        "cache_write_1h": 8.00 / 1_000_000,
     },
 }
 

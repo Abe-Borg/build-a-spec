@@ -65,6 +65,9 @@ export interface Health {
   app: string;
   version: string;
   model: string;
+  /** The model Final QC runs on (env-overridable). Optional: an older
+   *  backend does not send it. */
+  qc_model?: string;
   api_key_present: boolean;
   module?: string;
   module_id?: string;

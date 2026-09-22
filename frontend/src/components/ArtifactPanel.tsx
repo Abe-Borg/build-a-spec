@@ -120,6 +120,8 @@ interface Props {
   qc: QcSnapshot | null;
   readiness: ReadinessPayload | null;
   usage: UsageSummary | null;
+  /** The configured Final QC model id (`health.qc_model`). */
+  qcModel?: string;
   changedIds: ReadonlySet<string>;
   /** The file this session already saved itself to, or null when it never
    *  has. Null draws a plain Save that asks where; a target draws Save (which
@@ -379,6 +381,7 @@ export default function ArtifactPanel({
   qc,
   readiness,
   usage,
+  qcModel,
   changedIds,
   saveTarget,
   onSaveProject,
@@ -1662,6 +1665,7 @@ export default function ArtifactPanel({
         onAskModel={onAskModel}
         onJump={scrollToElement}
         openNonce={drawerNonces?.qc}
+        qcModel={qcModel}
       />
 
       <IssuesDrawer issues={lintIssues} onJump={scrollToElement} />

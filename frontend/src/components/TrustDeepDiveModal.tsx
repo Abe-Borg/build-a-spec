@@ -425,7 +425,7 @@ function DataFlowDiagram() {
           interview · drafting · research
         </text>
         <text x="412" y="136" {...small}>
-          Claude Opus 5
+          Claude Opus 5.5
         </text>
         <text x="412" y="152" {...faint}>
           Final QC only
@@ -622,7 +622,7 @@ function Dossier() {
             [
               "Final QC only",
               <>
-                Claude Opus 5 <Mono>(claude-opus-5)</Mono>
+                Claude Opus 5.5 <Mono>(claude-opus-5-5)</Mono>
               </>,
               "A stronger reasoning model than the one that drafts, chosen for a pass that has to catch what the drafter missed — it is measurably good at finding real defects without inventing them. It never touches the interview loop, and it is the only place a second model appears.",
             ],
@@ -898,7 +898,7 @@ function Dossier() {
               <br />
               <b className="text-ink">1 · Five lenses, run concurrently</b>{" "}
               (eight calls in flight at a time, shared with stage 2). Five
-              independent Opus 5 reviewers, none of which sees
+              independent Opus 5.5 reviewers, none of which sees
               the others’ output: code &amp; standard compliance; PART 1/2/3
               coordination and
               consistency; completeness against scope and grounded research;
@@ -959,7 +959,7 @@ function Dossier() {
           }
           model={
             <>
-              Claude Opus 5 — five lens calls plus two or three verifier calls{" "}
+              Claude Opus 5.5 — five lens calls plus two or three verifier calls{" "}
               <em>per finding</em>. Reasoning depth is set per stage: “high” for
               the lenses, which read the section cold and decide what is wrong
               with it, and “medium” for the verifier seats, which adjudicate one

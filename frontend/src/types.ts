@@ -2069,6 +2069,24 @@ export type StreamEvent =
 
 // --- Developer tools / diagnostics ------------------------------------------
 
+/** One category of a saved conversation (``history_hygiene.history_composition``). */
+export interface HistoryCompositionCategory {
+  category: string;
+  chars: number;
+  estimated_tokens: number;
+  blocks: number;
+}
+
+export interface HistoryComposition {
+  messages: number;
+  chars: number;
+  estimated_tokens: number;
+  /** Saved edit results still carrying a document outline — 0 for anything
+   *  this build committed or loaded. */
+  stale_outlines: number;
+  categories: HistoryCompositionCategory[];
+}
+
 /** `GET /api/diagnostics` — environment + session snapshot. */
 export interface DiagnosticsSnapshot {
   ok: boolean;
@@ -2236,6 +2254,9 @@ export interface DiagnosticsSnapshot {
     turn_active: boolean;
     stop_requested: boolean;
     last_context_tokens: number | null;
+    /** What the saved conversation the model re-reads every turn is made
+     *  of: sizes by category, never text. Tokens are a len/4 estimate. */
+    history_composition?: HistoryComposition;
     unsaved: boolean;
     import_report_present: boolean;
     module_id: string;

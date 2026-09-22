@@ -28,6 +28,10 @@ so users get one update, one What's-new modal, and one release page.
    "Release-note draft" (Projects, Research, Facts…). Every item says what
    the user can now DO. A behaviour change (Phase 4's source-ref check on
    the recording tool) is stated plainly.
+   Also collect the "Release-note draft" sections of
+   `../CHAT_HISTORY_COMPACTION_2026-09-22.md` for every phase of that plan
+   merged since v1.20.0 — it follows this program's release policy and
+   rides this release rather than cutting its own.
 4. **Bump the five version sites**: `backend/settings.py` `VERSION`,
    `frontend/package.json` `version`, BOTH root `version` fields of
    `frontend/package-lock.json` (the top-level one and `packages[""]`), and

@@ -303,6 +303,40 @@ document payload). `GET /api/project/sections` gains `pull_available` and
 `pull_summary`, and a native save's result gains `brief_refreshed`,
 `brief_written`, `brief_error`, `brief_report` and `pull_available`.
 
+## Chat history compaction (in progress)
+
+Every chat turn re-sends the whole conversation, and nothing bounded it: a
+long enough session would eventually exceed the model's 1M-token window,
+after which every message fails and the saved project keeps the problem.
+The plan is [`docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md`](docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md):
+first stop saving data that is already stored elsewhere, then condense the
+conversation rarely between turns, with the original transcript always
+kept and recallable. It ships with the next release, like the project
+workspace.
+
+### Stale outlines stay out of the conversation (Phase 1)
+
+Every edit the model makes returns the whole document outline, so it can
+map element ids between edits within a turn. That outline used to be saved
+into the conversation permanently, and it was most of what a long session
+re-sent: on a ~300-paragraph section, one **Draft full section** turn saved
+about 260k tokens, 85% of them these outlines, and every later one-sentence
+edit about 17k more. Now a saved turn keeps what each edit did and drops the
+outline; the model still sees it during the turn, and every turn already
+carries the full, current document with every element id. The same trim
+applies to a project saved by an earlier version as soon as it is opened
+(the file itself changes at the next save). Nothing you see in the chat
+changes.
+
+**Settings → Developer tools → Session state → History makeup** shows what
+the saved conversation is made of, by category (sizes only, never text).
+To measure saved projects offline — sizes and counts only, files named by a
+hash:
+
+```
+.venv\Scripts\python tools\chat_history_profile.py "C:\specs\*.baspec" --out history-measurement.md
+```
+
 ## Shipped in v1.20.0 (Next section in one click)
 
 **The project brief was a file relay.** Everything a section pays for could
@@ -1563,6 +1597,9 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          adaptive thinking, the per-turn PROJECT CONTEXT
                          block (full document + lint + research), incremental
                          history caching, per-turn usage aggregation
+    history_hygiene.py   keeps stale document outlines out of saved history
+                         (at commit and when an older project is opened) and
+                         measures what a history is made of, sizes only
 frontend/                Vite + React + TypeScript + Tailwind v4
   src/App.tsx            state owner: chat + document + lint + research + QC +
                          readiness + update + SSE dispatch

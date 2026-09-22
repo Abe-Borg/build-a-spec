@@ -1,120 +1,16 @@
 # Project workspace — carry a project's work across its sections
 
-Owner: Abraham. Drafted 2026-09-22 against `d5c9034` (v1.19.1). This file is
-the program's **handoff document**: a fresh session reads it, picks the next
-incomplete phase from the implementation record below, builds that one phase,
-and marks it complete here before stopping. Nothing about where the program
-stands lives anywhere else.
+Owner: Abraham. Drafted 2026-09-22 against `d5c9034` (v1.19.1).
 
-## Implementation record
-
-Update this table as phases land. Three states, and who sets each:
-
-- **not started** — nothing pushed.
-- **in review** — set by the phase's own implementation PR, which cannot know
-  whether it will merge: the row carries the PR number, the commit and the
-  version cut, and stays `in review` when that PR is merged with the row
-  still reading so. A later session never treats `in review` as done.
-- **complete** — set AFTER the merge, by the first later session to touch
-  this file (the reconcile step in the handoff prompt), or by Abraham by
-  hand. The proof is on `master`: the PR is merged, the release-notes entry
-  is in `backend/release_notes.py`, and the as-built deviations are recorded
-  under the phase heading in Part 2.
-
-A phase's status update therefore rides the NEXT PR, not its own. That is
-deliberate: `master` is the source of truth, an `in review` row names the PR
-to check, and a PR that was closed without merging is reconciled back to
-`not started` with a note rather than silently disappearing.
-
-| Phase | Status | Commit/PR | Version | Notes |
-|---|---|---|---|---|
-| plan | **complete** | PR #173 | — | Part 1 assessment + this plan; four Codex findings folded into Phases 3–4 (round identity, rid re-minting, the statement-only fact key, the source-ref resolver) |
-| 1 | **complete** | `b8bac2f` + `28bad83` (PR #174) | 1.20.0 | Next section →; three as-built deviations under the heading; an already-drafted number refused server-side (Codex) |
-| 2 | not started | | | **next up** — needs D1 (ratified: a folder); desktop shell only |
-| 3 | not started | | | after Phase 2 for the auto trigger; the merge itself is pure and can be built first |
-| 4 | not started | | | independent of 2–3 — may run beside them |
-| 5 | not started | | | gated on a measurement from a real second section |
-| 6 | not started | | | optional, D5: deferred until a second project for the same client exists |
-
-Decisions D1–D5 were **ratified as recommended by Abraham on 2026-09-22**
-("i trust you homie … just handle it") and are binding for every phase.
-
-## How to hand this off
-
-Give a fresh coding agent this prompt from the repository root:
-
-```text
-Read these files completely before touching code:
-
-1. CLAUDE.md
-2. docs/plans/PROJECT_WORKSPACE_2026-09-22.md
-
-FIRST, reconcile the implementation record against master. For every row
-marked "in review", check whether its PR merged (the GitHub API, or
-`git log origin/master --oneline` for its commit): merged -> mark it
-"complete" in your PR; closed without merging -> mark it "not started" with a
-one-line note; still open -> leave it, and do not start a phase that depends
-on it (continue that PR if it is yours to drive, else pick an independent
-phase). Never treat "in review" as done.
-
-THEN implement exactly ONE phase: the first phase whose Status is "not
-started" and whose dependencies (the "Depends on" line under its heading, and
-the Order and sizing table) are satisfied. Decisions D1-D5 are ratified and
-binding; the phase's design text is the spec, and its as-built deviations are
-recorded under its heading, not by rewriting the text. If current code makes
-part of the design unsafe, stop and explain the conflict with concrete code
-evidence.
-
-Keep tests hermetic: no network and no real API key. Use tests/fakes.py for
-provider behavior. Every phase ships as ONE pull request that also cuts a
-release: a new entry at the top of RELEASE_NOTES in backend/release_notes.py,
-the version bumped in backend/settings.py, frontend/package.json, BOTH root
-version fields of frontend/package-lock.json and the README headline, a
-"Shipped in vX.Y.Z" section in README.md, a CLAUDE.md implemented-notes
-section, and manual QA rows in docs/RELEASE_WINDOWS.md. A new user-facing
-control is a three-place capability edit (frontend/src/lib/capabilities.ts,
-the control's data-capability, a tour step) or npm test fails.
-
-Before pushing, from the repository root: ruff check ., the full pytest
-suite, (cd frontend && npm test && npm run build) -- the only package.json is
-frontend/, so the npm commands fail with ENOENT anywhere else --
-python packaging/windows/check_release_version.py --tag vX.Y.Z, and
-python packaging/windows/render_release_notes.py --version X.Y.Z (with
---notes-out and --body-out to a scratch dir). Push, open the PR, reply to
-every Codex thread with the fixing commit, and resolve them.
-
-Before stopping, mark the phase "in review" in the implementation record
-with the commit, PR, version and any deviations -- not "complete": the PR
-has not merged, and the next session's reconcile step promotes it once it
-has. Never push the git tag: the owner tags and pushes after the merge
-(git tag vX.Y.Z && git push --tags).
-```
-
-One phase is one reviewable pull request and one session. Phases 2 → 3 are a
-chain; Phase 4 is independent of both; Phase 5 waits on a measurement; Phase 6
-is optional. See "Order and sizing" at the end of Part 2.
-
-## Program rules
-
-- `CLAUDE.md` is binding — in particular turn atomicity across every store,
-  strip-at-commit, snapshot-before-expensive-work, the event-loop rule (an
-  `async def` handler never does seconds of CPU inline), and the
-  never-rewrite rule for implemented notes (append a new section; correct an
-  old one in an errata bullet).
-- **The transcript and the document never travel** between sections, in any
-  form. A model-written summary of a session is not a carry-over asset.
-- **Every carried asset keeps its provenance.** A brief carries records, never
-  prose the model wrote on the way out; a merged fact keeps who recorded it
-  and where; a harvested fact must resolve to something real.
-- **Nothing is deleted by a merge.** Supersede with a reason; re-mint an id
-  that collides; name what was dropped at a cap.
-- **Paid work is opt-in and previewed.** The harvest pass never fires on its
-  own and commits nothing the user did not accept.
-- **Every path stays fail-closed on the import gate.** A named page counts as
-  content; the choice to leave a page unnamed for an office-master import
-  belongs in the dialog (Phase 1 precedent).
-- Windows is the primary target. Paths that only the desktop shell can know
-  (Phase 2's project home) are local-only and never persisted into any file.
+**This file is the design RECORD, not the handoff.** The program's handoff
+— the implementation record, the prompt a fresh session starts from, the
+release policy (one release at the end, cut by Phase 7), the ratified
+decisions and the program rules — lives in
+[`project-workspace/README.md`](project-workspace/README.md), and each
+remaining phase has a full spec file beside it (`02_PROJECT_HOME.md` …
+`07_RELEASE_CLOSEOUT.md`). Where a phase file and Part 2 below differ, the
+phase file wins and records the difference. Phase 1 shipped in v1.20.0
+(PR #174); its as-built deviations are under its heading below.
 
 The ask: finish the common work on the fire-sprinkler section (21 13 13) —
 the client and jurisdiction research, the location facts, the system facts,

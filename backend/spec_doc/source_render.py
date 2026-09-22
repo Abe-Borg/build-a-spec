@@ -85,7 +85,15 @@ from .source_format import (
     SECTION_TITLE_UID,
     SourceFormatMap,
 )
-from .source_splice import FALLBACK_REVISIONS, append_text, splice_paragraph
+from .source_splice import (
+    FALLBACK_REVISIONS,
+    ParagraphMap,
+    SpliceOp,
+    append_text,
+    map_paragraph,
+    plan_splice,
+    render_clean,
+)
 
 _DOCUMENT_PART = "word/document.xml"
 
@@ -626,6 +634,75 @@ class _Group:
     gap: int = 0
 
 
+# ---------------------------------------------------------------------------
+# The emission plan (D-1 of the Redline-on-your-original plan)
+# ---------------------------------------------------------------------------
+
+#: A source element emitted as a byte-identical clone: an untouched
+#: provision, a heading reproduced verbatim, a preserved block.
+RECORD_KEPT = "kept"
+#: A source paragraph whose words changed: the word-level splice into its
+#: own runs, or — when the splice cannot map it — the first-run fallback.
+RECORD_SPLICED = "spliced"
+#: A new element, cloned from its nearest kin of its own kind.
+RECORD_INSERTED = "inserted"
+#: An anchored source element the user removed.
+RECORD_DELETED = "deleted"
+#: Unmodelled source content, carried through verbatim.
+RECORD_CARRIED = "carried"
+#: Unmodelled source content the clean export omits: the blank spacers of a
+#: deleted element, a stale "(Not used.)" line.
+RECORD_DROPPED = "dropped"
+#: The empty paragraph a displaced section-break holder leaves where its
+#: break belongs — the holder's own paragraph properties, nothing else.
+RECORD_LEFTOVER = "leftover"
+
+RECORD_KINDS = frozenset(
+    {
+        RECORD_KEPT,
+        RECORD_SPLICED,
+        RECORD_INSERTED,
+        RECORD_DELETED,
+        RECORD_CARRIED,
+        RECORD_DROPPED,
+        RECORD_LEFTOVER,
+    }
+)
+#: The kinds the clean export renders nothing for.
+_REMOVED_KINDS = frozenset({RECORD_DELETED, RECORD_DROPPED})
+
+
+@dataclass
+class Record:
+    """One body child of the emission plan.
+
+    ``source`` is the upload body index the record reproduces, removes or
+    derives from (``NO_ORIGIN`` for an inserted element). The clean export
+    renders every record except ``deleted`` and ``dropped``; the redline
+    renders every record, marking what Accept All and Reject All disagree
+    about. One plan feeding both is what makes "Accept All equals the
+    formatted export" true by construction.
+    """
+
+    kind: str
+    source: int = NO_ORIGIN
+    item: _Item | None = None
+    #: The clean export emits the source WITHOUT its section break: the
+    #: break was displaced and is left behind in a ``leftover`` record.
+    strip_break: bool = False
+    #: ``spliced``: the character map and edit script, or — when the splice
+    #: could not map the paragraph — the fallback reason instead.
+    pmap: ParagraphMap | None = None
+    ops: list[SpliceOp] | None = None
+    fallback: str = ""
+    #: ``inserted``: the kin the new element is cloned from.
+    template: int | None = None
+    #: Redline only: this record is one copy of a MOVED element — an
+    #: ``inserted`` copy at its new position or a ``deleted`` copy at its
+    #: old one (Phase 1, D-1/D-3).
+    moved: bool = False
+
+
 class _Assembler:
     def __init__(
         self,
@@ -660,6 +737,9 @@ class _Assembler:
             part.uid for part in section.parts if part.articles
         }
         self._dropped: set[int] = set()
+        # The blank spacers of a deleted element: the clean export drops
+        # them with it, the redline marks them deleted with it.
+        self._dropped_spacers: list[int] = []
         self._tails: dict[int, list[int]] = {}
         self._trailing: list[int] = []
         self._strip_break: set[int] = set()
@@ -717,7 +797,12 @@ class _Assembler:
                 # the tree never modelled (a picture-only paragraph, a body
                 # bookmark) stays where it was instead of being swept to the
                 # end of the file.
-                kept = [i for i in between if not _is_blank_paragraph(self._children[i])]
+                kept = []
+                for i in between:
+                    if _is_blank_paragraph(self._children[i]):
+                        self._dropped_spacers.append(i)
+                    else:
+                        kept.append(i)
                 if kept:
                     self._groups.append(_Group(position=origin - 0.5, members=kept))
             previous = origin
@@ -794,52 +879,23 @@ class _Assembler:
             if group.leftover:
                 self.stats["break_leftovers"] += 1
 
-    # -- rendering ---------------------------------------------------------
-    def _render_leftover(self, holder: int):
-        """An empty paragraph holding a displaced provision's section break.
+    # -- the plan ----------------------------------------------------------
+    def _item_record(self, item: _Item) -> Record:
+        """What the export does with one tree element, decided once.
 
-        The provision's own paragraph properties, so the break keeps its
-        place and spacing — minus its text, its identity (the provision may
-        still exist elsewhere) and its list numbering.
+        The decision the renderers used to make while rendering — clone,
+        splice or rebuild — is made here, so the clean export and the
+        redline read the same answer.
         """
-        paragraph = copy.deepcopy(self._children[holder])
-        for child in list(paragraph):
-            if child.tag != _W_PPR:
-                paragraph.remove(child)
-        _strip_identity(paragraph)
-        uid = self._anchored.get(holder, "")
-        if self._walker.label_kind(uid) == LABEL_AUTO:
-            _cancel_numbering(paragraph)
-        return paragraph
-
-    def _render_group(self, group: _Group) -> list:
-        rendered = [copy.deepcopy(self._children[i]) for i in group.members]
-        if group.leftover and group.holder is not None:
-            rendered.append(self._render_leftover(group.holder))
-        return rendered
-
-    def _render_item(self, item: _Item):
+        strip_break = item.origin in self._strip_break
         if item.mode in ("verbatim", "locked"):
             self.stats["preserved"] += 1
-            element = copy.deepcopy(self._children[item.origin])
-        elif item.mode == "new":
+            return Record(
+                RECORD_KEPT, item.origin, item, strip_break=strip_break
+            )
+        if item.mode == "new":
             self.stats["inserted"] += 1
-            if item.template is None:
-                element = _blank_template(False)
-            else:
-                element = copy.deepcopy(self._children[item.template])
-                # Clone hygiene: the kin's formatting, never its identity.
-                _strip_break(element)
-                _strip_identity(element)
-            _write_paragraph_text(element, item.text)
-            return element
-        else:
-            element = self._render_text(item)
-        if item.origin in self._strip_break:
-            _strip_break(element)
-        return element
-
-    def _render_text(self, item: _Item):
+            return Record(RECORD_INSERTED, NO_ORIGIN, item, template=item.template)
         source = self._children[item.origin]
         source_text = _accept_all_paragraph_text(source)
         revised = _element_has_tracked_changes(source)
@@ -851,22 +907,58 @@ class _Assembler:
             # (Codex). This is the untouched-provision guarantee: a
             # byte-identical clone, markup and all.
             self.stats["cloned"] += 1
-            return copy.deepcopy(source)
-        spliced, reason = (
-            (None, FALLBACK_REVISIONS)
-            if revised
-            else splice_paragraph(source, item.text, expected_text=source_text)
-        )
-        if spliced is not None:
+            return Record(
+                RECORD_KEPT, item.origin, item, strip_break=strip_break
+            )
+        if revised:
+            pmap, reason = None, FALLBACK_REVISIONS
+        else:
+            pmap, reason = map_paragraph(source, expected_text=source_text)
+        if pmap is not None:
             self.stats["spliced"] += 1
-            return spliced
+            return Record(
+                RECORD_SPLICED,
+                item.origin,
+                item,
+                strip_break=strip_break,
+                pmap=pmap,
+                ops=plan_splice(pmap.text, item.text),
+            )
         fallbacks = self.stats["fallback"]
         fallbacks[reason] = fallbacks.get(reason, 0) + 1
-        clone = copy.deepcopy(source)
-        _write_paragraph_text(clone, item.text)
-        return clone
+        return Record(
+            RECORD_SPLICED,
+            item.origin,
+            item,
+            strip_break=strip_break,
+            fallback=reason,
+        )
 
-    def assemble(self) -> list:
+    def _removed_records(self) -> list[Record]:
+        """What the upload holds and the clean export does not, in upload
+        order: removed anchored elements, their blank spacers, and stale
+        "(Not used.)" lines. The clean export renders none of them; the
+        redline marks each one deleted."""
+        holders = {
+            group.holder
+            for group in self._groups
+            if group.holder is not None and group.leftover
+        }
+        removed = [
+            Record(RECORD_DELETED, origin)
+            for origin in self._anchored_order
+            if origin not in self._position and origin not in holders
+        ]
+        removed.extend(
+            Record(RECORD_DROPPED, index)
+            for index in sorted(self._dropped) + self._dropped_spacers
+        )
+        removed.sort(key=lambda record: record.source)
+        return removed
+
+    def plan(self) -> tuple[list[Record], list[Record]]:
+        """``(records, removed)``: the clean export's body children in
+        output order, and what it leaves out of the upload."""
         self._classify_runs()
         self._place()
         self.stats["not_used_dropped"] = len(self._dropped)
@@ -874,23 +966,84 @@ class _Assembler:
         for group in sorted(self._groups, key=lambda g: g.position):
             if group.members or group.leftover:
                 by_gap.setdefault(group.gap, []).append(group)
-        output: list = []
+        records: list[Record] = []
         emitted_tails: set[int] = set()
         for gap in range(len(self.items) + 1):
             for group in by_gap.get(gap, ()):
-                output.extend(self._render_group(group))
+                records.extend(Record(RECORD_CARRIED, i) for i in group.members)
+                if group.leftover and group.holder is not None:
+                    records.append(Record(RECORD_LEFTOVER, group.holder))
             if gap == len(self.items):
                 break
             item = self.items[gap]
             if item.origin != NO_ORIGIN and item.origin not in emitted_tails:
                 emitted_tails.add(item.origin)
-                output.extend(
-                    copy.deepcopy(self._children[i])
+                records.extend(
+                    Record(RECORD_CARRIED, i)
                     for i in self._tails.get(item.origin, ())
                 )
-            output.append(self._render_item(item))
-        output.extend(copy.deepcopy(self._children[i]) for i in self._trailing)
-        return output
+            records.append(self._item_record(item))
+        records.extend(Record(RECORD_CARRIED, i) for i in self._trailing)
+        return records, self._removed_records()
+
+    # -- the clean rendering ----------------------------------------------
+    def render_leftover(self, holder: int):
+        """An empty paragraph holding a displaced provision's section break.
+
+        The provision's own paragraph properties, so the break keeps its
+        place and spacing — minus its text, its identity (the provision may
+        still exist elsewhere) and its list numbering.
+        """
+        paragraph = copy.deepcopy(self._children[holder])
+        for child in list(paragraph):
+            if child.tag != _W_PPR:
+                paragraph.remove(child)
+        _strip_identity(paragraph)
+        if self.holder_auto_numbered(holder):
+            _cancel_numbering(paragraph)
+        return paragraph
+
+    def holder_auto_numbered(self, holder: int) -> bool:
+        uid = self._anchored.get(holder, "")
+        return self._walker.label_kind(uid) == LABEL_AUTO
+
+    def render_inserted(self, record: Record):
+        """A new element: its kin's formatting, never its identity."""
+        if record.template is None:
+            element = _blank_template(False)
+        else:
+            element = copy.deepcopy(self._children[record.template])
+            # Clone hygiene: the kin's formatting, never its identity.
+            _strip_break(element)
+            _strip_identity(element)
+        _write_paragraph_text(element, record.item.text)
+        return element
+
+    def render_accepted(self, record: Record):
+        """``record`` as the clean export emits it (``None``: nothing)."""
+        kind = record.kind
+        if kind in _REMOVED_KINDS:
+            return None
+        if kind == RECORD_INSERTED:
+            return self.render_inserted(record)
+        if kind == RECORD_LEFTOVER:
+            return self.render_leftover(record.source)
+        if kind == RECORD_SPLICED:
+            if record.pmap is not None:
+                element = render_clean(record.pmap, record.ops or [])
+            else:
+                element = copy.deepcopy(self._children[record.source])
+                _write_paragraph_text(element, record.item.text)
+        else:  # kept, carried
+            element = copy.deepcopy(self._children[record.source])
+        if record.strip_break:
+            _strip_break(element)
+        return element
+
+    def assemble(self) -> list:
+        records, _removed = self.plan()
+        rendered = (self.render_accepted(record) for record in records)
+        return [element for element in rendered if element is not None]
 
 
 def render_preserving_docx(

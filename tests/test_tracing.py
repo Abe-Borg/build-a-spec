@@ -19,6 +19,48 @@ from backend.tracing.redaction import scrub_data
 from backend.tracing.retention import prune_trace_runs
 
 
+def _read_meta(path):
+    """run.json as the recorder last wrote it.
+
+    The writer replaces run.json atomically (a temp file, then ``os.replace``).
+    On Windows, opening the destination while that replace is in flight is
+    refused with ``PermissionError`` for an instant, so a test reading a LIVE
+    recorder's metadata retries that one error briefly (the release build's
+    Windows run failed on it). A torn file cannot happen, so JSON errors are
+    not retried. The app's own readers already treat any failed read as a gap.
+    """
+    deadline = time.monotonic() + 2.0
+    while True:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
+def test_read_meta_waits_out_a_replace_in_flight(tmp_path, monkeypatch):
+    """The helper retries the one error a Windows replace-in-flight raises.
+
+    The race itself cannot be staged off Windows, so this pins the mechanism:
+    two refused opens, then the file as written.
+    """
+    path = tmp_path / "run.json"
+    path.write_text('{"run_id": "r"}', encoding="utf-8")
+    real = type(path).read_text
+    calls = []
+
+    def refused_twice(self, *args, **kwargs):
+        calls.append(self)
+        if len(calls) < 3:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(path), "read_text", refused_twice)
+    assert _read_meta(path) == {"run_id": "r"}
+    assert len(calls) == 3
+
+
 def _read_jsonl(path):
     return [
         json.loads(line)
@@ -48,7 +90,7 @@ def test_recorder_writes_spans_events_and_run_meta(tmp_path):
     spans = _read_jsonl(run_dir / "spans.jsonl")
     events = _read_jsonl(run_dir / "events.jsonl")
     prompts = _read_jsonl(run_dir / "prompts.jsonl")
-    meta = json.loads((run_dir / "run.json").read_text())
+    meta = _read_meta(run_dir / "run.json")
 
     assert spans[0]["kind"] == "turn" and spans[0]["status"] == "ok"
     assert events[0]["type"] == "tool_dispatch" and events[0]["ops"] == 3
@@ -701,7 +743,7 @@ def test_jsonl_preserves_lone_surrogates_without_dropping_records(tmp_path):
 
         events = _read_jsonl(tmp_path / "surrogate" / "events.jsonl")
         assert events[0]["message"] == hostile
-        meta = json.loads((tmp_path / "surrogate" / "run.json").read_text())
+        meta = _read_meta(tmp_path / "surrogate" / "run.json")
         assert meta["recorder_health"]["dropped_records"] == 0
         assert meta["recorder_health"]["write_failures"] == 0
     finally:
@@ -767,9 +809,7 @@ def test_live_run_summary_is_checkpointed_without_a_bundle_flush(
         deadline = _time.monotonic() + 2.0
         summary = {}
         while _time.monotonic() < deadline:
-            meta = json.loads(
-                (tmp_path / "checkpoint" / "run.json").read_text()
-            )
+            meta = _read_meta(tmp_path / "checkpoint" / "run.json")
             summary = meta.get("summary") or {}
             if summary.get("events_total") == 1:
                 break
@@ -795,9 +835,7 @@ def test_idle_checkpoint_persists_enqueue_drop_health(monkeypatch, tmp_path):
         deadline = time.monotonic() + 2.0
         health = {}
         while time.monotonic() < deadline:
-            meta = json.loads(
-                (tmp_path / "idle-drop" / "run.json").read_text()
-            )
+            meta = _read_meta(tmp_path / "idle-drop" / "run.json")
             health = meta.get("recorder_health") or {}
             if health.get("queue_byte_drops") == 1:
                 break
@@ -833,16 +871,12 @@ def test_stop_preserves_writer_crash_as_terminal_failure(tmp_path):
     rec._writer_thread.join(timeout=2.0)
     assert rec._writer_thread.is_alive() is False
 
-    before_stop = json.loads(
-        (tmp_path / "writer-crash" / "run.json").read_text()
-    )
+    before_stop = _read_meta(tmp_path / "writer-crash" / "run.json")
     assert before_stop["recorder_health"]["state"] == "failed"
     assert before_stop["recorder_health"]["fatal_error"] == "OSError"
 
     rec.stop()
-    after_stop = json.loads(
-        (tmp_path / "writer-crash" / "run.json").read_text()
-    )
+    after_stop = _read_meta(tmp_path / "writer-crash" / "run.json")
     assert after_stop["ended_at"] is not None
     assert after_stop["recorder_health"]["state"] == "failed"
     assert after_stop["recorder_health"]["fatal_error"] == "OSError"
@@ -986,9 +1020,7 @@ def test_bounded_queue_drops_by_count_without_blocking_flush_control(tmp_path):
 
         events = _read_jsonl(tmp_path / "queue-count" / "events.jsonl")
         assert [event["index"] for event in events] == [1, 2]
-        meta = json.loads(
-            (tmp_path / "queue-count" / "run.json").read_text()
-        )
+        meta = _read_meta(tmp_path / "queue-count" / "run.json")
         health = meta["recorder_health"]
         assert health["dropped_records"] == 1
         assert health["queue_count_drops"] == 1
@@ -1016,9 +1048,7 @@ def test_queue_payload_byte_cap_rejects_one_oversized_record(tmp_path):
 
         events = _read_jsonl(tmp_path / "queue-bytes" / "events.jsonl")
         assert [event["payload"] for event in events] == ["small"]
-        meta = json.loads(
-            (tmp_path / "queue-bytes" / "run.json").read_text()
-        )
+        meta = _read_meta(tmp_path / "queue-bytes" / "run.json")
         health = meta["recorder_health"]
         assert health["queue_byte_drops"] == 1
         assert health["queue_count_drops"] == 0
@@ -1082,7 +1112,7 @@ def test_active_run_byte_cap_drops_records_but_barriers_still_progress(tmp_path)
         rec.add_event(None, "note", payload="second")
         assert rec.flush(timeout=2.0) is True
 
-        meta = json.loads((tmp_path / "byte-cap" / "run.json").read_text())
+        meta = _read_meta(tmp_path / "byte-cap" / "run.json")
         health = meta["recorder_health"]
         assert health["storage_limit_reached"] is True
         assert health["max_run_bytes"] == 1
@@ -1127,9 +1157,7 @@ def test_flush_metadata_summary_stops_exactly_at_its_barrier(tmp_path):
         flush_thread.join(timeout=2.0)
         assert result == {"ok": True}
 
-        first_meta = json.loads(
-            (tmp_path / "barrier-summary" / "run.json").read_text()
-        )
+        first_meta = _read_meta(tmp_path / "barrier-summary" / "run.json")
         assert first_meta["summary"]["records_enqueued"] == 1
         assert first_meta["summary"]["events_total"] == 1
         first_health = first_meta["recorder_health"]
@@ -1140,9 +1168,7 @@ def test_flush_metadata_summary_stops_exactly_at_its_barrier(tmp_path):
         )
 
         assert rec.flush(timeout=2.0) is True
-        second_meta = json.loads(
-            (tmp_path / "barrier-summary" / "run.json").read_text()
-        )
+        second_meta = _read_meta(tmp_path / "barrier-summary" / "run.json")
         assert second_meta["summary"]["records_enqueued"] == 2
         assert second_meta["summary"]["events_total"] == 2
         second_health = second_meta["recorder_health"]
@@ -1171,9 +1197,7 @@ def test_failed_event_summary_uses_closed_failure_shapes_and_counts(tmp_path):
         rec.add_event(None, "note", unrelated_failures=99)
         assert rec.flush(timeout=2.0) is True
 
-        meta = json.loads(
-            (tmp_path / "failure-classifier" / "run.json").read_text()
-        )
+        meta = _read_meta(tmp_path / "failure-classifier" / "run.json")
         summary = meta["summary"]
         assert summary["failed_events"] == 3
         assert summary["failed_events_by_type"] == {
@@ -1205,9 +1229,7 @@ def test_stop_timeout_later_converges_and_flush_requires_terminal_state(
     rec.add_event(None, "note", phase="queued")
     try:
         rec.stop(flush_timeout=0.01)
-        timed_out = json.loads(
-            (tmp_path / "stop-converges" / "run.json").read_text()
-        )
+        timed_out = _read_meta(tmp_path / "stop-converges" / "run.json")
         assert timed_out["recorder_health"]["state"] == "drain_timeout"
         assert timed_out["recorder_health"]["drain_timed_out"] is True
         assert rec.flush(timeout=0.01) is False
@@ -1215,9 +1237,7 @@ def test_stop_timeout_later_converges_and_flush_requires_terminal_state(
         gate.set()
         assert rec._writer_thread is not None
         rec._writer_thread.join(timeout=2.0)
-        final_meta = json.loads(
-            (tmp_path / "stop-converges" / "run.json").read_text()
-        )
+        final_meta = _read_meta(tmp_path / "stop-converges" / "run.json")
         final_health = final_meta["recorder_health"]
         assert final_health["state"] == "stopped"
         assert final_health["thread_alive"] is False
@@ -1237,7 +1257,7 @@ def test_run_meta_records_the_environment(tmp_path):
         environment={"platform": "TestOS-1.0", "python": "3.11.0", "pid": 42},
     )
     rec.stop()
-    meta = json.loads((tmp_path / "e" / "run.json").read_text())
+    meta = _read_meta(tmp_path / "e" / "run.json")
     assert meta["environment"]["platform"] == "TestOS-1.0"
     assert meta["environment"]["pid"] == 42
 
@@ -1247,7 +1267,7 @@ def test_run_meta_records_the_environment(tmp_path):
     )
     again.start(environment={"platform": "TestOS-2.0"})
     again.stop()
-    meta = json.loads((tmp_path / "e" / "run.json").read_text())
+    meta = _read_meta(tmp_path / "e" / "run.json")
     assert meta["environment"]["platform"] == "TestOS-2.0"
     assert len(meta["resumed_at"]) == 1
     assert meta["trace_schema_version"] == 2
@@ -1297,7 +1317,7 @@ def test_records_are_correlated_sequenced_and_summarized_at_flush(tmp_path):
     assert all(record["trace_run_id"] == "run-summary" for record in records)
     assert sorted(record["record_seq"] for record in records) == [1, 2, 3]
 
-    live_meta = json.loads((run_dir / "run.json").read_text())
+    live_meta = _read_meta(run_dir / "run.json")
     summary = live_meta["summary"]
     assert summary["records_enqueued"] == 3
     assert summary["events_by_type"] == {"api_request": 1}
@@ -1322,7 +1342,7 @@ def test_records_are_correlated_sequenced_and_summarized_at_flush(tmp_path):
     assert health["open_spans"] == 0
 
     rec.stop()
-    final_meta = json.loads((run_dir / "run.json").read_text())
+    final_meta = _read_meta(run_dir / "run.json")
     assert final_meta["recorder_health"]["state"] == "stopped"
     assert final_meta["process_instances"][-1]["ended_at"] is not None
 

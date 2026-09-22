@@ -70,7 +70,26 @@ main.py                    entry point: diagnostics.init_logging() FIRST, then
                            opens its dialog in the project folder, and a brief
                            export binds NO folder (it stamps the link in the
                            live session only; the next save writes it and
-                           finds the folder — Codex, PR #176)
+                           finds the folder — Codex, PR #176);
+                           Project workspace Phase 3: both save paths end in
+                           _finish_save, which after binding + discovery runs
+                           the brief refresh for a homed section
+                           (backend.app.refresh_project_brief, called
+                           directly — no token, no backend runtime needed)
+                           and folds it into the save result as
+                           brief_refreshed/brief_written/brief_error/
+                           brief_report/pull_available (never changing `ok`);
+                           save_project_brief MERGES onto an existing file
+                           (_merge_onto_existing_brief: bounded read, POST
+                           /api/project/brief/merge via _post_backend_file —
+                           a hand-built multipart body with this launch's
+                           token — read, merge and write under
+                           backend.app._BRIEF_FILE_LOCK; a different project
+                           or an unreadable file asks through
+                           create_confirmation_dialog OUTSIDE the lock, an
+                           unanswerable question being a "no");
+                           _atomic_write_target delegates to
+                           project_brief.write_brief_atomically
 backend/
   settings.py              models (claude-sonnet-5 default), SDK transport
                            (SDK_MAX_RETRIES / API_TIMEOUT_SECONDS — the SDK's
@@ -142,7 +161,32 @@ backend/
                            through sessions.resolve_section_file, re-assigns
                            project_home inside the commit's guard when the
                            file belongs to the same project) + project_home on
-                           _doc_payload + the home carried across next-section
+                           _doc_payload + the home carried across next-section;
+                           Project workspace Phase 3 moves _build_brief_locked
+                           to module level beside _session_brief_locked (the
+                           pure build), _record_brief_sync_locked (the link's
+                           registry + brief_updated_at, moved only when the
+                           session holds everything the file holds), the
+                           BriefSyncOutcome refusal vocabulary, and
+                           refresh_project_brief (module level so the shell
+                           calls the SAME implementation: _BRIEF_FILE_LOCK
+                           serializes read-merge-write in-process, the file is
+                           read and written off the guard, the section
+                           snapshotted under it); routes POST
+                           /api/project/brief/merge (async, upload parsed on
+                           a worker, answers merged bytes as text + report,
+                           never writes), /brief/refresh and /api/project/pull
+                           (all three in the lease middleware's list; pull
+                           merges UNDER one guard acquisition inside
+                           active_write and installs through
+                           _install_pull_locked — facts first because absorb
+                           is the one install that can refuse); GET
+                           /api/project/sections gains pull_available +
+                           pull_summary (_pull_availability: a dry-run merge,
+                           short-circuited only when the file's updated_at is
+                           the one the link last fully agreed with);
+                           _carried_research also names the sections a pulled
+                           round's stamp records
   standards.py             [PORT: Spec Critic src/core/code_cycles.py]
                            StandardEdition (+title for REFERENCES) / BaseCode /
                            StandardsBasis; effective_editions (pins + overrides −
@@ -192,7 +236,21 @@ backend/
                            fetch events, server-tool inputs buffered ONLY,
                            per-frame try/except (a malformed frame never fails
                            a dimension), no early break (stop semantics
-                           unchanged)
+                           unchanged). Project workspace Phase 3:
+                           ResearchRound.round_id (uuid4 hex minted in
+                           run_requirements_research) + item_ids (the round's
+                           own membership, new AND re-confirmed), both
+                           serialized only when set; append_research_round
+                           carries round_id like section and records
+                           item_ids; merge_research_profiles REPLAYS a copy's
+                           unseen rounds through append_research_round (keyed
+                           by research_round_key — round_id, else the hashed
+                           legacy_round_key carried as the replayed round's
+                           id), then reconciles what a replay cannot: the
+                           symmetric evidence date (_evidence_date), each
+                           dimension's latest-dated error, the profile date
+                           and project; returns base itself when nothing is
+                           new (the idempotence)
   research/grounding.py    [PORT: source_grounding.py + verifier collectors]
                            normalize_url, validate_cited_sources, evidence
                            collectors, stop-reason classes
@@ -440,7 +498,26 @@ backend/
                            research directive and a QC directive, delimiter
                            neutralization, "" when empty) and
                            project_facts_manifest_facts fingerprints the
-                           rendered FACT LINES for the QC manifest
+                           rendered FACT LINES for the QC manifest. Project
+                           workspace Phase 3: ProjectFact.uid (minted by
+                           record(), kept by every edit) + edited_at (stamped
+                           by update()), both serialized only when set;
+                           fact_match_key public (the merge key — scope-blind,
+                           like record()); _restore_facts is the ONE lenient
+                           parse (load, absorb, merge_facts) — repeated pids
+                           dropped, a borrowed uid cleared; next_seq property;
+                           absorb(snapshot) (refused while a turn owns the
+                           ledger; never moves _next_seq backwards); and
+                           merge_facts + FactsMergeReport / FactsMergeRefused:
+                           twin by uid (else statement + placement + where and
+                           when recorded), a retirement on either side is
+                           terminal, the later edited_at wins between live
+                           twins, the statement key confirms in place, the
+                           rest re-mints past pid_floor with superseded_by
+                           links rewritten, the wider scope survives a fold,
+                           a carried or merge-broken ref becomes
+                           source_kind="brief", and past MAX_ACTIVE_FACTS it
+                           refuses rather than drops
   project_brief.py         [v1.17.0] the .basproject: ProjectBrief +
                            build_project_brief (pure read; reuses the link's
                            project_id) / brief_bytes / brief_filename /
@@ -461,7 +538,29 @@ backend/
                            past the cap / wrong kind or format / bad id → None)
                            and merge_section_registries (by number, newest
                            exported_at wins, ties to the link, a blank
-                           file_name borrowed from the other record; pure)
+                           file_name borrowed from the other record; pure).
+                           Project workspace Phase 3 adds the write-back:
+                           merge_project_brief(existing, incoming, *,
+                           section_side, apply_setup, fact_pid_floor,
+                           reference_mint_floor, now) → (brief, MergeReport),
+                           pure and idempotent (nothing new returns `existing`
+                           untouched, updated_at included) — research via
+                           merge_research_profiles, references joined by
+                           content_fingerprint (_merge_reference_docs;
+                           duplicate rids on EITHER side refuse) with the cap
+                           applied only to what is ADDED
+                           (_cap_added_reference_docs), facts via merge_facts
+                           plus the D4 edition-conflict fact (direction-
+                           independent statement, uid from it), profile field
+                           by field (newest export wins, empty never erases),
+                           registry via merge_section_registries after
+                           _unless_only_restamped (a record that moved only
+                           its exported_at is not news); ProjectBriefMismatchError
+                           / ProjectBriefMergeRefused (carries the report);
+                           write_brief_atomically (the shell's atomic write,
+                           shared); read_brief_file (bounded, never follows a
+                           link); _now() at MICROSECOND resolution
+                           (updated_at is a version identity)
   suggestions.py           [Batch 9] model-driven reply chips: MAX_PROMPTS/
                            MAX_PROMPT_CHARS, SuggestError, validate_prompts (strict,
                            fold-whitespace/dedupe/cap; empty list valid) +
@@ -483,7 +582,9 @@ backend/
                            from committed history (PDF posture); the model re-reads
                            on demand. context_stubs() shows the REAL Anthropic-
                            counted token_count (post-truncation — the number the
-                           100k cap and the panel use), never a chars/4 guess
+                           100k cap and the panel use), never a chars/4 guess.
+                           next_seq property (Project workspace Phase 3): the
+                           floor a pull mints new rids past
   reference_extract.py     the attachment → text boundary: REFERENCE_KINDS
                            (.docx/.pdf/.txt/.xml/.csv) + labels, kind-for-filename,
                            sanitize_reference_filename (keeps the file's own
@@ -509,7 +610,10 @@ backend/
                            bundled and deterministic, no model call anywhere
                            in the tutorial; the structural copy also seeds a
                            project_link (TUTORIAL_PROJECT_ID; 21 13 13 + 21 30
-                           00, no home) for the Project panel step
+                           00, no home) for the Project panel step. Its facts
+                           fixture takes uids derived from the statements
+                           (record() mints random ones since Project
+                           workspace Phase 3; a fixture stays deterministic)
   sessions.py              SessionState (history + DocumentStore
                            + SpecModule + discipline (Batch 10, session-level
                            like module) + ResearchRunner + AuditRunner + QCRunner
@@ -925,6 +1029,12 @@ frontend/src/
                            session field as a load fallback) +
                            formatProjectHeading ("Discipline · Project Type ·
                            City, Region", never country)
+  lib/projectMerge.ts      [Project workspace Phase 3] pure helpers for the
+                           panel's write-back: describeBriefRefresh /
+                           describePullOffer / describePull COUNT, and
+                           pullNoticeLines passes the server's conflict and
+                           warning lines through verbatim, each once — a
+                           difference is never worded client-side
   lib/qcModel.ts           qcModelLabel: health.qc_model → the display name
                            the QC drawer's consent copy renders, plus whether
                            it may claim to out-reason the drafter (known
@@ -1054,7 +1164,10 @@ frontend/src/
                            facts") / ProjectPanel (Project workspace Phase 2
                            "Project" — the folder, the section registry with
                            present/current rows, Open by number, Next section
-                           →; desktop shell or tour only) / HelpModal (the five help topics + the
+                           →; desktop shell or tour only; Phase 3 adds Update
+                           project brief and the "changes to pull" offer with
+                           Pull project changes — both need a home, both hidden
+                           in a tour, one write-back at a time) / HelpModal (the five help topics + the
                            About footer, which states the license to every
                            user) / TrustDeepDiveModal (the "I'm not
                            convinced" dossier — fourteen runtime cards; a
@@ -1190,6 +1303,22 @@ tests/
                            load-file on the same bytes, the refusal matrix,
                            the home across next-section, and the shell's save
                            / brief-export / bind discovery incl. a moved folder
+  test_brief_merge.py      [Project workspace Phase 3] round identity (legacy
+                           bytes + QC fingerprint untouched, minted at birth),
+                           the same-day fork replayed to four rounds, the
+                           legacy-membership replay, the fact rules (statement
+                           key + wider scope, terminal retirement, re-mint +
+                           link rewrite, provenance vs `brief`, the refusing
+                           cap, an edit travelling by uid), references (kept
+                           by content, re-minted on collision, duplicate rids
+                           refused on either side, the cap only on what is
+                           added), D4 (one conflict fact however the sections
+                           take turns, the profile field by field),
+                           idempotence, the routes (merge, refresh with the
+                           failed-write byte identity, the refusal matrix,
+                           the pull installing only the three assets with QC
+                           reading stale), the dry-run offer, the shell's
+                           save-time refresh and the in-process lock
   test_facts_agent_visibility.py
                            [v1.17.0] the reference-visibility mirror: both
                            audiences, block 0 of every dimension rendered
@@ -10657,6 +10786,313 @@ No schema or protocol bump.
   `test_health_names_the_configured_qc_model`. The ledger test that prices
   the "qc" bucket now pins `settings.QC_MODEL` to Opus 5.5 itself, so an
   operator's override cannot turn it red.
+
+## Export project brief saves straight away — implemented notes (v1.20.0)
+
+Owner ask (Abraham, 2026-09-22): the brief export showed a huge modal, and
+all he needs is the brief on disk. Frontend only: no route, no SSE event, no
+dep, no project-format change.
+
+- **The Export menu's *Export project brief* entry writes directly.** It calls
+  the unchanged `App.saveProjectBrief` — `js_api.save_project_brief` (the
+  native Save dialog) in the shell, `downloadProjectBrief` in a browser — with
+  no confirm step and no manifest read first. **ERRATA**: "Project briefs"
+  (v1.17.0) says the brief entry "confirms with the manifest first", and "Next
+  section in one click" says the export confirm shares `BriefContents` with
+  `NextSectionDialog`. Neither holds any more: `BriefContents` now renders in
+  `NextSectionDialog` alone.
+- **The menu closes on click, so state lives beside it**, the pattern the
+  other exports already use: `exportTriggerBusy` (a spec download OR the
+  brief) labels and locks the Export trigger, and a failure gets its own
+  dismissible strip (`data-testid="brief-export-error"`). A cancelled Save
+  dialog is a decision and stays silent.
+- **The sensitivity disclosure moved, it was not dropped.** The modal said the
+  file carries the full text of attached reference documents; the menu
+  entry's tooltip says so now.
+- **`GET /api/project/brief/manifest` stays** (documented, tested API). Its
+  only frontend caller, `api.projectBriefManifest`, was deleted with the
+  modal, and `ArtifactPanel` no longer imports `ModalShell`.
+- **No capability or tour change.** `project.brief-export` stays on the menu
+  entry, so the three-place contract is untouched and `TOUR_VERSION` does not
+  move.
+- **Tests**: `frontend/tests/downloads.test.ts` gains a text-level pin — the
+  entry runs the export itself and keeps its capability id; no
+  `briefConfirmOpen`, `projectBriefManifest` or `<ModalShell` in the panel;
+  the error strip exists. Restoring the confirm step turns it red.
+
+## The brief is a living file — implemented notes (Project workspace Phase 3)
+
+Phase 3 of `docs/plans/project-workspace/` (spec: `03_WRITE_BACK_MERGE.md`,
+decisions D2 and D4). A section seeded from a project brief was a FORK:
+facts, rounds and references added in one section reached another only
+through a fresh export, and `save_project_brief` OVERWROTE an existing
+brief — silently deleting whatever another section had written into it. Now
+one append-only, id-joined, idempotent merge (`merge_project_brief`) runs
+three ways: a save of a homed section refreshes the brief beside it, an
+export onto an existing brief merges into it, and a section pulls what its
+siblings added. No release: Phases 2–6 ship together (Phase 7), so
+`VERSION` stays 1.20.0 and the user-facing notes wait in the phase file.
+No new dep, no new env knob, no new SSE event, no project-format bump.
+
+- **A round has an identity now, and a legacy one keeps its bytes.**
+  `ResearchRound.round_id` (uuid4 hex, minted in `run_requirements_research`
+  — the one place a round is born) and `item_ids` (the round's own
+  membership, new AND re-confirmed) ride after `section`, so positional
+  construction keeps working, and serialize only when set: a profile an
+  older build saved round-trips byte for byte and the QC research
+  fingerprint over it does not move (pinned). `append_research_round`
+  carries `round_id` exactly like `section` (the runner's adopt path passes
+  no keyword) and always records `item_ids` — so a round appended by this
+  build DOES gain the key, and `test_research_rounds.py`'s key-set pin was
+  updated knowingly.
+- **The research merge replays; it never restates the rules.**
+  `merge_research_profiles` keys rounds by `research_round_key` and feeds
+  every round the other copy lacks, as a one-round profile, through
+  `append_research_round` — so "confirm in place, citations union,
+  grounded OR, confidence max" and the cumulative per-dimension view are
+  the ones every Research press already applies. Two things a SEQUENTIAL
+  replay cannot get right are reconciled afterwards, and only those: an
+  item's evidence date (a fork's rounds interleave in time, and the replay
+  assumes the fresh round is newer — `_evidence_date` is the symmetric
+  rule: latest grounding, else earliest report) and the profile-level
+  "latest" facts (its date, its project, each dimension's latest-dated
+  error). Nothing new returns `base` ITSELF, which is the idempotence.
+- **A legacy round's key is carried as its id.** A round with no
+  `round_id` is keyed on `(section, research_date, round_index)` — hashed
+  into a round-id-shaped string (`legacy_round_key`) and CARRIED as the
+  replayed round's `round_id`, because a key built from a round index stops
+  matching the moment a merge renumbers it. A legacy round with no
+  membership replays only the items it first found (`round_index` equal to
+  its own) and records no membership rather than claiming that subset; the
+  report says both.
+- **Facts: the statement is the key, and the uid is the identity.** The
+  spec keyed on `fact_match_key(statement)` alone (now public; scope-blind,
+  like `record()`, so a merged ledger never holds a state `record()` would
+  refuse). That cannot recognise an EDITED fact across a fork — the
+  panel's Edit changes the statement — so `ProjectFact` gained `uid`
+  (minted by `record()`, kept by every edit) and `edited_at` (stamped by
+  `update()`), both serialized only when set. The order in `merge_facts`:
+  a twin (same uid; for a fact recorded before uids, the same statement +
+  placement + where and when recorded) is one fact — a retirement on
+  either side is terminal, and between two live copies the later
+  `edited_at` wins; otherwise the statement key confirms in place (detail
+  fills, `assumed` upgrades to `confirmed`, never the reverse); anything
+  else re-mints `pf-N` past `pid_floor` (a store's `next_seq`) with its
+  `superseded_by` links rewritten through the pid map; then no two live
+  facts may share a statement — the WIDER scope survives (tie: earlier
+  `recorded_at`) and the other folds in as superseded, pointing at it.
+- **A fact recorded before uids gets its uid at its FIRST EDIT, and it is
+  derived, not minted** (caught in review on PR #179, Codex). Such a fact
+  is known by its statement + placement + where and when it was recorded —
+  and an edit changes the statement. The first cut stamped `edited_at` but
+  no uid, so the edited record matched nothing: the save refreshed a brief
+  holding the old statement AND the new one, both live, and a pull
+  answered with the same pair. `update()` now stamps, BEFORE the edit
+  touches anything, the uid the pre-edit record derives
+  (`_legacy_uid`: a hash of `_legacy_identity`), and `find_twin` compares
+  `_effective_uid` — a uid, else the derived one — on both sides, so the
+  edited copy meets every unedited copy still holding no uid. DETERMINISTIC
+  on purpose: two sections editing the same legacy fact independently
+  stamp the same value and meet as twins, where a freshly minted uid would
+  have made them strangers. The twin path adopts the edit's uid
+  (`twin.uid = twin.uid or fact.uid`), because once the statement moves a
+  legacy twin can no longer derive it. An UNTOUCHED legacy fact still gains
+  no uid — materializing one on every merge would change the ledger's bytes
+  for nothing and wake every sibling's pull offer.
+- **`brief` is used in exactly two cases** — the D4 conflict fact, and a
+  carried fact whose source cannot resolve after the merge (a document
+  dropped at the cap, a research item the merged profile lacks) — and a
+  base fact is rewritten only when the MERGE broke its source
+  (`resolved_before`), never for a pre-existing broken ref. A pulled user
+  fact is still a user fact.
+- **References join by content, and the cap never deletes.** A document
+  both sides hold keeps its existing rid; a new one keeps its own unless
+  taken, else re-mints past the highest (a pull always mints from the
+  store's `next_seq`, so an id a deleted document once held is never
+  reused); the rid map rewrites incoming facts' refs. The cap
+  (`_cap_added_reference_docs`) refuses only what the merge ADDS — the
+  spec applied `within_reference_cap` to the merged list, which would drop
+  an attachment the extended side already held (a legacy file over the
+  token cap) — and names what did not fit. Duplicate rids refuse on EITHER
+  side: on a pull the file is the incoming side, and two documents under
+  one id would point a fact at whichever the map saw first.
+- **D4, as built.** The profile merges field by field (newest export's
+  value where it has one, an empty field never erasing a recorded one) —
+  "newest wins whole" would let a section with a blank client field erase
+  the project's client. An edition two sections disagree on is a warning
+  AND an assumed project fact whose statement is DIRECTION-INDEPENDENT
+  ("Sections disagree on the NFPA 13 edition: 2022 and 2025 are both
+  recorded. Resolve before issue.", editions sorted; who holds which, and
+  on what basis, in `detail`; uid derived from the statement). The spec's
+  template named sections in the statement, but the brief does not record
+  which section set its override, a statement is bounded at 240
+  characters, and a directional wording recorded ONE disagreement as TWO
+  facts once "newest export wins" flipped the brief's edition on each
+  section's save (pinned by the ping-pong case).
+- **A save that brings nothing writes nothing.** Every save rebuilds this
+  section's registry record with a fresh `exported_at`; a record that
+  differs from the file's only by that stamp keeps the file's copy
+  (`_unless_only_restamped`), so an unchanged save leaves the brief
+  byte-identical and in its order. `merge_project_brief` then returns
+  `existing` untouched — `updated_at` included — and nothing is written.
+- **`updated_at` is a version identity, so it has microseconds.** A smoke
+  run found the pull offer silently withheld: a sibling's refresh landing in
+  the same second as this section's sync produced the same seconds-resolution
+  `updated_at`, which the listing's short-circuit read as "the brief you
+  agreed with". `project_brief._now()` is now microsecond-resolution; the
+  ISO form still sorts chronologically against an older build's
+  seconds-only stamp, and the frontend reads only the date.
+- **Whether to offer a pull is a dry run, never the date alone.**
+  `project_link.brief_updated_at` moves only when the session holds
+  everything the file holds (`_record_brief_sync_locked(synced_at=None)`
+  otherwise), and `_pull_availability` answers "nothing" without reading
+  the file only when the file's `updated_at` IS that stamp; anything else
+  runs the pull as a dry merge (`_pull_dry_run`, `assets_changed`). A
+  sibling's save rewrites its registry record without adding an asset, so
+  the spec's "newer timestamp" rule would light the offer for nothing.
+- **The three triggers are one implementation.** `refresh_project_brief`
+  is module level so the shell's save calls the SAME function the route
+  does (directly, not over HTTP: no token, and a session with no backend
+  runtime still refreshes); `_BRIEF_FILE_LOCK` serializes read-merge-write
+  in-process (there is no cross-process lock — two app instances on one
+  folder: the later write wins, a torn file is impossible); the file is
+  read and written OFF the guard, the section snapshotted under it, and the
+  link recorded under it again only for the same generation. The save
+  result gains `brief_refreshed` / `brief_written` / `brief_error` /
+  `brief_report` / `pull_available` and never changes `ok`. The export path
+  merges through `POST /api/project/brief/merge` (the shell POSTs the
+  existing file with `_post_backend_file`, a hand-built multipart body — a
+  test replays that exact body through the real route) and holds
+  `_BRIEF_FILE_LOCK` across its read, merge and write, so an export and a
+  save-time refresh cannot interleave either; another project's brief, or a
+  file that is not one, is replaced only after `create_confirmation_dialog`
+  says yes — asked with the lock RELEASED, because a native modal must
+  never hold a lock another save waits on (pinned both ways). A write failure is a 500
+  `write_failed` (an environment failure, not a state conflict) and leaves
+  the old file byte-identical (pinned by patching `os.replace`).
+- **Windows asks "replace it?" before the app merges, and that is fine.**
+  pywebview's `FileDialog.SAVE` is a WinForms `SaveFileDialog`, whose
+  `OverwritePrompt` is on by default, so picking the project's existing
+  brief shows the OS question first; *Yes* returns the path and the app then
+  merges rather than replaces. Nothing is suppressed. The prompt promises
+  more loss than happens, never less. Since #178 removed the export's
+  confirm modal, the menu entry's tooltip is where this is said ("In the
+  desktop app, saving it over this project's existing brief adds to that
+  brief instead of replacing it"), and the QA row warns testers about the
+  OS question. Another project's brief gets both questions: the OS one,
+  then the app's own.
+- **A pull installs three assets, facts first.** `_install_pull_locked`
+  runs under the pull's one guard acquisition, inside `active_write`:
+  `facts.absorb` first because it is the one install that can refuse (a
+  turn owning the ledger) and a refusal must leave nothing half-installed;
+  then `research.restore` of the merged profile (the project-load path;
+  the next Research press is round N+1); then `references.load` with the
+  merged list and the store's own `next_seq` (not `add()`, which would
+  re-prepare the text and re-stamp it, and could not keep the rids the
+  merge already rewrote the facts' refs to). Profile, project type and
+  edition differences are REPORTED — the pull response carries the report
+  beside a fresh doc payload, not a session bundle (a bundle would reset
+  client state the pull never touched). The rounds a pull installs are
+  CARRIED: `research_rounds_at_seed` grows by them so the registry keeps
+  the section's own count, and `_carried_research` also names the sections
+  a carried round's stamp records — so the readiness disclosure appears for
+  a pulled-into section that was never seeded and never credits a
+  sibling's research to the seed alone.
+- **The offer and the result are one fact count, and it counts changes,
+  not new pids** (caught in review on PR #179, Codex). A pull keeps every
+  pid the section already holds — its ledger is the merge's base — so a
+  pull that EDITED or RETIRED facts minted nothing, and the result counted
+  minted pids: "nothing new to bring in", right after an offer that had
+  promised those changes. `_fact_changes(before, after)` joins the two
+  ledgers on pid and counts every merged record that is new or differs
+  (an edit, a retirement, a fold, a confirm-in-place); the offer
+  (`_pull_availability`, over `_pull_dry_merge`'s merged brief) and the
+  result (`_install_pull_locked`) both call it, so they cannot disagree
+  again. The frontend line says "fact change(s)", because a count that
+  includes in-place edits is not a count of facts; the trace field is
+  `fact_changes`.
+- **The fixture that could never see a rich session.**
+  `tests/fakes.audit_grade_qc_result` built its manifest with
+  `session.discipline` and no reference documents, while
+  `matches_current_inputs` rebuilds with the EFFECTIVE discipline and the
+  attachments — so any session whose identity names a discipline, or that
+  holds a document, was stale from birth. It builds with both now (the
+  PR #148 lesson, again). The tutorial's facts fixture takes uids derived
+  from its statements, because `record()` now mints random ones and a
+  tutorial fixture is bundled and deterministic;
+  `test_next_section.py`'s projection drops the per-record uid for the same
+  reason it drops the per-export project id.
+- **Limits, stated.** Append-only means deleting a reference document in
+  one section does not remove it from the brief, and a later pull offers
+  it back (retire a fact instead — a retirement travels). A browser (dev)
+  export stays a plain download: a browser cannot read the destination to
+  merge into it.
+- **Errata.** The plan file (`docs/plans/PROJECT_WORKSPACE_2026-09-22.md`
+  — the program's master plan) said every pulled fact is stamped
+  `source_kind="brief"`. Wrong, and the phase spec already corrected it:
+  provenance travels, and `brief` is used only in the two cases above.
+- **Frontend.** `ProjectPanel` gains **Update project brief** (with a
+  home, hidden in a tour) and the **changes to pull** header hint plus the
+  **Pull project changes** offer (only when the dry run says so), one
+  write-back at a time and both locked while anything runs (Open and Next
+  section → too, while one is in flight). `App.onPullProject` applies the
+  payload, then re-reads research, Final QC and readiness, posts a chat
+  marker, and shows the server's own conflict and warning lines in the
+  notice strip (`lib/projectMerge.ts` only counts); a save's `brief_error`
+  becomes a "Saved — but the project brief was not updated" notice.
+  `project.brief-refresh` / `project.pull` are the three-place capability
+  edit on the Phase 2 `project-panel` step (one step, several controls);
+  `TOUR_VERSION` unchanged — no step added or moved. HelpModal's recipe and
+  the trust dossier's brief card and data-handling line describe the
+  living file.
+- **Tests**: `tests/test_brief_merge.py` (29 — the two review regressions
+  included) plus 2 in
+  `test_close_prompt.py` (the export-onto-existing merge with both
+  questions, and the multipart replay through the real route), the
+  frontend `tests/projectWriteBack.test.ts` (6), and knowing updates in
+  `test_research_rounds.py` (the key set), `test_next_section.py` (the
+  uid), `projectPanel.test.ts` (Open is also locked by a write-back; the
+  step's four capabilities). Every mechanism was reverted in place to prove
+  it load-bearing: the restamp rule → 2 red, either-side duplicate rids →
+  1, the add-only cap → 1, the direction-independent statement → 1,
+  microsecond stamps → 1, the carried-round bump → 1, the pulled-stamp
+  names → 1, write-only-when-changed → 1, the fixture correction → 1, the
+  dry-run offer → 3, uid twins → 6, the in-process lock → 1, the export
+  merge → 1, the save-time refresh → 1; and the review fixes the same way:
+  the pre-edit uid stamp → 1, effective-uid matching → 1, the twin's uid
+  adoption → 1, the pid-joined change count → 1.
+
+## A live run.json read can be refused on Windows — implemented notes
+
+The Windows test build on `0a744ab` (the v1.20.0 commit) failed one test of
+2,030: `test_idle_checkpoint_persists_enqueue_drop_health` got
+`PermissionError` reading `run.json`. The same test passed on the previous
+Windows build, so it is intermittent. Test-only fix: no route, no SSE event,
+no dep, no behaviour change, no release-note item.
+
+- **The mechanism is the atomic replace, not a bug in it.** The recorder
+  writes a temp file and `os.replace`s it onto `run.json`. On Windows,
+  opening the destination while that replace is in flight is refused for an
+  instant. The polling tests patch the checkpoint interval to 20 ms and read
+  in a tight loop, which is exactly how to hit that instant.
+- **The app was already fine.** Every production reader of `run.json`
+  (`diagnostics._current_trace_meta_facts`, the run-listing check, the
+  retention scan) wraps the read and treats a failure as a gap. And the
+  WRITER side was already handled: a replace refused because a reader holds
+  the file counts a `metadata_write_failures` and retries on the next wake.
+- **`tests/test_tracing.py::_read_meta` is the one read**, retrying only
+  `PermissionError` for up to 2 s. JSON errors are deliberately NOT retried:
+  an atomic replace cannot produce a torn file, so a parse error is a real
+  bug. All 18 reads of a recorder's `run.json` in the file go through it;
+  the one left raw reads after `rec.stop()`, when no writer can race it.
+- **Same lesson as "A test that had only ever run on Linux".** CI's backend
+  job runs on Linux, so the release build is the first place the suite meets
+  Windows. The manual Windows dry run before tagging (`workflow_dispatch` on
+  `release.yml`) is what caught this one, one run after the same commit
+  family had passed.
+- **Tests**: `test_read_meta_waits_out_a_replace_in_flight` stages two
+  refused opens and requires the file's contents; turning the retry off
+  turns it red.
 
 ## Stale outlines stay out of saved history — implemented notes (compaction Phase 1)
 

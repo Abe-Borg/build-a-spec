@@ -56,6 +56,13 @@ def _projection(session) -> dict:
         record = ref.to_dict()
         record.pop("added_at", None)
         references.append(record)
+    facts = session.facts.to_dict()
+    # A fact's uid (Project workspace Phase 3) is minted per record, like the
+    # project id per export: the two paths each record their own rich
+    # section, so their uids differ by construction and say nothing about
+    # what was carried. Every other field is compared.
+    for fact in facts["project_facts"]:
+        fact.pop("uid", None)
     return {
         "doc": doc,
         "versions": len(session.doc.versions),
@@ -65,7 +72,7 @@ def _projection(session) -> dict:
         "research": research.to_dict() if research is not None else None,
         "research_status": session.research.status,
         "references": references,
-        "facts": session.facts.to_dict(),
+        "facts": facts,
         "link": link,
         "history": list(session.history),
         "template_origin": session.template_origin,

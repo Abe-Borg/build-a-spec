@@ -387,6 +387,83 @@ def _fetch_backend_bytes(
     )
 
 
+def _post_backend_file(
+    backend: _BackendRuntime,
+    path: str,
+    *,
+    payload: bytes,
+    filename: str = "upload.bin",
+) -> tuple[int, dict[str, Any]]:
+    """POST one file (multipart field ``file``) to THIS launch's backend with
+    its own token, and return ``(status, answer)``.
+
+    Every JSON answer comes back, error responses included: the caller
+    decides what a 409 means (the brief merge asks before replacing another
+    project's file). Raises ``RuntimeError`` only when the server cannot be
+    reached or answers something that is not a JSON object. The multipart
+    filename is a fixed ASCII name — the route reads the bytes, never the
+    name, and a path's own characters have no business in a header.
+    """
+    import urllib.error
+
+    from backend.app import _DESKTOP_TOKEN_HEADER
+
+    boundary = uuid.uuid4().hex
+    safe_name = "".join(ch for ch in filename if ch.isalnum() or ch in "._-") or "upload.bin"
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode("ascii"),
+            (
+                f'Content-Disposition: form-data; name="file"; filename="{safe_name}"\r\n'
+            ).encode("ascii"),
+            b"Content-Type: application/octet-stream\r\n\r\n",
+            payload,
+            f"\r\n--{boundary}--\r\n".encode("ascii"),
+        ]
+    )
+    request = urllib.request.Request(
+        f"http://{backend.host}:{backend.port}{path}",
+        data=body,
+        method="POST",
+        headers={
+            _DESKTOP_TOKEN_HEADER: backend.api_token,
+            "Accept": "application/json",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            status, raw = int(response.status), response.read()
+    except urllib.error.HTTPError as exc:
+        status, raw = int(exc.code), exc.read()
+    except (urllib.error.URLError, OSError) as exc:
+        raise RuntimeError("The local server could not be reached.") from exc
+    try:
+        answer = json.loads(raw.decode("utf-8", errors="replace"))
+    except ValueError as exc:
+        raise RuntimeError(f"The local server answered unexpectedly ({status}).") from exc
+    if not isinstance(answer, dict):
+        raise RuntimeError(f"The local server answered unexpectedly ({status}).")
+    return status, answer
+
+
+def _read_existing_file(path: str, limit: int) -> bytes | None:
+    """``path``'s bytes when it is a regular file no larger than ``limit`` —
+    else ``None`` (a link is never followed, a directory or an oversized
+    file is not a brief this app can read, and a read error is "cannot
+    read")."""
+    try:
+        if os.path.islink(path) or not os.path.isfile(path):
+            return None
+        if os.path.getsize(path) > limit:
+            return None
+        with open(path, "rb") as handle:
+            data = handle.read(limit + 1)
+    except OSError:
+        return None
+    return data if len(data) <= limit else None
+
+
 def _launch_file(path: Path) -> None:
     """Open ``path`` with the system's default application (Word for .docx)."""
     opener = getattr(os, "startfile", None)
@@ -798,6 +875,46 @@ class _CloseController:
         if not self._trusted_page():
             return self._save_result(False, error="This page cannot export.")
         written = os.path.abspath(os.fspath(target))
+        if os.path.lexists(written):
+            # Project workspace Phase 3: an export onto an existing brief
+            # MERGES (append-only) instead of overwriting — that file may be
+            # the other branch of a fork, and replacing it would silently
+            # delete everything another section wrote into it. Read, merge
+            # and write under the same in-process lock the save-time refresh
+            # takes, so the two can never interleave into a lost update; the
+            # question a non-brief file raises is asked OUTSIDE it — a
+            # native modal must never hold a lock another save waits on.
+            from backend.app import _BRIEF_FILE_LOCK
+
+            with _BRIEF_FILE_LOCK:
+                outcome = self._merge_onto_existing_brief(written)
+                if outcome["action"] == "merged":
+                    if not self._trusted_page():
+                        return self._save_result(False, error="This page cannot export.")
+                    if not self._atomic_write_target(
+                        written, outcome["payload"], prefix=".buildaspec-brief-"
+                    ):
+                        return self._save_result(
+                            False, error="The project brief could not be written."
+                        )
+                    return self._save_result(
+                        True,
+                        target=written,
+                        brief={
+                            "ok": True,
+                            "report": outcome["report"],
+                            "written": True,
+                            "pull_available": outcome["pull_available"],
+                        },
+                    )
+            if outcome["action"] == "error":
+                return self._save_result(False, error=outcome["error"])
+            if not self._confirm_brief_replace(outcome["message"]):
+                return self._save_result(False, cancelled=True)
+            # The user confirmed replacing a file that is not this project's
+            # brief: the plain export is written.
+            if not self._trusted_page():
+                return self._save_result(False, error="This page cannot export.")
         if not self._atomic_write_target(written, payload, prefix=".buildaspec-brief-"):
             return self._save_result(
                 False, error="The project brief could not be written."
@@ -812,6 +929,71 @@ class _CloseController:
         # it from a file that already carries the link. The panel says to
         # save once more until then.
         return self._save_result(True, target=written)
+
+    def _merge_onto_existing_brief(self, path: str) -> dict[str, Any]:
+        """Merge THIS section into the brief already at ``path`` — through
+        this launch's own ``POST /api/project/brief/merge``, so the route's
+        guards and the one merge implementation apply. Asks nothing itself.
+
+        Returns ``{"action", ...}``: ``merged`` (with the merged ``payload``,
+        its ``report`` and ``pull_available``), ``ask`` (with the ``message``
+        to confirm: the file is not a readable brief, or belongs to another
+        project), or ``error`` (the server refused — a streaming turn, a
+        merge that would have to delete — with its own message).
+        """
+        from backend.project_brief import MAX_PROJECT_BRIEF_BYTES
+
+        unreadable = {
+            "action": "ask",
+            "message": (
+                "The file you chose is not a project brief this app can read. "
+                "Replace it with this project's brief?"
+            ),
+        }
+        existing = _read_existing_file(path, MAX_PROJECT_BRIEF_BYTES)
+        if existing is None:
+            return unreadable
+        try:
+            status, answer = _post_backend_file(
+                self._backend,
+                "/api/project/brief/merge",
+                payload=existing,
+                filename="existing.basproject",
+            )
+        except RuntimeError as exc:
+            return {"action": "error", "error": str(exc)}
+        if status == 200 and answer.get("ok") and isinstance(answer.get("brief"), str):
+            return {
+                "action": "merged",
+                "payload": answer["brief"].encode("utf-8"),
+                "report": answer.get("report"),
+                "pull_available": bool(answer.get("pull_available")),
+            }
+        code = str(answer.get("code", "") or "")
+        if code == "different_project":
+            return {
+                "action": "ask",
+                "message": (
+                    "The file you chose is the brief of a DIFFERENT project. "
+                    "Replace it with this project's brief? Its own contents will "
+                    "be lost."
+                ),
+            }
+        if code == "brief_unreadable" or status == 413:
+            return unreadable
+        return {
+            "action": "error",
+            "error": str(answer.get("error") or f"The merge failed ({status})."),
+        }
+
+    def _confirm_brief_replace(self, message: str) -> bool:
+        """Ask before an export overwrites a file that is not this project's
+        brief. A dialog that cannot be shown is a "no": replacing another
+        project's work is never the default."""
+        try:
+            return bool(self._window.create_confirmation_dialog("Replace the file?", message))
+        except Exception:  # noqa: BLE001 - an unanswerable question is a no
+            return False
 
     def open_file(self, kind: str = "project") -> dict[str, str] | None:
         """Frontend's Open / Import buttons (native shell): show a native
@@ -959,6 +1141,7 @@ class _CloseController:
         error: str = "",
         target: str = "",
         home: dict[str, str] | None = None,
+        brief: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """The one shape every save path returns.
 
@@ -971,7 +1154,14 @@ class _CloseController:
         this save (``{"folder", "brief_name"}``), meaningful only beside a
         bound ``target``: an unbound target means the session was replaced
         mid-save, and its home is the replacement's business.
+
+        ``brief`` is what happened to the project brief (Project workspace
+        Phase 3) — the refresh a save of a homed section runs, or the merge
+        an export onto an existing brief ran. It never changes ``ok``: the
+        section is saved either way, and a brief that could not be updated
+        says so in ``brief_error`` beside a successful save.
         """
+        brief = brief or {}
         return {
             "ok": bool(ok),
             "cancelled": bool(cancelled),
@@ -979,6 +1169,11 @@ class _CloseController:
             "target": target,
             "name": os.path.basename(target) if target else "",
             "home": home,
+            "brief_refreshed": bool(brief.get("ok")),
+            "brief_written": bool(brief.get("written")),
+            "brief_error": "" if brief.get("ok") else str(brief.get("error", "") or ""),
+            "brief_report": brief.get("report"),
+            "pull_available": bool(brief.get("pull_available")),
         }
 
     @staticmethod
@@ -1062,12 +1257,7 @@ class _CloseController:
         if remembered:
             written = self._resolved_write(remembered, payload)
             if written:
-                bound = self._bind_save_target(session, written, generation)
-                return self._save_result(
-                    True,
-                    target=bound,
-                    home=self._discover_home_after_save(session, bound, generation),
-                )
+                return self._finish_save(workspace, session, written, generation)
             # Fall through to the dialog: the remembered file is no longer
             # writable, so asking is the only way forward that saves anything.
 
@@ -1108,12 +1298,49 @@ class _CloseController:
                 False,
                 error="That file could not be written. Try another location.",
             )
+        return self._finish_save(workspace, session, written, generation)
+
+    def _finish_save(
+        self, workspace, session, written: str, generation: int
+    ) -> dict[str, Any]:
+        """The tail both write paths share: bind the target, find (or lose)
+        the project folder, and — for a section that lives beside its brief —
+        refresh the brief (Project workspace Phase 3, D2)."""
         bound = self._bind_save_target(session, written, generation)
+        home = self._discover_home_after_save(session, bound, generation)
         return self._save_result(
             True,
             target=bound,
-            home=self._discover_home_after_save(session, bound, generation),
+            home=home,
+            brief=self._refresh_brief_after_save(workspace, home),
         )
+
+    @staticmethod
+    def _refresh_brief_after_save(workspace, home) -> dict[str, Any] | None:
+        """D2: a save of a section that lives beside its project brief
+        refreshes that brief — silently, and never at the save's expense.
+
+        The same implementation the Project panel's Update project brief runs
+        (``backend.app.refresh_project_brief``), called directly rather than
+        over HTTP: it needs no token, works in a session with no backend
+        runtime, and a refusal (a run in flight, a brief that cannot be read)
+        comes back as a value the save result carries, not an exception that
+        could fail the save. Nothing happens without a home — the brief is
+        only ever written in the project folder the session was found in.
+        """
+        if not home:
+            return None
+        try:
+            from backend.app import refresh_project_brief
+
+            return refresh_project_brief(workspace).payload()
+        except Exception:
+            import logging
+
+            logging.getLogger("buildaspec.main").exception(
+                "Refreshing the project brief after a save failed unexpectedly"
+            )
+            return {"ok": False, "error": "The project brief could not be updated."}
 
     @staticmethod
     def _bind_save_target(session, written: str, generation: int) -> str:
@@ -1149,32 +1376,20 @@ class _CloseController:
 
     @staticmethod
     def _atomic_write_target(target, payload: bytes, *, prefix: str) -> bool:
-        temp_path: str | None = None
+        """Atomically replace ``target`` with ``payload``; ``False`` on any
+        failure, with the old file left byte-identical.
+
+        One implementation with the brief refresh
+        (``project_brief.write_brief_atomically``, moved there in Project
+        workspace Phase 3 so the route and the shell cannot drift apart).
+        """
+        from backend.project_brief import write_brief_atomically
+
         try:
-            target_path = os.path.abspath(os.fspath(target))
-            target_dir = os.path.dirname(target_path)
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=target_dir,
-                prefix=prefix,
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                temp_path = handle.name
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_path, target_path)
-            temp_path = None
-            return True
+            write_brief_atomically(target, payload, prefix=prefix)
         except (OSError, TypeError, ValueError):
             return False
-        finally:
-            if temp_path is not None:
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
+        return True
 
 
 def main() -> None:

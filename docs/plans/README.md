@@ -38,6 +38,15 @@ plus Phases 3–6. Its README carries the handoff prompt, the
 frozen decisions, the finding-coverage matrix, the dependency edges and the
 phase gates; start there, not here.
 
+**[Redline on your original](REDLINE_ON_ORIGINAL_2026-09-22.md)**: proposed
+2026-09-22 and awaiting the owner's decisions; nothing is built yet. It adds a
+tracked-changes copy of the Word file you imported: every non-body part stays
+byte-identical, Reject All gives back the upload, and Accept All gives
+*Export Word (keeps your formatting)*. The export checks both halves itself and
+refuses when either check fails. Phase 0 fixes four bugs found in today's
+formatted export along the way: relettered provisions lose their tab and bold,
+a section break is dropped or duplicated, and a "(Not used.)" line goes stale.
+
 ## Retired
 
 The batch plans for v0.7.0–v1.0.0 (Batches 2–5) and the batch kickoff prompt

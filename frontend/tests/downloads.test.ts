@@ -224,3 +224,23 @@ test("the Export menu has no bare download anchors left", () => {
   // Every export goes through the shared helper, never a hand-built fetch.
   assert.match(panel, /downloadAttachment\(url, fallbackName, "Export"\)/);
 });
+
+test("Export project brief saves straight away, with no confirm modal", () => {
+  // Owner decision (2026-09-22): the export used to open a large modal
+  // listing what the brief carries before the Save dialog. It now goes
+  // straight to the save. Text-level for the same reason as the pin above.
+  const here = dirname(fileURLToPath(import.meta.url));
+  const panel = readFileSync(
+    join(here, "..", "src", "components", "ArtifactPanel.tsx"),
+    "utf8",
+  );
+  // The menu entry runs the export itself and keeps its capability id.
+  assert.match(
+    panel,
+    /onClick=\{\(\) => void runBriefExport\(\)\}[\s\S]{0,700}?data-capability="project\.brief-export"/,
+  );
+  // No confirm modal, and no manifest read to fill one.
+  assert.doesNotMatch(panel, /briefConfirmOpen|projectBriefManifest|<ModalShell/);
+  // The menu closes on click, so a failure needs a strip of its own.
+  assert.match(panel, /data-testid="brief-export-error"/);
+});

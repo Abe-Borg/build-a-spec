@@ -1,4 +1,5 @@
 import type {
+  BriefRefreshResult,
   DiagnosticsActivity,
   DiagnosticsLog,
   DiagnosticsSnapshot,
@@ -14,6 +15,7 @@ import type {
   ProjectBriefInspection,
   ProjectBriefManifest,
   ProjectFact,
+  ProjectPullResult,
   ProjectSectionsPayload,
   SeedReport,
   ImportResultPayload,
@@ -419,16 +421,6 @@ export async function supersedeProjectFact(
   return projectFactsFrom(resp, "retire fact");
 }
 
-/** What THIS session would export as a project brief — the confirm modal. */
-export async function projectBriefManifest(): Promise<ProjectBriefManifest> {
-  const resp = await fetch("/api/project/brief/manifest");
-  const data = await resp.json();
-  if (!resp.ok || !data.ok) {
-    throw new Error(data.error ?? `brief manifest failed (${resp.status})`);
-  }
-  return data.manifest as ProjectBriefManifest;
-}
-
 /**
  * Read a .basproject — or a sibling section's .baspec, from which the brief
  * is built — without touching the session: the New-section dialog's preview.
@@ -545,6 +537,38 @@ export async function openSection(number: string): Promise<ProjectLoadResult> {
     throw new Error(data.error ?? `open section failed (${resp.status})`);
   }
   return data as ProjectLoadResult;
+}
+
+/**
+ * Update project brief (Project workspace Phase 3): merge THIS section into
+ * the brief in its project folder and write it back — append-only, so
+ * nothing another section recorded is lost, and a merge that brings nothing
+ * new writes nothing. The same implementation every native save of a homed
+ * section runs. Refused in a tour, while anything runs, and with no project
+ * folder; the server's message is thrown as is.
+ */
+export async function refreshProjectBrief(): Promise<BriefRefreshResult> {
+  const resp = await fetch("/api/project/brief/refresh", { method: "POST" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `updating the project brief failed (${resp.status})`);
+  }
+  return data as BriefRefreshResult;
+}
+
+/**
+ * Pull project changes (Project workspace Phase 3): bring the research
+ * rounds, reference documents and facts this project's other sections added
+ * into THIS section. Profile and edition differences are reported, never
+ * applied — the answer carries the report beside a fresh doc payload.
+ */
+export async function pullProject(): Promise<ProjectPullResult> {
+  const resp = await fetch("/api/project/pull", { method: "POST" });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error ?? `pulling project changes failed (${resp.status})`);
+  }
+  return data as ProjectPullResult;
 }
 
 /**

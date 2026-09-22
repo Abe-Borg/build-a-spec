@@ -29,10 +29,10 @@ const fieldClass =
 
 type Choice = { kind: "catalog"; number: string } | { kind: "custom" } | { kind: "unnamed" };
 
-/** What the brief would carry, one line per asset — the export's receipt,
- *  shown BEFORE the write so a missing research profile or a reference past
+/** What the brief would carry, one line per asset — this dialog's receipt,
+ *  shown BEFORE the seed so a missing research profile or a reference past
  *  the cap is a decision rather than a surprise. */
-export function BriefContents({ manifest }: { manifest: ProjectBriefManifest }) {
+function BriefContents({ manifest }: { manifest: ProjectBriefManifest }) {
   const research = manifest.research;
   const rows: [string, string][] = [
     ["Project", manifest.name || "Untitled project"],

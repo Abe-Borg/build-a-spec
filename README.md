@@ -191,7 +191,7 @@ How the folder is found, and why nothing records it:
   brief.
 - This phase **reads** the brief in the folder and never writes it; the
   panel's "brief last updated" date is how a stale one shows. Keeping the
-  brief current on every save is the next phase.
+  brief current on every save is Phase 3, below.
 
 Routes: `GET /api/project/sections` (the panel's listing — the section's
 project link joined with the brief in the folder, the newest export winning
@@ -200,6 +200,108 @@ per section, plus which files are present and which are unregistered) and
 runs, or with no project folder; 404 for an unknown number or a missing file;
 400 for a file name outside the folder). The document payload gains
 `project_home`.
+
+### The brief is a living file (Phase 3)
+
+Until now a section started from a project brief was a **fork**: facts,
+research rounds and reference documents added in one section reached another
+only if someone exported a brief again — and exporting onto the existing brief
+**overwrote** it, deleting whatever another section had written into it since.
+Phase 3 makes the brief the project's shared, append-only record:
+
+- **A save updates the brief.** Every save of a section that lives beside its
+  brief (Phase 2's project folder) merges what that section established into
+  the brief — its research rounds, attached reference documents, project facts
+  and its own registry record. Nothing another section recorded is removed,
+  and a save that brings nothing new writes nothing, not even a new
+  timestamp. The file is replaced whole or not at all (a temporary file in the
+  same folder, then an atomic swap), so a full disk or a crash leaves the old
+  brief intact. Updating the brief never fails the save: when it cannot be
+  done (the brief was moved, it cannot be read, work is running) the save
+  still succeeds and says why the brief was not updated.
+- **Update project brief** in the Project panel does the same on demand.
+- **Exporting a brief onto an existing one merges** instead of overwriting.
+  When the file you pick is another project's brief, or not a brief at all,
+  the app asks before replacing it — "no" leaves the file untouched.
+- **Pull project changes.** When the brief holds work this section does not
+  have yet, the Project panel says so ("changes to pull") and offers **Pull
+  project changes**. A pull brings in exactly three things: the research
+  rounds other sections ran (replayed after this section's own, so the next
+  Research press is still round N+1, and the readiness checklist names the
+  sections they came from), their reference documents (a new one takes the
+  next free id in this section, and the facts that cite it follow it), and
+  their project facts — new ones, and edits or retirements of facts this
+  section already holds (a fact recorded by an earlier version is recognised
+  from its first edit on). The panel counts every fact the pull adds or
+  changes, the same count the offer showed. Everything else is **reported,
+  never applied**: a different city, client or project type, or an edition
+  two sections record differently, is listed in the panel's notice strip for
+  you to act on — the document is this section's own. A pull that changes
+  what Final QC read makes a retained Final QC report read stale, exactly as
+  editing those inputs does. Whether a pull is worth offering is decided by a
+  dry run of the pull itself, never by the file's date alone — a sibling
+  saving without adding anything does not light the offer.
+
+How two copies of a project are joined (one merge, used by all three):
+
+- **Research rounds have identities.** Every round records a unique id and the
+  findings it made or re-confirmed. A round one copy has and the other lacks
+  is replayed through the same rule every Research press already follows: a
+  finding found again is confirmed in place (citations combined, dated by its
+  latest grounding), never duplicated. A round saved before identities existed
+  is matched by section, date and round number, and the report says so. A
+  profile saved by an older build keeps its exact bytes, so a retained Final QC
+  report over it does not go stale for this.
+- **Facts are joined by what they say.** A fact stated the same way (spacing
+  and capitals aside) is one fact; the same fact recorded at two scopes keeps
+  the wider one (project over discipline over section) and records the other
+  as merged into it; a fact retired in one section is retired everywhere, with
+  that section's reason, and never comes back from an older copy. Each fact
+  also carries its own identity, so a fact edited in the Project facts panel
+  is still recognised, and between two edits the later one wins. A fact an
+  older build recorded has no identity yet; it gets one — derived from the
+  fact as it was, so every copy of it agrees — the first time it is edited,
+  and two sections editing it on their own still meet as one fact. A carried
+  fact keeps its provenance — who recorded it, where, when, and on what source
+  — except that one whose source cannot be found after the merge (a document
+  over the attachment limit, a research finding the brief does not hold) says
+  so and names the section that recorded it instead. Merging never pushes the
+  ledger past its 150-active-fact limit: it refuses, and nothing is written.
+- **Reference documents are joined by their content.** A document both sides
+  hold keeps the id it already has; a new one whose id is taken gets the next
+  free one. The attachment limit only ever refuses what is new — a document
+  the brief (or the section) already holds is never dropped — and anything
+  that did not fit is named. A brief listing two documents under one id was
+  edited by hand and is refused.
+- **The project setup: newest export wins.** For the profile, each field takes
+  the newest export's value, and an empty field never erases a recorded one;
+  every difference is reported with both values. For an edition two sections
+  record differently, the brief takes the newest export's — and the
+  disagreement becomes a project fact to resolve, stated the same way whichever
+  section saved last ("Sections disagree on the NFPA 13 edition: 2022 and 2025
+  are both recorded. Resolve before issue."), with each section's edition and
+  basis in its detail.
+- **Never merged:** the document, the conversation, figures, Final QC,
+  "Waiting on you", excluded standards, and any imported Word source — none of
+  them travel in a brief.
+
+Limits worth knowing: deleting a reference document in one section does not
+remove it from the brief, and a later pull offers it back (retire a fact
+instead of deleting it — a retirement travels). Two copies of the app
+updating the same brief at the same instant cannot corrupt it, but the later
+write wins; within one copy of the app, updates wait their turn. A brief's
+timestamps now carry microseconds, so a brief rewritten within the same second
+still reads as a change.
+
+Routes: `POST /api/project/brief/merge` (multipart `file` — an existing
+brief's bytes; answers the merged brief and a report, never writes; 409
+`different_project`, 400 `brief_unreadable`), `POST /api/project/brief/refresh`
+(merges into the brief in the project folder and writes it; 409 in a tour,
+while anything runs, or with no project folder), and `POST /api/project/pull`
+(the other direction; same refusals, answers the report beside a fresh
+document payload). `GET /api/project/sections` gains `pull_available` and
+`pull_summary`, and a native save's result gains `brief_refreshed`,
+`brief_written`, `brief_error`, `brief_report` and `pull_available`.
 
 ## Chat history compaction (in progress)
 
@@ -267,6 +369,14 @@ then the file dialog. Phase 1 of the project-workspace plan
 - **Template pairing stays on the New-session route.** The dialog says so.
   The file route also remains the way to continue a project on another
   machine or another day.
+- **Export project brief saves straight away.** Export → *Export project
+  brief* no longer opens the confirm dialog that listed what would travel
+  (described under v1.17.0 below); it goes straight to the native Save
+  dialog, or a download in a browser. The menu entry's tooltip keeps the
+  sensitivity note — the file carries the full text of attached reference
+  documents — and a failed export shows in its own dismissible strip under
+  the panel actions. `GET /api/project/brief/manifest` stays for API
+  callers; the app no longer reads it.
 
 ## Shipped in v1.17.0 (Project briefs — the next section starts where the last one left off)
 
@@ -1371,6 +1481,8 @@ backend/                 FastAPI + the conversation engine (Python 3.11+)
                          /api/project/next-section (GET options / POST seed),
                          /api/project/sections + /api/project/open-section
                          (the project folder, Project workspace Phase 2),
+                         POST /api/project/brief/merge|refresh +
+                         POST /api/project/pull (the living brief, Phase 3),
                          /api/release-notes (+ seen),
                          /api/session/unsaved|bundle, /api/usage,
                          /api/update/check|install,

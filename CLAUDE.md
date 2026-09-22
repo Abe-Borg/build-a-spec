@@ -11106,9 +11106,9 @@ No new dep, no new env knob, no new SSE event, no project-format bump.
 
 ## The formatted export stops losing things — implemented notes (Redline on your original, Phase 0)
 
-Phase 0 of `docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md`, the program that
-puts the redline INTO the Word file the user imported (that is Phase 1, not
-started). Phase 0 fixes today's *Export Word (keeps your formatting)*
+Phase 0 of `docs/plans/REDLINE_ON_ORIGINAL_2026-09-22.md` (PR #184), the
+program that puts the redline INTO the Word file the user imported (that is
+Phase 1, not started). Phase 0 fixes today's *Export Word (keeps your formatting)*
 because the redline's Accept All must equal it: left alone, the redline
 would have faithfully reproduced every bug below, two of them as tracked
 section-break changes nobody made. The owner ratified all six of the plan's

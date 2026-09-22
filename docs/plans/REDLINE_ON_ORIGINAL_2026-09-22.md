@@ -1,6 +1,6 @@
 # Redline on your original — tracked changes in the Word file you imported
 
-**Status:** Phase 0 built 2026-09-22 in PR #PRNUM — not yet released; the
+**Status:** Phase 0 built 2026-09-22 in PR #184 — not yet released; the
 owner picks the release (its note is under "Release-note drafts"). All six
 decisions ratified 2026-09-22 (see "Decisions"). **Phase 1 is next and not
 started** — start from "Phase 0 — as built" under "Phases".
@@ -489,7 +489,7 @@ release note.
 
 #### Phase 0 — as built
 
-**Built in PR #PRNUM (2026-09-22); not yet released.** No VERSION bump, no
+**Built in PR #184 (2026-09-22); not yet released.** No VERSION bump, no
 `release_notes.py` entry. The contract is in `docs/DOCX_FIDELITY.md` →
 "Appearance-preserving export"; the why and the traps are in `CLAUDE.md` →
 "The formatted export stops losing things". Code: `spec_doc/source_splice.py`

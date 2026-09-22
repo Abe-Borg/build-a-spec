@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -632,3 +633,20 @@ def test_project_load_clears_the_context_gauge(monkeypatch):
     assert client.post("/api/project/load", json=project).json()["ok"] is True
     # A loaded project has no measurement until its first turn commits.
     assert client.get("/api/usage").json()["context"] is None
+
+
+def test_final_qc_defaults_to_opus_5_5_priced_and_strict():
+    """A QC model missing from PRICING is metered at Sonnet 5's rates, and one
+    missing from the strict list silently loses ``strict: true`` — neither
+    raises, so the default has to be pinned in both tables."""
+    from backend.research.schema import _STRICT_CAPABLE_MODELS
+
+    if not os.environ.get("BUILD_A_SPEC_QC_MODEL", "").strip():
+        assert settings.QC_MODEL == settings.MODEL_OPUS_55 == "claude-opus-5-5"
+    rates = settings.PRICING[settings.MODEL_OPUS_55]
+    assert rates["input"] * 1_000_000 == pytest.approx(4.0)
+    assert rates["output"] * 1_000_000 == pytest.approx(20.0)
+    assert settings.MODEL_OPUS_55 in _STRICT_CAPABLE_MODELS
+    # Opus 5 stays priced and strict: retained reports and overrides use it.
+    assert settings.MODEL_OPUS_5 in settings.PRICING
+    assert settings.MODEL_OPUS_5 in _STRICT_CAPABLE_MODELS

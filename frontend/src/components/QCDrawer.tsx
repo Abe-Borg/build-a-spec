@@ -1,10 +1,10 @@
 /**
- * Final QC on Opus 5: one button, a fleet of Opus 5 reviewers,
+ * Final QC on Opus 5.5: one button, a fleet of Opus 5.5 reviewers,
  * an accept/dismiss fix queue, and an issue-readiness checklist.
  *
  * Idle → a "Send to Final QC" button + a cost expectation line + the
  * readiness checklist. The button never launches a run directly: because a
- * pass runs on Opus 5 (expensive) and takes minutes, it opens a confirmation
+ * pass runs on Opus 5.5 (expensive) and takes minutes, it opens a confirmation
  * dialog that spells out what the pass does, why it costs, and why it's slow —
  * the user opts in explicitly. Running → the five lens rows with live status,
  * then a
@@ -981,8 +981,8 @@ export default function QCDrawer({
     : "";
   const costLine =
     observedCost > 0
-      ? `Runs on Claude Opus 5 — a stronger reviewer than the drafter. This session's QC: ≈ $${observedCost.toFixed(2)}.${uncollectedNote}`
-      : "Runs on Claude Opus 5 — a stronger reviewer than the drafter.";
+      ? `Runs on Claude Opus 5.5 — a stronger reviewer than the drafter. This session's QC: ≈ $${observedCost.toFixed(2)}.${uncollectedNote}`
+      : "Runs on Claude Opus 5.5 — a stronger reviewer than the drafter.";
 
   // Cost-focused line for the confirmation dialog (the model name is already
   // stated there). A re-run folds the session's prior QC spend in.
@@ -1018,10 +1018,10 @@ export default function QCDrawer({
         ? "Final QC is already running."
         : interactionBusy
           ? QC_BUSY_MESSAGE
-          : "Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Opus 5 (uses your API key)";
+          : "Review what a pass costs and does, then confirm — runs the full lens fan-out + adversarial verification on Opus 5.5 (uses your API key)";
 
   // The start button opens the confirmation dialog; the run only fires once
-  // the user confirms in it (Opus 5 is expensive and a pass takes minutes).
+  // the user confirms in it (Opus 5.5 is expensive and a pass takes minutes).
   const confirmStart = (acknowledgeScopeMismatch: boolean) => {
     setConfirmOpen(false);
     onStart(acknowledgeScopeMismatch);
@@ -1075,7 +1075,7 @@ export default function QCDrawer({
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
           aria-controls="final-qc-drawer-body"
-          title="Final QC — a fleet of Opus 5 reviewers before the section goes out the door"
+          title="Final QC — a fleet of Opus 5.5 reviewers before the section goes out the door"
         >
           <span className="shrink-0 font-medium tracking-wide uppercase">
             Final QC
@@ -2060,7 +2060,7 @@ function DismissQCModal({
 }
 
 /**
- * Pre-flight confirmation for a Final QC pass. A run is expensive (Opus 5,
+ * Pre-flight confirmation for a Final QC pass. A run is expensive (Opus 5.5,
  * dozens of calls) and slow (minutes), so this dialog states plainly what the
  * pass does, why it
  * costs, and why it takes a while, and makes the user opt in. Backdrop click,
@@ -2211,7 +2211,7 @@ function ConfirmQCModal({
           <p>
             Final QC is a spare-no-expense review of the whole section before it
             goes out the door. It runs on{" "}
-            <strong className="text-ink">Claude Opus 5</strong>, a stronger
+            <strong className="text-ink">Claude Opus 5.5</strong>, a stronger
             reasoning model than the Sonnet&nbsp;5 model that drafts — the
             point of the pass is to catch what the drafter missed.
           </p>

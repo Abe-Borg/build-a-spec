@@ -1216,7 +1216,7 @@ export async function deleteReference(
   };
 }
 
-/* --- Final QC on Opus 5 --- */
+/* --- Final QC on Opus 5.5 --- */
 
 export class QcStartError extends Error {
   readonly status: number;

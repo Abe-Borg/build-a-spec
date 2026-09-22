@@ -796,7 +796,7 @@ This is the **1.0 release milestone**. Cut the first Windows build per
 
 ## Shipped in v0.9.0 (Batch 4: Final QC) and still current
 
-**One button, a fleet of Opus 5 reviewers, a full audit-grade report, and a
+**One button, a fleet of Opus 5.5 reviewers, a full audit-grade report, and a
 compact accept/dismiss action queue.** The one place a model other than Sonnet
 5 appears: a user-triggered last quality-control pass before a section goes
 out the door. The report is a first-class product surface, not
@@ -807,7 +807,7 @@ beside it for fast remediation without making the user mine the report for
 actions.
 
 - **Five lenses, in parallel, on a stronger reviewer than the drafter.**
-  "Send to Final QC" fans out five independent Opus 5 reviews of the whole
+  "Send to Final QC" fans out five independent Opus 5.5 reviews of the whole
   section: **code
   compliance** (verifies every citation/edition against the standards'
   *actual current content* via web search — the big search allowance),
@@ -854,7 +854,7 @@ actions.
   attempts, so failed fetches and evidence from an abandoned retry remain
   visible for cost/accountability without being allowed to ground a finding.
 - **Adversarial verification is seat-by-seat and auditable.** Every candidate
-  finding faces a panel of independent Opus 5 refuters prompted to *refute*
+  finding faces a panel of independent Opus 5.5 refuters prompted to *refute*
   it (2 for medium/low, 3 for critical/high). The report preserves every
   expected verifier seat, including its success, verdict, severity revision,
   proposed-fix adequacy decision and note, usage, or failure. **A finding is
@@ -1590,7 +1590,7 @@ The window loads the Vite dev server (localhost:5173), which proxies `/api` to t
 | `BUILD_A_SPEC_RESEARCH_MODEL` | `claude-sonnet-5` | Model for the research fan-out. |
 | `BUILD_A_SPEC_RESEARCH_MAX_TOKENS` | `128000` | Per-dimension research output ceiling (model max). |
 | `BUILD_A_SPEC_RESEARCH_EFFORT` | `high` | Adaptive-thinking effort for research dimensions (dialed back from `xhigh` on 2026-07-28 — cost). |
-| `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5` | Model for the Final QC pass (the one non-Sonnet surface). |
+| `BUILD_A_SPEC_QC_MODEL` | `claude-opus-5-5` | Model for the Final QC pass (the one non-Sonnet surface). |
 | `BUILD_A_SPEC_QC_MAX_TOKENS` | `128000` | Per-call QC output ceiling (model max — no app limit). |
 | `BUILD_A_SPEC_QC_EFFORT` | `high` | Adaptive-thinking effort for QC lenses/verifiers — the one-value fallback that sets both phases. |
 | `BUILD_A_SPEC_QC_LENS_EFFORT` | = `QC_EFFORT` | Effort for phase 1 (the five lenses and the consolidation call). |

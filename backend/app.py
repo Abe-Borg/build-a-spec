@@ -2951,6 +2951,10 @@ def create_app(
             "app": settings.APP_NAME,
             "version": settings.VERSION,
             "model": settings.INTERVIEW_MODEL,
+            # The model Final QC will actually run on (BUILD_A_SPEC_QC_MODEL
+            # can override the default), so the paid-run consent copy names
+            # what the user is agreeing to pay for.
+            "qc_model": settings.QC_MODEL,
             "api_key_present": bool(load_api_key()),
             "module": session.module.display_name,
             "module_id": session.module.module_id,

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from ..llm.history_hygiene import count_stale_outlines, elide_stale_outlines
 from ..llm.server_tool_pairing import (
     count_unpaired_server_tool_uses,
     without_unpaired_server_tool_uses,
@@ -531,6 +532,22 @@ def load_project(data: Any, session) -> None:
             count_unpaired_server_tool_uses(history),
         )
         history = repaired
+
+    # Histories saved before commit-time outline elision carry a full
+    # document outline in every edit result — the bulk of a long session's
+    # history, re-sent on every turn. Drop them the same way commit now
+    # does. Lossless: each described the document at the time of its edit,
+    # and every turn's PROJECT CONTEXT carries the current one. Same
+    # copy-on-write posture as the repair above (the file changes at the
+    # next save), and the same `logging` channel for the same reason.
+    trimmed = elide_stale_outlines(history)
+    if trimmed is not history:
+        _log.info(
+            "Dropped %d stale document outline(s) from a loaded project's "
+            "history; the file is unchanged until the next save.",
+            count_stale_outlines(history),
+        )
+        history = trimmed
 
     session.history.clear()
     session.history.extend(history)

@@ -887,6 +887,15 @@ backend/
                            (conversation, resend_sanitizer, project load) and
                            a private helper in conversation.py could not be
                            reached from resend_sanitizer without a cycle
+  llm/history_hygiene.py   [compaction Phase 1] keeps stale document outlines
+                           out of COMMITTED history (elide_stale_outlines,
+                           COW, same list object when nothing changed) —
+                           applied by _committed_messages and by project
+                           load; history_composition = sizes by category,
+                           never text (Developer tools, the support bundle,
+                           tools/chat_history_profile.py). Leaf module: the
+                           server_tool_pairing precedent (project.py needs
+                           it and cannot import the engine)
   llm/client.py            client factory; MissingApiKeyError; per-key cache
   llm/prompts.py           engine protocol blocks + render_system_prompt(module);
                            FULL_DRAFT_DIRECTIVE (Batch 3 full-draft user message)
@@ -11103,6 +11112,122 @@ No new dep, no new env knob, no new SSE event, no project-format bump.
   merge → 1, the save-time refresh → 1; and the review fixes the same way:
   the pre-edit uid stamp → 1, effective-uid matching → 1, the twin's uid
   adoption → 1, the pid-joined change count → 1.
+
+## A live run.json read can be refused on Windows — implemented notes
+
+The Windows test build on `0a744ab` (the v1.20.0 commit) failed one test of
+2,030: `test_idle_checkpoint_persists_enqueue_drop_health` got
+`PermissionError` reading `run.json`. The same test passed on the previous
+Windows build, so it is intermittent. Test-only fix: no route, no SSE event,
+no dep, no behaviour change, no release-note item.
+
+- **The mechanism is the atomic replace, not a bug in it.** The recorder
+  writes a temp file and `os.replace`s it onto `run.json`. On Windows,
+  opening the destination while that replace is in flight is refused for an
+  instant. The polling tests patch the checkpoint interval to 20 ms and read
+  in a tight loop, which is exactly how to hit that instant.
+- **The app was already fine.** Every production reader of `run.json`
+  (`diagnostics._current_trace_meta_facts`, the run-listing check, the
+  retention scan) wraps the read and treats a failure as a gap. And the
+  WRITER side was already handled: a replace refused because a reader holds
+  the file counts a `metadata_write_failures` and retries on the next wake.
+- **`tests/test_tracing.py::_read_meta` is the one read**, retrying only
+  `PermissionError` for up to 2 s. JSON errors are deliberately NOT retried:
+  an atomic replace cannot produce a torn file, so a parse error is a real
+  bug. All 18 reads of a recorder's `run.json` in the file go through it;
+  the one left raw reads after `rec.stop()`, when no writer can race it.
+- **Same lesson as "A test that had only ever run on Linux".** CI's backend
+  job runs on Linux, so the release build is the first place the suite meets
+  Windows. The manual Windows dry run before tagging (`workflow_dispatch` on
+  `release.yml`) is what caught this one, one run after the same commit
+  family had passed.
+- **Tests**: `test_read_meta_waits_out_a_replace_in_flight` stages two
+  refused opens and requires the file's contents; turning the retry off
+  turns it red.
+
+## Stale outlines stay out of saved history — implemented notes (compaction Phase 1)
+
+Owner ask (Abraham, 2026-09-22): "we will need some kind of compaction
+mechanism … but we need to be smart about it otherwise we will lose valuable
+context." The plan is `docs/plans/CHAT_HISTORY_COMPACTION_2026-09-22.md`
+(three layers: stop saving what is stored elsewhere; condense the
+conversation rarely, between turns; keep condensed turns recallable). This
+is its Phase 1. No new route, no new SSE event, no new dep, no new env knob,
+no project-format change, no version bump (the owner's one-release-at-the-end
+policy — the plan file carries the release-note draft).
+
+- **Only the chat history needs compacting.** Everything else the model sees
+  is rebuilt from structured state every turn, research and QC are one-shot
+  fan-outs, and the project brief carries no transcript. `session.history`
+  was the one unbounded thing — and nothing handled the ceiling: past the
+  1M window every turn is a `prompt is too long` 400, and the saved project
+  carries it.
+- **Most of that history was not conversation.** Every successful
+  `apply_spec_edits` result is `{"applied", "outline": outline(doc)}` — the
+  WHOLE document outline, the model's id map between calls — and so are
+  `apply_qc_fixes` results and rejected batches (outline appended after the
+  error). All of it was committed forever. Simulated with the real document
+  model on a ~300-paragraph section paced one article per call (as
+  `_FULL_DRAFT_POLICY` paces a draft): one full draft committed ~260k
+  tokens, 85% stale outlines; each later one-sentence edit ~17k; draft + 60
+  turns ~876k — at the ceiling. With the outline dropped: ~38k, ~140, ~71k.
+- **Dropped at commit, never within a turn.** `elide_stale_outlines` runs in
+  `_committed_messages` (after the reference elision, before the pairing
+  guard). Mid-turn the model still receives every outline; after commit
+  every later turn's PROJECT CONTEXT carries the full current document with
+  every id, which an old outline can only contradict. What an edit DID
+  stays: `applied`, QC `outcomes`, a rejected batch's error text.
+- **Cache-free by construction.** Commit already rewrites the last exchange
+  (strip-at-commit), so the next turn writes that exchange fresh whether or
+  not an outline is in it — the elision only makes that write smaller. (The
+  turn after a full draft re-writes the whole cache anyway — the draft adds
+  more than the 20-position lookback — so that re-write shrinks ~7×.)
+- **Tool results are matched by `tool_use_id`, never by shape**
+  (`OUTLINE_BEARING_TOOLS`), so a future tool returning an `outline` key is
+  untouched unless listed. A result that is not recognizably one of the
+  two shapes is left exactly as it is, and an outline shorter than the note
+  (an empty document's) is never replaced — the elision can only shrink.
+- **One shared header, two users.** `_run_tool` builds the rejected-batch
+  text from `REJECTED_BATCH_DOCUMENT_HEADER`; the elider finds the outline by
+  the same constant. Byte-identical to the previous literal.
+- **The note never names the context block by its header.** The first draft
+  said "…is in this turn's PROJECT CONTEXT", and
+  `test_context_block_never_fossilizes_into_history` (which asserts that
+  header never appears in history) went red. That guard is right; the note
+  now says the current document "arrives fresh with each new message".
+- **Older projects are trimmed when opened** — `load_project`, right after
+  the unpaired-server-tool repair, same COW posture (the file changes at the
+  next save), logged at INFO on `buildaspec.project` (never a trace event:
+  `load_project` runs under `session_state_guard()`). A `.baspec` open logs
+  it twice — once for the staging pass on a throwaway session, once for the
+  commit — exactly as the unpaired-server-tool repair warning always has.
+- **Measured, not guessed, from here on.** `history_composition` partitions a
+  history into categories (typed text, citations, tool calls/results by
+  tool, stale outlines, fetched pages, search results) in characters with a
+  len/4 token estimate — sizes only, pinned by a no-text test. `/api/
+  diagnostics` computes it from a shallow snapshot taken under the guard
+  and measured after it (a long history is megabytes); Developer tools →
+  Session state → **History makeup**; `tools/chat_history_profile.py` reads
+  saved `.baspec`/`.json` files offline (lint/QC profilers' privacy posture:
+  hashes not filenames, no text) and reports what the elision removes and
+  how much web research the history keeps — the input to Phase 2 (D2).
+  `stale_outlines` in a live session should always be 0: a canary.
+- **Deliberately not done here**: fetched web-page text (Phase 2 — owner
+  decision D2 plus one live check, because chat fetches carry `char_location`
+  citations into the document the elision would replace), the condensed
+  conversation and recall tool (Phase 3), and trimming outlines WITHIN a
+  turn (Phase 5 — changes what the model sees while drafting; ~220k by the
+  last article of a full draft).
+- **Tests**: `tests/test_history_hygiene.py` (7 — the chat turn end to end:
+  full outline mid-turn, note in saved history and in the next request,
+  full document in that request's context; a rejected batch; an older
+  project trimmed on open with the transcript unchanged and the next save
+  trimmed; COW/idempotence/scoping over every result shape; the composition
+  partition and its no-text guarantee; the diagnostics row; the profiler's
+  output). Reverted in place: commit elision → 3 red, load elision → 1 red,
+  tool scoping → 2 red. The no-growth rule is enforced twice (inside
+  `_elide_outline` and at every caller), so removing either copy alone
+  stays green — defence in depth, not an untested path.
 
 ## The formatted export stops losing things — implemented notes (Redline on your original, Phase 0)
 

@@ -10682,6 +10682,38 @@ dep, no project-format change.
   `briefConfirmOpen`, `projectBriefManifest` or `<ModalShell` in the panel;
   the error strip exists. Restoring the confirm step turns it red.
 
+## A live run.json read can be refused on Windows — implemented notes
+
+The Windows test build on `0a744ab` (the v1.20.0 commit) failed one test of
+2,030: `test_idle_checkpoint_persists_enqueue_drop_health` got
+`PermissionError` reading `run.json`. The same test passed on the previous
+Windows build, so it is intermittent. Test-only fix: no route, no SSE event,
+no dep, no behaviour change, no release-note item.
+
+- **The mechanism is the atomic replace, not a bug in it.** The recorder
+  writes a temp file and `os.replace`s it onto `run.json`. On Windows,
+  opening the destination while that replace is in flight is refused for an
+  instant. The polling tests patch the checkpoint interval to 20 ms and read
+  in a tight loop, which is exactly how to hit that instant.
+- **The app was already fine.** Every production reader of `run.json`
+  (`diagnostics._current_trace_meta_facts`, the run-listing check, the
+  retention scan) wraps the read and treats a failure as a gap. And the
+  WRITER side was already handled: a replace refused because a reader holds
+  the file counts a `metadata_write_failures` and retries on the next wake.
+- **`tests/test_tracing.py::_read_meta` is the one read**, retrying only
+  `PermissionError` for up to 2 s. JSON errors are deliberately NOT retried:
+  an atomic replace cannot produce a torn file, so a parse error is a real
+  bug. All 18 reads of a recorder's `run.json` in the file go through it;
+  the one left raw reads after `rec.stop()`, when no writer can race it.
+- **Same lesson as "A test that had only ever run on Linux".** CI's backend
+  job runs on Linux, so the release build is the first place the suite meets
+  Windows. The manual Windows dry run before tagging (`workflow_dispatch` on
+  `release.yml`) is what caught this one, one run after the same commit
+  family had passed.
+- **Tests**: `test_read_meta_waits_out_a_replace_in_flight` stages two
+  refused opens and requires the file's contents; turning the retry off
+  turns it red.
+
 ## Source-of-truth pointers into Claude-Spec-Critic
 
 Ported in Phase 3 (done — kept for archaeology): `src/core/code_cycles.py`

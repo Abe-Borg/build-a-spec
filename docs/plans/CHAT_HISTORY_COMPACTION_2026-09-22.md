@@ -110,8 +110,8 @@ see Phase 5.
 
 | Phase | What | Status | Commit/PR | Notes |
 |---|---|---|---|---|
-| plan | this file | **in review** | branch `claude/peaceful-dijkstra-c20hpu` | |
-| 1 | Stale outlines out of saved history + history composition | **in review** | branch `claude/peaceful-dijkstra-c20hpu` | commit-time + load-time elision; Developer tools row; offline profiler |
+| plan | this file | **in review** | `72a3b2f` (PR #182) | |
+| 1 | Stale outlines out of saved history + history composition | **in review** | `43a8ad8` (PR #182) | commit-time + load-time elision; Developer tools row; offline profiler |
 | 2 | Fetched web-page text out of saved history | not started | | gated: owner decision D2 + one live canary request |
 | 3 | Condensed conversation (Layer 2) + `recall_conversation` (Layer 3) | not started | | gated: D1, D3; ship both halves together |
 | 4 | Promote before prune | **handed off** | | this is project-workspace Phase 4 (`project-workspace/04_HARVEST.md`); don't build it twice |

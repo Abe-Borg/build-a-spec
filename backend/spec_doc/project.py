@@ -17,7 +17,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from ..llm.history_hygiene import count_stale_outlines, elide_stale_outlines
+from ..llm.history_hygiene import (
+    count_fetched_page_texts,
+    count_stale_outlines,
+    elide_fetched_page_text,
+    elide_stale_outlines,
+)
 from ..llm.server_tool_pairing import (
     count_unpaired_server_tool_uses,
     without_unpaired_server_tool_uses,
@@ -548,6 +553,20 @@ def load_project(data: Any, session) -> None:
             count_stale_outlines(history),
         )
         history = trimmed
+
+    # Likewise for the text of web pages the chat fetched, which commit now
+    # drops too: an older file keeps every page it ever fetched and re-sends
+    # all of them on every turn. The URL, title and retrieval time stay, so
+    # the model can fetch a page again. Same copy-on-write posture, same
+    # channel.
+    without_pages = elide_fetched_page_text(history)
+    if without_pages is not history:
+        _log.info(
+            "Dropped the text of %d fetched web page(s) from a loaded "
+            "project's history; the file is unchanged until the next save.",
+            count_fetched_page_texts(history),
+        )
+        history = without_pages
 
     session.history.clear()
     session.history.extend(history)

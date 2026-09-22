@@ -24,6 +24,18 @@ document goes. It is cache-free: commit already rewrites the last exchange
 (the PROJECT CONTEXT block is stripped), so the next turn writes that
 exchange fresh whether or not an outline is in it.
 
+:func:`elide_fetched_page_text` does the same for the text of web pages the
+chat fetched (compaction plan Phase 2, owner decision D2): up to
+``WEB_FETCH_MAX_CONTENT_TOKENS`` of page text per fetch, re-sent on every
+later turn. The page is not stored anywhere else in the app, but it lives on
+the web: the note that replaces it names the URL, the ``url`` field the
+model may re-fetch from stays, and so do the document's title, retrieval
+time and citation setting. The document block itself is never removed —
+citation ``document_index`` counts every document in the request, so
+dropping one would re-point every later citation at the wrong page. Fetched
+PDFs are not touched here; ``research.resend_sanitizer.elide_all_pdf_sources``
+already turns each one into a short note at commit.
+
 :func:`history_composition` says what a history is made of, by category,
 in sizes only — never text — for Developer tools, the support bundle and
 ``tools/chat_history_profile.py``.
@@ -70,6 +82,29 @@ _SERVER_RESULT_LABELS = {
 }
 
 OUTLINE_CATEGORY = "document outlines in edit results"
+
+# Replaces a fetched page's text in saved history. It names the URL so the
+# model can fetch the page again; the passages a reply quoted survive in
+# that reply's citations (``cited_text``), which the API does not bill as
+# input. Like STALE_OUTLINE_NOTE it never names the context block's header.
+FETCHED_PAGE_NOTE = (
+    "[Page text omitted from saved history so it is not re-sent with every "
+    "later message. Fetched from: {url}. Fetch it again if its exact "
+    "wording is needed; passages quoted from it stay in the replies' "
+    "citations.]"
+)
+# ``research.resend_sanitizer`` rewrites a fetched PDF into a short
+# plain-text note that starts with this. It says what it replaced (and how
+# many pages), so it is left alone rather than overwritten by the page note,
+# which can be the shorter of the two. A literal rather than an import keeps
+# this module a leaf; ``test_fetched_page_elision`` pins that the PDF note
+# really does start with it.
+PDF_ELISION_NOTE_PREFIX = "[Fetched PDF content elided"
+# Fetched URLs are capped at 250 characters by the API. The cap here only
+# guards a hand-edited file from putting something enormous in a note.
+_NOTE_URL_CHARS = 500
+
+FETCHED_PAGE_CATEGORY = "page text in fetched web pages"
 
 
 def _elide_outline(content: Any) -> tuple[Any, int]:
@@ -184,6 +219,94 @@ def count_stale_outlines(messages: list[Any]) -> int:
     return count
 
 
+def _note_url(url: Any) -> str:
+    text = str(url or "").strip()
+    return text[:_NOTE_URL_CHARS] if text else "an address the result did not record"
+
+
+def _elide_page_text(block: Any) -> dict[str, Any] | None:
+    """``block`` with its fetched page text replaced by the note, else None.
+
+    None means there is nothing to take out: not a successful
+    ``web_fetch_tool_result``, a document that is not plain text (a fetched
+    PDF, which the PDF elision handles), the PDF elision's own note, or a
+    page no longer than the note that would replace it — replacing it would
+    GROW the history, and that rule is also what makes the elision
+    idempotent (a note in place is exactly as long as its replacement).
+    Only the text source's ``data`` changes; every other key of the block,
+    the result (``url``, ``retrieved_at``) and the document (``title``,
+    ``citations``) is kept as it was.
+    """
+    if not isinstance(block, dict) or block.get("type") != "web_fetch_tool_result":
+        return None
+    result = block.get("content")
+    if not isinstance(result, dict) or result.get("type") != "web_fetch_result":
+        return None
+    document = result.get("content")
+    if not isinstance(document, dict) or document.get("type") != "document":
+        return None
+    source = document.get("source")
+    if not isinstance(source, dict) or source.get("type") != "text":
+        return None
+    data = source.get("data")
+    if not isinstance(data, str) or data.startswith(PDF_ELISION_NOTE_PREFIX):
+        return None
+    note = FETCHED_PAGE_NOTE.format(url=_note_url(result.get("url")))
+    if len(note) >= len(data):
+        return None
+    return {
+        **block,
+        "content": {
+            **result,
+            "content": {**document, "source": {**source, "data": note}},
+        },
+    }
+
+
+def elide_fetched_page_text(messages: list[Any]) -> list[Any]:
+    """Drop fetched web-page text from saved history (copy-on-write).
+
+    Returns the SAME list object when nothing needed removing; changed
+    messages are rebuilt and nothing given is ever mutated. Only committed
+    history may be passed: within a turn the model is still reading the page
+    it just fetched. Server tool results only ever sit in assistant
+    messages, so only those are searched.
+    """
+    result: list[Any] | None = None
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        new_content: list[Any] | None = None
+        for block_index, block in enumerate(content):
+            elided = _elide_page_text(block)
+            if elided is None:
+                continue
+            if new_content is None:
+                new_content = list(content)
+            new_content[block_index] = elided
+        if new_content is not None:
+            if result is None:
+                result = list(messages)
+            result[index] = {**message, "content": new_content}
+    return messages if result is None else result
+
+
+def count_fetched_page_texts(messages: list[Any]) -> int:
+    """How many saved web fetch results still carry removable page text."""
+    count = 0
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        count += sum(1 for block in content if _elide_page_text(block) is not None)
+    return count
+
+
 def estimated_tokens(chars: int) -> int:
     return chars // CHARS_PER_TOKEN
 
@@ -213,6 +336,8 @@ def history_composition(messages: list[Any]) -> dict[str, Any]:
     document outline — zero for anything committed by this build, which is
     what makes it a useful canary; ``tools/chat_history_profile.py`` uses it
     to show what the elision removes from files saved by earlier ones.
+    ``fetched_page_texts`` is the same canary for fetched web pages that
+    still carry their text.
     """
     tool_names: dict[str, str] = {}
     for message in messages:
@@ -234,6 +359,7 @@ def history_composition(messages: list[Any]) -> dict[str, Any]:
         entry[1] += 1
 
     stale = 0
+    fetched = 0
     counted = 0
     for message in messages:
         if not isinstance(message, dict):
@@ -271,7 +397,18 @@ def history_composition(messages: list[Any]) -> dict[str, Any]:
                 add(f"server tool call: {block.get('name') or 'unknown'}",
                     _size(block.get("input")))
             elif isinstance(kind, str) and kind.endswith("_tool_result"):
-                add(_SERVER_RESULT_LABELS.get(kind, kind), _size(block.get("content")))
+                result = block.get("content")
+                # Same scope as the elision: server results live in
+                # assistant messages, and only those are trimmed.
+                elided = _elide_page_text(block) if role == "assistant" else None
+                if elided is not None:
+                    # Sized as serialized, both ways, so the two categories
+                    # still add up to exactly what the block weighed.
+                    trimmed = elided.get("content")
+                    fetched += 1
+                    add(FETCHED_PAGE_CATEGORY, _size(result) - _size(trimmed))
+                    result = trimmed
+                add(_SERVER_RESULT_LABELS.get(kind, kind), _size(result))
             else:
                 add(f"other: {kind or 'untyped'}", _size(block))
 
@@ -292,5 +429,6 @@ def history_composition(messages: list[Any]) -> dict[str, Any]:
         "chars": chars,
         "estimated_tokens": estimated_tokens(chars),
         "stale_outlines": stale,
+        "fetched_page_texts": fetched,
         "categories": categories,
     }

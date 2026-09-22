@@ -2084,6 +2084,9 @@ export interface HistoryComposition {
   /** Saved edit results still carrying a document outline — 0 for anything
    *  this build committed or loaded. */
   stale_outlines: number;
+  /** Saved web fetch results still carrying the page's text — likewise 0
+   *  for anything this build committed or loaded. */
+  fetched_page_texts: number;
   categories: HistoryCompositionCategory[];
 }
 

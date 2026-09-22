@@ -135,6 +135,7 @@ from ..research import ResearchRunner, research_context_block
 from ..research.grounding import refusal_category, response_container_id
 from .history_hygiene import (
     REJECTED_BATCH_DOCUMENT_HEADER,
+    elide_fetched_page_text,
     elide_stale_outlines,
 )
 from .server_tool_pairing import (
@@ -2308,7 +2309,11 @@ def _committed_messages(
     - Thinking blocks drop — the adaptive-thinking contract only requires
       them within the turn that produced them.
     - Fetched-PDF payloads are elided wholesale (see
-      :func:`elide_all_pdf_sources`); search results and citations stay.
+      :func:`elide_all_pdf_sources`), and so is the text of every other
+      fetched page (see :func:`history_hygiene.elide_fetched_page_text`):
+      the URL, title and retrieval time stay, the model can fetch the page
+      again, and the passages this turn's reply quoted survive in its
+      citations. Search results and citations stay.
     - ``create_figure`` tool inputs shed their heavy source (see
       :func:`_elide_figure_tool_inputs`) — the figure store holds it.
     - ``read_reference_doc`` tool results shed the document body (see
@@ -2344,7 +2349,11 @@ def _committed_messages(
     return _without_unpaired_server_tool_uses(
         elide_stale_outlines(
             _elide_reference_tool_results(
-                _elide_figure_tool_inputs(elide_all_pdf_sources(committed))
+                _elide_figure_tool_inputs(
+                    # PDFs first: each becomes a short note, which the
+                    # page-text elision then recognizes and leaves alone.
+                    elide_fetched_page_text(elide_all_pdf_sources(committed))
+                )
             )
         )
     )

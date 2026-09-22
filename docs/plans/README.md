@@ -20,6 +20,16 @@ are [`PROJECT_WORKSPACE_2026-09-22.md`](PROJECT_WORKSPACE_2026-09-22.md).
 A fresh session starts from the folder README's "How to hand this off"
 section, not here.
 
+**[Chat history compaction](CHAT_HISTORY_COMPACTION_2026-09-22.md)** —
+opened 2026-09-22. Keep the chat history the model re-reads every turn
+bounded without losing what only the conversation holds: stop saving data
+stored elsewhere (Phase 1, stale edit outlines — in review; Phase 2,
+fetched page text), then condense the conversation rarely between turns
+with the full transcript kept and recallable (Phase 3). The file is the
+plan, the owner decisions (D1–D4) and the implementation record; its
+"promote before prune" phase is handed to the project workspace's harvest.
+Ships with the project workspace's release (same release policy).
+
 **[Deep-dive remediation](deep-dive-remediation/README.md)** — the other live
 program. Six phases, 24 chunks; **Phase 1 is complete** (direct server-tool
 callers; continuation containers in research, QC and chat; server-tool

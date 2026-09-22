@@ -133,6 +133,10 @@ from ..qc.apply import (
 from ..qc.context import qc_review_context_block
 from ..research import ResearchRunner, research_context_block
 from ..research.grounding import refusal_category, response_container_id
+from .history_hygiene import (
+    REJECTED_BATCH_DOCUMENT_HEADER,
+    elide_stale_outlines,
+)
 from .server_tool_pairing import (
     without_unpaired_server_tool_uses as _without_unpaired_server_tool_uses,
 )
@@ -2437,6 +2441,12 @@ def _committed_messages(
       :func:`_elide_figure_tool_inputs`) — the figure store holds it.
     - ``read_reference_doc`` tool results shed the document body (see
       :func:`_elide_reference_tool_results`) — the reference store holds it.
+    - Edit results shed the document outline they returned (see
+      :func:`history_hygiene.elide_stale_outlines`) — it was the model's id
+      map WITHIN this turn; every later turn's PROJECT CONTEXT carries the
+      full, current document instead. By far the largest thing a turn used
+      to commit: a full draft of a 300-paragraph section committed ~260k
+      tokens, 85% of them these stale outlines.
     - Unpaired ``server_tool_use`` blocks and orphaned server results are
       removed (see :func:`_without_unpaired_server_tool_uses`). The stop and
       truncation paths already scrub before they append, so this is the
@@ -2460,8 +2470,10 @@ def _committed_messages(
             content = [{"type": "text", "text": "[Model reasoning omitted.]"}]
         committed.append({"role": "assistant", "content": content})
     return _without_unpaired_server_tool_uses(
-        _elide_reference_tool_results(
-            _elide_figure_tool_inputs(elide_all_pdf_sources(committed))
+        elide_stale_outlines(
+            _elide_reference_tool_results(
+                _elide_figure_tool_inputs(elide_all_pdf_sources(committed))
+            )
         )
     )
 
@@ -3545,8 +3557,10 @@ def _run_tool(
                 "type": "tool_result",
                 "tool_use_id": block.get("id"),
                 "content": (
-                    f"Edit batch rejected (nothing was applied): {exc}\n\n"
-                    "Current specification document:\n"
+                    f"Edit batch rejected (nothing was applied): {exc}"
+                    # The shared header is what lets commit find (and drop)
+                    # this outline later: see history_hygiene.
+                    + REJECTED_BATCH_DOCUMENT_HEADER
                     + outline(session.doc.doc)
                 ),
                 "is_error": True,

@@ -372,3 +372,15 @@ As built, 2026-09-22:
     boundary line names "no automatic fact harvest", and the "What the model
     may touch" matrix gains the `record_project_facts` row it never had —
     this phase changes that tool's constraint, and the matrix is a contract.
+23. **The compaction hand-off is recorded, not wired.** PR #182's chat-history
+    compaction plan (`../CHAT_HISTORY_COMPACTION_2026-09-22.md`, its Phase 4
+    "promote before prune") hands this harvest one more candidate source: the
+    condensed-conversation summary's "decisions the ledgers are missing"
+    list. That summary does not exist yet — the plan's Phase 3 is not started
+    and its D1/D3/D4 are open — so there is nothing to wire. The seam is ready
+    for it: it becomes one more framed, neutralized block in `HarvestInputs`,
+    and its flagged decisions reach the sheet as proposals like any other,
+    through `assess_proposal` and the same commit — never a second path into
+    the facts store. The harvest already honours that plan's standing rule:
+    it reads `session.history` (the full record, never a compacted view), so
+    `turn:N` stays the Nth assistant bubble of the saved conversation.

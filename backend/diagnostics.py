@@ -1408,6 +1408,7 @@ def snapshot() -> dict[str, Any]:
     """
     from . import api_key_store, sessions, settings
     from .llm.conversation import effective_discipline
+    from .llm.history_hygiene import history_composition
     from .research.engine import incomplete_dimension_facts
     from .tracing import config as trace_config
     from .tracing.capture import trace_startup_failure_state
@@ -1546,11 +1547,18 @@ def snapshot() -> dict[str, Any]:
         busy = sessions.busy_reasons(session)
         usage = session.usage.snapshot()
         generation = session.generation
+        # A shallow copy is a coherent snapshot (messages are appended,
+        # truncated or replaced, never mutated in place); it is MEASURED
+        # below, after the guard, because a long history is megabytes.
+        history_snapshot = list(session.history)
 
     # Why an imported document is showing read-only affordances. The cache
     # lookup hashes the semantic projection outside the session guard and,
     # crucially, never starts or joins the expensive capability sweep.
     session_block["source"].update(_source_capability_facts(session))
+    # What the conversation the model re-reads every turn is made of —
+    # sizes by category, never text (the compaction plan's measurement).
+    session_block["history_composition"] = history_composition(history_snapshot)
 
     key = dict(api_key_store.key_status())
     if key.get("source") == "env":

@@ -8,9 +8,23 @@ stands lives anywhere else.
 
 ## Implementation record
 
-Update this table as phases land. A phase is complete only when its PR is
-merged, its release-notes entry is in `backend/release_notes.py`, and its
-as-built deviations are recorded under the phase heading in Part 2.
+Update this table as phases land. Three states, and who sets each:
+
+- **not started** — nothing pushed.
+- **in review** — set by the phase's own implementation PR, which cannot know
+  whether it will merge: the row carries the PR number, the commit and the
+  version cut, and stays `in review` when that PR is merged with the row
+  still reading so. A later session never treats `in review` as done.
+- **complete** — set AFTER the merge, by the first later session to touch
+  this file (the reconcile step in the handoff prompt), or by Abraham by
+  hand. The proof is on `master`: the PR is merged, the release-notes entry
+  is in `backend/release_notes.py`, and the as-built deviations are recorded
+  under the phase heading in Part 2.
+
+A phase's status update therefore rides the NEXT PR, not its own. That is
+deliberate: `master` is the source of truth, an `in review` row names the PR
+to check, and a PR that was closed without merging is reconciled back to
+`not started` with a note rather than silently disappearing.
 
 | Phase | Status | Commit/PR | Version | Notes |
 |---|---|---|---|---|
@@ -35,13 +49,21 @@ Read these files completely before touching code:
 1. CLAUDE.md
 2. docs/plans/PROJECT_WORKSPACE_2026-09-22.md
 
-Implement exactly ONE phase in this session: the first phase whose Status in
-the implementation record is "not started" and whose dependencies (the
-"Depends on" line under its heading, and the Order and sizing table) are
-satisfied. Decisions D1-D5 are ratified and binding; the phase's design text
-is the spec, and its as-built deviations are recorded under its heading, not
-by rewriting the text. If current code makes part of the design unsafe, stop
-and explain the conflict with concrete code evidence.
+FIRST, reconcile the implementation record against master. For every row
+marked "in review", check whether its PR merged (the GitHub API, or
+`git log origin/master --oneline` for its commit): merged -> mark it
+"complete" in your PR; closed without merging -> mark it "not started" with a
+one-line note; still open -> leave it, and do not start a phase that depends
+on it (continue that PR if it is yours to drive, else pick an independent
+phase). Never treat "in review" as done.
+
+THEN implement exactly ONE phase: the first phase whose Status is "not
+started" and whose dependencies (the "Depends on" line under its heading, and
+the Order and sizing table) are satisfied. Decisions D1-D5 are ratified and
+binding; the phase's design text is the spec, and its as-built deviations are
+recorded under its heading, not by rewriting the text. If current code makes
+part of the design unsafe, stop and explain the conflict with concrete code
+evidence.
 
 Keep tests hermetic: no network and no real API key. Use tests/fakes.py for
 provider behavior. Every phase ships as ONE pull request that also cuts a
@@ -53,15 +75,19 @@ section, and manual QA rows in docs/RELEASE_WINDOWS.md. A new user-facing
 control is a three-place capability edit (frontend/src/lib/capabilities.ts,
 the control's data-capability, a tour step) or npm test fails.
 
-Before pushing: ruff check ., the full pytest suite, npm test, npm run build,
+Before pushing, from the repository root: ruff check ., the full pytest
+suite, (cd frontend && npm test && npm run build) -- the only package.json is
+frontend/, so the npm commands fail with ENOENT anywhere else --
 python packaging/windows/check_release_version.py --tag vX.Y.Z, and
 python packaging/windows/render_release_notes.py --version X.Y.Z (with
 --notes-out and --body-out to a scratch dir). Push, open the PR, reply to
 every Codex thread with the fixing commit, and resolve them.
 
-Before stopping, mark the phase complete in the implementation record with
-the commit, PR, version and any deviations. Never push the git tag: the
-owner tags and pushes after the merge (git tag vX.Y.Z && git push --tags).
+Before stopping, mark the phase "in review" in the implementation record
+with the commit, PR, version and any deviations -- not "complete": the PR
+has not merged, and the next session's reconcile step promotes it once it
+has. Never push the git tag: the owner tags and pushes after the merge
+(git tag vX.Y.Z && git push --tags).
 ```
 
 One phase is one reviewable pull request and one session. Phases 2 → 3 are a
